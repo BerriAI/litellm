@@ -21,7 +21,6 @@ from prometheus_client import REGISTRY, Gauge
 from prometheus_client.registry import Collector
 
 import litellm
-from litellm.caching.redis_cache import _breaker_metrics
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.prometheus_services import PrometheusServicesLogger
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup_metrics import SpendLogCleanupMetrics
@@ -63,10 +62,7 @@ def _lazy_owner_collectors() -> tuple[Collector, ...]:
     assert SpendLogCleanupMetrics.runs is not None
     in_flight: Final = InFlightRequestsMiddleware._get_gauge()
     assert in_flight is not None
-    breaker: Final = _breaker_metrics()
-    assert breaker._state_gauge is not None
-    assert breaker._transitions is not None
-    assert breaker._failures is not None
+    services: Final = PrometheusServicesLogger()
     lens: Final = lens_export_counters()
     assert lens.written is not None
     assert lens.dropped is not None
@@ -77,9 +73,9 @@ def _lazy_owner_collectors() -> tuple[Collector, ...]:
         SpendLogCleanupMetrics.batch_failures,
         SpendLogCleanupMetrics.runs,
         in_flight,
-        breaker._state_gauge,
-        breaker._transitions,
-        breaker._failures,
+        services.redis_breaker_state,
+        services.redis_breaker_transitions,
+        services.redis_breaker_failures,
         lens.written,
         lens.dropped,
     )

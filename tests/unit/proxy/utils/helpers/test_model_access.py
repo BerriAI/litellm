@@ -449,6 +449,64 @@ async def test_get_available_models_for_user_resolves_team_access_group_models(
 
 
 @pytest.mark.asyncio
+async def test_get_available_models_for_user_lists_team_access_group_models_only_where_auth_grants_them(
+    monkeypatch,
+):
+    from litellm.models.access_group import LiteLLM_AccessGroupTable
+    from litellm.models.team import LiteLLM_TeamTableCachedObj
+    from litellm.proxy._types import Member
+
+    teams = {
+        "team-1": LiteLLM_TeamTableCachedObj(team_id="team-1", models=["model-a"], access_group_ids=["ag-1"]),
+        "team-2": LiteLLM_TeamTableCachedObj(
+            team_id="team-2", models=["model-c"], members_with_roles=[Member(user_id="user-1", role="user")]
+        ),
+    }
+
+    async def _get_team_object(team_id: str, **_kwargs):
+        return teams[team_id]
+
+    async def _get_access_object(**_kwargs):
+        return LiteLLM_AccessGroupTable(
+            access_group_id="ag-1",
+            access_group_name="team-group",
+            access_model_names=["model-b"],
+            assigned_team_ids=["team-1"],
+        )
+
+    monkeypatch.setattr("litellm.proxy.auth.auth_checks.get_team_object", _get_team_object)
+    monkeypatch.setattr("litellm.proxy.auth.auth_checks.get_access_object", _get_access_object)
+
+    async def _list_for(key_models: list[str], config: dict[str, list[str]] | None = None, team_id: str | None = None):
+        return sorted(
+            await get_available_models_for_user(
+                user_api_key_dict=UserAPIKeyAuth(
+                    api_key="sk-test-key",
+                    user_id="user-1",
+                    team_id="team-1",
+                    models=key_models,
+                    team_models=["model-a"],
+                    config=config or {},
+                ),
+                llm_router=_router_with_models(["model-a", "model-b", "model-c"]),
+                general_settings={},
+                user_model=None,
+                prisma_client=MagicMock(),
+                proxy_logging_obj=MagicMock(),
+                user_api_key_cache=MagicMock(),
+                team_id=team_id,
+            )
+        )
+
+    assert await _list_for(["model-a"]) == ["model-a"]
+    assert await _list_for(["model-a"], team_id="team-1") == ["model-a"]
+    assert await _list_for(["model-a"], team_id="team-2") == ["model-c"]
+    assert await _list_for(["model-a"], config={"model_list": []}) == ["model-a", "model-b"]
+    assert await _list_for(["all-team-models"]) == ["model-a", "model-b"]
+    assert await _list_for([]) == ["model-a", "model-b"]
+
+
+@pytest.mark.asyncio
 async def test_get_available_models_for_user_without_access_groups_grants_nothing(
     monkeypatch,
 ):

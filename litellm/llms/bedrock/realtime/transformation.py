@@ -7,9 +7,11 @@ Transforms between OpenAI Realtime API format and Bedrock Nova Sonic format.
 import base64
 import json
 import uuid as uuid_lib
+from collections.abc import Mapping
 from typing import Final, cast
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -43,6 +45,9 @@ from litellm.types.realtime import (
     RealtimeResponseTransformInput,
     RealtimeResponseTypedDict,
 )
+
+_JSON_VALUE: Final = TypeAdapter(object)
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
 
 
 class BedrockContentEnd(LiteLLMBaseModel):
@@ -839,10 +844,10 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         if not isinstance(additional_model_fields, str):
             return None
         try:
-            parsed: Final = json.loads(additional_model_fields)
+            parsed: Final = _JSON_VALUE.validate_python(json.loads(additional_model_fields))
         except json.JSONDecodeError:
             return None
-        stage: Final = parsed.get("generationStage") if isinstance(parsed, dict) else None
+        stage: Final = _JSON_OBJECT.validate_python(parsed).get("generationStage") if isinstance(parsed, dict) else None
         return stage if isinstance(stage, str) else None
 
     def _current_user_item_id(self, new_utterance: bool = False) -> str:

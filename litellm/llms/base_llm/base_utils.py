@@ -6,7 +6,7 @@ import copy
 import itertools
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
 
@@ -14,6 +14,7 @@ from openai.lib import _parsing, _pydantic  # pyright: ignore[reportPrivateUsage
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
 from litellm.types.utils import Message, ProviderSpecificModelInfo, TokenCountResponse
 
@@ -24,8 +25,8 @@ class BaseTokenCounter(ABC):
         self,
         model_to_use: str,
         messages: list[dict[str, Any]] | None,
-        contents: list[dict[str, Any]] | None,
-        deployment: dict[str, Any] | None = None,
+        contents: list[dict[str, object]] | None,
+        deployment: dict[str, object] | None = None,
         request_model: str = "",
         tools: list[dict[str, Any]] | None = None,
         system: Any | None = None,
@@ -141,8 +142,9 @@ def convert_tool_response_to_message(
     json_mode_content_str: Final[str | None] = tool_calls[0]["function"].get("arguments")
     try:
         if json_mode_content_str is not None:
-            args: Final = json.loads(json_mode_content_str)
-            if isinstance(args, dict) and (values := args.get("values")) is not None:
+            args: Final = _DECODED_JSON.validate_python(json.loads(json_mode_content_str))
+            args_object: Final = as_str_mapping(args)
+            if args_object is not None and (values := args_object.get("values")) is not None:
                 _message = Message(content=json.dumps(values))
                 return _message
             else:
@@ -170,6 +172,7 @@ class ResponseFormatSchema:
         return self.allows_undeclared_keys and not self.required_names
 
 
+_DECODED_JSON: Final = TypeAdapter(object)
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, JsonValue])
 _NAMES: Final = TypeAdapter(frozenset[str])
 
@@ -224,7 +227,7 @@ def _json_object_or_encoded_object(value: JsonValue) -> Mapping[str, JsonValue] 
     if not isinstance(value, str):
         return as_json_object(value)
     try:
-        return as_json_object(json.loads(value))
+        return as_json_object(_DECODED_JSON.validate_python(json.loads(value)))
     except (json.JSONDecodeError, RecursionError):
         return None
 
@@ -287,6 +290,73 @@ def response_format_envelope_contents(payload: object, schema: ResponseFormatSch
 def unwrap_response_format_envelope(payload: object, schema: ResponseFormatSchema, tool_name: str) -> object:
     contents: Final = response_format_envelope_contents(payload, schema, tool_name)
     return payload if contents is None else contents
+
+
+def _field_names(
+    blocks: tuple[Mapping[str, JsonValue], ...], key: str, schema: ResponseFormatSchema
+) -> tuple[str, ...] | None:
+    values: Final = (block[key] for block in blocks)
+    names: Final = tuple(value for value in values if isinstance(value, str) and value in schema.property_names)
+    return names if len(frozenset(names)) == len(blocks) else None
+
+
+def _is_a_label_every_block_repeats(blocks: tuple[Mapping[str, JsonValue], ...], key: str) -> bool:
+    return isinstance(blocks[0][key], str) and all(block[key] == blocks[0][key] for block in blocks)
+
+
+def _value_key(blocks: tuple[Mapping[str, JsonValue], ...], keys: frozenset[str]) -> str | None:
+    if len(keys) == 1:
+        return next(iter(keys))
+    varying: Final = tuple(key for key in keys if not _is_a_label_every_block_repeats(blocks, key))
+    return varying[0] if len(varying) == 1 else None
+
+
+def _split_answer_fields(
+    blocks: tuple[Mapping[str, JsonValue], ...], schema: ResponseFormatSchema
+) -> Mapping[str, JsonValue] | None:
+    keys: Final = frozenset(blocks[0])
+    if not keys.isdisjoint(schema.property_names) or any(frozenset(block) != keys for block in blocks):
+        return None
+    named: Final = tuple((key, names) for key in keys if (names := _field_names(blocks, key, schema)) is not None)
+    if len(named) != 1:
+        return None
+    ((name_key, field_names),) = named
+    value_key: Final = _value_key(blocks, keys - {name_key})
+    if value_key is None:
+        return None
+    return dict(zip(field_names, (block[value_key] for block in blocks), strict=True))
+
+
+def _merged_partial_answers(
+    blocks: tuple[Mapping[str, JsonValue], ...], schema: ResponseFormatSchema
+) -> Mapping[str, JsonValue] | None:
+    keys: Final = frozenset(itertools.chain.from_iterable(blocks))
+    if not keys <= schema.property_names or len(keys) != sum(len(block) for block in blocks):
+        return None
+    return dict(itertools.chain.from_iterable(block.items() for block in blocks))
+
+
+def split_response_format_answer(
+    encoded_blocks: Sequence[str], schema: ResponseFormatSchema
+) -> Mapping[str, JsonValue] | None:
+    decoded: Final = tuple(_json_object_or_encoded_object(encoded) for encoded in encoded_blocks)
+    blocks: Final = tuple(block for block in decoded if block is not None)
+    if len(blocks) < 2 or len(blocks) != len(decoded):
+        return None
+    named_fields: Final = _split_answer_fields(blocks, schema)
+    return named_fields if named_fields is not None else _merged_partial_answers(blocks, schema)
+
+
+def partial_response_format_answer(encoded_block: str, schema: ResponseFormatSchema) -> Mapping[str, JsonValue] | None:
+    block: Final = _json_object_or_encoded_object(encoded_block)
+    return block if block is not None and frozenset(block) <= schema.property_names else None
+
+
+def names_a_response_format_property(encoded_block: str, schema: ResponseFormatSchema) -> bool:
+    block: Final = _json_object_or_encoded_object(encoded_block)
+    if block is None:
+        return False
+    return any(isinstance(value, str) and value in schema.property_names for value in block.values())
 
 
 def _dict_to_response_format_helper(response_format: dict, ref_template: str | None = None) -> dict:

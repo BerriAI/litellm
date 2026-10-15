@@ -129,7 +129,7 @@ export const getModelHubTableColumns = ({ onModelClick }: ModelHubTableColumnsDe
   },
   {
     id: "mode",
-    accessorKey: "mode",
+    accessorFn: (row) => (row.mode ? displayMode(row.mode) : ""),
     meta: { title: "Mode", className: "hidden lg:table-cell" },
     header: ({ column }) => <DataTableSortHeader column={column} title="Mode" />,
     size: 110,

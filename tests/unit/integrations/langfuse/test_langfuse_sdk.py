@@ -1080,11 +1080,19 @@ def test_auth_check_and_project_id_make_one_round_trip_when_langfuse_is_down(
     [(500, 2), (503, 2), (429, 1), (404, 1)],
     ids=["http-500", "http-503", "http-429", "http-404"],
 )
-def test_cold_prompt_miss_never_sleeps_when_langfuse_is_down(status: int, round_trips: int):
+def test_cold_prompt_miss_never_sleeps_when_langfuse_is_down(
+    status: int, round_trips: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A cold ``get_prompt`` fetches inline on the event loop; with the generated client's default retries a
     429 carrying ``Retry-After: 30`` used to hold the loop for a minute. A 5xx gets the v2 client's one
     quick retry, a 429 or 4xx none."""
     requests: list[httpx.Request] = []
+    sleeps: Final[list[float]] = []
+    monkeypatch.setattr(
+        langfuse_http_client,
+        "time",
+        SimpleNamespace(sleep=sleeps.append, time=time.time),
+    )
 
     def fail(request: httpx.Request) -> httpx.Response:
         requests.append(request)
@@ -1097,18 +1105,25 @@ def test_cold_prompt_miss_never_sleeps_when_langfuse_is_down(status: int, round_
         httpx_client=httpx.Client(transport=httpx.MockTransport(fail)),
     )
 
-    started = monotonic()
     with pytest.raises(LangfusePromptError) as caught:
         client.get_prompt("greeting")
     assert len(requests) == round_trips
-    assert monotonic() - started < 0.5
+    assert sleeps == [], "a cold prompt miss should not sleep for REST retries"
     assert caught.value.status_code == status
 
 
 @pytest.mark.parametrize("first_failure", [503, "connect-error"], ids=["http-503", "connect-error"])
-def test_one_transient_failure_on_a_cold_prompt_miss_does_not_fail_the_call(first_failure: int | str):
+def test_one_transient_failure_on_a_cold_prompt_miss_does_not_fail_the_call(
+    first_failure: int | str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The v2 client retried a cold fetch once; a single Langfuse blip must not fail the LLM call."""
     requests: list[httpx.Request] = []
+    sleeps: Final[list[float]] = []
+    monkeypatch.setattr(
+        langfuse_http_client,
+        "time",
+        SimpleNamespace(sleep=sleeps.append, time=time.time),
+    )
 
     def flaky(request: httpx.Request) -> httpx.Response:
         requests.append(request)
@@ -1125,10 +1140,9 @@ def test_one_transient_failure_on_a_cold_prompt_miss_does_not_fail_the_call(firs
         httpx_client=httpx.Client(transport=httpx.MockTransport(flaky)),
     )
 
-    started = monotonic()
     assert client.get_prompt("greeting").compile() == "hello"
     assert len(requests) == 2
-    assert monotonic() - started < 0.5
+    assert sleeps == [], "one transient failure should not sleep for REST retries"
     assert client.get_prompt("greeting").compile() == "hello", "the retried prompt is cached like any other"
     assert len(requests) == 2
 

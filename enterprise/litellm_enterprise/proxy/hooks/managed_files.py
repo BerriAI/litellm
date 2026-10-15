@@ -24,7 +24,9 @@ from uuid import NAMESPACE_URL, uuid5
 
 import httpx
 from fastapi import HTTPException
-from pydantic import ValidationError
+from openai import APIConnectionError, AsyncOpenAI
+from openai.types.file_deleted import FileDeleted
+from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, Unpack
 
 import litellm
@@ -35,17 +37,17 @@ from litellm.caching.caching import DualCache
 from litellm.constants import (
     BATCH_OUTPUT_FILE_FALLBACK_RETRY_AFTER_SECONDS,
     BATCH_OUTPUT_FILE_LOOKUP_TIMEOUT_SECONDS,
+    MANAGED_BACKGROUND_RESPONSE_METADATA_KEY,
     MAX_FILE_LIST_LIMIT,
+    PENDING_RESPONSE_STATUSES,
 )
 from litellm.files.types import FileRetrieveCallOptions, FileRetrieveProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
+from litellm.litellm_core_utils.internal_call_metadata import requests_background
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_file_metadata,
 )
-from openai import APIConnectionError, AsyncOpenAI
-from openai.types.file_deleted import FileDeleted
-
 from litellm.llms.base_llm.files.storage_backend_factory import get_storage_backend
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
 from litellm.llms.base_llm.managed_resources.isolation import (
@@ -54,6 +56,7 @@ from litellm.llms.base_llm.managed_resources.isolation import (
     can_access_resource,
     resolve_resource_owner_id,
 )
+from litellm.llms.xai.batches.transformation import is_xai_batch_results_id
 from litellm.proxy._types import (
     CallTypes,
     LiteLLM_ManagedFileTable,
@@ -87,6 +90,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attributio
     request_tags_from_metadata,
 )
 from litellm.repositories.managed_file_repository import ManagedFileRepository
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (  # pyright: ignore[reportAttributeAccessIssue]
     AllMessageValues,
     AsyncCursorPage,
@@ -99,9 +103,11 @@ from litellm.types.llms.openai import (  # pyright: ignore[reportAttributeAccess
     ResponsesAPIResponse,
 )
 from litellm.types.utils import (
+    ADDRESSED_RESPONSE_ID_FIELD,
     CallTypesLiteral,
     LiteLLMBatch,
     LiteLLMFineTuningJob,
+    LlmProviders,
     LLMResponseTypes,
     SpecialEnums,
 )
@@ -194,6 +200,32 @@ def _is_transient_file_retrieve_error(error: Exception) -> bool:
     return isinstance(error, (httpx.TransportError, APIConnectionError, asyncio.TimeoutError))
 
 
+_MEASURED_SIZE_SAVE_ATTEMPTS: Final = 3
+
+
+def _stored_json_text(raw_file_object: object) -> str:
+    """JSON text of a stored file object exactly as read, for a write that must not race a newer one."""
+    if isinstance(raw_file_object, BaseModel):
+        return raw_file_object.model_dump_json()
+    return json.dumps(raw_file_object)
+
+
+def _with_measured_size(file_object: OpenAIFileObject, size_bytes: int | None) -> OpenAIFileObject:
+    """Fill a file object whose provider reported no size (0 bytes) with a size measured elsewhere."""
+    if not size_bytes or file_object.bytes:
+        return file_object
+    return file_object.model_copy(update={"bytes": size_bytes})
+
+
+def _over_stored_object(file_object: OpenAIFileObject, stored_object: OpenAIFileObject | None) -> OpenAIFileObject:
+    """Refreshed details for a stored row, keeping its size when none is reported and its stored created_at."""
+    if stored_object is None:
+        return file_object
+    return _with_measured_size(file_object, stored_object.bytes).model_copy(
+        update={"created_at": stored_object.created_at}
+    )
+
+
 def _proxy_llm_router() -> Router | None:
     import litellm.proxy.proxy_server as proxy_server_module
 
@@ -252,6 +284,23 @@ def _has_provider_file_retrieve_route(
     return bool(router_credentials) or _model_name_file_retrieve_provider(model_name) is not None
 
 
+def _is_xai_batch_output(
+    *,
+    llm_router: Router | None,
+    model_id: str | None,
+    model_name: str | None,
+    provider_file_id: str,
+) -> bool:
+    """Whether a batch output row holds an xAI batch's results, from its batch id and its deployment's provider."""
+    if not is_xai_batch_results_id(provider_file_id):
+        return False
+    router_credentials: Final = _provider_file_retrieve_credentials(llm_router=llm_router, model_id=model_id)
+    provider: Final = (router_credentials or {}).get("custom_llm_provider") or _model_name_file_retrieve_provider(
+        model_name
+    )
+    return provider == LlmProviders.XAI.value
+
+
 class _ManagedFileRow(Protocol):
     unified_file_id: str
     file_object: OpenAIFileObject
@@ -301,6 +350,8 @@ class _ManagedObjectTableActions(Protocol):
 
     async def update_many(self, where: Mapping[str, object], data: Mapping[str, object]) -> int: ...
 
+    async def create(self, data: Mapping[str, object]) -> "PrismaManagedObjectRow": ...
+
 
 class _ManagedResourceDatabase(Protocol):
     @property
@@ -347,6 +398,39 @@ def _managed_object_table(prisma_client: _ManagedResourcePrismaClient) -> _Manag
     return prisma_client.db.litellm_managedobjecttable
 
 
+_JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+_POSTGRES_UNSTORABLE_CHARACTER: Final = "\x00"
+
+
+def _storable_text(text: str) -> str:
+    return text.replace(_POSTGRES_UNSTORABLE_CHARACTER, "")
+
+
+def _storable_json_value(value: JsonValue) -> JsonValue:
+    if isinstance(value, str):
+        return _storable_text(value)
+    if isinstance(value, list):
+        return [_storable_json_value(item) for item in value]
+    if isinstance(value, dict):
+        return {_storable_text(key): _storable_json_value(item) for key, item in value.items()}
+    return value
+
+
+def _postgres_storable_json(file_object: BaseModel) -> str:
+    dumped: Final = file_object.model_dump_json()
+    if "\\u0000" not in dumped:
+        return dumped
+    return _JSON_VALUE_ADAPTER.dump_json(_storable_json_value(_JSON_VALUE_ADAPTER.validate_json(dumped))).decode()
+
+
+def _without_model_output(
+    file_object: LiteLLMBatch | LiteLLMFineTuningJob | ResponsesAPIResponse,
+) -> LiteLLMBatch | LiteLLMFineTuningJob | ResponsesAPIResponse:
+    return (
+        file_object.model_copy(update={"output": []}) if isinstance(file_object, ResponsesAPIResponse) else file_object
+    )
+
+
 def _storage_metadata_of(file_object: OpenAIFileObject | None) -> Mapping[str, str]:
     hidden_params: Final = cast(  # cast-ok: _hidden_params is an untyped attribute the upload path sets
         "Mapping[str, object]", getattr(file_object, "_hidden_params", None) or {}
@@ -358,6 +442,40 @@ def _storage_metadata_of(file_object: OpenAIFileObject | None) -> Mapping[str, s
             if isinstance(value := hidden_params.get(key), str)
         }
     )
+
+
+_MANAGED_RESPONSE_READ_CALL_TYPES: Final = frozenset({"aget_responses", "acancel_responses"})
+_REQUEST_FIELDS: Final = TypeAdapter(dict[str, object])
+
+
+def _addresses_a_proxy_issued_response(data: Mapping[str, object]) -> bool:
+    from litellm.proxy.hooks.responses_id_security import decrypted_response_id
+
+    addressed_id: Final = data.get(ADDRESSED_RESPONSE_ID_FIELD) or data.get("response_id")
+    return (
+        isinstance(addressed_id, str)
+        and ResponsesAPIRequestUtils.get_model_id_from_response_id(decrypted_response_id(addressed_id)) is not None
+    )
+
+
+def _is_streamed_background_create(request: Mapping[str, object]) -> bool:
+    return (
+        request.get("stream") is True
+        and isinstance(request.get("litellm_metadata"), dict)
+        and requests_background(request)
+    )
+
+
+def _with_managed_background_marker(request: Mapping[str, object]) -> dict[str, object]:
+    metadata_field: Final = "litellm_metadata" if isinstance(request.get("litellm_metadata"), dict) else "metadata"
+    existing_metadata: Final = request.get(metadata_field)
+    return {
+        **request,
+        metadata_field: {
+            **(_REQUEST_FIELDS.validate_python(existing_metadata) if isinstance(existing_metadata, dict) else {}),
+            MANAGED_BACKGROUND_RESPONSE_METADATA_KEY: True,
+        },
+    }
 
 
 _MANAGED_FILES_TARGET: Final = "managed_files"
@@ -484,11 +602,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     ) -> None:
         """Persist a managed object row, caching it and upserting it in the DB.
 
-        persist_attribution is set only by the batch create, which is the one caller
-        that can speak for the creator; it gates the api_key and request_tags columns
-        that CheckBatchCost bills against, so a later poll or retrieve of the same
-        batch cannot record itself as the paying key. Like created_by and team_id,
-        both are written only in the upsert create branch, never on update.
+        persist_attribution is set only by the batch and background response creates,
+        the callers that can speak for the creator; it gates the api_key, request_tags, and,
+        for a response, end_user_id columns that the cost poll jobs bill against, so a later poll or
+        retrieve of the same object cannot record itself as the paying key. Like created_by and team_id,
+        they are written only in the upsert create branch, never on update.
+
+        A stored response keeps no model output: billing reads only its status and model from
+        the row, so the row never holds generated content.
 
         create_if_missing is cleared by callers that observe a batch they did not
         create, such as a poll. They still refresh status and file_object, but a
@@ -501,11 +622,12 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         It is written only in the upsert create branch.
         """
         verbose_logger.info(f"Storing LiteLLM Managed {file_purpose} object with id={unified_object_id} in cache")
+        stored_object: Final = _without_model_output(file_object)
         litellm_managed_object = LiteLLM_ManagedObjectTable(
             unified_object_id=unified_object_id,
             model_object_id=model_object_id,
             file_purpose=file_purpose,
-            file_object=file_object,
+            file_object=stored_object,
         )
         await self.internal_usage_cache.async_set_cache(
             key=unified_object_id,
@@ -516,32 +638,35 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         from prisma import Json
 
         api_key = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict) or None
+        end_user_id: Final = user_api_key_dict.end_user_id if file_purpose == "response" else None
         attribution_columns = (
             {
                 **({"api_key": api_key} if api_key is not None else {}),
-                **({"request_tags": Json(list(request_tags))} if request_tags else {}),
+                **({"request_tags": Json([_storable_text(tag) for tag in request_tags])} if request_tags else {}),
+                **({"end_user_id": end_user_id} if end_user_id else {}),
             }
             if persist_attribution
             else {}
         )
         # FIX: Update status and file_object on every operation to keep state in sync
         update_columns: Final = {
-            "file_object": file_object.model_dump_json(),
+            "file_object": _postgres_storable_json(stored_object),
             "status": file_object.status,
             "updated_by": user_api_key_dict.user_id,
         }
+        managed_object_table: Final = _managed_object_table(self.prisma_client)
         if not create_if_missing:
-            await _managed_object_table(self.prisma_client).update_many(
+            await managed_object_table.update_many(
                 where={"unified_object_id": unified_object_id},
                 data=update_columns,
             )
             return
-        await _managed_object_table(self.prisma_client).upsert(
+        await managed_object_table.upsert(
             where={"unified_object_id": unified_object_id},
             data={
                 "create": {
                     "unified_object_id": unified_object_id,
-                    "file_object": file_object.model_dump_json(),
+                    "file_object": _postgres_storable_json(stored_object),
                     "model_object_id": model_object_id,
                     "file_purpose": file_purpose,
                     "created_by": resolve_resource_owner_id(user_api_key_dict),
@@ -555,6 +680,42 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 "update": update_columns,
             },
         )
+
+    async def track_untracked_background_response(
+        self,
+        response_id: str,
+        response: ResponsesAPIResponse,
+        user_api_key_dict: UserAPIKeyAuth,
+        request_tags: Sequence[str] | None = None,
+    ) -> bool:
+        if not _addresses_a_proxy_issued_response({"response_id": response_id}):
+            return False
+        from prisma import Json
+        from prisma.errors import UniqueViolationError
+
+        from litellm.proxy.hooks.responses_id_security import decrypted_response_id
+
+        api_key: Final = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict) or None
+        try:
+            await _managed_object_table(self.prisma_client).create(
+                data={
+                    "unified_object_id": response_id,
+                    "model_object_id": decrypted_response_id(response_id),
+                    "file_purpose": "response",
+                    "file_object": _postgres_storable_json(_without_model_output(response)),
+                    "status": PENDING_RESPONSE_STATUSES[0],
+                    "created_by": resolve_resource_owner_id(user_api_key_dict),
+                    "team_id": user_api_key_dict.team_id,
+                    "org_id": await self._resolve_creator_org_id(user_api_key_dict),
+                    "updated_by": user_api_key_dict.user_id,
+                    **({"api_key": api_key} if api_key is not None else {}),
+                    **({"end_user_id": user_api_key_dict.end_user_id} if user_api_key_dict.end_user_id else {}),
+                    **({"request_tags": Json([_storable_text(tag) for tag in request_tags])} if request_tags else {}),
+                }
+            )
+        except UniqueViolationError:
+            return False
+        return True
 
     @with_service_target(_MANAGED_FILES_TARGET)
     async def get_unified_file_id(
@@ -845,6 +1006,57 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             litellm_parent_otel_span=None,
         )
 
+    async def _save_xai_refreshed_file_object(
+        self,
+        stored: LiteLLM_ManagedFileTable,
+        file_object: OpenAIFileObject,
+    ) -> OpenAIFileObject | None:
+        """Save an xAI batch output's refreshed details, keeping a known size, only over the row as read; drop the cached copy if a newer write won."""
+        stored_object: Final = _parse_managed_file_object(stored.file_object, stored.unified_file_id)
+        sized_file_object: Final = _over_stored_object(file_object, stored_object)
+        if not await ManagedFileRepository(self.prisma_client).update_file_object(
+            stored.unified_file_id,
+            sized_file_object,
+            if_file_object=_stored_json_text(stored.file_object) if stored.file_object is not None else None,
+        ):
+            await self.internal_usage_cache.async_set_cache(
+                key=stored.unified_file_id, value=None, litellm_parent_otel_span=None
+            )
+            return None
+        await self.internal_usage_cache.async_set_cache(
+            key=stored.unified_file_id,
+            value=stored.model_copy(update={"file_object": sized_file_object}).model_dump(),
+            litellm_parent_otel_span=None,
+        )
+        return sized_file_object
+
+    async def _save_batch_output_file_object(
+        self,
+        stored: LiteLLM_ManagedFileTable,
+        file_object: OpenAIFileObject,
+        size_bytes: int | None,
+    ) -> None:
+        """Save an xAI batch output's details; after losing to a refresh, size the refreshed details instead of replacing them."""
+        current_row: LiteLLM_ManagedFileTable | None = stored  # rebind-ok: the row as last read
+        details: OpenAIFileObject = file_object  # rebind-ok: a concurrent refresh's details replace the job's copy
+        for _ in range(_MEASURED_SIZE_SAVE_ATTEMPTS):
+            if current_row is None:
+                return
+            saved = await self._save_xai_refreshed_file_object(  # rebind-ok: per attempt
+                current_row, _with_measured_size(details, size_bytes)
+            )
+            if saved is not None or not size_bytes:
+                return
+            latest_row = await ManagedFileRepository(  # rebind-ok: per attempt
+                self.prisma_client, use_writer=True
+            ).table.find_first(where={"unified_file_id": stored.unified_file_id})
+            current_row = (
+                None if latest_row is None else LiteLLM_ManagedFileTable.model_validate(latest_row.model_dump())
+            )
+            latest_object = None if current_row is None else current_row.file_object  # rebind-ok: per attempt
+            if latest_object is not None and not latest_object.litellm_details_fallback:
+                details = latest_object
+
     async def store_batch_output_file(
         self,
         *,
@@ -885,6 +1097,18 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             )
             return
         if stored_object is not None and not stored_object.litellm_details_fallback:
+            if (
+                stored_file is not None
+                and size_bytes
+                and not stored_object.bytes
+                and _is_xai_batch_output(
+                    llm_router=_proxy_llm_router(),
+                    model_id=model_id,
+                    model_name=model_name,
+                    provider_file_id=provider_file_id,
+                )
+            ):
+                await self._save_batch_output_file_object(stored_file, stored_object, size_bytes)
             return
 
         fallback_written_recently: Final = (
@@ -924,13 +1148,22 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             )
         )
 
+        xai_batch_output: Final = _is_xai_batch_output(
+            llm_router=_proxy_llm_router(),
+            model_id=model_id,
+            model_name=model_name,
+            provider_file_id=provider_file_id,
+        )
+        if stored_file is not None and xai_batch_output:
+            await self._save_batch_output_file_object(stored_file, file_object, size_bytes)
+            return
         if stored_file is not None:
             await self._save_refreshed_file_object(stored_file, file_object)
             return
 
         await self.store_unified_file_id(
             file_id=unified_file_id,
-            file_object=file_object,
+            file_object=_with_measured_size(file_object, size_bytes) if xai_batch_output else file_object,
             litellm_parent_otel_span=litellm_parent_otel_span,
             model_mappings={model_id: provider_file_id} if model_id else {},
             user_api_key_dict=owner,
@@ -1258,6 +1491,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 unified_vs_ids = self.get_vector_store_ids_from_file_search_tools(tools)
                 if unified_vs_ids:
                     await self.check_vector_store_ids_access(unified_vs_ids, user_api_key_dict)
+            create_request: Final = _REQUEST_FIELDS.validate_python(data)
+            if _is_streamed_background_create(create_request):
+                return _with_managed_background_marker(create_request)
         elif call_type == CallTypes.afile_content.value:
             retrieve_file_id = cast(Optional[str], data.get("file_id"))
             potential_file_id = _is_base64_encoded_unified_file_id(retrieve_file_id) if retrieve_file_id else False
@@ -1315,6 +1551,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 data[accessor_key] = get_batch_id_from_unified_batch_id(potential_llm_object_id)
             elif retrieve_object_id and accessor_key == "batch_id":
                 await self.enforce_batch_object_access(retrieve_object_id, user_api_key_dict)
+        elif call_type in _MANAGED_RESPONSE_READ_CALL_TYPES:
+            request: Final = _REQUEST_FIELDS.validate_python(data)
+            if _addresses_a_proxy_issued_response(request):
+                return _with_managed_background_marker(request)
         elif call_type == CallTypes.acreate_fine_tuning_job.value:
             fine_tuning_file_ids: Final = tuple(
                 file_id
@@ -1943,8 +2183,20 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     )
                     if refreshed_file_object is None:
                         return _public_file_object(file_object, file_id)
-                    await self._save_refreshed_file_object(stored_file_object, refreshed_file_object)
-                    return _public_file_object(refreshed_file_object, file_id)
+                    if not _is_xai_batch_output(
+                        llm_router=llm_router if llm_router is not None else _proxy_llm_router(),
+                        model_id=model_id,
+                        model_name=model_id,
+                        provider_file_id=provider_file_id,
+                    ):
+                        await self._save_refreshed_file_object(stored_file_object, refreshed_file_object)
+                        return _public_file_object(refreshed_file_object, file_id)
+                    saved_file_object: Final = await self._save_xai_refreshed_file_object(
+                        stored_file_object, refreshed_file_object
+                    )
+                    return _public_file_object(
+                        saved_file_object or _over_stored_object(refreshed_file_object, file_object), file_id
+                    )
                 except Exception as error:
                     verbose_logger.warning(
                         "Failed to refresh batch file object for "
