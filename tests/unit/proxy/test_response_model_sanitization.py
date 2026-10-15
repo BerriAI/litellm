@@ -68,6 +68,19 @@ def _decode_sse_chunk(chunk) -> str:
     return chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
 
 
+def _make_response_created_event(model: str):
+    from litellm.types.llms.openai import (
+        ResponseCreatedEvent,
+        ResponsesAPIResponse,
+        ResponsesAPIStreamEvents,
+    )
+
+    return ResponseCreatedEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_CREATED,
+        response=ResponsesAPIResponse(id="resp_test", created_at=0, output=[], model=model),
+    )
+
+
 def test_restamp_streaming_chunk_skips_matching_model():
     from litellm.proxy.proxy_server import _restamp_streaming_chunk_model
 
@@ -482,3 +495,18 @@ async def test_proxy_streaming_fastest_response_preserves_winning_model(monkeypa
     payload = json.loads(first[len("data: ") :].strip())
     assert payload["model"] == winning_model
     assert payload["model"] != comma_separated_models
+
+
+def test_restamp_streaming_chunk_rewrites_nested_response_model():
+    from litellm.proxy.proxy_server import _restamp_streaming_chunk_model
+
+    chunk = _make_response_created_event("hosted_vllm/some-model")
+    result, _ = _restamp_streaming_chunk_model(
+        chunk=chunk,
+        requested_model_from_client="client-model",
+        request_data={"litellm_call_id": "test-call-id"},
+        model_mismatch_logged=False,
+    )
+
+    assert result.response.model == "client-model"
+    assert chunk.response.model == "hosted_vllm/some-model"
