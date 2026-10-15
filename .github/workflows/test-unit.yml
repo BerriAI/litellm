@@ -233,6 +233,7 @@ jobs:
               tests/unit/llms/base_llm
               tests/unit/llms/baseten
               tests/unit/llms/black_forest_labs
+              tests/unit/llms/brave
               tests/unit/llms/bytez
               tests/unit/llms/cerebras
               tests/unit/llms/chat
@@ -268,6 +269,7 @@ jobs:
               tests/unit/llms/gdc
               tests/unit/llms/gemini
               tests/unit/llms/gigachat
+              tests/unit/llms/google_pse
               tests/unit/llms/github_copilot
               tests/unit/llms/gradient_ai
               tests/unit/llms/groq
@@ -300,6 +302,7 @@ jobs:
               tests/unit/llms/nebius
               tests/unit/llms/neosantara
               tests/unit/llms/nimble
+              tests/unit/llms/nlp_cloud
               tests/unit/llms/novita
               tests/unit/llms/nscale
               tests/unit/llms/nvidia_nim
@@ -310,6 +313,7 @@ jobs:
               tests/unit/llms/oobabooga
               tests/unit/llms/openai_like
               tests/unit/llms/opencode
+              tests/unit/llms/opensandbox
               tests/unit/llms/openrouter
               tests/unit/llms/ovhcloud
               tests/unit/llms/parallel_ai
@@ -342,10 +346,12 @@ jobs:
               tests/unit/llms/tinyfish
               tests/unit/llms/together_ai
               tests/unit/llms/tool_loop
+              tests/unit/llms/topaz
               tests/unit/llms/triton
               tests/unit/llms/v0
               tests/unit/llms/valkey
               tests/unit/llms/vercel_ai_gateway
+              tests/unit/llms/vllm
               tests/unit/llms/volcengine
               tests/unit/llms/voyage
               tests/unit/llms/wandb
@@ -412,6 +418,7 @@ jobs:
               tests/unit/rag
               tests/unit/realtime_api
               tests/unit/rerank_api
+              tests/unit/search
               tests/unit/vector_stores
               tests/unit/videos
             python-version: "3.12"
@@ -446,13 +453,14 @@ jobs:
               tests/unit/repositories
               tests/unit/secret_managers
               tests/unit/skills/test_skills_main.py
+              tests/unit/telemetry tests/unit/proxy/telemetry
               tests/unit/tracing
             python-version: "3.12"
-            workers: 2
+            workers: 4
             reruns: 0
             timeout-minutes: 20
             job-timeout-minutes: 60
-            dist: loadscope
+            dist: load
 
           - shard: proxy-auth
             test-path: |-
@@ -565,13 +573,23 @@ jobs:
               tests/unit/proxy/_experimental/mcp_server/test_mcp_server_manager.py
               tests/unit/proxy/_experimental/mcp_server/test_mcp_server_tool_calls_and_headers.py
               tests/unit/proxy/_experimental/mcp_server/test_operations.py
-              tests/integration/mcp/test_interactions.py
             python-version: "3.12"
-            workers: 2
+            workers: 4
             reruns: 0
             timeout-minutes: 20
             job-timeout-minutes: 60
             dist: loadscope
+
+          - shard: mcp-interactions
+            test-path: |-
+              --override-ini=pythonpath=tests
+              tests/integration/mcp/test_interactions.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: load
 
           - shard: proxy-infra
             test-path: |-

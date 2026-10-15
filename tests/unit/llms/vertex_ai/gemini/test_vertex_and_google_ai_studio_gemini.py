@@ -1486,7 +1486,7 @@ def test_vertex_ai_streaming_usage_calculation():
         iterator.chunk_parser(chunk)
 
         # Verify calculate_usage was called with correct parameters
-        mock_calculate_usage.assert_called_once_with(completion_response=chunk)
+        mock_calculate_usage.assert_called_once_with(completion_response=chunk, cache_creation_tokens=0)
 
     # Test non-streaming response parsing
     with patch.object(VertexGeminiConfig, "_calculate_usage") as mock_calculate_usage:
@@ -1512,6 +1512,7 @@ def test_vertex_ai_streaming_usage_calculation():
         # Verify _calculate_usage was called with correct parameters
         mock_calculate_usage.assert_called_once_with(
             completion_response=completion_response,
+            cache_creation_tokens=0,
         )
 
 
@@ -5776,28 +5777,20 @@ def test_sync_streaming_uses_custom_client():
 
 
 def test_transform_response_does_not_leak_body_on_parse_failure():
-    leaky_body = {"candidates": [{"content": {"parts": [{"text": "secret content"}]}}]}
-    raw_response = MagicMock()
-    raw_response.json.return_value = leaky_body
-    raw_response.text = json.dumps(leaky_body)
-    raw_response.headers = {}
+    raw_response = httpx.Response(200, json=[{"candidates": [{"content": {"parts": [{"text": "secret content"}]}}]}])
 
-    with patch(
-        "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.GenerateContentResponseBody",
-        side_effect=KeyError("missing required field"),
-    ):
-        with pytest.raises(VertexAIError) as exc_info:
-            VertexGeminiConfig().transform_response(
-                model="gemini-pro",
-                raw_response=raw_response,
-                model_response=ModelResponse(),
-                logging_obj=MagicMock(),
-                request_data={},
-                messages=[],
-                optional_params={},
-                litellm_params={},
-                encoding=None,
-            )
+    with pytest.raises(VertexAIError) as exc_info:
+        VertexGeminiConfig().transform_response(
+            model="gemini-pro",
+            raw_response=raw_response,
+            model_response=ModelResponse(),
+            logging_obj=MagicMock(),
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
 
     msg = str(exc_info.value)
     assert "secret content" not in msg
@@ -9458,6 +9451,8 @@ def test_vertex_ai_streaming_response_id():
             model="gemini-pro",
             messages=[],
             logging_obj=logging_obj,
+            request_body={},
+            hop_headers=lambda: {},
         )
         iterator = iter(iterator)
         first_chunk = next(iterator)
@@ -9512,6 +9507,39 @@ def test_vertex_ai_gemini_audio_ogg():
     assert file_data["mime_type"] == "audio/ogg", f"Expected audio/ogg, got: {file_data['mime_type']}"
     assert "En-us-public.ogg" in file_data["file_uri"], f"Unexpected file_uri: {file_data['file_uri']}"
     print(response)
+
+
+def test_vertex_ai_cache_creation_kwarg_cannot_change_usage_or_cost() -> None:
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json.return_value = {
+        "candidates": [
+            {"content": {"parts": [{"text": "hi"}], "role": "model"}, "finishReason": "STOP", "index": 0}
+        ],
+        "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5, "totalTokenCount": 15},
+    }
+    client = HTTPHandler()
+    httpx_mock = MagicMock(return_value=mock_response)
+    with (
+        patch.object(client, "post", new=httpx_mock),
+        patch.object(VertexBase, "_ensure_access_token", return_value=("fake-token", "fake-project")),
+    ):
+        response = litellm.completion(
+            model="vertex_ai/gemini-2.5-flash",
+            messages=[{"role": "user", "content": "hi"}],
+            vertex_project="fake-project",
+            vertex_location="us-central1",
+            vertex_ai_cache_creation_input_tokens=-1000000,
+            client=client,
+        )
+
+    assert response.usage.prompt_tokens == 10
+    assert response.usage.cache_creation_input_tokens is None
+    assert response._hidden_params["response_cost"] > 0
 
 
 def load_vertex_ai_credentials():
@@ -9598,3 +9626,55 @@ def test_map_openai_params_audio_voice_reaches_speech_config_mapped() -> None:
         drop_params=False,
     )
     assert optional_params["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
+
+
+_CACHED_PROMPT_USAGE_METADATA = {
+    "promptTokenCount": 1536,
+    "candidatesTokenCount": 40,
+    "totalTokenCount": 1576,
+    "cachedContentTokenCount": 1280,
+    "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 1536}],
+}
+
+
+def test_calculate_usage_bills_context_cache_creation_tokens_once():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    usage = VertexGeminiConfig._calculate_usage(
+        {"candidates": [], "usageMetadata": _CACHED_PROMPT_USAGE_METADATA}, cache_creation_tokens=1280
+    )
+
+    assert usage.prompt_tokens == 1536 + 1280
+    assert usage.total_tokens == 1576 + 1280
+    assert usage.cache_creation_input_tokens == 1280
+    assert usage.cache_read_input_tokens == 1280
+    assert usage.prompt_tokens_details.text_tokens == 256
+    assert usage.prompt_tokens_details.cache_creation_tokens == 1280
+
+
+def test_calculate_usage_without_cache_creation_leaves_usage_unchanged():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    usage = VertexGeminiConfig._calculate_usage({"candidates": [], "usageMetadata": _CACHED_PROMPT_USAGE_METADATA})
+
+    assert usage.prompt_tokens == 1536
+    assert usage.total_tokens == 1576
+    assert usage.cache_creation_input_tokens is None
+
+
+def test_streaming_usage_reads_cache_creation_tokens_recorded_on_logging_obj():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import ModelResponseIterator
+
+    logging_obj = MagicMock()
+    logging_obj.vertex_ai_cache_creation_input_tokens = 1280
+    iterator = ModelResponseIterator(streaming_response=[], sync_stream=True, logging_obj=logging_obj)
+
+    chunk = iterator.chunk_parser(
+        {
+            "candidates": [{"content": {"parts": [{"text": "done"}]}, "finishReason": "STOP", "index": 0}],
+            "usageMetadata": _CACHED_PROMPT_USAGE_METADATA,
+        }
+    )
+
+    assert chunk.usage.prompt_tokens == 1536 + 1280
+    assert chunk.usage.cache_creation_input_tokens == 1280

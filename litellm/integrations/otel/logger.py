@@ -292,7 +292,7 @@ class OpenTelemetryV2(CustomLogger):
     #  closed here. See ``log_pre_api_call``.
     # ====================================================================== #
 
-    def log_pre_api_call(self, model, messages, kwargs):
+    def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
         """Open the LLM-call span at the call boundary.
 
         Runs synchronously inside the request task, before the upstream call —
@@ -354,7 +354,13 @@ class OpenTelemetryV2(CustomLogger):
             _LLMCallSpan(span=span, start_time_ns=start_time_ns, provider=route.provider),
         )
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
+    ) -> None:
         if self._emit_mcp_tool_call(kwargs, start_time, end_time):
             return
         if self._emit_mcp_list_tools(kwargs, start_time, end_time):
@@ -396,7 +402,13 @@ class OpenTelemetryV2(CustomLogger):
         except Exception as exc:
             verbose_logger.debug("OpenTelemetryV2: metric recording failed: %s", exc)
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
+    ) -> None:
         if self._emit_mcp_tool_call(kwargs, start_time, end_time):
             return
         if self._emit_mcp_list_tools(kwargs, start_time, end_time):
@@ -964,10 +976,14 @@ def _excluded_db_systems(logger: "OpenTelemetryV2") -> frozenset[str]:
     callback folds into the preset, whose config is env-only.
     """
     otel_settings: Final = (litellm.callback_settings or {}).get("otel")
-    configured: Final = otel_settings.get("excluded_services") if isinstance(otel_settings, dict) else None
+    configured: Final = _excluded_services_setting(otel_settings) if isinstance(otel_settings, dict) else None
     if configured is None:
         return logger.config.excluded_services
     return excluded_db_systems_from(configured)
+
+
+def _excluded_services_setting(otel_settings: Mapping[str, object]) -> object:
+    return otel_settings.get("excluded_services")
 
 
 def _v2_configs(in_memory_loggers: Sequence[object], logger: "OpenTelemetryV2") -> tuple[OpenTelemetryV2Config, ...]:

@@ -21,7 +21,7 @@ jobs:
       pull-requests: read
       actions: read
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     services:
       redis:
         image: redis@sha256:e2debfb7956fa12c7ddc79d7e645c8cf26b30c99a6e9161ea9bf4171e1668a5f
@@ -600,6 +600,9 @@ jobs:
       - name: check_unsafe_enterprise_import
         run: uv run --no-sync python ./tests/code_coverage_tests/check_unsafe_enterprise_import.py
 
+      - name: check_telemetry_imports
+        run: uv run --no-sync python ./tests/code_coverage_tests/check_telemetry_imports.py
+
       - name: ban_copy_deepcopy_kwargs
         run: uv run --no-sync python ./tests/code_coverage_tests/ban_copy_deepcopy_kwargs.py
 
@@ -614,6 +617,9 @@ jobs:
 
       - name: check_migrations_no_data_rewrites
         run: uv run --no-sync python ./tests/code_coverage_tests/check_migrations_no_data_rewrites.py
+
+      - name: check_migrations_lock_timeout
+        run: uv run --no-sync python ./tests/code_coverage_tests/check_migrations_lock_timeout.py
 
       - name: check_no_publicly_known_master_key
         run: uv run --no-sync python ./tests/code_coverage_tests/check_no_publicly_known_master_key.py

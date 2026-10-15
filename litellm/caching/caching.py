@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from enum import Enum
 from typing import Any, Final, Literal, cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm._internal_context import current_service_target, service_target
@@ -42,6 +42,8 @@ from .redis_semantic_cache import RedisSemanticCache
 from .s3_cache import S3Cache
 
 RESPONSE_CACHE_TARGET: Final = "llm_response"
+_ALWAYS_KEYED_PROVIDER_PARAMS: Final = frozenset({"continuation_token"})
+_DECODED_LITERAL: Final = TypeAdapter(object)
 
 
 @contextmanager
@@ -398,8 +400,10 @@ class Cache:
         for param in kwargs:
             if param in scope_excluded_params:
                 continue
-            if param in combined_kwargs:
+            if param in combined_kwargs or param in _ALWAYS_KEYED_PROVIDER_PARAMS:
                 param_value: str | None = self._get_param_value(param, kwargs)
+                if param in _ALWAYS_KEYED_PROVIDER_PARAMS and not param_value:
+                    continue
                 if param_value is not None:
                     cache_key += f"{param}: {param_value}"
             elif not is_litellm_owned_kwarg(param):
@@ -599,9 +603,11 @@ class Cache:
                 if isinstance(cached_response, dict):
                     pass
                 else:
-                    cached_response = json.loads(cached_response)  # Convert string to dictionary
+                    cached_response = _DECODED_LITERAL.validate_python(
+                        json.loads(cached_response)
+                    )  # Convert string to dictionary
             except Exception:
-                cached_response = ast.literal_eval(cached_response)
+                cached_response = _DECODED_LITERAL.validate_python(ast.literal_eval(cached_response))
             return cached_response
         return cached_result
 
@@ -709,7 +715,7 @@ class Cache:
                 cache_key = self.get_cache_key(**kwargs)
             if cache_key is not None:
                 if isinstance(result, BaseModel):
-                    result = result.model_dump_json()
+                    result = result.model_dump_json(exclude_unset=True)
 
                 ## DEFAULT TTL ##
                 if self.ttl is not None:

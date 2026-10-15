@@ -24,7 +24,7 @@ from _fake_openai_endpoint_server import (
     moderations,
     triton_embeddings,
 )
-from integration.cost_calculation.cost_map import COST_MAP_ENTRIES
+from integration.cost_calculation.cost_map import COST_MAP_ENTRIES, FALLBACK_GENERALIZATIONS
 from integration.cost_calculation.cost_tracking_case import (
     BinaryResponse,
     EventStreamEvent,
@@ -275,7 +275,7 @@ class Provider:
         return JSONResponse({"deleted": deleted}, status_code=200 if deleted else 404)
 
     async def cost_map(self, _request: Request) -> Response:
-        return JSONResponse(COST_MAP_ENTRIES)
+        return JSONResponse({**COST_MAP_ENTRIES, "fallback_generalizations": FALLBACK_GENERALIZATIONS})
 
     async def oauth_token(self, _request: Request) -> Response:
         return JSONResponse(
@@ -567,10 +567,10 @@ class Provider:
                 Route("/triton/embeddings", triton_embeddings, methods=["POST"]),
                 Route("/vector_stores/{vector_store_id}/search", self.vector_store_search, methods=["POST"]),
                 Route("/__interactions/{interaction_id}", self.interaction_state, methods=["PUT", "DELETE"]),
-                Route("/v1beta/interactions/{interaction_id}:cancel", self.cancel_interaction, methods=["POST"]),
+                Route("/v1beta/interactions/{interaction_id}/cancel", self.cancel_interaction, methods=["POST"]),
                 Route("/v1beta/interactions/{interaction_id}", self.interaction, methods=["GET", "DELETE"]),
                 Route(
-                    "/{prefix:path}/v1beta/interactions/{interaction_id}:cancel",
+                    "/{prefix:path}/v1beta/interactions/{interaction_id}/cancel",
                     self.cancel_interaction,
                     methods=["POST"],
                 ),

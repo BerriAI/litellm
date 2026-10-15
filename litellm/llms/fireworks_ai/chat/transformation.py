@@ -1,8 +1,9 @@
 import json
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Iterable, Iterator, Mapping
 from typing import TYPE_CHECKING, Final, Literal, cast
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -12,7 +13,10 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
-from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_legacy_defs
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    strip_litellm_response_only_fields,
+    unpack_legacy_defs,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -50,6 +54,11 @@ from ..common_utils import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
+_JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_STR: Final = TypeAdapter(str)
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _map_reasoning_effort(value: object) -> object:
@@ -515,15 +524,8 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
                                 llm_provider="fireworks_ai",
                             )
             filter_value_from_dict(cast(dict, message), "cache_control")
-            # Remove fields not permitted by FireworksAI (additionalProperties: false
-            # on their ChatMessage schema) that may cause:
-            # "Extra inputs are not permitted, field: 'messages[n].<field>'"
-            if isinstance(message, dict):
-                m = cast(dict, message)
-                m.pop("provider_specific_fields", None)
-                m.pop("thinking_blocks", None)
 
-        return messages
+        return [strip_litellm_response_only_fields(message) for message in messages]
 
     # Cached index of fireworks_ai/* entries from litellm.model_cost. Building
     # this index requires a full scan of model_cost (tens of thousands of
@@ -744,7 +746,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
 
         ## RESPONSE OBJECT
         try:
-            completion_response: Final = raw_response.json()
+            completion_response: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             response_headers: Final = getattr(raw_response, "headers", None)
             raise FireworksAIException(
@@ -757,7 +759,8 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
 
         additional_headers: Final = get_response_headers(raw_response_headers)
 
-        response: Final = ModelResponse(**completion_response)
+        completion_fields: Final = _JSON_DICT.validate_python(completion_response)
+        response: Final = ModelResponse(**completion_fields)
 
         if response.model is not None:
             response.model = "fireworks_ai/" + response.model
@@ -771,7 +774,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
 
         response.hidden_params = {
             "additional_headers": additional_headers,
-            **_extract_fireworks_hidden_params(completion_response),
+            **_extract_fireworks_hidden_params(completion_fields),
         }
 
         return response
@@ -832,9 +835,9 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
                 f"Failed to fetch models from Fireworks AI. Status code: {response.status_code}, Response: {response.json()}"
             )
 
-        models: Final = response.json()["models"]
+        models: Final = _JSON_OBJECTS.validate_python(_JSON_DICT.validate_python(response.json())["models"])
 
-        return ["fireworks_ai/" + model["name"] for model in models]
+        return ["fireworks_ai/" + _STR.validate_python(model["name"]) for model in models]
 
     @staticmethod
     def get_api_key(api_key: str | None = None) -> str | None:
