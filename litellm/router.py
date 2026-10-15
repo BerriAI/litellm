@@ -13078,6 +13078,16 @@ class Router:
             )
             return None
 
+    def _deployment_configures_rpm(self, deployment: object) -> bool:
+        if not isinstance(deployment, dict):
+            return False
+        fields: Final[Mapping[str, object]] = cast(Mapping[str, object], deployment)  # cast-ok: untyped dict
+        params: Final = fields.get("litellm_params")
+        if not isinstance(params, dict):
+            return False
+        parsed_params: Final[Mapping[str, object]] = cast(Mapping[str, object], params)  # cast-ok: untyped dict
+        return parsed_params.get("rpm") is not None
+
     def _pre_call_checks(
         self,
         model: str,
@@ -13121,13 +13131,22 @@ class Router:
             request_kwargs
         )
 
+        # Safe to check statically since `rpm` is a direct litellm_params setting, unlike
+        # max_input_tokens which get_router_model_info() can also derive from the cost map.
+        any_deployment_has_rpm: Final = self.routing_strategy != "usage-based-routing-v2" and any(
+            self._deployment_configures_rpm(
+                deployment  # pyright: ignore[reportUnknownArgumentType]  # untyped deployment list
+            )
+            for deployment in _returned_deployments  # pyright: ignore[reportUnknownVariableType]  # untyped list
+        )
+
         ## get model group RPM ##
-        dt: Final = get_utc_datetime()
-        current_minute: Final = dt.strftime("%H-%M")
-        rpm_key: Final = f"{model}:rpm:{current_minute}"
+        rpm_key: Final = f"{model}:rpm:{get_utc_datetime().strftime('%H-%M')}"
         model_group_cache: Final = (
-            self.cache.get_cache(key=rpm_key, local_only=True, parent_otel_span=parent_otel_span) or {}
-        )  # check the in-memory cache used by lowest_latency and usage-based routing. Only check the local cache.
+            (self.cache.get_cache(key=rpm_key, local_only=True, parent_otel_span=parent_otel_span) or {})
+            if any_deployment_has_rpm
+            else {}
+        )
         for idx, deployment in enumerate(_returned_deployments):
             # Cache nested dict access to avoid repeated temporary dict allocations
             _litellm_params = deployment.get("litellm_params", {})
@@ -13167,14 +13186,14 @@ class Router:
             except Exception as e:
                 verbose_router_logger.exception("An error occurs - %s", e)
 
-            model_id = _model_info.get("id", "")
             ## RPM CHECK ##
-            ### get local router cache ###
-            current_request_cache_local = (
-                self.cache.get_cache(key=model_id, local_only=True, parent_otel_span=parent_otel_span) or 0
-            )
-            ### get usage based cache ###
-            if isinstance(model_group_cache, dict) and self.routing_strategy != "usage-based-routing-v2":
+            if any_deployment_has_rpm and isinstance(model_group_cache, dict):
+                model_id = _model_info.get("id", "")
+                ### get local router cache ###
+                current_request_cache_local = (
+                    self.cache.get_cache(key=model_id, local_only=True, parent_otel_span=parent_otel_span) or 0
+                )
+                ### get usage based cache ###
                 model_group_cache[model_id] = model_group_cache.get(model_id, 0)
 
                 current_request = max(current_request_cache_local, model_group_cache[model_id])
