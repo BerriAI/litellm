@@ -5,6 +5,8 @@ PARITY pairs the streamed case with its plain twin where both bill the same row.
 from typing import Final
 
 from integration.cost_calculation.cost_tracking_case import (
+    ALWAYS_OPEN_OFF_PEAK_WINDOW,
+    OffPeakPricing,
     CostTrackingTestCase,
     Deployment,
     EventStreamEvent,
@@ -17,6 +19,12 @@ from integration.cost_calculation.cost_tracking_case import (
     WavUpload,
 )
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase, sse_frames
+from integration.cost_calculation.cases.anthropic import (
+    CLAUDE_FABLE_5_1_INPUT_TEXT,
+    CLAUDE_FABLE_5_1_STREAM,
+    CLAUDE_HAIKU_5_5_INPUT_TEXT,
+    CLAUDE_HAIKU_5_5_STREAM,
+)
 
 
 # nova-next
@@ -599,7 +607,13 @@ XAI_GROK_5_PROVIDER_REPORTED_COST: Final = CostTrackingTestCase(
             "usage": {"prompt_tokens": 1840, "completion_tokens": 412, "total_tokens": 2252, "cost": 0.0421},
         },
     ),
-    expected=ExactExpected(spend=0.0421, input_cost=0.0, output_cost=0.0421, prompt_tokens=1840, completion_tokens=412),
+    expected=ExactExpected(
+        spend=0.0421,
+        input_cost=0.029078078,
+        output_cost=0.013021922,
+        prompt_tokens=1840,
+        completion_tokens=412,
+    ),
 )
 
 
@@ -740,6 +754,553 @@ AZURE_AI_GPT_5_4_MINI_LATEST_STREAM: Final = CostTrackingTestCase(
 )
 
 
+# azure_ai/claude-haiku-4-5 (Azure AI Foundry Anthropic, web search billed per server_tool_use.web_search_requests)
+AZURE_AI_CLAUDE_HAIKU_4_5_MESSAGES_WEB_SEARCH: Final = CostTrackingTestCase(
+    name="azure-ai-claude-haiku-4-5-messages_web_search_two_requests",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="azure_ai/claude-haiku-4-5",
+    endpoint="/v1/messages",
+    request={
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [{"role": "user", "content": "azure-ai-claude-haiku-4-5-messages_web_search_two_requests"}],
+        "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "msg_$UNIQUE_ID",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-4-5",
+            "content": [{"type": "text", "text": "scripted answer a1b2c3d4e5f6"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1840, "output_tokens": 412, "server_tool_use": {"web_search_requests": 2}},
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.0239,
+        input_cost=0.00184,
+        output_cost=0.00206,
+        prompt_tokens=1840,
+        completion_tokens=412,
+        tool_usage_cost=0.02,
+        rollups=True,
+    ),
+)
+
+AZURE_AI_CLAUDE_HAIKU_4_5_MESSAGES_WEB_SEARCH_STREAM: Final = CostTrackingTestCase(
+    name="azure-ai-claude-haiku-4-5-messages_web_search_two_requests_stream",
+    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+    model="azure_ai/claude-haiku-4-5",
+    endpoint="/v1/messages",
+    request={
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [{"role": "user", "content": "azure-ai-claude-haiku-4-5-messages_web_search_two_requests_stream"}],
+        "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}],
+        "stream": True,
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=(
+            'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_$REQUEST_ID","type":"message","role":"assistant","model":"claude-haiku-4-5","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":1840}}}',
+            'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+            'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"scripted response"}}',
+            'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
+            'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":412,"server_tool_use":{"web_search_requests":2}}}',
+            'event: message_stop\ndata: {"type":"message_stop"}',
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.0239,
+        input_cost=0.00184,
+        output_cost=0.00206,
+        prompt_tokens=1840,
+        completion_tokens=412,
+        tool_usage_cost=0.02,
+    ),
+)
+
+AZURE_AI_CLAUDE_HAIKU_4_5_MESSAGES_WEB_SEARCH_ONE_REQUEST: Final = CostTrackingTestCase(
+    name="azure-ai-claude-haiku-4-5-messages_web_search_one_request",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="azure_ai/claude-haiku-4-5",
+    endpoint="/v1/messages",
+    request={
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [{"role": "user", "content": "azure-ai-claude-haiku-4-5-messages_web_search_one_request"}],
+        "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "msg_$REQUEST_ID",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-4-5",
+            "content": [{"type": "text", "text": "scripted answer 0f1e2d3c4b5a"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1840, "output_tokens": 412, "server_tool_use": {"web_search_requests": 1}},
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.0139,
+        input_cost=0.00184,
+        output_cost=0.00206,
+        prompt_tokens=1840,
+        completion_tokens=412,
+        tool_usage_cost=0.01,
+    ),
+)
+
+AZURE_AI_CLAUDE_HAIKU_4_5_MESSAGES_NO_SEARCH: Final = CostTrackingTestCase(
+    name="azure-ai-claude-haiku-4-5-messages_no_server_tool_use",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="azure_ai/claude-haiku-4-5",
+    endpoint="/v1/messages",
+    request={
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [{"role": "user", "content": "azure-ai-claude-haiku-4-5-messages_no_server_tool_use"}],
+        "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "msg_$REQUEST_ID",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-4-5",
+            "content": [{"type": "text", "text": "scripted answer 9a8b7c6d5e4f"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1840, "output_tokens": 412},
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.0039,
+        input_cost=0.00184,
+        output_cost=0.00206,
+        prompt_tokens=1840,
+        completion_tokens=412,
+        tool_usage_cost=0.0,
+    ),
+)
+
+AZURE_AI_CLAUDE_HAIKU_4_5_CHAT_WEB_SEARCH: Final = CostTrackingTestCase(
+    name="azure-ai-claude-haiku-4-5-chat_web_search_three_requests",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="azure_ai/claude-haiku-4-5",
+    request={
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "azure-ai-claude-haiku-4-5-chat_web_search_three_requests"}],
+        "stream": False,
+        "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}],
+        "allowed_openai_params": ["web_search_options"],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "msg_$REQUEST_ID",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-4-5",
+            "content": [{"type": "text", "text": "scripted answer 5e4f3a2b1c0d"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1840, "output_tokens": 412, "server_tool_use": {"web_search_requests": 3}},
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.0339,
+        input_cost=0.00184,
+        output_cost=0.00206,
+        prompt_tokens=1840,
+        completion_tokens=412,
+        tool_usage_cost=0.03,
+    ),
+)
+
+AZURE_AI_CLAUDE_HAIKU_4_5_CHAT_WEB_SEARCH_STREAM: Final = CostTrackingTestCase(
+    name="azure-ai-claude-haiku-4-5-chat_web_search_two_requests_stream",
+    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+    model="azure_ai/claude-haiku-4-5",
+    request={
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "azure-ai-claude-haiku-4-5-chat_web_search_two_requests_stream"}],
+        "stream": True,
+        "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}],
+        "allowed_openai_params": ["web_search_options"],
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=sse_frames(
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_$REQUEST_ID",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-haiku-4-5",
+                    "content": [],
+                    "stop_reason": None,
+                    "usage": {"input_tokens": 1840},
+                },
+            },
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "scripted answer 2c3d4e5f6a7b"},
+            },
+            {"type": "content_block_stop", "index": 0},
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn"},
+                "usage": {"output_tokens": 412, "server_tool_use": {"web_search_requests": 2}},
+            },
+            {"type": "message_stop"},
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.0239,
+        input_cost=0.00184,
+        output_cost=0.00206,
+        prompt_tokens=1840,
+        completion_tokens=412,
+        tool_usage_cost=0.02,
+    ),
+)
+
+
+AZURE_AI_CLAUDE_HAIKU_4_5_RESPONSES_WEB_SEARCH: Final = CostTrackingTestCase(
+    name="azure-ai-claude-haiku-4-5-responses_web_search_two_requests",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="azure_ai/claude-haiku-4-5",
+    endpoint="/v1/responses",
+    request={
+        "model": "$MODEL",
+        "input": "azure-ai-claude-haiku-4-5-responses_web_search_two_requests",
+        "tools": [{"type": "web_search"}],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "msg_$REQUEST_ID",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-4-5",
+            "content": [{"type": "text", "text": "scripted answer 7d6e5f4a3b2c"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1840, "output_tokens": 412, "server_tool_use": {"web_search_requests": 2}},
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.0239,
+        input_cost=0.00184,
+        output_cost=0.00206,
+        prompt_tokens=1840,
+        completion_tokens=412,
+        tool_usage_cost=0.02,
+    ),
+)
+
+
+# azure_ai/claude-sonnet-4-5 (public row has no search price, the deployment owns input, output and search rates)
+AZURE_AI_CLAUDE_SONNET_4_5_DEPLOYMENT_MESSAGES_WEB_SEARCH: Final = CostTrackingTestCase(
+    name="azure-ai-claude-sonnet-4-5-deployment_rates_messages_web_search_two_requests",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="azure_ai/claude-sonnet-4-5",
+    endpoint="/v1/messages",
+    deployment=Deployment(input_cost_per_token=1e-06, output_cost_per_token=5e-06, search_cost_per_query=0.01),
+    request={
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [
+            {"role": "user", "content": "azure-ai-claude-sonnet-4-5-deployment_rates_messages_web_search_two_requests"}
+        ],
+        "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "msg_$UNIQUE_ID",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "content": [{"type": "text", "text": "scripted answer b1c2d3e4f5a6"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1840, "output_tokens": 412, "server_tool_use": {"web_search_requests": 2}},
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.0239,
+        input_cost=0.00184,
+        output_cost=0.00206,
+        prompt_tokens=1840,
+        completion_tokens=412,
+        tool_usage_cost=0.02,
+        rollups=True,
+    ),
+)
+
+AZURE_AI_CLAUDE_SONNET_4_5_DEPLOYMENT_MESSAGES_WEB_SEARCH_STREAM: Final = CostTrackingTestCase(
+    name="azure-ai-claude-sonnet-4-5-deployment_rates_messages_web_search_two_requests_stream",
+    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+    model="azure_ai/claude-sonnet-4-5",
+    endpoint="/v1/messages",
+    deployment=Deployment(input_cost_per_token=1e-06, output_cost_per_token=5e-06, search_cost_per_query=0.01),
+    request={
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [
+            {
+                "role": "user",
+                "content": "azure-ai-claude-sonnet-4-5-deployment_rates_messages_web_search_two_requests_stream",
+            }
+        ],
+        "stream": True,
+        "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}],
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=sse_frames(
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_$REQUEST_ID",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-4-5",
+                    "content": [],
+                    "stop_reason": None,
+                    "usage": {"input_tokens": 1840},
+                },
+            },
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "scripted answer c2d3e4f5a6b1"},
+            },
+            {"type": "content_block_stop", "index": 0},
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn"},
+                "usage": {"output_tokens": 412, "server_tool_use": {"web_search_requests": 2}},
+            },
+            {"type": "message_stop"},
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.0239,
+        input_cost=0.00184,
+        output_cost=0.00206,
+        prompt_tokens=1840,
+        completion_tokens=412,
+        tool_usage_cost=0.02,
+    ),
+)
+
+AZURE_AI_CLAUDE_SONNET_4_5_DEPLOYMENT_MESSAGES_WEB_SEARCH_ZERO_RATE: Final = CostTrackingTestCase(
+    name="azure-ai-claude-sonnet-4-5-deployment_zero_search_rate_messages_two_requests",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="azure_ai/claude-sonnet-4-5",
+    endpoint="/v1/messages",
+    deployment=Deployment(input_cost_per_token=1e-06, output_cost_per_token=5e-06, search_cost_per_query=0.0),
+    request={
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [
+            {"role": "user", "content": "azure-ai-claude-sonnet-4-5-deployment_zero_search_rate_messages_two_requests"}
+        ],
+        "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "msg_$REQUEST_ID",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "content": [{"type": "text", "text": "scripted answer d3e4f5a6b1c2"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1840, "output_tokens": 412, "server_tool_use": {"web_search_requests": 2}},
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.0039,
+        input_cost=0.00184,
+        output_cost=0.00206,
+        prompt_tokens=1840,
+        completion_tokens=412,
+        tool_usage_cost=0.0,
+    ),
+)
+
+AZURE_AI_CLAUDE_SONNET_4_5_DEPLOYMENT_MESSAGES_NO_SEARCH: Final = CostTrackingTestCase(
+    name="azure-ai-claude-sonnet-4-5-deployment_rates_messages_no_server_tool_use",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="azure_ai/claude-sonnet-4-5",
+    endpoint="/v1/messages",
+    deployment=Deployment(input_cost_per_token=1e-06, output_cost_per_token=5e-06, search_cost_per_query=0.01),
+    request={
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [
+            {"role": "user", "content": "azure-ai-claude-sonnet-4-5-deployment_rates_messages_no_server_tool_use"}
+        ],
+        "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "msg_$REQUEST_ID",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "content": [{"type": "text", "text": "scripted answer e4f5a6b1c2d3"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1840, "output_tokens": 412},
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.0039,
+        input_cost=0.00184,
+        output_cost=0.00206,
+        prompt_tokens=1840,
+        completion_tokens=412,
+        tool_usage_cost=0.0,
+    ),
+)
+
+AZURE_AI_CLAUDE_SONNET_4_5_DEPLOYMENT_CHAT_WEB_SEARCH: Final = CostTrackingTestCase(
+    name="azure-ai-claude-sonnet-4-5-deployment_rates_chat_web_search_three_requests",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="azure_ai/claude-sonnet-4-5",
+    deployment=Deployment(input_cost_per_token=1e-06, output_cost_per_token=5e-06, search_cost_per_query=0.01),
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {"role": "user", "content": "azure-ai-claude-sonnet-4-5-deployment_rates_chat_web_search_three_requests"}
+        ],
+        "stream": False,
+        "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}],
+        "allowed_openai_params": ["web_search_options"],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "msg_$REQUEST_ID",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "content": [{"type": "text", "text": "scripted answer f5a6b1c2d3e4"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1840, "output_tokens": 412, "server_tool_use": {"web_search_requests": 3}},
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.0339,
+        input_cost=0.00184,
+        output_cost=0.00206,
+        prompt_tokens=1840,
+        completion_tokens=412,
+        tool_usage_cost=0.03,
+    ),
+)
+
+AZURE_AI_CLAUDE_SONNET_4_5_DEPLOYMENT_CHAT_WEB_SEARCH_STREAM: Final = CostTrackingTestCase(
+    name="azure-ai-claude-sonnet-4-5-deployment_rates_chat_web_search_two_requests_stream",
+    covers="quota_management.spend_tracking.scripted_wire.logs_cost",
+    model="azure_ai/claude-sonnet-4-5",
+    deployment=Deployment(input_cost_per_token=1e-06, output_cost_per_token=5e-06, search_cost_per_query=0.01),
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "user",
+                "content": "azure-ai-claude-sonnet-4-5-deployment_rates_chat_web_search_two_requests_stream",
+            }
+        ],
+        "stream": True,
+        "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}],
+        "allowed_openai_params": ["web_search_options"],
+    },
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=sse_frames(
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_$REQUEST_ID",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-4-5",
+                    "content": [],
+                    "stop_reason": None,
+                    "usage": {"input_tokens": 1840},
+                },
+            },
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "scripted answer a6b1c2d3e4f5"},
+            },
+            {"type": "content_block_stop", "index": 0},
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn"},
+                "usage": {"output_tokens": 412, "server_tool_use": {"web_search_requests": 2}},
+            },
+            {"type": "message_stop"},
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.0239,
+        input_cost=0.00184,
+        output_cost=0.00206,
+        prompt_tokens=1840,
+        completion_tokens=412,
+        tool_usage_cost=0.02,
+    ),
+)
+
+AZURE_AI_CLAUDE_SONNET_4_5_DEPLOYMENT_RESPONSES_WEB_SEARCH: Final = CostTrackingTestCase(
+    name="azure-ai-claude-sonnet-4-5-deployment_rates_responses_web_search_two_requests",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="azure_ai/claude-sonnet-4-5",
+    endpoint="/v1/responses",
+    deployment=Deployment(input_cost_per_token=1e-06, output_cost_per_token=5e-06, search_cost_per_query=0.01),
+    request={
+        "model": "$MODEL",
+        "input": "azure-ai-claude-sonnet-4-5-deployment_rates_responses_web_search_two_requests",
+        "tools": [{"type": "web_search"}],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "msg_$REQUEST_ID",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "content": [{"type": "text", "text": "scripted answer b1c2d3e4f5a7"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1840, "output_tokens": 412, "server_tool_use": {"web_search_requests": 2}},
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.0239,
+        input_cost=0.00184,
+        output_cost=0.00206,
+        prompt_tokens=1840,
+        completion_tokens=412,
+        tool_usage_cost=0.02,
+    ),
+)
+
+
 # groq/qwen/qwen3.8-27b
 GROQ_QWEN_3_8_JSON: Final = CostTrackingTestCase(
     name="groq-qwen-3.8-json",
@@ -867,7 +1428,293 @@ XAI_GROK_4_7_INPUT_TEXT: Final = CostTrackingTestCase(
 )
 
 
+AZURE_AI_CLAUDE_FABLE_5_1_INPUT_TEXT: Final = CLAUDE_FABLE_5_1_INPUT_TEXT.model_copy(
+    update={
+        "name": "azure_ai/claude-fable-5-1-input_text",
+        "model": "azure_ai/claude-fable-5-1",
+        "response": JsonResponse(
+            content_type="application/json",
+            body={
+                "id": "msg_$REQUEST_ID",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-fable-5-1",
+                "content": [
+                    {"type": "thinking", "thinking": "scripted thought", "signature": "scripted signature"},
+                    {"type": "text", "text": "scripted answer 3d584fa07ae1"},
+                ],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "stop_details": None,
+                "container": None,
+                "diagnostics": None,
+                "usage": {
+                    "input_tokens": 1840,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                    "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                    "output_tokens": 412,
+                    "output_tokens_details": {"thinking_tokens": 0},
+                    "service_tier": "standard",
+                    "inference_geo": "not_available",
+                },
+            },
+        ),
+        "expected": ExactExpected(
+            spend=0.0663, input_cost=0.03128, output_cost=0.03502, prompt_tokens=1840, completion_tokens=412
+        ),
+    }
+)
+
+AZURE_AI_CLAUDE_FABLE_5_1_STREAM: Final = CLAUDE_FABLE_5_1_STREAM.model_copy(
+    update={
+        "name": "azure_ai/claude-fable-5-1-stream",
+        "model": "azure_ai/claude-fable-5-1",
+        "response": SseResponse(
+            content_type="text/event-stream",
+            frames=sse_frames(
+                *(
+                    {
+                        "type": "message_start",
+                        "message": {
+                            "id": "msg_$REQUEST_ID",
+                            "type": "message",
+                            "role": "assistant",
+                            "model": "claude-fable-5-1",
+                            "content": [],
+                            "stop_reason": None,
+                            "stop_sequence": None,
+                            "stop_details": None,
+                            "container": None,
+                            "diagnostics": None,
+                            "usage": {
+                                "input_tokens": 1840,
+                                "output_tokens": 1,
+                                "cache_creation_input_tokens": 0,
+                                "cache_read_input_tokens": 0,
+                                "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                                "service_tier": "standard",
+                                "inference_geo": "not_available",
+                            },
+                        },
+                    },
+                    {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": "", "signature": ""}},
+                    {"type": "ping"},
+                    {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": ""}},
+                    {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {"type": "signature_delta", "signature": "scripted signature"},
+                    },
+                    {"type": "content_block_stop", "index": 0},
+                    {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}},
+                    *(
+                        {
+                            "type": "content_block_delta",
+                            "index": 1,
+                            "delta": {"type": "text_delta", "text": text},
+                        }
+                        for text in (
+                            "scripted ",
+                            "answer ",
+                            "3d",
+                            "58",
+                            "4f",
+                            "a0",
+                            "7a",
+                            "e1",
+                            "",
+                            "",
+                        )
+                    ),
+                    {"type": "content_block_stop", "index": 1},
+                    {
+                        "type": "message_delta",
+                        "delta": {
+                            "container": None,
+                            "stop_details": None,
+                            "stop_reason": "end_turn",
+                            "stop_sequence": None,
+                        },
+                        "usage": {
+                            "input_tokens": 1840,
+                            "output_tokens": 412,
+                            "cache_creation_input_tokens": 0,
+                            "cache_read_input_tokens": 0,
+                            "output_tokens_details": {"thinking_tokens": 0},
+                        },
+                    },
+                    {"type": "message_stop"},
+                )
+            ),
+        ),
+        "expected": ExactExpected(
+            spend=0.0663, input_cost=0.03128, output_cost=0.03502, prompt_tokens=1840, completion_tokens=412
+        ),
+    }
+)
+
+AZURE_AI_CLAUDE_HAIKU_5_5_INPUT_TEXT: Final = CLAUDE_HAIKU_5_5_INPUT_TEXT.model_copy(
+    update={
+        "name": "azure_ai/claude-haiku-5-5-input_text",
+        "model": "azure_ai/claude-haiku-5-5",
+        "response": JsonResponse(
+            content_type="application/json",
+            body={
+                "id": "msg_$REQUEST_ID",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-5-5",
+                "content": [
+                    {"type": "thinking", "thinking": "scripted thought", "signature": "scripted signature"},
+                    {"type": "text", "text": "scripted answer 10673f3a1db3"},
+                ],
+                "container": None,
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "stop_details": None,
+                "usage": {
+                    "input_tokens": 1840,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                    "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                    "output_tokens": 412,
+                    "output_tokens_details": {"thinking_tokens": 0},
+                    "service_tier": "standard",
+                    "inference_geo": "global",
+                },
+                "diagnostics": None,
+            },
+        ),
+        "expected": ExactExpected(
+            spend=0.000741, input_cost=0.0003496, output_cost=0.0003914, prompt_tokens=1840, completion_tokens=412
+        ),
+    }
+)
+
+AZURE_AI_CLAUDE_HAIKU_5_5_STREAM: Final = CLAUDE_HAIKU_5_5_STREAM.model_copy(
+    update={
+        "name": "azure_ai/claude-haiku-5-5-stream",
+        "model": "azure_ai/claude-haiku-5-5",
+        "response": SseResponse(
+            content_type="text/event-stream",
+            frames=sse_frames(
+                *(
+                    {
+                        "type": "message_start",
+                        "message": {
+                            "id": "msg_$REQUEST_ID",
+                            "type": "message",
+                            "role": "assistant",
+                            "model": "claude-haiku-5-5",
+                            "content": [],
+                            "stop_reason": None,
+                            "stop_sequence": None,
+                            "stop_details": None,
+                            "container": None,
+                            "diagnostics": None,
+                            "usage": {
+                                "input_tokens": 1840,
+                                "output_tokens": 1,
+                                "cache_creation_input_tokens": 0,
+                                "cache_read_input_tokens": 0,
+                                "cache_creation": {
+                                    "ephemeral_5m_input_tokens": 0,
+                                    "ephemeral_1h_input_tokens": 0,
+                                },
+                                "service_tier": "standard",
+                                "inference_geo": "global",
+                            },
+                        },
+                    },
+                    {
+                        "type": "content_block_start",
+                        "index": 0,
+                        "content_block": {"type": "thinking", "thinking": "", "signature": ""},
+                    },
+                    {"type": "ping"},
+                    {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {"type": "thinking_delta", "thinking": ""},
+                    },
+                    {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {"type": "signature_delta", "signature": "scripted signature"},
+                    },
+                    {"type": "content_block_stop", "index": 0},
+                    {
+                        "type": "content_block_start",
+                        "index": 1,
+                        "content_block": {"type": "text", "text": ""},
+                    },
+                    *(
+                        {
+                            "type": "content_block_delta",
+                            "index": 1,
+                            "delta": {"type": "text_delta", "text": text},
+                        }
+                        for text in (
+                            "scripted ",
+                            "ans",
+                            "wer ",
+                            "2",
+                            "b",
+                            "f",
+                            "9",
+                            "b",
+                            "c",
+                            "b",
+                            "a",
+                            "4",
+                            "444",
+                        )
+                    ),
+                    {"type": "content_block_stop", "index": 1},
+                    {
+                        "type": "message_delta",
+                        "delta": {
+                            "container": None,
+                            "stop_details": None,
+                            "stop_reason": "end_turn",
+                            "stop_sequence": None,
+                        },
+                        "usage": {
+                            "input_tokens": 1840,
+                            "cache_creation_input_tokens": 0,
+                            "cache_read_input_tokens": 0,
+                            "output_tokens": 412,
+                            "output_tokens_details": {"thinking_tokens": 0},
+                        },
+                    },
+                    {"type": "message_stop"},
+                )
+            ),
+        ),
+        "expected": ExactExpected(
+            spend=0.000741, input_cost=0.0003496, output_cost=0.0003914, prompt_tokens=1840, completion_tokens=412
+        ),
+    }
+)
+
+
+PERPLEXITY_SONAR_NEXT_OFF_PEAK: Final = PERPLEXITY_SONAR_NEXT_NO_SEARCH.model_copy(
+    update={
+        "name": "perplexity-sonar-next-off_peak",
+        "deployment": Deployment(
+            off_peak_pricing=OffPeakPricing(
+                hours_utc=ALWAYS_OPEN_OFF_PEAK_WINDOW, input_cost_per_token=2.26e-06, output_cost_per_token=2.1e-06
+            )
+        ),
+        "expected": ExactExpected(
+            spend=0.0050236, input_cost=0.0041584, output_cost=0.0008652, prompt_tokens=1840, completion_tokens=412
+        ),
+    }
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
+    PERPLEXITY_SONAR_NEXT_OFF_PEAK,
     NOVA_NEXT_TRANSCRIPTIONS_PER_SECOND,
     AMAZON_NOVA_CANVAS_NEXT_IMAGES_ONE,
     COHERE_EMBEDDINGS_V5,
@@ -896,13 +1743,37 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     BEDROCK_INVOKE_HAIKU_STREAM,
     AZURE_AI_GPT_5_4_MINI_LATEST,
     AZURE_AI_GPT_5_4_MINI_LATEST_STREAM,
+    AZURE_AI_CLAUDE_HAIKU_4_5_MESSAGES_WEB_SEARCH,
+    AZURE_AI_CLAUDE_HAIKU_4_5_MESSAGES_WEB_SEARCH_STREAM,
+    AZURE_AI_CLAUDE_HAIKU_4_5_MESSAGES_WEB_SEARCH_ONE_REQUEST,
+    AZURE_AI_CLAUDE_HAIKU_4_5_MESSAGES_NO_SEARCH,
+    AZURE_AI_CLAUDE_HAIKU_4_5_CHAT_WEB_SEARCH,
+    AZURE_AI_CLAUDE_HAIKU_4_5_CHAT_WEB_SEARCH_STREAM,
+    AZURE_AI_CLAUDE_HAIKU_4_5_RESPONSES_WEB_SEARCH,
+    AZURE_AI_CLAUDE_SONNET_4_5_DEPLOYMENT_MESSAGES_WEB_SEARCH,
+    AZURE_AI_CLAUDE_SONNET_4_5_DEPLOYMENT_MESSAGES_WEB_SEARCH_STREAM,
+    AZURE_AI_CLAUDE_SONNET_4_5_DEPLOYMENT_MESSAGES_WEB_SEARCH_ZERO_RATE,
+    AZURE_AI_CLAUDE_SONNET_4_5_DEPLOYMENT_MESSAGES_NO_SEARCH,
+    AZURE_AI_CLAUDE_SONNET_4_5_DEPLOYMENT_CHAT_WEB_SEARCH,
+    AZURE_AI_CLAUDE_SONNET_4_5_DEPLOYMENT_CHAT_WEB_SEARCH_STREAM,
+    AZURE_AI_CLAUDE_SONNET_4_5_DEPLOYMENT_RESPONSES_WEB_SEARCH,
     GROQ_QWEN_3_8_JSON,
     GROQ_QWEN_3_8_STREAM_X_GROQ_RECOUNT,
     COHERE_COMMAND_A_V2_TOKENS,
     MISTRAL_MEDIUM_2604_JSON,
     XAI_GROK_4_7_INPUT_TEXT,
+    AZURE_AI_CLAUDE_FABLE_5_1_INPUT_TEXT,
+    AZURE_AI_CLAUDE_FABLE_5_1_STREAM,
+    AZURE_AI_CLAUDE_HAIKU_5_5_INPUT_TEXT,
+    AZURE_AI_CLAUDE_HAIKU_5_5_STREAM,
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(plain=TEXT_COMPLETIONS_OPENAI_BASIC, streamed=TEXT_COMPLETIONS_OPENAI_STREAM_USAGE),
+    StreamParityTestCase(
+        plain=AZURE_AI_CLAUDE_FABLE_5_1_INPUT_TEXT, streamed=AZURE_AI_CLAUDE_FABLE_5_1_STREAM
+    ),
+    StreamParityTestCase(
+        plain=AZURE_AI_CLAUDE_HAIKU_5_5_INPUT_TEXT, streamed=AZURE_AI_CLAUDE_HAIKU_5_5_STREAM
+    ),
 )

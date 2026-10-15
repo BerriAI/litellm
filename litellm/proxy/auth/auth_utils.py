@@ -697,6 +697,15 @@ def is_request_body_safe(
     return True
 
 
+def carries_client_side_overrides(request_body: object) -> bool:
+    if not isinstance(request_body, dict):
+        return False
+    try:
+        return not is_request_body_safe(request_body=request_body, general_settings={}, llm_router=None, model="")
+    except ValueError:
+        return True
+
+
 def _coerce_metadata_to_dict(value: object) -> dict[str, object] | None:
     """Return ``value`` as a dict, parsing it from JSON if delivered as a string.
 

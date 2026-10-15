@@ -24,7 +24,7 @@ from _fake_openai_endpoint_server import (
     moderations,
     triton_embeddings,
 )
-from integration.cost_calculation.cost_map import COST_MAP_ENTRIES
+from integration.cost_calculation.cost_map import COST_MAP_ENTRIES, FALLBACK_GENERALIZATIONS
 from integration.cost_calculation.cost_tracking_case import (
     BinaryResponse,
     EventStreamEvent,
@@ -275,7 +275,7 @@ class Provider:
         return JSONResponse({"deleted": deleted}, status_code=200 if deleted else 404)
 
     async def cost_map(self, _request: Request) -> Response:
-        return JSONResponse(COST_MAP_ENTRIES)
+        return JSONResponse({**COST_MAP_ENTRIES, "fallback_generalizations": FALLBACK_GENERALIZATIONS})
 
     async def oauth_token(self, _request: Request) -> Response:
         return JSONResponse(
@@ -496,6 +496,7 @@ class Provider:
                     .encode(),
                     media_type=response.content_type,
                     status_code=response.status,
+                    headers=response.headers,
                 )
             case BinaryResponse():
                 return Response(
@@ -518,13 +519,13 @@ class Provider:
                             ).encode()
                             await asyncio.sleep(response.frame_delay_ms / 1000)
 
-                    return StreamingResponse(stream(), media_type=response.content_type)
+                    return StreamingResponse(stream(), media_type=response.content_type, headers=response.headers)
                 stream_body: Final = (
                     ("\n\n".join(response.frames) + "\n\n")
                     .replace("$REQUEST_ID", scenario_id)
                     .replace("$UNIQUE_ID", unique_id)
                 )
-                return Response(content=stream_body.encode(), media_type=response.content_type)
+                return Response(content=stream_body.encode(), media_type=response.content_type, headers=response.headers)
             case EventStreamResponse():
                 events: Final = (
                     tuple(

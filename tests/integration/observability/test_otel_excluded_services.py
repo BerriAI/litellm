@@ -19,15 +19,18 @@ from integration._support.client import (
 )
 from integration._support.otlp_sink import (
     AuditConfigWriter,
+    ConnectSink,
     Span,
     SpanSinks,
     audit_configuration_writer,
     langfuse_callback_variables,
+    owned_connect_sink,
     owned_sinks,
     recorded_spans,
     spans_for_trace,
 )
 from integration._support.process import owned_proxy, owned_proxy_process
+from integration._support.redis_process import owned_redis
 from pydantic import JsonValue
 
 DB_SYSTEM_KEYS: Final = frozenset({"db.system.name", "db.system"})
@@ -38,6 +41,14 @@ TAIL_QUIET_SECONDS: Final = 5 * TENANT_EXPORT_INTERVAL_MILLISECONDS / 1000
 @pytest.fixture(autouse=True)
 def tenant_export_interval(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OTEL_BSP_SCHEDULE_DELAY", str(TENANT_EXPORT_INTERVAL_MILLISECONDS))
+
+
+@pytest.fixture(autouse=True)
+def private_redis(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    with owned_redis(tmp_path / "redis") as cache:
+        monkeypatch.setenv("REDIS_HOST", cache.host)
+        monkeypatch.setenv("REDIS_PORT", str(cache.port))
+        yield
 
 
 @pytest.fixture
@@ -88,19 +99,43 @@ def _operator_langfuse(audit_sinks: SpanSinks) -> dict[str, str]:
     }
 
 
-def _add_callback(gateway: Gateway, team_id: str, callback_vars: Mapping[str, JsonValue]) -> httpx.Response:
+def _newrelic_environment(audit_sinks: SpanSinks, newrelic_sink: ConnectSink) -> dict[str, str]:
+    return {
+        "LITELLM_OTEL_V2": "1",
+        **_operator_langfuse(audit_sinks),
+        "HTTPS_PROXY": newrelic_sink.proxy_url,
+        "NO_PROXY": "127.0.0.1,localhost",
+        "REQUESTS_CA_BUNDLE": newrelic_sink.ca_pem,
+    }
+
+
+def _newrelic_vars(excluded_services: str | None = None) -> dict[str, JsonValue]:
+    variables: Final[dict[str, JsonValue]] = {"newrelic_api_key": "nr-team-excluded-services"}
+    return variables if excluded_services is None else {**variables, "excluded_services": excluded_services}
+
+
+def _add_callback(
+    gateway: Gateway,
+    team_id: str,
+    callback_vars: Mapping[str, JsonValue],
+    callback_name: str = "langfuse_otel",
+) -> httpx.Response:
     return gateway.request(
         "POST",
         f"/team/{team_id}/callback",
-        {"callback_name": "langfuse_otel", "callback_vars": dict(callback_vars)},
+        {"callback_name": callback_name, "callback_vars": dict(callback_vars)},
     )
 
 
-def _drive(candidate: Gateway, langfuse_vars: Mapping[str, JsonValue]) -> httpx.Response:
+def _drive(
+    candidate: Gateway,
+    callback_vars: Mapping[str, JsonValue],
+    callback_name: str = "langfuse_otel",
+) -> httpx.Response:
     with candidate.scenario() as scenario:
         model: Final = scenario.model(model="openai/audit-chat", api_base=f"{candidate.upstream_url}/v1")
         team_id: Final = scenario.team()
-        callback: Final = _add_callback(candidate, team_id, langfuse_vars)
+        callback: Final = _add_callback(candidate, team_id, callback_vars, callback_name)
         assert callback.status_code == 200, callback.text
         key: Final = scenario.key(team_id=team_id)
         response: Final = candidate.request(
@@ -297,6 +332,85 @@ def test_without_excluded_services_the_tenant_still_gets_redis_and_postgres_span
         _, all_tenant = recorded_spans(audit_sinks.tenant, tenant_start)
         systems: Final = _db_systems(all_tenant)
         assert {"redis", "postgresql"} <= systems, f"datastore spans missing at tenant: {systems}"
+
+
+@pytest.mark.timeout(180)
+def test_team_excluded_services_replaces_global_and_keeps_operator_db_spans(
+    gateway: Gateway,
+    audit_sinks: SpanSinks,
+    otel_audit_config: AuditConfigWriter,
+    tmp_path: Path,
+) -> None:
+    config: Final = _config_with(tmp_path, otel_audit_config, extra=_guardrail_block)
+    with owned_connect_sink(tmp_path / "newrelic") as newrelic_sink:
+        overrides: Final = _newrelic_environment(audit_sinks, newrelic_sink)
+        with owned_proxy(gateway, tmp_path, overrides, config=config, workers=2) as candidate:
+            operator_start, _ = recorded_spans(audit_sinks.operator)
+            tenant_start, _ = recorded_spans(newrelic_sink.control_url)
+            traffic: Final = _drive(candidate, _newrelic_vars("redis,postgres"), callback_name="newrelic")
+            _await_db_span(
+                audit_sinks.operator,
+                None,
+                "postgres.update LiteLLM_VerificationToken",
+                seconds=60,
+                since=operator_start,
+            )
+            operator_trace: Final = _trace_id(audit_sinks.operator, traffic)
+            tenant_trace: Final = _trace_id(newrelic_sink.control_url, traffic)
+            assert operator_trace == tenant_trace
+            operator_trace_spans: Final = _trace_spans(audit_sinks.operator, operator_trace, seconds=15)
+            assert "redis" in _db_systems(operator_trace_spans), _db_systems(operator_trace_spans)
+            _, operator_spans = recorded_spans(audit_sinks.operator, operator_start)
+            assert "postgresql" in _db_systems(operator_spans), _db_systems(operator_spans)
+            tenant_trace_spans: Final = _trace_spans(newrelic_sink.control_url, tenant_trace, seconds=15)
+            _, tenant_spans = recorded_spans(newrelic_sink.control_url, tenant_start)
+            assert _db_systems(tenant_trace_spans) == set(), _db_systems(tenant_trace_spans)
+            assert _db_systems(tenant_spans) == set(), _db_systems(tenant_spans)
+
+
+@pytest.mark.timeout(180)
+def test_team_excluded_services_none_overrides_global(
+    gateway: Gateway,
+    audit_sinks: SpanSinks,
+    otel_audit_config: AuditConfigWriter,
+    tmp_path: Path,
+) -> None:
+    config: Final = _config_with(
+        tmp_path, otel_audit_config, otel={"excluded_services": ["redis", "postgres"]}, extra=_guardrail_block
+    )
+    with owned_connect_sink(tmp_path / "newrelic") as newrelic_sink:
+        overrides: Final = _newrelic_environment(audit_sinks, newrelic_sink)
+        with owned_proxy(gateway, tmp_path, overrides, config=config, workers=2) as candidate:
+            tenant_start, _ = recorded_spans(newrelic_sink.control_url)
+            traffic: Final = _drive(candidate, _newrelic_vars("none"), callback_name="newrelic")
+            tenant_trace: Final = _trace_id(newrelic_sink.control_url, traffic)
+            _await_db_span(newrelic_sink.control_url, tenant_trace, "redis", seconds=60)
+            _await_db_span(newrelic_sink.control_url, None, "postgresql", seconds=60, since=tenant_start)
+            tenant_trace_spans: Final = _trace_spans(newrelic_sink.control_url, tenant_trace, seconds=15)
+            _, tenant_spans = recorded_spans(newrelic_sink.control_url, tenant_start)
+            assert {"redis", "postgresql"} <= _db_systems(tenant_spans), _db_systems(tenant_spans)
+            assert {"redis", "postgresql"} <= _db_systems(tenant_trace_spans), _db_systems(tenant_trace_spans)
+
+
+@pytest.mark.timeout(180)
+def test_team_excluded_services_unset_inherits_global(
+    gateway: Gateway,
+    audit_sinks: SpanSinks,
+    otel_audit_config: AuditConfigWriter,
+    tmp_path: Path,
+) -> None:
+    config: Final = _config_with(
+        tmp_path, otel_audit_config, otel={"excluded_services": ["redis", "postgres"]}, extra=_guardrail_block
+    )
+    with owned_connect_sink(tmp_path / "newrelic") as newrelic_sink:
+        overrides: Final = _newrelic_environment(audit_sinks, newrelic_sink)
+        with owned_proxy(gateway, tmp_path, overrides, config=config, workers=2) as candidate:
+            tenant_start, _ = recorded_spans(newrelic_sink.control_url)
+            traffic: Final = _drive(candidate, _newrelic_vars(), callback_name="newrelic")
+            tenant_trace: Final = _trace_id(newrelic_sink.control_url, traffic)
+            _trace_spans(newrelic_sink.control_url, tenant_trace, seconds=15)
+            _, tenant_spans = recorded_spans(newrelic_sink.control_url, tenant_start)
+            assert _db_systems(tenant_spans) == set(), _db_systems(tenant_spans)
 
 
 @pytest.mark.parametrize("otel", [None, True, "on", "", []], ids=["null", "true", "on", "empty_string", "empty_list"])
