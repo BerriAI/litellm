@@ -9015,7 +9015,7 @@ async def get_available_models_for_user(
 
     key_models: Final[Sequence[str]] = (
         ()
-        if requested_team_object is not None
+        if requested_team_object is not None and requested_team_object.team_id != user_api_key_dict.team_id
         else get_key_models(
             user_api_key_dict=user_api_key_dict,
             proxy_model_list=proxy_model_list,
@@ -9054,12 +9054,14 @@ async def get_available_models_for_user(
     )
 
     key_model_names: Final = cast("list[str]", user_api_key_dict.models)  # cast-ok: key models are a string array
-    key_inherits_team_models: Final = SpecialModelNames.all_team_models.value in key_model_names
+    key_model_check_skipped: Final = (
+        bool(user_api_key_dict.config) or SpecialModelNames.all_team_models.value in key_model_names
+    )
     granted_key_models: Final = (
         (
             *key_models,
             *access_group_models.key,
-            *(access_group_models.team if key_inherits_team_models else ()),
+            *(access_group_models.team if key_model_check_skipped else ()),
         )
         if key_models
         else key_models
