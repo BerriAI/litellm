@@ -70,6 +70,15 @@ def schema_nested(levels: int) -> dict[str, JsonValue]:
     )
 
 
+def parsed_json(raw: bytes) -> JsonValue:
+    return json.loads(raw)
+
+
+def json_mapping(value: JsonValue) -> dict[str, JsonValue]:
+    assert isinstance(value, dict), f"Expected an object, received {type(value).__name__}"
+    return value
+
+
 def nonce() -> str:
     return f"nonce-{uuid.uuid4().hex}"
 
@@ -92,7 +101,7 @@ def claude_reply(request: Request) -> Reply:
         "stop_sequence": None,
         "usage": {"input_tokens": 12, "output_tokens": 3},
     }
-    if _JSON_OBJECT.validate_json(request.body).get("stream") is not True:
+    if json_mapping(parsed_json(request.body)).get("stream") is not True:
         return Reply(body=json.dumps(message).encode())
     events: Final = (
         ("message_start", {"type": "message_start", "message": {**message, "content": [], "stop_reason": None}}),
@@ -281,7 +290,7 @@ def reply_text(status: int, raw: bytes, *, streaming: bool) -> str:
 
 def sent_body(requests: Sequence[Request], target: str) -> dict[str, JsonValue]:
     assert [request.target.split("?")[0] for request in requests] == [target], [r.target for r in requests]
-    return _JSON_OBJECT.validate_json(requests[0].body)
+    return json_mapping(parsed_json(requests[0].body))
 
 
 @pytest.mark.parametrize("streaming", [False, True], ids=["json", "stream"])
@@ -350,7 +359,7 @@ def test_spend_log_keeps_the_tools_the_caller_sent(rig: Rig, model: str, guardra
     assert object_value(rows[0]["proxy_server_request"])["tools"] == [strict_tool()]
 
 
-@pytest.mark.parametrize("tools", [7, "", "x" * 5000, ["lint"]], ids=["int", "empty_string", "five_kb", "list_of_str"])
+@pytest.mark.parametrize("tools", [7, "x" * 5000, ["lint"]], ids=["int", "five_kb", "list_of_str"])
 def test_a_malformed_tools_field_is_answered_with_an_error_and_the_proxy_keeps_serving(
     rig: Rig, tools: JsonValue
 ) -> None:
@@ -363,6 +372,14 @@ def test_a_malformed_tools_field_is_answered_with_an_error_and_the_proxy_keeps_s
     control_nonce: Final = nonce()
     control_status, control_raw = rig.send(messages_body(CLAUDE_MODEL, control_nonce, tools=[strict_tool()]))
     assert reply_text(control_status, control_raw, streaming=False) == f"linted {control_nonce.removeprefix('nonce-')}"
+
+
+def test_an_empty_string_tools_field_reaches_claude_as_sent(rig: Rig) -> None:
+    request_nonce: Final = nonce()
+    status, raw = rig.send(messages_body(CLAUDE_MODEL, request_nonce, tools=""))
+
+    assert reply_text(status, raw, streaming=False) == f"linted {request_nonce.removeprefix('nonce-')}"
+    assert sent_body(rig.received(request_nonce), CLAUDE_TARGET)["tools"] == ""
 
 
 @pytest.mark.parametrize(
@@ -380,7 +397,7 @@ def test_a_schema_nested_past_the_recursion_limit_reaches_the_provider_as_sent(
     )
 
     assert reply_text(status, raw, streaming=False) == f"linted {request_nonce.removeprefix('nonce-')}"
-    tool: Final = object_value(list_value(sent_body(rig.received(request_nonce), target)["tools"])[0])
+    tool: Final = json_mapping(list_value(sent_body(rig.received(request_nonce), target)["tools"])[0])
     assert tool.get("input_schema", tool.get("parameters")) == schema
 
 

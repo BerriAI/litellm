@@ -4506,6 +4506,18 @@ def test_translate_anthropic_tools_to_openai_leaves_tools_deepcopy_cannot_copy_u
     assert set(tool["input_schema"]) == {"type", "properties"}
 
 
+def test_translate_anthropic_tools_to_openai_translates_a_tool_json_cannot_copy():
+    adapter: Final = LiteLLMAnthropicMessagesAdapter()
+    properties: Final = {"level": {"enum": {1, 2}}}
+
+    translated_tools, _ = adapter.translate_anthropic_tools_to_openai(
+        tools=[{"name": "lint", "input_schema": {"type": "object", "properties": properties}}]
+    )
+
+    assert [translated["function"]["name"] for translated in translated_tools] == ["lint"]
+    assert translated_tools[0]["function"]["parameters"]["properties"] == properties
+
+
 TOOL_RESULT_PDF_B64 = base64.b64encode(b"%PDF-1.4 minimal regression fixture").decode()
 
 
