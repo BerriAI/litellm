@@ -305,7 +305,7 @@ class ContextCachingEndpoints(VertexBase):
 
         return None
 
-    def check_and_create_cache(
+    def check_and_create_cache(  # noqa: C901  # preserve the synchronous cache lifecycle and its early-return policy
         self,
         messages: list[AllMessageValues],  # receives openai format messages
         optional_params: dict,  # cache the tools if present, in case cache content exists in messages
@@ -481,7 +481,7 @@ class ContextCachingEndpoints(VertexBase):
             raw_response_cached.get("name"),
         )
 
-    async def async_check_and_create_cache(
+    async def async_check_and_create_cache(  # noqa: C901  # preserve the asynchronous cache lifecycle and its early-return policy
         self,
         messages: list[AllMessageValues],  # receives openai format messages
         optional_params: dict,  # cache the tools if present, in case cache content exists in messages

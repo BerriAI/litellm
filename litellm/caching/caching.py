@@ -439,31 +439,8 @@ class Cache:
                 return self._add_namespace_to_cache_key(preset_cache_key, **kwargs)
             return preset_cache_key
 
-        combined_kwargs: Final = ModelParamHelper.get_all_llm_api_params()
         is_semantic_cache: Final = self._is_semantic_cache()
-        scope_excluded_params: Final = self._SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS if is_semantic_cache else frozenset()
-        for param in kwargs:
-            if param in scope_excluded_params:
-                continue
-            if param in combined_kwargs or param in _ALWAYS_KEYED_PROVIDER_PARAMS:
-                param_value: str | None = self._get_param_value(param, kwargs)
-                if param in _ALWAYS_KEYED_PROVIDER_PARAMS and not param_value:
-                    continue
-                if param_value is not None:
-                    cache_key += f"{param}: {param_value}"
-            elif not is_litellm_owned_kwarg(param):
-                if litellm.enable_caching_on_provider_specific_optional_params is True:  # feature flagged for now
-                    if kwargs[param] is None:
-                        continue  # ignore None params
-                    optional_param_value: object = kwargs[param]
-                    cache_key += f"{param}: {optional_param_value}"
-
-        if is_semantic_cache:
-            cache_key += self._get_semantic_cache_tenant_scope(kwargs)
-        else:
-            cache_key += self._get_proxy_cache_scope(  # rebind-ok: append authenticated proxy scope to the cache key
-                cast(Mapping[str, object], kwargs)  # cast-ok: cache kwargs are string-keyed
-            )  # noqa: LIT010  # preserve the existing cache-key assembly path
+        cache_key = self._build_cache_key_source(kwargs, is_semantic_cache)
 
         reasoning_summary: Final = peek_reasoning_summary_aliases(kwargs)
         reasoning_summary_material: Final = (
@@ -483,6 +460,37 @@ class Cache:
         kwargs_for_preset: Final = {k: v for k, v in kwargs.items() if k != "preset_cache_key"}
         self._set_preset_cache_key_in_kwargs(preset_cache_key=hashed_cache_key, **kwargs_for_preset)
         return hashed_cache_key
+
+    def _build_cache_key_source(
+        self,
+        kwargs: Mapping[str, object],
+        is_semantic_cache: bool,
+    ) -> str:
+        """Build the unhashed request source used by ``get_cache_key``."""
+        cache_key = ""
+        combined_kwargs: Final = ModelParamHelper.get_all_llm_api_params()
+        scope_excluded_params: Final = (
+            self._SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS if is_semantic_cache else frozenset()
+        )
+        for param in kwargs:
+            if param in scope_excluded_params:
+                continue
+            if param in combined_kwargs or param in _ALWAYS_KEYED_PROVIDER_PARAMS:
+                param_value: str | None = self._get_param_value(param, kwargs)
+                if param in _ALWAYS_KEYED_PROVIDER_PARAMS and not param_value:
+                    continue
+                if param_value is not None:
+                    cache_key += f"{param}: {param_value}"
+            elif not is_litellm_owned_kwarg(param):
+                if litellm.enable_caching_on_provider_specific_optional_params is True:
+                    if kwargs[param] is None:
+                        continue
+                    optional_param_value: object = kwargs[param]
+                    cache_key += f"{param}: {optional_param_value}"
+
+        if is_semantic_cache:
+            return cache_key + self._get_semantic_cache_tenant_scope(kwargs)
+        return cache_key + self._get_proxy_cache_scope(kwargs)
 
     def _get_param_value(
         self,
@@ -1137,22 +1145,9 @@ class Cache:
                 if self.ttl is not None:
                     kwargs["ttl"] = self.ttl
 
-                cache_list: Final = []
-                if isinstance(kwargs["input"], list):
-                    for idx, i in enumerate(kwargs["input"]):
-                        cache_entry = self.add_embedding_response_to_cache(result, i, kwargs, idx)
-                        if cache_entry is None:
-                            return
-                        cache_key, cached_data, kwargs = cache_entry  # rebind-ok: use normalized cache entry
-                        cache_list.append((cache_key, cached_data))
-                elif isinstance(kwargs["input"], str):
-                    cache_entry = self.add_embedding_response_to_cache(  # rebind-ok: embedding entry is optional
-                        result, kwargs["input"], kwargs
-                    )
-                    if cache_entry is None:
-                        return
-                    cache_key, cached_data, kwargs = cache_entry  # rebind-ok: use normalized cache entry
-                    cache_list.append((cache_key, cached_data))
+                cache_list, kwargs = self._embedding_cache_entries(result, kwargs)
+                if cache_list is None:
+                    return
 
                 if dynamic_cache_object is not None:
                     await dynamic_cache_object.async_set_cache_pipeline(cache_list=cache_list, **kwargs)
@@ -1160,6 +1155,28 @@ class Cache:
                     await self.cache.async_set_cache_pipeline(cache_list=cache_list, **kwargs)
         except Exception as e:
             self._log_add_cache_failure(e)
+
+    def _embedding_cache_entries(
+        self,
+        result: object,
+        kwargs: dict[str, Any],
+    ) -> tuple[list[tuple[str, Any]], dict[str, Any]] | None:
+        cache_list: list[tuple[str, Any]] = []
+        inputs = kwargs["input"]
+        if isinstance(inputs, list):
+            for idx, value in enumerate(inputs):
+                cache_entry = self.add_embedding_response_to_cache(result, value, kwargs, idx)
+                if cache_entry is None:
+                    return None
+                cache_key, cached_data, kwargs = cache_entry  # rebind-ok: normalized cache entry
+                cache_list.append((cache_key, cached_data))
+        elif isinstance(inputs, str):
+            cache_entry = self.add_embedding_response_to_cache(result, inputs, kwargs)
+            if cache_entry is None:
+                return None
+            cache_key, cached_data, kwargs = cache_entry  # rebind-ok: normalized cache entry
+            cache_list.append((cache_key, cached_data))
+        return cache_list, kwargs
 
     def should_use_cache(self, **kwargs):
         """
