@@ -118,6 +118,41 @@ def _is_response_cache_excluded(model: str | None, kwargs: Mapping[str, object])
     )
 
 
+def _cache_controls(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    controls: Final = kwargs.get("cache")
+    return TypeAdapter(Mapping[str, object]).validate_python(controls) if isinstance(controls, Mapping) else {}
+
+
+def is_call_type_cached(call_type: str) -> bool:
+    if litellm.cache is None or litellm.cache.supported_call_types is None:
+        return False
+    covering_call_types: Final = ("aresponses", "responses") if call_type == "aresponses" else (call_type,)
+    return any(name in litellm.cache.supported_call_types for name in covering_call_types)
+
+
+def cache_reads_requested(kwargs: Mapping[str, object]) -> bool:
+    caching: Final = kwargs.get("caching")
+    return ((caching is None and litellm.cache is not None) or caching is True) and _cache_controls(kwargs).get(
+        "no-cache"
+    ) is not True
+
+
+def may_read_cache(model: str | None, kwargs: Mapping[str, object], call_type: str) -> bool:
+    return (
+        not _is_response_cache_excluded(model=model, kwargs=kwargs)
+        and cache_reads_requested(kwargs)
+        and is_call_type_cached(call_type)
+    )
+
+
+def may_store_cache(model: str | None, kwargs: Mapping[str, object], call_type: str) -> bool:
+    return (
+        not _is_response_cache_excluded(model=model, kwargs=kwargs)
+        and is_call_type_cached(call_type)
+        and _cache_controls(kwargs).get("no-store") is not True
+    )
+
+
 def _is_chat_completion_cached_dict(cached_result: dict) -> bool:
     cached_id: Final = cached_result.get("id")
     if isinstance(cached_id, str) and cached_id.startswith("chatcmpl"):
@@ -325,11 +360,7 @@ class LLMCachingHandler:
             return None
 
         # Check if caching should be performed BEFORE doing expensive operations
-        if (
-            (kwargs.get("caching", None) is None and litellm.cache is not None) or kwargs.get("caching", False) is True
-        ) and (
-            kwargs.get("cache", {}).get("no-cache", False) is not True
-        ):  # allow users to control returning cached responses from the completion function
+        if cache_reads_requested(kwargs):
             args = args or ()
             final_embedding_cached_response: EmbeddingResponse | None = None
             embedding_all_elements_cache_hit: bool = False
@@ -1230,20 +1261,8 @@ class LLMCachingHandler:
         Returns:
             bool: True if the result should be stored in the cache, False otherwise.
         """
-        model_value: Final = kwargs.get("model")
-        model: Final = model_value if isinstance(model_value, str) else None
-        cache_options_value: Final = kwargs.get("cache")
-        cache_options: Final[Mapping[str, object]] = (
-            TypeAdapter(Mapping[str, object]).validate_python(cache_options_value)
-            if isinstance(cache_options_value, Mapping)
-            else {}
-        )
-        no_store: Final = cache_options.get("no-store", False)
-        return (
-            not _is_response_cache_excluded(model=model, kwargs=kwargs)
-            and self._is_call_type_supported_by_cache(original_function=original_function)
-            and no_store is not True
-        )
+        model: Final = kwargs.get("model")
+        return may_store_cache(model if isinstance(model, str) else None, kwargs, str(original_function.__name__))
 
     _should_store_result_in_cache = should_store_result_in_cache
 
@@ -1281,11 +1300,7 @@ class LLMCachingHandler:
         Returns:
             bool: True if the call type is supported by the cache, False otherwise.
         """
-        if litellm.cache is None or litellm.cache.supported_call_types is None:
-            return False
-        call_type: Final = str(original_function.__name__)
-        covering_call_types: Final = ("aresponses", "responses") if call_type == "aresponses" else (call_type,)
-        return any(name in litellm.cache.supported_call_types for name in covering_call_types)
+        return is_call_type_cached(str(original_function.__name__))
 
     async def add_streaming_response_to_cache(self, processed_chunk: ModelResponse) -> None:
         """

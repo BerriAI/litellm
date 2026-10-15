@@ -1,40 +1,17 @@
-use std::{future::Future, pin::Pin, time::Duration};
+use std::{future::Future, marker::PhantomData, pin::Pin, sync::Arc, time::Duration};
 
 use litellm_cache::Error;
 use litellm_cache_response::{
-    ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService, ResponseEnvelope,
+    CacheScope, ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService, ResponseEnvelope,
+    ScopedCache,
 };
-use litellm_host::{
-    machine::{HostServices, MachineFault},
-    protocol::{Protocol, Reply},
-};
-use litellm_inference::caching::CachedOutput;
+use litellm_host::{machine::HostServices, protocol::Reply};
+use litellm_inference::caching::{Cachable, CachedOutput};
 use serde_json::Value;
 
+use crate::cache::Cached;
+
 const STREAM_EVENTS_KEY: &str = "litellm_cached_anthropic_sse_events";
-
-fn from_python(value: Value) -> Result<Value, Error> {
-    let output = match value.get(STREAM_EVENTS_KEY) {
-        Some(events) => {
-            let events: Vec<String> =
-                serde_json::from_value(events.clone()).map_err(|_| Error::InvalidEntry)?;
-            CachedOutput::Stream(events.concat())
-        }
-        None => CachedOutput::Response(value),
-    };
-    serde_json::to_value(ResponseEnvelope::new("messages", output)).map_err(|_| Error::InvalidEntry)
-}
-
-fn to_python(value: Value) -> Result<Value, Error> {
-    let envelope: ResponseEnvelope<CachedOutput<Value>> =
-        serde_json::from_value(value).map_err(|_| Error::InvalidEntry)?;
-    match envelope.decode("messages").ok_or(Error::InvalidEntry)? {
-        CachedOutput::Response(response) => Ok(response),
-        CachedOutput::Stream(text) => Ok(serde_json::json!({
-            STREAM_EVENTS_KEY: text.split_inclusive("\n\n").collect::<Vec<_>>()
-        })),
-    }
-}
 
 pub(crate) enum CacheCall {
     Lookup {
@@ -46,31 +23,47 @@ pub(crate) enum CacheCall {
     },
 }
 
-struct PythonCacheService<P: Protocol> {
-    services: HostServices<P>,
+struct PythonCacheService<P: Cachable> {
+    services: HostServices<Cached<P>>,
     config: ResponseCacheConfig,
+    protocol: PhantomData<fn() -> P>,
 }
 
-pub(in crate::cache) fn service<P: Protocol<HostCall = CacheCall>>(
-    services: HostServices<P>,
-    namespace: String,
-) -> std::sync::Arc<dyn ResponseCacheService>
-where
-    P::Error: From<MachineFault>,
-{
-    std::sync::Arc::new(PythonCacheService {
-        services,
-        config: ResponseCacheConfig {
-            namespace,
-            ..Default::default()
-        },
-    })
+pub(crate) fn scoped<P: Cachable>(services: HostServices<Cached<P>>) -> ScopedCache {
+    ScopedCache::new(
+        Arc::new(PythonCacheService {
+            services,
+            config: ResponseCacheConfig::default(),
+            protocol: PhantomData,
+        }),
+        CacheScope::Shared,
+    )
 }
 
-impl<P: Protocol<HostCall = CacheCall>> ResponseCacheService for PythonCacheService<P>
-where
-    P::Error: From<MachineFault>,
-{
+fn from_python<P: Cachable>(value: Value) -> Result<Value, Error> {
+    let output = match value.get(STREAM_EVENTS_KEY) {
+        Some(events) => {
+            let events: Vec<String> =
+                serde_json::from_value(events.clone()).map_err(|_| Error::InvalidEntry)?;
+            CachedOutput::Stream(events.concat())
+        }
+        None => CachedOutput::Response(value),
+    };
+    serde_json::to_value(ResponseEnvelope::new(P::SURFACE, output)).map_err(|_| Error::InvalidEntry)
+}
+
+fn to_python<P: Cachable>(value: Value) -> Result<Value, Error> {
+    let envelope: ResponseEnvelope<CachedOutput<Value>> =
+        serde_json::from_value(value).map_err(|_| Error::InvalidEntry)?;
+    match envelope.decode(P::SURFACE).ok_or(Error::InvalidEntry)? {
+        CachedOutput::Response(response) => Ok(response),
+        CachedOutput::Stream(text) => Ok(serde_json::json!({
+            STREAM_EVENTS_KEY: text.split_inclusive("\n\n").collect::<Vec<_>>()
+        })),
+    }
+}
+
+impl<P: Cachable> ResponseCacheService for PythonCacheService<P> {
     fn config(&self) -> &ResponseCacheConfig {
         &self.config
     }
@@ -85,7 +78,7 @@ where
                 .call(|reply| CacheCall::Lookup { reply })
                 .await
                 .map_err(|_| Error::Unavailable)??
-                .map(from_python)
+                .map(from_python::<P>)
                 .transpose()
         })
     }
@@ -97,7 +90,7 @@ where
         _: Duration,
     ) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send + 'a>> {
         Box::pin(async move {
-            let value = to_python(value)?;
+            let value = to_python::<P>(value)?;
             self.services
                 .call(|reply| CacheCall::Store { value, reply })
                 .await

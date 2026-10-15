@@ -4,12 +4,20 @@ use std::sync::Arc;
 
 use host::ChatCompletionsPythonHost;
 use litellm_auth::AuthServices;
-use litellm_cache_response::{CachePolicy, ScopedCache};
+use litellm_cache_response::ScopedCache;
 use litellm_callbacks_legacy_python::LoggingOperation;
-use litellm_host::{call::HostedMachine, protocol::Protocol};
-use litellm_inference_chat::{ChatCompletionsRoute, route::ChatCompletions};
+use litellm_host::{
+    call::{CallOutput, OutputOf},
+    machine::ChannelInterceptors,
+};
+use litellm_inference::{CallOptions, RouteError};
+use litellm_inference_chat::{
+    ChatCompletionsRoute, route::ChatCompletions, types::ChatCompletionsCall,
+};
 use litellm_secrets::source::SecretSource;
 use pyo3::prelude::*;
+
+use crate::cache::Cached;
 
 use super::{
     NativeCall,
@@ -61,11 +69,14 @@ impl InferenceRoute for ChatCompletionsRoute {
         self.with_cache(cache)
     }
 
-    fn machine(
+    async fn call(
         self,
-        call: <ChatCompletions as Protocol>::Request,
-        policy: CachePolicy,
-    ) -> HostedMachine<ChatCompletions> {
-        self.machine(call, policy)
+        request: ChatCompletionsCall,
+        interceptors: ChannelInterceptors<Cached<ChatCompletions>>,
+        options: CallOptions,
+    ) -> Result<OutputOf<ChatCompletions>, RouteError> {
+        self.execute_call(request, &interceptors, options)
+            .await
+            .map(CallOutput::Complete)
     }
 }

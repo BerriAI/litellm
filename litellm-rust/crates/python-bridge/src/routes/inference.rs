@@ -1,13 +1,17 @@
 use std::sync::Arc;
 
 use litellm_auth::AuthServices;
-use litellm_cache_response::{CachePolicy, CacheScope, ScopedCache};
+use litellm_cache_response::ScopedCache;
 use litellm_callbacks_legacy_python::LoggingOperation;
 use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
-use litellm_host::{call::HostedMachine, protocol::Protocol};
-use litellm_host_python::{PythonBinding, PythonHostCalls, from_py};
+use litellm_host::{
+    call::{OutputOf, hosted_call},
+    machine::ChannelInterceptors,
+    protocol::Protocol,
+};
+use litellm_host_python::{PythonBinding, from_py};
 use litellm_http::transport::Error as TransportError;
-use litellm_inference::RouteError;
+use litellm_inference::{CallOptions, RouteError, caching::Cachable};
 use litellm_secrets::source::SecretSource;
 use pyo3::{
     exceptions::PyValueError,
@@ -20,6 +24,7 @@ use serde_json::{Map, Value};
 
 use super::{NativeCall, RequestView};
 use crate::{
+    cache::{Cached, CachedHost},
     errors::{RustUpstreamError, route_error_to_pyerr},
     marshal::{
         RouteOptions, optional_timeout, project_optional_fields, public_response,
@@ -149,8 +154,8 @@ impl InferenceHost {
     }
 }
 
-pub(super) trait InferenceRoute: Sized + 'static {
-    type Protocol: Protocol<Error = RouteError>;
+pub(super) trait InferenceRoute: Sized + Send + 'static {
+    type Protocol: Cachable;
     const OPERATION: LoggingOperation;
     const SYNC_CALL_TYPE: &'static str;
     const ASYNC_CALL_TYPE: &'static str;
@@ -161,11 +166,12 @@ pub(super) trait InferenceRoute: Sized + 'static {
         secrets: Arc<dyn SecretSource>,
     ) -> Self;
     fn with_cache(self, cache: ScopedCache) -> Self;
-    fn machine(
+    fn call(
         self,
-        call: <Self::Protocol as Protocol>::Request,
-        policy: CachePolicy,
-    ) -> HostedMachine<Self::Protocol>;
+        request: <Self::Protocol as Protocol>::Request,
+        interceptors: ChannelInterceptors<Cached<Self::Protocol>>,
+        options: CallOptions,
+    ) -> impl Future<Output = Result<OutputOf<Self::Protocol>, RouteError>> + Send;
 }
 
 pub(super) fn run_inference<R, H>(
@@ -176,14 +182,13 @@ pub(super) fn run_inference<R, H>(
 ) -> PyResult<Py<PyAny>>
 where
     R: InferenceRoute,
-    H: PythonBinding<Protocol = R::Protocol> + PythonHostCalls<R::Protocol> + 'static,
+    H: PythonBinding<Protocol = R::Protocol> + 'static,
 {
     let call_type = if asynchronous {
         R::ASYNC_CALL_TYPE
     } else {
         R::SYNC_CALL_TYPE
     };
-    crate::cache::admit_native(py, &call.kwargs, call_type)?;
     let (arguments, hooks) = super::call_hooks(py, R::OPERATION, &call, asynchronous)?;
     super::run_public_call(
         py,
@@ -195,14 +200,28 @@ where
                 crate::http::resources().auth.clone(),
                 crate::secrets::source(py)?,
             );
-            let (cache, cache_options) = crate::cache::configured_native(py, arguments, call_type)?;
-            let route = match cache {
-                Some(cache) => route.with_cache(ScopedCache::new(cache, CacheScope::Shared)),
-                None => route,
-            };
-            Ok(route.machine(request, cache_options.policy))
+            Ok(hosted_call(
+                request,
+                None,
+                move |(call, policy), services, interceptors, observers| async move {
+                    let route = match policy {
+                        Some(_) => route.with_cache(crate::cache::python_cache(services)),
+                        None => route,
+                    };
+                    route
+                        .call(
+                            call,
+                            interceptors,
+                            CallOptions {
+                                cache: policy,
+                                observers,
+                            },
+                        )
+                        .await
+                },
+            ))
         },
-        host,
+        CachedHost::new(host, call_type, asynchronous),
         hooks,
         asynchronous,
     )

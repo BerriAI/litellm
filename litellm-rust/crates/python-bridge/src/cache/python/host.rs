@@ -1,7 +1,9 @@
 use litellm_cache::Error;
+use litellm_cache_response::CachePolicy;
 use litellm_host::protocol::Reply;
 use litellm_host_python::{from_py, to_py};
 use pyo3::{
+    exceptions::{PyException, PyRuntimeError},
     gc::{PyTraverseError, PyVisit},
     prelude::*,
     types::PyDict,
@@ -10,80 +12,82 @@ use serde_json::Value;
 
 use super::service::CacheCall;
 
+const MODULE: &str = "litellm.rust_bridge.host.cache";
+
 enum Pending {
     Lookup(Reply<Result<Option<Value>, Error>>),
     Store(Reply<Result<(), Error>>),
 }
 
+struct Access {
+    cache: Py<PyAny>,
+    arguments: Py<PyDict>,
+}
+
 pub(crate) struct PythonCache {
-    cache: Option<Py<PyAny>>,
-    arguments: Option<Py<PyDict>>,
+    access: Option<Access>,
     pending: Option<Pending>,
     asynchronous: bool,
 }
 
 impl PythonCache {
-    pub fn new(asynchronous: bool) -> Self {
+    pub(crate) fn new(asynchronous: bool) -> Self {
         Self {
-            cache: None,
-            arguments: None,
+            access: None,
             pending: None,
             asynchronous,
         }
     }
 
-    pub(in crate::cache) fn bind(
+    pub(crate) fn configure(
         &mut self,
-        cache: Bound<'_, PyAny>,
+        py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
-    ) {
-        self.cache = Some(cache.unbind());
-        self.arguments = Some(arguments.clone().unbind());
+        call_type: &str,
+    ) -> PyResult<Option<CachePolicy>> {
+        let access = py
+            .import(MODULE)?
+            .getattr("access")?
+            .call1((arguments, call_type))?;
+        if access.is_none() {
+            self.access = None;
+            return Ok(None);
+        }
+        let policy = CachePolicy {
+            no_cache: !access.getattr("read")?.extract::<bool>()?,
+            no_store: !access.getattr("write")?.extract::<bool>()?,
+            ..CachePolicy::default()
+        };
+        self.access = Some(Access {
+            cache: access.getattr("cache")?.unbind(),
+            arguments: arguments.clone().unbind(),
+        });
+        Ok(Some(policy))
     }
 
-    pub fn begin(&mut self, py: Python<'_>, call: CacheCall) -> PyResult<Option<Py<PyAny>>> {
-        let Some(cache) = self.cache.as_ref() else {
-            return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                "cache operation without configured cache",
-            ));
+    pub(crate) fn begin(&mut self, py: Python<'_>, call: CacheCall) -> PyResult<Option<Py<PyAny>>> {
+        let access = self.access.as_ref().ok_or_else(|| {
+            PyRuntimeError::new_err("cache operation without granted cache access")
+        })?;
+        let module = py.import(MODULE)?;
+        let cache = access.cache.bind(py);
+        let arguments = access.arguments.bind(py);
+        let (lookup, store) = if self.asynchronous {
+            ("alookup", "astore")
+        } else {
+            ("lookup", "store")
         };
-        let arguments = self
-            .arguments
-            .as_ref()
-            .ok_or_else(|| {
-                pyo3::exceptions::PyRuntimeError::new_err("cache arguments unavailable")
-            })?
-            .bind(py)
-            .copy()?;
-        let (method, result) = match call {
+        let result = match call {
             CacheCall::Lookup { reply } => {
                 self.pending = Some(Pending::Lookup(reply));
-                (
-                    if self.asynchronous {
-                        "async_get_cache"
-                    } else {
-                        "get_cache"
-                    },
-                    None,
-                )
+                module.getattr(lookup)?.call1((cache, arguments))
             }
             CacheCall::Store { value, reply } => {
                 self.pending = Some(Pending::Store(reply));
-                (
-                    if self.asynchronous {
-                        "async_add_cache"
-                    } else {
-                        "add_cache"
-                    },
-                    Some(to_py(py, &value)?),
-                )
+                module
+                    .getattr(store)?
+                    .call1((cache, to_py(py, &value)?, arguments))
             }
-        };
-        let result = match result {
-            Some(value) => cache
-                .bind(py)
-                .call_method(method, (value,), Some(&arguments)),
-            None => cache.bind(py).call_method(method, (), Some(&arguments)),
         }
         .map(Bound::unbind);
         if self.asynchronous && result.is_ok() {
@@ -92,13 +96,13 @@ impl PythonCache {
         self.resume(py, result)
     }
 
-    pub fn resume(
+    pub(crate) fn resume(
         &mut self,
         py: Python<'_>,
         result: PyResult<Py<PyAny>>,
     ) -> PyResult<Option<Py<PyAny>>> {
         if let Err(error) = &result
-            && !error.is_instance_of::<pyo3::exceptions::PyException>(py)
+            && !error.is_instance_of::<PyException>(py)
         {
             self.pending = None;
             return Err(result.err().unwrap());
@@ -120,7 +124,7 @@ impl PythonCache {
                 reply.send(result.map(|_| ()).map_err(|_| Error::Unavailable));
             }
             None => {
-                return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                return Err(PyRuntimeError::new_err(
                     "cache reply without pending operation",
                 ));
             }
@@ -128,14 +132,16 @@ impl PythonCache {
         Ok(None)
     }
 
-    pub fn close(&mut self) {
+    pub(crate) fn close(&mut self) {
         self.pending = None;
-        self.cache = None;
-        self.arguments = None;
+        self.access = None;
     }
 
-    pub fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-        visit.call(&self.cache)?;
-        visit.call(&self.arguments)
+    pub(crate) fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
+        let Some(access) = &self.access else {
+            return Ok(());
+        };
+        visit.call(&access.cache)?;
+        visit.call(&access.arguments)
     }
 }
