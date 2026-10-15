@@ -28,6 +28,7 @@ import { useUrlTab } from "@/hooks/useUrlTab";
 
 import AlertingSettings from "./alerting/alerting_settings";
 import CloudZeroCostTracking from "./CloudZeroCostTracking/CloudZeroCostTracking";
+import TernaryCostTracking from "./TernaryCostTracking/TernaryCostTracking";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import {
   deleteCallback,
@@ -615,6 +616,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
           <TabsList variant="line">
             <TabsTrigger value="logging-callbacks">{t("loggingAndAlerts.page.tabs.loggingCallbacks")}</TabsTrigger>
             <TabsTrigger value="cloudzero-cost-tracking">{t("loggingAndAlerts.page.tabs.cloudZero")}</TabsTrigger>
+            <TabsTrigger value="ternary-cost-export">{t("loggingAndAlerts.page.tabs.ternary")}</TabsTrigger>
             <TabsTrigger value="alerting-types">{t("loggingAndAlerts.page.tabs.alertingTypes")}</TabsTrigger>
             <TabsTrigger value="alerting-settings">{t("loggingAndAlerts.page.tabs.alertingSettings")}</TabsTrigger>
             <TabsTrigger value="email-alerts">{t("loggingAndAlerts.page.tabs.emailAlerts")}</TabsTrigger>
@@ -644,6 +646,11 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
           <TabsContent value="cloudzero-cost-tracking" keepMounted>
             <div className="p-8">
               <CloudZeroCostTracking />
+            </div>
+          </TabsContent>
+          <TabsContent value="ternary-cost-export" keepMounted>
+            <div className="p-8">
+              <TernaryCostTracking />
             </div>
           </TabsContent>
           <TabsContent value="alerting-types" keepMounted>
