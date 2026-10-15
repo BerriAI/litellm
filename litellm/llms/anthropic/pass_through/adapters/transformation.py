@@ -809,7 +809,7 @@ class LiteLLMAnthropicMessagesAdapter:
             "eager_input_streaming",
         ]
 
-        for idx, tool in enumerate(tools):
+        for idx, tool in enumerate(copy.deepcopy(tools)):
             # Check if this is an Anthropic-native tool that should be kept as-is
             tool_type = tool.get("type", "")
             if any(tool_type.startswith(t.value) for t in ANTHROPIC_HOSTED_TOOLS):
@@ -836,7 +836,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 name=truncated_name,
             )
             if "input_schema" in tool:
-                function_chunk["parameters"] = copy.deepcopy(tool["input_schema"])
+                function_chunk["parameters"] = tool["input_schema"]
             if "description" in tool:
                 function_chunk["description"] = tool["description"]
             if "strict" in tool:

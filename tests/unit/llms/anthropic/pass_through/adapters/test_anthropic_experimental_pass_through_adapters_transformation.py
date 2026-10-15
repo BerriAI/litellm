@@ -43,7 +43,7 @@ from litellm.types.utils import (
     StreamingChoices,
     Usage,
 )
-from litellm.utils import remove_additional_properties
+from litellm.utils import remove_additional_properties, remove_strict_from_schema
 
 
 def test_translate_openai_response_to_anthropic_empty_choices() -> None:
@@ -4427,37 +4427,49 @@ def test_tool_result_plain_text_unchanged_by_openai_transform():
     assert _image_urls_in_user_messages(result) == []
 
 
-def _strict_nested_weather_schema() -> dict[str, object]:
-    return {
-        "type": "object",
-        "properties": {
-            "location": {
-                "type": "object",
-                "properties": {"city": {"type": "string"}},
-                "additionalProperties": False,
-            }
-        },
-        "additionalProperties": False,
-    }
-
-
-def test_translate_anthropic_tools_to_openai_leaves_caller_input_schema_untouched():
-    adapter: Final = LiteLLMAnthropicMessagesAdapter()
-    input_schema: Final = _strict_nested_weather_schema()
-    tools: Final = [
+def _caller_tools_with_strict_schemas() -> list[dict[str, object]]:
+    return [
         {
             "type": "custom",
-            "name": "get_weather",
+            "name": "lint",
             "strict": True,
-            "input_schema": input_schema,
-            "input_examples": [{"location": {"city": "Paris"}}],
-        }
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "additionalProperties": False,
+                    },
+                    "strict": {"type": "boolean"},
+                },
+                "additionalProperties": False,
+            },
+            "input_examples": [{"target": {"path": "a.py"}, "strict": True}],
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "strict": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "additionalProperties": False,
+                },
+            },
+        },
     ]
 
-    translated_tools, _ = adapter.translate_anthropic_tools_to_openai(tools=tools)
-    remove_additional_properties(translated_tools[0]["function"]["parameters"])
 
-    assert input_schema == _strict_nested_weather_schema()
+def test_translate_anthropic_tools_to_openai_leaves_caller_tools_untouched_by_schema_cleanup():
+    adapter: Final = LiteLLMAnthropicMessagesAdapter()
+    tools: Final = _caller_tools_with_strict_schemas()
+
+    translated_tools, _ = adapter.translate_anthropic_tools_to_openai(tools=tools)
+    remove_strict_from_schema(remove_additional_properties(translated_tools))
+
+    assert tools == _caller_tools_with_strict_schemas()
 
 
 TOOL_RESULT_PDF_B64 = base64.b64encode(b"%PDF-1.4 minimal regression fixture").decode()
