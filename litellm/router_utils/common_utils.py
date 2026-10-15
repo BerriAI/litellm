@@ -14,8 +14,15 @@ from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
-from litellm.types.router import CredentialLiteLLMParams, FallbackSkipReason, SkippedFallbackTarget
+from litellm.types.router import (
+    CredentialLiteLLMParams,
+    Deployment,
+    FallbackSkipReason,
+    LiteLLM_Params,
+    SkippedFallbackTarget,
+)
 from litellm.types.utils import LlmProviders, ProviderSpecificModelInfo
 
 _V = TypeVar("_V")
@@ -401,16 +408,26 @@ def provider_for_generic_call(litellm_params: Mapping[str, object]) -> str | Non
 PROVIDER_SPECIFIC_CAPABILITY_FIELDS: Final = frozenset(ProviderSpecificModelInfo.__annotations__)
 
 
-_MODEL_MAP_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
-def _model_map_carries(name: str) -> bool:
-    model_map: Final = _MODEL_MAP_ADAPTER.validate_python(litellm.model_cost)  # pyright: ignore[reportUnknownMemberType]  # legacy registry is validated at this boundary
-    return any(isinstance(entry, Mapping) and name in entry for entry in model_map.values())
+def _catalog_carries(name: str) -> bool:
+    return any(name in entry for entry in GetModelCostMap.loaded_model_cost_map().values())
 
 
 def is_model_capability_field(name: str) -> bool:
-    return name in PROVIDER_SPECIFIC_CAPABILITY_FIELDS or (name.startswith("supports_") and _model_map_carries(name))
+    return name in PROVIDER_SPECIFIC_CAPABILITY_FIELDS or (name.startswith("supports_") and _catalog_carries(name))
+
+
+def without_model_capability_flags(deployment: Deployment) -> Deployment:
+    flags: Final = frozenset(
+        key for key in (deployment.litellm_params.model_extra or {}) if is_model_capability_field(key)
+    )
+    if not flags:
+        return deployment
+    declared_params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(deployment.litellm_params.model_dump())
+    served_params: Final = {key: value for key, value in declared_params.items() if key not in flags}
+    return deployment.model_copy(update={"litellm_params": LiteLLM_Params.model_validate(served_params)})
 
 
 def warn_on_ignored_model_capability_flags(model_name: str, litellm_params: Mapping[str, object]) -> str | None:

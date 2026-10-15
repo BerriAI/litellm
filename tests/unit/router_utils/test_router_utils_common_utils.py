@@ -8,6 +8,7 @@ import pytest
 import litellm
 from litellm import Router
 from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.router_utils.common_utils import (
     _deployment_supports_web_search,
@@ -880,7 +881,7 @@ def test_router_warns_only_for_a_capability_flag_set_under_litellm_params(caplog
 
 def test_router_serves_deployments_without_model_capability_flags():
     capability_flags: Final = frozenset(ProviderSpecificModelInfo.__annotations__) | frozenset(
-        key for key in chain.from_iterable(litellm.model_cost.values()) if key.startswith("supports_")
+        key for key in chain.from_iterable(GetModelCostMap.loaded_model_cost_map().values()) if key.startswith("supports_")
     )
     declared_params: Final = {"supports_system_message": False, "supports_system_prompt": True}
     router: Final = Router(
@@ -899,6 +900,28 @@ def test_router_serves_deployments_without_model_capability_flags():
     served_params: Final = router.get_model_list()[0]["litellm_params"]
     assert sorted(capability_flags & served_params.keys() - declared_params.keys()) == []
     assert {key: served_params.get(key) for key in declared_params} == declared_params
+
+
+def test_router_keeps_a_provider_param_that_another_deployments_model_info_names():
+    Router(
+        model_list=[
+            {
+                "model_name": "registers-the-name",
+                "litellm_params": {"model": "openai/litellm-qa-registered-capability"},
+                "model_info": {"supports_system_prompt": True},
+            }
+        ]
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "replicate-system-prompt",
+                "litellm_params": {"model": "replicate/meta/meta-llama-3-8b-instruct", "supports_system_prompt": True},
+            }
+        ]
+    )
+
+    assert router.get_model_list()[0]["litellm_params"].get("supports_system_prompt") is True
 
 
 def test_router_warns_once_and_serves_no_flag_for_a_deployment_synced_from_the_db(caplog):

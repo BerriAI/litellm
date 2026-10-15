@@ -197,13 +197,13 @@ from litellm.router_utils.common_utils import (
     format_fallback_outcome_message,
     format_no_fallback_group_message,
     get_request_team_id,
-    is_model_capability_field,
     is_proxy_admin_request,
     provider_for_generic_call,
     resolve_model_group_alias,
     truncate_fallback_error_detail,
     warn_on_ignored_model_capability_flags,
     warn_on_provider_credential_mismatch,
+    without_model_capability_flags,
     without_router_only_kwargs,
 )
 from litellm.router_utils.cooldown_cache import CooldownCache
@@ -9496,7 +9496,7 @@ class Router:
             declared_params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(_litellm_params)
             warn_on_provider_credential_mismatch(model_name=_model_name, litellm_params=declared_params)
             warn_on_ignored_model_capability_flags(model_name=_model_name, litellm_params=declared_params)
-            deployment = Router._without_model_capability_flags(
+            deployment = without_model_capability_flags(
                 Deployment(
                     **deployment_info,
                     model_name=_model_name,
@@ -10326,7 +10326,7 @@ class Router:
         declared_params: Final = deployment.litellm_params.model_dump(exclude_none=True)
         warn_on_provider_credential_mismatch(model_name=deployment.model_name, litellm_params=declared_params)
         warn_on_ignored_model_capability_flags(model_name=deployment.model_name, litellm_params=declared_params)
-        served: Final = Router._without_model_capability_flags(deployment)
+        served: Final = without_model_capability_flags(deployment)
 
         # add to model list
         _deployment: Final = served.to_json(exclude_none=True)
@@ -10340,17 +10340,6 @@ class Router:
         self.model_names.add(served.model_name)
         self._sync_deployment_budget_config(deployment=served)
         return served
-
-    @staticmethod
-    def _without_model_capability_flags(deployment: Deployment) -> Deployment:
-        flags: Final = frozenset(
-            key for key in (deployment.litellm_params.model_extra or {}) if is_model_capability_field(key)
-        )
-        if not flags:
-            return deployment
-        declared_params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(deployment.litellm_params.model_dump())
-        served_params: Final = {key: value for key, value in declared_params.items() if key not in flags}
-        return deployment.model_copy(update={"litellm_params": LiteLLM_Params.model_validate(served_params)})
 
     def _update_deployment_indices_after_removal(self, model_id: str, removal_idx: int) -> None:
         """
@@ -10480,7 +10469,7 @@ class Router:
         """
         _deployment_model_id: Final = deployment.model_info.id or ""
         _deployment_on_router: Final[Deployment | None] = self.get_deployment(model_id=_deployment_model_id)
-        served: Final = Router._without_model_capability_flags(deployment)
+        served: Final = without_model_capability_flags(deployment)
         try:
             if _deployment_on_router is not None:
                 # deployment with this model_id exists on the router
