@@ -1908,7 +1908,7 @@ _RESPONSES_WS_FAILURE_EVENT_TYPES: Final = frozenset({"error", "response.failed"
 _RESPONSES_WS_TERMINAL_EVENT_TYPES: Final = _HISTORY_TERMINAL_EVENT_TYPES | _RESPONSES_WS_FAILURE_EVENT_TYPES
 
 
-def _json_object_or_none(message: object) -> dict[str, object] | None:
+def _json_object_or_none(message: object) -> Mapping[str, object] | None:
     if _is_json_object(message):
         return message
     if not isinstance(message, (str, bytes)):
@@ -1936,7 +1936,7 @@ def _user_texts_in_input_item(item: object) -> tuple[str, ...]:
     )
 
 
-def _logged_user_messages(client_frame: object) -> tuple[dict[str, object], ...]:
+def _logged_user_messages(client_frame: object) -> tuple[Mapping[str, object], ...]:
     frame: Final = _json_object_or_none(client_frame)
     if frame is None or frame.get("type") != "response.create":
         return ()
@@ -1961,9 +1961,9 @@ class _ResponsesWsTurn:
     event (``response.completed``, ``response.incomplete``, ``response.failed`` or ``error``) closes it."""
 
     logging_obj: LiteLLMLoggingObj
-    events: tuple[dict[str, object], ...] = ()
+    events: tuple[Mapping[str, object], ...] = ()
 
-    def with_event(self, event: dict[str, object]) -> _ResponsesWsTurn:
+    def with_event(self, event: Mapping[str, object]) -> _ResponsesWsTurn:
         return _ResponsesWsTurn(logging_obj=self.logging_obj, events=(*self.events, event))
 
     def failure(self, model: str, custom_llm_provider: str) -> Exception | None:
