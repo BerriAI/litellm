@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from "react";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { SortingState } from "@tanstack/react-table";
 import { Inbox, Plus, X } from "lucide-react";
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
@@ -11,7 +11,7 @@ import {
   updateMCPToolset,
   deleteMCPToolset,
   listMCPTools,
-  getProxyBaseUrl,
+  getGatewayBaseUrl,
 } from "@/components/networking";
 import { MCPToolset, MCPToolsetTool } from "@/components/mcp_tools/types";
 import { FieldGroup } from "@/components/ui/field";
@@ -329,12 +329,12 @@ function ToolsetsEmptyState() {
 
 function ToolsetUsageGuide() {
   const [copied, setCopied] = useState(false);
-  const proxyBaseUrl = getProxyBaseUrl();
+  const gatewayBaseUrl = getGatewayBaseUrl();
 
   const snippet = `{
   "mcpServers": {
     "my-toolset": {
-      "url": "${proxyBaseUrl}/toolset/<toolset-name>/mcp",
+      "url": "${gatewayBaseUrl}/toolset/<toolset-name>/mcp",
       "headers": { "x-litellm-api-key": "Bearer <your-api-key>" }
     }
   }

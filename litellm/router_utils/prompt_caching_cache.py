@@ -6,13 +6,14 @@ import hashlib
 import json
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import accumulate
+from itertools import accumulate, chain
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from pydantic import JsonValue, TypeAdapter
 from pydantic_core import to_jsonable_python
 from typing_extensions import TypedDict
 
+from litellm._internal_context import service_target
 from litellm.caching.caching import DualCache
 from litellm.constants import PROMPT_CACHE_LOOKBACK_POSITIONS
 from litellm.litellm_core_utils.logging_utils import truncate_base64_in_messages
@@ -36,6 +37,8 @@ class PromptCachingCacheValue(TypedDict):
 
 
 PROMPT_CACHE_PIN_TTL_SECONDS: Final = 300
+PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS: Final = 3600
+_PROMPT_CACHE_PINS_TARGET: Final = "prompt_cache_pins"
 _TOOL_RUN_BLOCK_TYPES: Final = frozenset({"tool_use", "tool_result"})
 _PREFIX_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, JsonValue], ...])
 _TOOLS_ADAPTER: Final = TypeAdapter(tuple[JsonValue, ...])
@@ -113,6 +116,20 @@ def _lookback_keys(positions: tuple[PrefixPosition, ...]) -> tuple[str, ...]:
         return ()
     oldest_probed_position: Final = positions[-1].position - PROMPT_CACHE_LOOKBACK_POSITIONS
     return tuple(entry.cache_key for entry in reversed(positions) if entry.position > oldest_probed_position)
+
+
+def _breakpoint_pin_ttl_seconds(carrier: JsonValue | Mapping[str, JsonValue]) -> int | None:
+    if not isinstance(carrier, Mapping):
+        return None
+    cache_control: Final = carrier.get("cache_control")
+    if not isinstance(cache_control, dict) or cache_control.get("type") != "ephemeral":
+        return None
+    return PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS if cache_control.get("ttl") == "1h" else PROMPT_CACHE_PIN_TTL_SECONDS
+
+
+def _breakpoint_carriers(message: Mapping[str, JsonValue]) -> tuple[JsonValue | Mapping[str, JsonValue], ...]:
+    content: Final = message.get("content")
+    return (message, *content) if isinstance(content, list) else (message,)
 
 
 def _pinned_value(value: JsonValue) -> PromptCachingCacheValue | None:
@@ -262,6 +279,27 @@ class PromptCachingCache:
         return await offload_token_count(PromptCachingCache.prefix_positions)(messages, tools)
 
     @staticmethod
+    def pin_ttl_seconds(
+        messages: Sequence[AllMessageValues] | None,
+        tools: Sequence[ChatCompletionToolParam] | None,
+    ) -> int:
+        if not messages:
+            return PROMPT_CACHE_PIN_TTL_SECONDS
+        prefix: Final = _PREFIX_ADAPTER.validate_python(
+            to_jsonable_python(
+                PromptCachingCache.extract_cacheable_prefix(list(messages)), serialize_unknown=True, bytes_mode="base64"
+            )
+        )
+        tool_carriers: Final = _TOOLS_ADAPTER.validate_python(
+            to_jsonable_python(tools or (), serialize_unknown=True, bytes_mode="base64")
+        )
+        carriers: Final = chain(tool_carriers, *map(_breakpoint_carriers, prefix))
+        return max(
+            (ttl for ttl in map(_breakpoint_pin_ttl_seconds, carriers) if ttl is not None),
+            default=PROMPT_CACHE_PIN_TTL_SECONDS,
+        )
+
+    @staticmethod
     def get_prompt_caching_cache_key(
         messages: list[AllMessageValues] | None,
         tools: Sequence[ChatCompletionToolParam] | None,
@@ -274,28 +312,44 @@ class PromptCachingCache:
         model_id: str,
         messages: list[AllMessageValues] | None,
         tools: Sequence[ChatCompletionToolParam] | None,
+        honors_one_hour_ttl: bool = False,
     ) -> None:
         cache_key: Final = PromptCachingCache.get_prompt_caching_cache_key(messages, tools)
         if cache_key is None:
             return
 
-        self.cache.set_cache(cache_key, PromptCachingCacheValue(model_id=model_id), ttl=PROMPT_CACHE_PIN_TTL_SECONDS)
+        self.cache.in_memory_cache.delete_cache(cache_key)
+        self.cache.set_cache(
+            cache_key,
+            PromptCachingCacheValue(model_id=model_id),
+            ttl=PromptCachingCache.pin_ttl_seconds(messages, tools)
+            if honors_one_hour_ttl
+            else PROMPT_CACHE_PIN_TTL_SECONDS,
+        )
 
     async def async_add_model_id(
         self,
         model_id: str,
         messages: list[AllMessageValues] | None,
         tools: Sequence[ChatCompletionToolParam] | None,
+        honors_one_hour_ttl: bool = False,
     ) -> None:
         positions: Final = await PromptCachingCache.async_prefix_positions(messages, tools)
         if not positions:
             return
 
-        await self.cache.async_set_cache(
-            positions[-1].cache_key,
-            PromptCachingCacheValue(model_id=model_id),
-            ttl=PROMPT_CACHE_PIN_TTL_SECONDS,
+        ttl: Final = (
+            await offload_token_count(PromptCachingCache.pin_ttl_seconds)(messages, tools)
+            if honors_one_hour_ttl
+            else PROMPT_CACHE_PIN_TTL_SECONDS
         )
+        self.cache.in_memory_cache.delete_cache(positions[-1].cache_key)
+        with service_target(_PROMPT_CACHE_PINS_TARGET):
+            await self.cache.async_set_cache(
+                positions[-1].cache_key,
+                PromptCachingCacheValue(model_id=model_id),
+                ttl=ttl,
+            )
 
     async def async_get_model_id(
         self,
@@ -311,13 +365,9 @@ class PromptCachingCache:
         if not cache_keys:
             return None
 
-        return _first_pin(
-            _PINS_ADAPTER.validate_python(
-                await self.cache.async_batch_get_cache(
-                    keys=list(cache_keys),
-                )
-            )
-        )
+        with service_target(_PROMPT_CACHE_PINS_TARGET):
+            pins: Final = await self.cache.async_batch_get_cache(keys=list(cache_keys))
+        return _first_pin(_PINS_ADAPTER.validate_python(pins))
 
     def get_model_id(
         self,

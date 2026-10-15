@@ -1937,7 +1937,7 @@ async def test_should_skip_reservation_when_counter_initialization_fails(
             return_value=0.5,
         ),
         patch(
-            "litellm.proxy.proxy_server._ensure_spend_counter_initialized",
+            "litellm.proxy.proxy_server.ensure_spend_counter_initialized",
             side_effect=RuntimeError("redis unavailable"),
         ),
         patch(
@@ -1993,7 +1993,7 @@ async def test_should_release_tracked_entry_when_reservation_fails_after_increme
             side_effect=fail_after_increment,
         ),
         patch(
-            "litellm.proxy.proxy_server._invalidate_spend_counter",
+            "litellm.proxy.proxy_server.invalidate_spend_counter",
             side_effect=RuntimeError("invalidate unavailable"),
         ),
     ):
@@ -2941,7 +2941,7 @@ async def _never_ending_stream():
 def _drive_streaming_cancel(valid_token, iterator_hook):
     streaming_logging_obj = MagicMock()
     streaming_logging_obj.async_post_call_streaming_iterator_hook = iterator_hook
-    streaming_logging_obj._arelease_max_parallel_requests_on_disconnect = AsyncMock()
+    streaming_logging_obj.arelease_max_parallel_requests_on_disconnect = AsyncMock()
     generator = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
         response=MagicMock(),
         user_api_key_dict=valid_token,
@@ -2985,7 +2985,7 @@ async def test_streaming_cancel_before_any_chunk_reconciles_to_input_cost(
         key="spend:key:key-cancel-no-chunk"
     ) == pytest.approx(0.5)
     assert reservation["finalized"] is True
-    streaming_logging_obj._arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
+    streaming_logging_obj.arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -3019,7 +3019,7 @@ async def test_streaming_cancel_after_chunk_keeps_reservation(
         key="spend:key:key-cancel-after-chunk"
     ) == pytest.approx(2.0)
     assert reservation.get("finalized") is not True
-    streaming_logging_obj._arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
+    streaming_logging_obj.arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -3098,7 +3098,7 @@ async def test_streaming_cancel_while_holding_back_provider_output_keeps_reserva
 
     streaming_logging_obj = MagicMock()
     streaming_logging_obj.async_post_call_streaming_iterator_hook = ping_then_cancel
-    streaming_logging_obj._arelease_max_parallel_requests_on_disconnect = AsyncMock()
+    streaming_logging_obj.arelease_max_parallel_requests_on_disconnect = AsyncMock()
     generator = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
         response=response,
         user_api_key_dict=valid_token,
@@ -3156,7 +3156,7 @@ async def test_streaming_cancel_in_slow_path_before_yield_refunds(spend_counter_
 
     streaming_logging_obj = MagicMock()
     streaming_logging_obj.async_post_call_streaming_iterator_hook = one_chunk
-    streaming_logging_obj._arelease_max_parallel_requests_on_disconnect = AsyncMock()
+    streaming_logging_obj.arelease_max_parallel_requests_on_disconnect = AsyncMock()
     # On the slow path the per-chunk hook is awaited before the chunk is yielded
     # to the client; cancel there. Nothing has reached the client yet.
     streaming_logging_obj.async_post_call_streaming_hook = AsyncMock(
@@ -3189,7 +3189,7 @@ async def test_streaming_cancel_in_slow_path_before_yield_refunds(spend_counter_
         key="spend:key:key-cancel-slowpath"
     ) == pytest.approx(0.5)
     assert reservation["finalized"] is True
-    streaming_logging_obj._arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
+    streaming_logging_obj.arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -3219,7 +3219,7 @@ async def test_streaming_disconnect_after_consuming_chunk_keeps_reservation(
         key="spend:key:key-disconnect-after-chunk"
     ) == pytest.approx(2.0)
     assert reservation.get("finalized") is not True
-    streaming_logging_obj._arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
+    streaming_logging_obj.arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
 
 
 @pytest.mark.asyncio

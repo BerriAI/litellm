@@ -1,17 +1,30 @@
 use std::{collections::BTreeMap, time::Duration};
 
 use litellm_http::Client;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{Connection, Error};
 
-const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReadLimits {
+    pub result_rows: u64,
+    pub response_bytes: usize,
+    pub execution_seconds: u64,
+}
 
-#[derive(Debug, Deserialize)]
+pub const READ_LIMITS: ReadLimits = ReadLimits {
+    result_rows: 1000,
+    response_bytes: 4 * 1024 * 1024,
+    execution_seconds: 10,
+};
+
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum Parameter {
     Text(String),
     Integer(i64),
+    Unsigned(u64),
+    Float(f64),
     Strings(Vec<String>),
 }
 
@@ -20,6 +33,8 @@ impl Parameter {
         match self {
             Self::Text(value) => escaped(value),
             Self::Integer(value) => value.to_string(),
+            Self::Unsigned(value) => value.to_string(),
+            Self::Float(value) => value.to_string(),
             Self::Strings(values) => format!(
                 "[{}]",
                 values
@@ -46,6 +61,16 @@ pub async fn execute_read(
     connection: &Connection,
     sql: &str,
     parameters: &BTreeMap<String, Parameter>,
+) -> Result<String, Error> {
+    execute_read_with_limits(client, connection, sql, parameters, READ_LIMITS).await
+}
+
+async fn execute_read_with_limits(
+    client: &Client,
+    connection: &Connection,
+    sql: &str,
+    parameters: &BTreeMap<String, Parameter>,
+    limits: ReadLimits,
 ) -> Result<String, Error> {
     if sql.trim().is_empty() {
         return Err(Error::EmptySql);
@@ -74,9 +99,9 @@ pub async fn execute_read(
         .clear()
         .extend_pairs(existing_pairs)
         .append_pair("readonly", "1")
-        .append_pair("max_result_rows", "1000")
+        .append_pair("max_result_rows", &limits.result_rows.to_string())
         .append_pair("result_overflow_mode", "throw")
-        .append_pair("max_execution_time", "10")
+        .append_pair("max_execution_time", &limits.execution_seconds.to_string())
         .append_pair("wait_end_of_query", "1")
         .append_pair("default_format", "JSON");
 
@@ -92,12 +117,19 @@ pub async fn execute_read(
         .body(sql.to_owned());
     let mut response = request.send().await.map_err(|_| Error::Transport)?;
     if !response.status().is_success() {
+        if response
+            .headers()
+            .get("x-clickhouse-exception-code")
+            .is_some_and(|code| code == "396")
+        {
+            return Err(Error::ResponseTooLarge);
+        }
         return Err(Error::QueryFailed(response.status().as_u16()));
     }
 
     let mut body = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(|_| Error::Transport)? {
-        if body.len() + chunk.len() > MAX_RESPONSE_BYTES {
+        if body.len() + chunk.len() > limits.response_bytes {
             return Err(Error::ResponseTooLarge);
         }
         body.extend_from_slice(&chunk);
@@ -110,4 +142,61 @@ pub async fn execute_read(
         return Err(Error::InvalidResponse);
     }
     String::from_utf8(body).map_err(|_| Error::InvalidResponse)
+}
+
+pub trait Query {
+    type Params: Serialize;
+    type Row: DeserializeOwned;
+
+    const READ_LIMITS: ReadLimits = crate::read::READ_LIMITS;
+    const SQL: &'static str;
+}
+
+#[derive(Deserialize)]
+struct Rows<T> {
+    data: Vec<T>,
+}
+
+fn parameters<T: Serialize>(params: &T) -> Result<BTreeMap<String, Parameter>, Error> {
+    let value = serde_json::to_value(params).map_err(|_| Error::InvalidParameters)?;
+    serde_json::from_value(value).map_err(|_| Error::InvalidParameters)
+}
+
+pub async fn fetch<Q: Query>(
+    client: &Client,
+    connection: &Connection,
+    params: &Q::Params,
+) -> Result<Vec<Q::Row>, Error> {
+    let body = execute_read_with_limits(
+        client,
+        connection,
+        Q::SQL,
+        &parameters(params)?,
+        Q::READ_LIMITS,
+    )
+    .await?;
+    decode_rows::<Q::Row>(&body)
+}
+
+pub async fn fetch_json<Q: Query>(
+    client: &Client,
+    connection: &Connection,
+    params: &Q::Params,
+) -> Result<String, Error> {
+    let body = execute_read_with_limits(
+        client,
+        connection,
+        Q::SQL,
+        &parameters(params)?,
+        Q::READ_LIMITS,
+    )
+    .await?;
+    decode_rows::<Q::Row>(&body)?;
+    Ok(body)
+}
+
+fn decode_rows<T: DeserializeOwned>(body: &str) -> Result<Vec<T>, Error> {
+    serde_json::from_str::<Rows<T>>(body)
+        .map(|rows| rows.data)
+        .map_err(|_| Error::InvalidResponse)
 }
