@@ -15,8 +15,8 @@ from litellm.experimental_mcp_client.client import MCPClient
 from litellm.proxy._experimental.mcp_server import subscriptions
 from litellm.proxy._experimental.mcp_server.contracts import OperationContext
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.mcp import MCPTransport
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
 def context(session: ServerSession, revision: str = "2026-07-28") -> ServerRequestContext:
@@ -87,7 +87,7 @@ async def test_legacy_listener_rejected_before_upstream_work(revision: str) -> N
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["legacy", "multiple-resources", "denied"])
+@pytest.mark.parametrize("mode", ["multiple-resources", "denied"])
 async def test_unsupported_targets_do_not_open_upstream_listeners(mode: str) -> None:
     client: Final = MCPClient(server_url="http://127.0.0.1:1/mcp", transport_type=MCPTransport.http)
     server: Final = MCPServer(
@@ -109,7 +109,6 @@ async def test_unsupported_targets_do_not_open_upstream_listeners(mode: str) -> 
     )
     error: Final = HTTPException if mode == "denied" else MCPError
     expected: Final = {
-        "legacy": "Select modern upstream",
         "multiple-resources": "exactly one allowed server",
         "denied": "No authorized MCP subscription targets",
     }[mode]
@@ -169,5 +168,190 @@ async def test_subscription_requires_a_supported_http_gateway_route(proxy_mode: 
         else:
             assert rejected.value.status_code == 400
             assert "HTTP request" in rejected.value.detail
+    finally:
+        server._mcp_proxy_mode.reset(token)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changed", [None, "user_id", "team_id", "org_id", "end_user_id", "api_key"])
+async def test_subscription_authorization_preserves_original_caller(changed: str | None) -> None:
+    from dataclasses import replace
+
+    from litellm.proxy._experimental.mcp_server.server import _owner_fingerprint_for
+
+    initial = OperationContext(_caller=UserAPIKeyAuth(api_key="first", user_id="alice", team_id="team"))
+    current = replace(
+        initial,
+        _caller=initial.user_api_key_auth.model_copy(update={changed: "different"})
+        if changed
+        else initial.user_api_key_auth,
+    )
+
+    async def refresh() -> OperationContext:
+        return current
+
+    authorization = subscriptions.SubscriptionAuthorization(initial, refresh, _owner_fingerprint_for)
+    if changed:
+        with pytest.raises(HTTPException, match="Subscription caller changed"):
+            await authorization()
+    else:
+        assert await authorization() is current
+        assert authorization.owner == _owner_fingerprint_for(initial.user_api_key_auth)
+
+
+@pytest.mark.asyncio
+async def test_legacy_events_filter_resource_updates_and_unsubscribe_on_exit() -> None:
+    from mcp.shared.subscriptions import ResourceUpdated
+    from mcp.types import (
+        ResourcesCapability,
+        ResourceUpdatedNotification,
+        ResourceUpdatedNotificationParams,
+        ServerCapabilities,
+        ToolListChangedNotification,
+        ToolsCapability,
+    )
+
+    session = Mock()
+    session.server_capabilities = ServerCapabilities(
+        tools=ToolsCapability(list_changed=True), resources=ResourcesCapability(subscribe=True)
+    )
+    session.send_request = AsyncMock()
+    events = subscriptions.LegacyNotifications()
+    requested = SubscriptionFilter(
+        tools_list_changed=True, prompts_list_changed=True, resource_subscriptions=["test://value"]
+    )
+    async with events.listen(session, requested) as listener:
+        assert listener.honored == SubscriptionFilter(tools_list_changed=True, resource_subscriptions=["test://value"])
+        await events.receive(ResourceUpdatedNotification(params=ResourceUpdatedNotificationParams(uri="test://other")))
+        await events.receive(ToolListChangedNotification())
+        await events.receive(ResourceUpdatedNotification(params=ResourceUpdatedNotificationParams(uri="test://value")))
+        assert await anext(listener) == ToolsListChanged()
+        assert await anext(listener) == ResourceUpdated(uri="test://value")
+    assert [(call.args[0].method, str(call.args[0].params.uri)) for call in session.send_request.await_args_list] == [
+        ("resources/subscribe", "test://value"),
+        ("resources/unsubscribe", "test://value"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_legacy_notification_overflow_closes_instead_of_silently_losing_changes() -> None:
+    from mcp.types import ServerCapabilities, ToolListChangedNotification, ToolsCapability
+
+    session = Mock()
+    session.server_capabilities = ServerCapabilities(tools=ToolsCapability(list_changed=True))
+    events = subscriptions.LegacyNotifications(max_buffered_events=1)
+    async with events.listen(session, SubscriptionFilter(tools_list_changed=True)) as listener:
+        await events.receive(ToolListChangedNotification())
+        await events.receive(ToolListChangedNotification())
+        with pytest.raises(MCPError, match="overflow"):
+            await anext(listener)
+
+
+@pytest.mark.asyncio
+async def test_partial_legacy_resource_setup_only_unsubscribes_accepted_resources() -> None:
+    from mcp.types import ResourcesCapability, ServerCapabilities
+
+    session = Mock()
+    session.server_capabilities = ServerCapabilities(resources=ResourcesCapability(subscribe=True))
+    session.send_request = AsyncMock(side_effect=[None, MCPError(code=-32602, message="Denied resource"), None, None])
+    events = subscriptions.LegacyNotifications()
+    with pytest.raises(MCPError, match="Denied resource"):
+        async with events.listen(
+            session, SubscriptionFilter(resource_subscriptions=["test://allowed", "test://denied"])
+        ):
+            pytest.fail("Rejected setup must not acknowledge a listener")
+    assert [(call.args[0].method, str(call.args[0].params.uri)) for call in session.send_request.await_args_list] == [
+        ("resources/subscribe", "test://allowed"),
+        ("resources/subscribe", "test://denied"),
+        ("resources/unsubscribe", "test://allowed"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_legacy_initialization_waiters_are_session_local_and_released_on_failure() -> None:
+    import anyio
+
+    service = subscriptions.GatewaySubscriptions()
+    first = context(Mock(spec=ServerSession), "2025-11-25")
+    second = context(Mock(spec=ServerSession), "2025-11-25")
+    async with service.initializing(first) as started:
+        assert started
+        async with service.initializing(first) as duplicate:
+            assert not duplicate
+        waiter = asyncio.create_task(service.wait_initialized(first))
+        await anyio.lowlevel.checkpoint()
+        assert not waiter.done()
+        await service.wait_initialized(second)
+        assert not waiter.done()
+    await waiter
+    async with service.initializing(first) as restarted:
+        assert restarted
+
+
+@pytest.mark.asyncio
+async def test_sessionless_legacy_resource_subscription_is_rejected() -> None:
+    session = Mock(spec=ServerSession)
+    session.client_params = None
+    service = subscriptions.GatewaySubscriptions()
+    with pytest.raises(MCPError, match="live legacy session"):
+        await service.legacy_resource(context(session, "2025-11-25"), "test://value", subscribe=True)
+
+
+@pytest.mark.asyncio
+async def test_legacy_upstream_without_capabilities_does_not_receive_subscribe() -> None:
+    session = Mock()
+    session.server_capabilities = None
+    session.send_request = AsyncMock()
+    events = subscriptions.LegacyNotifications()
+    async with events.listen(
+        session, SubscriptionFilter(tools_list_changed=True, resource_subscriptions=["test://value"])
+    ) as listener:
+        assert listener.honored == SubscriptionFilter()
+    session.send_request.assert_not_awaited()
+
+
+@pytest.mark.parametrize("proxy_mode", [False, True])
+def test_legacy_notification_capabilities_require_a_notification_route(proxy_mode: bool) -> None:
+    from litellm.proxy._experimental.mcp_server import server
+
+    token = server._mcp_proxy_mode.set(proxy_mode)
+    try:
+        capabilities = server.server.create_initialization_options().capabilities
+        assert capabilities.tools.list_changed is (not proxy_mode)
+        if proxy_mode:
+            assert capabilities.resources is None
+    finally:
+        server._mcp_proxy_mode.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_idle_legacy_listener_detects_closed_upstream_without_restarting_work(monkeypatch) -> None:
+    import anyio
+
+    session = Mock()
+    session.server_capabilities = None
+    session.send_ping = AsyncMock(side_effect=OSError("Upstream closed"))
+    deadline = anyio.move_on_after
+    monkeypatch.setattr(subscriptions.anyio, "move_on_after", lambda seconds, **kw: deadline(0.001, **kw))
+    events = subscriptions.LegacyNotifications()
+    with pytest.raises(OSError, match="Upstream closed"):
+        async with events.listen(session, SubscriptionFilter()) as listener:
+            await anext(listener)
+    session.send_ping.assert_awaited_once()
+    session.send_request.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["subscribe_resource", "unsubscribe_resource"])
+async def test_proxy_route_rejects_legacy_resource_subscription_before_setup(method: str) -> None:
+    from mcp.types import SubscribeRequestParams, UnsubscribeRequestParams
+
+    from litellm.proxy._experimental.mcp_server import server
+
+    params = (SubscribeRequestParams if method == "subscribe_resource" else UnsubscribeRequestParams)(uri="test://value")
+    token = server._mcp_proxy_mode.set(True)
+    try:
+        with pytest.raises(MCPError, match="/mcp/proxy"):
+            await getattr(server, method)(context(Mock(spec=ServerSession)), params)
     finally:
         server._mcp_proxy_mode.reset(token)

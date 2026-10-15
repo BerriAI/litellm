@@ -5122,3 +5122,22 @@ async def test_subscription_fingerprint_preserves_context_across_managed_renewal
     assert fingerprint != await client("renewed", scopes=None).subscription_auth_fingerprint()
     assert await client("original", scopes=None).subscription_auth_fingerprint() != await client("renewed", scopes=None).subscription_auth_fingerprint()
     assert (await original.prepare_request_auth()).headers[header_name] == "Bearer original"
+
+
+@pytest.mark.asyncio
+async def test_notification_callback_keeps_stream_errors_separate_from_protocol_errors() -> None:
+    from litellm.experimental_mcp_client.client import _receive_session_message
+
+    stream_error = asyncio.get_running_loop().create_future()
+    receiver = AsyncMock()
+    await _receive_session_message(
+        MCPError(code=-32602, message="Unsupported request"), stream_error=stream_error, on_notification=receiver
+    )
+    assert not stream_error.done()
+    receiver.assert_not_awaited()
+    first = OSError("Original transport failure")
+    for failure in (first, ValueError("Later parser failure")):
+        with pytest.raises(RuntimeError, match="MCP response stream failed"):
+            await _receive_session_message(failure, stream_error=stream_error, on_notification=receiver)
+    assert stream_error.result() is first
+    receiver.assert_not_awaited()

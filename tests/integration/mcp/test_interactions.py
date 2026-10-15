@@ -6,12 +6,10 @@ from typing import Final
 import httpx
 import pytest
 import yaml
-from pydantic import JsonValue
-
 from integration._support.client import Gateway
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
-
+from pydantic import JsonValue
 
 _KEY: Final = "sk-interaction-test"
 _PROXY_PYTHONPATH: Final = os.pathsep.join(
@@ -410,7 +408,23 @@ def test_missing_continuation_key_reports_configuration_for_each_carrier(tmp_pat
         ("tools", "idle"),
         ("tools", "hidden"),
         ("tools", "upstream-ended"),
+        ("tools", "legacy-caller-isolation"),
+        ("tools", "legacy-caller-no-notifications"),
+        ("tools", "legacy-caller-revoked"),
+        ("tools", "legacy-sse"),
+        ("updated", "legacy-sse"),
+        ("prompts", "legacy-caller"),
+        ("resources", "legacy-caller"),
+        ("prompts", "legacy-both"),
+        ("resources", "legacy-both"),
+        ("tools", "legacy-caller"),
+        ("updated", "legacy-caller"),
+        ("tools", "legacy-both"),
+        ("updated", "legacy-both"),
         ("tools", "legacy"),
+        ("prompts", "legacy"),
+        ("resources", "legacy"),
+        ("updated", "legacy"),
         ("tools", "pages"),
         ("tools", "fanout"),
         ("tools", "setup-race"),
@@ -425,39 +439,40 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
     tmp_path: Path, event_kind: str, access: str
 ) -> None:
     import asyncio
-    from contextlib import asynccontextmanager
+    from collections.abc import Callable
+    from contextlib import AsyncExitStack, asynccontextmanager
+    from threading import Event
 
     import httpx2
+    from integration._support.asgi import asgi_server
+    from integration._support.mcp import _drain_sse_streams
     from mcp import ClientSession, MCPError
+    from mcp.client.sse import sse_client
     from mcp.client.streamable_http import streamable_http_client
-    from mcp.client.subscriptions import listen, SubscriptionLost
+    from mcp.client.subscriptions import SubscriptionLost, listen
     from mcp.server.mcpserver import MCPServer
     from mcp.server.subscriptions import (
         InMemorySubscriptionBus,
         ListenHandler,
-        ToolsListChanged,
         PromptsListChanged,
         ResourcesListChanged,
         ResourceUpdated,
+        ToolsListChanged,
     )
     from mcp.server.transport_security import TransportSecuritySettings
+    from mcp.shared.subscriptions import ServerEvent
     from mcp.types import DiscoverResult, ListToolsResult, PaginatedRequestParams, SubscriptionsListenRequestParams
     from sse_starlette.sse import AppStatus
     from starlette.applications import Starlette
-    from starlette.routing import Mount, Route
     from starlette.responses import JSONResponse
-
-    from integration._support.asgi import asgi_server
-    from integration._support.mcp import _drain_sse_streams
-
-    from threading import Event
-    from collections.abc import Callable
-    from mcp.shared.subscriptions import ServerEvent
+    from starlette.routing import Mount, Route
 
     disconnected: Final = Event()
     connected: Final = Event()
+    tool_executions = []
     token_grants = []
     renewal_started = Event()
+
     async def token_endpoint(request):
         from urllib.parse import parse_qs
 
@@ -468,23 +483,31 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
         token_grants.append(form)
         if renewal_started.is_set() and access == "renewal-failed":
             return JSONResponse({"error": "invalid_client"}, status_code=401)
-        return JSONResponse({
-            "access_token": "synthetic-renewal-" + str(len(token_grants)),
-            "token_type": "Bearer", "expires_in": 70,
-            "scope": "read" if renewal_started.is_set() and access == "renewal-scopes" else "read write",
-        })
+        return JSONResponse(
+            {
+                "access_token": "synthetic-renewal-" + str(len(token_grants)),
+                "token_type": "Bearer",
+                "expires_in": 70,
+                "scope": "read" if renewal_started.is_set() and access == "renewal-scopes" else "read write",
+            }
+        )
 
     listener_credentials = []
     catalog_credentials = []
     setup_changed = Event()
 
+    active_listeners = set()
+
     class ObservedBus(InMemorySubscriptionBus):
         def subscribe(self, listener: Callable[[ServerEvent], None]) -> Callable[[], None]:
             unsubscribe = super().subscribe(listener)
+            marker = object()
+            active_listeners.add(marker)
             connected.set()
 
             def close() -> None:
                 unsubscribe()
+                active_listeners.discard(marker)
                 disconnected.set()
 
             return close
@@ -495,7 +518,7 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
         "from fastapi import HTTPException, Request\n"
         "from litellm.proxy._types import UserAPIKeyAuth\n"
         "async def authenticate(request: Request, api_key: str) -> UserAPIKeyAuth:\n"
-        "    if api_key != 'sk-subscriptions-test':\n"
+        "    if api_key not in ('sk-subscriptions-test', 'sk-subscriptions-other'):\n"
         "        raise HTTPException(status_code=401, detail='Unknown caller')\n"
         "    import json\n"
         "    data = json.loads(Path(__file__).with_suffix('.json').read_text())\n"
@@ -505,6 +528,8 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
         "        server = manager.config_mcp_servers['subscription-server']\n"
         "        fields = {'authorization_url': 'https://authorization.example/authorize'} if change == 'metadata' else {'url': server.url.rstrip('/') + '/changed'}\n"
         "        manager.config_mcp_servers[server.server_id] = server.model_copy(update=fields)\n"
+        "    if api_key == 'sk-subscriptions-other':\n"
+        "        data = {**data, 'api_key': api_key, 'user_id': 'bob', 'object_permission': {**data['object_permission'], 'mcp_tool_permissions': {'subscription-server': ['change_tools']}}}\n"
         "    return UserAPIKeyAuth.model_validate(data)\n"
     )
     identity: Final = {
@@ -522,6 +547,22 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
     upstream_listener: Final = ListenHandler(bus)
 
     async def control_listen(ctx, call_next):
+        if ctx.protocol_version != "2026-07-28" and ctx.method == "notifications/initialized":
+            from mcp.shared.subscriptions import event_to_notification
+
+            queue = asyncio.Queue()
+            unsubscribe = bus.subscribe(queue.put_nowait)
+            connected.set()
+            try:
+                while True:
+                    await ctx.session.send_notification(event_to_notification(await queue.get(), {}))
+            finally:
+                unsubscribe()
+        if ctx.method in ("resources/subscribe", "resources/unsubscribe"):
+            from mcp.types import EmptyResult
+
+            return EmptyResult()
+
         if ctx.method == "tools/list":
             catalog_credentials.append(ctx.request.headers.get("authorization"))
             if access == "setup-race" and connected.is_set() and not setup_changed.is_set():
@@ -529,8 +570,34 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
                 await change_tools()
         if ctx.method == "subscriptions/listen":
             listener_credentials.append(ctx.request.headers.get("authorization"))
+            if access == "legacy-caller-no-notifications":
+                raise MCPError(code=-32601, message="Upstream has no subscription support")
             return await upstream_listener(ctx, SubscriptionsListenRequestParams.model_validate(ctx.params))
         result = await call_next(ctx)
+        if access == "legacy-caller-no-notifications" and ctx.method in ("initialize", "server/discover"):
+            from mcp.types import InitializeResult, ServerCapabilities
+
+            parsed = (DiscoverResult if ctx.method == "server/discover" else InitializeResult).model_validate(result)
+            return parsed.model_copy(update={"capabilities": ServerCapabilities()})
+        if ctx.method == "initialize":
+            from mcp.types import (
+                InitializeResult,
+                PromptsCapability,
+                ResourcesCapability,
+                ServerCapabilities,
+                ToolsCapability,
+            )
+
+            result = InitializeResult.model_validate(result)
+            return result.model_copy(
+                update={
+                    "capabilities": ServerCapabilities(
+                        tools=ToolsCapability(list_changed=True),
+                        prompts=PromptsCapability(list_changed=True),
+                        resources=ResourcesCapability(list_changed=True, subscribe=True),
+                    )
+                }
+            )
         if access == "pages" and ctx.method == "tools/list":
             result = ListToolsResult.model_validate(result)
             offset = int((ctx.params or {}).get("cursor") or "0")
@@ -542,7 +609,11 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
             )
         return result
 
-    upstream: Final = MCPServer("subscription-peer", subscriptions=bus, middleware=[control_listen])
+    upstream: Final = MCPServer(
+        "subscription-peer",
+        subscriptions=None if access == "legacy-caller-no-notifications" else bus,
+        middleware=[control_listen],
+    )
 
     @upstream.resource("test://value")
     def value() -> str:
@@ -550,7 +621,10 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
 
     @upstream.tool()
     async def change_tools() -> str:
+        tool_executions.append("change_tools")
+
         async def added() -> str:
+            tool_executions.append("added")
             return "new tool"
 
         if access == "upstream-ended":
@@ -574,20 +648,125 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
         if access == "fanout":
             headers = {"x-litellm-api-key": gateway.key, "Authorization": "Bearer upstream-only-test-token"}
         async with httpx2.AsyncClient(headers=headers, timeout=30) as client:
-            async with streamable_http_client(
-                str(gateway.client.base_url).rstrip("/") + "/mcp/", http_client=client
-            ) as streams:
-                async with ClientSession(streams[0], streams[1]) as session:
+            gateway_url = str(gateway.client.base_url).rstrip("/")
+            connection = (
+                sse_client(gateway_url + "/mcp/sse", headers=headers)
+                if access == "legacy-sse"
+                else streamable_http_client(gateway_url + "/mcp/", http_client=client)
+            )
+            async with connection as streams:
+                received = asyncio.Queue()
+
+                async def receive(notification, queue=received):
+                    from mcp.shared.subscriptions import event_from_wire
+
+                    if not isinstance(notification, Exception):
+                        event = event_from_wire(
+                            notification.method,
+                            notification.params.model_dump(by_alias=True) if notification.params else None,
+                        )
+                        if event is not None:
+                            await queue.put(event)
+
+                async with (
+                    ClientSession(streams[0], streams[1], message_handler=receive) as session,
+                    AsyncExitStack() as additional,
+                ):
+                    other_received = asyncio.Queue()
+                    if access == "legacy-caller-isolation":
+                        other_client = await additional.enter_async_context(
+                            httpx2.AsyncClient(headers={"Authorization": "Bearer sk-subscriptions-other"})
+                        )
+                        other_streams = await additional.enter_async_context(
+                            streamable_http_client(gateway_url + "/mcp/", http_client=other_client)
+                        )
+
+                        async def receive_other(notification):
+                            await receive(notification, other_received)
+
+                        other = await additional.enter_async_context(
+                            ClientSession(other_streams[0], other_streams[1], message_handler=receive_other)
+                        )
+                        await other.initialize()
+                        assert {tool.name for tool in (await other.list_tools()).tools} == {"peer-change_tools"}
+
+                    if access.startswith("legacy-caller") or access in ("legacy-both", "legacy-sse"):
+                        await session.initialize()
+                        before = await session.list_tools()
+                        assert "peer-added" not in {tool.name for tool in before.tools}
+                        if event_kind == "updated":
+                            await session.subscribe_resource("test://value")
+                        if access != "legacy-caller-no-notifications":
+                            assert await asyncio.to_thread(connected.wait, 5)
+                        if access == "legacy-caller-revoked":
+                            auth_state.write_text(
+                                json.dumps(
+                                    {
+                                        **identity,
+                                        "object_permission": {
+                                            "object_permission_id": "subscription-permission",
+                                            "mcp_servers": ["denied"],
+                                        },
+                                    }
+                                )
+                            )
+                            async with streamable_http_client(upstream_url + "/mcp") as direct_streams:
+                                async with ClientSession(direct_streams[0], direct_streams[1]) as direct:
+                                    direct.adopt(
+                                        DiscoverResult.model_validate(await direct.send_discover("2026-07-28"))
+                                    )
+                                    assert not (await direct.call_tool("change_tools", {})).is_error
+                            with pytest.raises(TimeoutError):
+                                await asyncio.wait_for(received.get(), 0.5)
+                            assert await asyncio.to_thread(disconnected.wait, 3)
+                            return
+                        changed = await session.call_tool("peer-change_tools", {})
+                        assert not changed.is_error
+                        if access == "legacy-caller-no-notifications":
+                            with pytest.raises(TimeoutError):
+                                await asyncio.wait_for(received.get(), 0.5)
+                            assert "peer-added" in {tool.name for tool in (await session.list_tools()).tools}
+                            assert listener_credentials == []
+                            return
+                        event = await asyncio.wait_for(received.get(), 10)
+                        assert (
+                            event
+                            == (
+                                {
+                                    "tools": ToolsListChanged(),
+                                    "prompts": PromptsListChanged(),
+                                    "resources": ResourcesListChanged(),
+                                    "updated": ResourceUpdated(uri="test://value"),
+                                }[event_kind]
+                            )
+                        )
+                        if access == "legacy-caller-isolation":
+                            with pytest.raises(TimeoutError):
+                                await asyncio.wait_for(other_received.get(), 0.5)
+                            assert {tool.name for tool in (await other.list_tools()).tools} == {"peer-change_tools"}
+                            before_denied = tuple(tool_executions)
+                            denied = await other.call_tool("peer-added", {})
+                            assert denied.is_error
+                            assert tuple(tool_executions) == before_denied
+                        if event_kind == "tools":
+                            assert "peer-added" in {tool.name for tool in (await session.list_tools()).tools}
+                        elif event_kind == "prompts":
+                            assert "peer-added" in {prompt.name for prompt in (await session.list_prompts()).prompts}
+                        elif event_kind == "resources":
+                            assert "test://added" in {
+                                str(resource.uri) for resource in (await session.list_resources()).resources
+                            }
+                        else:
+                            await session.unsubscribe_resource("test://value")
+                            changed = await session.call_tool("peer-change_tools", {})
+                            assert not changed.is_error
+                            with pytest.raises(TimeoutError):
+                                await asyncio.wait_for(received.get(), 0.5)
+                        return
                     session.adopt(DiscoverResult.model_validate(await session.send_discover("2026-07-28")))
                     before = await session.list_tools()
                     assert "peer-change_tools" in {tool.name for tool in before.tools}
                     assert "peer-added" not in {tool.name for tool in before.tools}
-                    if access == "legacy":
-                        with pytest.raises(MCPError, match="Select modern upstream"):
-                            async with listen(session, tools_list_changed=True):
-                                pytest.fail("Unsupported upstream was acknowledged")
-                        assert not connected.is_set()
-                        return
                     async with listen(
                         session,
                         tools_list_changed=event_kind == "tools",
@@ -645,10 +824,23 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
                         if access != "setup-race":
                             async with streamable_http_client(upstream_url + "/mcp") as direct_streams:
                                 async with ClientSession(direct_streams[0], direct_streams[1]) as direct:
-                                    direct.adopt(DiscoverResult.model_validate(await direct.send_discover("2026-07-28")))
+                                    direct.adopt(
+                                        DiscoverResult.model_validate(await direct.send_discover("2026-07-28"))
+                                    )
                                     changed = await direct.call_tool("change_tools", {})
                                     assert not changed.is_error
-                        if access in ("revoked", "identity", "team", "org", "end-user", "idle", "upstream-ended", "config-change", "renewal-scopes", "renewal-failed"):
+                        if access in (
+                            "revoked",
+                            "identity",
+                            "team",
+                            "org",
+                            "end-user",
+                            "idle",
+                            "upstream-ended",
+                            "config-change",
+                            "renewal-scopes",
+                            "renewal-failed",
+                        ):
                             with pytest.raises((SubscriptionLost, StopAsyncIteration)):
                                 await asyncio.wait_for(anext(subscription), 5)
                             assert await asyncio.to_thread(disconnected.wait, 3)
@@ -706,7 +898,9 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
         watchers = tuple(task for task in asyncio.all_tasks() if "_shutdown_watcher" in repr(task.get_coro()))
         await asyncio.wait_for(asyncio.gather(*watchers), 2)
 
-    hosted: Final = Starlette(routes=[Route("/token", token_endpoint, methods=["POST"]), Mount("/", app=app)], lifespan=lifespan)
+    hosted: Final = Starlette(
+        routes=[Route("/token", token_endpoint, methods=["POST"]), Mount("/", app=app)], lifespan=lifespan
+    )
     with asgi_server(hosted) as upstream_url, httpx.Client() as client:
         config: Final = tmp_path / "proxy.yaml"
         config.write_text(
@@ -716,14 +910,21 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
                     "mcp_servers": {
                         "peer": {
                             "server_id": "subscription-server",
-                            **({
-                                "auth_type": "oauth2", "oauth2_flow": "client_credentials",
-                                "client_id": "subscription-service", "client_secret": "synthetic-client-secret",
-                                "token_url": upstream_url + "/token", "scopes": ["read", "write"],
-                            } if access.startswith("renewal") else {}),
+                            **(
+                                {
+                                    "auth_type": "oauth2",
+                                    "oauth2_flow": "client_credentials",
+                                    "client_id": "subscription-service",
+                                    "client_secret": "synthetic-client-secret",
+                                    "token_url": upstream_url + "/token",
+                                    "scopes": ["read", "write"],
+                                }
+                                if access.startswith("renewal")
+                                else {}
+                            ),
                             "url": upstream_url + "/mcp",
                             "transport": "http",
-                            "protocol_version": "2025-11-25" if access == "legacy" else "2026-07-28",
+                            "protocol_version": "2025-11-25" if access in ("legacy", "legacy-both") else "2026-07-28",
                             **({"allowed_tools": ["change_tools"]} if access == "hidden" else {}),
                             **(
                                 {"auth_type": "oauth_delegate", "extra_headers": ["Authorization"]}
@@ -780,6 +981,10 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
             ),
         ) as gateway:
             asyncio.run(exercise(gateway))
+            from integration._support.client import eventually
+
+            eventually(lambda: len(active_listeners), lambda count: count == 0, seconds=10)
+            assert not active_listeners, "Upstream listener survived client disconnect"
 
 
 def test_subscription_partial_setup_releases_upstream_capacity() -> None:
@@ -788,6 +993,8 @@ def test_subscription_partial_setup_releases_upstream_capacity() -> None:
     from threading import Event
 
     import httpx2
+    from integration._support.asgi import asgi_server
+    from integration._support.mcp import _drain_sse_streams
     from mcp import ClientSession, MCPError
     from mcp.client.streamable_http import streamable_http_client
     from mcp.client.subscriptions import listen
@@ -799,8 +1006,6 @@ def test_subscription_partial_setup_releases_upstream_capacity() -> None:
     from starlette.applications import Starlette
     from starlette.routing import Mount
 
-    from integration._support.asgi import asgi_server
-    from integration._support.mcp import _drain_sse_streams
     from litellm.experimental_mcp_client.client import MCPClient
     from litellm.proxy._experimental.mcp_server.contracts import OperationContext
     from litellm.proxy._experimental.mcp_server.subscriptions import GatewaySubscriptions, SubscriptionTarget

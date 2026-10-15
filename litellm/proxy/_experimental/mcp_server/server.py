@@ -582,7 +582,12 @@ if MCP_AVAILABLE:
     ) -> InitializationOptions:
         base_options: Final = Server.create_initialization_options(
             self,
-            notification_options=notification_options,
+            notification_options=notification_options
+            or NotificationOptions(
+                tools_changed=not _mcp_proxy_mode.get(),
+                prompts_changed=not _mcp_proxy_mode.get(),
+                resources_changed=not _mcp_proxy_mode.get(),
+            ),
             experimental_capabilities=experimental_capabilities or {},
             extensions=extensions,
         )
@@ -829,6 +834,8 @@ if MCP_AVAILABLE:
 
     @contextlib.asynccontextmanager
     async def _legacy_operation_context(ctx: ServerRequestContext, *, trace: bool) -> AsyncGenerator[OperationContext]:
+        if ctx.protocol_version != "2026-07-28" and ctx.method in ("tools/list", "prompts/list", "resources/list"):
+            await subscriptions.wait_initialized(ctx)
         with contextlib.ExitStack() as cleanup:
             cleanup.callback(active_mcp_request_ctx_var.reset, active_mcp_request_ctx_var.set(ctx))
             cleanup.callback(active_mcp_session_var.reset, active_mcp_session_var.set(ctx.session))
@@ -994,39 +1001,39 @@ if MCP_AVAILABLE:
         async with _legacy_operation_context(ctx, trace=False) as context:
             return await operations.GatewayOperations().execute(DiscoverRequest(params=params), context)
 
-    from mcp.types import SubscriptionsListenRequestParams, SubscriptionsListenResult
+    from mcp.types import (
+        EmptyResult,
+        NotificationParams,
+        SubscribeRequestParams,
+        SubscriptionsListenRequestParams,
+        SubscriptionsListenResult,
+        UnsubscribeRequestParams,
+    )
 
-    from litellm.proxy._experimental.mcp_server.subscriptions import GatewaySubscriptions
+    from litellm.proxy._experimental.mcp_server.subscriptions import GatewaySubscriptions, SubscriptionAuthorization
 
     subscriptions: Final = GatewaySubscriptions()
+    legacy_subscription_request: Final[contextvars.ContextVar[StarletteRequest | None]] = contextvars.ContextVar(
+        "legacy_subscription_request", default=None
+    )
 
-    async def listen_subscriptions(
-        ctx: ServerRequestContext, params: SubscriptionsListenRequestParams
-    ) -> SubscriptionsListenResult:
+    @contextlib.asynccontextmanager
+    async def _subscription_authorization(
+        ctx: ServerRequestContext[object, StarletteRequest],
+    ) -> AsyncGenerator[SubscriptionAuthorization]:
         if _mcp_proxy_mode.get():
             _reject_mcp_proxy_operation()
-        request: Final = ctx.request
+        request: Final[StarletteRequest | None] = (
+            ctx.request if isinstance(ctx.request, StarletteRequest) else legacy_subscription_request.get()
+        )
         if not isinstance(request, StarletteRequest):
             raise HTTPException(status_code=400, detail="Subscriptions require an HTTP request")
         async with _legacy_operation_context(ctx, trace=False) as initial:
-            owner: Final = _owner_fingerprint_for(
-                initial.user_api_key_auth, dict(initial.oauth2_headers or {}), initial.client_ip
-            )
-            caller: Final = initial.user_api_key_auth
-            identity: Final = (
-                (caller.user_id, caller.team_id, caller.org_id, caller.end_user_id) if caller is not None else None
-            )
 
             async def authorize() -> OperationContext:
                 auth, token, servers, server_headers, oauth_headers, headers = await extract_mcp_auth_context(
                     request.scope, request.url.path
                 )
-                current_identity: Final = (auth.user_id, auth.team_id, auth.org_id, auth.end_user_id)
-                if (
-                    current_identity != identity
-                    or _owner_fingerprint_for(auth, oauth_headers, initial.client_ip) != owner
-                ):
-                    raise HTTPException(status_code=403, detail="Subscription caller changed")
                 return operations.prepare_context(
                     auth,
                     token,
@@ -1041,7 +1048,38 @@ if MCP_AVAILABLE:
                     incoming_bearer_token=MCPRequestHandler.get_guardrail_bearer_token(request.headers, auth),
                 )
 
-            return await subscriptions.listen(ctx, params, authorize, owner)
+            authorization: Final = SubscriptionAuthorization(initial, authorize, _owner_fingerprint_for)
+            yield authorization
+
+    async def listen_subscriptions(
+        ctx: ServerRequestContext, params: SubscriptionsListenRequestParams
+    ) -> SubscriptionsListenResult:
+        async with _subscription_authorization(ctx) as authorization:
+            return await subscriptions.listen(ctx, params, authorization, authorization.owner)
+
+    async def legacy_notifications(ctx: ServerRequestContext, params: NotificationParams) -> None:
+        if _mcp_proxy_mode.get():
+            return
+        async with subscriptions.initializing(ctx) as start:
+            if start:
+                async with _subscription_authorization(ctx) as authorization:
+                    await subscriptions.legacy_session(ctx, authorization)
+
+    async def subscribe_resource(ctx: ServerRequestContext, params: SubscribeRequestParams) -> EmptyResult:
+        if _mcp_proxy_mode.get():
+            _reject_mcp_proxy_operation()
+        await subscriptions.legacy_resource(ctx, str(params.uri), subscribe=True)
+        return EmptyResult()
+
+    async def unsubscribe_resource(ctx: ServerRequestContext, params: UnsubscribeRequestParams) -> EmptyResult:
+        if _mcp_proxy_mode.get():
+            _reject_mcp_proxy_operation()
+        await subscriptions.legacy_resource(ctx, str(params.uri), subscribe=False)
+        return EmptyResult()
+
+    server.add_notification_handler("notifications/initialized", NotificationParams, legacy_notifications)
+    server.add_request_handler("resources/subscribe", SubscribeRequestParams, subscribe_resource)
+    server.add_request_handler("resources/unsubscribe", UnsubscribeRequestParams, unsubscribe_resource)
 
     server.add_request_handler("subscriptions/listen", SubscriptionsListenRequestParams, listen_subscriptions)
 
@@ -1266,7 +1304,7 @@ if MCP_AVAILABLE:
 
     def _owner_fingerprint_for(
         user_api_key_auth: UserAPIKeyAuth | None,
-        oauth2_headers: dict[str, str] | None = None,
+        oauth2_headers: Mapping[str, str] | None = None,
         client_ip: str | None = None,
     ) -> str:
         """
@@ -2730,13 +2768,18 @@ if MCP_AVAILABLE:
                     sse.connect_sse(transport_scope, receive, send) as (read_stream, write_stream),
                     server.lifespan(server) as lifespan_state,
                 ):
-                    await serve_loop(
-                        server,
-                        read_stream,
-                        write_stream,
-                        lifespan_state=lifespan_state,
-                        init_options=server.create_initialization_options(),
-                    )
+                    request_token: Final = legacy_subscription_request.set(StarletteRequest(scope))
+                    try:
+                        await serve_loop(
+                            server,
+                            read_stream,
+                            write_stream,
+                            lifespan_state=lifespan_state,
+                            init_options=server.create_initialization_options(),
+                        )
+                    finally:
+                        legacy_subscription_request.reset(request_token)
+
         except MCPUpstreamAuthError as e:
             # Upstream delegated auth returned 401; surface it to the client so
             # standards-compliant MCP clients trigger the upstream OAuth flow.

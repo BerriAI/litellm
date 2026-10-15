@@ -1,12 +1,13 @@
 import asyncio
 import hashlib
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, replace
 from itertools import chain
-from typing import Final
+from typing import Final, NoReturn
 
 import anyio
-from anyio.abc import TaskStatus
+from anyio.abc import TaskGroup, TaskStatus
 from fastapi import HTTPException
 from mcp import ClientSession, MCPError
 from mcp.client.subscriptions import listen
@@ -19,9 +20,12 @@ from mcp.shared.subscriptions import (
     ResourceUpdated,
     ServerEvent,
     ToolsListChanged,
+    event_from_wire,
     event_matches,
+    event_to_notification,
 )
 from mcp.types import (
+    EmptyResult,
     ListPromptsRequest,
     ListPromptsResult,
     ListResourcesRequest,
@@ -29,10 +33,15 @@ from mcp.types import (
     ListToolsResult,
     PaginatedRequestParams,
     RequestId,
+    ServerCapabilities,
     ServerNotification,
+    SubscribeRequest,
+    SubscribeRequestParams,
     SubscriptionFilter,
     SubscriptionsListenRequestParams,
     SubscriptionsListenResult,
+    UnsubscribeRequest,
+    UnsubscribeRequestParams,
 )
 
 from litellm.constants import MCP_TOOL_LISTING_MAX_PAGES, MCP_TOOL_LISTING_TIMEOUT
@@ -42,7 +51,111 @@ from litellm.proxy._experimental.mcp_server.catalog import (
     _configuration_identity as configuration_identity,  # pyright: ignore[reportPrivateUsage]  # reuse catalog-owned configuration identity without treating discovered metadata as configuration
 )
 from litellm.proxy._experimental.mcp_server.contracts import OperationContext
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+
+class SubscriptionAuthorization:
+    def __init__(
+        self,
+        initial: OperationContext,
+        refresh: Callable[[], Awaitable[OperationContext]],
+        fingerprint: Callable[[UserAPIKeyAuth | None, Mapping[str, str] | None, str | None], str],
+    ) -> None:
+        self._refresh = refresh
+        self._fingerprint = fingerprint
+        self.owner = self._owner(initial)
+        self._identity = self._caller(initial)
+
+    def _owner(self, context: OperationContext) -> str:
+        return self._fingerprint(context.user_api_key_auth, dict(context.oauth2_headers or {}), context.client_ip)
+
+    @staticmethod
+    def _caller(context: OperationContext) -> tuple[str | None, str | None, str | None, str | None] | None:
+        caller: Final = context.user_api_key_auth
+        return (caller.user_id, caller.team_id, caller.org_id, caller.end_user_id) if caller is not None else None
+
+    async def __call__(self) -> OperationContext:
+        fresh: Final = await self._refresh()
+        if self._caller(fresh) != self._identity or self._owner(fresh) != self.owner:
+            raise HTTPException(status_code=403, detail="Subscription caller changed")
+        return fresh
+
+
+def _supported_notifications(requested: SubscriptionFilter, capabilities: ServerCapabilities) -> SubscriptionFilter:
+    return SubscriptionFilter(
+        tools_list_changed=bool(requested.tools_list_changed and capabilities.tools and capabilities.tools.list_changed)
+        or None,
+        prompts_list_changed=bool(
+            requested.prompts_list_changed and capabilities.prompts and capabilities.prompts.list_changed
+        )
+        or None,
+        resources_list_changed=bool(
+            requested.resources_list_changed and capabilities.resources and capabilities.resources.list_changed
+        )
+        or None,
+        resource_subscriptions=list(requested.resource_subscriptions or ())
+        if capabilities.resources and capabilities.resources.subscribe
+        else None,
+    )
+
+
+class LegacyNotifications:
+    def __init__(self, *, max_buffered_events: int = 128) -> None:
+        self.honored = SubscriptionFilter()
+        self._session: ClientSession | None = None
+        self._events: Final[asyncio.Queue[ServerEvent | MCPError]] = asyncio.Queue(max_buffered_events)
+
+    async def receive(self, notification: ServerNotification) -> None:
+        event: Final = event_from_wire(
+            notification.method,
+            notification.params.model_dump(by_alias=True) if notification.params is not None else None,
+        )
+        if event is None or not event_matches(
+            self.honored, frozenset(self.honored.resource_subscriptions or ()), event
+        ):
+            return
+        self.publish(event)
+
+    def publish(self, event: ServerEvent) -> None:
+        try:
+            self._events.put_nowait(event)
+        except asyncio.QueueFull:
+            self._events.get_nowait()
+            self._events.put_nowait(MCPError(code=-32001, message="Legacy notification buffer overflow; refresh"))
+
+    def __aiter__(self) -> "LegacyNotifications":
+        return self
+
+    async def __anext__(self) -> ServerEvent:
+        while True:
+            with anyio.move_on_after(15 if self._session is not None else float("inf")) as idle:
+                event = await self._events.get()
+                if isinstance(event, MCPError):
+                    raise event
+                return event
+            if idle.cancel_called and self._session is not None:
+                await self._session.send_ping()
+
+    @asynccontextmanager
+    async def listen(
+        self, session: ClientSession, requested: SubscriptionFilter
+    ) -> AsyncGenerator["LegacyNotifications"]:
+        self._session = session
+        capabilities: Final = session.server_capabilities or ServerCapabilities()
+        self.honored = _supported_notifications(requested, capabilities)
+        cleanup: Final = AsyncExitStack()
+        try:
+            for uri in self.honored.resource_subscriptions or ():
+                await session.send_request(SubscribeRequest(params=SubscribeRequestParams(uri=uri)), EmptyResult)
+                cleanup.push_async_callback(
+                    session.send_request, UnsubscribeRequest(params=UnsubscribeRequestParams(uri=uri)), EmptyResult
+                )
+            yield self
+        finally:
+            with anyio.move_on_after(5, shield=True):
+                await cleanup.aclose()
+            self._session = None
 
 
 @dataclass(frozen=True)
@@ -139,6 +252,40 @@ async def _listing(event: ServerEvent, context: OperationContext) -> str | None:
     raise MCPError(code=-32603, message="Subscription catalog exceeds the pagination limit")
 
 
+async def _recheck_authorization(check: Callable[[], Awaitable[OperationContext]]) -> None:
+    while True:
+        await asyncio.sleep(15)
+        await check()
+
+
+async def _deliver_legacy(
+    ctx: ServerRequestContext,
+    bus: _ListenerBus,
+    check: Callable[[], Awaitable[OperationContext]],
+    notifications: SubscriptionFilter,
+    ready: Callable[[SubscriptionFilter], None] | None,
+) -> NoReturn:
+    events: Final = LegacyNotifications()
+    unsubscribe: Final = bus.subscribe(events.publish)
+    try:
+        if ready is not None:
+            ready(notifications)
+        while True:
+            event = await anext(events)
+            await check()
+            await ctx.session.send_notification(event_to_notification(event, {}))
+    finally:
+        unsubscribe()
+
+
+@dataclass
+class LegacySubscriptionSession:
+    group: TaskGroup
+    authorization: SubscriptionAuthorization
+    resources: Mapping[str, anyio.CancelScope]
+    lock: asyncio.Lock
+
+
 class GatewaySubscriptions:
     def __init__(
         self,
@@ -152,6 +299,9 @@ class GatewaySubscriptions:
         self._upstream_slots = anyio.CapacityLimiter(max_listeners)
         self._max_per_caller = max_per_caller
         self._owners: tuple[str, ...] = ()
+        self._legacy: Mapping[int, LegacySubscriptionSession] = {}
+        self._legacy_started = asyncio.Event()
+        self._initializing: Mapping[int, asyncio.Event] = {}
 
     async def listen(
         self,
@@ -160,32 +310,128 @@ class GatewaySubscriptions:
         authorize: Callable[[], Awaitable[OperationContext]],
         owner: str,
     ) -> SubscriptionsListenResult:
-        if self._owners.count(owner) >= self._max_per_caller:
-            raise MCPError(code=-32603, message="Caller subscription limit reached")
         if ctx.protocol_version != "2026-07-28":
             raise MCPError(code=-32601, message="Subscriptions require the modern MCP protocol")
+        async with self._capacity(owner):
+            return await self._listen(ctx, params, authorize)
+
+    @asynccontextmanager
+    async def _capacity(self, owner: str) -> AsyncGenerator[None]:
+        if self._owners.count(owner) >= self._max_per_caller:
+            raise MCPError(code=-32603, message="Caller subscription limit reached")
         try:
             self._slots.acquire_nowait()
         except anyio.WouldBlock as error:
             raise MCPError(code=-32603, message="Subscription limit reached") from error
         self._owners += (owner,)
         try:
-            return await self._listen(ctx, params, authorize)
+            yield
         finally:
             position: Final = self._owners.index(owner)
             self._owners = self._owners[:position] + self._owners[position + 1 :]
             self._slots.release()
+
+    @asynccontextmanager
+    async def initializing(self, ctx: ServerRequestContext) -> AsyncGenerator[bool]:
+        key: Final = id(ctx.session.client_params)
+        if key in self._initializing:
+            yield False
+            return
+        ready: Final = asyncio.Event()
+        self._initializing = {**self._initializing, key: ready}
+        try:
+            yield True
+        finally:
+            ready.set()
+            self._initializing = {
+                registered: event for registered, event in self._initializing.items() if registered != key
+            }
+
+    async def wait_initialized(self, ctx: ServerRequestContext) -> None:
+        ready: Final = self._initializing.get(id(ctx.session.client_params))
+        if ready is not None:
+            await ready.wait()
+
+    async def legacy_session(self, ctx: ServerRequestContext, authorization: SubscriptionAuthorization) -> None:
+        key: Final = id(ctx.session.client_params)
+        if ctx.session.client_params is None or key in self._legacy:
+            return
+        async with anyio.create_task_group() as group:
+            state: Final = LegacySubscriptionSession(group, authorization, {}, asyncio.Lock())
+            self._legacy = {**self._legacy, key: state}
+            self._legacy_started.set()
+            try:
+                await group.start(
+                    self._legacy_listener,
+                    ctx,
+                    SubscriptionFilter(tools_list_changed=True, prompts_list_changed=True, resources_list_changed=True),
+                    authorization,
+                )
+                if (ready := self._initializing.get(key)) is not None:
+                    ready.set()
+                await anyio.sleep_forever()
+            finally:
+                self._legacy = {registered: state for registered, state in self._legacy.items() if registered != key}
+                group.cancel_scope.cancel()
+
+    async def _legacy_listener(
+        self,
+        ctx: ServerRequestContext,
+        notifications: SubscriptionFilter,
+        authorization: SubscriptionAuthorization,
+        scope: anyio.CancelScope | None = None,
+        *,
+        task_status: TaskStatus[None],
+    ) -> None:
+        with scope if scope is not None else anyio.CancelScope():
+
+            def ready(honored: SubscriptionFilter) -> None:
+                if (
+                    notifications.resource_subscriptions
+                    and honored.resource_subscriptions != notifications.resource_subscriptions
+                ):
+                    raise MCPError(code=-32602, message="Upstream does not support this resource subscription")
+                task_status.started()
+
+            async with self._capacity(authorization.owner):
+                await self._listen(
+                    ctx, SubscriptionsListenRequestParams(notifications=notifications), authorization, ready
+                )
+
+    async def legacy_resource(self, ctx: ServerRequestContext, uri: str, *, subscribe: bool) -> None:
+        if ctx.session.client_params is None:
+            raise MCPError(code=-32602, message="Resource subscriptions require a live legacy session")
+        key: Final = id(ctx.session.client_params)
+        with anyio.fail_after(10):
+            while key not in self._legacy:
+                self._legacy_started.clear()
+                await self._legacy_started.wait()
+        state: Final = self._legacy[key]
+        async with state.lock:
+            await state.authorization()
+            if subscribe and uri not in state.resources:
+                scope: Final = anyio.CancelScope()
+                await state.group.start(
+                    self._legacy_listener,
+                    ctx,
+                    SubscriptionFilter(resource_subscriptions=[uri]),
+                    state.authorization,
+                    scope,
+                )
+                state.resources = {**state.resources, uri: scope}
+            elif not subscribe and uri in state.resources:
+                state.resources[uri].cancel()
+                state.resources = {resource: scope for resource, scope in state.resources.items() if resource != uri}
 
     async def _listen(
         self,
         ctx: ServerRequestContext,
         params: SubscriptionsListenRequestParams,
         authorize: Callable[[], Awaitable[OperationContext]],
+        ready: Callable[[SubscriptionFilter], None] | None = None,
     ) -> SubscriptionsListenResult:
         context: Final = await authorize()
         targets: Final = await self._resolve_targets(context)
-        if any(target.server.protocol_version != "2026-07-28" for target in targets):
-            raise MCPError(code=-32602, message="Select modern upstream servers for subscriptions")
         if not targets:
             raise HTTPException(status_code=403, detail="No authorized MCP subscription targets")
         if params.notifications.resource_subscriptions and len(targets) != 1:
@@ -202,29 +448,38 @@ class GatewaySubscriptions:
                 raise MCPError(code=-32001, message="Subscription authorization or upstream configuration changed")
             return fresh
 
-        async def recheck() -> None:
-            while True:
-                await asyncio.sleep(15)
-                await check()
-
         async def relay(target: SubscriptionTarget, *, task_status: TaskStatus[SubscriptionFilter]) -> None:
             await operations._enforce_mcp_server_rate_limit(context.user_api_key_auth, target.server)  # pyright: ignore[reportPrivateUsage]  # same admission policy as other gateway operations
 
+            legacy: Final = LegacyNotifications()
+
             async def connected(session: ClientSession) -> None:
                 requested: Final = params.notifications
+                if ctx.protocol_version != "2026-07-28" and not any(
+                    _supported_notifications(requested, session.server_capabilities or ServerCapabilities())
+                    .model_dump()
+                    .values()
+                ):
+                    task_status.started(SubscriptionFilter())
+                    return
                 requested_events: Final = tuple(
                     event
                     for event in (ToolsListChanged(), PromptsListChanged(), ResourcesListChanged())
                     if event_matches(requested, frozenset(), event)
                 )
                 baseline: Final = {event: await _listing(event, context) for event in requested_events}
-                async with listen(
-                    session,
-                    tools_list_changed=bool(requested.tools_list_changed),
-                    prompts_list_changed=bool(requested.prompts_list_changed),
-                    resources_list_changed=bool(requested.resources_list_changed),
-                    resource_subscriptions=requested.resource_subscriptions or (),
-                ) as subscription:
+                stream: Final = (
+                    listen(
+                        session,
+                        tools_list_changed=bool(requested.tools_list_changed),
+                        prompts_list_changed=bool(requested.prompts_list_changed),
+                        resources_list_changed=bool(requested.resources_list_changed),
+                        resource_subscriptions=requested.resource_subscriptions or (),
+                    )
+                    if session.protocol_version == "2026-07-28"
+                    else legacy.listen(session, requested)
+                )
+                async with stream as subscription:
                     events: Final = tuple(
                         event for event in requested_events if event_matches(subscription.honored, frozenset(), event)
                     )
@@ -256,7 +511,7 @@ class GatewaySubscriptions:
             except anyio.WouldBlock as error:
                 raise MCPError(code=-32603, message="Upstream subscription limit reached") from error
             try:
-                await target.client.run_with_session(connected)
+                await target.client.run_with_session(connected, on_notification=legacy.receive)
             finally:
                 self._upstream_slots.release()
 
@@ -273,8 +528,10 @@ class GatewaySubscriptions:
                 )
                 or None,
             )
-            group.start_soon(recheck)
+            group.start_soon(_recheck_authorization, check)
             try:
+                if ctx.protocol_version != "2026-07-28":
+                    await _deliver_legacy(ctx, bus, check, notifications, ready)
                 return await handler(
                     replace(ctx, session=_AuthorizedSession(ctx.session, check)),
                     params.model_copy(update={"notifications": notifications}),

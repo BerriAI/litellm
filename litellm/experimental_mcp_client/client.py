@@ -186,6 +186,23 @@ def _strip_header_whitespace(headers: dict[str, str]) -> dict[str, str]:
     }
 
 
+async def _receive_session_message(
+    message: ServerNotification | Exception,
+    *,
+    stream_error: asyncio.Future[Exception],
+    on_notification: Callable[[ServerNotification], Awaitable[None]] | None,
+) -> None:
+    if not isinstance(message, Exception):
+        if on_notification is not None:
+            await on_notification(message)
+        return
+    if not isinstance(message, (ValueError, httpx2.HTTPError, OSError)):
+        return
+    if not stream_error.done():
+        stream_error.set_result(message)
+    raise RuntimeError("MCP response stream failed")
+
+
 def _first_non_cancelled_cause(exc: BaseException, cleanup_errors: tuple[Exception, ...] = ()) -> BaseException | None:
     queue: Final[list[BaseException]] = [exc]
     while queue:
@@ -708,6 +725,7 @@ class MCPClient:
         *,
         on_stream_error: Callable[[asyncio.Future[Exception]], None] | None = None,
         on_cleanup: Callable[[], None] | None = None,
+        on_notification: Callable[[ServerNotification], Awaitable[None]] | None = None,
     ) -> TSessionResult:
         """
         Execute an operation within a transport and session context.
@@ -728,16 +746,6 @@ class MCPClient:
                     stream_error: Final[asyncio.Future[Exception]] = asyncio.get_running_loop().create_future()
                     _notify_stream_error(on_stream_error, stream_error)
 
-                    async def receive_message(
-                        message: ServerNotification | Exception,
-                    ) -> None:
-                        if not isinstance(message, (ValueError, httpx2.HTTPError, OSError)):
-                            return
-                        if not stream_error.done():
-                            stream_error.set_result(message)
-                        # The SDK closes pending requests when its message handler raises.
-                        raise RuntimeError("MCP response stream failed")
-
                     session_kwargs: Final = (
                         self._session_callbacks_override
                         if self._session_callbacks_override is not None
@@ -749,7 +757,9 @@ class MCPClient:
                         read_stream,
                         write_stream,
                         read_timeout_seconds=self.timeout,
-                        message_handler=receive_message,
+                        message_handler=partial(
+                            _receive_session_message, stream_error=stream_error, on_notification=on_notification
+                        ),
                         sampling_callback=session_kwargs["sampling_callback"],
                         elicitation_callback=session_kwargs["elicitation_callback"],
                         logging_callback=session_kwargs["logging_callback"],
@@ -816,6 +826,7 @@ class MCPClient:
         quiet_on_error: bool = False,
         on_stream_error: Callable[[asyncio.Future[Exception]], None] | None = None,
         on_cleanup: Callable[[], None] | None = None,
+        on_notification: Callable[[ServerNotification], Awaitable[None]] | None = None,
     ) -> TSessionResult:
         """Open a session, run the provided coroutine, and clean up.
 
@@ -834,8 +845,9 @@ class MCPClient:
                     http_client=http_client,
                     on_stream_error=on_stream_error,
                     on_cleanup=on_cleanup,
+                    on_notification=on_notification,
                 )
-                if on_stream_error is not None or on_cleanup is not None
+                if on_stream_error is not None or on_cleanup is not None or on_notification is not None
                 else self._execute_session_operation(transport_ctx, operation, http_client=http_client)
             )
             result: Final = await execution
