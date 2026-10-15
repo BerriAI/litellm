@@ -6,10 +6,17 @@ Native provider tools (like Anthropic's web_search_20250305) are converted
 to this format for consistent interception and execution.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
+from pydantic import TypeAdapter
+
 from litellm.constants import LITELLM_WEB_SEARCH_TOOL_NAME
+from litellm.types.integrations.websearch_interception import WebSearchDomainFilters
+
+_DOMAINS: Final = TypeAdapter(tuple[str, ...])
+_TOOL_MAPPING: Final = TypeAdapter(dict[str, object])
+_TOOLS: Final = TypeAdapter(list[dict[str, object]])
 
 _WEB_SEARCH_TOOL_DESCRIPTION: Final = (
     "Search the web for information. Use this when you need current "
@@ -17,7 +24,10 @@ _WEB_SEARCH_TOOL_DESCRIPTION: Final = (
 )
 
 
-def _web_search_input_schema() -> dict[str, object]:  # mutable-ok: plain-dict tool shape, as the get_* builders
+def _web_search_input_schema(
+    allowed_domains: Sequence[str] | None = None,
+    blocked_domains: Sequence[str] | None = None,
+) -> Mapping[str, object]:
     """
     JSON schema for the web search tool's input, shared by every tool format.
 
@@ -51,12 +61,20 @@ def _web_search_input_schema() -> dict[str, object]:  # mutable-ok: plain-dict t
                     "objective for the best results."
                 ),
             },
+            **{
+                name: {"type": "array", "items": {"type": "string"}, "default": list(domains)}
+                for name, domains in (("allowed_domains", allowed_domains), ("blocked_domains", blocked_domains))
+                if domains is not None
+            },
         },
         "required": ["query"],
     }
 
 
-def get_litellm_web_search_tool() -> dict[str, object]:
+def get_litellm_web_search_tool(
+    allowed_domains: Sequence[str] | None = None,
+    blocked_domains: Sequence[str] | None = None,
+) -> dict[str, object]:
     """
     Get the standard LiteLLM web search tool definition.
 
@@ -78,11 +96,14 @@ def get_litellm_web_search_tool() -> dict[str, object]:
     return {
         "name": LITELLM_WEB_SEARCH_TOOL_NAME,
         "description": _WEB_SEARCH_TOOL_DESCRIPTION,
-        "input_schema": _web_search_input_schema(),
+        "input_schema": _web_search_input_schema(allowed_domains, blocked_domains),
     }
 
 
-def get_litellm_web_search_tool_openai() -> dict[str, object]:
+def get_litellm_web_search_tool_openai(
+    allowed_domains: Sequence[str] | None = None,
+    blocked_domains: Sequence[str] | None = None,
+) -> dict[str, object]:
     """
     Get the standard LiteLLM web search tool definition in OpenAI format.
 
@@ -98,7 +119,7 @@ def get_litellm_web_search_tool_openai() -> dict[str, object]:
         "function": {
             "name": LITELLM_WEB_SEARCH_TOOL_NAME,
             "description": _WEB_SEARCH_TOOL_DESCRIPTION,
-            "parameters": _web_search_input_schema(),
+            "parameters": _web_search_input_schema(allowed_domains, blocked_domains),
         },
     }
 
@@ -121,6 +142,39 @@ def get_litellm_web_search_tool_responses() -> dict[str, object]:
         "description": _WEB_SEARCH_TOOL_DESCRIPTION,
         "parameters": _web_search_input_schema(),
     }
+
+
+def get_web_search_domain_filters(tool: Mapping[str, object]) -> WebSearchDomainFilters:
+    function: Final = tool.get("function")
+    if isinstance(function, Mapping):
+        return get_web_search_domain_filters(_TOOL_MAPPING.validate_python(function))
+    schema: Final = _TOOL_MAPPING.validate_python(tool.get("input_schema", tool.get("parameters", {})))
+    properties: Final = _TOOL_MAPPING.validate_python(schema.get("properties", {}))
+    defaults: Final = {
+        name: _TOOL_MAPPING.validate_python(value).get("default")
+        for name in ("allowed_domains", "blocked_domains")
+        if isinstance(value := properties.get(name), Mapping)
+    }
+    values: Final = {**defaults, **tool}
+    allowed: Final = values.get("allowed_domains")
+    blocked: Final = values.get("blocked_domains")
+    allowed_filter: Final[WebSearchDomainFilters] = (
+        {"allowed_domains": _DOMAINS.validate_python(allowed)} if allowed is not None else {}
+    )
+    blocked_filter: Final[WebSearchDomainFilters] = (
+        {"blocked_domains": _DOMAINS.validate_python(blocked)} if blocked is not None else {}
+    )
+    return {**allowed_filter, **blocked_filter}
+
+
+def resolve_web_search_domain_filters(request: Mapping[str, object]) -> WebSearchDomainFilters:
+    definitions: Final = _TOOLS.validate_python(request.get("tools") or [])
+    configured: Final[WebSearchDomainFilters] = next(
+        (get_web_search_domain_filters(tool) for tool in definitions if is_web_search_tool(tool)),
+        WebSearchDomainFilters(),
+    )
+    arguments: Final = get_web_search_domain_filters(_TOOL_MAPPING.validate_python(request.get("input") or {}))
+    return {**arguments, **configured}
 
 
 def is_web_search_tool_responses(tool: Mapping[str, object]) -> bool:
