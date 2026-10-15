@@ -123,8 +123,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             and isinstance(translated_thinking, dict)
             and translated_thinking.get("type") == "adaptive"
         ):
-            thinking_with_display: Final[AnthropicThinkingParam] = {"type": "adaptive", "display": "updates"}
-            optional_params["thinking"] = thinking_with_display
+            optional_params["thinking"] = {**translated_thinking, "display": "updates"}
 
         # The stub model hides the original model from the parent's forced-tool-use backstop
         response_format_tool_choice: Final = optional_params.get("tool_choice")
