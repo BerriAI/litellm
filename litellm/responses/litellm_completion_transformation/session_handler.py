@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
-from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
+from litellm.litellm_core_utils.cold_storage_handler import ColdStorageHandler
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -51,6 +51,7 @@ class ResponsesSessionHandler:
     @staticmethod
     async def get_chat_completion_message_history_for_previous_response_id(
         previous_response_id: str,
+        item_cache_control: bool = False,
     ) -> ChatCompletionSession:
         """
         Return the chat completion message history for a previous response id
@@ -86,6 +87,7 @@ class ResponsesSessionHandler:
                     spend_log=spend_log,
                     proxy_server_request_dict=proxy_server_request_dict,
                     chat_completion_message_history=chat_completion_message_history,
+                    item_cache_control=item_cache_control,
                 )
             )
 
@@ -117,6 +119,7 @@ class ResponsesSessionHandler:
             | ChatCompletionResponseMessage
             | Message
         ],
+        item_cache_control: bool = False,
     ):
         """
         Extend the chat completion message history with the spend log payload
@@ -148,6 +151,7 @@ class ResponsesSessionHandler:
                     input=response_input_param,
                     responses_api_request={},
                     replay_reasoning=True,
+                    item_cache_control=item_cache_control,
                 )
             )
 

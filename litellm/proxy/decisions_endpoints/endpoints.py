@@ -1,6 +1,6 @@
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Annotated, Final
+from typing import Annotated, Final, Literal
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import ORJSONResponse  # pyright: ignore[reportDeprecated]  # required endpoint contract
@@ -9,7 +9,15 @@ from pydantic import TypeAdapter, ValidationError
 from litellm.exceptions import BadRequestError
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.types.decisions import DecisionsRequestBody, OpenAIDecisionRequestBody
+from litellm.proxy.common_utils.custom_openapi_spec import inline_request_body
+from litellm.types.decisions import (
+    DecisionsRequest,
+    DecisionsRequestBody,
+    DecisionsResponse,
+    OpenAIDecisionRequest,
+    OpenAIDecisionRequestBody,
+    OpenAIDecisionResponse,
+)
 
 router: Final = APIRouter()
 _REQUEST_DATA_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
@@ -20,6 +28,51 @@ _OPENAI_DECISION_REQUEST_BODY_ADAPTER: Final[TypeAdapter[OpenAIDecisionRequestBo
 _GENERAL_SETTINGS_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
 _OPTIONAL_STRING_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
 _OPTIONAL_FLOAT_ADAPTER: Final[TypeAdapter[float | None]] = TypeAdapter(float | None)
+_SYSTEMONE_REQUEST_BODY: Final = inline_request_body(
+    DecisionsRequest,
+    {
+        "model": "jev",
+        "state": "Customer wrote: I was charged twice for order #4411 and want one charge refunded today.",
+        "questions": {
+            "is_refund_request": {"type": "noul", "instructions": "Is the customer asking for a refund?"},
+            "urgency": {
+                "type": "choice",
+                "instructions": "How urgent is this?",
+                "criteria": {"low": "can wait a week", "high": "needs action today"},
+            },
+            "frustration": {
+                "type": "score",
+                "instructions": "How frustrated is the customer?",
+                "criteria": ["calm", "mildly annoyed", "angry"],
+            },
+        },
+    },
+)
+_DECISIONS_REQUEST_BODY: Final = inline_request_body(
+    OpenAIDecisionRequest,
+    {
+        "model": "luna",
+        "input": "Customer wrote: I was charged twice for order #4411 and want one charge refunded today.",
+        "questions": [
+            {"type": "predicate", "name": "is_refund_request", "instructions": "Is the customer asking for a refund?"},
+            {
+                "type": "choice",
+                "name": "urgency",
+                "instructions": "How urgent is this?",
+                "choices": [
+                    {"value": "low", "description": "can wait a week"},
+                    {"value": "high", "description": "needs action today"},
+                ],
+            },
+            {
+                "type": "score",
+                "name": "frustration",
+                "instructions": "How frustrated is the customer?",
+                "levels": [{"label": "calm"}, {"label": "mildly annoyed"}, {"label": "angry"}],
+            },
+        ],
+    },
+)
 
 
 async def _invalid_request(
@@ -39,8 +92,11 @@ async def _invalid_request(
     )
 
 
+_FIELDS_CHECKED_AFTER_ROUTING: Final = frozenset({"safety_identifier", "images", "assets", "audio", "videos"})
+
+
 def _fields_checked_before_routing(data: Mapping[str, object]) -> Mapping[str, object]:
-    return MappingProxyType({key: value for key, value in data.items() if key != "safety_identifier"})
+    return MappingProxyType({key: value for key, value in data.items() if key not in _FIELDS_CHECKED_AFTER_ROUTING})
 
 
 async def _request_data(request: Request, user_api_key_dict: UserAPIKeyAuth) -> dict[str, object]:
@@ -56,6 +112,7 @@ async def _process_decisions(
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth,
     body_adapter: TypeAdapter[DecisionsRequestBody] | TypeAdapter[OpenAIDecisionRequestBody],
+    route_type: Literal["adecisions", "asystemone"],
 ) -> object:
     from litellm.proxy.proxy_server import (
         general_settings as proxy_general_settings,
@@ -93,7 +150,7 @@ async def _process_decisions(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
-            route_type="adecisions",
+            route_type=route_type,
             proxy_logging_obj=proxy_logging_obj,
             llm_router=llm_router,
             general_settings=general_settings,
@@ -121,23 +178,42 @@ async def _process_decisions(
     dependencies=[Depends(user_api_key_auth)],
     response_class=ORJSONResponse,  # pyright: ignore[reportDeprecated]  # required endpoint contract
     tags=["decisions"],
+    summary="Ask named questions about a state (System One format)",
+    responses={200: {"model": DecisionsResponse}},
+    openapi_extra={"requestBody": _SYSTEMONE_REQUEST_BODY},
 )
 @router.post(
     "/systemone",
     dependencies=[Depends(user_api_key_auth)],
     response_class=ORJSONResponse,  # pyright: ignore[reportDeprecated]  # required endpoint contract
     tags=["decisions"],
+    summary="Ask named questions about a state (System One format)",
+    responses={200: {"model": DecisionsResponse}},
+    openapi_extra={"requestBody": _SYSTEMONE_REQUEST_BODY},
 )
 async def systemone(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
+    """
+    Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.
+
+    Question types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with
+    `confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,
+    `legend` and `probabilities`) and `box` (the image region the `instructions` describe, with `confidence`).
+    TypeSafe models also take images in `assets`, each one referenced by its key in `state`. Requests that break
+    these rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format
+    too, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.
+
+    [Docs](https://docs.litellm.ai/docs/decisions)
+    """
     return await _process_decisions(
         request=request,
         fastapi_response=fastapi_response,
         user_api_key_dict=user_api_key_dict,
         body_adapter=_DECISIONS_REQUEST_BODY_ADAPTER,
+        route_type="asystemone",
     )
 
 
@@ -146,21 +222,40 @@ async def systemone(
     dependencies=[Depends(user_api_key_auth)],
     response_class=ORJSONResponse,  # pyright: ignore[reportDeprecated]  # required endpoint contract
     tags=["decisions"],
+    summary="Ask questions about an input (OpenAI Decisions format)",
+    responses={200: {"model": OpenAIDecisionResponse}},
+    openapi_extra={"requestBody": _DECISIONS_REQUEST_BODY},
 )
 @router.post(
     "/decisions",
     dependencies=[Depends(user_api_key_auth)],
     response_class=ORJSONResponse,  # pyright: ignore[reportDeprecated]  # required endpoint contract
     tags=["decisions"],
+    summary="Ask questions about an input (OpenAI Decisions format)",
+    responses={200: {"model": OpenAIDecisionResponse}},
+    openapi_extra={"requestBody": _DECISIONS_REQUEST_BODY},
 )
 async def decisions(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
+    """
+    Judge an `input` against 1 to 128 `questions` and get the answers back in the same order.
+
+    Question types are `predicate` (yes/no with `probability`), `choice` (one of the `choices`, with
+    `probabilities`), `score` (an index into `levels`, with `probabilities`) and `box` (the image region the
+    `instructions` describe, with `confidence`). Requests that break these rules are rejected with a 400 before
+    any provider is called. `model` is any decision model in the proxy
+    model list. System One decision models accept this format too, LiteLLM translates the request and the
+    answers. Streaming is not supported.
+
+    [Docs](https://docs.litellm.ai/docs/decisions)
+    """
     return await _process_decisions(
         request=request,
         fastapi_response=fastapi_response,
         user_api_key_dict=user_api_key_dict,
         body_adapter=_OPENAI_DECISION_REQUEST_BODY_ADAPTER,
+        route_type="adecisions",
     )

@@ -27,7 +27,7 @@ import httpx
 import orjson
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from starlette.types import Receive, Scope, Send
 from typing_extensions import Never
 
@@ -83,6 +83,7 @@ from litellm.litellm_core_utils.streaming_handler import (
 from litellm.proxy._types import LiteLLMRoutes, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     can_key_call_resolved_model,
+    is_model_cost_zero,
     request_skips_budget_checks,
     tag_max_budget_check_for_tags,
 )
@@ -120,6 +121,7 @@ from litellm.proxy.native_compaction import with_proxy_compaction_executor
 from litellm.proxy.route_llm_request import (
     route_request,
 )
+from litellm.proxy.telemetry.request_context import bind_call_id as bind_telemetry_call_id
 from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     ProxyLogging,
     _check_and_merge_model_level_guardrails,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -127,7 +129,7 @@ from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
 )
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
-from litellm.router_utils.common_utils import resolve_model_group_alias
+from litellm.router_utils.common_utils import resolve_model_group_alias, resolve_served_model
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.router import RouterRateLimitError
 from litellm.types.router_weights import validate_router_weights
@@ -183,6 +185,7 @@ ProxyRouteType: TypeAlias = Literal[
     "aocr",
     "asearch",
     "adecisions",
+    "asystemone",
     "avideo_generation",
     "avideo_list",
     "avideo_status",
@@ -250,6 +253,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     add_litellm_data_to_request,
     refresh_proxy_server_request_body_snapshot,
     reject_url_valued_destination,
+    sanitize_for_log,
 )
 from litellm.proxy.policy_engine.response_retrieval import attach_post_call_pipelines_to_retrieval
 from litellm.types.utils import (
@@ -509,7 +513,7 @@ def _litellm_model_supports_stream_options(litellm_model: str) -> bool:
     return supported_params is not None and "stream_options" in supported_params
 
 
-def _model_deployments_support_stream_options(
+def model_deployments_support_stream_options(
     model: object,
     llm_router: Router | None,
     team_id: str | None,
@@ -523,7 +527,7 @@ def _model_deployments_support_stream_options(
     return all(_litellm_model_supports_stream_options(m) for m in candidate_models)
 
 
-def _stream_usage_tracking_updates(
+def stream_usage_tracking_updates(
     data: Mapping[str, object],
     general_settings: Mapping[str, object],
     route_type: str,
@@ -540,6 +544,8 @@ def _stream_usage_tracking_updates(
         if isinstance(stream_options, dict) and "include_usage" not in stream_options:
             return {**scrub, "stream_options": {**stream_options, "include_usage": True}}
         return scrub
+    if always_include is False and route_type == "agenerate_content_stream" and "stream_options" not in data:
+        return {**scrub, "stream_options": {"include_usage": False}}
     if always_include is False or route_type != "acompletion":
         return scrub
     if isinstance(stream_options, dict) and stream_options.get("include_usage") is True:
@@ -553,6 +559,7 @@ def _stream_usage_tracking_updates(
     }
 
 
+@runtime_checkable
 class _UpstreamHttpResponse(Protocol):
     @property
     def status_code(self) -> int: ...
@@ -565,6 +572,11 @@ class _UpstreamHttpResponse(Protocol):
 
 def _as_upstream_response(response: _UpstreamHttpResponse) -> _UpstreamHttpResponse:
     return response
+
+
+_UPSTREAM_RESPONSE: Final = TypeAdapter(
+    _UpstreamHttpResponse, config=ConfigDict(arbitrary_types_allowed=True, hide_input_in_errors=True)
+)
 
 
 class _ReadsHeaderValues(Protocol):
@@ -737,6 +749,7 @@ async def _resolve_per_request_model_group_alias(
 
 
 _REQUEST_MODEL: Final[TypeAdapter[str | list[str] | None]] = TypeAdapter(str | list[str] | None)
+_ROUTER_SETTINGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 
 
 def _request_model(data: Mapping[str, object]) -> str | list[str] | None:
@@ -1733,9 +1746,73 @@ def _timing_values(
     return getattr(logging_obj, "response_timing_metrics", None) or {}
 
 
+async def _team_member_within_fallback_model_budget(
+    user_api_key_dict: UserAPIKeyAuth,
+    model: str,
+    llm_router: Router | None,
+    proxy_config: ProxyConfig | None,
+    proxy_logging_obj: ProxyLogging,
+) -> bool:
+    member_caps: Final = user_api_key_dict.team_member_model_max_budget
+    user_id: Final = user_api_key_dict.user_id
+    team_id: Final = user_api_key_dict.team_id
+    if not isinstance(member_caps, Mapping) or not member_caps or user_id is None or team_id is None:
+        return True
+    from litellm.proxy.proxy_server import model_max_budget_limiter
+
+    try:
+        from litellm.proxy.proxy_server import prisma_client
+
+        router_settings: Final = (
+            _ROUTER_SETTINGS_ADAPTER.validate_python(
+                await proxy_config.get_hierarchical_router_settings(  # pyright: ignore[reportUnknownMemberType]  # legacy bare-dict return
+                    user_api_key_dict=user_api_key_dict,
+                    prisma_client=prisma_client,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+            )
+            if proxy_config is not None and llm_router is not None
+            else None
+        )
+        raw_aliases: Final[object] = cast(  # cast-ok: auth aliases are dynamically typed at runtime
+            object, user_api_key_dict.aliases
+        )
+        served_model: Final = resolve_served_model(
+            model,
+            litellm.model_alias_map,
+            raw_aliases,
+            router_settings.get("model_group_alias") if router_settings is not None else None,
+        )
+        if is_model_cost_zero(model=served_model, llm_router=llm_router):
+            return True
+        budget_models: Final = (
+            tuple(dict.fromkeys((model, served_model, llm_router.routable_model_group(served_model))))
+            if llm_router is not None
+            else tuple(dict.fromkeys((model, served_model)))
+        )
+        for budget_model in budget_models:
+            await model_max_budget_limiter.is_team_member_within_model_budget(
+                user_id=user_id,
+                team_id=team_id,
+                team_member_model_max_budget=member_caps,
+                model=budget_model,
+            )
+    except litellm.BudgetExceededError:
+        return False
+    except Exception as e:  # noqa: BLE001  # fail closed: a spend lookup failure must not bill the member
+        verbose_proxy_logger.warning(
+            "Skipping rate limit fallback to model=%s: member budget lookup failed: %s",
+            sanitize_for_log(model),
+            sanitize_for_log(e),
+        )
+        return False
+    return True
+
+
 class ProxyBaseLLMRequestProcessing:
-    def __init__(self, data: dict):
+    def __init__(self, data: dict, served_model: str | None = None):
         self.data = data
+        self.served_model = served_model
         self._tags_before_guardrails: frozenset[str] | None = None
 
     @property
@@ -2008,6 +2085,7 @@ class ProxyBaseLLMRequestProcessing:
             "aocr",
             "asearch",
             "adecisions",
+            "asystemone",
             "avideo_generation",
             "avideo_list",
             "avideo_status",
@@ -2188,7 +2266,11 @@ class ProxyBaseLLMRequestProcessing:
                 if alias_target is not None:
                     self.data["model"] = alias_target
 
-        self.data["litellm_call_id"] = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
+        aliased_model: Final = self.data.get("model")
+
+        litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
+        self.data["litellm_call_id"] = litellm_call_id
+        bind_telemetry_call_id(litellm_call_id)
         DDSpanTagger.tag_call_id(self.data.get("litellm_call_id"))
         DDSpanTagger.tag_request(
             user_api_key_dict=user_api_key_dict,
@@ -2197,11 +2279,11 @@ class ProxyBaseLLMRequestProcessing:
 
         ### AUTO STREAM USAGE TRACKING ###
         self.data.update(
-            _stream_usage_tracking_updates(
+            stream_usage_tracking_updates(
                 data=self.data,
                 general_settings=general_settings,
                 route_type=route_type,
-                supports_stream_options=lambda: _model_deployments_support_stream_options(
+                supports_stream_options=lambda: model_deployments_support_stream_options(
                     model=self.data.get("model"),
                     llm_router=llm_router,
                     team_id=user_api_key_dict.team_id,
@@ -2283,6 +2365,14 @@ class ProxyBaseLLMRequestProcessing:
 
         if "messages" in self.data and self.data["messages"]:
             logging_obj.update_messages(self.data["messages"])
+
+        if (
+            self.served_model is not None
+            and llm_router is not None
+            and isinstance(aliased_model, str)
+            and self.data.get("model") == aliased_model
+        ):
+            self.data["model"] = llm_router.resolve_served_model_name(aliased_model, self.served_model)
 
         return self.data, logging_obj
 
@@ -2370,6 +2460,14 @@ class ProxyBaseLLMRequestProcessing:
             try:
                 for fallback_model in fallback_models:
                     if fallback_model == original_model:
+                        continue
+                    if not await _team_member_within_fallback_model_budget(
+                        user_api_key_dict=user_api_key_dict,
+                        model=fallback_model,
+                        llm_router=llm_router,
+                        proxy_config=proxy_config,
+                        proxy_logging_obj=proxy_logging_obj,
+                    ):
                         continue
                     self.data = independent_snapshot(pristine)
                     self.data["model"] = fallback_model
@@ -2486,7 +2584,7 @@ class ProxyBaseLLMRequestProcessing:
     @staticmethod
     def _response_cost_from_logging_obj(
         *,
-        response: Any,
+        response: object,
         logging_obj: LiteLLMLoggingObj,
     ) -> float | str:
         """
@@ -2542,7 +2640,7 @@ class ProxyBaseLLMRequestProcessing:
         is_streaming_request: bool | None = False,
         contents: list[object] | None = None,
         skip_pre_call_logic: bool = False,
-    ) -> Any:
+    ) -> object:
         """Run the request, sending SSE keepalives while the upstream is still silent.
 
         Everything below this point, the upstream call included, happens before the
@@ -3185,7 +3283,7 @@ class ProxyBaseLLMRequestProcessing:
         if isinstance(result, Response):
             return result
 
-        upstream: Final = _as_upstream_response(result)
+        upstream: Final = _UPSTREAM_RESPONSE.validate_python(result)
         content: Final = await upstream.aread()
         return Response(
             content=content,

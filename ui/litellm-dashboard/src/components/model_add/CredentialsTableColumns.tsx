@@ -7,7 +7,7 @@ import { CredentialItem } from "@/components/networking";
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
 import { DataTableSortHeader } from "@/components/shared/DataTable";
 import { credentialLabel } from "@/components/shared/credentialOptions";
-import { IdentityCell } from "@/components/shared/table_cells";
+import { IdentityCell, StatusBadge } from "@/components/shared/table_cells";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import {
@@ -128,7 +128,6 @@ export const getCredentialsTableColumns = ({
         <IdentityCell
           title={credentialLabel(row.original)}
           subtitle={row.original.display_name ? row.original.credential_name : undefined}
-          badge={row.original.source === "config" ? <Badge variant="outline">Config</Badge> : undefined}
           className="max-w-72"
           titleClassName="font-medium"
         />
@@ -147,6 +146,20 @@ export const getCredentialsTableColumns = ({
           federated={inferAuthMethod(row.original.credential_values) === "federation"}
         />
       ),
+    },
+    {
+      id: "source",
+      accessorFn: (row) => row.source ?? "db",
+      meta: { title: "Source" },
+      header: "Source",
+      size: 140,
+      enableSorting: false,
+      cell: ({ row }) =>
+        row.original.source === "config" ? (
+          <StatusBadge tone="neutral" label="Config" />
+        ) : (
+          <StatusBadge tone="info" label="DB" />
+        ),
     },
   ];
 

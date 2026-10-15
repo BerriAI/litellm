@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from collections import deque
 from collections.abc import Iterator, Mapping, Sequence
@@ -55,6 +56,7 @@ _MAX_VALIDATION_DEPTH: Final = 64
 _MAX_VALIDATION_NODES: Final = 10_000
 _MAX_VALIDATION_CHARACTERS: Final = 1_048_576
 _VALIDATION_TIMEOUT_SECONDS: Final = 30
+_MAX_VALIDATION_WORKERS: Final = 4
 
 
 def _validation_nodes(value: JsonValue | Mapping[str, JsonValue]) -> Iterator[tuple[int, int]]:
@@ -101,18 +103,25 @@ def _validate_tool_arguments(schema: Mapping[str, JsonValue], arguments: Mapping
     return None
 
 
+def _schema_validation_worker_count() -> int:
+    available: Final = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count() or 1
+    return max(1, min(_MAX_VALIDATION_WORKERS, available))
+
+
 async def _tool_argument_validation_error(
-    schema: Mapping[str, JsonValue], arguments: Mapping[str, JsonValue]
+    schema: Mapping[str, JsonValue],
+    arguments: Mapping[str, JsonValue],
+    timeout_seconds: float = _VALIDATION_TIMEOUT_SECONDS,
 ) -> str | None:
     limit_error: Final = _validation_limit_error(schema, arguments)
     if limit_error is not None:
         return limit_error
     existing: Final = _SCHEMA_VALIDATION_LIMITER.get(None)
-    limiter: Final = existing if existing is not None else anyio.CapacityLimiter(4)
+    limiter: Final = existing if existing is not None else anyio.CapacityLimiter(_schema_validation_worker_count())
     if existing is None:
         _SCHEMA_VALIDATION_LIMITER.set(limiter)
     try:
-        with anyio.fail_after(_VALIDATION_TIMEOUT_SECONDS):
+        with anyio.fail_after(timeout_seconds):
             return await to_process.run_sync(
                 _validate_tool_arguments, schema, arguments, cancellable=True, limiter=limiter
             )
@@ -256,9 +265,11 @@ def _split_core_tools(tools: Sequence[Tool], core_tools: Sequence[str]) -> tuple
 
 
 def _top_hits(
-    tools: Sequence[Tool], scores: Sequence[float], minimum: float, limit: int
+    tools: Sequence[Tool], scores: Sequence[float | None], minimum: float, limit: int
 ) -> tuple[tuple[float, Tool], ...]:
-    hits: Final = ((score, tool) for score, tool in zip(scores, tools, strict=True) if score >= minimum)
+    hits: Final = (
+        (score, tool) for score, tool in zip(scores, tools, strict=True) if score is not None and score >= minimum
+    )
     return tuple(sorted(hits, key=lambda hit: hit[0], reverse=True)[:limit])
 
 

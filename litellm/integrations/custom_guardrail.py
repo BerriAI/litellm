@@ -44,7 +44,7 @@ from litellm.types.utils import (
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 dc: Final = DualCache()
 
 
@@ -119,7 +119,7 @@ def is_guardrail_intervention(e: Exception) -> bool:
 
 
 def _user_api_key_auth_from_request(request_data: Mapping[str, object]) -> "UserAPIKeyAuth":
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
     metadata: Final = request_data.get(get_metadata_variable_name_from_kwargs(request_data))
     stamped: Final[Mapping[str, object]] = metadata if isinstance(metadata, dict) else {}
@@ -511,7 +511,7 @@ class CustomGuardrail(CustomLogger):
             sticky_session_routing=self.sticky_session_routing,
         )
 
-    def _get_session_id_from_request_data(self, request_data: dict[str, Any]) -> str | None:
+    def _get_session_id_from_request_data(self, request_data: dict[str, object]) -> str | None:
         """Extract session_id from request data."""
         return get_session_id_from_request_data(request_data)
 

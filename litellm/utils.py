@@ -604,20 +604,38 @@ def add_custom_logger_callback_to_specific_event(callback: str, logging_event: L
     )
 
     if callback_class:
-        if logging_event == "success" and _custom_logger_class_exists_in_success_callbacks(callback_class) is False:
-            litellm.logging_callback_manager.add_litellm_success_callback(callback_class)
-            litellm.logging_callback_manager.add_litellm_async_success_callback(callback_class)
-            if callback in litellm.success_callback:
-                litellm.success_callback.remove(callback)  # remove the string from the callback list
-            if callback in litellm._async_success_callback:
-                litellm._async_success_callback.remove(callback)  # remove the string from the callback list
-        elif logging_event == "failure" and _custom_logger_class_exists_in_failure_callbacks(callback_class) is False:
-            litellm.logging_callback_manager.add_litellm_failure_callback(callback_class)
-            litellm.logging_callback_manager.add_litellm_async_failure_callback(callback_class)
-            if callback in litellm.failure_callback:
-                litellm.failure_callback.remove(callback)  # remove the string from the callback list
-            if callback in litellm._async_failure_callback:
-                litellm._async_failure_callback.remove(callback)  # remove the string from the callback list
+        register_custom_logger_for_event(callback, callback_class, logging_event)
+
+
+def add_configured_callback_to_specific_event(callback: str, logging_event: Literal["success", "failure"]) -> None:
+    from litellm.litellm_core_utils.litellm_logging import (
+        init_custom_logger_compatible_class_at_startup,
+    )
+
+    callback_class: Final = init_custom_logger_compatible_class_at_startup(
+        callback, internal_usage_cache=None, llm_router=None
+    )
+    if callback_class is not None:
+        register_custom_logger_for_event(callback, callback_class, logging_event)
+
+
+def register_custom_logger_for_event(
+    callback: str, callback_class: CustomLogger, logging_event: Literal["success", "failure"]
+) -> None:
+    if logging_event == "success" and _custom_logger_class_exists_in_success_callbacks(callback_class) is False:
+        litellm.logging_callback_manager.add_litellm_success_callback(callback_class)
+        litellm.logging_callback_manager.add_litellm_async_success_callback(callback_class)
+        if callback in litellm.success_callback:
+            litellm.success_callback.remove(callback)  # remove the string from the callback list
+        if callback in litellm._async_success_callback:
+            litellm._async_success_callback.remove(callback)  # remove the string from the callback list
+    elif logging_event == "failure" and _custom_logger_class_exists_in_failure_callbacks(callback_class) is False:
+        litellm.logging_callback_manager.add_litellm_failure_callback(callback_class)
+        litellm.logging_callback_manager.add_litellm_async_failure_callback(callback_class)
+        if callback in litellm.failure_callback:
+            litellm.failure_callback.remove(callback)  # remove the string from the callback list
+        if callback in litellm._async_failure_callback:
+            litellm._async_failure_callback.remove(callback)  # remove the string from the callback list
 
 
 _add_custom_logger_callback_to_specific_event = add_custom_logger_callback_to_specific_event
@@ -974,6 +992,12 @@ def _ocr_document_summary(document: object) -> str:
 
 
 # Runs once per call to check if the user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
+
+_DECISION_CALL_TYPES: Final[frozenset[str]] = frozenset(
+    (CallTypes.decisions.value, CallTypes.adecisions.value, CallTypes.systemone.value, CallTypes.asystemone.value)
+)
+
+
 def function_setup(
     original_function: str,
     rules_obj: Rules,
@@ -1220,7 +1244,7 @@ def function_setup(
                 if isinstance(search_query, list)
                 else search_query
             )
-        elif call_type in (CallTypes.decisions.value, CallTypes.adecisions.value):
+        elif call_type in _DECISION_CALL_TYPES:
             decisions_state: Final = args[1] if len(args) > 1 else kwargs.get("state") or kwargs.get("input") or ""
             messages = decisions_state if isinstance(decisions_state, str) else json.dumps(decisions_state, default=str)
         elif call_type in (CallTypes.image_edit.value, CallTypes.aimage_edit.value):
@@ -2663,6 +2687,24 @@ def supports_web_search(model: str, custom_llm_provider: str | None = None) -> b
     )
 
 
+def supports_tool_search(model: str, custom_llm_provider: str | None = None) -> bool:
+    """
+    Check if the given model supports provider-side tool search over deferred tools.
+
+    Parameters:
+    model (str): The model name to be checked.
+    custom_llm_provider (str): The provider to be checked.
+
+    Returns:
+    bool: True if the model supports tool search, False otherwise.
+    """
+    return supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_tool_search",
+    )
+
+
 def supports_url_context(model: str, custom_llm_provider: str | None = None) -> bool:
     """
     Check if the given model supports URL context and return a boolean value.
@@ -2967,6 +3009,14 @@ def is_explicitly_disabled_factory(model: str, custom_llm_provider: str | None, 
 def supports_audio_input(model: str, custom_llm_provider: str | None = None) -> bool:
     """Check if a given model supports audio input in a chat completion call"""
     return supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_audio_input")
+
+
+def supports_video_input(model: str, custom_llm_provider: str | None = None) -> bool:
+    return supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_video_input")
+
+
+def supports_box_questions(model: str, custom_llm_provider: str | None = None) -> bool:
+    return supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_box_questions")
 
 
 def supports_pdf_input(model: str, custom_llm_provider: str | None = None) -> bool:
@@ -4764,8 +4814,10 @@ def get_optional_params(
         bedrock_model_info: Final[type[BedrockModelInfo]] = litellm_utils.BedrockModelInfo
         bedrock_base_model: Final = bedrock_model_info.get_base_model(model)
         if bedrock_route == "converse" or bedrock_route == "converse_like":
+            from litellm.llms.bedrock.common_utils import bedrock_capability_model
+
             optional_params = litellm.AmazonConverseConfig().map_openai_params(
-                model=model,
+                model=bedrock_capability_model(model, base_model),
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 drop_params=bool(drop_params),
@@ -5063,6 +5115,13 @@ def get_optional_params(
             model=model,
             drop_params=bool(drop_params),
         )
+    if (litellm.drop_params or drop_params) and custom_llm_provider != "litellm_proxy":
+        litellm.AnthropicConfig.maybe_drop_speed_param(
+            model=model,
+            optional_params=passed_params,
+            drop_params=True,
+            custom_llm_provider=custom_llm_provider or None,
+        )
     # if user passed in non-default kwargs for specific providers/models, pass them along
     optional_params = add_provider_specific_params_to_optional_params(
         optional_params=optional_params,
@@ -5103,8 +5162,15 @@ def add_provider_specific_params_to_optional_params(
     """
     Add provider specific params to optional_params
     """
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
-    if custom_llm_provider in ["openai", "azure", "text-completion-openai"] + litellm.openai_compatible_providers:
+    calls_through_openai_sdk: Final = custom_llm_provider in [
+        "openai",
+        "azure",
+        "text-completion-openai",
+        *litellm.openai_compatible_providers,
+    ] or JSONProviderRegistry.exists(custom_llm_provider)
+    if calls_through_openai_sdk:
         # for openai, azure we should pass the extra/passed params within `extra_body` https://github.com/openai/openai-python/blob/ac33853ba10d13ac149b1fa3ca6dba7d613065c9/src/openai/resources/models.py#L46
         if _should_drop_param(k="extra_body", additional_drop_params=additional_drop_params) is False:
             extra_body: Final = dict(passed_params.pop("extra_body", None) or {})
@@ -5746,7 +5812,7 @@ def get_model_cost_key(potential_key: str) -> str | None:
 _get_model_cost_key = get_model_cost_key
 
 
-def _get_model_info_from_model_cost(key: str) -> dict[str, Any]:
+def _get_model_info_from_model_cost(key: str) -> dict[str, object]:
     return litellm.model_cost[key]
 
 
@@ -5902,9 +5968,18 @@ def get_potential_model_names(model: str, custom_llm_provider: str | None) -> Po
         provider_prefixed_model_name = combined_model_name
 
     if custom_llm_provider in ("bedrock", "bedrock_converse"):
-        from litellm.llms.bedrock.common_utils import strip_bedrock_routing_prefix
+        from litellm.llms.bedrock.common_utils import (
+            extract_model_name_from_bedrock_arn,
+            split_bedrock_region_path,
+            strip_bedrock_routing_prefix,
+        )
 
-        split_model = strip_bedrock_routing_prefix(split_model)
+        region_free_bedrock_model: Final = split_bedrock_region_path(split_model)[1]
+        split_model = (
+            extract_model_name_from_bedrock_arn(region_free_bedrock_model)
+            if region_free_bedrock_model.startswith("arn:")
+            else strip_bedrock_routing_prefix(split_model)
+        )
 
     region_free_split_model: Final = (
         _strip_mantle_region_prefix(split_model) if custom_llm_provider == "bedrock_mantle" else split_model
@@ -6280,6 +6355,7 @@ def get_model_info_helper(
                 input_cost_per_query=_model_info.get("input_cost_per_query", None),
                 cost_per_second=_model_info.get("cost_per_second", None),
                 input_cost_per_second=_model_info.get("input_cost_per_second", None),
+                input_cost_per_text_message=_model_info.get("input_cost_per_text_message", None),
                 input_cost_per_audio_token=_model_info.get("input_cost_per_audio_token", None),
                 input_cost_per_image_token=_model_info.get("input_cost_per_image_token", None),
                 input_cost_per_video_token=_model_info.get("input_cost_per_video_token", None),
@@ -6379,6 +6455,8 @@ def get_model_info_helper(
                 supports_prompt_cache_breakpoint=_model_info.get("supports_prompt_cache_breakpoint", None),
                 supports_thinking_cache_preservation=_model_info.get("supports_thinking_cache_preservation", None),
                 supports_audio_input=_model_info.get("supports_audio_input", None),
+                supports_video_input=_model_info.get("supports_video_input", None),
+                supports_box_questions=_model_info.get("supports_box_questions", None),
                 supports_audio_output=_model_info.get("supports_audio_output", None),
                 supports_pdf_input=_model_info.get("supports_pdf_input", None),
                 supports_embedding_image_input=_model_info.get("supports_embedding_image_input", None),
@@ -6529,6 +6607,8 @@ def get_model_info(
             supports_prompt_caching: Optional[bool]
             supports_prompt_cache_breakpoint: Optional[bool]
             supports_audio_input: Optional[bool]
+            supports_video_input: Optional[bool]
+            supports_box_questions: Optional[bool]
             supports_audio_output: Optional[bool]
             supports_pdf_input: Optional[bool]
             supports_web_search: Optional[bool]
@@ -8504,7 +8584,7 @@ _get_bundled_model_cost_map = get_bundled_model_cost_map
 def _get_model_cost_entry_for_provider_config(
     model: str,
     provider: LlmProviders,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     candidate_keys: Final = (model, f"{provider.value}/{model}")
     for model_key in candidate_keys:
         model_info = litellm.model_cost.get(model_key)
@@ -8655,6 +8735,7 @@ class ProviderConfigManager:
                 False,
             ),
             LlmProviders.FEATHERLESS_AI: (lambda: litellm.FeatherlessAIConfig(), False),
+            LlmProviders.SCALEDOWN: (lambda: litellm.ScaleDownChatConfig(), False),
             LlmProviders.NOVITA: (lambda: litellm.NovitaConfig(), False),
             LlmProviders.NEBIUS: (lambda: litellm.NebiusConfig(), False),
             LlmProviders.WANDB: (lambda: litellm.WandbConfig(), False),
@@ -9011,6 +9092,8 @@ class ProviderConfigManager:
             return litellm.TypeSafeDecisionsConfig()
         if provider == LlmProviders.OPENROUTER:
             return litellm.OpenRouterDecisionsConfig()
+        if provider == LlmProviders.FIREWORKS_AI:
+            return litellm.FireworksAIDecisionsConfig()
         if provider == LlmProviders.CLOUDFLARE:
             return litellm.CloudflareDecisionsConfig()
         if provider == LlmProviders.STRANDS_DECIDER:
@@ -9019,6 +9102,10 @@ class ProviderConfigManager:
             return litellm.DatabricksDecisionsConfig()
         if provider == LlmProviders.HOSTED_VLLM:
             return litellm.HostedVLLMDecisionsConfig()
+        if provider == LlmProviders.LAYA:
+            return litellm.LayaDecisionsConfig()
+        if provider == LlmProviders.BESPOKE:
+            return litellm.BespokeDecisionsConfig()
         if provider == LlmProviders.OPENAI:
             return litellm.OpenAIDecisionsConfig()
         if provider == LlmProviders.AZURE_AI:
@@ -9806,6 +9893,16 @@ class ProviderConfigManager:
             from litellm.llms.vertex_ai.videos.transformation import VertexAIVideoConfig
 
             return VertexAIVideoConfig()
+        elif provider in (
+            LlmProviders.DASHSCOPE,
+            LlmProviders.QWENCLOUD,
+            LlmProviders.QWEN_AI_PLATFORM,
+        ):
+            from litellm.llms.dashscope.common_utils import (
+                get_dashscope_family_video_config,
+            )
+
+            return get_dashscope_family_video_config(provider.value)
         elif LlmProviders.RUNWAYML == provider:
             from litellm.llms.runwayml.videos.transformation import RunwayMLVideoConfig
 
@@ -9818,6 +9915,10 @@ class ProviderConfigManager:
             from litellm.llms.hosted_vllm.videos import get_hosted_vllm_video_config
 
             return get_hosted_vllm_video_config(model)
+        elif LlmProviders.MINIMAX == provider:
+            from litellm.llms.minimax.videos.transformation import MinimaxVideoConfig
+
+            return MinimaxVideoConfig()
         elif LlmProviders.EDENAI == provider:
             return litellm.EdenAIVideoConfig()
         return None
@@ -10138,6 +10239,7 @@ class ProviderConfigManager:
     def get_provider_google_genai_generate_content_config(
         model: str,
         provider: LlmProviders,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> BaseGoogleGenAIGenerateContentConfig | None:
         if litellm.LlmProviders.GEMINI == provider:
             from litellm.llms.gemini.google_genai.transformation import (
@@ -10146,25 +10248,13 @@ class ProviderConfigManager:
 
             return GoogleGenAIConfig()
         elif litellm.LlmProviders.VERTEX_AI == provider:
+            from litellm.llms.vertex_ai.common_utils import uses_vertex_gemini_api
             from litellm.llms.vertex_ai.google_genai.transformation import (
                 VertexAIGoogleGenAIConfig,
             )
-            from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
-                VertexAIPartnerModels,
-            )
 
-            #########################################################
-            # If Vertex Partner models like Anthropic, Mistral, etc. are used,
-            # return None as we want this to go through the litellm.completion() adapter
-            # and not the Google Gen AI adapter
-            #########################################################
-            if VertexAIPartnerModels.is_vertex_partner_model(model):
+            if not uses_vertex_gemini_api(model, litellm_params):
                 return None
-
-            #########################################################
-            # If the model is not a Vertex Partner model, return the Vertex AI Google Gen AI Config
-            # This is for Vertex `gemini` models
-            #########################################################
             return VertexAIGoogleGenAIConfig()
         return None
 
