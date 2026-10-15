@@ -97,42 +97,24 @@ class ModelResponseIterator:
     def __next__(self):
         if not hasattr(self, "response_iterator"):
             self.response_iterator = self.streaming_response
+        chunk: Final = self._next_sse_data()
         try:
-            chunk = self.response_iterator.__next__()
-        except StopIteration:
-            raise StopIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error receiving chunk from stream: {e}")
-
-        try:
-            chunk = litellm.CustomStreamWrapper.strip_sse_data_from_chunk(chunk) or ""
-            chunk = chunk.strip()
-            if len(chunk) > 0:
-                json_chunk: Final = json.loads(chunk)
-                return self.chunk_parser(chunk=json_chunk)
-            else:
-                return GenericStreamingChunk(
-                    text="",
-                    is_finished=False,
-                    finish_reason="",
-                    usage=None,
-                    index=0,
-                    tool_use=None,
-                )
-        except StopIteration:
-            raise StopIteration
+            json_chunk: Final = json.loads(chunk)
+            return self.chunk_parser(chunk=json_chunk)
         except ValueError as e:
             verbose_logger.debug(
                 "Error parsing chunk: %s,\nReceived chunk: %s. Defaulting to empty chunk here.", e, chunk
             )
-            return GenericStreamingChunk(
-                text="",
-                is_finished=False,
-                finish_reason="",
-                usage=None,
-                index=0,
-                tool_use=None,
-            )
+            return _empty_generic_chunk()
+
+    def _next_sse_data(self) -> str:
+        try:
+            for raw_chunk in self.response_iterator:
+                if sse_data := _sse_data(raw_chunk):
+                    return sse_data
+        except ValueError as e:
+            raise RuntimeError(f"Error receiving chunk from stream: {e}")
+        raise StopIteration
 
     # Async iterator
     def __aiter__(self):
@@ -140,43 +122,38 @@ class ModelResponseIterator:
         return self
 
     async def __anext__(self):
-        try:
-            chunk = await self.async_response_iterator.__anext__()
-        except StopAsyncIteration:
+        chunk: Final = await self._anext_sse_data()
+        if chunk == "[DONE]":
             raise StopAsyncIteration
-        except ValueError as e:
-            raise RuntimeError(f"Error receiving chunk from stream: {e}")
-        except Exception as e:
-            raise RuntimeError(f"Error receiving chunk from stream: {e}")
-
         try:
-            chunk = litellm.CustomStreamWrapper.strip_sse_data_from_chunk(chunk) or ""
-            chunk = chunk.strip()
-            if chunk == "[DONE]":
-                raise StopAsyncIteration
-            if len(chunk) > 0:
-                json_chunk: Final = json.loads(chunk)
-                return self.chunk_parser(chunk=json_chunk)
-            else:
-                return GenericStreamingChunk(
-                    text="",
-                    is_finished=False,
-                    finish_reason="",
-                    usage=None,
-                    index=0,
-                    tool_use=None,
-                )
-        except StopAsyncIteration:
-            raise StopAsyncIteration
+            json_chunk: Final = json.loads(chunk)
+            return self.chunk_parser(chunk=json_chunk)
         except ValueError as e:
             verbose_logger.debug(
                 "Error parsing chunk: %s,\nReceived chunk: %s. Defaulting to empty chunk here.", e, chunk
             )
-            return GenericStreamingChunk(
-                text="",
-                is_finished=False,
-                finish_reason="",
-                usage=None,
-                index=0,
-                tool_use=None,
-            )
+            return _empty_generic_chunk()
+
+    async def _anext_sse_data(self) -> str:
+        try:
+            async for raw_chunk in self.async_response_iterator:
+                if sse_data := _sse_data(raw_chunk):
+                    return sse_data
+        except Exception as e:
+            raise RuntimeError(f"Error receiving chunk from stream: {e}")
+        raise StopAsyncIteration
+
+
+def _sse_data(raw_chunk: str) -> str:
+    return (litellm.CustomStreamWrapper.strip_sse_data_from_chunk(raw_chunk) or "").strip()
+
+
+def _empty_generic_chunk() -> GenericStreamingChunk:
+    return GenericStreamingChunk(
+        text="",
+        is_finished=False,
+        finish_reason="",
+        usage=None,
+        index=0,
+        tool_use=None,
+    )

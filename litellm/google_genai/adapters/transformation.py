@@ -158,7 +158,16 @@ class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
         self.sent_first_chunk = False
         self.accumulated_tool_calls = dict[int, _ToolCallAccumulator]()
         self._returned_response = False
+        self.finish_chunk_awaiting_usage: Mapping[str, object] | None = None
         super().__init__(completion_stream)
+
+    def hold_finish_chunk_for_usage(self, finish_chunk: Mapping[str, object]) -> None:
+        self.finish_chunk_awaiting_usage = finish_chunk
+
+    def take_finish_chunk_awaiting_usage(self) -> Mapping[str, object] | None:
+        finish_chunk: Final = self.finish_chunk_awaiting_usage
+        self.finish_chunk_awaiting_usage = None
+        return finish_chunk
 
     def __next__(self):
         try:
@@ -176,6 +185,9 @@ class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
                 if transformed_chunk:
                     return transformed_chunk
 
+            finish_chunk: Final = self.take_finish_chunk_awaiting_usage()
+            if finish_chunk:
+                return finish_chunk
             raise StopIteration
         except StopIteration:
             raise
@@ -197,6 +209,10 @@ class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
                 transformed_chunk = GoogleGenAIAdapter().translate_streaming_completion_to_generate_content(chunk, self)
                 if transformed_chunk:
                     return transformed_chunk
+
+            finish_chunk: Final = self.take_finish_chunk_awaiting_usage()
+            if finish_chunk:
+                return finish_chunk
 
             # After the stream is exhausted, check for any remaining accumulated tool calls
             if self.accumulated_tool_calls:
@@ -657,7 +673,7 @@ class GoogleGenAIAdapter:
         # Extract the main response content from streaming chunk
         choice: Final = response.choices[0] if response.choices else None
         if not choice:
-            return self._usage_only_streaming_chunk(response)
+            return self._usage_only_streaming_chunk(response, wrapper)
 
         # Handle streaming choice
         if isinstance(choice, StreamingChoices):
@@ -674,7 +690,7 @@ class GoogleGenAIAdapter:
 
         # Only create response chunk if we have parts or it's the final chunk
         if not parts and not finish_reason:
-            return self._usage_only_streaming_chunk(response)
+            return self._usage_only_streaming_chunk(response, wrapper)
 
         # Create Google GenAI streaming format response
         streaming_chunk: Final[_JsonDict] = {
@@ -688,25 +704,30 @@ class GoogleGenAIAdapter:
             ]
         }
 
-        # Add usage metadata only in the final chunk (when finish_reason is present)
-        if finish_reason:
-            usage_metadata: Final = (
-                self._map_usage(getattr(response, "usage", None))
-                if hasattr(response, "usage") and getattr(response, "usage", None)
-                else {
-                    "promptTokenCount": 0,
-                    "candidatesTokenCount": 0,
-                    "totalTokenCount": 0,
-                }
-            )
-            streaming_chunk["usageMetadata"] = usage_metadata
+        if not finish_reason:
+            return streaming_chunk
 
-        return streaming_chunk
+        finish_usage: Final[object] = getattr(response, "usage", None)
+        if finish_usage:
+            return {**streaming_chunk, "usageMetadata": self._map_usage(finish_usage)}
 
-    def _usage_only_streaming_chunk(self, response: ModelResponse | ModelResponseStream) -> Mapping[str, object] | None:
+        wrapper.hold_finish_chunk_for_usage(
+            {
+                **streaming_chunk,
+                "usageMetadata": {"promptTokenCount": 0, "candidatesTokenCount": 0, "totalTokenCount": 0},
+            }
+        )
+        return None
+
+    def _usage_only_streaming_chunk(
+        self, response: ModelResponse | ModelResponseStream, wrapper: GoogleGenAIStreamWrapper
+    ) -> Mapping[str, object] | None:
         usage: Final[object] = getattr(response, "usage", None)
         if not usage:
             return None
+        finish_chunk: Final = wrapper.take_finish_chunk_awaiting_usage()
+        if finish_chunk:
+            return {**finish_chunk, "usageMetadata": self._map_usage(usage)}
         return {
             "candidates": [{"content": {"parts": [{"text": ""}], "role": "model"}, "index": 0}],
             "usageMetadata": self._map_usage(usage),

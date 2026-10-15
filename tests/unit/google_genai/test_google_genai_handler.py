@@ -491,6 +491,7 @@ async def test_generate_content_adapter_stream_ends_with_upstream_usage(
         for line in b"".join(events).decode().splitlines()
         if line.startswith("data: {")
     ]
+    assert payloads[-1]["candidates"][0]["finishReason"] == "STOP"
     assert payloads[-1]["usageMetadata"]["promptTokenCount"] == prompt_tokens
 
 

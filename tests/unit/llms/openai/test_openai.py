@@ -755,10 +755,6 @@ async def test_openai_via_gemini_streaming_bridge_translates_openai_chunks(
             "candidates": [
                 {"content": {"parts": [], "role": "model"}, "finishReason": "STOP", "index": 0, "safetyRatings": []}
             ],
-            "usageMetadata": {"promptTokenCount": 0, "candidatesTokenCount": 0, "totalTokenCount": 0},
-        },
-        {
-            "candidates": [{"content": {"parts": [{"text": ""}], "role": "model"}, "index": 0}],
             "usageMetadata": {"promptTokenCount": 12, "candidatesTokenCount": 6, "totalTokenCount": 18},
         },
     )

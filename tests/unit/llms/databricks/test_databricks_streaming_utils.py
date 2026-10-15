@@ -7,6 +7,14 @@ set. `chunk_parser` previously did `choices[0]` unconditionally, raising
 `IndexError` -> `MidStreamFallbackError` and crashing the stream.
 """
 
+import json
+from typing import Final
+
+import httpx
+import pytest
+import respx
+
+import litellm
 from litellm.llms.databricks.streaming_utils import ModelResponseIterator
 
 
@@ -85,3 +93,46 @@ def test_chunk_parser_keeps_cached_tokens_on_usage_only_chunk():
     assert result["usage"] is not None
     assert result["usage"]["prompt_tokens_details"] is not None
     assert result["usage"]["prompt_tokens_details"]["cached_tokens"] == 320
+
+
+def _sse_event(body: dict[str, object]) -> bytes:
+    return f"data: {json.dumps(body)}\n\n".encode()
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_stream_usage_after_finish_chunk_reaches_the_caller(respx_mock: respx.MockRouter) -> None:
+    chunk_header: Final = {"id": "chatcmpl-x", "object": "chat.completion.chunk", "created": 1, "model": "sabia-3"}
+    stream_body: Final = b"".join(
+        (
+            _sse_event({**chunk_header, "choices": [{"index": 0, "delta": {"role": "assistant", "content": "144"}}]}),
+            _sse_event({**chunk_header, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}),
+            _sse_event(
+                {
+                    **chunk_header,
+                    "choices": [],
+                    "usage": {
+                        "prompt_tokens": 340,
+                        "completion_tokens": 1,
+                        "total_tokens": 341,
+                        "prompt_tokens_details": {"cached_tokens": 320},
+                    },
+                }
+            ),
+            b"data: [DONE]\n\n",
+        )
+    )
+    respx_mock.post("http://upstream.test/chat/completions").mock(
+        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, content=stream_body)
+    )
+
+    stream: Final = litellm.completion(
+        model="maritalk/sabia-3",
+        api_base="http://upstream.test",
+        api_key="sk-test",
+        messages=[{"role": "user", "content": "What is 12*12?"}],
+        stream=True,
+        stream_options={"include_usage": True},
+    )
+    usages: Final = [chunk.usage for chunk in stream if getattr(chunk, "usage", None)]
+
+    assert [(usage.prompt_tokens, usage.prompt_tokens_details.cached_tokens) for usage in usages] == [(340, 320)]
