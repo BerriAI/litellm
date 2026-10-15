@@ -203,10 +203,11 @@ CLAUDE_SONNET_4_6_TEST_CASE: Final = TranslationTestCase(
     },
     mock_provider_response={
         "model": "claude-sonnet-4-6",
-        "id": "msg_bdrk_011CfjukowJGNdRPkmrmvmEU",
+        "id": "msg_bdrk_zvuu2yb6ecoxss7yoi6aiednkwkcuz4s5ttchbfzobevewukiauq",
         "type": "message",
         "role": "assistant",
         "content": [{"type": "text", "text": "Hello!"}],
+        "container": None,
         "stop_reason": "end_turn",
         "stop_sequence": None,
         "stop_details": None,
@@ -216,6 +217,7 @@ CLAUDE_SONNET_4_6_TEST_CASE: Final = TranslationTestCase(
             "cache_read_input_tokens": 0,
             "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
             "output_tokens": 5,
+            "service_tier": "standard",
         },
     },
     expected_litellm_response={
