@@ -1424,6 +1424,19 @@ def test_convert_gemini_tool_result_wraps_non_schema_string_ref():
     assert result["function_response"]["response"] == {"content": dbref_json}
 
 
+def test_convert_gemini_tool_result_wraps_top_level_ref():
+    """A $ref on the tool result's root object is read as a part name too."""
+    root_ref_json = '{"$ref":"#/$defs/Config","$defs":{"Config":{"type":"object"}}}'
+    message, last_message_with_tool_calls = _gemini_tool_result_fixture(root_ref_json)
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+
+    assert result["function_response"]["response"] == {"content": root_ref_json}
+
+
 def _json_unicode_escape(text: str) -> str:
     return "".join(f"\\u{ord(char):04x}" for char in text)
 
