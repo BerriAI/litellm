@@ -4450,6 +4450,32 @@ async def test_restoration_never_contacts_presidio(has_tokens: bool) -> None:
 
 
 @pytest.mark.asyncio
+async def test_output_parse_pii_restore_callback_routes_natively_via_mask_response_content() -> None:
+    """Regression guard (issue #46087): the restore callback must get its native
+    streaming route through the per-instance ``mask_response_content`` flag, not
+    a class-level ``use_native_lifecycle_hooks`` override. The latter would also
+    silently skip during_call scans (no native ``async_moderation_hook``) and
+    /v1/responses pre_call masking (the native ``async_pre_call_hook`` only reads
+    ``data["messages"]``) for every Presidio guardrail instance, not just this one.
+    """
+    from litellm.proxy.guardrails.guardrail_hooks.presidio import _OPTIONAL_PresidioPIIMasking
+    from litellm.proxy.guardrails.guardrail_initializers import initialize_presidio
+
+    params: Final = LitellmParams(
+        guardrail="presidio",
+        mode=["pre_call", "post_call"],
+        output_parse_pii=True,
+        presidio_filter_scope="input",
+        presidio_analyzer_api_base="http://test-analyzer/",
+        presidio_anonymizer_api_base="http://test-anonymizer/",
+    )
+    scan_callback, restore_callback = initialize_presidio(params, {"guardrail_name": "restore-mask"})
+    assert scan_callback.mask_response_content is False
+    assert restore_callback.mask_response_content is True
+    assert _OPTIONAL_PresidioPIIMasking.use_native_lifecycle_hooks is False
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("event_hook", ["pre_call", ["pre_call"], ["pre_call", "post_call"]])
 async def test_standalone_restoration_preserves_post_call_selection(event_hook: str | list[str]) -> None:
     from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails

@@ -16,7 +16,7 @@ from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaita
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Protocol, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, cast
 
 import aiohttp
 from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError, with_config
@@ -179,8 +179,6 @@ async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGener
 
 
 class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
-    use_native_lifecycle_hooks: ClassVar[bool] = True
-
     user_api_key_cache = None
     ad_hoc_recognizers: list[str] | None = None
 
