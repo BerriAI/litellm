@@ -4,7 +4,10 @@ Tests for key and team `model_aliases` on the model listing endpoints: GET /v1/m
 An alias the caller can complete on is listed next to its target and resolves by name.
 """
 
+import json
+
 import pytest
+from fastapi import HTTPException
 from starlette.requests import Request
 
 from litellm import Router
@@ -25,11 +28,12 @@ def router(monkeypatch: pytest.MonkeyPatch) -> Router:
     router = Router(
         model_list=[
             _deployment("gpt-4.1-mini"),
-            _deployment("gpt-4.1", model="openai/gpt-4.1"),
+            _deployment("gpt-4.1", model="openai/gpt-4.1", display_name="GPT 4.1"),
             _deployment(
                 "model_name_team1_abc", model="openai/gpt-4o", team_id="team1", team_public_model_name="team-chat"
             ),
             _deployment("hidden", model="anthropic/claude-sonnet-4-5", discoverable=False),
+            _deployment("paused", model="openai/gpt-4.1", blocked=True),
         ],
         model_group_alias={"legacy": "gpt-4.1"},
     )
@@ -206,3 +210,50 @@ async def test_router_alias_the_caller_lists_resolves_at_retrieval_like_its_list
     assert rows["legacy"] == {**rows["gpt-4.1"], "id": "legacy"}
     target = await proxy_server.model_info(model_id="gpt-4.1", user_api_key_dict=caller)
     assert await proxy_server.model_info(model_id="legacy", user_api_key_dict=caller) == {**target, "id": "legacy"}
+
+
+def _alias_holder(**aliases: dict[str, object]) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        api_key="sk-test",
+        user_id="u",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        models=["gpt-4.1", "fast"],
+        **aliases,
+    )
+
+
+@pytest.mark.asyncio
+async def test_listed_alias_keeps_its_own_display_name_in_the_anthropic_and_codex_listings(router: Router) -> None:
+    caller = _alias_holder(aliases={"fast": "gpt-4.1"})
+
+    anthropic = await proxy_server.model_list(user_api_key_dict=caller, request=_anthropic_request())
+    assert {row["id"]: row["display_name"] for row in anthropic["data"]} == {"gpt-4.1": "GPT 4.1", "fast": "fast"}
+    codex = await proxy_server.model_list(user_api_key_dict=caller, request=None, client_version="0.200.0")
+    target, alias = json.loads(codex.body)["models"]
+    assert (target["display_name"], alias["display_name"]) == ("GPT 4.1", "fast")
+    assert {**alias, "slug": "gpt-4.1", "display_name": "GPT 4.1", "priority": 0} == target
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model_group_alias", [{"fast": "gpt-4.1"}, {"fast": {"model": "gpt-4.1", "hidden": True}}]
+)
+async def test_key_router_settings_alias_the_key_lists_reports_its_target_at_list_and_retrieval(
+    router: Router, model_group_alias: dict[str, object]
+) -> None:
+    caller = _alias_holder(router_settings={"model_group_alias": model_group_alias})
+
+    rows = {row["id"]: row for row in (await proxy_server.model_list(user_api_key_dict=caller, request=None))["data"]}
+    assert rows["fast"] == {**rows["gpt-4.1"], "id": "fast"}
+    target = await proxy_server.model_info(model_id="gpt-4.1", user_api_key_dict=caller)
+    assert await proxy_server.model_info(model_id="fast", user_api_key_dict=caller) == {**target, "id": "fast"}
+
+
+@pytest.mark.asyncio
+async def test_alias_to_a_paused_model_is_not_described_by_it(router: Router) -> None:
+    caller = _team_member(models=["gpt-4.1-mini", "model_name_team1_abc", "fast"], team_model_aliases={"fast": "paused"})
+
+    assert await _v1_models(caller) == ["gpt-4.1-mini", "team-chat", "fast"]
+    with pytest.raises(HTTPException) as retrieval:
+        await proxy_server.model_info(model_id="fast", user_api_key_dict=caller)
+    assert retrieval.value.status_code == 404
