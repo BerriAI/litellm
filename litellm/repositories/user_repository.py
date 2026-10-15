@@ -5,7 +5,7 @@ User repository for database operations on LiteLLM_UserTable.
 import json
 from collections.abc import Mapping, Sequence
 from itertools import chain
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import TypeAdapter
 
@@ -37,6 +37,19 @@ ORDER BY p.user_id
 _PLACEHOLDER_ROWS_ADAPTER: Final = TypeAdapter(tuple[SCIMPlaceholder, ...])
 
 
+class _UserDb(Protocol):
+    @property
+    def litellm_usertable(self) -> TableActions["prisma_models.LiteLLM_UserTable"]: ...
+
+
+class _PrismaClientView(Protocol):
+    @property
+    def db(self) -> _UserDb: ...
+
+    @property
+    def writer_db(self) -> _UserDb: ...
+
+
 class UserRepository(BaseRepository[LiteLLM_UserTable]):
     """Repository for user database operations."""
 
@@ -46,7 +59,8 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
 
     @property
     def table(self) -> TableActions["prisma_models.LiteLLM_UserTable"]:
-        database: Final = self.prisma_client.writer_db if self._use_writer else self.prisma_client.db
+        client: Final[_PrismaClientView] = self.prisma_client
+        database: Final = client.writer_db if self._use_writer else client.db
         return database.litellm_usertable
 
     @property

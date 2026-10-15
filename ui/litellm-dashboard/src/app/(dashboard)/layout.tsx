@@ -1,6 +1,7 @@
 "use client";
 
 import React, { Suspense, useState, useRef, useEffect } from "react";
+import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { DashboardHeader } from "@/components/DashboardHeader";
 import Navbar from "@/components/navbar";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
@@ -8,17 +9,25 @@ import { ThemeProvider } from "@/contexts/ThemeContext";
 import { useAuth } from "@/contexts/AuthContext";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { DebugWarningBanner } from "@/components/DebugWarningBanner";
-import { NoRedisWarningBanner } from "@/components/NoRedisWarningBanner";
-import { EnvCredentialLoginWarningBanner } from "@/components/EnvCredentialLoginWarningBanner";
-import { LicenseExpiryBanner } from "@/components/LicenseExpiryBanner";
+import {
+  createDeploymentHealthHandle,
+  DeploymentHealthBanner,
+  DeploymentHealthIcon,
+} from "@/components/DeploymentHealth/DeploymentHealth";
+import { DeploymentHealthPanel } from "@/components/DeploymentHealth/DeploymentHealthPanel";
 import { UserBanner } from "@/components/UserBanner";
-import LiteAdmin from "@/components/liteadmin/LiteAdmin";
-import { UpgradeBanner } from "@/components/UpgradeBanner";
+import { LiteAdminFrame } from "@/components/liteadmin/LiteAdmin";
 import { routeSegmentForPathname, uiHref } from "@/utils/uiHref";
 import { PluginModeProvider, usePluginMode } from "@/contexts/PluginModeContext";
 import { createApiClient } from "@/lib/http/client";
 import { getProxyBaseUrl } from "@/components/networking";
+import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { Button } from "@/components/ui/button";
+import { Menu } from "lucide-react";
+import { useMediaQuery } from "usehooks-ts";
+import { CommandPaletteProvider } from "@/components/CommandPalette/CommandPaletteProvider";
+import { recordUiEvent } from "@/lib/telemetry/uiEvents";
+import TelemetryEnvBanner from "@/app/(dashboard)/telemetry/_components/TelemetryEnvBanner";
 
 const pluginApiClient = createApiClient({ getBaseUrl: () => getProxyBaseUrl() ?? "" });
 
@@ -104,8 +113,21 @@ const FULL_BLEED_SEGMENTS = new Set(["logs"]);
 function DashboardShell({ children }: { children: React.ReactNode }) {
   const { accessToken } = useAuth();
   const { mode } = usePluginMode();
-  const routeSegment = routeSegmentForPathname(usePathname());
-  const isPlayground = routeSegment === "playground";
+  const pathname = usePathname();
+  const routeSegment = routeSegmentForPathname(pathname);
+  useEffect(() => {
+    void recordUiEvent({ page: routeSegment || "home", action: "view" });
+  }, [routeSegment]);
+  const searchParams = useSearchParams();
+  const navigationKey = `${pathname}?${searchParams.toString()}`;
+  const isDesktop = useMediaQuery("(min-width: 768px)", { initializeWithValue: false });
+  const [mobileNavigationKey, setMobileNavigationKey] = useState<string | null>(null);
+  const [mobileNavigationHandle] = useState(() => DialogPrimitive.createHandle());
+  const [deploymentHealthHandle] = useState(createDeploymentHealthHandle);
+  if (mobileNavigationKey !== null && (isDesktop || mobileNavigationKey !== navigationKey)) {
+    setMobileNavigationKey(null);
+  }
+  const mobileNavigationOpen = !isDesktop && mobileNavigationKey === navigationKey;
   const isFullBleed = FULL_BLEED_SEGMENTS.has(routeSegment);
   // A manual toggle holds only for the route it was made on; full-bleed routes default to collapsed.
   const [sidebarOverride, setSidebarOverride] = useState<{ segment: string; collapsed: boolean } | null>(null);
@@ -121,13 +143,14 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   if (!isGateway) {
     return (
       <div className="flex h-screen flex-col overflow-hidden bg-background">
-        <Navbar accessToken={accessToken} isPublicPage={false} />
-        <DebugWarningBanner accessToken={accessToken} />
-        <NoRedisWarningBanner accessToken={accessToken} />
-        <EnvCredentialLoginWarningBanner accessToken={accessToken} />
-        <LicenseExpiryBanner accessToken={accessToken} />
+        <Navbar
+          accessToken={accessToken}
+          isPublicPage={false}
+          deploymentHealth={<DeploymentHealthIcon handle={deploymentHealthHandle} />}
+        />
+        <DeploymentHealthBanner handle={deploymentHealthHandle} />
+        <DeploymentHealthPanel handle={deploymentHealthHandle} />
         <UserBanner accessToken={accessToken} />
-        <UpgradeBanner accessToken={accessToken} />
         <main className="flex min-h-0 flex-1 overflow-hidden">
           <AgentControlPlaneView />
         </main>
@@ -139,19 +162,54 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   // sidebar owns its own scroll and the content column scrolls independently,
   // so the page can't be dragged past the end of the nav.
   return (
-    <div className="flex h-screen overflow-hidden bg-background">
-      <SidebarProvider sidebarCollapsed={sidebarCollapsed} onToggleCollapsed={toggleSidebar} />
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <DashboardHeader />
-        <DebugWarningBanner accessToken={accessToken} />
-        <NoRedisWarningBanner accessToken={accessToken} />
-        <EnvCredentialLoginWarningBanner accessToken={accessToken} />
-        <LicenseExpiryBanner accessToken={accessToken} />
-        <UserBanner accessToken={accessToken} />
-        <UpgradeBanner accessToken={accessToken} />
-        <main className="min-w-0 flex-1 overflow-y-auto">{children}</main>
-        {!isPlayground && <LiteAdmin />}
+    <div className="flex h-screen overflow-hidden bg-background max-md:h-dvh">
+      <div className="hidden h-full md:flex">
+        <SidebarProvider sidebarCollapsed={sidebarCollapsed} onToggleCollapsed={toggleSidebar} />
       </div>
+      <Sheet
+        handle={mobileNavigationHandle}
+        open={mobileNavigationOpen}
+        onOpenChange={(open) => setMobileNavigationKey(open ? navigationKey : null)}
+      >
+        <SheetContent
+          side="left"
+          showCloseButton={false}
+          className="gap-0 p-0 data-[side=left]:w-[min(280px,calc(100vw-3rem))] [&_[data-slot=sidebar]]:w-full"
+          onClickCapture={(event) => {
+            if (event.target instanceof Element && event.target.closest("a[href]")) setMobileNavigationKey(null);
+          }}
+        >
+          <SheetTitle className="sr-only">Navigation</SheetTitle>
+          <SidebarProvider sidebarCollapsed={false} onToggleCollapsed={() => setMobileNavigationKey(null)} />
+        </SheetContent>
+      </Sheet>
+      <LiteAdminFrame>
+        <CommandPaletteProvider>
+          <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+            <DashboardHeader
+              accessToken={accessToken}
+              navigationTrigger={
+                <SheetTrigger
+                  handle={mobileNavigationHandle}
+                  render={
+                    <Button variant="ghost" size="icon" className="size-11 md:hidden" aria-label="Open navigation" />
+                  }
+                >
+                  <Menu />
+                </SheetTrigger>
+              }
+              deploymentHealth={<DeploymentHealthIcon handle={deploymentHealthHandle} />}
+            />
+            <DeploymentHealthBanner handle={deploymentHealthHandle} />
+            <DeploymentHealthPanel handle={deploymentHealthHandle} />
+            <UserBanner accessToken={accessToken} />
+            <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">
+              <TelemetryEnvBanner />
+              {children}
+            </main>
+          </div>
+        </CommandPaletteProvider>
+      </LiteAdminFrame>
     </div>
   );
 }

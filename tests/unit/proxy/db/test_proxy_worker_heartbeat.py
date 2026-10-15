@@ -1,3 +1,4 @@
+from collections.abc import Awaitable, Callable
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -13,6 +14,7 @@ from litellm.proxy.db.proxy_worker_heartbeat import (
     count_live_proxy_workers,
 )
 from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
 
 def _prisma():
@@ -92,3 +94,21 @@ async def test_count_returns_unknown_for_a_malformed_row():
     prisma = _prisma()
     prisma.db.query_raw.return_value = [{"unexpected": "shape"}]
     assert await count_live_proxy_workers(prisma) is None
+
+
+@pytest.mark.asyncio
+async def test_a_heartbeat_tick_renders_one_postgres_span_per_round_trip(
+    postgres_span_names: Callable[[], Awaitable[tuple[str, ...]]],
+) -> None:
+    prisma = _prisma()
+    prisma.db.execute_raw = engine_call()
+    prisma.db.query_raw = engine_call([{"live_workers": 2}])
+
+    await ProxyWorkerHeartbeat(prisma_client=prisma, worker_id="worker-1").beat()
+    assert await count_live_proxy_workers(prisma) == 2
+
+    assert await postgres_span_names() == (
+        "postgres.upsert LiteLLM_ProxyWorkerHeartbeat",
+        "postgres.delete LiteLLM_ProxyWorkerHeartbeat",
+        "postgres.select LiteLLM_ProxyWorkerHeartbeat",
+    )
