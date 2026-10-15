@@ -93,6 +93,7 @@ _LANGFUSE_B3_KEYS: Final = frozenset(
         "langfuse.observation.output",
         "langfuse.observation.type",
         "langfuse.observation.usage_details",
+        "langfuse.trace.name",
         "litellm.api_key.hash",
         "litellm.call_id",
         "litellm.call_type",
