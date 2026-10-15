@@ -15,6 +15,7 @@ from unittest.mock import patch
 import pytest
 from prometheus_client import CollectorRegistry, multiprocess
 
+from litellm.constants import PROMETHEUS_ADMITTED_SERIES_FILE_PREFIX
 from litellm.proxy.prometheus_cleanup import mark_dead_workers, mark_worker_exit, wipe_directory
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers
 
@@ -235,3 +236,24 @@ class TestMaybeSetupPrometheusMultiprocDir:
 
             assert result_dir == str(tmp_path)
             assert os.environ["PROMETHEUS_MULTIPROC_DIR"] == str(tmp_path)
+
+    def test_single_worker_restart_with_an_operator_set_dir_wipes_it(self, tmp_path: Path) -> None:
+        """One worker and no metrics server still wipe the operator's directory at boot: the docs promise a
+        restart frees every capped slot, and the exited worker's samples would otherwise keep the merged scrape
+        past the cap."""
+        admitted: Final = tmp_path / f"{PROMETHEUS_ADMITTED_SERIES_FILE_PREFIX}litellm_requests_metric"
+        admitted.write_text('\n["user-a"]\n')
+        samples: Final = tmp_path / "counter_123.db"
+        samples.write_bytes(b"operator-owned samples")
+        with patch.dict(os.environ, {"PROMETHEUS_MULTIPROC_DIR": str(tmp_path)}, clear=False):
+            os.environ.pop("prometheus_multiproc_dir", None)
+
+            result_dir = ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir(
+                num_workers=1,
+                litellm_settings={"callbacks": ["prometheus"]},
+            )
+
+            assert result_dir is None
+            assert os.environ["PROMETHEUS_MULTIPROC_DIR"] == str(tmp_path)
+        assert not admitted.exists()
+        assert not samples.exists()

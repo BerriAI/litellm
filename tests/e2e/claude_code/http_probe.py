@@ -42,6 +42,7 @@ from e2e_http import (
     UnknownApiError,
     ValidationError,
 )
+from e2e_metadata import step
 from models import (
     AnthropicAssistantTurn,
     AnthropicCustomTool,
@@ -109,6 +110,7 @@ def _acquire(model: str, rate_limiter: RateLimiter | None) -> None:
     limiter.acquire(infer_provider(model))
 
 
+@step('Count tokens with /v1/messages/count_tokens for {model} on the message "{message}"')
 def probe_count_tokens(
     *,
     client: ProxyClient,
@@ -132,6 +134,7 @@ def probe_count_tokens(
     )
 
 
+@step("Send a /v1/messages request to {model} with the tool_search tool declared")
 def probe_tool_search(
     *,
     client: ProxyClient,
@@ -228,6 +231,10 @@ def _replay_history(answer: AnthropicMessagesResponse) -> tuple[AnthropicMessage
     )
 
 
+@step(
+    "Send a /v1/messages request to {model} with the tool_search tool declared,"
+    " then send its answer back as history in a second request"
+)
 def probe_tool_search_multiturn(
     *,
     client: ProxyClient,

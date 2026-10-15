@@ -74,7 +74,7 @@ def test_transform_messages_handles_dicts_only(config):
         {"role": "assistant", "content": "Hello!"},
         {"role": "user", "content": "Hi!"},
     ]
-    out = config._transform_messages(messages, model="gradient_ai/test-model")
+    out = config.transform_messages(messages, model="gradient_ai/test-model")
     assert out[0]["role"] == "assistant"
     assert out[0]["content"] == "Hello!"
     assert out[1]["role"] == "user"
@@ -84,7 +84,7 @@ def test_transform_messages_handles_dicts_only(config):
 def test_get_openai_compatible_provider_info_env(monkeypatch, config):
     monkeypatch.setenv("GRADIENT_AI_AGENT_ENDPOINT", DO_BASE_URL)
     monkeypatch.setenv("GRADIENT_AI_API_KEY", "env-key")
-    api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+    api_base, api_key = config.get_openai_compatible_provider_info(None, None)
     assert api_base == DO_BASE_URL
     assert api_key == "env-key"
 
@@ -92,6 +92,6 @@ def test_get_openai_compatible_provider_info_env(monkeypatch, config):
 def test_get_openai_compatible_provider_info_default(monkeypatch, config):
     monkeypatch.delenv("GRADIENT_AI_AGENT_ENDPOINT", raising=False)
     monkeypatch.setenv("GRADIENT_AI_API_KEY", "env-key")
-    api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+    api_base, api_key = config.get_openai_compatible_provider_info(None, None)
     assert api_base == GRADIENT_AI_SERVERLESS_ENDPOINT
     assert api_key == "env-key"

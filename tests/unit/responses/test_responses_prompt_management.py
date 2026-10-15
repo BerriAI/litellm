@@ -71,7 +71,7 @@ def _patch_responses_dispatch():
             side_effect=_provider_by_model,
         ),
         patch.object(
-            import_module("litellm.responses.mcp.litellm_proxy_mcp_handler").LiteLLM_Proxy_MCP_Handler, "_should_use_litellm_mcp_gateway",
+            import_module("litellm.responses.mcp.litellm_proxy_mcp_handler").LiteLLM_Proxy_MCP_Handler, "should_use_litellm_mcp_gateway",
             return_value=False,
         ),
         patch.object(
@@ -620,6 +620,7 @@ def test_sync_prompt_swap_cross_provider_with_credentials_raises():
     with pytest.raises(litellm.BadRequestError, match="Refusing to send"):
         _apply_prompt_management_to_responses_call(
             input="hi",
+            tools=None,
             model="anthropic/claude-haiku-4-5",
             custom_llm_provider="anthropic",
             litellm_logging_obj=logging_obj,

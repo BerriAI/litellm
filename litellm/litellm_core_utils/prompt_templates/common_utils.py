@@ -2,6 +2,8 @@
 Common utility functions used for translating messages across providers
 """
 
+import base64
+import binascii
 import io
 import json
 import mimetypes
@@ -29,6 +31,7 @@ from litellm.types.llms.openai import (
     ChatCompletionThinkingBlock,
     ChatCompletionToolParam,
     ChatCompletionUserMessage,
+    PromptCacheBreakpoint,
 )
 from litellm.types.utils import (
     Choices,
@@ -192,6 +195,33 @@ def get_str_from_messages(messages: list[AllMessageValues]) -> str:
     return text
 
 
+def get_semantic_cache_prompt_from_messages(messages: Sequence[Mapping[str, object]]) -> str:
+    """
+    The text a semantic cache embeds for a request: `get_str_from_messages` plus the text inside
+    Messages API `tool_result` blocks, so a tool turn does not embed identically to the turn before it
+    """
+    return "".join(
+        _semantic_cache_content_text(message.get("content"))
+        + extract_search_results_text(message.get("search_results"))
+        for message in messages
+    )
+
+
+def _semantic_cache_content_text(content: object) -> str:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    return "".join(_semantic_cache_block_text(block) for block in content if isinstance(block, Mapping))
+
+
+def _semantic_cache_block_text(block: Mapping[str, object]) -> str:
+    if block.get("type") == "tool_result":
+        return _semantic_cache_content_text(block.get("content"))
+    text: Final = block.get("text")
+    return text if isinstance(text, str) else ""
+
+
 def is_non_content_values_set(message: AllMessageValues) -> bool:
     ignore_keys: Final = ["content", "role", "name"]
     return any(message.get(key, None) is not None for key in message if key not in ignore_keys)
@@ -271,7 +301,7 @@ def request_contains_image_content(messages: Sequence[Mapping[str, object]]) -> 
     )
 
 
-def _audio_or_image_in_message_content(message: AllMessageValues) -> bool:
+def audio_or_image_in_message_content(message: AllMessageValues) -> bool:
     """
     Checks if message content contains an image or audio
     """
@@ -282,6 +312,9 @@ def _audio_or_image_in_message_content(message: AllMessageValues) -> bool:
                 if c.get("type") == "image_url" or c.get("type") == "input_audio":
                     return True
     return False
+
+
+_audio_or_image_in_message_content = audio_or_image_in_message_content
 
 
 def convert_openai_message_to_only_content_messages(
@@ -535,9 +568,9 @@ def update_messages_with_model_file_ids(
     }
     """
     from litellm.proxy.openai_files_endpoints.common_utils import (
-        _is_base64_encoded_unified_file_id,
         convert_b64_uid_to_unified_uid,
         get_original_file_id,
+        is_base64_encoded_unified_file_id,
         is_model_embedded_id,
     )
 
@@ -573,7 +606,7 @@ def update_messages_with_model_file_ids(
                                 if model_file_id_mapping and model_id is not None
                                 else None
                             )
-                            if not provider_file_id and _is_base64_encoded_unified_file_id(file_id):
+                            if not provider_file_id and is_base64_encoded_unified_file_id(file_id):
                                 unified_file_id = convert_b64_uid_to_unified_uid(file_id)
                                 if "llm_output_file_id," in unified_file_id:
                                     provider_file_id = unified_file_id.split("llm_output_file_id,")[1].split(";")[0]
@@ -604,9 +637,9 @@ def update_responses_input_with_model_file_ids(
                                Format: {"litellm_file_id": {"model_id": "provider_file_id"}}
     """
     from litellm.proxy.openai_files_endpoints.common_utils import (
-        _is_base64_encoded_unified_file_id,
         convert_b64_uid_to_unified_uid,
         get_original_file_id,
+        is_base64_encoded_unified_file_id,
         is_model_embedded_id,
     )
 
@@ -641,7 +674,7 @@ def update_responses_input_with_model_file_ids(
                             updated_content.append(updated_content_item)
                         else:
                             # Check if this is a base64-encoded unified file ID without mapping
-                            is_unified_file_id = _is_base64_encoded_unified_file_id(file_id)
+                            is_unified_file_id = is_base64_encoded_unified_file_id(file_id)
                             if is_unified_file_id:
                                 # Fallback: decode unified file ID
                                 unified_file_id = convert_b64_uid_to_unified_uid(file_id)
@@ -1503,7 +1536,7 @@ def tool_with_sanitized_parameters(
     return tool if sanitized_schema is input_schema else {**tool, "input_schema": sanitized_schema}
 
 
-def _get_image_mime_type_from_url(url: str) -> str | None:
+def get_image_mime_type_from_url(url: str) -> str | None:
     """
     Get mime type for common image URLs
     See gemini mime types: https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/image-understanding#image-requirements
@@ -1566,6 +1599,9 @@ def _get_image_mime_type_from_url(url: str) -> str | None:
             return mime_type
 
     return None
+
+
+_get_image_mime_type_from_url = get_image_mime_type_from_url
 
 
 def infer_content_type_from_url_and_content(
@@ -1754,10 +1790,21 @@ _MarkedT: Final = TypeVar("_MarkedT", bound=Mapping[str, object])
 
 
 def with_prompt_cache_breakpoint(target: _MarkedT, marker: object) -> _MarkedT:
-    if marker is None:
+    """A breakpoint the client already wrote on the block wins, TTL included."""
+    if marker is None or target.get("prompt_cache_breakpoint") is not None:
         return target
     marked: Final = {**target, "prompt_cache_breakpoint": marker}
     return cast(_MarkedT, marked)  # cast-ok: same block shape as the input plus the marker key
+
+
+def cache_control_as_prompt_cache_breakpoint(block: _MarkedT) -> _MarkedT:
+    """Anthropic's ``cache_control`` mark rewritten as OpenAI's ``prompt_cache_breakpoint`` on the same block."""
+    if block.get("cache_control") is None:
+        return block
+    unmarked: Final = {key: value for key, value in block.items() if key != "cache_control"}
+    return cast(  # cast-ok: same block shape as the input with the marker key renamed
+        _MarkedT, with_prompt_cache_breakpoint(unmarked, PromptCacheBreakpoint(mode="explicit"))
+    )
 
 
 LITELLM_INTERNAL_MESSAGE_FIELDS: Final = frozenset({"thinking_blocks", "reasoning_content", "provider_specific_fields"})
@@ -1968,7 +2015,11 @@ def convert_prefix_message_to_non_prefix_messages(
     return new_messages
 
 
-def _extract_reasoning_content(message: dict) -> tuple[str | None, str | None]:
+def _provider_text_or_none(value: object) -> str | None:
+    return cast(str | None, value)  # cast-ok: reasoning fields arrive in untyped provider messages
+
+
+def extract_reasoning_content(message: Mapping[str, object]) -> tuple[str | None, str | None]:
     """
     Extract reasoning content and main content from a message.
 
@@ -1980,12 +2031,15 @@ def _extract_reasoning_content(message: dict) -> tuple[str | None, str | None]:
     """
     message_content: Final = message.get("content")
     if "reasoning_content" in message:
-        return message["reasoning_content"], message_content
+        return _provider_text_or_none(message["reasoning_content"]), _provider_text_or_none(message_content)
     elif "reasoning" in message:
-        return message["reasoning"], message_content
+        return _provider_text_or_none(message["reasoning"]), _provider_text_or_none(message_content)
     elif isinstance(message_content, str):
-        return _parse_content_for_reasoning(message_content)
-    return None, message_content
+        return parse_content_for_reasoning(message_content)
+    return None, _provider_text_or_none(message_content)
+
+
+_extract_reasoning_content = extract_reasoning_content
 
 
 def _readable_thinking_text(block: Mapping[str, object]) -> str:
@@ -2080,6 +2134,32 @@ def is_unsignable_thinking_block(block: object) -> bool:
     return not (isinstance(thinking_text, str) and len(thinking_text.strip()) > 0)
 
 
+def native_redacted_thinking_data(data: str) -> str:
+    """Claude's own `data` string for a redacted_thinking block.
+
+    Bedrock Converse carries it base64-wrapped as `redactedContent`, and LiteLLM passed that
+    wrapper through as `data` until it started decoding Converse replies, so histories saved
+    before then still hold it. Claude's own value never decodes twice, since its first byte
+    decodes to a protobuf tag outside the base64 alphabet.
+    """
+    return _converse_wrapped_payload(data) or data
+
+
+def converse_redacted_content(data: str) -> str:
+    """The `redactedContent` Bedrock Converse expects for a redacted_thinking block's `data`."""
+    return base64.b64encode(native_redacted_thinking_data(data).encode()).decode()
+
+
+def _converse_wrapped_payload(data: str) -> str | None:
+    try:
+        payload: Final = base64.b64decode(data, validate=True).decode("ascii")
+        _ = base64.b64decode(payload, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    else:
+        return payload
+
+
 def strip_encrypted_reasoning_from_messages(
     messages: object,
     *,
@@ -2163,7 +2243,7 @@ def responses_reasoning_items_from_thinking_blocks(
     )
 
 
-def _parse_content_for_reasoning(
+def parse_content_for_reasoning(
     message_text: str | None,
 ) -> tuple[str | None, str | None]:
     """
@@ -2186,6 +2266,9 @@ def _parse_content_for_reasoning(
         return reasoning_match.group(1), reasoning_match.group(2)
 
     return None, message_text
+
+
+_parse_content_for_reasoning = parse_content_for_reasoning
 
 
 def _extract_base64_data(image_url: str) -> str:

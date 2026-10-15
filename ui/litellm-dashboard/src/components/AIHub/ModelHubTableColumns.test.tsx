@@ -37,6 +37,12 @@ describe("getModelHubTableColumns", () => {
     expect(screen.getByText("gpt-4o")).toBeInTheDocument();
   });
 
+  it("shows the legacy evaluation mode as decisions", () => {
+    renderTable([{ ...mockModel, mode: "evaluation" }]);
+    expect(screen.getByText("decisions")).toBeInTheDocument();
+    expect(screen.queryByText("evaluation")).not.toBeInTheDocument();
+  });
+
   it("shows the first two providers and '+1' for overflow", () => {
     renderTable([mockModel]);
     expect(screen.getByText("openai")).toBeInTheDocument();

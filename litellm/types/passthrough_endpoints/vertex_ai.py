@@ -2,12 +2,12 @@
 Used for /vertex_ai/ pass through endpoints
 """
 
-from pydantic import BaseModel
+from litellm.types.llms.base import LiteLLMBaseModel
 
 from ..llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 
 
-class VertexPassThroughCredentials(BaseModel):
+class VertexPassThroughCredentials(LiteLLMBaseModel):
     # Example: vertex_project = "my-project-123"
     vertex_project: str | None = None
 
