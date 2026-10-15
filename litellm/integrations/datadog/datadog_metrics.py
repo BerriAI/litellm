@@ -33,6 +33,9 @@ from litellm.types.utils import StandardLoggingPayload
 
 
 class DatadogMetricsLogger(CustomBatchLogger):
+    preserve_events_added_during_flush = True
+    log_queue: list[DatadogMetricSeries | DatadogDistributionSeries]
+
     def __init__(self, start_periodic_flush: bool = True, **kwargs):
         self.dd_api_key = os.getenv("DD_API_KEY")
         self.dd_app_key = os.getenv("DD_APP_KEY")
@@ -237,13 +240,16 @@ class DatadogMetricsLogger(CustomBatchLogger):
             raise
 
     async def _upload_to_datadog(self, payload: DatadogMetricsPayload):
-        await self._post_compressed(self.upload_url, safe_dumps(payload), encoding="gzip")
+        await self._post_compressed(self.upload_url, safe_dumps(payload), len(payload["series"]), encoding="gzip")
 
-    async def _upload_distributions_to_datadog(self, payload: DatadogDistributionPayload):
-        # /api/v1/distribution_points only accepts deflate-compressed bodies
-        await self._post_compressed(self.distribution_upload_url, safe_dumps(payload), encoding="deflate")
+    async def _upload_distributions_to_datadog(self, payload: DatadogDistributionPayload) -> None:
+        await self._post_compressed(
+            self.distribution_upload_url, safe_dumps(payload), len(payload["series"]), encoding="deflate"
+        )
 
-    async def _post_compressed(self, url: str, json_data: str, encoding: Literal["gzip", "deflate"]) -> None:
+    async def _post_compressed(
+        self, url: str, json_data: str, point_count: int, encoding: Literal["gzip", "deflate"]
+    ) -> None:
         if not self.dd_api_key:
             return
 
@@ -263,7 +269,9 @@ class DatadogMetricsLogger(CustomBatchLogger):
 
         response.raise_for_status()
 
-        verbose_logger.debug("Datadog Metrics: Uploaded metrics to %s. Status: %s", url, response.status_code)
+        verbose_logger.debug(
+            "Datadog Metrics: Uploaded %s metric points. Status: %s", point_count, response.status_code
+        )
 
     async def async_health_check(self) -> IntegrationHealthCheckStatus:
         """

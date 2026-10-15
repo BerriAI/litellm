@@ -1,6 +1,7 @@
 import gzip
 import json
 import time
+import zlib
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock
 
@@ -413,10 +414,6 @@ async def test_async_send_batch(clean_env):
 @pytest.mark.asyncio
 async def test_async_send_batch_routes_distributions_to_v1_endpoint(clean_env):
     """Distribution series go to /api/v1/distribution_points (deflate), gauges/counts stay on /api/v2/series."""
-    import gzip
-    import json
-    import zlib
-
     logger = DatadogMetricsLogger(start_periodic_flush=False)
     logger.async_client = AsyncMock()
     logger.async_client.post.return_value = Response(
@@ -541,6 +538,47 @@ async def test_flush_retries_only_distributions_after_v1_failure(clean_env):
     assert [call.args[0] for call in logger.async_client.post.call_args_list] == [v2_url, v1_url, v2_url, v1_url]
     second_v2 = json.loads(gzip.decompress(logger.async_client.post.call_args_list[2].kwargs["content"]))
     assert [s["metric"] for s in second_v2["series"]] == ["litellm.llm_api.request_count"]
+
+
+@pytest.mark.asyncio
+async def test_flush_keeps_metrics_queued_while_the_upload_was_in_flight(clean_env):
+    """A request finishing while a flush awaits Datadog rides the next flush instead of being cleared with the batch."""
+    logger = DatadogMetricsLogger(start_periodic_flush=False)
+    logger.async_client = AsyncMock()
+    timestamp = int(time.time())
+    late = {
+        "metric": "litellm.request.total_latency.distribution",
+        "type": "distribution",
+        "points": ((timestamp, (2.0,)),),
+        "tags": ("env:late",),
+    }
+
+    def post(url, **_):
+        if late not in logger.log_queue:
+            logger.log_queue.append(late)
+        return Response(202, json={"status": "ok"}, request=Request("POST", url))
+
+    logger.async_client.post.side_effect = post
+    logger.log_queue = [
+        {
+            "metric": "litellm.request.total_latency",
+            "type": 3,
+            "points": [{"timestamp": timestamp, "value": 1.5}],
+            "tags": ["env:test"],
+        }
+    ]
+
+    await logger.flush_queue()
+
+    assert logger.log_queue == [late]
+
+    await logger.flush_queue()
+
+    assert logger.log_queue == []
+    assert [call.args[0] for call in logger.async_client.post.call_args_list] == [
+        "https://api.test.datadoghq.com/api/v2/series",
+        "https://api.test.datadoghq.com/api/v1/distribution_points",
+    ]
 
 
 @pytest.mark.asyncio

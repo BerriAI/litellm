@@ -1,5 +1,5 @@
 from collections.abc import Sequence
-from typing import Literal
+from typing import Literal, TypeAlias
 
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
@@ -21,7 +21,7 @@ class DatadogMetricsPayload(TypedDict):
     series: ReadOnly[Sequence[DatadogMetricSeries]]
 
 
-DatadogDistributionPoint = tuple[int, tuple[float, ...]]
+DatadogDistributionPoint: TypeAlias = tuple[int, tuple[float, ...]]
 
 
 class DatadogDistributionSeries(TypedDict):
