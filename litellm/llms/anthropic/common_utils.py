@@ -53,6 +53,7 @@ from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
     AnthropicMcpServerTool,
     AnthropicMessagesToolChoice,
+    AnthropicThinkingParam,
 )
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues
