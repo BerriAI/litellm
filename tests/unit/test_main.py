@@ -1244,6 +1244,37 @@ def test_responses_api_bridge_check_blank_api_base_is_default_openai(blank_api_b
     assert model_info.get("mode") == "responses"
 
 
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "reasoning_effort", "api_base", "expected_mode"),
+    [
+        ("openai", "none", None, "responses"),
+        ("openai", {"effort": "none"}, None, "responses"),
+        ("azure", "none", "https://example.openai.azure.com", "responses"),
+        ("openai", "none", "http://vllm.internal:8000/v1", None),
+    ],
+    ids=["openai-effort-none", "openai-dict-effort-none", "azure-effort-none", "chat-only-custom-base"],
+)
+def test_responses_api_bridge_check_tool_search_routes_to_responses_on_openai_endpoints(
+    custom_llm_provider, reasoning_effort, api_base, expected_mode
+):
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.responses.bridge_check.get_model_info_helper") as mock_get_model_info:
+        mock_get_model_info.return_value = {"max_tokens": 128000}
+        model_info, _ = responses_api_bridge_check(
+            model="gpt-5.5",
+            custom_llm_provider=custom_llm_provider,
+            tools=[
+                {"type": "tool_search"},
+                {"type": "function", "function": {"name": "get_weather"}, "defer_loading": True},
+            ],
+            reasoning_effort=reasoning_effort,
+            api_base=api_base,
+        )
+
+    assert model_info.get("mode") == expected_mode
+
+
 def test_responses_api_bridge_check_custom_api_base_with_unset_effort_stays_chat():
     """
     Chat-only OpenAI-compatible backends registered under the openai provider with a
