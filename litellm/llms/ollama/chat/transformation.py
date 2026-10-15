@@ -489,8 +489,11 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
                             # Keep the id the provider sent (Ollama assigns one
                             # per tool call); only mint one when it is missing
                             # (#46543, preserving the #11262 uuid fallback).
-                            entry: dict[str, object] = tool_call  # mutable-ok: typed view for the id read
-                            entry["id"] = entry.get("id") or str(uuid.uuid4())
+                            en: Mapping[str, str] = tool_call  # pyright: ignore[reportUnknownVariableType]  # untyped
+                            tool_call["id"] = (
+                                en.get("id")  # pyright: ignore[reportUnknownMemberType]  # untyped chunk payload
+                                or str(uuid.uuid4())
+                            )
 
             # PROCESS REASONING CONTENT
             reasoning_content: str | None = None
