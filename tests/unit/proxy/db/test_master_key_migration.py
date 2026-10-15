@@ -772,3 +772,44 @@ async def test_integration_settings_config_rows_count_their_encrypted_fields(mon
     assert decrypt_if_encrypted_with(tables["LiteLLM_Config"][0]["param_value"]["api_key"], NEW_KEY) == "vantage-key"
     assert tables["LiteLLM_Config"][0]["param_value"]["base_url"] == "https://api.vantage.sh"
     assert tables["LiteLLM_Config"][1]["param_value"]["timezone"] == "utc"
+
+
+@pytest.mark.asyncio
+async def test_mcp_metadata_and_user_scope_env_vars_do_not_block_a_pynacl_free_migration(monkeypatch):
+    """MCP credentials hold plaintext metadata (region, scopes) next to the secret fields,
+    and env_vars hold plaintext user-scope placeholders: only writer-encrypted leaves
+    count, so a no-PyNaCl install still converges."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+    tables: Tables = {
+        "LiteLLM_MCPServerTable": [
+            {
+                "server_id": "mcp-1",
+                "credentials": {
+                    "auth_value": _encrypted("mcp-secret"),
+                    "aws_region_name": "us-east-1",
+                    "scopes": ["read"],
+                },
+                "env_vars": [{"name": "API_TOKEN", "scope": "user"}],
+            }
+        ],
+    }
+    database = _FakeDatabase(tables)
+
+    assert await count_values_encrypted_with(database, PREVIOUS_KEY) == 1  # only auth_value
+
+    outcome = await migrate_from_previous_master_key(
+        previous_master_key=PREVIOUS_KEY,
+        master_key=NEW_KEY,
+        salt_key_is_set=False,
+        database=database,
+        log=lambda message: None,
+    )
+
+    assert outcome == Migrated(migrated=1, remaining=0, unreadable=0)
+    credentials = tables["LiteLLM_MCPServerTable"][0]["credentials"]
+    assert credentials["aws_region_name"] == "us-east-1"
+    assert credentials["scopes"] == ["read"]
+    assert tables["LiteLLM_MCPServerTable"][0]["env_vars"] == [{"name": "API_TOKEN", "scope": "user"}]

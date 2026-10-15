@@ -3,7 +3,7 @@ import json
 import sys
 from types import ModuleType, SimpleNamespace
 from typing import Final
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -780,3 +780,29 @@ def test_decrypt_callback_vars_round_trips_a_marked_value_under_the_current_key(
     decrypted = decrypt_callback_vars({"callback_settings": {"callback_vars": {"langfuse_secret_key": marked}}})
 
     assert decrypted["callback_settings"]["callback_vars"]["langfuse_secret_key"] == "the-secret"
+
+
+def test_deprecated_callback_settings_branch_drops_a_marked_value(monkeypatch):
+    """The deprecated metadata['callback_settings'] shape must not hand a still-marked
+    (unreadable) ciphertext to a provider as the live credential either."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.litellm_pre_call_utils import get_dynamic_logging_metadata
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-callback-decrypt-salt")
+    marked = "litellm_enc::" + str(encrypt_value_helper("secret", new_encryption_key="sk-another-salt"))
+    team_metadata: Final = {
+        "callback_settings": {
+            "success_callback": ["langfuse"],
+            "callback_vars": {"langfuse_secret_key": marked, "langfuse_environment": "production"},
+        }
+    }
+    auth: Final = UserAPIKeyAuth(
+        api_key="sk-test",
+        team_id="team-1",
+        user_role="proxy_admin",
+        team_metadata=team_metadata,
+    )
+
+    resolved = get_dynamic_logging_metadata(user_api_key_dict=auth, proxy_config=MagicMock())
+
+    assert resolved.callback_vars == {"langfuse_environment": "production"}

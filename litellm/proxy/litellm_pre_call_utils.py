@@ -1084,6 +1084,11 @@ def get_dynamic_logging_metadata(
         team_metadata: Final = decrypt_callback_vars(user_api_key_dict.team_metadata)
         callback_settings: Final = team_metadata.get("callback_settings", None) or {}
         callback_settings_obj = TeamCallbackMetadata(**callback_settings)
+        # Drop vars that still carry the marker so an unreadable ciphertext is never
+        # handed onward as the live credential; the variable reads as unset.
+        callback_settings_obj.callback_vars = cast(  # cast-ok: filtering keeps the model's str values
+            "dict[str, str]", _without_unreadable_callback_vars(callback_settings_obj.callback_vars or {})
+        )
         verbose_proxy_logger.debug("Team callback settings activated: %s", callback_settings_obj)
     #########################################################################################
     # Enter here when configured on the config.yaml file.
@@ -1200,6 +1205,30 @@ def resolve_tenant_otel_destinations(
     )
 
 
+def _without_unreadable_callback_vars(
+    callback_vars: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: a fresh plain mapping the callers merge into settings
+    """The vars without values that still carry the encrypted-value marker.
+
+    A marked value this install cannot decrypt (wrong key, or legacy ciphertext without
+    PyNaCl) is never a usable credential: handing it onward — into request kwargs or OTEL
+    headers — would treat the ciphertext blob as the live secret. The variable reads as
+    unset instead; the stored value itself is untouched.
+    """
+    usable: Final[dict[str, object]] = {  # mutable-ok: filtered copy handed to the caller
+        var: value
+        for var, value in callback_vars.items()
+        if not (isinstance(value, str) and value.startswith(CALLBACK_VAR_ENCRYPTED_PREFIX))
+    }
+    if len(usable) != len(callback_vars):
+        verbose_proxy_logger.warning(
+            "Ignoring %d callback variable(s) still holding unreadable encrypted values: %s",
+            len(callback_vars) - len(usable),
+            sorted(set(callback_vars) - set(usable)),
+        )
+    return usable
+
+
 def _tenant_destination(
     name: str, callbacks: Sequence[AddTeamCallback], service_name: str | None
 ) -> "OtelDestination | None":
@@ -1207,10 +1236,15 @@ def _tenant_destination(
     from litellm.integrations.otel.presets.destinations import destination_for
 
     callback_vars: Final = MappingProxyType(
-        dict(
-            itertools.chain.from_iterable(
-                callback.callback_vars.items() for callback in callbacks if callback.callback_name == name
-            )
+        cast(  # cast-ok: filtering AddTeamCallback.callback_vars keeps its dict[str, str]
+            "dict[str, str]",
+            _without_unreadable_callback_vars(
+                dict(
+                    itertools.chain.from_iterable(
+                        callback.callback_vars.items() for callback in callbacks if callback.callback_name == name
+                    )
+                )
+            ),
         )
     )
     return destination_for(

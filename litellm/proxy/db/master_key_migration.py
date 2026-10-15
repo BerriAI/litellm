@@ -134,6 +134,7 @@ _LITELLM_PARAMS_SECRET_COLUMNS: Final = frozenset(
     )
 )
 _ENV_VARS_CONFIG_ROW: Final = "environment_variables"
+_MCP_CREDENTIAL_TABLES: Final = frozenset(("LiteLLM_MCPServerTable", "LiteLLM_MCPServerOAuthClient"))
 # Config rows whose writers encrypt selected top-level fields (the same fields the
 # credential-migration walkers re-encrypt); the rows' other fields are plaintext metadata.
 _CONFIG_ROW_SENSITIVE_FIELDS: Final[Mapping[str, tuple[str, ...]]] = {
@@ -179,6 +180,31 @@ def _counted_secret_leaves(secret_column: _SecretColumn, primary_key: object, st
         return
     if secret_column.table == "LiteLLM_GuardrailsTable":
         yield from _sensitive_prefixed_leaves(stored)
+        return
+    if secret_column.column == "credentials" and secret_column.table in _MCP_CREDENTIAL_TABLES:
+        # The MCP credentials writer encrypts only its secret fields; region / service
+        # names and scopes next to them are stored plaintext by construction.
+        from litellm.proxy._experimental.mcp_server.db import MCP_CREDENTIAL_SECRET_FIELDS
+
+        blob: Final[JsonValue] = stored
+        if isinstance(blob, dict):
+            for field in MCP_CREDENTIAL_SECRET_FIELDS:
+                value = blob.get(field)
+                if isinstance(value, str):
+                    yield value.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX)
+        return
+    if secret_column.table == "LiteLLM_MCPServerTable" and secret_column.column == "env_vars":
+        # Only global-scope entries carry an encrypted value; user-scope placeholders
+        # hold a name and scope in plaintext by construction.
+        from litellm.proxy._experimental.mcp_server.db import is_global_env_var_scope
+
+        entries: Final[JsonValue] = stored
+        if isinstance(entries, list):
+            for entry in entries:
+                if isinstance(entry, dict) and is_global_env_var_scope(entry.get("scope")):
+                    value = entry.get("value")
+                    if isinstance(value, str):
+                        yield value.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX)
         return
     yield from _string_leaves(stored)
 
