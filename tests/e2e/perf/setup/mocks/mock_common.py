@@ -26,7 +26,7 @@ from fastapi import FastAPI
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
-from replay import Capture, Provider, body_bytes, paced, pick
+from replay import Capture, Provider, body_bytes, first_byte_s, paced, pick
 
 MARKER: Final = re.compile(r"perfreq-\d{6}-[nib]")
 _KNOBS: Final = re.compile(r"^(?:[fsp]\d+)(?:-[fsp]\d+)*$")
@@ -143,6 +143,7 @@ class Decision:
     marker: str | None
     knobs: Knobs
     capture: Capture
+    provider_first_byte_s: float
     fail: bool
 
     @property
@@ -155,8 +156,8 @@ class Decision:
 
     @property
     def delay_s(self) -> float:
-        """Seconds before the first byte, what `added_latency_s` subtracts from the client's time."""
-        return 0.0 if self.fail else self.capture.ttfb_s * self.knobs.scale
+        """Seconds before the first byte, what `gateway_added_seconds` subtracts from the client's time."""
+        return 0.0 if self.fail else self.provider_first_byte_s * self.knobs.scale
 
     @property
     def headers(self) -> dict[str, str]:
@@ -188,6 +189,7 @@ class RequestLog:
             marker=marker,
             knobs=knobs,
             capture=pick(self._provider, route, stream, prompt_tokens),
+            provider_first_byte_s=first_byte_s(self._provider, route, stream, prompt_tokens),
             fail=fail,
         )
         self._entries.append(
@@ -227,7 +229,7 @@ async def json_reply(decision: Decision) -> Response:
 def stream_reply(decision: Decision, media_type: str) -> Response:
     """The captured chunks on the captured clock, ids swapped for this request's."""
     return StreamingResponse(
-        paced(decision.capture, decision.seed, decision.knobs.scale),
+        paced(decision.capture, decision.seed, decision.knobs.scale, decision.delay_s),
         media_type=media_type,
         headers=decision.headers,
     )

@@ -149,11 +149,34 @@ def library(provider: Provider) -> tuple[Capture, ...]:
     return tuple(Capture.model_validate_json(path.read_text()) for path in paths)
 
 
-def pick(provider: Provider, route: str, stream: bool, prompt_tokens: int) -> Capture:
-    """The capture for this route and mode whose request was closest in size to the one just received."""
+def _matching(provider: Provider, route: str, stream: bool) -> tuple[Capture, ...]:
     matching: Final = tuple(c for c in library(provider) if c.route == route and c.stream == stream)
     assert matching, f"no {provider} capture for route={route} stream={stream}"
-    return min(matching, key=lambda c: abs(c.request_tokens_estimate - prompt_tokens))
+    return matching
+
+
+def pick(provider: Provider, route: str, stream: bool, prompt_tokens: int) -> Capture:
+    """The capture for this route and mode whose request was closest in size to the one just received."""
+    return min(_matching(provider, route, stream), key=lambda c: abs(c.request_tokens_estimate - prompt_tokens))
+
+
+def first_byte_s(provider: Provider, route: str, stream: bool, prompt_tokens: int) -> float:
+    """Seconds the real provider took to its first byte for a request of this size: linear between the two
+    captures nearest in size, the smallest or largest capture's own time outside the captured range."""
+    by_size: Final = sorted(_matching(provider, route, stream), key=lambda c: c.request_tokens_estimate)
+    below: Final = tuple(c for c in by_size if c.request_tokens_estimate <= prompt_tokens)
+    above: Final = tuple(c for c in by_size if c.request_tokens_estimate >= prompt_tokens)
+    if not below:
+        return by_size[0].ttfb_s
+    if not above:
+        return by_size[-1].ttfb_s
+    low, high = below[-1], above[0]
+    if high.request_tokens_estimate == low.request_tokens_estimate:
+        return low.ttfb_s
+    fraction: Final = (prompt_tokens - low.request_tokens_estimate) / (
+        high.request_tokens_estimate - low.request_tokens_estimate
+    )
+    return low.ttfb_s + fraction * (high.ttfb_s - low.ttfb_s)
 
 
 def fresh_ids(text: str, seed: str) -> str:
@@ -176,11 +199,12 @@ def chunk_bytes(capture: Capture, chunk: Chunk, seed: str) -> bytes:
     return fresh_ids(chunk.data, seed).encode()
 
 
-async def paced(capture: Capture, seed: str, scale: float) -> AsyncIterator[bytes]:
-    """The captured chunks, each sent at its captured offset times `scale`."""
+async def paced(capture: Capture, seed: str, scale: float, first_byte_s: float) -> AsyncIterator[bytes]:
+    """The captured chunks, the first at `first_byte_s`, the rest at their captured spacing times `scale`."""
     loop: Final = asyncio.get_running_loop()
     start: Final = loop.time()
+    shift: Final = first_byte_s - capture.ttfb_s * scale
     for chunk in capture.chunks:
-        if (wait := start + chunk.t * scale - loop.time()) > 0:
+        if (wait := start + shift + chunk.t * scale - loop.time()) > 0:
             await asyncio.sleep(wait)
         yield chunk_bytes(capture, chunk, seed)
