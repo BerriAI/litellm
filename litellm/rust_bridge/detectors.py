@@ -9,6 +9,7 @@ import httpx
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.rust_bridge.catalog import Feature
 from litellm.rust_bridge.public_call import NativeCall, optional_mapping, optional_sequence, optional_str
 
@@ -69,7 +70,11 @@ def retries_fallbacks(request: NativeCall) -> bool:
 
 
 def drop_modify_params(request: NativeCall) -> bool:
-    return bool(litellm.drop_params) or bool(litellm.modify_params) or request.resolved.get("drop_params") is True
+    return (
+        bool(litellm.drop_params)
+        or bool(litellm.modify_params)
+        or normalize_drop_params(request.resolved.get("drop_params")) is True
+    )
 
 
 def deployment_response_id(request: NativeCall) -> bool:
