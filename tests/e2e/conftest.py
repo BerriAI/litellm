@@ -33,10 +33,10 @@ from e2e_config import (
     OTEL_TLS_OPT_IN_ENV,
     OTEL_V2_OPT_IN_ENV,
     OWNED_GATEWAY_OPT_IN_ENV,
+    PERF_TESTS_OPT_IN_ENV,
     PROMPT_CACHING_OPT_IN_ENV,
     PROVIDER_EDGE_HOST_OPT_IN_ENV,
     PROXY_BASE_URL,
-    REDIS_CHAOS_OPT_IN_ENV,
     SAGEMAKER_NOVA2_LITE_OPT_IN_ENV,
     SAGEMAKER_NOVA_OPT_IN_ENV,
     SECRET_MANAGER_OPT_IN_ENV,
@@ -69,7 +69,8 @@ OPT_IN_MARKERS: Final = MappingProxyType(
         "weekly": WEEKLY_ANOMALY_OPT_IN_ENV,
         "managed_files": MANAGED_FILES_OPT_IN_ENV,
         "prompt_caching_stack": PROMPT_CACHING_OPT_IN_ENV,
-        "redis_chaos": REDIS_CHAOS_OPT_IN_ENV,
+        "redis_chaos": PERF_TESTS_OPT_IN_ENV,
+        "perf": PERF_TESTS_OPT_IN_ENV,
         "cli_determinism": CLI_DETERMINISM_OPT_IN_ENV,
         "mcp_oauth_live": MCP_OAUTH_LIVE_OPT_IN_ENV,
         "provider_edge_host": PROVIDER_EDGE_HOST_OPT_IN_ENV,
@@ -139,7 +140,8 @@ def pytest_configure(config: pytest.Config) -> None:
     )
     config.addinivalue_line(
         "markers",
-        "load: heavy throughput/load test; collected last so it never perturbs latency-sensitive suites",
+        "perf: performance test (throughput, latency, memory) against mocked deployments; collected last so it "
+        "never perturbs latency-sensitive suites, and deselected unless E2E_PERF_TESTS is set",
     )
     config.addinivalue_line(
         "markers",
@@ -161,7 +163,7 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers",
         "redis_chaos: load test that pauses the proxy's Redis outright mid-run; needs a proxy booted from "
-        "gateway/redis_chaos_ci_config.yml on the same host, and is deselected unless E2E_REDIS_CHAOS is set",
+        "gateway/redis_chaos_ci_config.yml on the same host, and is deselected unless E2E_PERF_TESTS is set",
     )
     config.addinivalue_line(
         "markers",
@@ -251,7 +253,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     standard report and these properties for package rollups and coverage
     drill-down. See junit_properties.py.
 
-    Also sort `load`-marked items last so a whole-tree run drives heavy throughput
+    Also sort `perf`-marked items last so a whole-tree run drives heavy throughput
     traffic only after the latency-sensitive suites have finished."""
     deselected = [item for item in items if _needs_unset_opt_in(item)]
     if deselected:
@@ -264,7 +266,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         items[:] = [item for item in items if item.get_closest_marker("migration_startup") is None]
         if deselected:
             deselected[0].config.hook.pytest_deselected(items=deselected)
-    items.sort(key=lambda item: item.get_closest_marker("load") is not None)
+    items.sort(key=lambda item: item.get_closest_marker("perf") is not None)
 
 
 @pytest.hookimpl(tryfirst=True)

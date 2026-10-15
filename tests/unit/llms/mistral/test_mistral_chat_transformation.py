@@ -830,6 +830,47 @@ class TestMistralStripsOutputOnlyFields:
         assert assistant_message["content"] == "Follow-up"
         assert assistant_message["role"] == "assistant"
 
+    def test_tool_search_reply_drops_litellm_response_fields(self):
+        tool_search_reply = {
+            "role": "assistant",
+            "content": "",
+            "reasoning_items": [{"type": "reasoning", "id": "rs_1", "summary": []}],
+            "provider_specific_fields": {"tool_search_items": [{"type": "tool_search_call", "id": "ts_1"}]},
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                    "provider_specific_fields": {"namespace": "weather"},
+                }
+            ],
+        }
+        messages = cast(
+            List[AllMessageValues],
+            [
+                {"role": "user", "content": "Weather in Paris?"},
+                tool_search_reply,
+                {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+            ],
+        )
+
+        result = cast(
+            List[AllMessageValues],
+            MistralConfig().transform_messages(messages=messages, model="mistral-medium-3-5"),
+        )
+
+        assert result[1] == {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                }
+            ],
+        }
+
     def test_non_assistant_messages_are_untouched(self):
         messages = cast(
             List[AllMessageValues],

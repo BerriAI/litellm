@@ -1,7 +1,5 @@
 import asyncio
-import os
 import re
-import signal
 import socket
 import threading
 from collections import Counter
@@ -17,10 +15,9 @@ import psutil
 import pytest
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
-from integration._support.process import owned_proxy_process
+from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
 from integration.providers._cache_control_marks_support import (
-    ASK_LABEL,
     CITIES,
     POINTS,
     SYSTEM_LABEL,
@@ -41,6 +38,8 @@ from integration.providers._cache_control_marks_support import (
     tool_use_label,
 )
 from pydantic import JsonValue
+
+pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 
 _STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
 _SURFACES: Final = ("chat", "chat-stream", "chat-unmarked", "messages", "responses")
@@ -78,8 +77,6 @@ def _surface_request(surface: str, marker: str) -> tuple[str, dict[str, JsonValu
 
 
 def _expected_labels(item: _Sent) -> list[str]:
-    if item.surface == "responses":
-        return [SYSTEM_LABEL, ASK_LABEL]
     if item.surface == "chat-unmarked":
         return [SYSTEM_LABEL, final_label(item.marker)]
     return client_marked()
@@ -150,7 +147,6 @@ def _single_spend_row(item: _Sent) -> None:
     assert len(rows) == 1, (item.surface, item.call_id)
 
 
-@pytest.mark.timeout(240)
 async def test_capped_burst_rides_out_a_provider_outage_and_logs_every_request_once(
     gateway: Gateway, tmp_path: Path
 ) -> None:
@@ -185,7 +181,6 @@ async def test_capped_burst_rides_out_a_provider_outage_and_logs_every_request_o
         _single_spend_row(item)
 
 
-@pytest.mark.timeout(240)
 async def test_worker_sigkill_mid_burst_leaves_the_sibling_serving_capped_requests(
     gateway: Gateway, tmp_path: Path
 ) -> None:
@@ -209,10 +204,12 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_serving_capped_reques
                         {pid: _held_upstream_connections(pid, wire.url) for pid in workers}
                     )
                     victim: Final = max(workers, key=held_by.__getitem__)
-                    os.kill(victim, signal.SIGKILL)
+                    with owned.replacing_worker(victim) as kill:
+                        await asyncio.to_thread(kill)
+                        release.set()
+                        served: Final = await burst
                 finally:
                     release.set()
-                served: Final = await burst
             during: Final = wire.drain()
             after: Final = await _fire(owned_url, owned.gateway.key)
             after_received: Final = wire.drain()
@@ -227,7 +224,6 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_serving_capped_reques
         _single_spend_row(item)
 
 
-@pytest.mark.timeout(240)
 def test_yaml_auto_caching_stands_down_for_tool_call_marks_and_outranks_a_key_opt_out(
     gateway: Gateway, tmp_path: Path
 ) -> None:
@@ -262,7 +258,7 @@ def test_yaml_auto_caching_stands_down_for_tool_call_marks_and_outranks_a_key_op
     ]
 
 
-@pytest.mark.timeout(360)
+@pytest.mark.timeout(4 * graceful_stop_seconds() + 120)
 async def test_proxy_restart_mid_burst_serves_capped_requests_after_the_reboot(
     gateway: Gateway, tmp_path: Path
 ) -> None:
@@ -277,7 +273,7 @@ async def test_proxy_restart_mid_burst_serves_capped_requests_after_the_reboot(
             )
             try:
                 await asyncio.to_thread(eventually, lambda: wire.received.qsize(), lambda size: size >= _BURST, 90)
-                first.process.terminate()
+                first.begin_shutdown()
             finally:
                 release.set()
             served: Final = await burst

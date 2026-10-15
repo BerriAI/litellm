@@ -2297,3 +2297,43 @@ def test_dict_tool_call_with_object_function_fragments_are_joined() -> None:
     tool_call = response.choices[0].message.tool_calls[0]
     assert tool_call.id == "call_9f2c"
     assert tool_call.function.name == "get_weather"
+def test_stream_chunk_builder_keeps_reasoning_items_on_text_only_replies():
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    reasoning_items: Final[list[dict[str, object]]] = [
+        {"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": "enc_1"}
+    ]
+    chunks: Final = [
+        ModelResponseStream(
+            id="chatcmpl-rs",
+            created=1,
+            model="gpt-5.5",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(content="Hello", role="assistant"),
+                )
+            ],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-rs",
+            created=1,
+            model="gpt-5.5",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason="stop",
+                    index=0,
+                    delta=Delta(content=" world", role="assistant", reasoning_items=reasoning_items),
+                )
+            ],
+        ),
+    ]
+
+    response: Final = stream_chunk_builder(chunks=list(chunks))
+
+    assert response is not None
+    assert response.choices[0].message.content == "Hello world"
+    assert response.choices[0].message.reasoning_items == reasoning_items

@@ -1,5 +1,5 @@
 import os
-import signal
+import re
 import time
 import uuid
 from collections.abc import Callable, Mapping
@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Final
 from urllib.parse import urlsplit, urlunsplit
 
-import psutil
+import httpx
 import psycopg
 import pytest
 from psycopg import sql
@@ -16,12 +16,15 @@ from pydantic import JsonValue
 from redis import Redis
 from redis.client import PubSub
 
+from tests.integration._support.budget import case_timeout_seconds
 from tests.integration._support.client import JSON_OBJECT, Gateway, eventually, object_value, string_value
-from tests.integration._support.process import owned_proxy
+from tests.integration._support.database import read_rows
+from tests.integration._support.process import owned_proxy_process
 from tests.integration._support.redis_process import owned_redis
 
 _USERS: Final = 60
 _BURST: Final = 30
+_WEDGED_PUBLISHES_PER_BURST_USER: Final = 2
 _HANDLER_BUDGET_SECONDS: Final = 0.75
 _BULK_BUDGET_SECONDS: Final = 2.0
 _CHANNEL: Final = "litellm_proxy.auth_cache_invalidation"
@@ -52,26 +55,6 @@ def _received(pubsub: PubSub) -> tuple[dict[str, JsonValue], ...]:
             messages.append(JSON_OBJECT.validate_json(data))
 
 
-def _worker_pid(port: int) -> int:
-    for process in psutil.process_iter():
-        parent = process.parent()
-        if parent is None:
-            continue
-        try:
-            cmdline = parent.cmdline()
-            own_cmdline = process.cmdline()
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
-        if (
-            "integration._support.proxy" in cmdline
-            and "--port" in cmdline
-            and str(port) in cmdline
-            and not any("prisma" in part for part in own_cmdline)
-        ):
-            return process.pid
-    raise AssertionError(f"no uvicorn worker found under the owned proxy on port {port}")
-
-
 def _burst_call(
     index: int, users: tuple[str, ...], key: str, team_id: str, customer_id: str
 ) -> tuple[str, dict[str, JsonValue]]:
@@ -88,7 +71,7 @@ def _burst_call(
             return "/customer/update", {"user_id": customer_id, "max_budget": 7.0 + index}
 
 
-@pytest.mark.timeout(240)
+@pytest.mark.timeout(case_timeout_seconds())
 @pytest.mark.covers(
     "mgmt.user.update.budget_change_returns_promptly_with_wedged_coordination_redis",
     "mgmt.user.bulk_update.budget_change_returns_promptly_with_wedged_coordination_redis",
@@ -112,7 +95,7 @@ def test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged(
             prior_logs: Final = frozenset(results_dir.glob("owned-proxy-*.log"))
             with (
                 owned_redis(tmp_path) as coordination,
-                owned_proxy(
+                owned_proxy_process(
                     gateway,
                     tmp_path,
                     {
@@ -123,9 +106,10 @@ def test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged(
                     config=Path("tests/integration/coordination_redis_proxy_config.yaml"),
                     remove_environment=("DATABASE_URL_READ_REPLICA",),
                     workers=2,
-                ) as candidate,
+                ) as owned,
                 Redis(host=coordination.host, port=coordination.port, socket_timeout=1) as subscriber_client,
             ):
+                candidate: Final = owned.gateway
                 pubsub: Final = subscriber_client.pubsub()
                 pubsub.subscribe(_CHANNEL)
                 received: list[dict[str, JsonValue]] = []
@@ -168,8 +152,8 @@ def test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged(
                 assert timings["h2_healthy_control"] < _HANDLER_BUDGET_SECONDS, (
                     f"healthy control update took {timings['h2_healthy_control']:.3f}s"
                 )
-                coordination.signal(signal.SIGSTOP)
-                try:
+                with owned.replacing_worker(min(owned.worker_pids())) as kill, coordination.paused():
+                    kill()
                     timings["s2_wedged_control"] = _timed_post(
                         candidate, "/user/update", {"user_id": users[0], "tpm_limit": 1000}
                     )
@@ -225,22 +209,17 @@ def test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged(
                         f"/user/update with an invalid body took {timings['s8_invalid_body']:.3f}s"
                     )
 
-                    def burst_request(path: str, body: Mapping[str, JsonValue]) -> tuple[object, float]:
+                    def burst_request(path: str, body: Mapping[str, JsonValue]) -> tuple[int, float]:
                         started: Final = time.monotonic()
-                        try:
-                            response: Final = candidate.client.request(
-                                "POST",
-                                path,
-                                json=body,
-                                headers={"Authorization": f"Bearer {candidate.key}"},
-                                timeout=60,
-                            )
-                            return response.status_code, time.monotonic() - started
-                        except Exception as error:  # noqa: BLE001  # the killed worker drops in-flight requests
-                            return error, time.monotonic() - started
+                        response: Final = candidate.client.request(
+                            "POST",
+                            path,
+                            json=body,
+                            headers={"Authorization": f"Bearer {candidate.key}"},
+                            timeout=60,
+                        )
+                        return response.status_code, time.monotonic() - started
 
-                    port: Final = candidate.client.base_url.port
-                    assert port is not None, f"owned proxy client has no port: {candidate.client.base_url}"
                     with ThreadPoolExecutor(_BURST) as pool:
                         futures: Final = [
                             pool.submit(
@@ -249,15 +228,9 @@ def test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged(
                             )
                             for i in range(_BURST)
                         ]
-                        os.kill(_worker_pid(port), signal.SIGKILL)
                         results: Final = [future.result() for future in futures]
-                    responses: Final = [(status, elapsed) for status, elapsed in results if isinstance(status, int)]
-                    failures: Final = [status for status, _elapsed in responses if status != 200]
+                    failures: Final = [status for status, _elapsed in results if status != 200]
                     assert not failures, f"burst responses that were not 200: {failures}"
-                    transport_errors: Final = [status for status, _elapsed in results if not isinstance(status, int)]
-                    assert len(transport_errors) <= 3, (
-                        f"{len(transport_errors)} requests raised transport errors: {transport_errors!r}"
-                    )
                     elapsed_sorted: Final = sorted(
                         elapsed for i, (status, elapsed) in enumerate(results) if i % 5 in (0, 1, 4) and status == 200
                     )
@@ -276,39 +249,37 @@ def test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged(
                     assert timings["c1_survivor"] < _HANDLER_BUDGET_SECONDS, (
                         f"control update on the surviving worker took {timings['c1_survivor']:.3f}s"
                     )
-                finally:
-                    coordination.signal(signal.SIGCONT)
-                wedged_keys: Final = {users[i] for i in range(_BURST) if i % 5 == 0 and i != 0} | {f"team_id:{team_id}"}
+                    wedged_users: Final = {users[i] for i in range(_BURST) if i % 5 == 0 and i != 0}
+                    wedged_team_keys: Final = {f"team_id:{team_id}", f"team_alias:{identity}"}
+                    wedged_keys: Final = wedged_users | wedged_team_keys
+                    wedged_team_updates: Final = 1 + sum(1 for i in range(_BURST) if i % 5 == 3)
 
-                def proxy_log() -> str:
-                    return "".join(
-                        path.read_text() for path in results_dir.glob("owned-proxy-*.log") if path not in prior_logs
+                    def proxy_log() -> str:
+                        return "".join(
+                            path.read_text() for path in results_dir.glob("owned-proxy-*.log") if path not in prior_logs
+                        )
+
+                    eventually(
+                        proxy_log,
+                        lambda text: (
+                            all(
+                                text.count(f"publish for {user} failed") >= _WEDGED_PUBLISHES_PER_BURST_USER
+                                for user in wedged_users
+                            )
+                            and all(
+                                text.count(f"publish for {team_key} failed") >= wedged_team_updates
+                                for team_key in wedged_team_keys
+                            )
+                        ),
+                        seconds=45,
                     )
-
-                team_wedged_key: Final = f"team_id:{team_id}"
-                eventually(
-                    proxy_log,
-                    lambda text: (
-                        all(
-                            f"publish for {wedged_key} failed" in text
-                            for wedged_key in wedged_keys
-                            if wedged_key != team_wedged_key
-                        )
-                        and (
-                            f"publish for {team_wedged_key} failed" in text
-                            or f"internal usage cache entry {team_wedged_key}" in text
-                        )
-                    ),
-                    seconds=45,
-                )
                 marker: Final = len(received)
                 drained()
                 recovered_keys: Final = {str(message.get("cache_key")) for message in received[marker:]}
                 assert recovered_keys.isdisjoint(wedged_keys), (
                     f"wedged publishes unexpectedly landed after recovery: {sorted(recovered_keys & wedged_keys)}"
                 )
-                coordination.signal(signal.SIGSTOP)
-                try:
+                with coordination.paused():
                     timings["r1b_short_wedge_a"] = _timed_post(
                         candidate, "/user/update", {"user_id": users[4], "max_budget": 15.0}
                     )
@@ -321,8 +292,6 @@ def test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged(
                     assert timings["r1b_short_wedge_b"] < _HANDLER_BUDGET_SECONDS, (
                         f"/user/update inside a short wedge took {timings['r1b_short_wedge_b']:.3f}s"
                     )
-                finally:
-                    coordination.signal(signal.SIGCONT)
                 eventually(
                     drained,
                     lambda messages: {str(message.get("cache_key")) for message in messages} >= {users[4], users[5]},
@@ -378,3 +347,323 @@ def test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged(
         finally:
             admin.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(identity)))
     record_property("cell_elapsed_seconds", timings)
+
+
+_USER_BUDGET_REFUSAL: Final = re.compile(
+    r"^ExceededBudget: User=(?P<user>\S+) over budget\. Spend=(?P<spend>[0-9.eE+-]+), Budget=(?P<budget>[0-9.eE+-]+)$"
+)
+
+
+def _observed(upstream: httpx.Client) -> list[dict[str, JsonValue]]:
+    response: Final = upstream.get("/__observations")
+    response.raise_for_status()
+    requests: Final = response.json()["requests"]
+    assert isinstance(requests, list)
+    return requests
+
+
+def _user_chat(proxy: Gateway, model: str, key: str, text: str) -> httpx.Response:
+    return proxy.request(
+        "POST",
+        "/v1/chat/completions",
+        {"model": model, "messages": [{"role": "user", "content": text}]},
+        key=key,
+    )
+
+
+def _chat_observation(text: str) -> dict[str, JsonValue]:
+    return {
+        "path": "/v1/chat/completions",
+        "authorization": "Bearer integration-provider-key",
+        "body": {"messages": [{"role": "user", "content": text}], "model": "gpt-4o-mini"},
+        "method": "POST",
+        "api_key": "",
+    }
+
+
+def _user_row(user_id: str) -> list[dict[str, JsonValue]]:
+    return read_rows('SELECT models, max_budget, metadata FROM "LiteLLM_UserTable" WHERE user_id=%s', (user_id,))
+
+
+def _partial_user_row(user_id: str) -> list[dict[str, JsonValue]]:
+    return read_rows(
+        "SELECT models, max_budget, metadata, user_alias, rpm_limit, budget_duration, spend "
+        'FROM "LiteLLM_UserTable" WHERE user_id=%s',
+        (user_id,),
+    )
+
+
+def _assert_user_budget_refusal(response: httpx.Response, user_id: str) -> None:
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["type"] == "budget_exceeded", response.text
+    match: Final = _USER_BUDGET_REFUSAL.match(response.json()["error"]["message"])
+    assert match is not None, response.text
+    assert match.group("user") == user_id, response.text
+    assert float(match.group("spend")) > 0, response.text
+
+
+def _user_model_denied_error(model: str) -> dict[str, JsonValue]:
+    return {
+        "error": {
+            "message": f"The requested model '{model}' is not available for this API key, or the model name is invalid. Check the models available to you and try again.",
+            "type": "key_model_access_denied",
+            "param": "model",
+            "code": "403",
+        }
+    }
+
+
+def _model_user(gateway: Gateway, model: str, max_budget: float = 10.0) -> str:
+    created: Final = gateway.post(
+        "/user/new",
+        {
+            "user_id": f"integration-{uuid.uuid4().hex}",
+            "user_role": "internal_user",
+            "auto_create_key": False,
+            "max_budget": max_budget,
+            "models": [model],
+            "metadata": {"dept": "qa"},
+        },
+    )
+    return string_value(created["user_id"])
+
+
+def _wait_for_spend(user_id: str, spend: float) -> None:
+    eventually(
+        lambda: read_rows('SELECT spend FROM "LiteLLM_UserTable" WHERE user_id=%s', (user_id,)),
+        lambda rows: bool(rows) and float(rows[0]["spend"]) >= spend,
+        seconds=70,
+    )
+
+
+def test_user_budget_update_propagates_to_gateway_and_peer(gateway: Gateway, peer: Gateway) -> None:
+    with (
+        gateway.scenario() as scenario,
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+    ):
+        model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
+        user_id: Final = _model_user(gateway, model)
+        scenario.cleanups.callback(lambda: gateway.request("POST", "/user/delete", {"user_ids": [user_id]}))
+        key: Final = string_value(gateway.post("/key/generate", {"user_id": user_id})["key"])
+
+        assert _observed(upstream) == []
+        for proxy in (gateway, peer):
+            warm: Final = f"warm {uuid.uuid4().hex}"
+            assert (
+                eventually(
+                    lambda p=proxy, t=warm: _user_chat(p, model, key, t),
+                    lambda response: response.status_code == 200,
+                    seconds=75,
+                ).status_code
+                == 200
+            )
+            assert _observed(upstream) == [_chat_observation(warm)]
+        _wait_for_spend(user_id, 0.11)
+
+        shrink: Final = gateway.request("POST", "/user/update", {"user_id": user_id, "max_budget": 0.01})
+        assert shrink.status_code == 200, shrink.text
+        _assert_user_budget_refusal(_user_chat(gateway, model, key, f"denied {uuid.uuid4().hex}"), user_id)
+        _assert_user_budget_refusal(
+            eventually(
+                lambda: _user_chat(peer, model, key, f"denied {uuid.uuid4().hex}"),
+                lambda response: response.status_code == 422,
+                seconds=10,
+            ),
+            user_id,
+        )
+        denied_observations: Final = _observed(upstream)
+        assert denied_observations == [], denied_observations
+        for proxy in (gateway, peer):
+            _assert_user_budget_refusal(_user_chat(proxy, model, key, f"denied {uuid.uuid4().hex}"), user_id)
+        assert _observed(upstream) == []
+
+        restored: Final = gateway.request("POST", "/user/update", {"user_id": user_id, "max_budget": 100.0})
+        assert restored.status_code == 200, restored.text
+        for proxy in (gateway, peer):
+            text: Final = f"restored {uuid.uuid4().hex}"
+            assert (
+                eventually(
+                    lambda p=proxy, t=text: _user_chat(p, model, key, t),
+                    lambda response: response.status_code == 200,
+                    seconds=30,
+                ).status_code
+                == 200
+            )
+            assert _observed(upstream) == [_chat_observation(text)]
+
+        _wait_for_spend(user_id, 0.23)
+        email: Final = f"{user_id}@integration.local"
+        gateway.post("/user/update", {"user_id": user_id, "user_email": email})
+        spelled: Final = gateway.request("POST", "/user/update", {"user_email": email, "max_budget": 0.01})
+        assert spelled.status_code == 200, spelled.text
+        _assert_user_budget_refusal(_user_chat(gateway, model, key, f"denied {uuid.uuid4().hex}"), user_id)
+        assert _observed(upstream) == []
+
+
+def test_user_models_update_with_metadata_propagates_to_gateway_and_peer(gateway: Gateway, peer: Gateway) -> None:
+    with (
+        gateway.scenario() as scenario,
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+    ):
+        model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
+        user_id: Final = _model_user(gateway, model)
+        scenario.cleanups.callback(lambda: gateway.request("POST", "/user/delete", {"user_ids": [user_id]}))
+        key: Final = string_value(gateway.post("/key/generate", {"user_id": user_id})["key"])
+
+        assert _observed(upstream) == []
+        for proxy in (gateway, peer):
+            warm: Final = f"warm {uuid.uuid4().hex}"
+            assert (
+                eventually(
+                    lambda p=proxy, t=warm: _user_chat(p, model, key, t),
+                    lambda response: response.status_code == 200,
+                    seconds=75,
+                ).status_code
+                == 200
+            )
+            assert _observed(upstream) == [_chat_observation(warm)]
+
+        narrowed: Final = gateway.request(
+            "POST",
+            "/user/update",
+            {"user_id": user_id, "models": ["no-default-models"], "metadata": {"dept": "restricted"}},
+        )
+        assert narrowed.status_code == 200, narrowed.text
+        denied_gateway: Final = _user_chat(gateway, model, key, f"denied {uuid.uuid4().hex}")
+        assert denied_gateway.status_code == 403, denied_gateway.text
+        assert denied_gateway.json() == _user_model_denied_error(model), denied_gateway.text
+        denied_peer: Final = eventually(
+            lambda: _user_chat(peer, model, key, f"denied {uuid.uuid4().hex}"),
+            lambda response: response.status_code == 403,
+            seconds=30,
+        )
+        assert denied_peer.json() == _user_model_denied_error(model), denied_peer.text
+        model_denied_observations: Final = _observed(upstream)
+        assert model_denied_observations == [], model_denied_observations
+        for proxy in (gateway, peer):
+            denied_again: Final = _user_chat(proxy, model, key, f"denied {uuid.uuid4().hex}")
+            assert denied_again.status_code == 403, denied_again.text
+            assert denied_again.json() == _user_model_denied_error(model), denied_again.text
+        assert _observed(upstream) == []
+
+        restored: Final = gateway.request(
+            "POST",
+            "/user/update",
+            {"user_id": user_id, "models": [model], "metadata": {"dept": "qa"}},
+        )
+        assert restored.status_code == 200, restored.text
+        for proxy in (gateway, peer):
+            text: Final = f"restored {uuid.uuid4().hex}"
+            assert (
+                eventually(
+                    lambda p=proxy, t=text: _user_chat(p, model, key, t),
+                    lambda response: response.status_code == 200,
+                    seconds=75,
+                ).status_code
+                == 200
+            )
+            assert _observed(upstream) == [_chat_observation(text)]
+
+
+def test_partial_user_update_preserves_sibling_fields(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
+        user_id: Final = _model_user(gateway, model)
+        scenario.cleanups.callback(lambda: gateway.request("POST", "/user/delete", {"user_ids": [user_id]}))
+
+        initial: Final = gateway.request(
+            "POST",
+            "/user/update",
+            {
+                "user_id": user_id,
+                "user_alias": "sibling-alias",
+                "rpm_limit": 123,
+                "budget_duration": "1d",
+                "spend": 0.25,
+            },
+        )
+        assert initial.status_code == 200, initial.text
+        before: Final = _partial_user_row(user_id)
+        assert float(str(before[0]["spend"])) == pytest.approx(0.25), before
+        updated: Final = gateway.request("POST", "/user/update", {"user_id": user_id, "tpm_limit": 1234})
+        assert updated.status_code == 200, updated.text
+        after: Final = _partial_user_row(user_id)
+        assert after == before
+        info: Final = object_value(gateway.get("/user/info", {"user_id": user_id})["user_info"])
+        assert info["models"] == [model], info
+        assert info["max_budget"] == 10.0, info
+        assert info["metadata"] == {"dept": "qa"}, info
+        assert info["user_alias"] == "sibling-alias", info
+        assert info["rpm_limit"] == 123, info
+        assert info["budget_duration"] == "1d", info
+        assert info["tpm_limit"] == 1234, info
+        assert float(str(info["spend"])) == pytest.approx(0.25), info
+        assert float(str(after[0]["spend"])) == pytest.approx(0.25), after
+
+
+def test_user_models_only_update_is_enforced_on_the_gateway(gateway: Gateway) -> None:
+    with (
+        gateway.scenario() as scenario,
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+    ):
+        model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
+        user_id: Final = _model_user(gateway, model, max_budget=100.0)
+        scenario.cleanups.callback(lambda: gateway.request("POST", "/user/delete", {"user_ids": [user_id]}))
+        key: Final = string_value(gateway.post("/key/generate", {"user_id": user_id})["key"])
+
+        assert _observed(upstream) == []
+        warm: Final = f"warm {uuid.uuid4().hex}"
+        warmed: Final = _user_chat(gateway, model, key, warm)
+        assert warmed.status_code == 200, warmed.text
+        assert _observed(upstream) == [_chat_observation(warm)]
+
+        narrowed: Final = gateway.request("POST", "/user/update", {"user_id": user_id, "models": ["no-default-models"]})
+        assert narrowed.status_code == 200, narrowed.text
+        assert _observed(upstream) == []
+        denied: Final = _user_chat(gateway, model, key, f"denied {uuid.uuid4().hex}")
+        assert denied.status_code == 403, denied.text
+        assert denied.json() == _user_model_denied_error(model), denied.text
+        assert _observed(upstream) == []
+
+        restored: Final = gateway.request("POST", "/user/update", {"user_id": user_id, "models": [model]})
+        assert restored.status_code == 200, restored.text
+        text: Final = f"restored {uuid.uuid4().hex}"
+        served: Final = _user_chat(gateway, model, key, text)
+        assert served.status_code == 200, served.text
+        assert _observed(upstream) == [_chat_observation(text)]
+
+
+def test_user_models_update_without_metadata_propagates_to_gateway_and_peer(gateway: Gateway, peer: Gateway) -> None:
+    with (
+        gateway.scenario() as scenario,
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+    ):
+        model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
+        user_id: Final = _model_user(gateway, model, max_budget=100.0)
+        scenario.cleanups.callback(lambda: gateway.request("POST", "/user/delete", {"user_ids": [user_id]}))
+        key: Final = string_value(gateway.post("/key/generate", {"user_id": user_id})["key"])
+
+        _observed(upstream)
+        for proxy in (gateway, peer):
+            warm: Final = f"warm {uuid.uuid4().hex}"
+            warmed: Final = _user_chat(proxy, model, key, warm)
+            assert warmed.status_code == 200, warmed.text
+            assert _observed(upstream) == [_chat_observation(warm)]
+
+        narrowed: Final = gateway.request("POST", "/user/update", {"user_id": user_id, "models": ["no-default-models"]})
+        assert narrowed.status_code == 200, narrowed.text
+        denied_gateway: Final = _user_chat(gateway, model, key, f"denied {uuid.uuid4().hex}")
+        assert denied_gateway.status_code == 403, denied_gateway.text
+        assert denied_gateway.json() == _user_model_denied_error(model), denied_gateway.text
+        denied_peer: Final = eventually(
+            lambda: _user_chat(peer, model, key, f"denied {uuid.uuid4().hex}"),
+            lambda response: response.status_code == 403,
+            seconds=10,
+        )
+        assert denied_peer.json() == _user_model_denied_error(model), denied_peer.text
+        denied_observations: Final = _observed(upstream)
+        assert denied_observations == [], denied_observations
+        for proxy in (gateway, peer):
+            refused = _user_chat(proxy, model, key, f"denied {uuid.uuid4().hex}")
+            assert refused.json() == _user_model_denied_error(model), refused.text
+        assert _observed(upstream) == []

@@ -99,6 +99,18 @@ def validate_capture_message_content_value(value: str) -> None:
         )
 
 
+def validate_excluded_services_value(value: str) -> None:
+    from litellm.integrations.otel.model.config import invalid_excluded_service_names
+
+    names: Final = tuple(name.strip().lower() for name in value.split(","))
+    invalid_names: Final = invalid_excluded_service_names(value)
+    allowed: Final = "redis, postgres, postgresql, batch_write_to_db, redis_-prefixed service names, or none"
+    if invalid_names or ("none" in names and len(names) != 1):
+        raise ValueError(
+            f"Invalid excluded_services {value!r}: use {allowed}; 'none' must be used alone and names cannot be empty"
+        )
+
+
 # Hardcoded list of supported callback params to avoid runtime inspection issues with TypedDict
 _supported_callback_params: Final[tuple[str, ...]] = (
     "langfuse_public_key",

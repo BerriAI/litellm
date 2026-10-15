@@ -2757,6 +2757,35 @@ async def test_optional_discovery_allows_exhaustion_at_page_cap(method: str, mon
     )
 
 
+def test_standalone_client_request_does_not_require_proxy_dependencies():
+    import textwrap
+
+    from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
+
+    script = textwrap.dedent("""
+        import asyncio
+        import sys
+        for name in ("fastapi", "orjson", "email_validator", "annotated_doc"):
+            sys.modules[name] = None
+        import httpx2
+        from litellm.experimental_mcp_client.client import MCPClient
+
+        async def request():
+            upstream = MCPClient(server_url="https://upstream.example/mcp")
+            transport = httpx2.MockTransport(lambda request: httpx2.Response(200))
+            async with upstream._create_httpx_client_factory(transport=transport)() as client:
+                response = await client.post(upstream.server_url, json={"method": "tools/call"})
+                assert response.status_code == 200
+            assert all(sys.modules[name] is None for name in ("fastapi", "orjson", "email_validator", "annotated_doc"))
+
+        asyncio.run(request())
+        print("standalone request succeeded")
+    """)
+    result = run_child_interpreter(script, timeout=60)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "standalone request succeeded"
+
+
 def test_client_import_before_proxy_credentials_succeeds_in_fresh_process():
     import subprocess
 
@@ -4942,3 +4971,50 @@ async def test_persistent_session_ends_after_a_broken_stream_so_the_next_call_ge
             await asyncio.wait_for(session.run(broken_stream), 5)
         await asyncio.wait_for(session.wait_closed(), 5)
         assert session.closed, "a dead transport must end the session instead of being reused"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("session_started_in_request", [True, False])
+async def test_persistent_session_releases_the_current_requests_scope_response(session_started_in_request) -> None:
+    from mcp.server.context import ServerRequestContext
+    from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
+    from litellm.proxy._experimental.mcp_server.scope_challenge import SCOPE_RESPONSE_KEY, OAuthScopeResponse
+
+    app = _stateful_upstream()
+    async with app.router.lifespan_context(app):
+        client = _StatefulUpstreamClient(app, server_url="http://upstream/mcp", transport_type=MCPTransport.http)
+        first = OAuthScopeResponse(AsyncMock(), "https://gateway.example", "/mcp")
+        second = OAuthScopeResponse(AsyncMock(), "https://gateway.example", "/mcp")
+        context = ServerRequestContext(
+            session=MagicMock(),
+            lifespan_context={},
+            protocol_version="2025-11-25",
+            method="tools/call",
+            request=Request({"type": "http", SCOPE_RESPONSE_KEY: first}),
+        )
+        earlier_session = None if session_started_in_request else client.open_persistent_session()
+        token = active_mcp_request_ctx_var.set(context)
+        session = earlier_session if earlier_session is not None else client.open_persistent_session()
+        try:
+            selected = await client.call_tool(
+                CallToolRequestParams(name="select_project", arguments={"name": "demo"}), persistent_session=session
+            )
+            assert not selected.is_error and not first.pending
+            active_mcp_request_ctx_var.set(
+                ServerRequestContext(
+                    session=context.session,
+                    lifespan_context={},
+                    protocol_version="2025-11-25",
+                    method="tools/call",
+                    request=Request({"type": "http", SCOPE_RESPONSE_KEY: second}),
+                )
+            )
+            created = await client.call_tool(
+                CallToolRequestParams(name="create_feature", arguments={"title": "feature"}), persistent_session=session
+            )
+            assert not created.is_error and created.content[0].text == "demo/feature"
+            assert not second.pending
+        finally:
+            active_mcp_request_ctx_var.reset(token)
+            session.close()
+            await asyncio.wait_for(session.wait_closed(), 5)

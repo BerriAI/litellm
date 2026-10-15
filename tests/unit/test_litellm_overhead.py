@@ -145,6 +145,7 @@ async def test_litellm_overhead_stream(monkeypatch):
 @pytest.mark.asyncio
 async def test_litellm_overhead_cache_hit(monkeypatch):
     from litellm.caching.caching import Cache
+    from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 
     calls = _mock_openai_completion_transport(monkeypatch, response_id="chatcmpl-cache")
     litellm.cache = Cache()
@@ -157,7 +158,7 @@ async def test_litellm_overhead_cache_hit(monkeypatch):
         messages=messages,
         caching=True,
     )
-    await asyncio.sleep(0.5)
+    await asyncio.wait_for(asyncio.gather(*_PENDING_CACHE_WRITES), timeout=5)
     response2 = await litellm.acompletion(
         model="gpt-4o",
         api_key="test-key",
