@@ -156,6 +156,32 @@ AFFINITY_REPLAY_INPUT: Final[list[JsonValue]] = [
     {"role": "user", "content": "And Germany?"},
 ]
 
+MINTED_REASONING_REPLAY_INPUT: Final[list[JsonValue]] = [
+    {"type": "reasoning", "id": "rs_6f9619ff-8b86-4d01-b42d-00c04fc964ff", "summary": []},
+    {
+        "type": "reasoning",
+        "id": "rs_0a1b2c3d4e5f",
+        "summary": [],
+        "encrypted_content": '[{"type":"thinking","thinking":"x","signature":"sig"}]',
+    },
+    {"role": "user", "content": "And Germany?"},
+]
+
+FOREIGN_TOOL_CALL_REPLAY_INPUT: Final[list[JsonValue]] = [
+    {
+        "type": "function_call",
+        "id": "toolu_6f5e4d3c2b1a",
+        "call_id": "call_6f5e4d3c2b1a",
+        "name": "get_weather",
+        "arguments": '{"city":"Paris"}',
+    },
+    {"type": "function_call_output", "call_id": "call_6f5e4d3c2b1a", "output": "18C and sunny"},
+]
+
+PATTERNED_PARAMETERS: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"type": "object", "properties": {"city": {"type": "string", "pattern": "^\\p{L}+$"}}}
+)
+
 REASONING_REPLAY_INPUT: Final[list[JsonValue]] = [
     {"type": "reasoning", "id": "rs_0a1b2c3d4e5f", "summary": [], "status": None},
     {"role": "user", "content": "And Germany?"},
@@ -183,6 +209,7 @@ class Case:
     kwargs: Mapping[str, object]
     upstream: Mapping[str, JsonValue] = TEXT_RESPONSE
     gaps: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
+    falls_back: bool = False
 
     def params(self) -> Iterator[object]:
         for aspect in ASPECTS:
@@ -194,10 +221,6 @@ class Case:
 DEPLOYMENT_METADATA: Final = MappingProxyType(
     {"model_info": {"id": "deploy-1"}, "encrypted_content_affinity_enabled": True}
 )
-
-
-def _gaps(**gaps: str) -> Mapping[str, str]:
-    return MappingProxyType(gaps)
 
 
 CASES: Final = (
@@ -236,14 +259,11 @@ CASES: Final = (
     Case(
         "warm_up_probe_below_minimum_max_output_tokens",
         {"input": "hi", "max_output_tokens": 1},
-        gaps=_gaps(request="native requests send max_output_tokens below OpenAI's minimum of 16"),
     ),
     Case(
         "gpt_5_family_drops_temperature_while_reasoning",
         {"input": "hi", "temperature": 0.2, "reasoning": {"effort": "high"}, "drop_params": True},
-        gaps=MappingProxyType(
-            {"dispatch": "native responses decline drop_params instead of applying the GPT-5 sampling rules"}
-        ),
+        falls_back=True,
     ),
     Case(
         "anthropic_cache_control_is_stripped",
@@ -262,7 +282,6 @@ CASES: Final = (
         {
             "input": REASONING_REPLAY_INPUT,
         },
-        gaps=_gaps(request="native requests forward reasoning items with status null"),
     ),
     Case(
         "tool_parameters_sent_as_json_string",
@@ -270,7 +289,26 @@ CASES: Final = (
             "input": "Weather in Paris?",
             "tools": [{**WEATHER_TOOL, "parameters": '{"type":"object","properties":{"city":{"type":"string"}}}'}],
         },
-        gaps=_gaps(request="native requests forward tool parameters encoded as a JSON string"),
+    ),
+    Case(
+        "item_level_cache_control_is_stripped",
+        {"input": [{"role": "user", "content": "hi", "cache_control": {"type": "ephemeral"}}]},
+    ),
+    Case(
+        "bridge_minted_reasoning_is_dropped",
+        {"input": MINTED_REASONING_REPLAY_INPUT},
+    ),
+    Case(
+        "foreign_tool_call_ids_are_dropped",
+        {"input": FOREIGN_TOOL_CALL_REPLAY_INPUT, "tools": [dict(WEATHER_TOOL)]},
+    ),
+    Case(
+        "tool_schema_repair_stays_on_python",
+        {
+            "input": "Weather in Paris?",
+            "tools": [{**WEATHER_TOOL, "parameters": dict(PATTERNED_PARAMETERS)}],
+        },
+        falls_back=True,
     ),
 )
 
@@ -351,7 +389,7 @@ async def test_native_responses_match_python(
     native: Final = await _leg(case, parity_server, probe=native_responses)
     match aspect:
         case "dispatch":
-            assert not native.fell_back
+            assert native.fell_back == case.falls_back
         case "request":
             assert (native.request_body, native.request_headers) == (python.request_body, python.request_headers)
         case "response":

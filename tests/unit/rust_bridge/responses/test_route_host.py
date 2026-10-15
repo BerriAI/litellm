@@ -5,7 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 import litellm
-from litellm.rust_bridge.responses.route_host import connection_defaults, map_failure, response
+from litellm.rust_bridge.responses.route_host import connection_defaults, decline_reason, map_failure, response
 from litellm.types.llms.openai import ResponsesAPIResponse
 
 
@@ -87,3 +87,49 @@ def test_failure_preserves_the_explicit_endpoint(api_base: str | None, base_url:
     assert isinstance(mapped, litellm.RateLimitError)
     assert str(mapped.response.request.url) == expected
     assert mapped.__context__ is upstream
+
+
+_PATTERNED_TOOL: Final = MappingProxyType(
+    {
+        "type": "function",
+        "name": "lookup",
+        "parameters": {"type": "object", "properties": {"city": {"type": "string", "pattern": "^\\p{L}+$"}}},
+    }
+)
+_PLAIN_TOOL: Final = MappingProxyType(
+    {"type": "function", "name": "lookup", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}}
+)
+
+
+@pytest.mark.parametrize(
+    ("request_fields", "expected"),
+    (
+        pytest.param({"input": "hi", "temperature": 1}, None, id="supported_temperature"),
+        pytest.param(
+            {"input": "hi", "temperature": 0.2},
+            "native Responses does not implement the model's sampling rules",
+            id="gpt_5_sampling_rules",
+        ),
+        pytest.param({"input": "hi", "tools": [dict(_PLAIN_TOOL)]}, None, id="valid_tool_schema"),
+        pytest.param(
+            {"input": "hi", "tools": [dict(_PATTERNED_TOOL)]},
+            "native Responses does not implement tool schema repair",
+            id="python_incompatible_pattern",
+        ),
+        pytest.param(
+            {"input": [{"role": "user", "content": "hi", "cache_control": {"type": "ephemeral"}}]},
+            "native Responses does not implement prompt cache breakpoints",
+            id="prompt_cache_breakpoints_on_openai",
+        ),
+        pytest.param(
+            {
+                "input": [{"role": "user", "content": "hi", "cache_control": {"type": "ephemeral"}}],
+                "api_base": "http://127.0.0.1:9/v1",
+            },
+            None,
+            id="cache_control_on_a_compatible_host",
+        ),
+    ),
+)
+def test_model_rules_stay_on_python(request_fields: dict[str, object], expected: str | None) -> None:
+    assert decline_reason(MappingProxyType({"model": "openai/gpt-6.1-sol", **request_fields})) == expected

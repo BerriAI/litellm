@@ -60,6 +60,10 @@ pub enum ErrorDetail {
         value: String,
         hint: String,
     },
+    #[error(
+        "Invalid type for 'tools[{index}].parameters': expected an object, but got {actual} instead."
+    )]
+    InvalidToolParameters { index: usize, actual: &'static str },
     #[error("invalid {subject} on line {line}: {source}")]
     InvalidLine {
         subject: &'static str,
