@@ -1013,15 +1013,3 @@ async def test_skip_content_enforcers_skips_enforcers_but_not_other_hooks(proxy_
 
     assert enforcer.calls == 0
     assert accountant.calls == 1
-
-
-@pytest.mark.asyncio
-async def test_skip_content_enforcers_and_guardrails_only_are_mutually_exclusive(proxy_logging):
-    with pytest.raises(ValueError, match="mutually exclusive"):
-        await proxy_logging.pre_call_hook(
-            user_api_key_dict=MagicMock(),
-            data={"model": "m"},
-            call_type="acompletion",
-            guardrails_only=True,
-            skip_content_enforcers=True,
-        )

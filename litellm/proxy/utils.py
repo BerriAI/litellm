@@ -2397,13 +2397,17 @@ class ProxyLogging:
 
         return data
 
-    def has_pre_call_guardrails(self, request_metadata: Mapping[str, object]) -> bool:
+    def has_pre_call_guardrails(
+        self, request_metadata: Mapping[str, object], request_body: Mapping[str, object] | None = None
+    ) -> bool:
         """
         Whether anything configured would inspect the content of a request carrying this metadata.
 
         Evaluated with the same predicate the pre-call loop uses, so a proxy configured only with
         post-call guardrails answers False. Callers that must pay a real cost to build the hook's
         input, such as streaming a batch input file off disk, use this to skip that work.
+        ``request_body`` supplies the request's top-level fields, such as ``stream``, that a
+        guardrail scoped to streaming or non-streaming requests reads.
 
         A content-enforcing ``CustomLogger`` counts too. It is not a guardrail and has no event
         hook to consult, but it judges the payload the same way, so a proxy configured only with
@@ -2414,7 +2418,7 @@ class ProxyLogging:
         caps: Final = ProxyLogging.callback_capabilities()
         if caps.has_content_enforcer:
             return True
-        probe: Final = {"metadata": dict(request_metadata)}
+        probe: Final = {**(request_body or {}), "metadata": dict(request_metadata)}
         return any(
             isinstance(callback, CustomGuardrail)
             and callback.should_run_guardrail(data=probe, event_type=GuardrailEventHooks.pre_call)
@@ -2477,8 +2481,6 @@ class ProxyLogging:
 
         if guardrails_only and skip_guardrails:
             raise ValueError("guardrails_only and skip_guardrails are mutually exclusive")
-        if guardrails_only and skip_content_enforcers:
-            raise ValueError("guardrails_only and skip_content_enforcers are mutually exclusive")
 
         if not guardrails_only:
             self._init_response_taking_too_long_task(data=data)

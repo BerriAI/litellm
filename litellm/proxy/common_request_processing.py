@@ -1816,6 +1816,7 @@ class ProxyBaseLLMRequestProcessing:
         self.data: dict[str, Any] = data  # mutable-ok: the request body every later step mutates in place
         self.served_model = served_model
         self._tags_before_guardrails: frozenset[str] | None = None
+        self._rejected_before_guardrails = False
 
     @property
     def litellm_call_id(self) -> str | None:
@@ -2418,7 +2419,7 @@ class ProxyBaseLLMRequestProcessing:
                 data=self.data,
                 call_type=call_type,
                 skip_guardrails=True,
-                skip_content_enforcers=True,
+                skip_content_enforcers=not skip_guardrails,
             )
             refresh_proxy_server_request_body_snapshot(self.data)
             await raise_if_model_not_routable(
@@ -2444,16 +2445,17 @@ class ProxyBaseLLMRequestProcessing:
 
         Covers every request field a pre-call guardrail can rewrite on the routes that reach this
         check: chat and Anthropic messages and system, completion prompt, Responses input and
-        instructions, embedding and speech input, and Gemini contents and system instruction. The
-        request body, its proxy_server_request snapshot and message logging all carry the redaction
-        marker, so failure callbacks, post-call failure hooks and spend rows never see content a
-        masking guardrail would have rewritten.
+        instructions, embedding and speech input, tool definitions, and Gemini contents and system
+        instruction. The request body, its proxy_server_request snapshot and message logging all
+        carry the redaction marker, so failure callbacks, post-call failure hooks and spend rows
+        never see content a masking guardrail would have rewritten.
         """
         request_metadata: Final = dict[str, object]()
         for bucket in _request_metadata_buckets(self.data):
             request_metadata.update(bucket)
-        if not proxy_logging_obj.has_pre_call_guardrails(request_metadata):
+        if not proxy_logging_obj.has_pre_call_guardrails(request_metadata, request_body=self.data):
             return
+        self._rejected_before_guardrails = True
         if "messages" in self.data:
             self.data["messages"] = [{"role": "user", "content": REDACTED_BY_LITELLM}]
         if "contents" in self.data:
@@ -2461,6 +2463,8 @@ class ProxyBaseLLMRequestProcessing:
         for content_key in ("prompt", "input"):
             if content_key in self.data:
                 self.data[content_key] = ""
+        if "tools" in self.data:
+            self.data["tools"] = []
         for content_key in ("system", "instructions"):
             if content_key in self.data:
                 self.data[content_key] = REDACTED_BY_LITELLM
@@ -2574,6 +2578,7 @@ class ProxyBaseLLMRequestProcessing:
                     ):
                         continue
                     self.data = independent_snapshot(pristine)
+                    self._rejected_before_guardrails = False
                     self.data["model"] = fallback_model
                     try:
                         return await self.common_processing_pre_call_logic(
@@ -2598,7 +2603,8 @@ class ProxyBaseLLMRequestProcessing:
                             raise
                         continue
             except BaseException:
-                self.data = rate_limited_data
+                if not self._rejected_before_guardrails:
+                    self.data = rate_limited_data
                 raise
 
             self.data = rate_limited_data
