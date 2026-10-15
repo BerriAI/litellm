@@ -202,31 +202,50 @@ def _rewrite(model_id: str, alias_maps: Sequence[Mapping[str, str]]) -> str | No
 
 def alias_target(model_id: str, aliases: CallerAliases, listed: Container[str] = frozenset()) -> str | None:
     """The model group `/chat/completions` rewrites `model_id` to, else None. A `model_id`
-    already `listed` keeps its own row, so it is never rewritten."""
-    if model_id in listed:
+    already `listed` only resolves to a `listed` target, so retrieval never describes a
+    model the caller cannot list."""
+    target: Final = _rewrite(model_id, tuple(alias_map(raw) for raw in aliases.rewrite))
+    if model_id in listed and (target is None or target not in listed):
         return None
-    return _rewrite(model_id, tuple(alias_map(raw) for raw in aliases.rewrite))
+    return target
+
+
+def _listed_lookup_id(
+    name: str,
+    maps: Sequence[Mapping[str, str]],
+    lookup_by_response: Mapping[str, str],
+    lookup_ids: Container[str],
+) -> str | None:
+    target: Final = _rewrite(name, maps)
+    if target is None:
+        return None
+    if target in lookup_by_response:
+        return lookup_by_response[target]
+    return target if target in lookup_ids else None
 
 
 def alias_listing_entries(
     entries: Sequence[tuple[str, str]],
     aliases: CallerAliases,
 ) -> tuple[tuple[str, str], ...]:
-    """`entries` plus one `(alias, lookup_id)` row per key or team alias whose target is
-    listed. An alias colliding with a listed id keeps the listed entry."""
+    """`entries` plus one row per key or team alias not listed itself, every alias looked
+    up under the listed model `/chat/completions` rewrites it to. An alias whose target
+    is not listed is neither added nor retargeted."""
     maps: Final = tuple(alias_map(raw) for raw in aliases.rewrite)
     own: Final = tuple(alias_map(raw) for raw in aliases.own)
     lookup_by_response: Final = MappingProxyType(dict(entries))
     lookup_ids: Final = frozenset(lookup_by_response.values())
-    targets: Final = MappingProxyType(
-        {alias: _rewrite(alias, maps) for alias in _alias_names(own) if alias not in lookup_by_response}
+    retargeted: Final = tuple(
+        (response_id, _listed_lookup_id(response_id, maps, lookup_by_response, lookup_ids) or lookup_id)
+        for response_id, lookup_id in entries
     )
     added: Final = tuple(
-        (alias, lookup_by_response.get(target, target))
-        for alias, target in targets.items()
-        if target is not None and (target in lookup_by_response or target in lookup_ids)
+        (alias, lookup_id)
+        for alias in _alias_names(own)
+        if alias not in lookup_by_response
+        and (lookup_id := _listed_lookup_id(alias, maps, lookup_by_response, lookup_ids)) is not None
     )
-    return (*entries, *added)
+    return (*retargeted, *added)
 
 
 def claude_code_requested_group(
@@ -331,74 +350,6 @@ class TeamModelNameTranslator:
         if not internal_to_public:
             return [(name, name) for name in model_names]
         return list(TeamModelNameTranslator._response_to_lookup_map(model_names, internal_to_public).items())
-
-    @staticmethod
-    def resolve_alias_target(
-        listed_name: str,
-        llm_router: Router | None,
-        alias_maps: Sequence[object] = (),
-        accessible_names: Container[str] | None = None,
-    ) -> str | None:
-        """The deployment `listed_name` routes to when it is an alias, else None.
-
-        An alias owns no deployment row, so a metadata lookup keyed on it finds neither
-        a deployment nor a cost-map entry and yields no `mode` or token limits.
-
-        Rewrites are applied in `alias_maps` order, each against the result of the last,
-        because `litellm_pre_call_utils` applies the team map and then the key map to
-        whatever name survived the previous one. Checking every map against
-        `listed_name` instead would report an intermediate deployment's metadata for a
-        chained alias.
-
-        `accessible_names` is the caller's own accessible set. A target outside it is
-        not resolved, because `_can_object_call_model` rejects a request that an alias
-        rewrites to a model the caller may not call: reporting that deployment's limits
-        would both disclose a restricted model's metadata and describe a call that
-        cannot succeed. Passing None skips the check, for callers that already hold an
-        unrestricted view.
-        """
-        if llm_router is None:
-            return None
-
-        resolved: Final = TeamModelNameTranslator._chain_alias_rewrites(
-            listed_name, (*alias_maps, llm_router.model_group_alias)
-        )
-        if resolved == listed_name:
-            return None
-        if accessible_names is not None and resolved not in accessible_names:
-            return None
-        return resolved if llm_router.model_name_to_deployment_indices.get(resolved) else None
-
-    @staticmethod
-    def _chain_alias_rewrites(listed_name: str, alias_maps: Sequence[object]) -> str:
-        """`listed_name` after each map in turn rewrites the previous result.
-
-        A name already rewritten once is never followed again, so a cycle across maps
-        terminates instead of looping.
-        """
-        resolved = listed_name  # rebind-ok: each alias map rewrites the result of the previous one
-        seen: Final[set[str]] = {listed_name}  # mutable-ok: accumulates visited names to break alias cycles
-        for alias_map in alias_maps:
-            target: str | None = TeamModelNameTranslator._alias_lookup(alias_map, resolved)
-            if target is None or target in seen:
-                continue
-            resolved = target
-            seen.add(target)
-        return resolved
-
-    @staticmethod
-    def _alias_lookup(alias_map: object, name: str) -> str | None:
-        """`name`'s target in one alias map, or None when absent or malformed.
-
-        `model_group_alias` entries may be a routing dict rather than a bare name.
-        """
-        if not isinstance(alias_map, Mapping):
-            return None
-        mapping: Final = cast("Mapping[str, object]", alias_map)  # cast-ok: isinstance narrowed it, values unknown
-        raw_target: Final[object] = mapping.get(name)
-        nested: Final = cast("Mapping[str, object]", raw_target)  # cast-ok: a routing-dict entry has unknown values
-        target: Final[object] = nested.get("model") if isinstance(raw_target, Mapping) else raw_target
-        return target if isinstance(target, str) and target else None
 
     @staticmethod
     def translate_listing(

@@ -140,7 +140,8 @@ def test_team_alias_is_listed_under_its_target_metadata_and_only_when_the_target
         {"claude-sonnet-4-5": "gpt-4.1-mini", "via-public": "team-public", "not-granted": "gpt-4.1"},
     )
     assert alias_listing_entries(entries, _caller(*aliases)) == (
-        *entries,
+        ("gpt-4.1-mini", "model_name_team_1_abc"),
+        ("team-public", "model_name_team_1_abc"),
         ("claude-sonnet-4-5", "gpt-4.1-mini"),
         ("via-public", "model_name_team_1_abc"),
     )
@@ -153,14 +154,34 @@ def test_alias_target_resolves_the_requested_alias_across_key_and_team_maps() ->
     assert alias_target("gpt-4.1-mini", _caller(None, {"claude-sonnet-4-5": "gpt-4.1-mini"})) is None
 
 
-def test_alias_colliding_with_a_listed_id_keeps_the_listed_model_at_list_and_retrieval() -> None:
+def test_listed_alias_is_looked_up_under_the_listed_model_it_rewrites_to_at_list_and_retrieval() -> None:
+    entries = [
+        ("fast", "fast"),
+        ("gpt-4.1-mini", "gpt-4.1-mini"),
+        ("chat", "chat"),
+        ("team-public", "model_name_team_1_abc"),
+    ]
+    maps = _caller({"fast": "gpt-4.1-mini", "chat": "team-public"})
+    listed = frozenset(response_id for response_id, _ in entries)
+
+    assert alias_listing_entries(entries, maps) == (
+        ("fast", "gpt-4.1-mini"),
+        ("gpt-4.1-mini", "gpt-4.1-mini"),
+        ("chat", "model_name_team_1_abc"),
+        ("team-public", "model_name_team_1_abc"),
+    )
+    assert alias_target("fast", maps, listed) == "gpt-4.1-mini"
+    assert alias_target("chat", maps, listed) == "team-public"
+
+
+def test_listed_alias_to_a_model_the_caller_cannot_list_keeps_its_own_row_at_list_and_retrieval() -> None:
     entries = [("fast", "fast"), ("gpt-4.1-mini", "gpt-4.1-mini")]
-    maps = _caller({"fast": "gpt-4.1-mini"})
+    maps = _caller({"fast": "restricted"})
     listed = frozenset(response_id for response_id, _ in entries)
 
     assert alias_listing_entries(entries, maps) == tuple(entries)
     assert alias_target("fast", maps, listed) is None
-    assert alias_target("fast", maps) == "gpt-4.1-mini"
+    assert alias_target("fast", maps) == "restricted"
 
 
 def test_alias_maps_apply_in_the_order_chat_completions_applies_them() -> None:

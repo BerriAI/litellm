@@ -149,3 +149,16 @@ async def test_v1_models_by_id_keeps_the_alias_as_id_when_it_targets_a_team_scop
     assert "chat" in await _v1_models(caller)
     response = await proxy_server.model_info(model_id="chat", user_api_key_dict=caller)
     assert response["id"] == "chat"
+
+
+@pytest.mark.asyncio
+async def test_alias_the_key_also_lists_reports_its_target_metadata_at_list_and_retrieval(router: Router) -> None:
+    caller = _team_member(
+        models=["gpt-4.1-mini", "model_name_team1_abc", "fast"], team_model_aliases={"fast": "gpt-4.1-mini"}
+    )
+
+    response = await proxy_server.model_list(user_api_key_dict=caller, request=None)
+    rows = {row["id"]: row for row in response["data"]}
+    assert rows["fast"] == {**rows["gpt-4.1-mini"], "id": "fast"}
+    target = await proxy_server.model_info(model_id="gpt-4.1-mini", user_api_key_dict=caller)
+    assert await proxy_server.model_info(model_id="fast", user_api_key_dict=caller) == {**target, "id": "fast"}
