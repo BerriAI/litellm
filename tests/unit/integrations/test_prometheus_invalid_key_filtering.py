@@ -176,34 +176,40 @@ class TestSkipMetricsValidation:
         assert prometheus_logger._should_skip_metrics_for_invalid_key(kwargs=kwargs) is expected
 
     @pytest.mark.parametrize(
-        "litellm_params,expected",
+        "logged_call,expected",
         [
-            ({"proxy_server_request": {"credential_fields": ("api_key",)}}, True),
+            ({"litellm_params": {"proxy_server_request": {"credential_fields": ("api_key",)}}}, True),
             (
                 {
-                    "github_copilot_user_session": GithubCopilotUserSession(
-                        token="caller-session-token", api_base="https://api.githubcopilot.com"
-                    )
+                    "litellm_params": {
+                        "github_copilot_user_session": GithubCopilotUserSession(
+                            token="caller-session-token", api_base="https://api.githubcopilot.com"
+                        )
+                    }
                 },
                 True,
             ),
-            ({"proxy_server_request": {"credential_fields": ("headers",)}}, False),
-            ({"proxy_server_request": {"credential_fields": "api_key"}}, False),
+            ({"standard_logging_object": {"metadata": {"used_client_oauth_token": True}}}, True),
+            ({"litellm_params": {"proxy_server_request": {"credential_fields": ("headers",)}}}, False),
+            ({"litellm_params": {"proxy_server_request": {"credential_fields": "api_key"}}}, False),
+            ({"standard_logging_object": {"metadata": {"used_client_oauth_token": False}}}, False),
         ],
         ids=[
             "caller-supplied-api-key",
             "caller-copilot-session",
+            "caller-anthropic-oauth-token",
             "caller-supplied-headers-only",
             "malformed-credential-fields",
+            "deployment-anthropic-key",
         ],
     )
-    def test_skip_a_provider_401_on_a_credential_the_caller_owns(self, prometheus_logger, litellm_params, expected):
+    def test_skip_a_provider_401_on_a_credential_the_caller_owns(self, prometheus_logger, logged_call, expected):
         exception = litellm.AuthenticationError(
             message="Incorrect API key provided: sk-calle*****",
             llm_provider="openai",
             model="gpt-4o-mini",
         )
-        kwargs = {"exception": exception, "litellm_params": litellm_params}
+        kwargs = {"exception": exception, **logged_call}
         assert prometheus_logger._should_skip_metrics_for_invalid_key(kwargs=kwargs) is expected
 
     def test_no_skip_for_valid_request(self, prometheus_logger):

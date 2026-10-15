@@ -1,6 +1,6 @@
 """A provider 401 on a caller's own per-user GitHub Copilot session is the caller's credential failing, so the
-shared Copilot deployment keeps no failure, request or outage series for it, while a provider 401 on the
-deployment's own key in the same process is counted against that deployment."""
+shared Copilot deployment keeps no failure, request or outage series for it, while a provider 401 on the router
+deployment's own key, or on the key a direct SDK call brings, is counted as a failed request."""
 
 from __future__ import annotations
 
@@ -13,6 +13,8 @@ from integration._support.copilot_session_prometheus_worker import (
     CALLER_SESSION_TOKEN,
     COPILOT_DEPLOYMENT,
     DEPLOYMENT_SERIES,
+    DIRECT_CALL,
+    DIRECT_KEY,
     FAILURES,
     LLM_FAILED,
     OPERATOR_DEPLOYMENT,
@@ -47,10 +49,12 @@ def test_both_calls_reach_the_provider_with_their_own_credential_and_fail_with_i
     assert report.outcomes == (
         Outcome(deployment=COPILOT_DEPLOYMENT, status=401),
         Outcome(deployment=OPERATOR_DEPLOYMENT, status=401),
+        Outcome(deployment=DIRECT_CALL, status=401),
     )
     assert [r.headers.get("authorization") for r in received] == [
         f"Bearer {CALLER_SESSION_TOKEN}",
         f"Bearer {OPERATOR_KEY}",
+        f"Bearer {DIRECT_KEY}",
     ]
 
 
@@ -68,4 +72,13 @@ def test_a_provider_401_on_the_deployments_own_key_counts_as_a_deployment_failur
     assert report.values(FAILURES, OPERATOR_DEPLOYMENT) == (1.0,)
     assert report.values(TOTALS, OPERATOR_DEPLOYMENT) == (1.0,)
     assert report.values(LLM_FAILED, OPERATOR_DEPLOYMENT) == (1.0,)
-    assert report.values(STATE, OPERATOR_DEPLOYMENT) == (1.0,)
+    assert report.on_the_endpoint(STATE, OPERATOR_DEPLOYMENT) == (1.0,)
+
+
+def test_a_provider_401_on_the_key_a_direct_sdk_call_brings_is_counted_as_a_failed_request(
+    ran: tuple[WorkerReport, tuple[Request, ...]],
+) -> None:
+    report, _ = ran
+    assert report.outside_the_router(FAILURES) == (1.0,)
+    assert report.outside_the_router(TOTALS) == (1.0,)
+    assert report.outside_the_router(LLM_FAILED) == (1.0,)

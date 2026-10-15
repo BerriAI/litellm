@@ -340,12 +340,16 @@ def _logged_fields(value: object) -> Mapping[str, object]:
 
 def _used_a_caller_credential(logged_call: Mapping[str, object]) -> bool:
     """True when the provider was called with a credential that belongs to the caller rather than the
-    deployment: an api_key the caller sent with the request, or the caller's own GitHub Copilot connection."""
+    deployment: an api_key the caller sent with the request, the caller's own Anthropic OAuth token, or the
+    caller's own GitHub Copilot connection."""
     litellm_params: Final = _logged_fields(logged_call.get("litellm_params"))
     credential_fields: Final = _logged_fields(litellm_params.get("proxy_server_request")).get("credential_fields")
+    logged_metadata: Final = _logged_fields(_logged_fields(logged_call.get("standard_logging_object")).get("metadata"))
     return (
-        isinstance(credential_fields, tuple) and "api_key" in credential_fields
-    ) or github_copilot_user_session_from(litellm_params) is not None
+        (isinstance(credential_fields, tuple) and "api_key" in credential_fields)
+        or logged_metadata.get("used_client_oauth_token") is True
+        or github_copilot_user_session_from(litellm_params) is not None
+    )
 
 
 def _is_deployment_failure(exception: openai.APIError, logged_call: Mapping[str, object]) -> bool:

@@ -31,6 +31,7 @@ RATE_LIMITS: Final = "provider-rate-limits"
 RECOVERS: Final = "provider-rejects-once"
 HEALTHY: Final = "provider-healthy"
 AGENT_365_GUARDRAIL: Final = f"agent-365-{RUN}"
+CALLER_OAUTH_TOKEN: Final = f"sk-ant-oat01-caller-{RUN}"
 
 FAILURES: Final = "litellm_deployment_failure_responses_total"
 TOTALS: Final = "litellm_deployment_total_requests_total"
@@ -123,6 +124,18 @@ def deployment(cell: str, upstream_model: str, api_base: str) -> dict[str, JsonV
     }
 
 
+def anthropic_deployment(cell: str, api_base: str) -> dict[str, JsonValue]:
+    return {
+        "model_name": name(cell),
+        "litellm_params": {
+            "model": f"anthropic/{REJECTS}",
+            "api_key": f"sk-ant-api03-deployment-credential-{cell}",
+            "api_base": api_base,
+        },
+        "model_info": {"id": identity(cell)},
+    }
+
+
 def config(directory: Path, upstream: Wire) -> Path:
     api_base: Final = f"{upstream.url}/v1"
     configuration: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
@@ -134,6 +147,8 @@ def config(directory: Path, upstream: Wire) -> Path:
         deployment("key-not-valid", KEY_NOT_VALID, api_base),
         deployment("rate-limited", RATE_LIMITS, api_base),
         deployment("recovers", RECOVERS, api_base),
+        anthropic_deployment("anthropic-own-key", upstream.url),
+        anthropic_deployment("caller-oauth", upstream.url),
         {
             "model_name": name("caller-credential"),
             "litellm_params": {
@@ -382,6 +397,45 @@ def test_a_provider_401_on_an_api_key_the_caller_sent_stays_out_of_the_deploymen
     assert [request.headers["authorization"] for request in rig.upstream.drain()] == [f"Bearer {caller_key}"]
     samples: Final = until(rig.gateway, PROXY_FAILED, requested_model=name("caller-api-key"))
     assert deployment_series(samples) - before == frozenset(), recorded(samples, requested_model=name("caller-api-key"))
+
+
+def anthropic_messages(gateway: Gateway, cell: str, key: str, headers: dict[str, str]) -> httpx.Response:
+    body: Final[dict[str, JsonValue]] = {"model": name(cell), "max_tokens": 16, "messages": messages(cell)}
+    return gateway.request("POST", "/v1/messages", body, key=key, headers=headers)
+
+
+def test_a_provider_401_on_an_anthropic_deployments_own_key_is_recorded(rig: Rig) -> None:
+    with rig.gateway.scenario() as scenario:
+        key: Final = scenario.key(models=[name("anthropic-own-key")])
+        rig.upstream.drain()
+        response: Final = anthropic_messages(rig.gateway, "anthropic-own-key", key, {})
+        assert response.status_code == 401, response.text
+        assert [request.headers.get("x-api-key") for request in rig.upstream.drain()] == [
+            "sk-ant-api03-deployment-credential-anthropic-own-key"
+        ]
+        assert_recorded_as_a_deployment_failure(rig, "anthropic-own-key", "401")
+
+
+def test_a_provider_401_on_an_anthropic_oauth_token_the_caller_sent_stays_out_of_the_deployment_metrics(
+    rig: Rig,
+) -> None:
+    with rig.gateway.scenario() as scenario:
+        key: Final = scenario.key(models=[name("caller-oauth")])
+        rig.upstream.drain()
+        response: Final = anthropic_messages(
+            rig.gateway,
+            "caller-oauth",
+            CALLER_OAUTH_TOKEN,
+            {"x-litellm-api-key": key},
+        )
+        assert response.status_code == 401, response.text
+        assert [request.headers.get("authorization") for request in rig.upstream.drain()] == [
+            f"Bearer {CALLER_OAUTH_TOKEN}"
+        ]
+        samples: Final = until(rig.gateway, PROXY_FAILED, requested_model=name("caller-oauth"))
+        assert {metric: values(samples, metric, model_id=identity("caller-oauth")) for metric in DEPLOYMENT_SERIES} == {
+            metric: [] for metric in DEPLOYMENT_SERIES
+        }, recorded(samples, requested_model=name("caller-oauth"))
 
 
 def _gated_key(scenario: Scenario, cell: str) -> str | None:

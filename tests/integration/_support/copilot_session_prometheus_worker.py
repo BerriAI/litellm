@@ -1,6 +1,7 @@
-"""One SDK process for the per-user GitHub Copilot metric cells: a provider 401 on a caller's own Copilot session
-and one on the deployment's own key, then a report of the deployment series on that process's default registry.
-Run as a script by ``run_copilot_session_worker`` so each process registers the Prometheus metrics exactly once."""
+"""One SDK process for the SDK provider-401 metric cells: a provider 401 on a caller's own Copilot session, one on
+the router deployment's own key and one on a direct call's own key, then a report of the deployment series on that
+process's default registry. Run as a script by ``run_copilot_session_worker`` so each process registers the
+Prometheus metrics exactly once."""
 
 from __future__ import annotations
 
@@ -22,6 +23,8 @@ COPILOT_DEPLOYMENT: Final = "copilot-per-user-deployment"
 OPERATOR_DEPLOYMENT: Final = "operator-key-deployment"
 CALLER_SESSION_TOKEN: Final = "caller-copilot-session-token"
 OPERATOR_KEY: Final = "rotated-operator-key"
+DIRECT_CALL: Final = "direct-sdk-call"
+DIRECT_KEY: Final = "rotated-direct-call-key"
 FAILURES: Final = "litellm_deployment_failure_responses_total"
 TOTALS: Final = "litellm_deployment_total_requests_total"
 LLM_FAILED: Final = "litellm_llm_api_failed_requests_metric_total"
@@ -40,16 +43,27 @@ class Outcome:
 class Series:
     metric: str
     model_id: str
+    api_base: str
     value: float
 
 
 @dataclass(frozen=True, slots=True)
 class WorkerReport:
+    api_base: str
     outcomes: tuple[Outcome, ...]
     series: tuple[Series, ...]
 
     def values(self, metric: str, model_id: str) -> tuple[float, ...]:
         return tuple(s.value for s in self.series if s.metric == metric and s.model_id == model_id)
+
+    def on_the_endpoint(self, metric: str, model_id: str) -> tuple[float, ...]:
+        return tuple(
+            s.value for s in self.series if (s.metric, s.model_id, s.api_base) == (metric, model_id, self.api_base)
+        )
+
+    def outside_the_router(self, metric: str) -> tuple[float, ...]:
+        router_ids: Final = (COPILOT_DEPLOYMENT, OPERATOR_DEPLOYMENT)
+        return tuple(s.value for s in self.series if s.metric == metric and s.model_id not in router_ids)
 
 
 _REPORT: Final = TypeAdapter(WorkerReport)
@@ -69,7 +83,12 @@ def run_copilot_session_worker(api_base: str) -> WorkerReport:
 
 def _deployment_series() -> tuple[Series, ...]:
     return tuple(
-        Series(metric=sample.name, model_id=str(sample.labels.get("model_id", "")), value=float(sample.value))
+        Series(
+            metric=sample.name,
+            model_id=str(sample.labels.get("model_id", "")),
+            api_base=str(sample.labels.get("api_base", "")),
+            value=float(sample.value),
+        )
         for family in REGISTRY.collect()
         for sample in family.samples
         if sample.name in DEPLOYMENT_SERIES
@@ -95,6 +114,7 @@ def _router(api_base: str) -> litellm.Router:
             },
         ],
         num_retries=0,
+        disable_cooldowns=True,
     )
 
 
@@ -106,6 +126,19 @@ async def _attempt(router: litellm.Router, model: str, **extra: object) -> Outco
     return Outcome(deployment=model, status=None)
 
 
+async def _direct_attempt(api_base: str) -> Outcome:
+    try:
+        await litellm.acompletion(
+            model="openai/gpt-5.6",
+            api_base=api_base,
+            api_key=DIRECT_KEY,
+            messages=[{"role": "user", "content": f"{DIRECT_CALL} worker"}],
+        )
+    except openai.APIStatusError as error:
+        return Outcome(deployment=DIRECT_CALL, status=error.status_code)
+    return Outcome(deployment=DIRECT_CALL, status=None)
+
+
 async def main(api_base: str) -> None:
     litellm.callbacks = [PrometheusLogger()]  # test-quality-ok: this worker process exits right after the report
     session: Final = GithubCopilotUserSession(token=CALLER_SESSION_TOKEN, api_base=api_base)
@@ -113,8 +146,9 @@ async def main(api_base: str) -> None:
     outcomes: Final = (
         await _attempt(router, COPILOT_DEPLOYMENT, github_copilot_user_session=session),
         await _attempt(router, OPERATOR_DEPLOYMENT),
+        await _direct_attempt(api_base),
     )
-    report: Final = WorkerReport(outcomes=outcomes, series=_deployment_series())
+    report: Final = WorkerReport(api_base=api_base, outcomes=outcomes, series=_deployment_series())
     sys.stdout.write(json.dumps(_REPORT.dump_python(report)) + "\n")
 
 
