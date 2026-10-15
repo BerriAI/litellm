@@ -1,3 +1,5 @@
+SET LOCAL lock_timeout = '10s';
+
 -- AlterTable
 -- Cumulative per-team token budget, mirroring the existing dollar budget
 -- (max_budget / spend). max_tokens_budget is the cap (null = untracked);
