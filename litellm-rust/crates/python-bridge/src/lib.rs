@@ -6,7 +6,6 @@ mod diagnostics;
 mod errors;
 mod execution;
 mod http;
-mod lifecycle;
 mod logger;
 mod marshal;
 mod preflight;

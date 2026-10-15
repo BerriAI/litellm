@@ -27,7 +27,7 @@ _SYSTEMONE_QUESTIONS_ADAPTER: Final[TypeAdapter[SystemOneQuestions | None]] = Ty
 _OPENAI_QUESTIONS_ADAPTER: Final[TypeAdapter[OpenAIDecisionQuestions | None]] = TypeAdapter(
     OpenAIDecisionQuestions | None
 )
-_SYSTEMONE_FIELDS: Final = frozenset({"state", "images"})
+_SYSTEMONE_FIELDS: Final = frozenset({"state", "images", "assets"})
 
 
 def _request_fields(
@@ -55,6 +55,7 @@ def _request_fields(
         state=_STATE_ADAPTER.validate_python(kwargs["state"]),
         questions=_SYSTEMONE_QUESTIONS_ADAPTER.validate_python(questions),
         images=kwargs.get("images"),
+        assets=kwargs.get("assets"),
         audio=audio,
         videos=videos,
     )

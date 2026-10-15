@@ -196,6 +196,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_computer_use: bool | None
     supports_audio_input: bool | None
     supports_video_input: ReadOnly[bool | None]
+    supports_box_questions: ReadOnly[bool | None]
     supports_embedding_image_input: bool | None
     supports_audio_output: bool | None
     supports_pdf_input: bool | None
@@ -355,6 +356,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_image_token_batches: ReadOnly[float | None]
     cost_per_second: ReadOnly[float | None]
     input_cost_per_second: float | None  # for OpenAI Speech models
+    input_cost_per_text_message: ReadOnly[float | None]
     input_cost_per_token_batches: float | None
     input_cost_per_video_token_batches: ReadOnly[float | None]
     input_cost_per_token_above_200k_tokens_batches: ReadOnly[float | None]
@@ -2885,6 +2887,7 @@ class LoggedLiteLLMParams(TypedDict, total=False):
     no_log: bool | None
     cost_per_second: ReadOnly[float | None]
     input_cost_per_second: float | None
+    input_cost_per_text_message: ReadOnly[float | None]
     input_cost_per_token: float | None
     output_cost_per_token: float | None
     output_cost_per_second: float | None
@@ -3857,6 +3860,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     ## CUSTOM PRICING ##
     cost_per_second: float | None = None
     input_cost_per_second: float | None = None
+    input_cost_per_text_message: float | None = None
     output_cost_per_second: float | None = None
     output_cost_per_second_1080p: float | None = None
     output_cost_per_second_480p: float | None = None
@@ -4217,6 +4221,8 @@ class LlmProviders(str, Enum):
     PERPLEXITY = "perplexity"
     TYPESAFE = "typesafe"
     STRANDS_DECIDER = "strands_decider"
+    LAYA = "laya"
+    BESPOKE = "bespoke"
     MISTRAL = "mistral"
     MILVUS = "milvus"
     GROQ = "groq"
@@ -4331,6 +4337,7 @@ class LlmProviders(str, Enum):
     CORTECS = "cortecs"
     SCX_AI = "scx-ai"
     PRISM = "prism"
+    INFERENCEAPIS = "inferenceapis"
     DARKBLOOM = "darkbloom"
     META = "meta"
     SAIL = "sail"
@@ -4734,3 +4741,12 @@ class GenericGuardrailAPIInputs(TypedDict, total=False):
     stream_holdback_chars: list[
         int
     ]  # trailing chars to withhold from streaming emission per text (word-boundary safety)
+
+
+class ProviderRoutingHints(TypedDict, total=False):
+    custom_llm_provider: ReadOnly[str | None]
+    api_base: ReadOnly[str | None]
+
+
+class BaseUrlRoutingHint(TypedDict, total=False):
+    base_url: ReadOnly[str | None]
