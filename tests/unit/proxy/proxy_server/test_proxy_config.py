@@ -33,7 +33,6 @@ from litellm.proxy.utils import PrismaClient
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.types.router import Deployment, LiteLLM_Params
 from litellm import Router
-from litellm.types.router import Deployment, LiteLLM_Params
 from litellm.proxy.proxy_server import (
     ProxyConfig,
     _is_remote_module_url,
