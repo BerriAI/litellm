@@ -2371,3 +2371,39 @@ def test_transform_response_carries_served_service_tier(served_tier: str | None)
     )
 
     assert result.to_dict().get("service_tier") == served_tier
+
+
+_DATABRICKS_TOOLS_WITH_OPENAI_TOOL_SEARCH: Final = [
+    {"type": "tool_search", "execution": "server"},
+    {
+        "type": "function",
+        "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+        "defer_loading": True,
+    },
+]
+
+
+def test_databricks_claude_answers_400_for_the_openai_tool_search_tool_without_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.utils.UnsupportedParamsError) as raised:
+        DatabricksConfig().map_openai_params(
+            non_default_params={"tools": _DATABRICKS_TOOLS_WITH_OPENAI_TOOL_SEARCH},
+            optional_params={},
+            model="databricks-claude-opus-5-5",
+            drop_params=False,
+        )
+    assert raised.value.status_code == 400
+    assert "tool_search" in str(raised.value)
+
+
+def test_databricks_claude_drops_the_openai_tool_search_tool_under_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    mapped: Final = DatabricksConfig().map_openai_params(
+        non_default_params={"tools": _DATABRICKS_TOOLS_WITH_OPENAI_TOOL_SEARCH},
+        optional_params={},
+        model="databricks-claude-opus-5-5",
+        drop_params=True,
+    )
+    assert mapped["tools"] == [
+        {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}}}
+    ]

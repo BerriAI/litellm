@@ -30,13 +30,14 @@ from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.azure_ai.anthropic.transformation import AzureAnthropicConfig
+from litellm.llms.bedrock.claude_platform.transformation import BedrockClaudePlatformConfig
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeConfig,
 )
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
     VertexAIAnthropicConfig,
 )
-from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
 from litellm.types.llms.openai import ChatCompletionToolCallFunctionChunk
 from litellm.types.utils import ChatCompletionToolCallChunk, ModelResponse, ServerToolUse, Usage
 from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
@@ -9248,6 +9249,215 @@ def test_completion_surfaces_response_citations_in_provider_specific_fields(resp
     assert response.choices[0].message.provider_specific_fields["citations"] == [
         [{**citation, "supported_text": "the grass is green"}]
     ]
+
+
+def _openai_tool_search_with_deferred_functions(
+    search_tools: tuple[dict[str, object], ...] = ({"type": "tool_search", "execution": "server"},),
+) -> list[dict[str, object]]:
+    return [
+        {
+            "type": "function",
+            "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+            "defer_loading": True,
+        },
+        *search_tools,
+        {
+            "type": "function",
+            "function": {
+                "name": "get_stock_price",
+                "parameters": {"type": "object", "properties": {}},
+                "defer_loading": True,
+            },
+        },
+        {
+            "type": "namespace",
+            "name": "crm",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "lookup_customer",
+                    "parameters": {"type": "object", "properties": {}},
+                    "defer_loading": True,
+                }
+            ],
+        },
+    ]
+
+
+_DEFERRED_FUNCTION_NAMES: Final = ["get_weather", "get_stock_price", "lookup_customer"]
+
+
+def _search_tools_sent(tools: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [
+        {"type": tool["type"], "name": tool["name"]}
+        for tool in tools
+        if tool.get("type") in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+    ]
+
+
+def _deferral_by_function_name(tools: list[dict[str, object]]) -> dict[object, object]:
+    return {
+        tool["name"]: tool.get("defer_loading")
+        for tool in tools
+        if tool.get("type") not in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+    }
+
+
+@pytest.mark.parametrize(
+    ("config", "model", "provider"),
+    [
+        pytest.param(AnthropicConfig(), "claude-sonnet-5-5", "anthropic", id="anthropic"),
+        pytest.param(AmazonAnthropicClaudeConfig(), "us.anthropic.claude-sonnet-5-5", "bedrock", id="bedrock-invoke"),
+        pytest.param(VertexAIAnthropicConfig(), "claude-sonnet-5-5", "vertex_ai", id="vertex_ai"),
+        pytest.param(AzureAnthropicConfig(), "claude-sonnet-5-5", "azure_ai", id="azure_ai"),
+        pytest.param(
+            BedrockClaudePlatformConfig(), "claude_platform/claude-opus-5-5", "bedrock", id="bedrock-claude-platform"
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "search_tools",
+    [
+        pytest.param(({"type": "tool_search", "execution": "server"},), id="one-search-item"),
+        pytest.param(({"type": "tool_search"}, {"type": "tool_search", "execution": "server"}), id="two-search-items"),
+    ],
+)
+def test_map_openai_params_sends_one_anthropic_search_tool_and_keeps_deferral_on_a_route_that_runs_it(
+    config, model, provider, search_tools
+):
+    from litellm.responses.litellm_completion_transformation.tool_search import anthropic_tool_search_chat_tool
+
+    assert litellm.supports_tool_search(model, provider)
+    mapped: Final = config.map_openai_params(
+        non_default_params={"tools": _openai_tool_search_with_deferred_functions(search_tools)},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    assert _search_tools_sent(mapped["tools"]) == [anthropic_tool_search_chat_tool()]
+    assert _deferral_by_function_name(mapped["tools"]) == dict.fromkeys(_DEFERRED_FUNCTION_NAMES, True)
+
+
+@pytest.mark.parametrize("native_type", sorted(ANTHROPIC_TOOL_SEARCH_TOOL_TYPES))
+@pytest.mark.parametrize(
+    ("config", "model"),
+    [
+        pytest.param(AnthropicConfig(), "claude-sonnet-5-5", id="model-with-tool-search"),
+        pytest.param(AnthropicConfig(), "claude-3-haiku-20240307", id="model-without-tool-search"),
+    ],
+)
+def test_map_openai_params_lets_a_native_anthropic_search_tool_replace_the_openai_one(
+    monkeypatch, config, model, native_type
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    native_name: Final = native_type.removesuffix("_20251119")
+    mapped: Final = config.map_openai_params(
+        non_default_params={
+            "tools": _openai_tool_search_with_deferred_functions(
+                ({"type": "tool_search", "execution": "server"}, {"type": native_type, "name": native_name})
+            )
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    assert _search_tools_sent(mapped["tools"]) == [{"type": native_type, "name": native_name}]
+    assert _deferral_by_function_name(mapped["tools"]) == dict.fromkeys(_DEFERRED_FUNCTION_NAMES, True)
+
+
+@pytest.mark.parametrize(
+    ("config", "model", "provider"),
+    [
+        pytest.param(AmazonAnthropicClaudeConfig(), "us.anthropic.claude-sonnet-5-5", "bedrock", id="bedrock-invoke"),
+        pytest.param(VertexAIAnthropicConfig(), "claude-sonnet-5-5", "vertex_ai", id="vertex_ai"),
+    ],
+)
+def test_map_openai_params_judges_tool_search_on_the_real_model_when_tool_based_response_format_swaps_it(
+    config, model, provider
+):
+    from litellm.responses.litellm_completion_transformation.tool_search import anthropic_tool_search_chat_tool
+
+    assert litellm.supports_tool_search(model, provider)
+    mapped: Final = config.map_openai_params(
+        non_default_params={
+            "tools": _openai_tool_search_with_deferred_functions(),
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "weather", "schema": {"type": "object", "properties": {}}},
+            },
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    deferral: Final = _deferral_by_function_name(mapped["tools"])
+    assert RESPONSE_FORMAT_TOOL_NAME in deferral
+    assert _search_tools_sent(mapped["tools"]) == [anthropic_tool_search_chat_tool()]
+    assert {name: deferral[name] for name in _DEFERRED_FUNCTION_NAMES} == dict.fromkeys(_DEFERRED_FUNCTION_NAMES, True)
+
+
+_UNRUNNABLE_TOOL_SEARCH_CASES: Final = [
+    pytest.param(AnthropicConfig(), "claude-3-haiku-20240307", "anthropic", "server", id="model-without-tool-search"),
+    pytest.param(AnthropicConfig(), "claude-sonnet-5-5", None, "client", id="client-executed-search"),
+    pytest.param(AnthropicConfig(), "claude-sonnet-5-5", None, 123, id="malformed-execution-search"),
+]
+
+
+@pytest.mark.parametrize(("config", "model", "provider", "execution"), _UNRUNNABLE_TOOL_SEARCH_CASES)
+def test_map_openai_params_answers_400_for_an_openai_tool_search_tool_it_cannot_run(
+    monkeypatch, config, model, provider, execution
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    assert provider is None or not litellm.supports_tool_search(model, provider)
+    with pytest.raises(litellm.utils.UnsupportedParamsError) as raised:
+        config.map_openai_params(
+            non_default_params={
+                "tools": _openai_tool_search_with_deferred_functions(({"type": "tool_search", "execution": execution},))
+            },
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+    assert raised.value.status_code == 400
+    assert "tool_search" in str(raised.value)
+    assert "drop_params: true" in str(raised.value)
+    assert ("supports_tool_search: true" in str(raised.value)) is (execution == "server")
+
+
+def test_map_openai_params_runs_tool_search_on_a_custom_named_deployment_whose_model_info_says_it_can(monkeypatch):
+    from litellm.responses.litellm_completion_transformation.tool_search import anthropic_tool_search_chat_tool
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    tools: Final = _openai_tool_search_with_deferred_functions()
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        AzureAnthropicConfig().map_openai_params(
+            non_default_params={"tools": tools}, optional_params={}, model="my-claude-deployment", drop_params=False
+        )
+    litellm.register_model({"azure_ai/my-claude-deployment": {"supports_tool_search": True, "litellm_provider": "azure_ai"}})
+    mapped: Final = AzureAnthropicConfig().map_openai_params(
+        non_default_params={"tools": tools}, optional_params={}, model="my-claude-deployment", drop_params=False
+    )
+    assert _search_tools_sent(mapped["tools"]) == [anthropic_tool_search_chat_tool()]
+    assert _deferral_by_function_name(mapped["tools"]) == dict.fromkeys(_DEFERRED_FUNCTION_NAMES, True)
+
+
+@pytest.mark.parametrize(("config", "model", "provider", "execution"), _UNRUNNABLE_TOOL_SEARCH_CASES)
+def test_map_openai_params_drops_the_openai_tool_search_tool_and_every_deferral_under_drop_params(
+    monkeypatch, config, model, provider, execution
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    assert provider is None or not litellm.supports_tool_search(model, provider)
+    mapped: Final = config.map_openai_params(
+        non_default_params={
+            "tools": _openai_tool_search_with_deferred_functions(({"type": "tool_search", "execution": execution},))
+        },
+        optional_params={},
+        model=model,
+        drop_params=True,
+    )
+    assert [tool["name"] for tool in mapped["tools"]] == _DEFERRED_FUNCTION_NAMES
+    assert all("defer_loading" not in tool for tool in mapped["tools"])
 
 
 def _refusal_message_body(stop_reason: str, stop_details: dict | None) -> dict:
