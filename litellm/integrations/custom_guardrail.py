@@ -863,12 +863,13 @@ class CustomGuardrail(CustomLogger):
                     return True
         return False
 
-    def uses_apply_guardrail_interface(self) -> bool:
-        return type(self).apply_guardrail is not CustomGuardrail.apply_guardrail
+    @classmethod
+    def uses_apply_guardrail_interface(cls) -> bool:
+        return cls.apply_guardrail is not CustomGuardrail.apply_guardrail
 
     @classmethod
     def accepts_logging_only_mode(cls) -> bool:
-        return cls.apply_guardrail is not CustomGuardrail.apply_guardrail and not cls.use_native_lifecycle_hooks
+        return cls.uses_apply_guardrail_interface() and not cls.use_native_lifecycle_hooks
 
     @classmethod
     def supports_logging_only_scope(cls) -> bool:
@@ -1025,7 +1026,7 @@ class CustomGuardrail(CustomLogger):
             )
             return kwargs, result
         litellm_params: Final = kwargs.get("litellm_params") or {}
-        scratch_metadata: Final = {
+        scratch_metadata: Final[dict[str, object]] = {  # mutable-ok: apply_guardrail records its verdict here
             key: value
             for key, value in (litellm_params.get("metadata") or {}).items()
             if key != "standard_logging_guardrail_information"
@@ -1079,11 +1080,11 @@ class CustomGuardrail(CustomLogger):
 
     async def _scan_logged_call(
         self,
-        kwargs: dict,  # mutable-ok: CustomLogger.async_logging_hook contract
+        kwargs: dict[str, object],  # mutable-ok: CustomLogger.async_logging_hook contract
         response: object | None,
         translation: "BaseTranslation",
         output_translation: "BaseTranslation",
-        scratch_metadata: dict,  # mutable-ok: apply_guardrail records its verdict into request metadata
+        scratch_metadata: dict[str, object],  # mutable-ok: apply_guardrail records its verdict into request metadata
     ) -> None:
         scratch_fields: Final = self._copy_scratch_request_fields(kwargs)
         scratch_input, scratch_tools = scratch_fields or (None, None)

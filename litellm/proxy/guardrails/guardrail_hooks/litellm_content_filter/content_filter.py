@@ -1894,11 +1894,11 @@ class ContentFilterGuardrail(CustomGuardrail):
 
     async def _scan_logged_call(
         self,
-        kwargs: dict,  # mutable-ok: CustomLogger.async_logging_hook contract
+        kwargs: dict[str, object],  # mutable-ok: CustomLogger.async_logging_hook contract
         response: object | None,
         translation: "BaseTranslation",
         output_translation: "BaseTranslation",
-        scratch_metadata: dict,  # mutable-ok: apply_guardrail records its verdict into request metadata
+        scratch_metadata: dict[str, object],  # mutable-ok: apply_guardrail records its verdict into request metadata
     ) -> None:
         """Scan the logged call with every BLOCK match recorded instead of raised."""
         token: Final = _logging_only_scan_guardrail.set(self)
