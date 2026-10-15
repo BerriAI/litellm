@@ -1413,6 +1413,34 @@ async def test_the_billing_event_carries_the_creators_end_user():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("created_by", "billed_user_id"),
+    [("alice", "alice"), ("key:hashed-token", None)],
+    ids=["key_with_a_user", "key_with_no_user_or_team"],
+)
+async def test_the_billing_event_bills_the_creating_user_and_never_a_keys_owner_scope(
+    created_by: str, billed_user_id: str | None
+):
+    table: Final = _InMemoryManagedObjectTable(
+        rows=(
+            _StoredResponse(
+                id="job-owner",
+                unified_object_id="resp_owner",
+                status="queued",
+                created_by=created_by,
+                api_key="hashed-token",
+            ),
+        )
+    )
+    billed_logger: Final = _RecordingBilledLogger()
+
+    await _poller_over(table, billed_logger).bill_if_finished(response_id="resp_owner", response=_terminal_response())
+
+    (billed,) = billed_logger.billed
+    assert billed.metadata["user_api_key_user_id"] == billed_user_id
+
+
+@pytest.mark.asyncio
 async def test_settling_from_the_deployment_bills_a_finished_response_once_from_a_free_fetch():
     """A read the caller retargets, or a delete, bills from a fetch through the configured
     deployment, since the client controls the body it would otherwise hand in."""
@@ -1480,7 +1508,16 @@ class _PricedBilling:
     cost: float | None
 
 
-async def _bill_through_a_priced_deployment(read: ResponsesAPIResponse) -> _PricedBilling:
+_PRICED_LITELLM_PARAMS: Final[Mapping[str, object]] = MappingProxyType(
+    {"model": "openai/gpt-5.6", "api_key": "sk-unused", "input_cost_per_token": 0.001, "output_cost_per_token": 0.002}
+)
+
+
+async def _bill_through_a_priced_deployment(
+    read: ResponsesAPIResponse,
+    litellm_params: Mapping[str, object] = _PRICED_LITELLM_PARAMS,
+    model_info: Mapping[str, object] = MappingProxyType({}),
+) -> _PricedBilling:
     import litellm
     from litellm_enterprise.proxy.common_utils.check_responses_cost import CheckResponsesCost
 
@@ -1502,13 +1539,8 @@ async def _bill_through_a_priced_deployment(read: ResponsesAPIResponse) -> _Pric
         model_list=[
             {
                 "model_name": "priced-gpt",
-                "litellm_params": {
-                    "model": "openai/gpt-5.6",
-                    "api_key": "sk-unused",
-                    "input_cost_per_token": 0.001,
-                    "output_cost_per_token": 0.002,
-                },
-                "model_info": {"id": "deployment-custom"},
+                "litellm_params": dict(litellm_params),
+                "model_info": {"id": "deployment-custom", **model_info},
             }
         ]
     )
@@ -1541,6 +1573,44 @@ async def test_the_billing_event_prices_the_fetched_usage_at_the_deployment_rate
     assert payload["metadata"]["user_api_key_hash"] == "hash-alice"
     assert read.hidden_params == {"response_cost": 0.0}
     assert billing.table.statuses == {"job-priced": "completed"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("base_model_in", ["litellm_params", "model_info"])
+async def test_the_billing_event_prices_the_usage_at_the_deployments_base_model(
+    monkeypatch: pytest.MonkeyPatch, base_model_in: str
+):
+    """A deployment that names a base_model for cost tracking bills its background responses at that
+    model's price, whether the base_model sits in litellm_params or model_info."""
+    import litellm
+
+    capture: Final = _spend_capture_logger()
+    monkeypatch.setattr(litellm, "_async_success_callback", [capture])
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "qa-priced-base-model",
+        {
+            "litellm_provider": "openai",
+            "mode": "responses",
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0.002,
+        },
+    )
+    base_model: Final = {"base_model": "qa-priced-base-model"}
+
+    billing: Final = await _bill_through_a_priced_deployment(
+        _terminal_response(),
+        litellm_params={
+            "model": "openai/gpt-5.6",
+            "api_key": "sk-unused",
+            **(base_model if base_model_in == "litellm_params" else {}),
+        },
+        model_info=base_model if base_model_in == "model_info" else {},
+    )
+
+    (payload,) = capture.payloads
+    assert payload["response_cost"] == pytest.approx(_PRICED_COST)
+    assert billing.cost == pytest.approx(_PRICED_COST)
 
 
 @pytest.mark.asyncio

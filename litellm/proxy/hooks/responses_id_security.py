@@ -140,12 +140,12 @@ class ResponsesIDSecurity(CustomLogger):
         )
         if not isinstance(addressed_id, str) or not addressed_id:
             return data
-        authorized_id: Final = self._authorize_response_id(addressed_id, user_api_key_dict)
+        authorized_id: Final = self.authorize_response_id(addressed_id, user_api_key_dict)
         data[addressed_id_field] = authorized_id
         data[ADDRESSED_RESPONSE_ID_FIELD] = addressed_id
         return data
 
-    def _authorize_response_id(
+    def authorize_response_id(
         self,
         response_id: str,
         user_api_key_dict: "UserAPIKeyAuth",

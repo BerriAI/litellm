@@ -58,12 +58,19 @@ class ManagedObjectRow(Protocol):
 
 
 _TAG_LIST_ADAPTER: Final[TypeAdapter[list[object]]] = TypeAdapter(list[object])
+_KEY_OWNER_SCOPE_PREFIX: Final = "key:"
 
 
 def _string_tags(request_tags: object) -> list[str] | None:
     if not isinstance(request_tags, list):
         return None
     return [tag for tag in _TAG_LIST_ADAPTER.validate_python(request_tags) if isinstance(tag, str)] or None
+
+
+def _creator_user_id(created_by: str | None) -> str | None:
+    if created_by is None or created_by.startswith(_KEY_OWNER_SCOPE_PREFIX):
+        return None
+    return created_by
 
 
 def _user_table(prisma_client: PrismaClient) -> TableActions[prisma_models.LiteLLM_UserTable]:
@@ -105,12 +112,13 @@ class ManagedObjectCreatorAttribution:
         team_alias: Final = getattr(team_row, "team_alias", None)
         org_id: Final = getattr(job, "org_id", None) or _organization_id(key_row) or _organization_id(team_row)
         tags: Final = _string_tags(getattr(job, "request_tags", None))
+        user_id: Final = _creator_user_id(job.created_by)
         return {
-            "user_api_key_user_id": job.created_by,
+            "user_api_key_user_id": user_id,
             "user_api_key": api_key,
             "user_api_key_hash": api_key,
             "user_api_key_team_id": team_id,
-            **(await self._user_info(object_id, job.created_by)),
+            **(await self._user_info(object_id, user_id)),
             **({"user_api_key_alias": key_alias} if key_alias is not None else {}),
             **({"user_api_key_team_alias": team_alias} if team_alias is not None else {}),
             **({"user_api_key_org_id": org_id} if org_id is not None else {}),

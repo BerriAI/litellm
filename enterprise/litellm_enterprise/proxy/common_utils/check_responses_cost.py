@@ -25,7 +25,7 @@ from litellm_enterprise.proxy.common_utils.managed_object_attribution import (
     ManagedObjectCreatorAttribution,
     ManagedObjectRow,
 )
-from pydantic import TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -114,11 +114,23 @@ async def log_billed_background_response(billed: BilledBackgroundResponse) -> fl
     return cost
 
 
+class _DeploymentBaseModel(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    base_model: str | None = None
+
+
 def _deployment_litellm_params(deployment: Deployment) -> Mapping[str, object]:
     from litellm.litellm_core_utils.litellm_logging import mask_api_base_credentials
 
     api_base: Final = deployment.litellm_params.api_base
-    return MappingProxyType({"api_base": mask_api_base_credentials(api_base)} if api_base else {})
+    base_model: Final = _DeploymentBaseModel.model_validate(deployment.litellm_params, from_attributes=True).base_model
+    return MappingProxyType(
+        {
+            **({"api_base": mask_api_base_credentials(api_base)} if api_base else {}),
+            **({"base_model": base_model} if base_model else {}),
+        }
+    )
 
 
 def _deployment_metadata(deployment: Deployment) -> Mapping[str, object]:

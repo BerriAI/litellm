@@ -50,7 +50,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     read_request_body,
     safe_set_request_parsed_body,
 )
-from litellm.proxy.hooks.responses_id_security import decrypted_response_id
+from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity, decrypted_response_id
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
     request_tags_from_request_data,
 )
@@ -401,7 +401,7 @@ async def responses_api(
             proxy_config=proxy_config,
             select_data_generator=(
                 partial(_streamed_background_data_generator, native_data_generator, proxy_logging_obj)
-                if data.get("background")
+                if _requests_background(_PROXY_SERVER_REQUEST_ADAPTER.validate_python(data))
                 else native_data_generator
             ),
             model=None,
@@ -848,6 +848,10 @@ class _BackgroundResponseStore(Protocol):
     ) -> bool: ...
 
 
+def _requests_background(request_body: Mapping[str, object]) -> bool:
+    return bool(request_body.get("background")) or is_background_response(request_body.get("extra_body"))
+
+
 def _managed_files_hook(proxy_logging_obj: "ProxyLogging") -> _BackgroundResponseStore | None:
     hook: Final = proxy_logging_obj.get_proxy_hook("managed_files")
     return hook if isinstance(hook, _BackgroundResponseStore) else None
@@ -904,7 +908,10 @@ def _background_cost_check() -> _BackgroundCostCheck | None:
 
     if prisma_client is None or llm_router is None:
         return None
-    from litellm_enterprise.proxy.common_utils.check_responses_cost import CheckResponsesCost
+    try:
+        from litellm_enterprise.proxy.common_utils.check_responses_cost import CheckResponsesCost
+    except ImportError:
+        return None
 
     return CheckResponsesCost(  # pyright: ignore[reportUnknownVariableType]  # litellm_enterprise is absent from the type-check venv
         proxy_logging_obj=proxy_logging_obj, prisma_client=prisma_client, llm_router=llm_router
@@ -924,6 +931,19 @@ async def _settle_background_billing(
         return
     if billed_cost is not None and fastapi_response is not None:
         fastapi_response.headers["x-litellm-response-cost"] = str(billed_cost)  # rebind-ok: FastAPI response headers
+
+
+def _caller_may_address_response(
+    response_id: str, user_api_key_dict: UserAPIKeyAuth, proxy_logging_obj: "ProxyLogging"
+) -> bool:
+    security_hook: Final = proxy_logging_obj.get_proxy_hook("responses_id_security")
+    if not isinstance(security_hook, ResponsesIDSecurity):
+        return True
+    try:
+        security_hook.authorize_response_id(response_id, user_api_key_dict)
+    except HTTPException:
+        return False
+    return True
 
 
 def _streamed_background_data_generator(
@@ -959,6 +979,9 @@ async def _record_streamed_background_response(
         async for remaining_chunk in chunks:
             yield remaining_chunk
         return
+    late_completed: Final = ProxyBaseLLMRequestProcessing.extract_completed_responses_response(stream)
+    if isinstance(late_completed, ResponsesAPIResponse):
+        await _store_billed_stream_response(late_completed, managed_files_hook, user_api_key_dict)
 
 
 async def _store_billed_stream_response(
@@ -1057,7 +1080,8 @@ async def delete_response(
     # Normal provider response flow
     data: Final = await read_request_body(request=request)
     data["response_id"] = response_id
-    await _settle_background_billing(lambda cost_check: cost_check.bill_from_deployment(response_id), None)
+    if _caller_may_address_response(response_id, user_api_key_dict, proxy_logging_obj):
+        await _settle_background_billing(lambda cost_check: cost_check.bill_from_deployment(response_id), None)
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
