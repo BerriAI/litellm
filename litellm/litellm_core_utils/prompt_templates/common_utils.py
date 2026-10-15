@@ -2539,6 +2539,9 @@ def merge_consecutive_system_messages(
     ]
 
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
 def _attempt_json_repair(s: str) -> object | None:
     """
     Attempt to repair truncated JSON produced by LLM tool calls.
@@ -2590,7 +2593,7 @@ def _attempt_json_repair(s: str) -> object | None:
     candidate += "".join(reversed(opener_stack))
 
     try:
-        return json.loads(candidate)
+        return _DECODED_JSON.validate_python(json.loads(candidate))
     except json.JSONDecodeError:
         pass
 
@@ -2629,7 +2632,7 @@ def parse_tool_call_arguments(
         return {}
 
     try:
-        return json.loads(arguments)
+        return _DECODED_JSON.validate_python(json.loads(arguments))
     except json.JSONDecodeError as original_error:
         repaired: Final = _attempt_json_repair(arguments)
         if repaired is not None:

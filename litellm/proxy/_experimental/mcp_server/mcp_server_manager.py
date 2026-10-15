@@ -284,6 +284,11 @@ _USER_ENV_VARS_CACHE_MAX_SIZE: Final = 4096  # cap to prevent unbounded growth
 
 _ListedToolsByCaller: TypeAlias = Mapping[str | None, Mapping[str, MCPTool]]
 _LISTED_TOOLS_CALLERS_PER_SERVER: Final = 256
+_UNTYPED_VALUE: Final = TypeAdapter(object)
+
+
+def _www_authenticate_header(headers: Mapping[str, str]) -> str | None:
+    return headers.get("WWW-Authenticate") or headers.get("www-authenticate")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1708,7 +1713,7 @@ def _deserialize_json_list(data: object) -> list[dict[str, Any]] | None:
         return None
     if isinstance(data, str):
         try:
-            parsed: Final[object] = json.loads(data)
+            parsed: Final = _UNTYPED_VALUE.validate_python(json.loads(data))
         except (json.JSONDecodeError, TypeError):
             return None
         data = parsed
@@ -2910,7 +2915,7 @@ class MCPServerManager:
             verbose_logger.debug("Processing %s paths from OpenAPI spec", len(paths))
 
             for path, path_item in paths.items():
-                for method in ["get", "post", "put", "delete", "patch"]:
+                for method in ("get", "post", "put", "delete", "patch"):
                     if method not in path_item:
                         continue
 
@@ -3512,7 +3517,9 @@ class MCPServerManager:
         byom_cache_key: Final = self.get_byom_submitted_servers_cache_key(submitter_user_id)
         submitted_server_ids: list[str] | None = None
         try:
-            cached_submitted_server_ids: Final = await user_api_key_cache.async_get_cache(key=byom_cache_key)
+            cached_submitted_server_ids: Final = _UNTYPED_VALUE.validate_python(
+                await user_api_key_cache.async_get_cache(key=byom_cache_key)
+            )
             if cached_submitted_server_ids is not None:
                 submitted_server_ids = cast(list[str], cached_submitted_server_ids)
         except Exception as e:  # noqa: BLE001
@@ -5165,7 +5172,7 @@ class MCPServerManager:
 
         header_value: str | None = None
         if exc.response is not None:
-            header_value = exc.response.headers.get("WWW-Authenticate") or exc.response.headers.get("www-authenticate")
+            header_value = _www_authenticate_header(exc.response.headers)
         status_attempt: Final = (
             f"GET {origin}: HTTP {exc.response.status_code}"
             if exc.response is not None
