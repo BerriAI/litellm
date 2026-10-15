@@ -3,7 +3,7 @@ import io
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import asdict, fields, replace
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Final, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -19,6 +19,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     ScopeDenied,
     daily_activity_repository,
     get_daily_activity_aggregated,
+    parse_canonical_date_range,
     raise_public,
     spend_logs_window,
 )
@@ -41,6 +42,7 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
     CacheLeakageKeysResponse,
     DailyActivityKeyPageResponse,
     DailyActivityKeySearchResponse,
+    DailyActivityUserPageResponse,
     KeyActivityRow,
     KeyMetadata,
     KeySpendActivityRow,
@@ -48,12 +50,15 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
     ModelTopKeysResponse,
     SpendAnalyticsPaginatedResponse,
     SpendMetrics,
+    UserActivityRow,
 )
 from litellm.types.repositories.daily_activity import (
     ExportRow,
     ExportType,
     KeyMetadataRow,
     KeySpendRow,
+    UserMetadataRow,
+    UserSpendRow,
 )
 
 router = APIRouter()
@@ -69,9 +74,8 @@ def get_daily_activity_repository() -> DailyActivityRepository:
 
 def _date_range_error(query: EntityQuery, *, user_aggregated: bool) -> InvalidDateRange | None:
     if user_aggregated:
-        if query.start_date is None or query.end_date is None:
-            return InvalidDateRange(reason="Please provide start_date and end_date")
-        return None
+        date_range: Final = parse_canonical_date_range(query.start_date, query.end_date)
+        return date_range if isinstance(date_range, InvalidDateRange) else None
 
     range_error: Final[str | None] = aggregated_date_range_error(query.start_date, query.end_date)
     return None if range_error is None else InvalidDateRange(reason=range_error)
@@ -162,21 +166,47 @@ async def _key_activity_rows(
     return [_key_activity_row(row, metadata) for row in rows]
 
 
+def _user_activity_row(row: UserSpendRow, metadata: Mapping[str, UserMetadataRow]) -> UserActivityRow:
+    meta: Final = metadata.get(row.user_id) if row.user_id is not None else None
+    return UserActivityRow(
+        user_id=row.user_id,
+        user_email=meta.user_email if meta is not None else None,
+        user_alias=meta.user_alias if meta is not None else None,
+        spend=row.spend,
+        prompt_tokens=row.prompt_tokens,
+        completion_tokens=row.completion_tokens,
+        total_tokens=row.total_tokens,
+        api_requests=row.api_requests,
+        successful_requests=row.successful_requests,
+        failed_requests=row.failed_requests,
+    )
+
+
+async def _user_activity_rows(
+    repository: DailyActivityRepository,
+    rows: Sequence[UserSpendRow],
+) -> Sequence[UserActivityRow]:
+    metadata: Final[Mapping[str, UserMetadataRow]] = await repository.user_metadata(
+        frozenset(user_id for row in rows if (user_id := row.user_id) is not None)
+    )
+    return [_user_activity_row(row, metadata) for row in rows]
+
+
 def _export_filename(
     entity: str,
-    start_date: str,
-    end_date: str,
+    start_date: date,
+    end_date: date,
     export_type: ExportType,
     file_format: Literal["csv", "json"],
 ) -> str:
     extension: Final[str] = "csv" if file_format == "csv" else "json"
-    return f"{entity}-usage-{start_date}-{end_date}-{export_type.value}.{extension}"
+    return f"{entity}-usage-{start_date.isoformat()}-{end_date.isoformat()}-{export_type.value}.{extension}"
 
 
 def _content_disposition(
     entity: str,
-    start_date: str,
-    end_date: str,
+    start_date: date,
+    end_date: date,
     export_type: ExportType,
     file_format: Literal["csv", "json"],
 ) -> str:
@@ -479,8 +509,8 @@ def _register_export_route(router: APIRouter, resolver: EntityScopeResolver, pre
                     "Cache-Control": "no-store",
                     "Content-Disposition": _content_disposition(
                         resolver.entity,
-                        resolved.scope.start_date,
-                        resolved.scope.end_date,
+                        date.fromisoformat(resolved.scope.start_date),
+                        date.fromisoformat(resolved.scope.end_date),
                         export_type,
                         file_format,
                     ),
@@ -509,6 +539,49 @@ def _register_export_route(router: APIRouter, resolver: EntityScopeResolver, pre
                 },
             }
         },
+        include_in_schema=prefix != "/end_user",
+    )
+
+
+def _register_user_page_route(router: APIRouter, resolver: EntityScopeResolver, prefix: str) -> None:
+    @management_endpoint_wrapper
+    async def user_page(
+        entity_query: Annotated[EntityQuery, Depends(resolver.query)],
+        user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+        repository: Annotated[DailyActivityRepository, Depends(get_daily_activity_repository)],
+        prisma_client: Annotated[PrismaClient, Depends(get_daily_activity_prisma_client)],
+        offset: Annotated[int, Query(ge=0)] = 0,
+        limit: Annotated[int, Query(ge=1, le=constants.USAGE_USER_PAGE_MAX)] = constants.USAGE_USER_PAGE_DEFAULT,
+    ) -> DailyActivityUserPageResponse:
+        try:
+            resolved: Final = await _resolved_scope(
+                resolver,
+                entity_query,
+                user_api_key_dict,
+                prisma_client,
+                user_aggregated=False,
+            )
+            page: Final = await repository.user_page(resolved.scope, offset=offset, limit=limit)
+            return DailyActivityUserPageResponse(
+                users=await _user_activity_rows(repository, page.rows),
+                total_users=page.total_users,
+                offset=offset,
+                limit=limit,
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001, LIT003  # mirrors the sibling daily-activity routes' 500 mapping
+            verbose_proxy_logger.exception("Daily activity user page failed: %s", exc)
+            raise HTTPException(status_code=500, detail={"error": f"Failed to fetch analytics: {exc}"})
+
+    router.add_api_route(
+        f"{prefix}/daily/activity/aggregated/users",
+        user_page,
+        methods=["GET"],
+        name=resolver.operation_names["user_page"],
+        tags=list(resolver.tags),
+        dependencies=(Depends(user_api_key_auth),),
+        response_model=DailyActivityUserPageResponse,
         include_in_schema=prefix != "/end_user",
     )
 
@@ -565,6 +638,7 @@ def register_daily_activity_routes(router: APIRouter, resolver: EntityScopeResol
         _register_model_top_keys_route(router, resolver, prefix)
         _register_export_route(router, resolver, prefix)
         if resolver.entity == "user":
+            _register_user_page_route(router, resolver, prefix)
             _register_cache_leakage_route(router, resolver, prefix)
 
 

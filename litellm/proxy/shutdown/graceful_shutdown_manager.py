@@ -2,9 +2,10 @@
 Application-level graceful shutdown coordination for the LiteLLM proxy.
 
 Kubernetes terminates a pod by sending ``SIGTERM`` and, after
-``terminationGracePeriodSeconds``, ``SIGKILL``. By default LiteLLM delegates
-the signal to uvicorn and tears down immediately, dropping any in-flight
-requests (streaming, batch inference, long-lived calls).
+``terminationGracePeriodSeconds``, ``SIGKILL``. On ``SIGTERM`` uvicorn stops
+accepting connections and waits up to ``GRACEFUL_SHUTDOWN_TIMEOUT`` for open
+ones, cancelling whatever is still running, before the lifespan teardown that
+runs this drain.
 
 A fixed ``preStop`` sleep can not solve this: it has to be sized for the
 *worst-case* request, so it either wastes time on every routine shutdown or is

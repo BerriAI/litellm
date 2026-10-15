@@ -1,11 +1,14 @@
 import copy
 import json
+from itertools import chain
 from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
+from httpx import Headers
 import pytest
 import respx
+from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm.constants import (
@@ -18,7 +21,11 @@ from litellm.constants import (
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
+from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+from litellm.llms.anthropic.chat import ModelResponseIterator
+from litellm.llms.anthropic.common_utils import process_anthropic_headers
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.base_llm.base_utils import ResponseFormatSchema, response_format_schema
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
@@ -30,7 +37,9 @@ from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation im
     VertexAIAnthropicConfig,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
-from litellm.types.utils import ServerToolUse, Usage
+from litellm.types.llms.openai import ChatCompletionToolCallFunctionChunk
+from litellm.types.utils import ChatCompletionToolCallChunk, ModelResponse, ServerToolUse, Usage
+from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
 
 def test_response_format_transformation_unit_test():
@@ -608,7 +617,7 @@ def test_map_tool_helper():
 
     tool = {"type": "web_search_20250305", "name": "web_search", "max_uses": 5}
 
-    result, _ = config._map_tool_helper(tool)
+    result, _ = config.map_tool_helper(tool)
     assert result is not None
     assert result["name"] == "web_search"
     assert result["max_uses"] == 5
@@ -1052,6 +1061,40 @@ def test_transform_response_with_prefix_prompt():
     assert result.choices[0].message.content == "You are a helpful assistant. The grass is green."
 
 
+def test_pdf_file_input_becomes_anthropic_document():
+    config = AnthropicConfig()
+    file_data = "data:application/pdf;base64,JVBERi0xLjQKJSBQT05H"
+
+    result = config.transform_request(
+        model="claude-sonnet-5-5",
+        messages=[
+            {
+                "role": "user",
+                "content": [{"type": "file", "file": {"file_data": file_data, "filename": "document.pdf"}}],
+            }
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": "JVBERi0xLjQKJSBQT05H",
+                    },
+                }
+            ],
+        }
+    ]
+
+
 def test_get_supported_params_thinking():
     config = AnthropicConfig()
     params = config.get_supported_openai_params(model="claude-sonnet-4-20250514")
@@ -1424,7 +1467,7 @@ def test_tool_search_regex_mapping():
 
     tool = {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"}
 
-    mapped_tool, mcp_server = config._map_tool_helper(tool)
+    mapped_tool, mcp_server = config.map_tool_helper(tool)
 
     assert mapped_tool is not None
     assert mapped_tool["type"] == "tool_search_tool_regex_20251119"
@@ -1438,7 +1481,7 @@ def test_tool_search_bm25_mapping():
 
     tool = {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"}
 
-    mapped_tool, mcp_server = config._map_tool_helper(tool)
+    mapped_tool, mcp_server = config.map_tool_helper(tool)
 
     assert mapped_tool is not None
     assert mapped_tool["type"] == "tool_search_tool_bm25_20251119"
@@ -1560,7 +1603,7 @@ def test_defer_loading_preserved_in_transformation():
         "defer_loading": True,
     }
 
-    mapped_tool, mcp_server = config._map_tool_helper(tool)
+    mapped_tool, mcp_server = config.map_tool_helper(tool)
 
     assert mapped_tool is not None
     assert mapped_tool.get("defer_loading") is True
@@ -1664,7 +1707,7 @@ def test_allowed_callers_field_preservation():
         "allowed_callers": ["code_execution_20250825"],
     }
 
-    transformed_tool, _ = config._map_tool_helper(tool_with_allowed_callers)
+    transformed_tool, _ = config.map_tool_helper(tool_with_allowed_callers)
     assert transformed_tool is not None
     assert "allowed_callers" in transformed_tool
     assert transformed_tool["allowed_callers"] == ["code_execution_20250825"]
@@ -1752,7 +1795,7 @@ def test_code_execution_20250825_tool_type():
 
     tool = {"type": "code_execution_20250825", "name": "code_execution"}
 
-    transformed_tool, _ = config._map_tool_helper(tool)
+    transformed_tool, _ = config.map_tool_helper(tool)
     assert transformed_tool is not None
     assert transformed_tool["type"] == "code_execution_20250825"
     assert transformed_tool["name"] == "code_execution"
@@ -1777,7 +1820,7 @@ def test_allowed_callers_in_function_field():
         },
     }
 
-    transformed_tool, _ = config._map_tool_helper(tool)
+    transformed_tool, _ = config.map_tool_helper(tool)
     assert transformed_tool is not None
     assert "allowed_callers" in transformed_tool
     assert transformed_tool["allowed_callers"] == ["code_execution_20250825"]
@@ -1808,7 +1851,7 @@ def test_input_examples_field_preservation():
         ],
     }
 
-    transformed_tool, _ = config._map_tool_helper(tool_with_examples)
+    transformed_tool, _ = config.map_tool_helper(tool_with_examples)
     assert transformed_tool is not None
     assert "input_examples" in transformed_tool
     assert len(transformed_tool["input_examples"]) == 2
@@ -1866,7 +1909,7 @@ def test_input_examples_in_function_field():
         },
     }
 
-    transformed_tool, _ = config._map_tool_helper(tool)
+    transformed_tool, _ = config.map_tool_helper(tool)
     assert transformed_tool is not None
     assert "input_examples" in transformed_tool
     assert len(transformed_tool["input_examples"]) == 2
@@ -1893,7 +1936,7 @@ def test_input_examples_with_other_features():
         "allowed_callers": ["code_execution_20250825"],
     }
 
-    transformed_tool, _ = config._map_tool_helper(tool)
+    transformed_tool, _ = config.map_tool_helper(tool)
     assert transformed_tool is not None
     assert "input_examples" in transformed_tool
     assert "defer_loading" in transformed_tool
@@ -1921,7 +1964,7 @@ def test_input_examples_empty_list_not_added():
         "input_examples": [],
     }
 
-    transformed_tool, _ = config._map_tool_helper(tool)
+    transformed_tool, _ = config.map_tool_helper(tool)
     assert transformed_tool is not None
     # Empty list should not be added
     assert "input_examples" not in transformed_tool or len(transformed_tool.get("input_examples", [])) == 0
@@ -2195,7 +2238,7 @@ def test_anthropic_drop_params_false_forwards_to_unsupported_model():
     ],
 )
 def test_anthropic_model_supports_effort_param_recognizes_supporting_models(model):
-    assert AnthropicConfig._model_supports_effort_param(model, "anthropic") is True
+    assert AnthropicConfig.model_supports_effort_param(model, "anthropic") is True
 
 
 @pytest.mark.parametrize(
@@ -2208,7 +2251,7 @@ def test_anthropic_model_supports_effort_param_recognizes_supporting_models(mode
     ],
 )
 def test_anthropic_model_supports_effort_param_rejects_non_supporting_models(model):
-    assert AnthropicConfig._model_supports_effort_param(model, "anthropic") is False
+    assert AnthropicConfig.model_supports_effort_param(model, "anthropic") is False
 
 
 @pytest.mark.parametrize(
@@ -2532,7 +2575,7 @@ def test_supports_effort_level_handles_provider_prefixes(model, level, expected)
     ],
 )
 def test_validate_effort_for_model_centralises_per_model_gating(model, effort, expect_error):
-    err = AnthropicConfig._validate_effort_for_model(model, effort, "anthropic")
+    err = AnthropicConfig.validate_effort_for_model(model, effort, "anthropic")
     if expect_error:
         assert err is not None
         assert effort in err
@@ -2782,7 +2825,6 @@ def test_raw_adaptive_thinking_untouched_for_46_plus_model():
         ("claude-opus-4-8", True),
         ("anthropic.claude-opus-4-8", True),
         ("vertex_ai/claude-opus-4-6@default", True),
-        ("openrouter/anthropic/claude-opus-4.7", True),
         ("us.anthropic.claude-sonnet-4-6", True),
         ("claude-opus-4-6-20260205", True),
         # unmapped future models -> anthropic-claude fallback rule
@@ -2807,7 +2849,7 @@ def test_is_adaptive_thinking_model_is_sourced_from_cost_map(local_model_cost_ma
     fallback for ids the cost map cannot resolve. The dated Claude 4.0 names stay
     non-adaptive because the date suffix is not read as a minor version, while 4.8/4.9/5.x
     are covered without a code change."""
-    assert AnthropicConfig._is_adaptive_thinking_model(model, "anthropic") is expected
+    assert AnthropicConfig.is_adaptive_thinking_model(model, "anthropic") is expected
 
 
 def test_get_supported_params_includes_reasoning_for_sonnet_4_6_alias(
@@ -4277,6 +4319,71 @@ def test_calculate_usage_service_tier_defaults_to_none():
     assert usage.service_tier is None
 
 
+@pytest.mark.parametrize("provider", ["anthropic", "azure_ai"])
+@pytest.mark.parametrize(
+    ("openai_tier", "anthropic_tier"),
+    [("auto", "auto"), ("default", "standard_only"), ("standard_only", "standard_only")],
+)
+def test_service_tier_reaches_anthropic_request_body(provider, openai_tier, anthropic_tier):
+    optional_params: Final = litellm.utils.get_optional_params(
+        model="claude-sonnet-4-6", custom_llm_provider=provider, service_tier=openai_tier
+    )
+
+    body: Final = AnthropicConfig().transform_request(
+        model="claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert body["service_tier"] == anthropic_tier
+
+
+@pytest.mark.parametrize("tier", ["flex", "priority", "fast", "scale"])
+def test_service_tier_without_anthropic_equivalent_raises_with_drop_params_hint(monkeypatch, tier):
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params") as exc_info:
+        litellm.utils.get_optional_params(
+            model="claude-sonnet-4-6", custom_llm_provider="anthropic", service_tier=tier
+        )
+
+    assert exc_info.value.status_code == 400
+
+
+def test_service_tier_without_anthropic_equivalent_dropped_with_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    optional_params: Final = litellm.utils.get_optional_params(
+        model="claude-sonnet-4-6", custom_llm_provider="anthropic", service_tier="flex", drop_params=True
+    )
+
+    assert "service_tier" not in optional_params
+
+
+@pytest.mark.parametrize(
+    ("provider", "model"),
+    [("bedrock", "invoke/us.anthropic.claude-sonnet-4-6"), ("vertex_ai", "claude-sonnet-4-6")],
+)
+def test_service_tier_still_rejected_for_claude_hosts_that_400_on_it(monkeypatch, provider, model):
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="service_tier"):
+        litellm.utils.get_optional_params(model=model, custom_llm_provider=provider, service_tier="auto")
+
+
+def test_bedrock_invoke_service_tier_opt_in_is_sent_untranslated():
+    optional_params: Final = litellm.utils.get_optional_params(
+        model="invoke/us.anthropic.claude-sonnet-4-6",
+        custom_llm_provider="bedrock",
+        service_tier="default",
+        allowed_openai_params=["service_tier"],
+    )
+
+    assert optional_params["service_tier"] == "default"
+
+
 def test_fast_mode_parameter_in_supported_params():
     """
     Test that 'speed' is in the list of supported OpenAI params.
@@ -4413,7 +4520,7 @@ def test_map_tool_helper_enforces_object_type_when_missing():
     }
 
     original_params = tool["function"]["parameters"].copy()
-    result, _ = config._map_tool_helper(tool)
+    result, _ = config.map_tool_helper(tool)
     assert result is not None
     assert result["input_schema"]["type"] == "object"
     assert "properties" in result["input_schema"]
@@ -4444,7 +4551,7 @@ def test_map_tool_helper_enforces_object_type_when_wrong_type():
     }
 
     original_params = tool["function"]["parameters"].copy()
-    result, _ = config._map_tool_helper(tool)
+    result, _ = config.map_tool_helper(tool)
     assert result is not None
     assert result["input_schema"]["type"] == "object"
     assert result["input_schema"].get("properties") == {}, (
@@ -4478,7 +4585,7 @@ def test_map_tool_helper_preserves_valid_object_schema():
         },
     }
 
-    result, _ = config._map_tool_helper(tool)
+    result, _ = config.map_tool_helper(tool)
     assert result is not None
     assert result["input_schema"]["type"] == "object"
     assert "city" in result["input_schema"]["properties"]
@@ -4500,7 +4607,7 @@ def test_map_tool_helper_empty_parameters_get_default():
         },
     }
 
-    result, _ = config._map_tool_helper(tool)
+    result, _ = config.map_tool_helper(tool)
     assert result is not None
     assert result["input_schema"]["type"] == "object"
     assert result["input_schema"].get("properties") == {}
@@ -4559,7 +4666,7 @@ def test_advisor_tool_map_tool_helper():
         "name": "advisor",
         "model": "claude-opus-4-6",
     }
-    returned_tool, mcp_server = config._map_tool_helper(tool)  # type: ignore
+    returned_tool, mcp_server = config.map_tool_helper(tool)  # type: ignore
     assert returned_tool is not None
     assert returned_tool["type"] == "advisor_20260301"
     assert returned_tool["model"] == "claude-opus-4-6"
@@ -4576,7 +4683,7 @@ def test_advisor_tool_map_tool_helper_with_optional_fields():
         "max_uses": 3,
         "caching": {"type": "ephemeral", "ttl": "5m"},
     }
-    returned_tool, _ = config._map_tool_helper(tool)  # type: ignore
+    returned_tool, _ = config.map_tool_helper(tool)  # type: ignore
     assert returned_tool is not None
     assert returned_tool["max_uses"] == 3
     assert returned_tool["caching"] == {"type": "ephemeral", "ttl": "5m"}
@@ -4587,7 +4694,7 @@ def test_advisor_tool_map_tool_helper_missing_model():
     config = AnthropicConfig()
     tool = {"type": "advisor_20260301", "name": "advisor"}
     with pytest.raises(ValueError, match="valid model"):
-        config._map_tool_helper(tool)  # type: ignore
+        config.map_tool_helper(tool)  # type: ignore
 
 
 def test_advisor_beta_header_injected():
@@ -5515,7 +5622,7 @@ def test_map_tool_helper_inlines_components_schemas_refs():
         },
     }
 
-    transformed, _ = config._map_tool_helper(tool)
+    transformed, _ = config.map_tool_helper(tool)
 
     assert transformed is not None
     schema = transformed["input_schema"]
@@ -5555,7 +5662,7 @@ def test_map_tool_helper_inlines_legacy_definitions_refs():
         },
     }
 
-    transformed, _ = config._map_tool_helper(tool)
+    transformed, _ = config.map_tool_helper(tool)
 
     assert transformed is not None
     schema = transformed["input_schema"]
@@ -5586,7 +5693,7 @@ def test_map_tool_helper_preserves_native_dollar_defs():
         },
     }
 
-    transformed, _ = config._map_tool_helper(tool)
+    transformed, _ = config.map_tool_helper(tool)
 
     assert transformed is not None
     schema = transformed["input_schema"]
@@ -5618,7 +5725,7 @@ def test_map_tool_helper_does_not_mutate_caller_dict():
     }
     snapshot = copy.deepcopy(tool)
 
-    config._map_tool_helper(tool)
+    config.map_tool_helper(tool)
 
     assert tool == snapshot, "caller's tool dict was mutated in place"
 
@@ -5658,7 +5765,7 @@ def test_map_tool_helper_collision_prefers_definitions_over_components_schemas()
         },
     }
 
-    transformed, _ = config._map_tool_helper(tool)
+    transformed, _ = config.map_tool_helper(tool)
 
     assert transformed is not None
     expected = {"type": "string", "description": "from-definitions"}
@@ -5856,7 +5963,7 @@ def test_namespace_tool_flat_nested_tools_are_extracted():
             ],
         }
     ]
-    anthropic_tools, _ = config._map_tools(tools)
+    anthropic_tools, _ = config.map_tools(tools)
     assert len(anthropic_tools) == 1
     assert anthropic_tools[0]["name"] == "close_agent"
 
@@ -5907,7 +6014,7 @@ def test_namespace_tool_nested_tools_are_extracted():
             },
         },
     ]
-    anthropic_tools, mcp_servers = config._map_tools(tools)
+    anthropic_tools, mcp_servers = config.map_tools(tools)
     names = [t["name"] for t in anthropic_tools]
     assert "close_agent" in names
     assert "resume_agent" in names
@@ -6323,7 +6430,7 @@ def _eager_chat_tool(**extra: object) -> dict[str, object]:
 
 @pytest.mark.parametrize("flag", [True, False])
 def test_eager_input_streaming_passed_through_from_tool_top_level(flag):
-    mapped_tool, _ = AnthropicConfig()._map_tool_helper(_eager_chat_tool(eager_input_streaming=flag))
+    mapped_tool, _ = AnthropicConfig().map_tool_helper(_eager_chat_tool(eager_input_streaming=flag))
 
     assert mapped_tool == {
         "name": "write_file",
@@ -6335,7 +6442,7 @@ def test_eager_input_streaming_passed_through_from_tool_top_level(flag):
 
 
 def test_eager_input_streaming_passed_through_from_function():
-    mapped_tool, _ = AnthropicConfig()._map_tool_helper(
+    mapped_tool, _ = AnthropicConfig().map_tool_helper(
         {"type": "function", "function": _eager_chat_function(eager_input_streaming=True)}
     )
 
@@ -6344,14 +6451,14 @@ def test_eager_input_streaming_passed_through_from_function():
 
 
 def test_eager_input_streaming_absent_stays_absent():
-    mapped_tool, _ = AnthropicConfig()._map_tool_helper(_eager_chat_tool())
+    mapped_tool, _ = AnthropicConfig().map_tool_helper(_eager_chat_tool())
 
     assert "eager_input_streaming" not in mapped_tool
 
 
 def test_eager_input_streaming_rejects_non_boolean():
     with pytest.raises(litellm.BadRequestError, match="eager_input_streaming must be a boolean"):
-        AnthropicConfig()._map_tool_helper(_eager_chat_tool(eager_input_streaming="true"))
+        AnthropicConfig().map_tool_helper(_eager_chat_tool(eager_input_streaming="true"))
 
 
 def test_eager_input_streaming_not_set_on_computer_use_tool():
@@ -6361,7 +6468,7 @@ def test_eager_input_streaming_not_set_on_computer_use_tool():
         "eager_input_streaming": True,
     }
 
-    mapped_tool, _ = AnthropicConfig()._map_tool_helper(computer_tool)
+    mapped_tool, _ = AnthropicConfig().map_tool_helper(computer_tool)
 
     assert mapped_tool["type"] == "computer_20250124"
     assert "eager_input_streaming" not in mapped_tool
@@ -6798,3 +6905,2271 @@ def test_chat_dummy_tool_result_for_an_orphaned_tool_call_replays_a_byte_identic
     _assert_prefix_stable(requests)
     assert [m["role"] for m in requests[0]["messages"]] == ["user", "assistant", "user"]
     assert requests[0]["messages"][2]["content"][0]["type"] == "tool_result"
+
+
+anthropic_chunk_list: Final = [
+    {
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {"type": "text", "text": ""},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": "To"},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": " answer"},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": " your question about the weather"},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": " in Boston and Los"},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": " Angeles today, I'll"},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": " need to"},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": " use"},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": " the"},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": " get_current_weather"},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": " function"},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": " for"},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": " both"},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": " cities"},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": ". Let"},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": " me fetch"},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": " that"},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": " information"},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": " for"},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": " you."},
+    },
+    {"type": "content_block_stop", "index": 0},
+    {
+        "type": "content_block_start",
+        "index": 1,
+        "content_block": {
+            "type": "tool_use",
+            "id": "toolu_12345",
+            "name": "get_current_weather",
+            "input": {},
+        },
+    },
+    {
+        "type": "content_block_delta",
+        "index": 1,
+        "delta": {"type": "input_json_delta", "partial_json": ""},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 1,
+        "delta": {"type": "input_json_delta", "partial_json": '{"locat'},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 1,
+        "delta": {"type": "input_json_delta", "partial_json": 'ion": "Bos'},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 1,
+        "delta": {"type": "input_json_delta", "partial_json": 'ton, MA"}'},
+    },
+    {"type": "content_block_stop", "index": 1},
+    {
+        "type": "content_block_start",
+        "index": 2,
+        "content_block": {
+            "type": "tool_use",
+            "id": "toolu_023423423",
+            "name": "get_current_weather",
+            "input": {},
+        },
+    },
+    {
+        "type": "content_block_delta",
+        "index": 2,
+        "delta": {"type": "input_json_delta", "partial_json": ""},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 2,
+        "delta": {"type": "input_json_delta", "partial_json": '{"l'},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 2,
+        "delta": {"type": "input_json_delta", "partial_json": "oca"},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 2,
+        "delta": {"type": "input_json_delta", "partial_json": "tio"},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 2,
+        "delta": {"type": "input_json_delta", "partial_json": 'n": "Lo'},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 2,
+        "delta": {"type": "input_json_delta", "partial_json": "s Angel"},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 2,
+        "delta": {"type": "input_json_delta", "partial_json": 'es, CA"}'},
+    },
+    {"type": "content_block_stop", "index": 2},
+    {
+        "type": "message_delta",
+        "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+        "usage": {"output_tokens": 137},
+    },
+    {"type": "message_stop"},
+]
+
+
+def _make_transform_request(optional_params: dict, litellm_params: dict) -> dict:
+
+    return AnthropicConfig().transform_request(
+        model="claude-3-5-sonnet-20241022",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        headers={},
+    )
+
+
+def test_anthropic_tool_streaming():
+    """
+    OpenAI starts tool_use indexes at 0 for the first tool, regardless of preceding text.
+
+    Anthropic gives tool_use indexes starting at the first chunk, meaning they often start at 1
+    when they should start at 0
+    """
+    litellm.set_verbose = True
+    response_iter = ModelResponseIterator([], False)
+
+    # First index is 0, we'll start earlier because incrementing is easier
+    correct_tool_index = -1
+    for chunk in anthropic_chunk_list:
+        parsed_chunk = response_iter.chunk_parser(chunk)
+        if tool_use := parsed_chunk.get("tool_use"):
+            # We only increment when a new block starts
+            if tool_use.get("id") is not None:
+                correct_tool_index += 1
+            assert tool_use["index"] == correct_tool_index
+
+
+def test_process_anthropic_headers_empty():
+    result = process_anthropic_headers({})
+    assert result == {}, "Expected empty dictionary for no input"
+
+
+def test_process_anthropic_headers_with_all_headers():
+    input_headers = Headers(
+        {
+            "anthropic-ratelimit-requests-limit": "100",
+            "anthropic-ratelimit-requests-remaining": "90",
+            "anthropic-ratelimit-tokens-limit": "10000",
+            "anthropic-ratelimit-tokens-remaining": "9000",
+            "other-header": "value",
+        }
+    )
+
+    expected_output = {
+        "x-ratelimit-limit-requests": "100",
+        "x-ratelimit-remaining-requests": "90",
+        "x-ratelimit-limit-tokens": "10000",
+        "x-ratelimit-remaining-tokens": "9000",
+        "llm_provider-anthropic-ratelimit-requests-limit": "100",
+        "llm_provider-anthropic-ratelimit-requests-remaining": "90",
+        "llm_provider-anthropic-ratelimit-tokens-limit": "10000",
+        "llm_provider-anthropic-ratelimit-tokens-remaining": "9000",
+        "llm_provider-other-header": "value",
+    }
+
+    result = process_anthropic_headers(input_headers)
+    assert result == expected_output, "Unexpected output for all Anthropic headers"
+
+
+def test_process_anthropic_headers_with_partial_headers():
+    input_headers = Headers(
+        {
+            "anthropic-ratelimit-requests-limit": "100",
+            "anthropic-ratelimit-tokens-remaining": "9000",
+            "other-header": "value",
+        }
+    )
+
+    expected_output = {
+        "x-ratelimit-limit-requests": "100",
+        "x-ratelimit-remaining-tokens": "9000",
+        "llm_provider-anthropic-ratelimit-requests-limit": "100",
+        "llm_provider-anthropic-ratelimit-tokens-remaining": "9000",
+        "llm_provider-other-header": "value",
+    }
+
+    result = process_anthropic_headers(input_headers)
+    assert result == expected_output, "Unexpected output for partial Anthropic headers"
+
+
+def test_process_anthropic_headers_with_no_matching_headers():
+    input_headers = Headers({"unrelated-header-1": "value1", "unrelated-header-2": "value2"})
+
+    expected_output = {
+        "llm_provider-unrelated-header-1": "value1",
+        "llm_provider-unrelated-header-2": "value2",
+    }
+
+    result = process_anthropic_headers(input_headers)
+    assert result == expected_output, "Unexpected output for non-matching headers"
+
+
+@pytest.mark.parametrize(
+    "computer_tool_used, prompt_caching_set, expected_beta_header",
+    [
+        (True, False, True),
+        (False, True, False),
+        (True, True, True),
+        (False, False, False),
+    ],
+)
+def test_anthropic_beta_header(computer_tool_used, prompt_caching_set, expected_beta_header):
+    headers = litellm.AnthropicConfig().get_anthropic_headers(
+        api_key="fake-api-key",
+        computer_tool_used=computer_tool_used,
+        prompt_caching_set=prompt_caching_set,
+    )
+
+    if expected_beta_header:
+        assert "anthropic-beta" in headers
+    else:
+        assert "anthropic-beta" not in headers
+
+
+@pytest.mark.parametrize(
+    "cache_control_location",
+    [
+        "inside_function",
+        "outside_function",
+    ],
+)
+def test_anthropic_tool_helper(cache_control_location):
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "get_current_weather",
+            "description": "Get the current weather in a given location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "The city and state, e.g. San Francisco, CA",
+                    },
+                    "unit": {
+                        "type": "string",
+                        "enum": ["celsius", "fahrenheit"],
+                    },
+                },
+                "required": ["location"],
+            },
+        },
+    }
+
+    if cache_control_location == "inside_function":
+        tool["function"]["cache_control"] = {"type": "ephemeral"}
+    else:
+        tool["cache_control"] = {"type": "ephemeral"}
+
+    tool, _ = AnthropicConfig().map_tool_helper(tool=tool)
+
+    assert tool["cache_control"] == {"type": "ephemeral"}
+
+
+def test_create_json_tool_call_for_response_format():
+    """
+    tests using response_format=json with anthropic
+
+    A tool call to anthropic is made when response_format=json is used.
+
+    """
+
+    config = AnthropicConfig()
+
+    tool = config._create_json_tool_call_for_response_format()
+    assert tool["name"] == "json_tool_call"
+    _input_schema = tool.get("input_schema")
+    assert _input_schema is not None
+    assert _input_schema.get("type") == "object"
+    assert _input_schema.get("additionalProperties") is True
+    assert _input_schema.get("properties") == {}
+
+    custom_schema = {"name": {"type": "string"}, "age": {"type": "integer"}}
+    tool = config._create_json_tool_call_for_response_format(json_schema=custom_schema)
+    assert tool["name"] == "json_tool_call"
+    _input_schema = tool.get("input_schema")
+    assert _input_schema is not None
+    assert _input_schema.get("type") == "object"
+    assert _input_schema.get("name") == custom_schema["name"]
+    assert _input_schema.get("age") == custom_schema["age"]
+    assert "additionalProperties" not in _input_schema
+
+
+def test_convert_tool_response_to_message_with_values():
+    """Test converting a tool response with 'values' key to a message"""
+    tool_calls = [
+        ChatCompletionToolCallChunk(
+            id="test_id",
+            type="function",
+            function=ChatCompletionToolCallFunctionChunk(
+                name="json_tool_call",
+                arguments='{"values": {"name": "John", "age": 30}}',
+            ),
+            index=0,
+        )
+    ]
+
+    message = AnthropicConfig.convert_tool_response_to_message(tool_calls=tool_calls)
+
+    assert message is not None
+    assert message.content == '{"name": "John", "age": 30}'
+
+
+def test_convert_tool_response_to_message_without_values():
+    """
+    Test converting a tool response without 'values' key to a message
+
+    Anthropic API returns the JSON schema in the tool call, OpenAI Spec expects it in the message. This test ensures that the tool call is converted to a message correctly.
+
+    Relevant issue: https://github.com/BerriAI/litellm/issues/6741
+    """
+    tool_calls = [
+        ChatCompletionToolCallChunk(
+            id="test_id",
+            type="function",
+            function=ChatCompletionToolCallFunctionChunk(
+                name="json_tool_call", arguments='{"name": "John", "age": 30}'
+            ),
+            index=0,
+        )
+    ]
+
+    message = AnthropicConfig.convert_tool_response_to_message(tool_calls=tool_calls)
+
+    assert message is not None
+    assert message.content == '{"name": "John", "age": 30}'
+
+
+def test_convert_tool_response_to_message_invalid_json():
+    """Test converting a tool response with invalid JSON"""
+    tool_calls = [
+        ChatCompletionToolCallChunk(
+            id="test_id",
+            type="function",
+            function=ChatCompletionToolCallFunctionChunk(name="json_tool_call", arguments="invalid json"),
+            index=0,
+        )
+    ]
+
+    message = AnthropicConfig.convert_tool_response_to_message(tool_calls=tool_calls)
+
+    assert message is not None
+    assert message.content == "invalid json"
+
+
+def test_convert_tool_response_to_message_no_arguments():
+    """Test converting a tool response with no arguments"""
+    tool_calls = [
+        ChatCompletionToolCallChunk(
+            id="test_id",
+            type="function",
+            function=ChatCompletionToolCallFunctionChunk(name="json_tool_call"),
+            index=0,
+        )
+    ]
+
+    message = AnthropicConfig.convert_tool_response_to_message(tool_calls=tool_calls)
+
+    assert message is None
+
+
+_RISK_SCHEMA: Final = {
+    "$defs": {"Owner": {"title": "Owner", "type": "object", "properties": {"team": {"type": "string"}}}},
+    "title": "RiskAssessment",
+    "type": "object",
+    "properties": {
+        "tier": {"title": "Tier", "type": "integer"},
+        "summary": {"title": "Summary", "type": "string"},
+        "owner": {"$ref": "#/$defs/Owner"},
+    },
+    "required": ["tier", "summary"],
+}
+_RISK_OBJECT: Final = {"tier": 3, "summary": "Two-hour read-only window on the loyalty APIs"}
+_PERSON_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"name": {"type": "string"}, "age": {"type": "integer"}},
+    "required": ["name", "age"],
+}
+_OPTIONAL_FIELDS_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"note": {"type": "string"}, "score": {"type": "integer"}},
+}
+_TREE_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"value": {"type": "integer"}, "child": {"type": "object"}},
+    "required": ["value"],
+}
+_OPEN_SCORE_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"score": {"type": "integer"}},
+    "additionalProperties": True,
+}
+_VALUES_SCHEMA: Final = {"type": "object", "properties": {"values": {"type": "array"}}, "required": ["values"]}
+_REMOTE_REF_SCHEMA: Final = {**_PERSON_SCHEMA, "$ref": "https://schemas.example.com/person.json"}
+_LOOSE_SCHEMA: Final = {"type": "object", "properties": {"name": {"type": "string"}, "email": {"type": "string"}}}
+_CLOSED_CONTACT_SCHEMA: Final = {**_LOOSE_SCHEMA, "additionalProperties": False}
+_CONTACT: Final = {"name": "Ada", "email": "ada@example.com"}
+_NAMED_BOOK_SCHEMA: Final = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string"},
+        "parameters": {
+            "type": "object",
+            "properties": {"title": {"type": "string"}, "author": {"type": "string"}},
+            "required": ["title", "author"],
+            "additionalProperties": False,
+        },
+    },
+    "required": ["name", "parameters"],
+    "additionalProperties": False,
+}
+_NAMED_BOOK: Final = {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": {"title": "Dune", "author": "Frank Herbert"}}
+_RECURSIVE_NODE_SCHEMA: Final = {
+    "type": "object",
+    "properties": {
+        "id": {"type": "string"},
+        "title": {"type": "string"},
+        "parent": {"anyOf": [{"$ref": "#"}, {"type": "null"}]},
+    },
+    "required": ["id", "title"],
+}
+_CHILD_WITHOUT_TITLE: Final = {"id": "child-7", "parent": {"id": "root-1", "title": "Root", "parent": None}}
+_JSON_OBJECT_MODE_SCHEMA: Final = {"type": "object", "properties": {}, "additionalProperties": True}
+_SUMMARY_PROPERTIES: Final = {"summary": {"type": "string"}}
+_PER_USER_SCHEMA: Final = {
+    "type": "object",
+    "properties": _SUMMARY_PROPERTIES,
+    "additionalProperties": {"type": "object"},
+}
+_PER_USER_PATTERN_SCHEMA: Final = {
+    "type": "object",
+    "properties": _SUMMARY_PROPERTIES,
+    "patternProperties": {"^user_": {"type": "object"}},
+}
+_PER_USER_ANSWER: Final = {"user_1": {"summary": "likes tea", "visits": 3}}
+
+
+def _schema(document: dict[str, object]) -> ResponseFormatSchema:
+    schema = response_format_schema(document)
+    assert schema is not None
+    return schema
+
+
+def _json_tool_call(arguments: object) -> list[ChatCompletionToolCallChunk]:
+    return [
+        ChatCompletionToolCallChunk(
+            id="toolu_1",
+            type="function",
+            function=ChatCompletionToolCallFunctionChunk(
+                name=RESPONSE_FORMAT_TOOL_NAME, arguments=json.dumps(arguments)
+            ),
+            index=0,
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "schema, tool_input, expected_content",
+    [
+        pytest.param(
+            _RISK_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _RISK_OBJECT},
+            _RISK_OBJECT,
+            id="name_and_parameters_envelope",
+        ),
+        pytest.param(_RISK_SCHEMA, {"input": _RISK_OBJECT}, _RISK_OBJECT, id="input_wrapper"),
+        pytest.param(_RISK_SCHEMA, {"arguments": _RISK_OBJECT}, _RISK_OBJECT, id="arguments_wrapper"),
+        pytest.param(
+            _PERSON_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": {"name": "Ada", "age": 36}},
+            {"name": "Ada", "age": 36},
+            id="envelope_key_shared_with_a_schema_property",
+        ),
+        pytest.param(
+            _OPTIONAL_FIELDS_SCHEMA,
+            {"input": {"score": 7}},
+            {"score": 7},
+            id="wrapper_around_an_all_optional_schema",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"parameter": {"value": _RISK_OBJECT}},
+            _RISK_OBJECT,
+            id="two_level_envelope",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"parameter_name": "RiskAssessment", "parameter_value": _RISK_OBJECT},
+            _RISK_OBJECT,
+            id="string_label_beside_the_wrapper",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"$FUNCTION_NAME": RESPONSE_FORMAT_TOOL_NAME, "PARAMETER_VALUE": _RISK_OBJECT},
+            _RISK_OBJECT,
+            id="foreign_tool_name_key_beside_the_wrapper",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"note": "read-only window", **_RISK_OBJECT},
+            {"note": "read-only window", **_RISK_OBJECT},
+            id="string_label_beside_schema_keys",
+        ),
+        pytest.param(
+            {**_RISK_SCHEMA, "required": "tier"},
+            {"parameter_name": "RiskAssessment", "parameter_value": _RISK_OBJECT},
+            {"parameter_name": "RiskAssessment", "parameter_value": _RISK_OBJECT},
+            id="string_label_when_required_is_malformed",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "arguments": json.dumps(_RISK_OBJECT)},
+            _RISK_OBJECT,
+            id="tool_name_envelope_holding_encoded_json",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"tier": 1, "parameters": _RISK_OBJECT},
+            {"tier": 1, "parameters": _RISK_OBJECT},
+            id="schema_key_beside_a_wrapper_key",
+        ),
+        pytest.param(
+            _RECURSIVE_NODE_SCHEMA,
+            _CHILD_WITHOUT_TITLE,
+            _CHILD_WITHOUT_TITLE,
+            id="recursive_schema_keeps_the_answer_over_its_complete_parent",
+        ),
+        pytest.param(
+            {**_RISK_SCHEMA, "$schema": 5},
+            {"input": _RISK_OBJECT},
+            _RISK_OBJECT,
+            id="non_string_dollar_schema",
+        ),
+        pytest.param(
+            _OPEN_SCORE_SCHEMA,
+            {"meta": {"score": 7}, "label": "keep"},
+            {"meta": {"score": 7}, "label": "keep"},
+            id="valid_answer_with_extra_keys_and_a_schema_shaped_nested_object",
+        ),
+        pytest.param(_VALUES_SCHEMA, {"values": [1, 2]}, {"values": [1, 2]}, id="values_is_a_schema_property"),
+        pytest.param(
+            _REMOTE_REF_SCHEMA,
+            {"input": {"name": "Ada", "age": 36}},
+            {"name": "Ada", "age": 36},
+            id="remote_ref_schema_falls_back_to_key_matching",
+        ),
+        pytest.param(
+            _CLOSED_CONTACT_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _CONTACT},
+            _CONTACT,
+            id="tool_name_envelope_when_the_schema_lists_no_required_keys",
+        ),
+        pytest.param(
+            _LOOSE_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _CONTACT},
+            _CONTACT,
+            id="tool_name_envelope_on_an_open_schema",
+        ),
+        pytest.param(_NAMED_BOOK_SCHEMA, _NAMED_BOOK, _NAMED_BOOK, id="accepted_answer_whose_name_is_the_tool_name"),
+        pytest.param(
+            _LOOSE_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "email": "ada@example.com"},
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "email": "ada@example.com"},
+            id="tool_name_value_without_a_nested_object_stays",
+        ),
+        pytest.param(_RISK_SCHEMA, _RISK_OBJECT, _RISK_OBJECT, id="plain_schema_object"),
+        pytest.param(
+            _TREE_SCHEMA,
+            {"value": 1, "child": {"value": 2}},
+            {"value": 1, "child": {"value": 2}},
+            id="schema_object_whose_property_holds_a_schema_shaped_object",
+        ),
+        pytest.param(_RISK_SCHEMA, {"input": {"tier": 3}}, {"tier": 3}, id="inner_object_missing_required_key"),
+        pytest.param(_RISK_SCHEMA, {"values": {"tier": 2}}, {"tier": 2}, id="values_wrapper_missing_required_key"),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"first": _RISK_OBJECT, "second": _RISK_OBJECT},
+            {"first": _RISK_OBJECT, "second": _RISK_OBJECT},
+            id="two_candidate_objects",
+        ),
+        pytest.param(
+            _OPTIONAL_FIELDS_SCHEMA,
+            {"meta": {"source": "change-request"}},
+            {"meta": {"source": "change-request"}},
+            id="inner_object_without_schema_keys",
+        ),
+        pytest.param(
+            _JSON_OBJECT_MODE_SCHEMA,
+            {"input": _RISK_OBJECT},
+            {"input": _RISK_OBJECT},
+            id="json_object_mode_without_schema_properties",
+        ),
+        pytest.param(
+            _JSON_OBJECT_MODE_SCHEMA,
+            {"values": _RISK_OBJECT},
+            _RISK_OBJECT,
+            id="json_object_mode_values_wrapper",
+        ),
+        pytest.param(
+            _JSON_OBJECT_MODE_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _RISK_OBJECT},
+            _RISK_OBJECT,
+            id="json_object_mode_tool_name_envelope",
+        ),
+        pytest.param(_PER_USER_SCHEMA, _PER_USER_ANSWER, _PER_USER_ANSWER, id="key_allowed_by_additional_properties"),
+        pytest.param(
+            _PER_USER_PATTERN_SCHEMA, _PER_USER_ANSWER, _PER_USER_ANSWER, id="key_allowed_by_pattern_properties"
+        ),
+        pytest.param(_OPEN_SCORE_SCHEMA, {"input": {"score": 7}}, {"input": {"score": 7}}, id="key_allowed_by_true"),
+        pytest.param(
+            {**_PER_USER_SCHEMA, "required": ["summary"]},
+            {"input": {"summary": "likes tea"}},
+            {"summary": "likes tea"},
+            id="allowed_key_on_a_schema_with_required_keys",
+        ),
+        pytest.param(
+            _PER_USER_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": {"summary": "likes tea"}},
+            {"summary": "likes tea"},
+            id="tool_name_envelope_on_a_schema_allowing_extra_keys",
+        ),
+    ],
+)
+def test_convert_tool_response_to_message_unwraps_only_an_unambiguous_schema_envelope(
+    schema: dict, tool_input: dict, expected_content: dict
+):
+    message = AnthropicConfig.convert_tool_response_to_message(
+        tool_calls=_json_tool_call(tool_input),
+        response_format_schema=_schema(schema),
+    )
+
+    assert message is not None
+    assert json.loads(message.content) == expected_content
+
+
+_TOO_DEEP_TO_DECODE: Final = "[" * 100_000 + "]" * 100_000
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [json.dumps({"name": RESPONSE_FORMAT_TOOL_NAME, "arguments": _TOO_DEEP_TO_DECODE}), _TOO_DEEP_TO_DECODE],
+    ids=["encoded_inner_object", "whole_arguments"],
+)
+def test_convert_tool_response_to_message_keeps_arguments_too_deep_to_decode(arguments: str):
+    message = AnthropicConfig.convert_tool_response_to_message(
+        tool_calls=[
+            ChatCompletionToolCallChunk(
+                id="toolu_1",
+                type="function",
+                function=ChatCompletionToolCallFunctionChunk(name=RESPONSE_FORMAT_TOOL_NAME, arguments=arguments),
+                index=0,
+            )
+        ],
+        response_format_schema=_schema(_RISK_SCHEMA),
+    )
+
+    assert message is not None
+    assert message.content == arguments
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        {"type": "object", "properties": ["tier", "summary"]},
+        {"type": "object", "properties": "tier"},
+        ["tier", "summary"],
+    ],
+    ids=["properties_list", "properties_string", "schema_list"],
+)
+def test_response_format_schema_rejects_a_malformed_schema(document: object):
+    assert response_format_schema(document) is None
+
+
+def test_json_mode_with_user_tool_call_unwraps_the_envelope_into_content():
+    user_tool_call: Final = ChatCompletionToolCallChunk(
+        id="toolu_user",
+        type="function",
+        function=ChatCompletionToolCallFunctionChunk(name="lookup_change_window", arguments='{"system": "ledger"}'),
+        index=1,
+    )
+
+    replacement, remaining_tool_calls, extra_content = AnthropicConfig()._resolve_json_mode_non_streaming(
+        json_mode=True,
+        tool_calls=[*_json_tool_call({"input": _RISK_OBJECT}), user_tool_call],
+        response_format_schema=_schema(_RISK_SCHEMA),
+    )
+
+    assert replacement is None
+    assert remaining_tool_calls == [user_tool_call]
+    assert extra_content is not None
+    assert json.loads(extra_content) == _RISK_OBJECT
+
+
+def test_vertex_claude_tool_emulated_response_format_returns_the_object_the_model_wrapped():
+    config = VertexAIAnthropicConfig()
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "lookup_change_window",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"system": {"type": "string"}},
+                            "required": ["system"],
+                        },
+                    },
+                }
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "RiskAssessment", "schema": _RISK_SCHEMA},
+            },
+        },
+        optional_params={},
+        model="claude-emulated-structured-output",
+        drop_params=False,
+    )
+    json_mode = optional_params.pop("json_mode")
+    request = config.transform_request(
+        model="claude-emulated-structured-output",
+        messages=[{"role": "user", "content": "Assess this change request"}],
+        optional_params={**optional_params, "is_vertex_request": True},
+        litellm_params={},
+        headers={},
+    )
+    json_tool = next(tool for tool in request["tools"] if tool["name"] == RESPONSE_FORMAT_TOOL_NAME)
+    assert json_tool["input_schema"]["required"] == ["tier", "summary"]
+    assert "output_format" not in request
+    assert "output_config" not in request
+    completion_response = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-emulated-structured-output",
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "toolu_1",
+                "name": RESPONSE_FORMAT_TOOL_NAME,
+                "input": {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _RISK_OBJECT},
+            }
+        ],
+        "stop_reason": "tool_use",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 12, "output_tokens": 30},
+    }
+
+    result = config.transform_response(
+        model="claude-emulated-structured-output",
+        raw_response=httpx.Response(200, json=completion_response),
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data=request,
+        messages=[{"role": "user", "content": "Assess this change request"}],
+        optional_params=optional_params,
+        litellm_params={},
+        encoding=None,
+        json_mode=json_mode,
+    )
+
+    assert json.loads(result.choices[0].message.content) == _RISK_OBJECT
+    assert result.choices[0].message.tool_calls is None
+    assert result.choices[0].finish_reason == "stop"
+
+
+_SPLIT_RISK_SCHEMA: Final = {
+    "title": "RiskAssessment",
+    "type": "object",
+    "properties": {
+        "tier": {"type": "integer"},
+        "risk_level": {"type": "string", "enum": ["low", "medium", "high"]},
+        "score": {"type": "integer"},
+        "summary": {"type": "string"},
+        "affected_systems": {"type": "array", "items": {"type": "string"}},
+        "findings": {"type": "array", "items": {"type": "object"}},
+        "rollback_plan": {"type": "string"},
+        "requires_downtime": {"type": "boolean"},
+    },
+    "required": [
+        "tier",
+        "risk_level",
+        "score",
+        "summary",
+        "affected_systems",
+        "findings",
+        "rollback_plan",
+        "requires_downtime",
+    ],
+}
+_SPLIT_RISK_OBJECT: Final = {
+    "tier": 1,
+    "risk_level": "high",
+    "score": 78,
+    "summary": "Migrating loyalty-points ledger DB to managed cloud with weekend read-only cutover; financial data, high risk.",
+    "affected_systems": ["Loyalty-points ledger DB", "Loyalty rewards API", "Reporting/analytics pipeline"],
+    "findings": [
+        {
+            "title": "Financial data integrity risk",
+            "severity": "high",
+            "detail": "Loyalty points are monetary-equivalent; any sync error causes customer-facing balance discrepancies.",
+        },
+        {
+            "title": "Weekend support coverage",
+            "severity": "low",
+            "detail": "Reduced staff availability over weekend may delay incident response if issues arise.",
+        },
+    ],
+    "rollback_plan": "Keep old cluster live/read-only; revert DNS/connection strings to original cluster if migration fails.",
+    "requires_downtime": True,
+}
+# Block shape captured from vertex_ai/claude-sonnet-5 tool emulation on 2026-10-13, one tool_use block per field
+_SPLIT_RISK_BLOCKS: Final = tuple(
+    {"$FUNCTION_NAME": "RiskAssessment", "$PARAMETER_NAME": name, "$PARAMETER_VALUE": value}
+    for name, value in _SPLIT_RISK_OBJECT.items()
+)
+_CONTACT_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"name": {"type": "string"}, "email": {"type": "string"}},
+    "required": ["name", "email"],
+}
+_OPTIONAL_CONTACT_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"name": {"type": "string"}, "email": {"type": "string"}, "phone": {"type": "string"}},
+}
+_FLAGS_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"urgent": {"type": "boolean"}, "reviewed": {"type": "boolean"}},
+    "required": ["urgent", "reviewed"],
+}
+
+
+def _json_tool_calls(*blocks: object) -> list[ChatCompletionToolCallChunk]:
+    return list(chain.from_iterable(_json_tool_call(block) for block in blocks))
+
+
+def test_vertex_claude_json_answer_split_into_one_tool_block_per_field_returns_one_schema_object():
+    config = VertexAIAnthropicConfig()
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "RiskAssessment", "schema": _SPLIT_RISK_SCHEMA},
+            },
+        },
+        optional_params={},
+        model="claude-emulated-structured-output",
+        drop_params=False,
+    )
+    json_mode = optional_params.pop("json_mode")
+    completion_response = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-emulated-structured-output",
+        "content": [
+            {"type": "tool_use", "id": f"toolu_{index}", "name": RESPONSE_FORMAT_TOOL_NAME, "input": block}
+            for index, block in enumerate(_SPLIT_RISK_BLOCKS)
+        ],
+        "stop_reason": "tool_use",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 12, "output_tokens": 30},
+    }
+
+    result = config.transform_response(
+        model="claude-emulated-structured-output",
+        raw_response=httpx.Response(200, json=completion_response),
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "Assess this change request"}],
+        optional_params=optional_params,
+        litellm_params={},
+        encoding=None,
+        json_mode=json_mode,
+    )
+
+    assert json.loads(result.choices[0].message.content) == _SPLIT_RISK_OBJECT
+    assert result.choices[0].message.tool_calls is None
+    assert result.choices[0].finish_reason == "stop"
+
+
+@pytest.mark.parametrize(
+    "schema, blocks, expected_content",
+    [
+        pytest.param(
+            _RISK_SCHEMA,
+            (
+                {"$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": _RISK_OBJECT["tier"]},
+                {"$PARAMETER_NAME": "summary", "$PARAMETER_VALUE": _RISK_OBJECT["summary"]},
+            ),
+            _RISK_OBJECT,
+            id="name_and_value_keys_only",
+        ),
+        pytest.param(
+            _CONTACT_SCHEMA,
+            (
+                {"function": "Contact", "parameter_name": "name", "parameter_value": "Ada"},
+                {"function": "Contact", "parameter_name": "email", "parameter_value": "ada@example.com"},
+            ),
+            {"name": "Ada", "email": "ada@example.com"},
+            id="string_values_beside_a_repeated_label",
+        ),
+        pytest.param(
+            _FLAGS_SCHEMA,
+            ({"field": "urgent", "value": True}, {"field": "reviewed", "value": True}),
+            {"urgent": True, "reviewed": True},
+            id="every_field_holds_the_same_value",
+        ),
+        pytest.param(
+            _CONTACT_SCHEMA,
+            ({"field": "name", "value": "unknown"}, {"field": "email", "value": "unknown"}),
+            {"name": "unknown", "email": "unknown"},
+            id="every_field_holds_the_same_string",
+        ),
+        pytest.param(
+            _CONTACT_SCHEMA,
+            ({"name": "unknown"}, {"email": "unknown"}),
+            {"name": "unknown", "email": "unknown"},
+            id="one_partial_object_per_field",
+        ),
+        pytest.param(
+            _OPTIONAL_CONTACT_SCHEMA,
+            ({"name": "Ada", "email": "ada@example.com"}, {"phone": "555-0100"}),
+            {"name": "Ada", "email": "ada@example.com", "phone": "555-0100"},
+            id="partial_objects_of_uneven_size_on_a_schema_with_no_required_list",
+        ),
+    ],
+)
+def test_json_tool_blocks_that_each_name_one_schema_property_become_one_object(
+    schema: dict[str, object], blocks: tuple[object, ...], expected_content: dict[str, object]
+):
+    replacement, remaining_tool_calls, extra_content = AnthropicConfig()._resolve_json_mode_non_streaming(
+        json_mode=True,
+        tool_calls=_json_tool_calls(*blocks),
+        response_format_schema=_schema(schema),
+    )
+
+    assert replacement is not None
+    assert json.loads(replacement.content) == expected_content
+    assert remaining_tool_calls == []
+    assert extra_content is None
+
+
+@pytest.mark.parametrize(
+    "schema, blocks",
+    [
+        pytest.param(_RISK_SCHEMA, ({"$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": 3},), id="one_field_alone"),
+        pytest.param(
+            _RISK_SCHEMA,
+            ({"$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": 3}, {"$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": 4}),
+            id="same_property_named_twice",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            (
+                {"$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": 3},
+                {"$PARAMETER_NAME": "color", "$PARAMETER_VALUE": "red"},
+            ),
+            id="property_the_schema_does_not_declare",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            (
+                {"$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": 3},
+                {"parameter_name": "summary", "parameter_value": "Read-only window"},
+            ),
+            id="blocks_with_different_keys",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            (
+                {"$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": 3, "note": "first"},
+                {"$PARAMETER_NAME": "summary", "$PARAMETER_VALUE": "Read-only window", "note": "second"},
+            ),
+            id="two_keys_that_could_hold_the_value",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            ({"$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": 3}, ["summary", "Read-only window"]),
+            id="block_that_is_not_an_object",
+        ),
+        pytest.param(
+            _PERSON_SCHEMA,
+            ({"name": "name", "age": 1}, {"name": "age", "age": 2}),
+            id="blocks_keyed_by_schema_properties",
+        ),
+        pytest.param(
+            _CONTACT_SCHEMA,
+            ({"name": "Ada"}, {"name": "Grace"}),
+            id="partial_objects_that_repeat_a_field",
+        ),
+        pytest.param(
+            _CONTACT_SCHEMA,
+            ({"name": "Ada"}, {"nickname": "A"}),
+            id="partial_object_with_a_key_the_schema_does_not_declare",
+        ),
+    ],
+)
+def test_json_tool_blocks_that_are_not_one_field_each_keep_the_first_block(
+    schema: dict[str, object], blocks: tuple[object, ...]
+):
+    replacement, remaining_tool_calls, extra_content = AnthropicConfig()._resolve_json_mode_non_streaming(
+        json_mode=True,
+        tool_calls=_json_tool_calls(*blocks),
+        response_format_schema=_schema(schema),
+    )
+
+    assert replacement is not None
+    assert json.loads(replacement.content) == blocks[0]
+    assert remaining_tool_calls == []
+    assert extra_content is None
+
+
+def test_json_mode_with_user_tool_call_joins_the_split_answer_into_content():
+    user_tool_call: Final = ChatCompletionToolCallChunk(
+        id="toolu_user",
+        type="function",
+        function=ChatCompletionToolCallFunctionChunk(name="lookup_change_window", arguments='{"system": "ledger"}'),
+        index=2,
+    )
+    first_field, second_field = _json_tool_calls(
+        {"$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": _RISK_OBJECT["tier"]},
+        {"$PARAMETER_NAME": "summary", "$PARAMETER_VALUE": _RISK_OBJECT["summary"]},
+    )
+
+    replacement, remaining_tool_calls, extra_content = AnthropicConfig()._resolve_json_mode_non_streaming(
+        json_mode=True,
+        tool_calls=[first_field, user_tool_call, second_field],
+        response_format_schema=_schema(_RISK_SCHEMA),
+    )
+
+    assert replacement is None
+    assert remaining_tool_calls == [user_tool_call]
+    assert extra_content is not None
+    assert json.loads(extra_content) == _RISK_OBJECT
+
+
+def test_anthropic_tool_with_image():
+    import json
+
+    from litellm.litellm_core_utils.prompt_templates.factory import prompt_factory
+
+    b64_data = "iVBORw0KGgoAAAANSUhEu6U3//C9t/fKv5wDgpP1r5796XwC4zyH1D565bHGDqbY85AMb0nIQe+u3J390Xbtb9XgXxcK0/aqRXpdYcwgARbCN03FJk"
+    image_url = f"data:image/png;base64,{b64_data}"
+    messages = [
+        {
+            "content": [
+                {"type": "text", "text": "go to github ryanhoangt by browser"},
+                {
+                    "type": "text",
+                    "text": '<extra_info>\nThe following information has been included based on a keyword match for "github". It may or may not be relevant to the user\'s request.\n\nYou have access to an environment variable, `GITHUB_TOKEN`, which allows you to interact with\nthe GitHub API.\n\nYou can use `curl` with the `GITHUB_TOKEN` to interact with GitHub\'s API.\nALWAYS use the GitHub API for operations instead of a web browser.\n\nHere are some instructions for pushing, but ONLY do this if the user asks you to:\n* NEVER push directly to the `main` or `master` branch\n* Git config (username and email) is pre-set. Do not modify.\n* You may already be on a branch called `openhands-workspace`. Create a new branch with a better name before pushing.\n* Use the GitHub API to create a pull request, if you haven\'t already\n* Use the main branch as the base branch, unless the user requests otherwise\n* After opening or updating a pull request, send the user a short message with a link to the pull request.\n* Do all of the above in as few steps as possible. E.g. you could open a PR with one step by running the following bash commands:\n```bash\ngit remote -v && git branch \x23 to find the current org, repo and branch\ngit checkout -b create-widget && git add . && git commit -m "Create widget" && git push -u origin create-widget\ncurl -X POST "https://api.github.com/repos/$ORG_NAME/$REPO_NAME/pulls" \\\n    -H "Authorization: Bearer $GITHUB_TOKEN" \\\n    -d \'{"title":"Create widget","head":"create-widget","base":"openhands-workspace"}\'\n```\n</extra_info>',
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+            "role": "user",
+        },
+        {
+            "content": [
+                {
+                    "type": "text",
+                    "text": "I'll help you navigate to the GitHub profile of ryanhoangt using the browser.",
+                }
+            ],
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "index": 1,
+                    "function": {
+                        "arguments": '{"code": "goto(\'https://github.com/ryanhoangt\')"}',
+                        "name": "browser",
+                    },
+                    "id": "tooluse_UxfOQT6jRq-SvoQ9La_1sA",
+                    "type": "function",
+                }
+            ],
+        },
+        {
+            "content": [
+                {
+                    "type": "text",
+                    "text": "[Current URL: https://github.com/ryanhoangt]\n[Focused element bid: 119]\n\n[Action executed successfully.]\n============== BEGIN accessibility tree ==============\nRootWebArea 'ryanhoangt (Ryan H. Tran) · GitHub', focused\n\t[119] generic\n\t\t[120] generic\n\t\t\t[121] generic\n\t\t\t\t[122] link 'Skip to content', clickable\n\t\t\t\t[123] generic\n\t\t\t\t\t[124] generic\n\t\t\t\t[135] generic\n\t\t\t\t\t[137] generic, clickable\n\t\t\t\t[142] banner ''\n\t\t\t\t\t[143] heading 'Navigation Menu'\n\t\t\t\t\t[146] generic\n\t\t\t\t\t\t[147] generic\n\t\t\t\t\t\t\t[148] generic\n\t\t\t\t\t\t\t[155] link 'Homepage', clickable\n\t\t\t\t\t\t\t[158] generic\n\t\t\t\t\t\t[160] generic\n\t\t\t\t\t\t\t[161] generic\n\t\t\t\t\t\t\t\t[162] navigation 'Global'\n\t\t\t\t\t\t\t\t\t[163] list ''\n\t\t\t\t\t\t\t\t\t\t[164] listitem ''\n\t\t\t\t\t\t\t\t\t\t\t[165] button 'Product', expanded=False\n\t\t\t\t\t\t\t\t\t\t[244] listitem ''\n\t\t\t\t\t\t\t\t\t\t\t[245] button 'Solutions', expanded=False\n\t\t\t\t\t\t\t\t\t\t[288] listitem ''\n\t\t\t\t\t\t\t\t\t\t\t[289] button 'Resources', expanded=False\n\t\t\t\t\t\t\t\t\t\t[325] listitem ''\n\t\t\t\t\t\t\t\t\t\t\t[326] button 'Open Source', expanded=False\n\t\t\t\t\t\t\t\t\t\t[352] listitem ''\n\t\t\t\t\t\t\t\t\t\t\t[353] button 'Enterprise', expanded=False\n\t\t\t\t\t\t\t\t\t\t[392] listitem ''\n\t\t\t\t\t\t\t\t\t\t\t[393] link 'Pricing', clickable\n\t\t\t\t\t\t\t\t[394] generic\n\t\t\t\t\t\t\t\t\t[395] generic\n\t\t\t\t\t\t\t\t\t\t[396] generic, clickable\n\t\t\t\t\t\t\t\t\t\t\t[397] button 'Search or jump to…', clickable, hasPopup='dialog'\n\t\t\t\t\t\t\t\t\t\t\t\t[398] generic\n\t\t\t\t\t\t\t\t\t\t[477] generic\n\t\t\t\t\t\t\t\t\t\t\t[478] generic\n\t\t\t\t\t\t\t\t\t\t\t[499] generic\n\t\t\t\t\t\t\t\t\t\t\t\t[500] generic\n\t\t\t\t\t\t\t\t\t[534] generic\n\t\t\t\t\t\t\t\t\t\t[535] link 'Sign in', clickable\n\t\t\t\t\t\t\t\t\t[536] link 'Sign up', clickable\n\t\t\t[553] generic\n\t\t\t[554] generic\n\t\t\t[556] generic\n\t\t\t\t[557] main ''\n\t\t\t\t\t[558] generic\n\t\t\t\t\t[566] generic\n\t\t\t\t\t\t[567] generic\n\t\t\t\t\t\t\t[568] generic\n\t\t\t\t\t\t\t\t[569] generic\n\t\t\t\t\t\t\t\t\t[570] generic\n\t\t\t\t\t\t\t\t\t\t[571] LayoutTable ''\n\t\t\t\t\t\t\t\t\t\t\t[572] generic\n\t\t\t\t\t\t\t\t\t\t\t\t[573] image '@ryanhoangt'\n\t\t\t\t\t\t\t\t\t\t\t[574] generic\n\t\t\t\t\t\t\t\t\t\t\t\t[575] strong ''\n\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'ryanhoangt'\n\t\t\t\t\t\t\t\t\t\t\t\t[576] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t[577] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t[578] link 'Follow', clickable\n\t\t\t\t\t\t\t\t[579] generic\n\t\t\t\t\t\t\t\t\t[580] generic\n\t\t\t\t\t\t\t\t\t\t[581] navigation 'User profile'\n\t\t\t\t\t\t\t\t\t\t\t[582] link 'Overview', clickable\n\t\t\t\t\t\t\t\t\t\t\t[585] link 'Repositories 136', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t[588] generic '136'\n\t\t\t\t\t\t\t\t\t\t\t[589] link 'Projects', clickable\n\t\t\t\t\t\t\t\t\t\t\t[593] link 'Packages', clickable\n\t\t\t\t\t\t\t\t\t\t\t[597] link 'Stars 311', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t[600] generic '311'\n\t\t\t\t\t[621] generic\n\t\t\t\t\t\t[622] generic\n\t\t\t\t\t\t\t[623] generic\n\t\t\t\t\t\t\t\t[624] generic\n\t\t\t\t\t\t\t\t\t[625] generic\n\t\t\t\t\t\t\t\t\t\t[626] LayoutTable ''\n\t\t\t\t\t\t\t\t\t\t\t[627] generic\n\t\t\t\t\t\t\t\t\t\t\t\t[628] image '@ryanhoangt'\n\t\t\t\t\t\t\t\t\t\t\t[629] generic\n\t\t\t\t\t\t\t\t\t\t\t\t[630] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t[631] strong ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'ryanhoangt'\n\t\t\t\t\t\t\t\t\t\t\t[632] generic\n\t\t\t\t\t\t\t\t\t\t\t\t[633] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t[634] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t[635] link 'Follow', clickable\n\t\t\t\t\t\t\t\t\t[636] generic\n\t\t\t\t\t\t\t\t\t\t[637] generic\n\t\t\t\t\t\t\t\t\t\t\t[638] generic\n\t\t\t\t\t\t\t\t\t\t\t\t[639] link \"View ryanhoangt's full-sized avatar\", clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t[640] image \"View ryanhoangt's full-sized avatar\"\n\t\t\t\t\t\t\t\t\t\t\t\t[641] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t[642] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t[643] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[644] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[645] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[646] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText '🎯'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[647] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[648] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Focusing'\n\t\t\t\t\t\t\t\t\t\t\t[649] generic\n\t\t\t\t\t\t\t\t\t\t\t\t[650] heading 'Ryan H. Tran ryanhoangt'\n\t\t\t\t\t\t\t\t\t\t\t\t\t[651] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Ryan H. Tran'\n\t\t\t\t\t\t\t\t\t\t\t\t\t[652] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'ryanhoangt'\n\t\t\t\t\t\t\t\t\t\t[660] generic\n\t\t\t\t\t\t\t\t\t\t\t[661] generic\n\t\t\t\t\t\t\t\t\t\t\t\t[662] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t[663] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t[665] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t[666] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[667] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[668] link 'Follow', clickable\n\t\t\t\t\t\t\t\t\t\t\t[669] generic\n\t\t\t\t\t\t\t\t\t\t\t\t[670] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t[671] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText \"Working with Attention. It's all we need\"\n\t\t\t\t\t\t\t\t\t\t\t\t[672] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t[673] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t[674] link '11 followers', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[677] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText '11'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText '·'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t[678] link '30 following', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[679] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText '30'\n\t\t\t\t\t\t\t\t\t\t\t\t[680] list ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t[681] listitem 'Home location: Earth'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t[684] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Earth'\n\t\t\t\t\t\t\t\t\t\t\t\t\t[685] listitem ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t[688] link 'hoangt.dev', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t[689] listitem ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t[692] link 'https://orcid.org/0009-0000-3619-0932', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t[693] listitem ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t[694] image 'X'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[696] graphics-symbol ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t[697] link '@ryanhoangt', clickable\n\t\t\t\t\t\t\t\t\t\t[698] generic\n\t\t\t\t\t\t\t\t\t\t\t[699] heading 'Achievements'\n\t\t\t\t\t\t\t\t\t\t\t\t[700] link 'Achievements', clickable\n\t\t\t\t\t\t\t\t\t\t\t[701] generic\n\t\t\t\t\t\t\t\t\t\t\t\t[702] link 'Achievement: Pair Extraordinaire', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t[703] image 'Achievement: Pair Extraordinaire'\n\t\t\t\t\t\t\t\t\t\t\t\t[704] link 'Achievement: Pull Shark x2', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t[705] image 'Achievement: Pull Shark'\n\t\t\t\t\t\t\t\t\t\t\t\t\t[706] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'x2'\n\t\t\t\t\t\t\t\t\t\t\t\t[707] link 'Achievement: YOLO', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t[708] image 'Achievement: YOLO'\n\t\t\t\t\t\t\t\t\t\t[720] generic\n\t\t\t\t\t\t\t\t\t\t\t[721] heading 'Highlights'\n\t\t\t\t\t\t\t\t\t\t\t[722] list ''\n\t\t\t\t\t\t\t\t\t\t\t\t[723] listitem ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t[724] link 'Developer Program Member', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t[727] listitem ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t[730] generic 'Label: Pro'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'PRO'\n\t\t\t\t\t\t\t\t\t\t[731] button 'Block or Report'\n\t\t\t\t\t\t\t\t\t\t\t[732] generic\n\t\t\t\t\t\t\t\t\t\t\t\t[733] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Block or Report'\n\t\t\t\t\t\t\t\t\t\t[734] generic\n\t\t\t\t\t\t\t[775] generic\n\t\t\t\t\t\t\t\t[817] generic, clickable\n\t\t\t\t\t\t\t\t\t[818] generic\n\t\t\t\t\t\t\t\t\t\t[819] generic\n\t\t\t\t\t\t\t\t\t\t\t[820] generic\n\t\t\t\t\t\t\t\t\t\t\t\t[821] heading 'PinnedLoading'\n\t\t\t\t\t\t\t\t\t\t\t\t\t[822] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t[826] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Loading'\n\t\t\t\t\t\t\t\t\t\t\t\t\t[827] status '', live='polite', atomic, relevant='additions text'\n\t\t\t\t\t\t\t\t\t\t\t\t[828] list '', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t[829] listitem ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t[830] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[831] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[832] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[833] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[836] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[837] link 'All-Hands-AI/OpenHands', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[838] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'All-Hands-AI/'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[839] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'OpenHands'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[843] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[844] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Public'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[845] paragraph ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText '🙌 OpenHands: Code Less, Make More'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[846] paragraph ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[847] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[848] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[849] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Python'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[850] link 'stars 37.5k', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[851] image 'stars'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[852] graphics-symbol ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[853] link 'forks 4.2k', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[854] image 'forks'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[855] graphics-symbol ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t[856] listitem ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t[857] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[858] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[859] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[860] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[863] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[864] link 'nus-apr/auto-code-rover', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[865] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'nus-apr/'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[866] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'auto-code-rover'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[870] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[871] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Public'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[872] paragraph ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'A project structure aware autonomous software engineer aiming for autonomous program improvement. Resolved 37.3% tasks (pass@1) in SWE-bench lite and 46.2% tasks (pass@1) in SWE-bench verified with…'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[873] paragraph ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[874] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[875] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[876] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Python'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[877] link 'stars 2.7k', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[878] image 'stars'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[879] graphics-symbol ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[880] link 'forks 288', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[881] image 'forks'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[882] graphics-symbol ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t[883] listitem ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t[884] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[885] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[886] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[887] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[890] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[891] link 'TransformerLensOrg/TransformerLens', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[892] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'TransformerLensOrg/'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[893] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'TransformerLens'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[897] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[898] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Public'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[899] paragraph ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'A library for mechanistic interpretability of GPT-style language models'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[900] paragraph ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[901] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[902] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[903] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Python'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[904] link 'stars 1.6k', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[905] image 'stars'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[906] graphics-symbol ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[907] link 'forks 308', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[908] image 'forks'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[909] graphics-symbol ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t[910] listitem ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t[911] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[912] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[913] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[914] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[917] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[918] link 'danbraunai/simple_stories_train', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[919] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'danbraunai/'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[920] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'simple_stories_train'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[924] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[925] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Public'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[926] paragraph ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Trains small LMs. Designed for training on SimpleStories'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[927] paragraph ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[928] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[929] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[930] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Python'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[931] link 'stars 3', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[932] image 'stars'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[933] graphics-symbol ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[934] link 'fork 1', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[935] image 'fork'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[936] graphics-symbol ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t[937] listitem ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t[938] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[939] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[940] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[941] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[944] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[945] link 'locify', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[946] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'locify'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[950] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[951] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Public'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[952] paragraph ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'A library for LLM-based agents to navigate large codebases efficiently.'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[953] paragraph ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[954] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[955] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[956] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Python'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[957] link 'stars 6', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[958] image 'stars'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[959] graphics-symbol ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t[960] listitem ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t[961] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[962] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[963] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[964] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[967] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[968] link 'iDunno', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[969] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'iDunno'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[973] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[974] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Public'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[975] paragraph ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'A Distributed ML Cluster'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[976] paragraph ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[977] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[978] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[979] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Java'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[980] link 'stars 3', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[981] image 'stars'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[982] graphics-symbol ''\n\t\t\t\t\t\t\t\t\t\t[983] generic\n\t\t\t\t\t\t\t\t\t\t\t[984] generic\n\t\t\t\t\t\t\t\t\t\t\t\t[985] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t[986] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t[987] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[988] heading '481 contributions in the last year'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[989] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[990] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[991] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2099] grid 'Contribution Graph', clickable, multiselectable=False\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2100] caption ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Contribution Graph'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2101] rowgroup ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2102] row ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2103] gridcell 'Day of Week'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2104] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Day of Week'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2105] gridcell 'December'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2106] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'December'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2108] gridcell 'January'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2109] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'January'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2111] gridcell 'February'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2112] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'February'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2114] gridcell 'March'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2115] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'March'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2117] gridcell 'April'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2118] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'April'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2120] gridcell 'May'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2121] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'May'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2123] gridcell 'June'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2124] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'June'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2126] gridcell 'July'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2127] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'July'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2129] gridcell 'August'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2130] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'August'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2132] gridcell 'September'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2133] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'September'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2135] gridcell 'October'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2136] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'October'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2138] gridcell 'November'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2139] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'November'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2141] rowgroup ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2142] row ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2143] gridcell 'Sunday'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2144] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Sunday'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2146] gridcell '14 contributions on November 26th.', clickable, selected=False, describedby='contribution-graph-legend-level-4'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2147] gridcell '3 contributions on December 3rd.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2148] gridcell '5 contributions on December 10th.', clickable, selected=False, describedby='contribution-graph-legend-level-2'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2149] gridcell 'No contributions on December 17th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2150] gridcell '5 contributions on December 24th.', clickable, selected=False, describedby='contribution-graph-legend-level-2'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2151] gridcell 'No contributions on December 31st.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2152] gridcell '1 contribution on January 7th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2153] gridcell '2 contributions on January 14th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2154] gridcell '2 contributions on January 21st.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2155] gridcell '2 contributions on January 28th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2156] gridcell 'No contributions on February 4th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2157] gridcell '1 contribution on February 11th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2158] gridcell 'No contributions on February 18th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2159] gridcell 'No contributions on February 25th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2160] gridcell 'No contributions on March 3rd.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2161] gridcell 'No contributions on March 10th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2162] gridcell 'No contributions on March 17th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2163] gridcell '2 contributions on March 24th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2164] gridcell '3 contributions on March 31st.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2165] gridcell 'No contributions on April 7th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2166] gridcell '5 contributions on April 14th.', clickable, selected=False, describedby='contribution-graph-legend-level-2'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2167] gridcell '2 contributions on April 21st.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2168] gridcell 'No contributions on April 28th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2169] gridcell 'No contributions on May 5th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2170] gridcell 'No contributions on May 12th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2171] gridcell '1 contribution on May 19th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2172] gridcell '1 contribution on May 26th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2173] gridcell '2 contributions on June 2nd.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2174] gridcell '5 contributions on June 9th.', clickable, selected=False, describedby='contribution-graph-legend-level-2'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2175] gridcell '1 contribution on June 16th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2176] gridcell 'No contributions on June 23rd.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2177] gridcell 'No contributions on June 30th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2178] gridcell 'No contributions on July 7th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2179] gridcell 'No contributions on July 14th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2180] gridcell '5 contributions on July 21st.', clickable, selected=False, describedby='contribution-graph-legend-level-2'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2181] gridcell 'No contributions on July 28th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2182] gridcell '3 contributions on August 4th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2183] gridcell '1 contribution on August 11th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2184] gridcell '1 contribution on August 18th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2185] gridcell '1 contribution on August 25th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2186] gridcell '1 contribution on September 1st.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2187] gridcell 'No contributions on September 8th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2188] gridcell '1 contribution on September 15th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2189] gridcell '2 contributions on September 22nd.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2190] gridcell '1 contribution on September 29th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2191] gridcell '2 contributions on October 6th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2192] gridcell '2 contributions on October 13th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2193] gridcell '4 contributions on October 20th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2194] gridcell '1 contribution on October 27th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2195] gridcell '14 contributions on November 3rd.', clickable, selected=False, describedby='contribution-graph-legend-level-4'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2196] gridcell '10 contributions on November 10th.', clickable, selected=False, describedby='contribution-graph-legend-level-3'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2197] gridcell '2 contributions on November 17th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2198] gridcell '1 contribution on November 24th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2199] row ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2200] gridcell 'Monday'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2201] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Monday'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2203] gridcell 'No contributions on November 27th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2204] gridcell 'No contributions on December 4th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2205] gridcell '2 contributions on December 11th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2206] gridcell '2 contributions on December 18th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2207] gridcell '3 contributions on December 25th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2208] gridcell '2 contributions on January 1st.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2209] gridcell '1 contribution on January 8th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2210] gridcell 'No contributions on January 15th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2211] gridcell '3 contributions on January 22nd.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2212] gridcell '3 contributions on January 29th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2213] gridcell 'No contributions on February 5th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2214] gridcell '2 contributions on February 12th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2215] gridcell '1 contribution on February 19th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2216] gridcell 'No contributions on February 26th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2217] gridcell 'No contributions on March 4th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2218] gridcell '1 contribution on March 11th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2219] gridcell '1 contribution on March 18th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2220] gridcell 'No contributions on March 25th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2221] gridcell '1 contribution on April 1st.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2222] gridcell '1 contribution on April 8th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2223] gridcell '1 contribution on April 15th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2224] gridcell '1 contribution on April 22nd.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2225] gridcell '1 contribution on April 29th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2226] gridcell '2 contributions on May 6th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2227] gridcell 'No contributions on May 13th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2228] gridcell 'No contributions on May 20th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2229] gridcell '1 contribution on May 27th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2230] gridcell 'No contributions on June 3rd.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2231] gridcell '3 contributions on June 10th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2232] gridcell 'No contributions on June 17th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2233] gridcell 'No contributions on June 24th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2234] gridcell '1 contribution on July 1st.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2235] gridcell 'No contributions on July 8th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2236] gridcell 'No contributions on July 15th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2237] gridcell 'No contributions on July 22nd.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2238] gridcell '1 contribution on July 29th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2239] gridcell '1 contribution on August 5th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2240] gridcell 'No contributions on August 12th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2241] gridcell '2 contributions on August 19th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2242] gridcell '1 contribution on August 26th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2243] gridcell 'No contributions on September 2nd.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2244] gridcell 'No contributions on September 9th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2245] gridcell '1 contribution on September 16th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2246] gridcell '2 contributions on September 23rd.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2247] gridcell '1 contribution on September 30th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2248] gridcell '1 contribution on October 7th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2249] gridcell '1 contribution on October 14th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2250] gridcell '7 contributions on October 21st.', clickable, selected=False, describedby='contribution-graph-legend-level-2'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2251] gridcell '1 contribution on October 28th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2252] gridcell '4 contributions on November 4th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2253] gridcell '2 contributions on November 11th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2254] gridcell '1 contribution on November 18th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2255] gridcell '1 contribution on November 25th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2256] row ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2257] gridcell 'Tuesday'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2258] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Tuesday'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2260] gridcell 'No contributions on November 28th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2261] gridcell '3 contributions on December 5th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2262] gridcell '1 contribution on December 12th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2263] gridcell 'No contributions on December 19th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2264] gridcell '2 contributions on December 26th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2265] gridcell '2 contributions on January 2nd.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2266] gridcell 'No contributions on January 9th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2267] gridcell 'No contributions on January 16th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2268] gridcell 'No contributions on January 23rd.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2269] gridcell 'No contributions on January 30th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2270] gridcell 'No contributions on February 6th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2271] gridcell 'No contributions on February 13th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2272] gridcell 'No contributions on February 20th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2273] gridcell 'No contributions on February 27th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2274] gridcell 'No contributions on March 5th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2275] gridcell 'No contributions on March 12th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2276] gridcell 'No contributions on March 19th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2277] gridcell 'No contributions on March 26th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2278] gridcell '1 contribution on April 2nd.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2279] gridcell '1 contribution on April 9th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2280] gridcell '1 contribution on April 16th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2281] gridcell '2 contributions on April 23rd.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2282] gridcell '1 contribution on April 30th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2283] gridcell 'No contributions on May 7th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2284] gridcell '1 contribution on May 14th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2285] gridcell '2 contributions on May 21st.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2286] gridcell '2 contributions on May 28th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2287] gridcell '1 contribution on June 4th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2288] gridcell '1 contribution on June 11th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2289] gridcell 'No contributions on June 18th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2290] gridcell 'No contributions on June 25th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2291] gridcell '1 contribution on July 2nd.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2292] gridcell '1 contribution on July 9th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2293] gridcell '1 contribution on July 16th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2294] gridcell '1 contribution on July 23rd.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2295] gridcell 'No contributions on July 30th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2296] gridcell 'No contributions on August 6th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2297] gridcell 'No contributions on August 13th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2298] gridcell 'No contributions on August 20th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2299] gridcell 'No contributions on August 27th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2300] gridcell '1 contribution on September 3rd.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2301] gridcell 'No contributions on September 10th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2302] gridcell 'No contributions on September 17th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2303] gridcell '2 contributions on September 24th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2304] gridcell '1 contribution on October 1st.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2305] gridcell '1 contribution on October 8th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2306] gridcell '1 contribution on October 15th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2307] gridcell '3 contributions on October 22nd.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2308] gridcell '2 contributions on October 29th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2309] gridcell '3 contributions on November 5th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2310] gridcell '3 contributions on November 12th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2311] gridcell '2 contributions on November 19th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2312] gridcell 'No contributions on November 26th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2313] row ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2314] gridcell 'Wednesday'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2315] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Wednesday'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2317] gridcell '1 contribution on November 29th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2318] gridcell '3 contributions on December 6th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2319] gridcell '1 contribution on December 13th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2320] gridcell '4 contributions on December 20th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2321] gridcell '2 contributions on December 27th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2322] gridcell '1 contribution on January 3rd.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2323] gridcell 'No contributions on January 10th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2324] gridcell 'No contributions on January 17th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2325] gridcell 'No contributions on January 24th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2326] gridcell 'No contributions on January 31st.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2327] gridcell 'No contributions on February 7th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2328] gridcell '1 contribution on February 14th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2329] gridcell '1 contribution on February 21st.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2330] gridcell '1 contribution on February 28th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2331] gridcell 'No contributions on March 6th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2332] gridcell 'No contributions on March 13th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2333] gridcell 'No contributions on March 20th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2334] gridcell 'No contributions on March 27th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2335] gridcell '3 contributions on April 3rd.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2336] gridcell 'No contributions on April 10th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2337] gridcell '1 contribution on April 17th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2338] gridcell 'No contributions on April 24th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2339] gridcell 'No contributions on May 1st.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2340] gridcell '1 contribution on May 8th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2341] gridcell '2 contributions on May 15th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2342] gridcell '1 contribution on May 22nd.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2343] gridcell 'No contributions on May 29th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2344] gridcell '3 contributions on June 5th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2345] gridcell '1 contribution on June 12th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2346] gridcell '1 contribution on June 19th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2347] gridcell '1 contribution on June 26th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2348] gridcell 'No contributions on July 3rd.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2349] gridcell '1 contribution on July 10th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2350] gridcell 'No contributions on July 17th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2351] gridcell '1 contribution on July 24th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2352] gridcell '2 contributions on July 31st.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2353] gridcell '1 contribution on August 7th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2354] gridcell '1 contribution on August 14th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2355] gridcell '2 contributions on August 21st.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2356] gridcell '1 contribution on August 28th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2357] gridcell 'No contributions on September 4th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2358] gridcell 'No contributions on September 11th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2359] gridcell '1 contribution on September 18th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2360] gridcell '1 contribution on September 25th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2361] gridcell '1 contribution on October 2nd.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2362] gridcell '1 contribution on October 9th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2363] gridcell '3 contributions on October 16th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2364] gridcell '4 contributions on October 23rd.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2365] gridcell '1 contribution on October 30th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2366] gridcell '2 contributions on November 6th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2367] gridcell '1 contribution on November 13th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2368] gridcell 'No contributions on November 20th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2369] gridcell '1 contribution on November 27th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2370] row ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2371] gridcell 'Thursday'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2372] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Thursday'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2374] gridcell 'No contributions on November 30th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2375] gridcell 'No contributions on December 7th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2376] gridcell '2 contributions on December 14th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2377] gridcell '3 contributions on December 21st.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2378] gridcell 'No contributions on December 28th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2379] gridcell 'No contributions on January 4th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2380] gridcell 'No contributions on January 11th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2381] gridcell 'No contributions on January 18th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2382] gridcell '1 contribution on January 25th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2383] gridcell 'No contributions on February 1st.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2384] gridcell 'No contributions on February 8th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2385] gridcell 'No contributions on February 15th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2386] gridcell '1 contribution on February 22nd.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2387] gridcell '1 contribution on February 29th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2388] gridcell '6 contributions on March 7th.', clickable, selected=False, describedby='contribution-graph-legend-level-2'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2389] gridcell 'No contributions on March 14th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2390] gridcell 'No contributions on March 21st.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2391] gridcell '1 contribution on March 28th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2392] gridcell '3 contributions on April 4th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2393] gridcell '1 contribution on April 11th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2394] gridcell '1 contribution on April 18th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2395] gridcell 'No contributions on April 25th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2396] gridcell '1 contribution on May 2nd.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2397] gridcell '1 contribution on May 9th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2398] gridcell 'No contributions on May 16th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2399] gridcell 'No contributions on May 23rd.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2400] gridcell '2 contributions on May 30th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2401] gridcell '1 contribution on June 6th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2402] gridcell 'No contributions on June 13th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2403] gridcell 'No contributions on June 20th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2404] gridcell '1 contribution on June 27th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2405] gridcell '3 contributions on July 4th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2406] gridcell '1 contribution on July 11th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2407] gridcell '1 contribution on July 18th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2408] gridcell '1 contribution on July 25th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2409] gridcell 'No contributions on August 1st.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2410] gridcell '1 contribution on August 8th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2411] gridcell 'No contributions on August 15th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2412] gridcell '1 contribution on August 22nd.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2413] gridcell '1 contribution on August 29th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2414] gridcell '1 contribution on September 5th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2415] gridcell '1 contribution on September 12th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2416] gridcell '1 contribution on September 19th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2417] gridcell '1 contribution on September 26th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2418] gridcell '1 contribution on October 3rd.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2419] gridcell '2 contributions on October 10th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2420] gridcell '8 contributions on October 17th.', clickable, selected=False, describedby='contribution-graph-legend-level-2'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2421] gridcell '1 contribution on October 24th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2422] gridcell '2 contributions on October 31st.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2423] gridcell '1 contribution on November 7th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2424] gridcell '3 contributions on November 14th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2425] gridcell '2 contributions on November 21st.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2426] gridcell '3 contributions on November 28th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2427] row ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2428] gridcell 'Friday'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2429] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Friday'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2431] gridcell 'No contributions on December 1st.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2432] gridcell '1 contribution on December 8th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2433] gridcell '2 contributions on December 15th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2434] gridcell '1 contribution on December 22nd.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2435] gridcell '1 contribution on December 29th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2436] gridcell 'No contributions on January 5th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2437] gridcell '1 contribution on January 12th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2438] gridcell '1 contribution on January 19th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2439] gridcell 'No contributions on January 26th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2440] gridcell '1 contribution on February 2nd.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2441] gridcell 'No contributions on February 9th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2442] gridcell '1 contribution on February 16th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2443] gridcell 'No contributions on February 23rd.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2444] gridcell 'No contributions on March 1st.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2445] gridcell 'No contributions on March 8th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2446] gridcell 'No contributions on March 15th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2447] gridcell 'No contributions on March 22nd.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2448] gridcell '1 contribution on March 29th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2449] gridcell 'No contributions on April 5th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2450] gridcell '2 contributions on April 12th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2451] gridcell 'No contributions on April 19th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2452] gridcell 'No contributions on April 26th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2453] gridcell 'No contributions on May 3rd.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2454] gridcell '1 contribution on May 10th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2455] gridcell '1 contribution on May 17th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2456] gridcell 'No contributions on May 24th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2457] gridcell 'No contributions on May 31st.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2458] gridcell 'No contributions on June 7th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2459] gridcell 'No contributions on June 14th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2460] gridcell 'No contributions on June 21st.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2461] gridcell '1 contribution on June 28th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2462] gridcell '1 contribution on July 5th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2463] gridcell '2 contributions on July 12th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2464] gridcell 'No contributions on July 19th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2465] gridcell '1 contribution on July 26th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2466] gridcell 'No contributions on August 2nd.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2467] gridcell '2 contributions on August 9th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2468] gridcell '2 contributions on August 16th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2469] gridcell 'No contributions on August 23rd.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2470] gridcell '1 contribution on August 30th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2471] gridcell 'No contributions on September 6th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2472] gridcell '1 contribution on September 13th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2473] gridcell '3 contributions on September 20th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2474] gridcell '1 contribution on September 27th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2475] gridcell 'No contributions on October 4th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2476] gridcell '3 contributions on October 11th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2477] gridcell '5 contributions on October 18th.', clickable, selected=False, describedby='contribution-graph-legend-level-2'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2478] gridcell '3 contributions on October 25th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2479] gridcell '1 contribution on November 1st.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2480] gridcell '1 contribution on November 8th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2481] gridcell '3 contributions on November 15th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2482] gridcell '1 contribution on November 22nd.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2483] gridcell ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2484] row ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2485] gridcell 'Saturday'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2486] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Saturday'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2488] gridcell '10 contributions on December 2nd.', clickable, selected=False, describedby='contribution-graph-legend-level-3'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2489] gridcell '13 contributions on December 9th.', clickable, selected=False, describedby='contribution-graph-legend-level-4'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2490] gridcell 'No contributions on December 16th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2491] gridcell '1 contribution on December 23rd.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2492] gridcell '10 contributions on December 30th.', clickable, selected=False, describedby='contribution-graph-legend-level-3'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2493] gridcell '3 contributions on January 6th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2494] gridcell '1 contribution on January 13th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2495] gridcell '1 contribution on January 20th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2496] gridcell '3 contributions on January 27th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2497] gridcell 'No contributions on February 3rd.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2498] gridcell '1 contribution on February 10th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2499] gridcell 'No contributions on February 17th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2500] gridcell '1 contribution on February 24th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2501] gridcell 'No contributions on March 2nd.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2502] gridcell 'No contributions on March 9th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2503] gridcell 'No contributions on March 16th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2504] gridcell 'No contributions on March 23rd.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2505] gridcell '2 contributions on March 30th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2506] gridcell '1 contribution on April 6th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2507] gridcell '5 contributions on April 13th.', clickable, selected=False, describedby='contribution-graph-legend-level-2'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2508] gridcell '1 contribution on April 20th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2509] gridcell 'No contributions on April 27th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2510] gridcell 'No contributions on May 4th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2511] gridcell '1 contribution on May 11th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2512] gridcell '1 contribution on May 18th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2513] gridcell 'No contributions on May 25th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2514] gridcell '2 contributions on June 1st.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2515] gridcell 'No contributions on June 8th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2516] gridcell 'No contributions on June 15th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2517] gridcell 'No contributions on June 22nd.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2518] gridcell 'No contributions on June 29th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2519] gridcell '1 contribution on July 6th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2520] gridcell 'No contributions on July 13th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2521] gridcell '1 contribution on July 20th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2522] gridcell 'No contributions on July 27th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2523] gridcell '1 contribution on August 3rd.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2524] gridcell 'No contributions on August 10th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2525] gridcell 'No contributions on August 17th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2526] gridcell 'No contributions on August 24th.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2527] gridcell 'No contributions on August 31st.', clickable, selected=False, describedby='contribution-graph-legend-level-0'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2528] gridcell '1 contribution on September 7th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2529] gridcell '1 contribution on September 14th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2530] gridcell '1 contribution on September 21st.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2531] gridcell '1 contribution on September 28th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2532] gridcell '1 contribution on October 5th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2533] gridcell '5 contributions on October 12th.', clickable, selected=False, describedby='contribution-graph-legend-level-2'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2534] gridcell '5 contributions on October 19th.', clickable, selected=False, describedby='contribution-graph-legend-level-2'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2535] gridcell '7 contributions on October 26th.', clickable, selected=False, describedby='contribution-graph-legend-level-2'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2536] gridcell '5 contributions on November 2nd.', clickable, selected=False, describedby='contribution-graph-legend-level-2'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2537] gridcell '17 contributions on November 9th.', clickable, selected=False, describedby='contribution-graph-legend-level-4'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2538] gridcell '1 contribution on November 16th.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2539] gridcell '1 contribution on November 23rd.', clickable, selected=False, describedby='contribution-graph-legend-level-1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2540] gridcell ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2541] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2542] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2543] link 'Learn how we count contributions', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2544] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2545] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Less'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2546] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2547] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'No contributions.'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2548] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2549] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Low contributions.'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2550] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2551] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Medium-low contributions.'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2552] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2553] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Medium-high contributions.'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2554] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2555] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'High contributions.'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2556] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'More'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2557] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2558] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2559] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2560] navigation 'Organizations'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2561] link '@All-Hands-AI', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2562] image ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2563] link '@Globe-NLP-Lab', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2564] image ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2565] link '@TransformerLensOrg', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2566] image ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2567] Details '', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2568] button 'More', clickable, hasPopup='menu', expanded=False\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2569] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2591] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2592] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2593] heading 'Activity overview'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2594] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2597] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Contributed to'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2598] link 'All-Hands-AI/OpenHands', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText ','\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2599] link 'All-Hands-AI/openhands-aci', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText ','\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2600] link 'ryanhoangt/locify', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2601] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'and 36 other repositories'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2602] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2603] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2604] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2608] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Loading'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2609] SvgRoot \"A graph representing ryanhoangt's contributions from November 26, 2023 to November 28, 2024. The contributions are 77% commits, 15% pull requests, 4% code review, 4% issues.\"\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2611] group ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2612] graphics-symbol ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2613] graphics-symbol ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2614] graphics-symbol ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2615] graphics-symbol ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2616] graphics-symbol ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2617] graphics-symbol ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2618] graphics-symbol ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2619] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText '4%'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2620] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Code review'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2621] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText '4%'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2622] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Issues'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2623] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText '15%'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2624] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Pull requests'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2625] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText '77%'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2626] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Commits'\n\t\t\t\t\t\t\t\t\t\t\t\t\t[2627] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2629] heading 'Contribution activity'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2630] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2631] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2632] heading 'November 2024'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2633] generic 'November 2024'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2634] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText '2024'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2635] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2636] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2639] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2640] Details ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2641] button 'Created 24 commits in 3 repositories', clickable, expanded=True\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2642] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Created 24 commits in 3 repositories'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2643] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2644] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2650] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2651] list ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2652] listitem ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2653] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2654] link 'All-Hands-AI/openhands-aci', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2655] link '16 commits', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2656] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2657] image '67% of commits in November were made to All-Hands-AI/openhands-aci'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2658] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2659] listitem ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2660] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2661] link 'All-Hands-AI/OpenHands', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2662] link '4 commits', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2663] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2664] image '17% of commits in November were made to All-Hands-AI/OpenHands'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2665] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2666] listitem ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2667] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2668] link 'ryanhoangt/p4cm4n', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2669] link '4 commits', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2670] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2671] image '17% of commits in November were made to ryanhoangt/p4cm4n'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2672] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2673] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2674] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2677] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2678] Details ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2679] button 'Created 3 repositories', clickable, expanded=True\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2680] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Created 3 repositories'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2681] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2682] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2688] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2689] list ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2690] listitem ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2691] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2692] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2695] link 'ryanhoangt/TapeAgents', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2696] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2697] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2698] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2699] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Python'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2700] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2701] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'This contribution was made on Nov 21'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2703] listitem ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2704] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2705] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2708] link 'ryanhoangt/multilspy', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2709] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2710] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2711] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2712] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Python'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2713] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2714] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'This contribution was made on Nov 8'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2716] listitem ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2717] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2718] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2721] link 'ryanhoangt/anthropic-quickstarts', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2722] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2723] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2724] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2725] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'TypeScript'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2726] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2727] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'This contribution was made on Nov 3'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2729] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2730] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2733] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2734] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2735] heading 'Created a pull request in All-Hands-AI/OpenHands that received 20 comments'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2736] link 'All-Hands-AI/OpenHands', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2737] link 'Nov 17', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2738] time ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Nov 17'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2739] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2742] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2743] heading '[Experiment] Add symbol navigation commands into the editor'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2744] link '[Experiment] Add symbol navigation commands into the editor', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2745] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2746] paragraph ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2747] strong ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'End-user friendly description of the problem this fixes or functionality that this introduces'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Include this change in the Release Notes. If checke…'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2748] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2749] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2750] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText '+311'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2751] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText '−105'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2752] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2753] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2754] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2755] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2756] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2757] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'lines changed'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2758] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText '•'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText '20 comments'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2759] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2760] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2763] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2764] Details ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2765] button 'Opened 17 other pull requests in 5 repositories', clickable, expanded=True\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2766] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Opened 17 other pull requests in 5 repositories'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2767] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2768] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2774] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2775] Details ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2776] button 'All-Hands-AI/openhands-aci 2 open 8 merged', clickable, expanded=False\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2777] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2778] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'All-Hands-AI/openhands-aci'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2779] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2780] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText '2'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'open'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2781] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText '8'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'merged'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2782] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2786] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2896] Details ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2897] button 'All-Hands-AI/OpenHands 4 merged', clickable, expanded=False\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2898] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2899] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'All-Hands-AI/OpenHands'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2900] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2901] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText '4'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'merged'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2902] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2906] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2951] Details ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2952] button 'ryanhoangt/multilspy 1 open', clickable, expanded=False\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2953] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2954] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'ryanhoangt/multilspy'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2955] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2956] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText '1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'open'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2957] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2961] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2976] Details ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2977] button 'anthropics/anthropic-quickstarts 1 closed', clickable, expanded=False\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2978] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2979] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'anthropics/anthropic-quickstarts'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2980] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2981] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText '1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'closed'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2982] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[2986] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3001] Details ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3002] button 'danbraunai/simple_stories_train 1 open', clickable, expanded=False\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3003] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3004] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'danbraunai/simple_stories_train'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3005] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3006] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText '1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'open'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3007] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3011] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3026] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3027] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3030] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3031] Details ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3032] button 'Reviewed 6 pull requests in 2 repositories', clickable, expanded=True\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3033] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Reviewed 6 pull requests in 2 repositories'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3034] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3035] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3041] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3042] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3043] Details ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3044] button 'All-Hands-AI/openhands-aci 3 pull requests', clickable, expanded=False\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3045] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3046] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'All-Hands-AI/openhands-aci'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3047] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText '3 pull requests'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3048] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3052] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3087] Details ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3088] button 'All-Hands-AI/OpenHands 3 pull requests', clickable, expanded=False\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3089] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3090] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'All-Hands-AI/OpenHands'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3091] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText '3 pull requests'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3092] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3096] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3131] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3132] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3135] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3136] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3137] heading 'Created an issue in All-Hands-AI/OpenHands that received 1 comment'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3138] link 'All-Hands-AI/OpenHands', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3139] link 'Nov 7', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3140] time ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Nov 7'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3141] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3145] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3146] heading '[Bug]: Patch collection after eval was empty although the agent did make changes'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3147] link '[Bug]: Patch collection after eval was empty although the agent did make changes', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3148] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3149] paragraph ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText \"Is there an existing issue for the same bug? I have checked the existing issues. Describe the bug and reproduction steps I'm running eval for\"\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3150] link '#4782', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3151] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3152] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3153] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3154] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3158] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3159] SvgRoot ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3160] graphics-symbol ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3161] graphics-symbol ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3162] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText '1 task done'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3163] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText '•'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText '1 comment'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3164] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3165] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3169] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3170] Details ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3171] button 'Opened 3 other issues in 2 repositories', clickable, expanded=True\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3172] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Opened 3 other issues in 2 repositories'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3173] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3174] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3180] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3181] Details ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3182] button 'ryanhoangt/locify 2 open', clickable, expanded=False\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3183] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3184] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'ryanhoangt/locify'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3185] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3186] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText '2'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'open'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3187] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3191] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3218] Details ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3219] button 'All-Hands-AI/openhands-aci 1 closed', clickable, expanded=False\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3220] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3221] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'All-Hands-AI/openhands-aci'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3222] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3223] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText '1'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'closed'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3224] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3228] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3244] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3245] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3248] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3249] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText '31 contributions in private repositories'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3250] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Nov 5 – Nov 25'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3251] Section ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3252] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3256] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Loading'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3257] button 'Show more activity', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3258] paragraph ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText 'Seeing something unexpected? Take a look at the'\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3259] link 'GitHub profile guide', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tStaticText '.'\n\t\t\t\t\t\t\t\t\t\t\t\t[3260] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t[3261] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3263] generic\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3264] list ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3265] listitem ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3266] link 'Contribution activity in 2024', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3267] listitem ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3268] link 'Contribution activity in 2023', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3269] listitem ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3270] link 'Contribution activity in 2022', clickable\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3271] listitem ''\n\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t[3272] link 'Contribution activity in 2021', clickable\n\t\t\t[3273] contentinfo ''\n\t\t\t\t[3274] heading 'Footer'\n\t\t\t\t[3275] generic\n\t\t\t\t\t[3276] generic\n\t\t\t\t\t\t[3277] link 'Homepage', clickable\n\t\t\t\t\t\t[3280] generic\n\t\t\t\t\t\t\tStaticText '© 2024 GitHub,\\xa0Inc.'\n\t\t\t\t\t[3281] navigation 'Footer'\n\t\t\t\t\t\t[3282] heading 'Footer navigation'\n\t\t\t\t\t\t[3283] list 'Footer navigation'\n\t\t\t\t\t\t\t[3284] listitem ''\n\t\t\t\t\t\t\t\t[3285] link 'Terms', clickable\n\t\t\t\t\t\t\t[3286] listitem ''\n\t\t\t\t\t\t\t\t[3287] link 'Privacy', clickable\n\t\t\t\t\t\t\t[3288] listitem ''\n\t\t\t\t\t\t\t\t[3289] link 'Security', clickable\n\t\t\t\t\t\t\t[3290] listitem ''\n\t\t\t\t\t\t\t\t[3291] link 'Status', clickable\n\t\t\t\t\t\t\t[3292] listitem ''\n\t\t\t\t\t\t\t\t[3293] link 'Docs', clickable\n\t\t\t\t\t\t\t[3294] listitem ''\n\t\t\t\t\t\t\t\t[3295] link 'Contact', clickable\n\t\t\t\t\t\t\t[3296] listitem ''\n\t\t\t\t\t\t\t\t[3297] generic\n\t\t\t\t\t\t\t\t\t[3298] button 'Manage cookies', clickable\n\t\t\t\t\t\t\t[3299] listitem ''\n\t\t\t\t\t\t\t\t[3300] generic\n\t\t\t\t\t\t\t\t\t[3301] button 'Do not share my personal information', clickable\n\t\t\t[3302] generic\n\t\t[3314] generic, live='polite', atomic, relevant='additions text'\n\t\t[3315] generic, live='assertive', atomic, relevant='additions text'\n============== END accessibility tree ==============\nThe screenshot of the current page is shown below.\n",
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {"url": image_url},
+                },
+            ],
+            "role": "tool",
+            "cache_control": {"type": "ephemeral"},
+            "tool_call_id": "tooluse_UxfOQT6jRq-SvoQ9La_1sA",
+            "name": "browser",
+        },
+    ]
+
+    result = prompt_factory(
+        model="claude-sonnet-4-5-20250929",
+        messages=messages,
+        custom_llm_provider="anthropic",
+    )
+
+    assert b64_data in json.dumps(result)
+
+
+def test_anthropic_map_openai_params_tools_and_json_schema():
+    import json
+
+    args = {
+        "non_default_params": {
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "schema": {
+                        "properties": {
+                            "question": {"title": "Question", "type": "string"},
+                            "answer": {"title": "Answer", "type": "string"},
+                        },
+                        "required": ["question", "answer"],
+                        "title": "RFormat",
+                        "type": "object",
+                        "additionalProperties": False,
+                    },
+                    "name": "RFormat",
+                    "strict": True,
+                },
+            },
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_current_weather",
+                        "description": "Get the current weather in a given location",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "location": {
+                                    "type": "string",
+                                    "description": "The city and state, e.g. San Francisco, CA",
+                                },
+                                "unit": {
+                                    "type": "string",
+                                    "enum": ["celsius", "fahrenheit"],
+                                },
+                            },
+                            "required": ["location"],
+                        },
+                    },
+                }
+            ],
+            "tool_choice": "required",
+        }
+    }
+
+    mapped_params = litellm.AnthropicConfig().map_openai_params(
+        non_default_params=args["non_default_params"],
+        optional_params={},
+        model="claude-sonnet-4-5-20250929",
+        drop_params=False,
+    )
+
+    assert "Question" in json.dumps(mapped_params)
+
+
+def test_anthropic_map_openai_params_tools_with_defs():
+    args = {
+        "non_default_params": {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "create_user",
+                        "description": "Create a user from provided profile data.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "user": {"$ref": "#/$defs/User"},
+                            },
+                            "required": ["user"],
+                            "$defs": {
+                                "User": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": {"type": "string"},
+                                        "email": {"type": "string"},
+                                    },
+                                    "required": ["name", "email"],
+                                }
+                            },
+                        },
+                    },
+                }
+            ]
+        }
+    }
+
+    mapped_params = litellm.AnthropicConfig().map_openai_params(
+        non_default_params=args["non_default_params"],
+        optional_params={},
+        model="claude-sonnet-4-5-20250929",
+        drop_params=False,
+    )
+
+    tool = mapped_params["tools"][0]
+    assert tool["input_schema"]["properties"]["user"]["$ref"] == "#/$defs/User"
+    assert tool["input_schema"]["$defs"]["User"]["properties"]["name"]["type"] == "string"
+
+
+@pytest.mark.parametrize(
+    "json_mode, tool_calls, expect_null_response",
+    [
+        (
+            True,
+            [
+                {
+                    "id": "toolu_013JszbnYBVygTxh6EGHEHia",
+                    "type": "function",
+                    "function": {
+                        "name": "get_current_weather",
+                        "arguments": '{"location": "New York, NY"}',
+                    },
+                    "index": 0,
+                }
+            ],
+            True,
+        ),
+        (
+            True,
+            [
+                {
+                    "id": "toolu_013JszbnYBVygTxh6EGHEHia",
+                    "type": "function",
+                    "function": {
+                        "name": RESPONSE_FORMAT_TOOL_NAME,
+                        "arguments": '{"location": "New York, NY"}',
+                    },
+                    "index": 0,
+                }
+            ],
+            False,
+        ),
+        (
+            False,
+            [
+                {
+                    "id": "toolu_013JszbnYBVygTxh6EGHEHia",
+                    "type": "function",
+                    "function": {
+                        "name": RESPONSE_FORMAT_TOOL_NAME,
+                        "arguments": '{"location": "New York, NY"}',
+                    },
+                    "index": 0,
+                }
+            ],
+            True,
+        ),
+    ],
+)
+def test_anthropic_json_mode_and_tool_call_response(json_mode, tool_calls, expect_null_response):
+    result, _, _ = litellm.AnthropicConfig()._resolve_json_mode_non_streaming(
+        json_mode=json_mode,
+        tool_calls=tool_calls,
+    )
+
+    assert result is None if expect_null_response else result is not None, (
+        f"Expected result to be {None if expect_null_response else 'not None'}, but got {result}"
+    )
+
+
+@pytest.mark.parametrize(
+    "stop_input,expected_output,drop_params",
+    [
+        ("stop", ["stop"], True),  # basic string
+        (["stop1", "stop2"], ["stop1", "stop2"], True),  # list of strings
+        (
+            "   ",
+            None,
+            True,
+        ),  # whitespace string should be dropped when drop_params is True
+        (
+            "   ",
+            ["   "],
+            False,
+        ),  # whitespace string should be kept when drop_params is False
+        (
+            ["stop1", "  ", "stop2"],
+            ["stop1", "stop2"],
+            True,
+        ),  # list with whitespace that should be filtered
+        (
+            ["stop1", "  ", "stop2"],
+            ["stop1", "  ", "stop2"],
+            False,
+        ),  # list with whitespace that should be kept
+        (None, None, True),  # None input
+    ],
+)
+def test_map_stop_sequences(stop_input, expected_output, drop_params):
+    """Test the _map_stop_sequences method of AnthropicConfig"""
+    litellm.drop_params = drop_params
+    config = AnthropicConfig()
+    result = config.map_stop_sequences(stop_input)
+    assert result == expected_output
+
+
+@pytest.mark.usefixtures("fake_provider_credentials")
+@pytest.mark.parametrize(
+    "model",
+    ["anthropic/claude-3-sonnet-20240229", "anthropic/claude-3-opus-20240229"],
+)
+@pytest.mark.asyncio()
+async def test_anthropic_api_max_completion_tokens(model: str):
+    """
+    Tests that:
+    - max_completion_tokens is passed as max_tokens to anthropic models
+    """
+    litellm.set_verbose = True
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    mock_response = {
+        "content": [{"text": "Hi! My name is Claude.", "type": "text"}],
+        "id": "msg_013Zva2CMHLNnXjNJJKqJ2EF",
+        "model": "claude-3-5-sonnet-20240620",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "type": "message",
+        "usage": {"input_tokens": 2095, "output_tokens": 503},
+    }
+
+    client = HTTPHandler()
+
+    print("\n\nmock_response: ", mock_response)
+
+    with patch.object(client, "post") as mock_client:
+        try:
+            response = await litellm.acompletion(
+                model=model,
+                max_completion_tokens=10,
+                messages=[{"role": "user", "content": "Hello!"}],
+                client=client,
+            )
+        except Exception as e:
+            print(f"Error: {e}")
+        mock_client.assert_called_once()
+        request_body = mock_client.call_args.kwargs["json"]
+
+        print("request_body: ", request_body)
+
+        assert request_body == {
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello!"}]}],
+            "max_tokens": 10,
+            "model": model.split("/")[-1],
+        }
+
+
+def test_anthropic_tool_cache_control():
+    from litellm.utils import return_raw_request
+    from litellm.types.utils import CallTypes
+    import json
+
+    tool_content = "Result: 4. " * 1000
+    messages = [
+        {"role": "user", "content": "Calculate 2+2"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_proxy_123",
+                    "type": "function",
+                    "function": {"name": "calc", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_proxy_123",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "1234567890",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+    ]
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "calc",
+                "description": "Calculator",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+
+    vertex_ai_model = "vertex_ai/claude-sonnet-4-5@20250929"
+    anthropic_api_model = "claude-sonnet-4-5-20250929"
+    result = return_raw_request(
+        endpoint=CallTypes.completion,
+        kwargs={
+            "model": anthropic_api_model,
+            "messages": messages + [{"role": "user", "content": "What's 1+1?"}],
+            "tools": tools,
+            "max_tokens": 50,
+        },
+    )
+
+    print(f"result: {result}")
+
+    print(result["raw_request_body"]["messages"][2])
+
+    assert "cache_control" in json.dumps(result["raw_request_body"]["messages"][2]["content"])
+
+
+def test_anthropic_strict_parameter_passthrough():
+    """Test that the strict parameter in tool parameters is passed through to Anthropic input_schema"""
+    args = {
+        "non_default_params": {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get weather information",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "location": {"type": "string"},
+                            },
+                            "required": ["location"],
+                            "strict": True,
+                        },
+                    },
+                }
+            ],
+        }
+    }
+
+    mapped_params = litellm.AnthropicConfig().map_openai_params(
+        non_default_params=args["non_default_params"],
+        optional_params={},
+        model="claude-sonnet-4-5-20250929",
+        drop_params=False,
+    )
+
+    assert "tools" in mapped_params
+    assert len(mapped_params["tools"]) == 1
+    tool = mapped_params["tools"][0]
+    assert "input_schema" in tool
+    assert tool["input_schema"]["strict"] is True
+
+
+def test_anthropic_strict_not_present():
+    """Test that the strict parameter in tool parameters is passed through to Anthropic input_schema"""
+    args = {
+        "non_default_params": {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get weather information",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "location": {"type": "string"},
+                            },
+                            "required": ["location"],
+                        },
+                    },
+                }
+            ],
+        }
+    }
+
+    mapped_params = litellm.AnthropicConfig().map_openai_params(
+        non_default_params=args["non_default_params"],
+        optional_params={},
+        model="claude-sonnet-4-5-20250929",
+        drop_params=False,
+    )
+
+    assert "tools" in mapped_params
+    assert len(mapped_params["tools"]) == 1
+    tool = mapped_params["tools"][0]
+    assert "input_schema" in tool
+    assert "strict" not in tool["input_schema"]
+
+
+def test_metadata_only_user_id_passes_through():
+    """metadata with only user_id is forwarded as-is."""
+    data = _make_transform_request(
+        optional_params={"metadata": {"user_id": "abc123"}},
+        litellm_params={},
+    )
+    assert data.get("metadata") == {"user_id": "abc123"}
+
+
+def test_metadata_extra_keys_are_stripped():
+    """Extra keys in metadata are removed; only user_id is sent."""
+    data = _make_transform_request(
+        optional_params={"metadata": {"user_id": "abc123", "extra_key": "val"}},
+        litellm_params={},
+    )
+    assert data.get("metadata") == {"user_id": "abc123"}
+
+
+def test_metadata_without_user_id_is_dropped():
+    """metadata with no user_id is removed entirely."""
+    data = _make_transform_request(
+        optional_params={"metadata": {"only_other_key": "val"}},
+        litellm_params={},
+    )
+    assert "metadata" not in data
+
+
+def test_metadata_user_id_from_litellm_params_strips_extras():
+    """user_id from litellm_params metadata is extracted; extra keys are not forwarded."""
+    data = _make_transform_request(
+        optional_params={},
+        litellm_params={"metadata": {"user_id": "abc123", "trace_id": "xyz"}},
+    )
+    assert data.get("metadata") == {"user_id": "abc123"}
+
+
+@pytest.mark.parametrize("user_id", [12345, {"id": "abc123"}, ["abc123"]])
+def test_metadata_non_string_user_id_is_skipped_instead_of_raising(user_id):
+    data: Final = _make_transform_request(
+        optional_params={},
+        litellm_params={"metadata": {"user_id": user_id}},
+    )
+    assert "metadata" not in data
+
+
+def test_metadata_filter_applies_to_vertex_anthropic():
+    """VertexAIAnthropicConfig inherits the metadata filter."""
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
+        VertexAIAnthropicConfig,
+    )
+
+    data = VertexAIAnthropicConfig().transform_request(
+        model="claude-3-5-sonnet-20241022",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"metadata": {"user_id": "u1", "extra": "drop_me"}},
+        litellm_params={},
+        headers={},
+    )
+    assert data.get("metadata") == {"user_id": "u1"}
+
+
+def test_metadata_filter_applies_to_azure_anthropic():
+    """AzureAnthropicConfig inherits the metadata filter."""
+    from litellm.llms.azure_ai.anthropic.transformation import AzureAnthropicConfig
+
+    data = AzureAnthropicConfig().transform_request(
+        model="claude-3-5-sonnet-20241022",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"metadata": {"user_id": "u2", "extra": "drop_me"}},
+        litellm_params={},
+        headers={},
+    )
+    assert data.get("metadata") == {"user_id": "u2"}
+
+
+@pytest.mark.asyncio()
+async def test_anthropic_api_prompt_caching_with_content_str():
+    system_message = [
+        {
+            "role": "system",
+            "content": "Here is the full text of a complex legal agreement",
+            "cache_control": {"type": "ephemeral"},
+        },
+    ]
+    translated_system_message = litellm.AnthropicConfig().translate_system_message(messages=system_message)
+
+    assert translated_system_message == [
+        # System Message
+        {
+            "type": "text",
+            "text": "Here is the full text of a complex legal agreement",
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+    user_messages = [
+        # marked for caching with the cache_control parameter, so that this checkpoint can read from the previous cache.
+        {
+            "role": "user",
+            "content": "What are the key terms and conditions in this agreement?",
+            "cache_control": {"type": "ephemeral"},
+        },
+        {
+            "role": "assistant",
+            "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
+        },
+        # The final turn is marked with cache-control, for continuing in followups.
+        {
+            "role": "user",
+            "content": "What are the key terms and conditions in this agreement?",
+            "cache_control": {"type": "ephemeral"},
+        },
+    ]
+
+    translated_messages = anthropic_messages_pt(
+        messages=user_messages,
+        model="claude-3-5-sonnet-20240620",
+        llm_provider="anthropic",
+    )
+
+    expected_messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
+                }
+            ],
+        },
+        # The final turn is marked with cache-control, for continuing in followups.
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+    ]
+
+    assert len(translated_messages) == len(expected_messages)
+    for idx, i in enumerate(translated_messages):
+        assert i == expected_messages[idx], "Error on idx={}. Got={}, Expected={}".format(
+            idx, i, expected_messages[idx]
+        )
+
+
+@pytest.fixture
+def anthropic_messages():
+    return [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Here is the full text of a complex legal agreement" * 500,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": "Certainly! the key terms and conditions are the following: the contract is 1 year long for $10/mo",
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What are the key terms and conditions in this agreement?",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+    ]
+
+
+@pytest.mark.usefixtures("fake_provider_credentials")
+def test_is_prompt_caching_enabled(anthropic_messages):
+    assert litellm.utils.is_prompt_caching_valid_prompt(
+        messages=anthropic_messages,
+        tools=None,
+        custom_llm_provider="anthropic",
+        model="anthropic/claude-sonnet-4-5-20250929",
+    )
+
+
+def test_calculate_usage_sums_compaction_and_message_iterations():
+    usage: Final = AnthropicConfig().calculate_usage(
+        usage_object={
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "iterations": [
+                {"iteration": 1, "type": "compaction", "input_tokens": 1000, "output_tokens": 500},
+                {"iteration": 2, "type": "message", "input_tokens": 100, "output_tokens": 50},
+            ],
+        },
+        reasoning_content=None,
+    )
+    assert usage.prompt_tokens == 1100
+    assert usage.completion_tokens == 550
+    assert usage.total_tokens == 1650
+    assert usage.prompt_tokens_details.text_tokens == 1100
+    assert usage.iterations is not None
+    assert len(usage.iterations) == 2
+    assert usage.iterations[0]["type"] == "compaction"
+
+
+def test_calculate_usage_sums_cache_tokens_across_compaction_iterations():
+    usage: Final = AnthropicConfig().calculate_usage(
+        usage_object={
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "iterations": [
+                {
+                    "type": "compaction",
+                    "input_tokens": 500,
+                    "output_tokens": 200,
+                    "cache_creation_input_tokens": 50,
+                    "cache_read_input_tokens": 17000,
+                },
+                {
+                    "type": "message",
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "cache_creation_input_tokens": 10,
+                    "cache_read_input_tokens": 20,
+                },
+            ],
+        },
+        reasoning_content=None,
+    )
+    assert usage.prompt_tokens == 17680
+    assert usage.completion_tokens == 250
+    assert usage.prompt_tokens_details.cache_creation_tokens == 60
+    assert usage.prompt_tokens_details.cached_tokens == 17020
+
+
+PROMPT_CACHING_MODEL: Final = "claude-sonnet-5-5"
+EPHEMERAL: Final = {"type": "ephemeral"}
+WEATHER_PARAMETERS: Final = {
+    "type": "object",
+    "properties": {
+        "location": {"type": "string", "description": "The city and state, e.g. San Francisco, CA"},
+        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+    },
+    "required": ["location"],
+}
+
+
+async def _send_prompt_caching_request(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, **params: object
+) -> httpx.Request:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_01XFDUDYJgAACzvnptvVoYEL",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Hello!"}],
+                "model": PROMPT_CACHING_MODEL,
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 12, "output_tokens": 6},
+            },
+        )
+    )
+    await litellm.acompletion(
+        api_key="mock_api_key",
+        model=f"anthropic/{PROMPT_CACHING_MODEL}",
+        extra_headers={"anthropic-version": "2023-06-01"},
+        **params,
+    )
+    assert route.call_count == 1
+    request: Final = route.calls.last.request
+    assert request.headers["x-api-key"] == "mock_api_key"
+    assert request.headers["anthropic-version"] == "2023-06-01"
+    assert "anthropic-beta" not in request.headers
+    return request
+
+
+async def test_litellm_anthropic_prompt_caching_tools(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request: Final = await _send_prompt_caching_request(
+        respx_mock,
+        monkeypatch,
+        messages=[{"role": "user", "content": "What's the weather like in Boston today?"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_current_weather",
+                    "description": "Get the current weather in a given location",
+                    "parameters": WEATHER_PARAMETERS,
+                    "cache_control": EPHEMERAL,
+                },
+            }
+        ],
+    )
+    assert json.loads(request.content) == {
+        "model": PROMPT_CACHING_MODEL,
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "What's the weather like in Boston today?"}]}
+        ],
+        "tools": [
+            {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "input_schema": WEATHER_PARAMETERS,
+                "type": "custom",
+                "cache_control": EPHEMERAL,
+            }
+        ],
+        "max_tokens": litellm.get_max_tokens(PROMPT_CACHING_MODEL),
+    }
+
+
+async def test_litellm_anthropic_prompt_caching_system(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    system_blocks: Final = [
+        {"type": "text", "text": "You are an AI assistant tasked with analyzing legal documents."},
+        {"type": "text", "text": "Here is the full text of a complex legal agreement", "cache_control": EPHEMERAL},
+    ]
+    request: Final = await _send_prompt_caching_request(
+        respx_mock,
+        monkeypatch,
+        messages=[
+            {"role": "system", "content": system_blocks},
+            {"role": "user", "content": "what are the key terms and conditions in this agreement?"},
+        ],
+    )
+    assert json.loads(request.content) == {
+        "model": PROMPT_CACHING_MODEL,
+        "system": system_blocks,
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "what are the key terms and conditions in this agreement?"}],
+            }
+        ],
+        "max_tokens": litellm.get_max_tokens(PROMPT_CACHING_MODEL),
+    }
+
+
+def test_completion_forwards_caller_anthropic_beta_header_with_computer_tool(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_custom_headers",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Paris"}],
+                "model": "claude-sonnet-4-5-20250929",
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 12, "output_tokens": 2},
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="anthropic/claude-sonnet-4-5-20250929",
+        api_key="mock_api_key",
+        headers={"anthropic-beta": "computer-use-2025-01-24"},
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        tools=[
+            {
+                "type": "computer_20241022",
+                "function": {
+                    "name": "get_current_weather",
+                    "parameters": {"display_height_px": 100, "display_width_px": 100, "display_number": 1},
+                },
+            }
+        ],
+    )
+
+    assert response.choices[0].message.content == "Paris"
+    assert route.call_count == 1
+    sent_betas: Final = frozenset(
+        beta.strip() for beta in route.calls.last.request.headers["anthropic-beta"].split(",")
+    )
+    assert sent_betas == frozenset({"computer-use-2025-01-24"})
+    assert json.loads(route.calls.last.request.content)["tools"] == [
+        {
+            "type": "computer_20241022",
+            "name": "get_current_weather",
+            "display_width_px": 100,
+            "display_height_px": 100,
+            "display_number": 1,
+        }
+    ]
+
+
+def _anthropic_message_body(content: list[dict[str, object]], stop_reason: str) -> dict[str, object]:
+    return {
+        "id": "msg_01XrAv7gc5tQNDuoADra7vB4",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5-20250929",
+        "content": content,
+        "stop_reason": stop_reason,
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": 610,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 51,
+        },
+    }
+
+
+def test_completion_sends_prefix_as_trailing_assistant_turn_and_prepends_it(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200, json=_anthropic_message_body([{"type": "text", "text": " won the 2022 World Cup."}], "end_turn")
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="anthropic/claude-sonnet-4-5-20250929",
+        api_key="mock_api_key",
+        messages=[
+            {"role": "user", "content": "Who won the World Cup in 2022?"},
+            {"role": "assistant", "content": "Argentina", "prefix": True},
+        ],
+    )
+
+    assert json.loads(route.calls.last.request.content)["messages"] == [
+        {"role": "user", "content": [{"type": "text", "text": "Who won the World Cup in 2022?"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Argentina"}]},
+    ]
+    assert response.choices[0].message.content == "Argentina won the 2022 World Cup."
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_completion_with_required_tool_choice_and_response_format_returns_tool_calls(respx_mock: respx.MockRouter):
+    class WeatherAnswer(BaseModel):
+        model_config = ConfigDict(frozen=True)
+
+        question: str
+        answer: str
+
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json=_anthropic_message_body(
+                [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_weather",
+                        "name": "get_current_weather",
+                        "input": {"location": "NYC"},
+                    }
+                ],
+                "tool_use",
+            ),
+        )
+    )
+    weather_parameters: Final = {
+        "type": "object",
+        "properties": {"location": {"type": "string"}, "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]}},
+        "required": ["location"],
+    }
+
+    response: Final = litellm.completion(
+        model="anthropic/claude-sonnet-4-5-20250929",
+        api_key="mock_api_key",
+        messages=[
+            {"role": "system", "content": "response user question with JSON object"},
+            {"role": "user", "content": "Hey! What's the weather in NewYork?"},
+        ],
+        tool_choice="required",
+        response_format=WeatherAnswer,
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_current_weather",
+                    "description": "Get the current weather in a given location",
+                    "parameters": weather_parameters,
+                },
+            }
+        ],
+    )
+
+    request_body: Final = json.loads(route.calls.last.request.content)
+    assert request_body["tool_choice"] == {"type": "any"}
+    assert request_body["tools"] == [
+        {
+            "name": "get_current_weather",
+            "input_schema": weather_parameters,
+            "type": "custom",
+            "description": "Get the current weather in a given location",
+        }
+    ]
+    assert request_body["output_format"] == {
+        "type": "json_schema",
+        "schema": {
+            "properties": {
+                "question": {"title": "Question", "type": "string"},
+                "answer": {"title": "Answer", "type": "string"},
+            },
+            "required": ["question", "answer"],
+            "title": "WeatherAnswer",
+            "type": "object",
+            "additionalProperties": False,
+        },
+    }
+    assert response.choices[0].finish_reason == "tool_calls"
+    assert [tool_call.model_dump() for tool_call in response.choices[0].message.tool_calls] == [
+        {
+            "index": 0,
+            "function": {"arguments": '{"location": "NYC"}', "name": "get_current_weather"},
+            "id": "toolu_weather",
+            "type": "function",
+        }
+    ]
+
+
+def test_completion_surfaces_response_citations_in_provider_specific_fields(respx_mock: respx.MockRouter):
+    citation: Final = {
+        "type": "char_location",
+        "cited_text": "The grass is green. ",
+        "document_index": 0,
+        "document_title": "My Document",
+        "start_char_index": 0,
+        "end_char_index": 20,
+    }
+    document: Final = {
+        "type": "document",
+        "source": {"type": "text", "media_type": "text/plain", "data": "The grass is green. The sky is blue."},
+        "title": "My Document",
+        "context": "This is a trustworthy document.",
+        "citations": {"enabled": True},
+    }
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json=_anthropic_message_body(
+                [
+                    {"type": "text", "text": "According to the document, "},
+                    {"type": "text", "text": "the grass is green", "citations": [citation]},
+                ],
+                "end_turn",
+            ),
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="anthropic/claude-sonnet-4-5-20250929",
+        api_key="mock_api_key",
+        messages=[{"role": "user", "content": [document, {"type": "text", "text": "What color is the grass?"}]}],
+    )
+
+    assert json.loads(route.calls.last.request.content)["messages"] == [
+        {"role": "user", "content": [document, {"type": "text", "text": "What color is the grass?"}]}
+    ]
+    assert response.choices[0].message.content == "According to the document, the grass is green"
+    assert response.choices[0].message.provider_specific_fields["citations"] == [
+        [{**citation, "supported_text": "the grass is green"}]
+    ]
+
+
+def _refusal_message_body(stop_reason: str, stop_details: dict | None) -> dict:
+    return {**ANTHROPIC_DOCS_REFUSAL_MESSAGE, "stop_reason": stop_reason, "stop_details": stop_details}
+
+
+def _transform_message_body(body: dict) -> litellm.ModelResponse:
+    return AnthropicConfig().transform_parsed_response(
+        completion_response=body,
+        raw_response=httpx.Response(status_code=200, headers={}),
+        model_response=litellm.ModelResponse(),
+        json_mode=False,
+        prefix_prompt=None,
+    )
+
+
+def test_refusal_stop_details_kept_in_provider_specific_fields():
+    stop_details: Final = ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]
+    result: Final = _transform_message_body(ANTHROPIC_DOCS_REFUSAL_MESSAGE)
+
+    assert result.choices[0].finish_reason == "content_filter"
+    provider_fields: Final = result.choices[0].message.provider_specific_fields
+    assert provider_fields["stop_reason"] == "refusal"
+    assert provider_fields["stop_details"] == stop_details
+    assert result._hidden_params["provider_specific_fields"]["stop_details"] == stop_details
+
+
+def test_refusal_without_stop_details_keeps_the_native_stop_reason():
+    result: Final = _transform_message_body(_refusal_message_body("refusal", None))
+
+    provider_fields: Final = result.choices[0].message.provider_specific_fields
+    assert provider_fields["stop_reason"] == "refusal"
+    assert "stop_details" not in provider_fields
+
+
+def test_end_turn_response_carries_no_stop_details():
+    result: Final = _transform_message_body(_refusal_message_body("end_turn", None))
+
+    assert result.choices[0].finish_reason == "stop"
+    provider_fields: Final = result.choices[0].message.provider_specific_fields
+    assert "stop_details" not in provider_fields
+    assert "stop_reason" not in provider_fields
+
+
+def _json_mode_message_body(stop_reason: str, stop_details: dict | None) -> dict:
+    return {
+        **_refusal_message_body(stop_reason, stop_details),
+        "content": [
+            {"type": "tool_use", "id": "toolu_json", "name": RESPONSE_FORMAT_TOOL_NAME, "input": {"answer": "Hello"}}
+        ],
+    }
+
+
+def _transform_json_mode_body(body: dict) -> litellm.ModelResponse:
+    return AnthropicConfig().transform_parsed_response(
+        completion_response=body,
+        raw_response=httpx.Response(status_code=200, headers={}),
+        model_response=litellm.ModelResponse(),
+        json_mode=True,
+        prefix_prompt=None,
+    )
+
+
+def test_json_mode_refusal_keeps_stop_details_on_the_message():
+    stop_details: Final = ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]
+    result: Final = _transform_json_mode_body(_json_mode_message_body("refusal", stop_details))
+
+    message: Final = result.choices[0].message
+    assert json.loads(message.content) == {"answer": "Hello"}
+    assert message.provider_specific_fields == {"stop_reason": "refusal", "stop_details": stop_details}
+
+
+def test_json_mode_tool_use_turn_adds_no_stop_fields_to_the_message():
+    result: Final = _transform_json_mode_body(_json_mode_message_body("tool_use", None))
+
+    message: Final = result.choices[0].message
+    assert json.loads(message.content) == {"answer": "Hello"}
+    assert not message.provider_specific_fields
+
+
+def test_non_dict_upstream_body_still_transforms_without_refusal_fields() -> None:
+    result = AnthropicConfig().transform_parsed_response(
+        completion_response=MagicMock(),
+        raw_response=httpx.Response(200, headers={}),
+        model_response=litellm.ModelResponse(),
+        json_mode=False,
+        prefix_prompt=None,
+    )
+    provider_specific_fields = result.choices[0].message.provider_specific_fields or {}
+    assert "stop_details" not in provider_specific_fields

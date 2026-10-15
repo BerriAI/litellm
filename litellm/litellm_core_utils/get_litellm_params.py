@@ -2,7 +2,7 @@ import reprlib
 from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass, fields
 from types import MappingProxyType
-from typing import Final
+from typing import Final, cast
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -11,6 +11,7 @@ from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.llms.openai.data_residency import infer_openai_data_residency
 from litellm.types.litellm_params import MAX_CONTROL_INT_DIGITS, ControlOptions
 from litellm.types.router import CustomPricingLiteLLMParams
+from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 
 AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
     {
@@ -31,6 +32,14 @@ AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
 )
 
 PROVIDER_AFFINITY_HEADER_KWARG_KEY: Final = "provider_affinity_header"
+OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS: Final = frozenset(
+    {
+        "token_exchange_endpoint",
+        "token_exchange_profile",
+        "token_exchange_scope",
+        "token_exchange_audience",
+    }
+)
 
 # Pre-define optional kwargs keys as frozenset for O(1) lookups
 # These are extracted from kwargs only if present, avoiding unnecessary .get() calls
@@ -66,10 +75,16 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "itpm",
             "otpm",
             "use_xai_oauth",
+            "github_copilot_auth_type",
+            "github_copilot_user_session",
+            "fireworks_forward_user_id",
             PROVIDER_AFFINITY_HEADER_KWARG_KEY,
         }
     )
     | AWS_CREDENTIAL_KWARGS_KEYS
+    | ANTHROPIC_WIF_KWARGS_KEYS
+    | OPENAI_WIF_KWARGS_KEYS
+    | OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS
     | frozenset(CustomPricingLiteLLMParams.model_fields)
 )
 
@@ -120,15 +135,23 @@ def with_control_options(litellm_params: Mapping[str, object], control: ControlO
     return {**litellm_params, CONTROL_OPTIONS_KEY: control}
 
 
-def _get_base_model_from_litellm_call_metadata(
-    metadata: dict | None,
+def get_base_model_from_litellm_call_metadata(
+    metadata: Mapping[str, object] | None,
 ) -> str | None:
     if metadata is None:
         return None
     model_info: Final = metadata.get("model_info")
     if model_info:
-        return model_info.get("base_model")
+        model_info_mapping: Final = cast(  # cast-ok: model metadata is caller-provided and preserves its mapping shape
+            Mapping[str, object], model_info
+        )
+        return cast(  # cast-ok: model metadata values are caller-provided
+            str | None, model_info_mapping.get("base_model")
+        )
     return None
+
+
+_get_base_model_from_litellm_call_metadata = get_base_model_from_litellm_call_metadata
 
 
 def get_litellm_params(
@@ -226,7 +249,7 @@ def get_litellm_params(
         "azure_ad_token_provider": azure_ad_token_provider,
         "user_continue_message": user_continue_message,
         "base_model": base_model
-        or (_get_base_model_from_litellm_call_metadata(metadata=metadata) if metadata else None),
+        or (get_base_model_from_litellm_call_metadata(metadata=metadata) if metadata else None),
         "litellm_trace_id": litellm_trace_id,
         "litellm_session_id": litellm_session_id,
         "hf_model_name": hf_model_name,

@@ -1,16 +1,21 @@
 import logging
-from typing import Final
+from typing import Final, cast
 from unittest.mock import Mock, patch
 
+import httpx
 import pytest
 from fastapi import HTTPException
+from pydantic import JsonValue, TypeAdapter
 
+from litellm import DualCache
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.azure.text_moderation import (
     AzureContentSafetyTextModerationGuardrail,
 )
 from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
-from litellm.types.utils import Choices, Message, ModelResponse
+from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import CallTypesLiteral, Choices, Message, ModelResponse
 
 
 @pytest.mark.asyncio
@@ -494,12 +499,159 @@ def _moderation_response(severity):
     return response
 
 
-def _moderation_guardrail():
+def _moderation_guardrail(api_base: str = "azure_text_moderation_api_base"):
     return AzureContentSafetyTextModerationGuardrail(
         guardrail_name="azure_text_moderation",
         api_key="azure_text_moderation_api_key",
-        api_base="azure_text_moderation_api_base",
+        api_base=api_base,
     )
+
+
+def _moderation_http_response(severity: int) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={"blocklistsMatch": [], "categoriesAnalysis": [{"category": "Hate", "severity": severity}]},
+    )
+
+
+def _standard_guardrail_entry(data: dict[str, object]) -> dict[str, JsonValue]:
+    metadata: Final = TypeAdapter(dict[str, JsonValue]).validate_python(data["metadata"])
+    entries: Final = metadata["standard_logging_guardrail_information"]
+    assert isinstance(entries, list) and len(entries) == 1
+    return TypeAdapter(dict[str, JsonValue]).validate_python(entries[0])
+
+
+@pytest.mark.asyncio
+async def test_text_moderation_scans_tuple_messages() -> None:
+    guardrail: Final = _moderation_guardrail("https://azure-content-safety.example")
+    prompt: Final = "synthetic tuple prompt"
+    data: Final[dict[str, object]] = {"messages": ({"role": "user", "content": prompt},)}
+    azure_response: Final = _moderation_http_response(0)
+    azure_http_handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(lambda _request: azure_response))
+    guardrail.async_handler = azure_http_handler
+
+    try:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            cache=DualCache(),
+            data=data,
+            call_type="completion",
+        )
+        request_body: Final = TypeAdapter(dict[str, JsonValue]).validate_json(azure_response.request.read())
+    finally:
+        await azure_http_handler.close()
+
+    assert request_body["text"] == prompt
+
+
+@pytest.mark.asyncio
+async def test_text_moderation_dispatches_to_subclass_get_user_prompt_override() -> None:
+    class AllTurnsTextModeration(AzureContentSafetyTextModerationGuardrail):
+        def get_user_prompt(self, messages: list[AllMessageValues]) -> str:
+            return "\n".join(
+                message["content"]
+                for message in messages
+                if isinstance(message, dict)
+                and message.get("role") == "user"
+                and isinstance(message.get("content"), str)
+            )
+
+    guardrail: Final = AllTurnsTextModeration(
+        guardrail_name="azure_text_moderation",
+        api_key="azure_text_moderation_api_key",
+        api_base="https://azure-content-safety.example",
+    )
+    first_prompt: Final = "synthetic first user turn"
+    expected_prompt: Final = first_prompt + "\nbenign final user turn"
+    data: Final[dict[str, object]] = {
+        "messages": [
+            {"role": "user", "content": first_prompt},
+            {"role": "assistant", "content": "ok"},
+            {"role": "user", "content": "benign final user turn"},
+        ]
+    }
+    azure_response: Final = _moderation_http_response(0)
+    azure_http_handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(lambda _request: azure_response))
+    guardrail.async_handler = azure_http_handler
+
+    try:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            cache=DualCache(),
+            data=data,
+            call_type="completion",
+        )
+        request_body: Final = TypeAdapter(dict[str, JsonValue]).validate_json(azure_response.request.read())
+    finally:
+        await azure_http_handler.close()
+
+    assert request_body["text"] == expected_prompt
+
+
+@pytest.mark.asyncio
+async def test_text_moderation_subclass_can_call_get_user_prompt() -> None:
+    class RequiringTextModeration(AzureContentSafetyTextModerationGuardrail):
+        async def async_pre_call_hook(
+            self,
+            user_api_key_dict: UserAPIKeyAuth,
+            cache: DualCache,
+            data: dict[str, object],
+            call_type: CallTypesLiteral,
+        ) -> dict[str, object] | None:
+            messages: Final = cast(list[AllMessageValues], data["messages"])  # cast-ok: chat input
+            user_prompt: Final = self.get_user_prompt(messages)
+            assert user_prompt
+            return await super().async_pre_call_hook(user_api_key_dict, cache, data, call_type)
+
+    guardrail: Final = RequiringTextModeration(
+        guardrail_name="azure_text_moderation",
+        api_key="azure_text_moderation_api_key",
+        api_base="https://azure-content-safety.example",
+    )
+    prompt: Final = "synthetic direct method prompt"
+    data: Final[dict[str, object]] = {"messages": [{"role": "user", "content": prompt}]}
+    azure_response: Final = _moderation_http_response(0)
+    azure_http_handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(lambda _request: azure_response))
+    guardrail.async_handler = azure_http_handler
+
+    try:
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            cache=DualCache(),
+            data=data,
+            call_type="completion",
+        )
+        request_body: Final = TypeAdapter(dict[str, JsonValue]).validate_json(azure_response.request.read())
+    finally:
+        await azure_http_handler.close()
+
+    assert request_body["text"] == prompt
+
+
+@pytest.mark.asyncio
+async def test_text_moderation_messages_less_embeddings_return_data_and_log_allow() -> None:
+    guardrail: Final = _moderation_guardrail()
+    data: Final[dict[str, object]] = {"input": "synthetic embedding input", "metadata": {}}
+
+    def fail_on_azure_request(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("unexpected Azure request")
+
+    azure_http_handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(fail_on_azure_request))
+    guardrail.async_handler = azure_http_handler
+
+    try:
+        result: Final = await guardrail.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            cache=DualCache(),
+            data=data,
+            call_type="embedding",
+        )
+    finally:
+        await azure_http_handler.close()
+
+    entry: Final = _standard_guardrail_entry(data)
+    assert entry["guardrail_response"] == "allow"
+    assert result is data
 
 
 @pytest.mark.asyncio

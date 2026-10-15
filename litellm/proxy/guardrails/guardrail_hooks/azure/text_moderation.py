@@ -16,7 +16,11 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypesLiteral, GenericGuardrailAPIInputs, LLMResponseTypes
 
-from .base import AzureGuardrailBase
+from .base import (  # noqa: F401  # legacy module exports
+    _RESPONSES_API_CALL_TYPES,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    RESPONSES_API_CALL_TYPES,
+    AzureGuardrailBase,
+)
 
 if TYPE_CHECKING:
     from litellm.caching.caching import DualCache
@@ -231,6 +235,9 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
             "Azure Text Moderation: Running pre-call prompt scan, on call_type: %s",
             call_type,
         )
+        if call_type not in RESPONSES_API_CALL_TYPES and data.get("messages") is None:
+            verbose_proxy_logger.warning("Azure Text Moderation: not running guardrail. No messages in data")
+            return data
         user_prompt: Final = self.get_user_prompt_from_request(data, call_type)
 
         if user_prompt:

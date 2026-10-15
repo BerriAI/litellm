@@ -1,14 +1,44 @@
 import os
 import sys
+from enum import Enum
 from types import MappingProxyType
 from typing import Final, Literal
 
-from litellm.litellm_core_utils.env_utils import get_env_int, get_env_int_in_range, get_env_int_or_none
+from litellm.litellm_core_utils.env_utils import (
+    get_env_float,
+    get_env_float_or_none,
+    get_env_int,
+    get_env_int_in_range,
+    get_env_int_or_none,
+)
 
+MICROSOFT_GRAPH_BETA_BASE: Final = "https://graph.microsoft.com/beta"
+OAUTH_TOKEN_EXCHANGE_CACHE_SAFETY_MARGIN_SECONDS: Final = 60
+MICROSOFT_365_COPILOT_DEFAULT_TOKEN_EXCHANGE_PROFILE: Final = "jwt_bearer_obo"
+MICROSOFT_365_COPILOT_DEFAULT_TOKEN_EXCHANGE_SCOPE: Final = "https://graph.microsoft.com/.default"
+# Replies depend on the caller's delegated identity, which response-cache keys do not include.
+RESPONSE_CACHE_EXCLUDED_PROVIDERS: Final = frozenset({"microsoft_365_copilot"})
+MICROSOFT_365_COPILOT_DEFAULT_TIME_ZONE: Final = "UTC"
+GITHUB_COPILOT_PER_USER_AUTH_TYPE: Final = "per_user_oauth"
+GITHUB_COPILOT_AUTH_TYPE_KEY: Final = "github_copilot_auth_type"
+GITHUB_COPILOT_USER_TOKEN_SAFETY_MARGIN_SECONDS: Final = 60
+GITHUB_COPILOT_USER_CREDENTIAL_CACHE_TTL_SECONDS: Final = 60
+GITHUB_COPILOT_DEVICE_FLOW_CACHE_PREFIX: Final = "github_copilot_device_flow"
+USER_PROVIDER_CREDENTIAL_CACHE_PREFIX: Final = "user_provider_credential"
+USER_PROVIDER_CREDENTIAL_NOT_CONNECTED: Final = "__not_connected__"
+SERVER_STREAMING_CLASSIFICATION_KEY: Final = "litellm_server_streaming_classification"
+
+
+class ServerStreamingClassification(str, Enum):
+    MARKER = "litellm-server-streaming"
+
+
+SERVER_STREAMING_CLASSIFICATION_MARKER: Final = ServerStreamingClassification.MARKER
+DEFER_PYDANTIC_BUILD: Final = os.getenv("DEFER_PYDANTIC_BUILD", "true") in ("true", "1", "on")
 DEFAULT_HEALTH_CHECK_PROMPT: Final = str(os.getenv("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"))
 AZURE_DEFAULT_RESPONSES_API_VERSION: Final = str(os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "preview"))
 AZURE_OPENAI_AUDIO_PROVIDERS: Final = frozenset({"azure", "azure_ai"})
-ROUTER_MAX_FALLBACKS: Final = int(os.getenv("ROUTER_MAX_FALLBACKS", 5))
+ROUTER_MAX_FALLBACKS: Final = get_env_int("ROUTER_MAX_FALLBACKS", 5)
 ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS: Final = 2000
 RUNTIME_UPDATABLE_ROUTER_SETTINGS: Final[frozenset[str]] = frozenset(
     {
@@ -30,6 +60,7 @@ RUNTIME_UPDATABLE_ROUTER_SETTINGS: Final[frozenset[str]] = frozenset(
         "enable_tag_filtering",
         "tag_routing_prefix",
         "optional_pre_call_checks",
+        "fallback_on_unsupported_params",
     }
 )
 ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG: Final[frozenset[str]] = frozenset(
@@ -44,24 +75,35 @@ ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG: Final[frozenset[str]] = frozenset(
         "auto_router_capability_limit",
     }
 )
-DEFAULT_BATCH_SIZE: Final = int(os.getenv("DEFAULT_BATCH_SIZE", 512))
-DEFAULT_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_FLUSH_INTERVAL_SECONDS", 5))
+DEFAULT_BATCH_SIZE: Final = get_env_int("DEFAULT_BATCH_SIZE", 512)
+SCIM_GROUP_MEMBER_LOOKUP_BATCH_SIZE: Final = get_env_int_in_range(
+    "SCIM_GROUP_MEMBER_LOOKUP_BATCH_SIZE", 1000, 1, 10_000
+)
+DEFAULT_FLUSH_INTERVAL_SECONDS: Final = get_env_int("DEFAULT_FLUSH_INTERVAL_SECONDS", 5)
 CLICKHOUSE_BATCH_SIZE: Final = get_env_int("CLICKHOUSE_BATCH_SIZE", 10_000)
-CLICKHOUSE_FLUSH_INTERVAL_SECONDS: Final = float(os.getenv("CLICKHOUSE_FLUSH_INTERVAL_SECONDS", "1.0"))
+CLICKHOUSE_FLUSH_INTERVAL_SECONDS: Final = get_env_float("CLICKHOUSE_FLUSH_INTERVAL_SECONDS", 1.0)
 CLICKHOUSE_MAX_BUFFERED_ROWS: Final = get_env_int("CLICKHOUSE_MAX_BUFFERED_ROWS", 200_000)
 CLICKHOUSE_MAX_RETRIES: Final = get_env_int("CLICKHOUSE_MAX_RETRIES", 3)
-AGENT_TRACING_RETENTION_DAYS: Final = get_env_int("AGENT_TRACING_RETENTION_DAYS", 30)
-AGENT_TRACING_SPEND_LOG_RETENTION_DAYS: Final = get_env_int("AGENT_TRACING_SPEND_LOG_RETENTION_DAYS", 90)
+DEFAULT_CLICKHOUSE_DATABASE: Final = "litellm"
+DEFAULT_AGENT_TRACING_RETENTION_DAYS: Final = 14
 OTLP_MAX_BODY_BYTES: Final = get_env_int("OTLP_MAX_BODY_BYTES", 16 * 1024 * 1024)
 OTLP_MAX_ATTRIBUTE_VALUE_BYTES: Final = get_env_int("OTLP_MAX_ATTRIBUTE_VALUE_BYTES", 64 * 1024)
 OTLP_RETRY_AFTER_SECONDS: Final = get_env_int("OTLP_RETRY_AFTER_SECONDS", 2)
+TRACE_READ_RETRY_AFTER_SECONDS: Final = get_env_int("TRACE_READ_RETRY_AFTER_SECONDS", 2)
 OTLP_MAX_CONCURRENT_INGESTS: Final = get_env_int("OTLP_MAX_CONCURRENT_INGESTS", 2)
 AGENT_TRACING_INPUT_PREVIEW_CHARS: Final = get_env_int("AGENT_TRACING_INPUT_PREVIEW_CHARS", 240)
 AGENT_TRACING_LIST_PAGE_SIZE: Final = get_env_int("AGENT_TRACING_LIST_PAGE_SIZE", 50)
-DEFAULT_S3_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_S3_FLUSH_INTERVAL_SECONDS", 10))
-DEFAULT_S3_BATCH_SIZE: Final = int(os.getenv("DEFAULT_S3_BATCH_SIZE", 512))
-DEFAULT_S3_MAX_CONCURRENT_UPLOADS: Final = int(os.getenv("DEFAULT_S3_MAX_CONCURRENT_UPLOADS", "16"))
+AGENT_TRACING_AGENT_LIST_LIMIT: Final = get_env_int("AGENT_TRACING_AGENT_LIST_LIMIT", 500)
+LENS_DATASET_MAX_CASES: Final = get_env_int("LENS_DATASET_MAX_CASES", 200)
+LENS_DATASET_MAX_CASE_CHARS: Final = get_env_int("LENS_DATASET_MAX_CASE_CHARS", 20_000)
+LENS_DATASET_TRACE_PAGE_SIZE: Final = 500
+LENS_FEEDBACK_MAX_COMMENT_CHARS: Final = 10_000
+LENS_FEEDBACK_MAX_SCORE: Final = 10
+DEFAULT_S3_FLUSH_INTERVAL_SECONDS: Final = get_env_int("DEFAULT_S3_FLUSH_INTERVAL_SECONDS", 10)
+DEFAULT_S3_BATCH_SIZE: Final = get_env_int("DEFAULT_S3_BATCH_SIZE", 512)
+DEFAULT_S3_MAX_CONCURRENT_UPLOADS: Final = get_env_int("DEFAULT_S3_MAX_CONCURRENT_UPLOADS", 16)
 DEFAULT_S3_MAX_ADAPTIVE_CONCURRENCY: Final = get_env_int("DEFAULT_S3_MAX_ADAPTIVE_CONCURRENCY", 200)
+S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS: Final = get_env_int_in_range("S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS", 30, 1, 3600)
 # https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
 MAX_S3_OBJECT_KEY_BYTES: Final = 1024
 S3_BOUNDED_OBJECT_KEY_HEAD_BYTES: Final = 64
@@ -71,46 +113,43 @@ MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES: Final = 1024
 S3_LOG_PROMPTS_ONLY_ENV_VAR: Final = "S3_LOG_PROMPTS_ONLY"
 S3_PARTITION_GRANULARITY_ENV_VAR: Final = "S3_PARTITION_GRANULARITY"
 MAX_FILE_LIST_LIMIT: Final = 10000
-DEFAULT_SQS_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10))
-DEFAULT_NUM_WORKERS_LITELLM_PROXY: Final = int(os.getenv("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1))
+DEFAULT_SQS_FLUSH_INTERVAL_SECONDS: Final = get_env_int("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10)
+DEFAULT_NUM_WORKERS_LITELLM_PROXY: Final = get_env_int("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1)
+GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS: Final = 10
 budget_reservation_disabled_info_emitted = False
-DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE = int(os.getenv("DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE", 1))
-DEFAULT_SQS_BATCH_SIZE: Final = int(os.getenv("DEFAULT_SQS_BATCH_SIZE", 512))
+DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE = get_env_int("DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE", 1)
+DEFAULT_SQS_BATCH_SIZE: Final = get_env_int("DEFAULT_SQS_BATCH_SIZE", 512)
 SQS_SEND_MESSAGE_ACTION: Final = "SendMessage"
 SQS_API_VERSION: Final = "2012-11-05"
-DEFAULT_MAX_RETRIES: Final = int(os.getenv("DEFAULT_MAX_RETRIES", 2))
+DEFAULT_MAX_RETRIES: Final = get_env_int("DEFAULT_MAX_RETRIES", 2)
 # Max records accepted in one POST /v1/callbacks/logs batch. Bounds the blast
 # radius: each record fans out to spend logs + every callback integration.
 MAX_CALLBACK_LOG_RECORDS: Final = 1000
-DEFAULT_MAX_RECURSE_DEPTH: Final = int(os.getenv("DEFAULT_MAX_RECURSE_DEPTH", 100))
-DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER = int(os.getenv("DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER", 10))
-DEFAULT_FAILURE_THRESHOLD_PERCENT: Final = float(
-    os.getenv("DEFAULT_FAILURE_THRESHOLD_PERCENT", 0.5)
+DEFAULT_MAX_RECURSE_DEPTH: Final = get_env_int("DEFAULT_MAX_RECURSE_DEPTH", 100)
+GUARDRAIL_ROTATION_ATTEMPTS: Final = 3
+DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER = get_env_int("DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER", 10)
+DEFAULT_FAILURE_THRESHOLD_PERCENT: Final = get_env_float(
+    "DEFAULT_FAILURE_THRESHOLD_PERCENT", 0.5
 )  # default cooldown a deployment if 50% of requests fail in a given minute
-DEFAULT_MAX_TOKENS: Final = int(os.getenv("DEFAULT_MAX_TOKENS", 4096))
-DEFAULT_ALLOWED_FAILS: Final = int(os.getenv("DEFAULT_ALLOWED_FAILS", 3))
-DEFAULT_REDIS_SYNC_INTERVAL: Final = int(os.getenv("DEFAULT_REDIS_SYNC_INTERVAL", 1))
-DEFAULT_COOLDOWN_TIME_SECONDS: Final = int(os.getenv("DEFAULT_COOLDOWN_TIME_SECONDS", 5))
-DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS: Final = float(
-    os.getenv("DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS", "1")
-)
-DEFAULT_REPLICATE_POLLING_RETRIES: Final = int(os.getenv("DEFAULT_REPLICATE_POLLING_RETRIES", 5))
-DEFAULT_REPLICATE_POLLING_DELAY_SECONDS: Final = int(os.getenv("DEFAULT_REPLICATE_POLLING_DELAY_SECONDS", 1))
-DEFAULT_IMAGE_TOKEN_COUNT: Final = int(os.getenv("DEFAULT_IMAGE_TOKEN_COUNT", 250))
+DEFAULT_MAX_TOKENS: Final = get_env_int("DEFAULT_MAX_TOKENS", 4096)
+DEFAULT_ALLOWED_FAILS: Final = get_env_int("DEFAULT_ALLOWED_FAILS", 3)
+DEFAULT_REDIS_SYNC_INTERVAL: Final = get_env_int("DEFAULT_REDIS_SYNC_INTERVAL", 1)
+DEFAULT_COOLDOWN_TIME_SECONDS: Final = get_env_int("DEFAULT_COOLDOWN_TIME_SECONDS", 5)
+DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS: Final = get_env_float("DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS", 1.0)
+DEFAULT_REPLICATE_POLLING_RETRIES: Final = get_env_int("DEFAULT_REPLICATE_POLLING_RETRIES", 5)
+DEFAULT_REPLICATE_POLLING_DELAY_SECONDS: Final = get_env_int("DEFAULT_REPLICATE_POLLING_DELAY_SECONDS", 1)
+DEFAULT_IMAGE_TOKEN_COUNT: Final = get_env_int("DEFAULT_IMAGE_TOKEN_COUNT", 250)
 HF_CONFIG_FETCH_TIMEOUT_SECONDS: Final = 10.0
 
 # Maximum wall-clock seconds a streaming response is allowed to run.
 # Streams exceeding this duration are terminated with a Timeout error.
 # None (default) = no limit.  Set env var to a number of seconds to enable globally.
-_max_stream_duration_env: Final = os.getenv("LITELLM_MAX_STREAMING_DURATION_SECONDS", None)
-LITELLM_MAX_STREAMING_DURATION_SECONDS: Final = (
-    float(_max_stream_duration_env) if _max_stream_duration_env is not None else None
-)
+LITELLM_MAX_STREAMING_DURATION_SECONDS: Final = get_env_float_or_none("LITELLM_MAX_STREAMING_DURATION_SECONDS")
 
 # Maximum number of base64 characters to keep in logging payloads.
 # Data URIs exceeding this are replaced with a size placeholder.
 # Set to 0 to disable truncation.
-MAX_BASE64_LENGTH_FOR_LOGGING: Final = int(os.getenv("MAX_BASE64_LENGTH_FOR_LOGGING", 64))
+MAX_BASE64_LENGTH_FOR_LOGGING: Final = get_env_int("MAX_BASE64_LENGTH_FOR_LOGGING", 64)
 BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS: Final = 256 * 1024
 REDACTED_BY_LITELLM: Final = "redacted-by-litellm"
 # in-memory stand-in handed to provider converters for redacted arguments; never stored
@@ -124,44 +163,44 @@ MAX_BASE64_LENGTH_STDOUT_LOG: Final = get_env_int("MAX_BASE64_LENGTH_STDOUT_LOG"
 LITELLM_DETAILED_TIMING: Final = os.getenv("LITELLM_DETAILED_TIMING", "false").lower() == "true"
 
 # Model cost map validation constants
-MODEL_COST_MAP_MIN_MODEL_COUNT: Final = int(
-    os.getenv("MODEL_COST_MAP_MIN_MODEL_COUNT", 50)
+MODEL_COST_MAP_MIN_MODEL_COUNT: Final = get_env_int(
+    "MODEL_COST_MAP_MIN_MODEL_COUNT", 50
 )  # Minimum number of models a fetched cost map must contain to be considered valid
-MODEL_COST_MAP_MAX_SHRINK_RATIO: Final = float(
-    os.getenv("MODEL_COST_MAP_MAX_SHRINK_RATIO", 0.5)
+MODEL_COST_MAP_MAX_SHRINK_RATIO: Final = get_env_float(
+    "MODEL_COST_MAP_MAX_SHRINK_RATIO", 0.5
 )  # Maximum allowed shrinkage ratio vs local backup (0.5 = reject if fetched map is <50% of backup)
-DEFAULT_IMAGE_WIDTH: Final = int(os.getenv("DEFAULT_IMAGE_WIDTH", 300))
-DEFAULT_IMAGE_HEIGHT: Final = int(os.getenv("DEFAULT_IMAGE_HEIGHT", 300))
+DEFAULT_IMAGE_WIDTH: Final = get_env_int("DEFAULT_IMAGE_WIDTH", 300)
+DEFAULT_IMAGE_HEIGHT: Final = get_env_int("DEFAULT_IMAGE_HEIGHT", 300)
 # Maximum size for image URL downloads in MB (default 50MB, set to 0 to disable limit)
 # This prevents memory issues from downloading very large images
 # Maps to OpenAI's 50 MB payload limit - requests with images exceeding this size will be rejected
 # Set MAX_IMAGE_URL_DOWNLOAD_SIZE_MB=0 to disable image URL handling entirely
-MAX_IMAGE_URL_DOWNLOAD_SIZE_MB: Final = float(os.getenv("MAX_IMAGE_URL_DOWNLOAD_SIZE_MB", 50))
-MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB: Final = int(
-    os.getenv("MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB", 1024)
+MAX_IMAGE_URL_DOWNLOAD_SIZE_MB: Final = get_env_float("MAX_IMAGE_URL_DOWNLOAD_SIZE_MB", 50.0)
+MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB: Final = get_env_int(
+    "MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB", 1024
 )  # 1MB = 1024KB
 # Surrogate-repair fallback in _read_request_body runs two full-body re.sub passes
 # that block the event loop on multi-MB malformed bodies. Skip the repair above this
 # size and raise the existing 400 immediately. Set to 0 to disable the cap.
 MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB: Final = get_env_int("MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB", 1)
-SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD: Final = int(
-    os.getenv("SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD", 1000)
+SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD: Final = get_env_int(
+    "SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD", 1000
 )  # Minimum number of requests to consider "reasonable traffic". Used for single-deployment cooldown logic.
-DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS: Final = int(
-    os.getenv("DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS", 5)
+DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS: Final = get_env_int(
+    "DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS", 5
 )  # Minimum number of requests before applying error rate cooldown. Prevents cooldown from triggering on first failure.
 
-DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET = int(os.getenv("DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET", 0))
+DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET = get_env_int("DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET", 0)
 
 # MCP Semantic Tool Filter Defaults
 DEFAULT_MCP_SEMANTIC_FILTER_EMBEDDING_MODEL: Final = str(
     os.getenv("DEFAULT_MCP_SEMANTIC_FILTER_EMBEDDING_MODEL", "text-embedding-3-small")
 )
-DEFAULT_MCP_SEMANTIC_FILTER_TOP_K: Final = int(os.getenv("DEFAULT_MCP_SEMANTIC_FILTER_TOP_K", 10))
-DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD: Final = float(
-    os.getenv("DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD", 0.3)
+DEFAULT_MCP_SEMANTIC_FILTER_TOP_K: Final = get_env_int("DEFAULT_MCP_SEMANTIC_FILTER_TOP_K", 10)
+DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD: Final = get_env_float(
+    "DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD", 0.3
 )
-MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH: Final = int(os.getenv("MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH", 150))
+MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH: Final = get_env_int("MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH", 150)
 MAX_LITELLM_CALL_ID_LENGTH: Final = 256
 MAX_GUARDRAIL_SCAN_METADATA_HEADER_LENGTH: Final = 2048
 
@@ -171,15 +210,15 @@ DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS: Final = 2000
 DEFAULT_SEMANTIC_GUARD_EMBEDDING_MODEL: Final = str(
     os.getenv("DEFAULT_SEMANTIC_GUARD_EMBEDDING_MODEL", "text-embedding-3-small")
 )
-DEFAULT_SEMANTIC_GUARD_SIMILARITY_THRESHOLD = float(os.getenv("DEFAULT_SEMANTIC_GUARD_SIMILARITY_THRESHOLD", 0.75))
+DEFAULT_SEMANTIC_GUARD_SIMILARITY_THRESHOLD = get_env_float("DEFAULT_SEMANTIC_GUARD_SIMILARITY_THRESHOLD", 0.75)
 
 DEFAULT_OPENAI_MODERATIONS_MODEL: Final = "omni-moderation-latest"
 
 # MCP OAuth2 Client Credentials Defaults
-MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS: Final = int(os.getenv("MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS", "60"))
-MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE: Final = int(os.getenv("MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE", "200"))
-MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL: Final = int(os.getenv("MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL", "3600"))
-MCP_SSO_ASSERTION_CACHE_TTL_SECONDS: Final = int(os.getenv("MCP_SSO_ASSERTION_CACHE_TTL_SECONDS", "60"))
+MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS: Final = get_env_int("MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS", 60)
+MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE: Final = get_env_int("MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE", 200)
+MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL: Final = get_env_int("MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL", 3600)
+MCP_SSO_ASSERTION_CACHE_TTL_SECONDS: Final = get_env_int("MCP_SSO_ASSERTION_CACHE_TTL_SECONDS", 60)
 
 # mcp_tool_permissions entry that grants every current and future tool on a server
 MCP_ALL_TOOLS_WILDCARD: Final = "*"
@@ -188,20 +227,21 @@ MCP_ALL_TOOLS_WILDCARD: Final = "*"
 # npm/npx needs a writable cache dir; in containers the default (~/.npm)
 # may not exist or be read-only. /tmp is always writable.
 MCP_NPM_CACHE_DIR: Final = os.getenv("MCP_NPM_CACHE_DIR", "/tmp/.npm_mcp_cache")
-MCP_OAUTH2_TOKEN_CACHE_MIN_TTL: Final = int(os.getenv("MCP_OAUTH2_TOKEN_CACHE_MIN_TTL", "10"))
+MCP_OAUTH2_TOKEN_CACHE_MIN_TTL: Final = get_env_int("MCP_OAUTH2_TOKEN_CACHE_MIN_TTL", 10)
 
 # Per-user OAuth token Redis cache (for server-side token storage)
 MCP_PER_USER_TOKEN_REDIS_KEY_PREFIX: Final = "mcp:per_user_token"
-MCP_PER_USER_TOKEN_DEFAULT_TTL: Final = int(
-    os.getenv("MCP_PER_USER_TOKEN_DEFAULT_TTL", "43200")  # 12 hours
-)
-MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS: Final = int(os.getenv("MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS", "60"))
+MCP_PER_USER_TOKEN_DEFAULT_TTL: Final = get_env_int("MCP_PER_USER_TOKEN_DEFAULT_TTL", 43200)
+MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS: Final = get_env_int("MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS", 60)
 
 # MCP timeout defaults (seconds). Override via env vars for slow/custom MCP servers.
-MCP_CLIENT_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_CLIENT_TIMEOUT", "60.0"))
-MCP_TOOL_LISTING_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_TOOL_LISTING_TIMEOUT", "30.0"))
-MCP_METADATA_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_METADATA_TIMEOUT", "10.0"))
-MCP_HEALTH_CHECK_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_HEALTH_CHECK_TIMEOUT", "10.0"))
+MCP_CLIENT_TIMEOUT: Final = get_env_float("LITELLM_MCP_CLIENT_TIMEOUT", 60.0)
+MCP_TOOL_LISTING_TIMEOUT: Final = get_env_float("LITELLM_MCP_TOOL_LISTING_TIMEOUT", 30.0)
+MCP_METADATA_TIMEOUT: Final = get_env_float("LITELLM_MCP_METADATA_TIMEOUT", 10.0)
+MCP_HEALTH_CHECK_TIMEOUT: Final = get_env_float("LITELLM_MCP_HEALTH_CHECK_TIMEOUT", 10.0)
+AGENT_HEALTH_CHECK_TIMEOUT_SECONDS: Final = get_env_float("LITELLM_AGENT_HEALTH_CHECK_TIMEOUT", 5.0)
+AGENT_HEALTH_CHECK_GATHER_TIMEOUT_SECONDS: Final = get_env_float("LITELLM_AGENT_HEALTH_CHECK_GATHER_TIMEOUT", 30.0)
+MCP_UPSTREAM_SESSION_SHUTDOWN_TIMEOUT_SECONDS: Final = 5.0
 MCP_TOOL_LISTING_MAX_PAGES: Final = 1000
 MCP_GATEWAY_SESSION_ID_PREFIX_LENGTH: Final = 8
 MCP_BYOK_CREDENTIAL_CACHE_TTL_SECONDS: Final = 60
@@ -218,7 +258,7 @@ MCP_STDIO_ALLOWED_COMMANDS: Final[frozenset] = frozenset(
 )
 
 # MCP OAuth2 Token Exchange (OBO) Defaults
-MCP_TOKEN_EXCHANGE_CACHE_MAX_SIZE: Final = int(os.getenv("MCP_TOKEN_EXCHANGE_CACHE_MAX_SIZE", "500"))
+MCP_TOKEN_EXCHANGE_CACHE_MAX_SIZE: Final = get_env_int("MCP_TOKEN_EXCHANGE_CACHE_MAX_SIZE", 500)
 
 LITELLM_UI_ALLOW_HEADERS: Final = [
     "x-litellm-semantic-filter",
@@ -231,14 +271,14 @@ LITELLM_UI_ALLOW_HEADERS: Final = [
 ]
 
 # Gemini model-specific minimal thinking budget constants
-DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH: Final = int(
-    os.getenv("DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH", 1)
+DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH: Final = get_env_int(
+    "DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH", 1
 )
-DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO: Final = int(
-    os.getenv("DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO", 128)
+DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO: Final = get_env_int(
+    "DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO", 128
 )
-DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE: Final = int(
-    os.getenv("DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE", 512)
+DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE: Final = get_env_int(
+    "DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE", 512
 )
 
 # Maximum number of callbacks that can be registered
@@ -260,12 +300,13 @@ PROXY_LLM_PROVIDER_FALLBACK: Final = "litellm_proxy"
 PROXY_REJECTED_BEFORE_ROUTING_KEY: Final = "proxy_rejected_before_routing"
 
 # Generic fallback for unknown models
-DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET: Final = int(
-    os.getenv("DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET", 128)
+DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET: Final = get_env_int(
+    "DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET", 128
 )
 
 # Provider-specific API base URLs
 XAI_API_BASE: Final = "https://api.x.ai/v1"
+PLACEHOLDER_API_KEY: Final = "fake-api-key"
 OPEN_SANDBOX_API_BASE_ENV_VAR: Final = "OPEN_SANDBOX_API_BASE"
 OPEN_SANDBOX_API_KEY_ENV_VAR: Final = "OPEN_SANDBOX_API_KEY"
 OPEN_SANDBOX_DEFAULT_TEMPLATE: Final = "opensandbox/code-interpreter:v1.1.0"
@@ -279,19 +320,19 @@ OPEN_SANDBOX_DEFAULT_TIMEOUT: Final = 300
 OPEN_SANDBOX_READY_TIMEOUT: Final = 30.0
 OPEN_SANDBOX_POLL_INTERVAL: Final = 0.2
 
-DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET = int(os.getenv("DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET", 1024))
-DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET: Final = int(
-    os.getenv("DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET", 2048)
+DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET = get_env_int("DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET", 1024)
+DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET: Final = get_env_int(
+    "DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET", 2048
 )
-DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET = int(os.getenv("DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET", 4096))
-DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET = int(os.getenv("DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET", 8192))
-DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET = int(os.getenv("DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET", 16384))
-MAX_TOKEN_TRIMMING_ATTEMPTS: Final = int(
-    os.getenv("MAX_TOKEN_TRIMMING_ATTEMPTS", 10)
+DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET = get_env_int("DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET", 4096)
+DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET = get_env_int("DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET", 8192)
+DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET = get_env_int("DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET", 16384)
+MAX_TOKEN_TRIMMING_ATTEMPTS: Final = get_env_int(
+    "MAX_TOKEN_TRIMMING_ATTEMPTS", 10
 )  # Maximum number of attempts to trim the message
 
 RUNWAYML_DEFAULT_API_VERSION: Final = str(os.getenv("RUNWAYML_DEFAULT_API_VERSION", "2024-11-06"))
-RUNWAYML_POLLING_TIMEOUT = int(os.getenv("RUNWAYML_POLLING_TIMEOUT", 600))  # 10 minutes default for image generation
+RUNWAYML_POLLING_TIMEOUT = get_env_int("RUNWAYML_POLLING_TIMEOUT", 600)  # 10 minutes default for image generation
 
 ########## Networking constants ##############################################################
 _DEFAULT_TTL_FOR_HTTPX_CLIENTS: Final = 3600  # 1 hour, re-use the same httpx client for 1 hour
@@ -308,10 +349,10 @@ EVICTED_LLM_CLIENT_CLOSE_MAX_PENDING: Final = 10_000
 
 # Aiohttp connection pooling - prevents memory leaks from unbounded connection growth
 # Set to 0 for unlimited (not recommended for production)
-AIOHTTP_CONNECTOR_LIMIT: Final = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT", 1000))
-AIOHTTP_CONNECTOR_LIMIT_PER_HOST: Final = int(os.getenv("AIOHTTP_CONNECTOR_LIMIT_PER_HOST", 500))
-AIOHTTP_KEEPALIVE_TIMEOUT: Final = int(os.getenv("AIOHTTP_KEEPALIVE_TIMEOUT", 120))
-AIOHTTP_TTL_DNS_CACHE: Final = int(os.getenv("AIOHTTP_TTL_DNS_CACHE", 300))
+AIOHTTP_CONNECTOR_LIMIT: Final = get_env_int("AIOHTTP_CONNECTOR_LIMIT", 1000)
+AIOHTTP_CONNECTOR_LIMIT_PER_HOST: Final = get_env_int("AIOHTTP_CONNECTOR_LIMIT_PER_HOST", 500)
+AIOHTTP_KEEPALIVE_TIMEOUT: Final = get_env_int("AIOHTTP_KEEPALIVE_TIMEOUT", 15)
+AIOHTTP_TTL_DNS_CACHE: Final = get_env_int("AIOHTTP_TTL_DNS_CACHE", 300)
 # TCP keep-alive (SO_KEEPALIVE) — opt-in. Required when running behind NAT/LBs
 # whose idle timeout is shorter than provider response timeouts (e.g. AWS NAT
 # Gateway: 350s vs OpenAI/Azure: 600s). Without this, the kernel sends nothing
@@ -319,9 +360,9 @@ AIOHTTP_TTL_DNS_CACHE: Final = int(os.getenv("AIOHTTP_TTL_DNS_CACHE", 300))
 # arrives. Enabling SO_KEEPALIVE makes the kernel emit TCP probes that reset
 # the NAT idle timer.
 AIOHTTP_SO_KEEPALIVE: Final = os.getenv("AIOHTTP_SO_KEEPALIVE", "False").lower() == "true"
-AIOHTTP_TCP_KEEPIDLE: Final = int(os.getenv("AIOHTTP_TCP_KEEPIDLE", 60))
-AIOHTTP_TCP_KEEPINTVL: Final = int(os.getenv("AIOHTTP_TCP_KEEPINTVL", 30))
-AIOHTTP_TCP_KEEPCNT: Final = int(os.getenv("AIOHTTP_TCP_KEEPCNT", 5))
+AIOHTTP_TCP_KEEPIDLE: Final = get_env_int("AIOHTTP_TCP_KEEPIDLE", 60)
+AIOHTTP_TCP_KEEPINTVL: Final = get_env_int("AIOHTTP_TCP_KEEPINTVL", 30)
+AIOHTTP_TCP_KEEPCNT: Final = get_env_int("AIOHTTP_TCP_KEEPCNT", 5)
 # enable_cleanup_closed is only needed for Python versions with the SSL leak bug
 # Fixed in Python 3.12.7+ and 3.13.1+ (see https://github.com/python/cpython/pull/118960)
 # Reference: https://github.com/aio-libs/aiohttp/blob/master/aiohttp/connector.py#L74-L78
@@ -334,10 +375,9 @@ AIOHTTP_NEEDS_CLEANUP_CLOSED: Final = (3, 13, 0) <= sys.version_info < (
 # WebSocket constants
 # Default to None (unlimited) to match OpenAI's official agents SDK behavior
 # https://github.com/openai/openai-agents-python/blob/cf1b933660e44fd37b4350c41febab8221801409/src/agents/realtime/openai_realtime.py#L235
-_max_size_env: Final = os.getenv("REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES")
-REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES: Final = int(_max_size_env) if _max_size_env is not None else None
-REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS: Final = float(
-    os.getenv("REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS", "20.0")
+REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES: Final = get_env_int_or_none("REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES")
+REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS: Final = get_env_float(
+    "REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS", 20.0
 )
 
 # RFC 6455 caps the close frame payload at 125 bytes, 2 of which carry the status code
@@ -354,7 +394,14 @@ BEDROCK_REALTIME_SDK_DISTRIBUTION: Final = "aws-sdk-bedrock-runtime"
 BEDROCK_REALTIME_SDK_SUPPORTED_RANGE: Final = ">=0.10.0,<0.12.0"
 CLIENT_REQUESTED_MODEL_SCOPE_KEY: Final = "litellm.client_requested_model"
 MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY: Final = "litellm.model_group_alias_resolved"
+MCP_PEEKED_BODY_SCOPE_KEY: Final = "litellm_mcp_peeked_body"
+MCP_ADMISSION_BODY_PEEK_TIMEOUT_SECONDS: Final = 5.0
 REALTIME_SESSION_SUCCESS_LOGGED_KEY: Final = "realtime_session_success_logged"
+OPENAI_LIVE_SESSION_START_TIMEOUT_SECONDS: Final = 30
+OPENAI_LIVE_SESSION_CLOSE_TIMEOUT_SECONDS: Final = 5
+OPENAI_LIVE_TERMINAL_RESPONSE_EVENT_TYPES: Final = frozenset(
+    {"response.completed", "response.incomplete", "response.failed"}
+)
 REALTIME_SESSION_FAILURE_LOGGED_KEY: Final = "realtime_session_failure_logged"
 
 # SSL/TLS cipher configuration for faster handshakes
@@ -384,6 +431,11 @@ DEFAULT_SSL_CIPHERS: Final = os.getenv(
 ########### v2 Architecture constants for managing writing updates to the database ###########
 REDIS_UPDATE_BUFFER_KEY: Final = "litellm_spend_update_buffer"
 REDIS_GATEWAY_REQUESTS_BUFFER_KEY: Final = "litellm_gateway_requests_buffer"
+REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2: Final = "litellm_gateway_requests_buffer_v2"
+REDIS_REQUEST_ERRORS_BUFFER_KEY: Final = "litellm_request_errors_buffer"
+REQUEST_ERRORS_UNKNOWN_STATUS_CODE: Final = 0
+REQUEST_ERRORS_MAX_ROWS_PER_UPSERT: Final = 1000
+GATEWAY_REQUESTS_MAX_ROWS_PER_UPSERT: Final = 1000
 REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_spend_update_buffer"
 REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_team_spend_update_buffer"
 REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_org_spend_update_buffer"
@@ -391,15 +443,16 @@ REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_end_user_sp
 REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_agent_spend_update_buffer"
 REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_tag_spend_update_buffer"
 REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_window_spend_update_buffer"
-MAX_REDIS_BUFFER_DEQUEUE_COUNT: Final = int(os.getenv("MAX_REDIS_BUFFER_DEQUEUE_COUNT", 100))
+MAX_REDIS_BUFFER_DEQUEUE_COUNT: Final = get_env_int("MAX_REDIS_BUFFER_DEQUEUE_COUNT", 100)
 REDIS_SPEND_LOGS_BUFFER_KEY: Final = "litellm_spend_logs_buffer"
 REDIS_SPEND_LOGS_BUFFER_MAX_ROWS: Final = 100000
 REDIS_SPEND_LOGS_BUFFER_DEQUEUE_COUNT: Final = 1000
 # Bounds asyncio.Queue() instances (log queues, spend update queues, etc.) to prevent unbounded memory growth
-LITELLM_ASYNCIO_QUEUE_MAXSIZE: Final = int(os.getenv("LITELLM_ASYNCIO_QUEUE_MAXSIZE", 1000))
-TOOL_POLICY_CACHE_TTL_SECONDS: Final = int(os.getenv("TOOL_POLICY_CACHE_TTL_SECONDS", 60))
-GUARDRAIL_SCANNED_MESSAGES_CACHE_TTL_SECONDS: Final = int(
-    os.getenv("GUARDRAIL_SCANNED_MESSAGES_CACHE_TTL_SECONDS", 24 * 60 * 60)
+LITELLM_ASYNCIO_QUEUE_MAXSIZE: Final = get_env_int("LITELLM_ASYNCIO_QUEUE_MAXSIZE", 1000)
+TOOL_POLICY_CACHE_TTL_SECONDS: Final = get_env_int("TOOL_POLICY_CACHE_TTL_SECONDS", 60)
+LITELLM_CONFIG_CACHE_TTL_SECONDS: Final = get_env_int("LITELLM_CONFIG_PARAM_CACHE_TTL_SECONDS", 60)
+GUARDRAIL_SCANNED_MESSAGES_CACHE_TTL_SECONDS: Final = get_env_int(
+    "GUARDRAIL_SCANNED_MESSAGES_CACHE_TTL_SECONDS", 24 * 60 * 60
 )
 BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS: Final = 25_000
 CONTENT_FILTER_STREAMING_HOLDBACK_CHARS: Final = 50
@@ -409,8 +462,8 @@ PRESIDIO_ANALYZE_CHUNK_OVERLAP_CHARS: Final = 4096
 PRESIDIO_ANALYZE_CHUNK_CONCURRENCY: Final = 8
 # Aggregation threshold: default to 80% of the asyncio queue maxsize so the check can always trigger.
 # Must be < LITELLM_ASYNCIO_QUEUE_MAXSIZE; if set higher the aggregation logic will never fire.
-MAX_SIZE_IN_MEMORY_QUEUE: Final = int(os.getenv("MAX_SIZE_IN_MEMORY_QUEUE", int(LITELLM_ASYNCIO_QUEUE_MAXSIZE * 0.8)))
-MAX_IN_MEMORY_QUEUE_FLUSH_COUNT: Final = int(os.getenv("MAX_IN_MEMORY_QUEUE_FLUSH_COUNT", 1000))
+MAX_SIZE_IN_MEMORY_QUEUE: Final = get_env_int("MAX_SIZE_IN_MEMORY_QUEUE", int(LITELLM_ASYNCIO_QUEUE_MAXSIZE * 0.8))
+MAX_IN_MEMORY_QUEUE_FLUSH_COUNT: Final = get_env_int("MAX_IN_MEMORY_QUEUE_FLUSH_COUNT", 1000)
 ###############################################################################################
 # Providers will not cache a prefix below a minimum size. That minimum is per-model, not global:
 # Anthropic's ranges from 512 to 4096 depending on the model, and can differ per platform for the
@@ -425,22 +478,22 @@ MINIMUM_PROMPT_CACHE_TOKEN_COUNT: Final = (
     else DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT
 )
 PROMPT_CACHE_LOOKBACK_POSITIONS: Final = 20
-DEFAULT_TRIM_RATIO: Final = float(
-    os.getenv("DEFAULT_TRIM_RATIO", 0.75)
+DEFAULT_TRIM_RATIO: Final = get_env_float(
+    "DEFAULT_TRIM_RATIO", 0.75
 )  # default ratio of tokens to trim from the end of a prompt
-HOURS_IN_A_DAY: Final = int(os.getenv("HOURS_IN_A_DAY", 24))
-DAYS_IN_A_WEEK: Final = int(os.getenv("DAYS_IN_A_WEEK", 7))
-DAYS_IN_A_MONTH: Final = int(os.getenv("DAYS_IN_A_MONTH", 28))
-DAYS_IN_A_YEAR: Final = int(os.getenv("DAYS_IN_A_YEAR", 365))
-REPLICATE_MODEL_NAME_WITH_ID_LENGTH: Final = int(os.getenv("REPLICATE_MODEL_NAME_WITH_ID_LENGTH", 64))
+HOURS_IN_A_DAY: Final = get_env_int("HOURS_IN_A_DAY", 24)
+DAYS_IN_A_WEEK: Final = get_env_int("DAYS_IN_A_WEEK", 7)
+DAYS_IN_A_MONTH: Final = get_env_int("DAYS_IN_A_MONTH", 28)
+DAYS_IN_A_YEAR: Final = get_env_int("DAYS_IN_A_YEAR", 365)
+REPLICATE_MODEL_NAME_WITH_ID_LENGTH: Final = get_env_int("REPLICATE_MODEL_NAME_WITH_ID_LENGTH", 64)
 #### TOKEN COUNTING ####
-FUNCTION_DEFINITION_TOKEN_COUNT: Final = int(os.getenv("FUNCTION_DEFINITION_TOKEN_COUNT", 9))
-SYSTEM_MESSAGE_TOKEN_COUNT: Final = int(os.getenv("SYSTEM_MESSAGE_TOKEN_COUNT", 4))
-TOOL_CHOICE_OBJECT_TOKEN_COUNT: Final = int(os.getenv("TOOL_CHOICE_OBJECT_TOKEN_COUNT", 4))
-DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT: Final = int(os.getenv("DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT", 10))
-DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT: Final = int(os.getenv("DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT", 20))
-MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES: Final = int(os.getenv("MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES", 768))
-MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES: Final = int(os.getenv("MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES", 2000))
+FUNCTION_DEFINITION_TOKEN_COUNT: Final = get_env_int("FUNCTION_DEFINITION_TOKEN_COUNT", 9)
+SYSTEM_MESSAGE_TOKEN_COUNT: Final = get_env_int("SYSTEM_MESSAGE_TOKEN_COUNT", 4)
+TOOL_CHOICE_OBJECT_TOKEN_COUNT: Final = get_env_int("TOOL_CHOICE_OBJECT_TOKEN_COUNT", 4)
+DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT: Final = get_env_int("DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT", 10)
+DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT: Final = get_env_int("DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT", 20)
+MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES: Final = get_env_int("MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES", 768)
+MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES: Final = get_env_int("MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES", 2000)
 # tiktoken's BPE merge loop is quadratic in the length of a single regex piece, so a long run of one
 # repeated character (dot leaders, whitespace, zero-padded base64) can take minutes on a multi-MB payload.
 # Encoding in chunks makes the cost linear, at a drift of at most ~1 token per chunk boundary. The upper
@@ -464,69 +517,63 @@ TOKEN_COUNTER_MAX_CONCURRENT_COUNTS: Final = get_env_int_in_range(
     minimum=1,
     maximum=256,
 )
-MAX_TILE_WIDTH: Final = int(os.getenv("MAX_TILE_WIDTH", 512))
-MAX_TILE_HEIGHT: Final = int(os.getenv("MAX_TILE_HEIGHT", 512))
-OPENAI_FILE_SEARCH_COST_PER_1K_CALLS: Final = float(os.getenv("OPENAI_FILE_SEARCH_COST_PER_1K_CALLS", 2.5 / 1000))
+MAX_TILE_WIDTH: Final = get_env_int("MAX_TILE_WIDTH", 512)
+MAX_TILE_HEIGHT: Final = get_env_int("MAX_TILE_HEIGHT", 512)
+OPENAI_FILE_SEARCH_COST_PER_1K_CALLS: Final = get_env_float("OPENAI_FILE_SEARCH_COST_PER_1K_CALLS", 2.5 / 1000)
 GROQ_BROWSER_VISIT_WEBSITE_COST_PER_CALL: Final = 1.0 / 1000
 # Azure OpenAI Assistants feature costs
 # Source: https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/
-AZURE_FILE_SEARCH_COST_PER_GB_PER_DAY: Final = float(
-    os.getenv("AZURE_FILE_SEARCH_COST_PER_GB_PER_DAY", 0.1)  # $0.1 USD per 1 GB/Day
+AZURE_FILE_SEARCH_COST_PER_GB_PER_DAY: Final = get_env_float("AZURE_FILE_SEARCH_COST_PER_GB_PER_DAY", 0.1)
+AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS: Final = get_env_float("AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS", 3.0)
+AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS: Final = get_env_float(
+    "AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS", 12.0
 )
-AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS: Final = float(
-    os.getenv("AZURE_COMPUTER_USE_INPUT_COST_PER_1K_TOKENS", 3.0)  # $0.003 USD per 1K Tokens
-)
-AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS: Final = float(
-    os.getenv("AZURE_COMPUTER_USE_OUTPUT_COST_PER_1K_TOKENS", 12.0)  # $0.012 USD per 1K Tokens
-)
-AZURE_VECTOR_STORE_COST_PER_GB_PER_DAY: Final = float(
-    os.getenv("AZURE_VECTOR_STORE_COST_PER_GB_PER_DAY", 0.1)  # $0.1 USD per 1 GB/Day (same as file search)
-)
-MIN_NON_ZERO_TEMPERATURE: Final = float(os.getenv("MIN_NON_ZERO_TEMPERATURE", 0.0001))
+AZURE_VECTOR_STORE_COST_PER_GB_PER_DAY: Final = get_env_float("AZURE_VECTOR_STORE_COST_PER_GB_PER_DAY", 0.1)
+MIN_NON_ZERO_TEMPERATURE: Final = get_env_float("MIN_NON_ZERO_TEMPERATURE", 0.0001)
 #### RELIABILITY ####
-REPEATED_STREAMING_CHUNK_LIMIT: Final = int(
-    os.getenv("REPEATED_STREAMING_CHUNK_LIMIT", 100)
+REPEATED_STREAMING_CHUNK_LIMIT: Final = get_env_int(
+    "REPEATED_STREAMING_CHUNK_LIMIT", 100
 )  # catch if model starts looping the same chunk while streaming. Uses high default to prevent false positives.
 # Shared maxsize for functools.lru_cache usage across hot paths.
 # Defaulted to 64 to avoid cache thrash in multi-model production workloads.
-DEFAULT_MAX_LRU_CACHE_SIZE: Final = int(os.getenv("DEFAULT_MAX_LRU_CACHE_SIZE", 64))
+DEFAULT_MAX_LRU_CACHE_SIZE: Final = get_env_int("DEFAULT_MAX_LRU_CACHE_SIZE", 64)
 _REALTIME_BODY_CACHE_SIZE = 1000  # Keep realtime helper caches bounded; workloads rarely exceed 1k models/intents
-INITIAL_RETRY_DELAY: Final = float(os.getenv("INITIAL_RETRY_DELAY", 0.5))
-MAX_RETRY_DELAY: Final = float(os.getenv("MAX_RETRY_DELAY", 8.0))
-JITTER: Final = float(os.getenv("JITTER", 0.75))
-DEFAULT_IN_MEMORY_TTL = int(os.getenv("DEFAULT_IN_MEMORY_TTL", 5))  # default time to live for the in-memory cache
-DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE: Final = int(
-    os.getenv("DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE", 1000)
+INITIAL_RETRY_DELAY: Final = get_env_float("INITIAL_RETRY_DELAY", 0.5)
+MAX_RETRY_DELAY: Final = get_env_float("MAX_RETRY_DELAY", 8.0)
+JITTER: Final = get_env_float("JITTER", 0.75)
+DEFAULT_IN_MEMORY_TTL = get_env_int("DEFAULT_IN_MEMORY_TTL", 5)  # default time to live for the in-memory cache
+DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE: Final = get_env_int(
+    "DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE", 1000
 )  # default max size for redis batch cache
-DEFAULT_POLLING_INTERVAL: Final = float(
-    os.getenv("DEFAULT_POLLING_INTERVAL", 0.03)
+DEFAULT_POLLING_INTERVAL: Final = get_env_float(
+    "DEFAULT_POLLING_INTERVAL", 0.03
 )  # default polling interval for the scheduler
-AZURE_OPERATION_POLLING_TIMEOUT: Final = int(os.getenv("AZURE_OPERATION_POLLING_TIMEOUT", 120))
+AZURE_OPERATION_POLLING_TIMEOUT: Final = get_env_int("AZURE_OPERATION_POLLING_TIMEOUT", 120)
 AZURE_DOCUMENT_INTELLIGENCE_API_VERSION: Final = str(os.getenv("AZURE_DOCUMENT_INTELLIGENCE_API_VERSION", "2024-11-30"))
-AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI: Final = int(os.getenv("AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI", 96))
-REDIS_SOCKET_TIMEOUT: Final = float(os.getenv("REDIS_SOCKET_TIMEOUT", 0.1))
+AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI: Final = get_env_int("AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI", 96)
+REDIS_SOCKET_TIMEOUT: Final = get_env_float("REDIS_SOCKET_TIMEOUT", 5.0)
 CACHE_WRITE_SHUTDOWN_FLUSH_TIMEOUT_SECONDS: Final[float] = 5.0
-REDIS_CONNECTION_POOL_TIMEOUT: Final = int(os.getenv("REDIS_CONNECTION_POOL_TIMEOUT", 5))
-REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD: Final = int(os.getenv("REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD", 5))
-REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT: Final = int(os.getenv("REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT", 60))
+REDIS_CONNECTION_POOL_TIMEOUT: Final = get_env_int("REDIS_CONNECTION_POOL_TIMEOUT", 5)
+REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD: Final = get_env_int("REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD", 5)
+REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT: Final = get_env_int("REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT", 60)
 REDIS_CIRCUIT_BREAKER_ENABLED: Final = os.getenv("REDIS_CIRCUIT_BREAKER_ENABLED", "true").lower() == "true"
 # minimum seconds a timeout-only failure streak must span before it can open the breaker,
 # so one event-loop stall timing out many queued calls at once does not trip it
-REDIS_CIRCUIT_BREAKER_TIMEOUT_MIN_DURATION: Final = float(os.getenv("REDIS_CIRCUIT_BREAKER_TIMEOUT_MIN_DURATION", 5.0))
-REDIS_TIMEOUT_LOG_INTERVAL: Final = float(os.getenv("REDIS_TIMEOUT_LOG_INTERVAL", "5.0"))
+REDIS_CIRCUIT_BREAKER_TIMEOUT_MIN_DURATION: Final = get_env_float("REDIS_CIRCUIT_BREAKER_TIMEOUT_MIN_DURATION", 5.0)
+REDIS_TIMEOUT_LOG_INTERVAL: Final = get_env_float("REDIS_TIMEOUT_LOG_INTERVAL", 5.0)
 # Seconds of idle before a Redis cluster connection is validated with a PING and
 # reconnected if dead, so a connection silently dropped by a cluster restart
 # (e.g. ElastiCache Serverless maintenance) is not reused while broken
 REDIS_CLUSTER_HEALTH_CHECK_INTERVAL: Final = 25
 # Default Redis major version to assume when version cannot be determined
 # Using 7 as it's the modern version that supports LPOP with count parameter
-DEFAULT_REDIS_MAJOR_VERSION: Final = int(os.getenv("DEFAULT_REDIS_MAJOR_VERSION", 7))
-NON_LLM_CONNECTION_TIMEOUT: Final = int(
-    os.getenv("NON_LLM_CONNECTION_TIMEOUT", 15)
+DEFAULT_REDIS_MAJOR_VERSION: Final = get_env_int("DEFAULT_REDIS_MAJOR_VERSION", 7)
+NON_LLM_CONNECTION_TIMEOUT: Final = get_env_int(
+    "NON_LLM_CONNECTION_TIMEOUT", 15
 )  # timeout for adjacent services (e.g. jwt auth)
-MAX_EXCEPTION_MESSAGE_LENGTH: Final = int(os.getenv("MAX_EXCEPTION_MESSAGE_LENGTH", 2000))
-MAX_STRING_LENGTH_PROMPT_IN_DB: Final = int(os.getenv("MAX_STRING_LENGTH_PROMPT_IN_DB", 2048))
-BEDROCK_MAX_POLICY_SIZE: Final = int(os.getenv("BEDROCK_MAX_POLICY_SIZE", 75))
+MAX_EXCEPTION_MESSAGE_LENGTH: Final = get_env_int("MAX_EXCEPTION_MESSAGE_LENGTH", 2000)
+MAX_STRING_LENGTH_PROMPT_IN_DB: Final = get_env_int("MAX_STRING_LENGTH_PROMPT_IN_DB", 2048)
+BEDROCK_MAX_POLICY_SIZE: Final = get_env_int("BEDROCK_MAX_POLICY_SIZE", 75)
 # One entry per distinct AWS credential-argument set. Per-user cost attribution passes the attributed
 # identity as aws_session_name, so this bounds how many attributed identities keep a cached STS session.
 BEDROCK_IAM_CACHE_MAX_ENTRIES: Final = 1000
@@ -536,27 +583,27 @@ BEDROCK_IAM_CACHE_FETCH_LOCK_STRIPES: Final = 64
 # Retire a cached STS credential this many seconds before AWS expires it, so a request that reads it
 # still has a usable credential for the whole call.
 STS_CREDENTIAL_EXPIRY_SAFETY_MARGIN_SECONDS: Final = 60
-BEDROCK_MIN_THINKING_BUDGET_TOKENS: Final = int(os.getenv("BEDROCK_MIN_THINKING_BUDGET_TOKENS", 1024))
+BEDROCK_MIN_THINKING_BUDGET_TOKENS: Final = get_env_int("BEDROCK_MIN_THINKING_BUDGET_TOKENS", 1024)
 # Anthropic's Messages API rejects thinking.budget_tokens < 1024.
 ANTHROPIC_MIN_THINKING_BUDGET_TOKENS: Final = 1024
-REPLICATE_POLLING_DELAY_SECONDS: Final = float(os.getenv("REPLICATE_POLLING_DELAY_SECONDS", 0.5))
-DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS: Final = int(os.getenv("DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS", 4096))
+REPLICATE_POLLING_DELAY_SECONDS: Final = get_env_float("REPLICATE_POLLING_DELAY_SECONDS", 0.5)
+DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS: Final = get_env_int("DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS", 4096)
 DEFAULT_OCI_CHAT_MAX_TOKENS: Final = 4096
-TOGETHER_AI_4_B: Final = int(os.getenv("TOGETHER_AI_4_B", 4))
-TOGETHER_AI_8_B: Final = int(os.getenv("TOGETHER_AI_8_B", 8))
-TOGETHER_AI_21_B: Final = int(os.getenv("TOGETHER_AI_21_B", 21))
-TOGETHER_AI_41_B: Final = int(os.getenv("TOGETHER_AI_41_B", 41))
-TOGETHER_AI_80_B: Final = int(os.getenv("TOGETHER_AI_80_B", 80))
-TOGETHER_AI_110_B: Final = int(os.getenv("TOGETHER_AI_110_B", 110))
-TOGETHER_AI_EMBEDDING_150_M: Final = int(os.getenv("TOGETHER_AI_EMBEDDING_150_M", 150))
-TOGETHER_AI_EMBEDDING_350_M: Final = int(os.getenv("TOGETHER_AI_EMBEDDING_350_M", 350))
-QDRANT_SCALAR_QUANTILE: Final = float(os.getenv("QDRANT_SCALAR_QUANTILE", 0.99))
-QDRANT_VECTOR_SIZE: Final = int(os.getenv("QDRANT_VECTOR_SIZE", 1536))
-CACHED_STREAMING_CHUNK_DELAY: Final = float(os.getenv("CACHED_STREAMING_CHUNK_DELAY", 0.02))
-AUDIO_SPEECH_CHUNK_SIZE: Final = int(
-    os.getenv("AUDIO_SPEECH_CHUNK_SIZE", 8192)
+TOGETHER_AI_4_B: Final = get_env_int("TOGETHER_AI_4_B", 4)
+TOGETHER_AI_8_B: Final = get_env_int("TOGETHER_AI_8_B", 8)
+TOGETHER_AI_21_B: Final = get_env_int("TOGETHER_AI_21_B", 21)
+TOGETHER_AI_41_B: Final = get_env_int("TOGETHER_AI_41_B", 41)
+TOGETHER_AI_80_B: Final = get_env_int("TOGETHER_AI_80_B", 80)
+TOGETHER_AI_110_B: Final = get_env_int("TOGETHER_AI_110_B", 110)
+TOGETHER_AI_EMBEDDING_150_M: Final = get_env_int("TOGETHER_AI_EMBEDDING_150_M", 150)
+TOGETHER_AI_EMBEDDING_350_M: Final = get_env_int("TOGETHER_AI_EMBEDDING_350_M", 350)
+QDRANT_SCALAR_QUANTILE: Final = get_env_float("QDRANT_SCALAR_QUANTILE", 0.99)
+QDRANT_VECTOR_SIZE: Final = get_env_int("QDRANT_VECTOR_SIZE", 1536)
+CACHED_STREAMING_CHUNK_DELAY: Final = get_env_float("CACHED_STREAMING_CHUNK_DELAY", 0.02)
+AUDIO_SPEECH_CHUNK_SIZE: Final = get_env_int(
+    "AUDIO_SPEECH_CHUNK_SIZE", 8192
 )  # chunk_size for audio speech streaming. Balance between latency and memory usage
-DEFAULT_MAX_TOKENS_FOR_TRITON: Final = int(os.getenv("DEFAULT_MAX_TOKENS_FOR_TRITON", 2000))
+DEFAULT_MAX_TOKENS_FOR_TRITON: Final = get_env_int("DEFAULT_MAX_TOKENS_FOR_TRITON", 2000)
 #### Networking settings ####
 # Sentinel used when `REQUEST_TIMEOUT` is unset: `litellm.request_timeout` keeps this
 # value so longer-running surfaces (Router `timeout or litellm.request_timeout`,
@@ -569,12 +616,13 @@ DEFAULT_REQUEST_TIMEOUT_SECONDS: Final[float] = 6000.0
 # deadline and connect handshake (see ``http_handler`` cached handler paths).
 COMPLETION_HTTP_FALLBACK_SECONDS: Final[float] = 600.0
 HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS: Final[float] = 5.0
-SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS: Final[float] = float(
-    os.getenv("SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS", "5.0")
+SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS: Final[float] = get_env_float("SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS", 5.0)
+_request_timeout_from_env: Final = get_env_float_or_none("REQUEST_TIMEOUT")
+request_timeout: float = (
+    DEFAULT_REQUEST_TIMEOUT_SECONDS if _request_timeout_from_env is None else _request_timeout_from_env
 )
-request_timeout: float = float(os.getenv("REQUEST_TIMEOUT", str(int(DEFAULT_REQUEST_TIMEOUT_SECONDS))))
-request_timeout_explicitly_set: bool = "REQUEST_TIMEOUT" in os.environ
-DEFAULT_A2A_AGENT_TIMEOUT: Final[float] = float(os.getenv("DEFAULT_A2A_AGENT_TIMEOUT", 6000))  # 10 minutes
+request_timeout_explicitly_set: bool = _request_timeout_from_env is not None
+DEFAULT_A2A_AGENT_TIMEOUT: Final[float] = get_env_float("DEFAULT_A2A_AGENT_TIMEOUT", 6000.0)  # 10 minutes
 AGENT_KILL_SWITCH_TIMEOUT_SECONDS: Final = 10.0
 AGENT_KILL_SWITCH_RESPONSE_BODY_MAX_CHARS: Final = 2000
 # Patterns that indicate a localhost/internal URL in A2A agent cards that should be
@@ -598,20 +646,20 @@ STREAM_SSE_DATA_PREFIX: Final[str] = "data: "
 STREAM_SSE_KEEPALIVE_PING_CHUNK: Final[str] = 'event: ping\ndata: {"type": "ping"}\n\n'
 STREAM_SSE_KEEPALIVE_PING_BYTES: Final[bytes] = STREAM_SSE_KEEPALIVE_PING_CHUNK.encode("utf-8")
 ### SPEND TRACKING ###
-DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND: Final = float(
-    os.getenv("DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND", 0.001400)
+DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND: Final = get_env_float(
+    "DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND", 0.001400
 )  # price per second for a100 80GB
-FIREWORKS_AI_56_B_MOE: Final = int(os.getenv("FIREWORKS_AI_56_B_MOE", 56))
-FIREWORKS_AI_176_B_MOE: Final = int(os.getenv("FIREWORKS_AI_176_B_MOE", 176))
-FIREWORKS_AI_4_B: Final = int(os.getenv("FIREWORKS_AI_4_B", 4))
-FIREWORKS_AI_16_B: Final = int(os.getenv("FIREWORKS_AI_16_B", 16))
-FIREWORKS_AI_80_B: Final = int(os.getenv("FIREWORKS_AI_80_B", 80))
+FIREWORKS_AI_56_B_MOE: Final = get_env_int("FIREWORKS_AI_56_B_MOE", 56)
+FIREWORKS_AI_176_B_MOE: Final = get_env_int("FIREWORKS_AI_176_B_MOE", 176)
+FIREWORKS_AI_4_B: Final = get_env_int("FIREWORKS_AI_4_B", 4)
+FIREWORKS_AI_16_B: Final = get_env_int("FIREWORKS_AI_16_B", 16)
+FIREWORKS_AI_80_B: Final = get_env_int("FIREWORKS_AI_80_B", 80)
 # https://docs.fireworks.ai/guides/prompt-caching (accessed 2026-09-19): serverless cached prompt tokens
 # default to a 50% discount off the input rate
 FIREWORKS_AI_DEFAULT_CACHE_READ_RATE_RATIO: Final = 0.5
 #### Logging callback constants ####
 REDACTED_BY_LITELM_STRING: Final = "REDACTED_BY_LITELM"
-MAX_LANGFUSE_INITIALIZED_CLIENTS: Final = int(os.getenv("MAX_LANGFUSE_INITIALIZED_CLIENTS", 50))
+MAX_LANGFUSE_INITIALIZED_CLIENTS: Final = get_env_int("MAX_LANGFUSE_INITIALIZED_CLIENTS", 50)
 LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS: Final = 10_000
 # Backpressure + lifetime bounds for the /v1/messages streaming relay (see
 # BaseAnthropicMessagesStreamingIterator.async_sse_wrapper). The relay queue is
@@ -619,27 +667,25 @@ LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS: Final = 10_000
 # buffer the whole response in memory; the detached-drain cap bounds how many
 # post-disconnect drains may run concurrently so client behavior can't create
 # unbounded worker state.
-ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE: Final = int(
-    os.getenv("ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE", "1024")
+ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE: Final = get_env_int(
+    "ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE", 1024
 )
 # Setting this to 0 disables detached draining entirely: every post-disconnect
 # pump bills whatever partial output it has already collected and aborts the
 # upstream stream immediately, instead of continuing to drain for the real
 # terminal usage.
-ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS: Final = int(
-    os.getenv("ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS", "100")
-)
-LOGGING_WORKER_CONCURRENCY: Final = int(os.getenv("LOGGING_WORKER_CONCURRENCY", 100))  # Must be above 0
-LOGGING_WORKER_MAX_QUEUE_SIZE: Final = int(os.getenv("LOGGING_WORKER_MAX_QUEUE_SIZE", 50_000))
-LOGGING_WORKER_MAX_TIME_PER_COROUTINE: Final = float(os.getenv("LOGGING_WORKER_MAX_TIME_PER_COROUTINE", 20.0))
+ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS: Final = get_env_int("ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS", 100)
+LOGGING_WORKER_CONCURRENCY: Final = get_env_int("LOGGING_WORKER_CONCURRENCY", 100)  # Must be above 0
+LOGGING_WORKER_MAX_QUEUE_SIZE: Final = get_env_int("LOGGING_WORKER_MAX_QUEUE_SIZE", 50_000)
+LOGGING_WORKER_MAX_TIME_PER_COROUTINE: Final = get_env_float("LOGGING_WORKER_MAX_TIME_PER_COROUTINE", 20.0)
 LOGGING_WORKER_TIMEOUT_SUMMARY_WINDOW_SECONDS: Final = 5.0
-LOGGING_WORKER_CLEAR_PERCENTAGE: Final = int(
-    os.getenv("LOGGING_WORKER_CLEAR_PERCENTAGE", 50)
+LOGGING_WORKER_CLEAR_PERCENTAGE: Final = get_env_int(
+    "LOGGING_WORKER_CLEAR_PERCENTAGE", 50
 )  # Percentage of queue to clear (default: 50%)
-MAX_ITERATIONS_TO_CLEAR_QUEUE: Final = int(os.getenv("MAX_ITERATIONS_TO_CLEAR_QUEUE", 200))
-MAX_TIME_TO_CLEAR_QUEUE: Final = float(os.getenv("MAX_TIME_TO_CLEAR_QUEUE", 5.0))
-LOGGING_WORKER_AGGRESSIVE_CLEAR_COOLDOWN_SECONDS: Final = float(
-    os.getenv("LOGGING_WORKER_AGGRESSIVE_CLEAR_COOLDOWN_SECONDS", 0.5)
+MAX_ITERATIONS_TO_CLEAR_QUEUE: Final = get_env_int("MAX_ITERATIONS_TO_CLEAR_QUEUE", 200)
+MAX_TIME_TO_CLEAR_QUEUE: Final = get_env_float("MAX_TIME_TO_CLEAR_QUEUE", 5.0)
+LOGGING_WORKER_AGGRESSIVE_CLEAR_COOLDOWN_SECONDS: Final = get_env_float(
+    "LOGGING_WORKER_AGGRESSIVE_CLEAR_COOLDOWN_SECONDS", 0.5
 )  # Cooldown time in seconds before allowing another aggressive clear (default: 0.5s)
 LOGGING_EXECUTOR_MAX_THREADS: Final = get_env_int("LOGGING_EXECUTOR_MAX_THREADS", 100)
 LOGGING_EXECUTOR_MAX_PENDING_TASKS: Final = get_env_int("LOGGING_EXECUTOR_MAX_PENDING_TASKS", 10_000)
@@ -652,15 +698,19 @@ DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE: Final = os.getenv(
 
 LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED: Final = 499
 
-EMAIL_BUDGET_ALERT_TTL: Final = int(os.getenv("EMAIL_BUDGET_ALERT_TTL", 24 * 60 * 60))  # 24 hours in seconds
-EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE: Final = float(
-    os.getenv("EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE", 0.8)
+EMAIL_BUDGET_ALERT_TTL: Final = get_env_int("EMAIL_BUDGET_ALERT_TTL", 24 * 60 * 60)  # 24 hours in seconds
+EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE: Final = get_env_float(
+    "EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE", 0.8
 )  # 80% of max budget
 ############### LLM Provider Constants ###############
 ### ANTHROPIC CONSTANTS ###
 ANTHROPIC_TOKEN_COUNTING_BETA_VERSION = os.getenv("ANTHROPIC_TOKEN_COUNTING_BETA_VERSION", "token-counting-2024-11-01")
 ANTHROPIC_SKILLS_API_BETA_VERSION: Final = "skills-2025-10-02"
 ANTHROPIC_BATCHES_ROUTE: Final = "/v1/messages/batches"
+ANTHROPIC_IMAGE_MAX_LONG_EDGE_PX: Final = 1568
+ANTHROPIC_IMAGE_MAX_PIXELS: Final = 1_150_000
+ANTHROPIC_IMAGE_PIXELS_PER_TOKEN: Final = 750
+PDF_DATA_URL_PREFIX: Final = "data:application/pdf;base64,"
 VERTEX_BATCH_PREDICTION_JOBS_ROUTE: Final = "batchPredictionJobs"
 ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES: Final = {
     "low": 1,
@@ -675,11 +725,11 @@ LITELLM_WEB_SEARCH_TOOL_NAME: Final = "litellm_web_search"
 DEFAULT_IMAGE_ENDPOINT_MODEL: Final = "dall-e-2"
 DEFAULT_VIDEO_ENDPOINT_MODEL: Final = "sora-2"
 
-DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS: Final = int(os.getenv("DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS", 8))
+DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS: Final = get_env_int("DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS", 8)
 
 ### DATAFORSEO CONSTANTS ###
-DEFAULT_DATAFORSEO_LOCATION_CODE: Final = int(
-    os.getenv("DEFAULT_DATAFORSEO_LOCATION_CODE", 2250)
+DEFAULT_DATAFORSEO_LOCATION_CODE: Final = get_env_int(
+    "DEFAULT_DATAFORSEO_LOCATION_CODE", 2250
 )  # Default to France (2250) - lower number, commonly used location
 
 LITELLM_CHAT_PROVIDERS: Final = [
@@ -781,6 +831,7 @@ LITELLM_CHAT_PROVIDERS: Final = [
     "lemonade",
     "docker_model_runner",
     "amazon_nova",
+    "scaledown",
 ]
 
 # Resolving these providers runs an OAuth device flow (their provider info IS the login), so any
@@ -961,9 +1012,11 @@ openai_compatible_endpoints: Final[list] = [
     "https://api.meta.ai/v1",
     "https://api.sailresearch.com/v1",
     "https://api.cognition.ai/v1",
+    "https://inference.coralbricks.ai/v1",
     "https://api.cortecs.ai/v1",
     "https://api.scx.ai/v1",
     "https://api.prisminference.com/v1",
+    "https://api.reka.ai/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
 ]
 
@@ -1036,10 +1089,12 @@ openai_compatible_providers: Final[list] = [
     "darkbloom",
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
     "cognition",
+    "coralbricks",
     "cortecs",
     "scx-ai",
     "prism",
     "sail",
+    "reka",
 ]
 
 OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))
@@ -1069,7 +1124,7 @@ openai_text_completion_compatible_providers: Final[list] = [  # providers that s
     "hyperbolic",
     "wandb",
 ]
-_openai_like_providers: Final[list] = [
+_openai_like_providers: Final[list[str]] = [
     "predibase",
     "databricks",
     "lemonade",
@@ -1536,18 +1591,20 @@ OPENAI_FINISH_REASONS: Final = [
     "tool_calls",
     "content_filter",
 ]
-HUMANLOOP_PROMPT_CACHE_TTL_SECONDS: Final = int(os.getenv("HUMANLOOP_PROMPT_CACHE_TTL_SECONDS", 60))  # 1 minute
+HUMANLOOP_PROMPT_CACHE_TTL_SECONDS: Final = get_env_int("HUMANLOOP_PROMPT_CACHE_TTL_SECONDS", 60)  # 1 minute
 RESPONSE_FORMAT_TOOL_NAME = "json_tool_call"  # default tool name used when converting response format to tool call
 
 ########################### Logging Callback Constants ###########################
 AZURE_STORAGE_MSFT_VERSION: Final = "2019-07-07"
 AZURE_STORAGE_DEFAULT_ENDPOINT_SUFFIX: Final = "core.windows.net"
-PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES: Final = int(
-    os.getenv("PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES", 5)
+PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES: Final = get_env_int(
+    "PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES", 5
 )
-CLOUDZERO_EXPORT_INTERVAL_MINUTES: Final = int(os.getenv("CLOUDZERO_EXPORT_INTERVAL_MINUTES", 60))
+PROMETHEUS_OVERFLOW_SERIES_LABEL_VALUE: Final = "other"
+PROMETHEUS_ADMITTED_SERIES_FILE_PREFIX: Final = "litellm_admitted_series_"
+CLOUDZERO_EXPORT_INTERVAL_MINUTES: Final = get_env_int("CLOUDZERO_EXPORT_INTERVAL_MINUTES", 60)
 MCP_TOOL_NAME_PREFIX: Final = "mcp_tool"
-MAXIMUM_TRACEBACK_LINES_TO_LOG: Final = int(os.getenv("MAXIMUM_TRACEBACK_LINES_TO_LOG", 100))
+MAXIMUM_TRACEBACK_LINES_TO_LOG: Final = get_env_int("MAXIMUM_TRACEBACK_LINES_TO_LOG", 100)
 PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS: Final = 4096
 
 # Headers to control callbacks
@@ -1585,11 +1642,11 @@ STANDARD_CUSTOMER_ID_HEADERS: Final = [
     "x-litellm-customer-id",
     "x-litellm-end-user-id",
 ]
-MAX_SPENDLOG_ROWS_TO_QUERY: Final = int(
-    os.getenv("MAX_SPENDLOG_ROWS_TO_QUERY", 1_000_000)
+MAX_SPENDLOG_ROWS_TO_QUERY: Final = get_env_int(
+    "MAX_SPENDLOG_ROWS_TO_QUERY", 1_000_000
 )  # if spendLogs has more than 1M rows, do not query the DB
-DEFAULT_SOFT_BUDGET: Final = float(
-    os.getenv("DEFAULT_SOFT_BUDGET", 50.0)
+DEFAULT_SOFT_BUDGET: Final = get_env_float(
+    "DEFAULT_SOFT_BUDGET", 50.0
 )  # by default all litellm proxy keys have a soft budget of 50.0
 # makes it clear this is a rate limit error for a litellm virtual key
 RATE_LIMIT_ERROR_MESSAGE_FOR_VIRTUAL_KEY: Final = "LiteLLM Virtual Key user_api_key_hash"
@@ -1656,38 +1713,16 @@ TRANSCRIBE_MEDIA_FETCH_ATTEMPTS: Final = 3
 TRANSCRIBE_MEDIA_LAST_MODIFIED_TOLERANCE_SECONDS: Final = 1.0  # S3 Last-Modified carries whole seconds only
 TRANSCRIBE_MEASURABLE_MEDIA_FORMATS: Final = frozenset({"flac", "mp3", "ogg", "wav"})  # what libsndfile can read
 
-BATCH_STATUS_POLL_INTERVAL_SECONDS: Final = int(os.getenv("BATCH_STATUS_POLL_INTERVAL_SECONDS", 3600))  # 1 hour
-BATCH_STATUS_POLL_MAX_ATTEMPTS: Final = int(os.getenv("BATCH_STATUS_POLL_MAX_ATTEMPTS", 24))  # for 24 hours
+BATCH_STATUS_POLL_INTERVAL_SECONDS: Final = get_env_int("BATCH_STATUS_POLL_INTERVAL_SECONDS", 3600)  # 1 hour
+BATCH_STATUS_POLL_MAX_ATTEMPTS: Final = get_env_int("BATCH_STATUS_POLL_MAX_ATTEMPTS", 24)  # for 24 hours
 BATCH_TPD_WINDOW_SECONDS: Final = 86400
 BATCH_TPD_DESCRIPTOR_SUFFIX: Final = "_tpd"
 
-HEALTH_CHECK_TIMEOUT_SECONDS: Final = int(os.getenv("HEALTH_CHECK_TIMEOUT_SECONDS", 60))  # 60 seconds
-_background_health_check_max_tokens_env: Final = os.getenv("BACKGROUND_HEALTH_CHECK_MAX_TOKENS")
-try:
-    _raw_background_health_check_max_tokens: Final = (
-        _background_health_check_max_tokens_env.strip() if _background_health_check_max_tokens_env is not None else ""
-    )
-    BACKGROUND_HEALTH_CHECK_MAX_TOKENS: int | None = (
-        int(_raw_background_health_check_max_tokens) if _raw_background_health_check_max_tokens else None
-    )
-except (ValueError, TypeError):
-    BACKGROUND_HEALTH_CHECK_MAX_TOKENS = None
-
-
-_background_health_check_max_tokens_reasoning_env: Final = os.getenv("BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING")
-try:
-    _raw_background_health_check_max_tokens_reasoning: Final = (
-        _background_health_check_max_tokens_reasoning_env.strip()
-        if _background_health_check_max_tokens_reasoning_env is not None
-        else ""
-    )
-    BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING: int | None = (
-        int(_raw_background_health_check_max_tokens_reasoning)
-        if _raw_background_health_check_max_tokens_reasoning
-        else None
-    )
-except (ValueError, TypeError):
-    BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING = None
+HEALTH_CHECK_TIMEOUT_SECONDS: Final = get_env_int("HEALTH_CHECK_TIMEOUT_SECONDS", 60)  # 60 seconds
+BACKGROUND_HEALTH_CHECK_MAX_TOKENS: int | None = get_env_int_or_none("BACKGROUND_HEALTH_CHECK_MAX_TOKENS")
+BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING: int | None = get_env_int_or_none(
+    "BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING"
+)
 
 LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME: Final = "litellm-internal-health-check"
 LITTELM_CLI_SERVICE_ACCOUNT_NAME: Final = "litellm-cli"
@@ -1712,22 +1747,22 @@ OTEL_SERVICE_NAME_METADATA_KEYS: Final = ("otel_service_name_override", "otel_se
 
 # Key Rotation Constants
 LITELLM_KEY_ROTATION_ENABLED: Final = os.getenv("LITELLM_KEY_ROTATION_ENABLED", "false")
-LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS: Final = int(
-    os.getenv("LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS", 86400)
+LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS: Final = get_env_int(
+    "LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS", 86400
 )  # 24 hours default
 LITELLM_KEY_ROTATION_GRACE_PERIOD: Final[str] = os.getenv(
     "LITELLM_KEY_ROTATION_GRACE_PERIOD", ""
 )  # Duration to keep old key valid after rotation (e.g. "24h", "2d"); empty = immediate revoke (default)
-LITELLM_KEY_ROTATION_LOCK_TTL_SECONDS: Final = int(
-    os.getenv("LITELLM_KEY_ROTATION_LOCK_TTL_SECONDS", 600)
+LITELLM_KEY_ROTATION_LOCK_TTL_SECONDS: Final = get_env_int(
+    "LITELLM_KEY_ROTATION_LOCK_TTL_SECONDS", 600
 )  # 10 minutes default — caps the deadlock window if a pod crashes mid-rotation
 UI_SESSION_TOKEN_TEAM_ID: Final = "litellm-dashboard"
 LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_ENABLED = os.getenv("LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_ENABLED", "false")
-LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_INTERVAL_SECONDS: Final = int(
-    os.getenv("LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_INTERVAL_SECONDS", 86400)
+LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_INTERVAL_SECONDS: Final = get_env_int(
+    "LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_INTERVAL_SECONDS", 86400
 )  # 24 hours default
-LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_BATCH_SIZE: Final = int(
-    os.getenv("LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_BATCH_SIZE", 1000)
+LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_BATCH_SIZE: Final = get_env_int(
+    "LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_BATCH_SIZE", 1000
 )
 LOGIN_THROTTLE_CACHE_KEY_PREFIX: Final = "login_fail"
 LOGIN_THROTTLE_UNKNOWN_SOURCE: Final = "unknown"
@@ -1737,7 +1772,7 @@ LOGIN_THROTTLE_NOT_BLOCKED: Final = (0, 0)
 LITELLM_PROXY_ADMIN_NAME: Final = "default_user_id"
 LITELLM_PROXY_BUDGET_NAME: Final = "litellm-proxy-budget"
 GLOBAL_PROXY_SPEND_CACHE_KEY: Final = f"{LITELLM_PROXY_ADMIN_NAME}:spend"
-LITELLM_EXECUTED_BATCH_CONCURRENCY: Final = max(1, int(os.getenv("LITELLM_EXECUTED_BATCH_CONCURRENCY", "4")))
+LITELLM_EXECUTED_BATCH_CONCURRENCY: Final = max(1, get_env_int("LITELLM_EXECUTED_BATCH_CONCURRENCY", 4))
 
 ########################### CLI SSO AUTHENTICATION CONSTANTS ###########################
 LITELLM_CLI_SOURCE_IDENTIFIER: Final = "litellm-cli"
@@ -1746,8 +1781,8 @@ CLI_SSO_SESSION_CACHE_KEY_PREFIX: Final = "cli_sso_session"
 CLI_SSO_SESSION_TTL_SECONDS: Final = 600
 CLI_SESSION_KEY_PREFIX: Final = "cli-session"
 # Support both CLI_JWT_EXPIRATION_HOURS and LITELLM_CLI_JWT_EXPIRATION_HOURS for backwards compatibility
-CLI_JWT_EXPIRATION_HOURS: Final = int(
-    os.getenv("CLI_JWT_EXPIRATION_HOURS") or os.getenv("LITELLM_CLI_JWT_EXPIRATION_HOURS") or 24
+CLI_JWT_EXPIRATION_HOURS: Final = get_env_int(
+    "CLI_JWT_EXPIRATION_HOURS", get_env_int("LITELLM_CLI_JWT_EXPIRATION_HOURS", 24)
 )
 # Comma-separated allowlisted OIDC claim map for CLI SSO polling, e.g.
 # "employment_type->acme_employment_type,org_info.department->department"
@@ -1765,7 +1800,7 @@ DB_DAILY_TAG_SPEND_UPDATE_JOB_NAME: Final = "db_daily_tag_spend_update_job"
 PROMETHEUS_EMIT_BUDGET_METRICS_JOB_NAME: Final = "prometheus_emit_budget_metrics"
 CLOUDZERO_EXPORT_USAGE_DATA_JOB_NAME: Final = "cloudzero_export_usage_data"
 MAVVRIK_FOCUS_EXPORT_JOB_NAME: Final = "mavvrik_focus_export_usage_data"
-CLOUDZERO_MAX_FETCHED_DATA_RECORDS: Final = int(os.getenv("CLOUDZERO_MAX_FETCHED_DATA_RECORDS", 50000))
+CLOUDZERO_MAX_FETCHED_DATA_RECORDS: Final = get_env_int("CLOUDZERO_MAX_FETCHED_DATA_RECORDS", 50000)
 SPEND_LOG_CLEANUP_JOB_NAME: Final = "spend_log_cleanup"
 BACKGROUND_HEALTH_CHECK_DB_SAVE_JOB_NAME: Final = "background_health_check_db_save"
 KEY_ROTATION_JOB_NAME: Final = "litellm_key_rotation_job"
@@ -1776,20 +1811,20 @@ USER_SPEND_ALERTS_JOB_ID: Final = "user_spend_alerts_job"
 PROMETHEUS_FALLBACK_STATS_JOB_ID: Final = "prometheus_fallback_stats_job"
 SLACK_DAILY_REPORT_LOCK_ID: Final = "slack_daily_report"
 SLACK_MODEL_DEPRECATION_LOCK_ID: Final = "slack_model_deprecation_warning"
-SPEND_LOG_RUN_LOOPS: Final = int(os.getenv("SPEND_LOG_RUN_LOOPS", 500))
-SPEND_LOG_CLEANUP_BATCH_SIZE: Final = int(os.getenv("SPEND_LOG_CLEANUP_BATCH_SIZE", 1000))
-SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES = int(os.getenv("SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES", 3))
-SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS: Final = float(
-    os.getenv("SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS", 0.5)
+SPEND_LOG_RUN_LOOPS: Final = get_env_int("SPEND_LOG_RUN_LOOPS", 500)
+SPEND_LOG_CLEANUP_BATCH_SIZE: Final = get_env_int("SPEND_LOG_CLEANUP_BATCH_SIZE", 1000)
+SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES = get_env_int("SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES", 3)
+SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS: Final = get_env_float(
+    "SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS", 0.5
 )
-SPEND_LOG_CLEANUP_RUN_BUDGET_SECONDS: Final = float(os.getenv("SPEND_LOG_CLEANUP_RUN_BUDGET_SECONDS", "300"))
-SPEND_LOG_CLEANUP_BATCH_TIMEOUT_SECONDS: Final = float(os.getenv("SPEND_LOG_CLEANUP_BATCH_TIMEOUT_SECONDS", "30"))
-SPEND_LOG_CLEANUP_REMAINING_COUNT_CAP: Final = int(os.getenv("SPEND_LOG_CLEANUP_REMAINING_COUNT_CAP", "100000"))
-SCHEDULED_JOB_SHUTDOWN_FINISH_TIMEOUT_SECONDS: Final = float(
-    os.getenv("SCHEDULED_JOB_SHUTDOWN_FINISH_TIMEOUT_SECONDS", "5")
+SPEND_LOG_CLEANUP_RUN_BUDGET_SECONDS: Final = get_env_float("SPEND_LOG_CLEANUP_RUN_BUDGET_SECONDS", 300.0)
+SPEND_LOG_CLEANUP_BATCH_TIMEOUT_SECONDS: Final = get_env_float("SPEND_LOG_CLEANUP_BATCH_TIMEOUT_SECONDS", 30.0)
+SPEND_LOG_CLEANUP_REMAINING_COUNT_CAP: Final = get_env_int("SPEND_LOG_CLEANUP_REMAINING_COUNT_CAP", 100000)
+SCHEDULED_JOB_SHUTDOWN_FINISH_TIMEOUT_SECONDS: Final = get_env_float(
+    "SCHEDULED_JOB_SHUTDOWN_FINISH_TIMEOUT_SECONDS", 5.0
 )
-SCHEDULED_JOB_SHUTDOWN_CANCEL_TIMEOUT_SECONDS: Final = float(
-    os.getenv("SCHEDULED_JOB_SHUTDOWN_CANCEL_TIMEOUT_SECONDS", "5")
+SCHEDULED_JOB_SHUTDOWN_CANCEL_TIMEOUT_SECONDS: Final = get_env_float(
+    "SCHEDULED_JOB_SHUTDOWN_CANCEL_TIMEOUT_SECONDS", 5.0
 )
 TOOL_SPEND_TOP_TOOLS: Final = 100
 MODEL_INSIGHTS_TOP_MODELS: Final = 10
@@ -1797,51 +1832,54 @@ MODEL_INSIGHTS_MAX_RANGE_DAYS: Final = 365
 MODEL_INSIGHTS_DEFAULT_TASK: Final = "uncategorized"
 MODEL_INSIGHTS_TASK_TAG_PREFIX: Final = "task:"
 SPEND_LOG_PARTITION_INTERVAL: Final = os.getenv("SPEND_LOG_PARTITION_INTERVAL", "day")
-SPEND_LOG_PARTITION_PRECREATE_AHEAD: Final = int(os.getenv("SPEND_LOG_PARTITION_PRECREATE_AHEAD", 7))
-SPEND_LOG_WRITE_BATCH_MAX_BYTES: Final = max(1, int(os.getenv("SPEND_LOG_WRITE_BATCH_MAX_BYTES", 2_000_000)))
-SPEND_LOG_WRITE_BATCH_MAX_ROWS: Final = max(1, int(os.getenv("SPEND_LOG_WRITE_BATCH_MAX_ROWS", "100")))
-SPEND_LOG_QUEUE_SIZE_THRESHOLD: Final = int(os.getenv("SPEND_LOG_QUEUE_SIZE_THRESHOLD", 100))
-SPEND_LOG_QUEUE_MAX_BYTES: Final = max(1, int(os.getenv("SPEND_LOG_QUEUE_MAX_BYTES", "64000000")))
-SPEND_LOG_QUEUE_POLL_INTERVAL: Final = float(os.getenv("SPEND_LOG_QUEUE_POLL_INTERVAL", 2.0))
-RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS: Final = max(1, int(os.getenv("RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS", "3")))
-RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL: Final = float(os.getenv("RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL", "0.2"))
-SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE: Final = int(os.getenv("SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE", 10000))
-PROXY_DB_LOOKUP_MAX_CONCURRENCY: Final = max(1, int(os.getenv("PROXY_DB_LOOKUP_MAX_CONCURRENCY", "25")))
-PROXY_DB_LOOKUP_DEADLINE_SECONDS: Final = max(0.1, float(os.getenv("PROXY_DB_LOOKUP_DEADLINE_SECONDS", "10")))
-PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS: Final = max(0.0, float(os.getenv("PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS", "30")))
-DEFAULT_CRON_JOB_LOCK_TTL_SECONDS: Final = int(os.getenv("DEFAULT_CRON_JOB_LOCK_TTL_SECONDS", 60))  # 1 minute
-PROXY_BUDGET_RESCHEDULER_MIN_TIME: Final = int(os.getenv("PROXY_BUDGET_RESCHEDULER_MIN_TIME", 597))
-RESET_BUDGET_JOB_BATCH_SIZE: Final = max(1, int(os.getenv("RESET_BUDGET_JOB_BATCH_SIZE", "500")))
-RESET_BUDGET_JOB_MAX_CHUNKS_PER_RUN: Final = max(1, int(os.getenv("RESET_BUDGET_JOB_MAX_CHUNKS_PER_RUN", "100")))
+SPEND_LOG_PARTITION_PRECREATE_AHEAD: Final = get_env_int("SPEND_LOG_PARTITION_PRECREATE_AHEAD", 7)
+SPEND_LOG_WRITE_BATCH_MAX_BYTES: Final = max(1, get_env_int("SPEND_LOG_WRITE_BATCH_MAX_BYTES", 2_000_000))
+SPEND_LOG_WRITE_BATCH_MAX_ROWS: Final = max(1, get_env_int("SPEND_LOG_WRITE_BATCH_MAX_ROWS", 100))
+SPEND_ROLLUP_LOCK_TIMEOUT_MS: Final = max(1, get_env_int("SPEND_ROLLUP_LOCK_TIMEOUT_MS", 5000))
+SPEND_LOG_QUEUE_SIZE_THRESHOLD: Final = get_env_int("SPEND_LOG_QUEUE_SIZE_THRESHOLD", 100)
+SPEND_LOG_QUEUE_MAX_BYTES: Final = max(1, get_env_int("SPEND_LOG_QUEUE_MAX_BYTES", 64000000))
+SPEND_LOG_QUEUE_POLL_INTERVAL: Final = get_env_float("SPEND_LOG_QUEUE_POLL_INTERVAL", 2.0)
+RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS: Final = max(1, get_env_int("RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS", 3))
+RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL: Final = get_env_float("RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL", 0.2)
+SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE: Final = get_env_int("SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE", 10000)
+PROXY_DB_LOOKUP_MAX_CONCURRENCY: Final = max(1, get_env_int("PROXY_DB_LOOKUP_MAX_CONCURRENCY", 25))
+PROXY_DB_LOOKUP_DEADLINE_SECONDS: Final = max(0.1, get_env_float("PROXY_DB_LOOKUP_DEADLINE_SECONDS", 10.0))
+PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS: Final = max(0.0, get_env_float("PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS", 30.0))
+DEFAULT_CRON_JOB_LOCK_TTL_SECONDS: Final = get_env_int("DEFAULT_CRON_JOB_LOCK_TTL_SECONDS", 60)  # 1 minute
+PROXY_BUDGET_RESCHEDULER_MIN_TIME: Final = get_env_int("PROXY_BUDGET_RESCHEDULER_MIN_TIME", 597)
+RESET_BUDGET_JOB_BATCH_SIZE: Final = max(1, get_env_int("RESET_BUDGET_JOB_BATCH_SIZE", 500))
+RESET_BUDGET_JOB_MAX_CHUNKS_PER_RUN: Final = max(1, get_env_int("RESET_BUDGET_JOB_MAX_CHUNKS_PER_RUN", 100))
 RESET_BUDGET_JOB_NAME: Final = "reset_budget_job"
 # Comfortably longer than one PROXY_BUDGET_RESCHEDULER_MIN_TIME tick, so a healthy
 # leader keeps the lease across its own run, and a crashed one strands the sweep for
 # at most a single tick.
 RESET_BUDGET_JOB_LOCK_TTL_SECONDS: Final[int] = 900
-PROXY_BATCH_POLLING_INTERVAL: Final = int(os.getenv("PROXY_BATCH_POLLING_INTERVAL", 3600))
-MAX_OBJECTS_PER_POLL_CYCLE: Final = max(1, int(os.getenv("MAX_OBJECTS_PER_POLL_CYCLE", 50)))
-MANAGED_OBJECT_STALENESS_CUTOFF_DAYS: Final = max(1, int(os.getenv("MANAGED_OBJECT_STALENESS_CUTOFF_DAYS", 7)))
-STALE_OBJECT_CLEANUP_BATCH_SIZE: Final = max(1, int(os.getenv("STALE_OBJECT_CLEANUP_BATCH_SIZE", 1000)))
+PROXY_BATCH_POLLING_INTERVAL: Final = get_env_int("PROXY_BATCH_POLLING_INTERVAL", 3600)
+MAX_OBJECTS_PER_POLL_CYCLE: Final = max(1, get_env_int("MAX_OBJECTS_PER_POLL_CYCLE", 50))
+MANAGED_OBJECT_STALENESS_CUTOFF_DAYS: Final = max(1, get_env_int("MANAGED_OBJECT_STALENESS_CUTOFF_DAYS", 7))
+BATCH_OUTPUT_FILE_LOOKUP_TIMEOUT_SECONDS: Final = 10.0
+BATCH_OUTPUT_FILE_FALLBACK_RETRY_AFTER_SECONDS: Final = 60
+STALE_OBJECT_CLEANUP_BATCH_SIZE: Final = max(1, get_env_int("STALE_OBJECT_CLEANUP_BATCH_SIZE", 1000))
 # Set PROXY_BATCH_POLLING_ENABLED=false to disable the CheckBatchCost and
 # CheckResponsesCost background polling jobs entirely (e.g. to avoid DB load on
 # installations with large numbers of stale managed objects).
 _batch_polling_env: Final = os.getenv("PROXY_BATCH_POLLING_ENABLED", "true").lower()
 PROXY_BATCH_POLLING_ENABLED: Final = _batch_polling_env == "true"
-BACKGROUND_INTERACTION_COST_POLL_INITIAL_INTERVAL_SECONDS: Final = float(
-    os.getenv("BACKGROUND_INTERACTION_COST_POLL_INITIAL_INTERVAL_SECONDS", "5")
+BACKGROUND_INTERACTION_COST_POLL_INITIAL_INTERVAL_SECONDS: Final = get_env_float(
+    "BACKGROUND_INTERACTION_COST_POLL_INITIAL_INTERVAL_SECONDS", 5.0
 )
-BACKGROUND_INTERACTION_COST_POLL_MAX_INTERVAL_SECONDS: Final = float(
-    os.getenv("BACKGROUND_INTERACTION_COST_POLL_MAX_INTERVAL_SECONDS", "60")
+BACKGROUND_INTERACTION_COST_POLL_MAX_INTERVAL_SECONDS: Final = get_env_float(
+    "BACKGROUND_INTERACTION_COST_POLL_MAX_INTERVAL_SECONDS", 60.0
 )
-BACKGROUND_INTERACTION_COST_POLL_TIMEOUT_SECONDS: Final = float(
-    os.getenv("BACKGROUND_INTERACTION_COST_POLL_TIMEOUT_SECONDS", "3600")
+BACKGROUND_INTERACTION_COST_POLL_TIMEOUT_SECONDS: Final = get_env_float(
+    "BACKGROUND_INTERACTION_COST_POLL_TIMEOUT_SECONDS", 3600.0
 )
 _background_interaction_cost_polling_env: Final = os.getenv(
     "BACKGROUND_INTERACTION_COST_POLLING_ENABLED", "true"
 ).lower()
 BACKGROUND_INTERACTION_COST_POLLING_ENABLED: Final = _background_interaction_cost_polling_env == "true"
-PROXY_BUDGET_RESCHEDULER_MAX_TIME: Final = int(os.getenv("PROXY_BUDGET_RESCHEDULER_MAX_TIME", 605))
-PROXY_BATCH_WRITE_AT: Final = int(os.getenv("PROXY_BATCH_WRITE_AT", 10))  # in seconds, increased from 10
+PROXY_BUDGET_RESCHEDULER_MAX_TIME: Final = get_env_int("PROXY_BUDGET_RESCHEDULER_MAX_TIME", 605)
+PROXY_BATCH_WRITE_AT: Final = get_env_int("PROXY_BATCH_WRITE_AT", 10)  # in seconds, increased from 10
 PROXY_CONFIG_RELOAD_INTERVAL_SECONDS: Final = get_env_int("PROXY_CONFIG_RELOAD_INTERVAL_SECONDS", 30)
 
 # APScheduler Configuration - MEMORY LEAK FIX
@@ -1850,10 +1888,10 @@ APSCHEDULER_COALESCE: Final = os.getenv("APSCHEDULER_COALESCE", "True").lower() 
     "true",
     "1",
 ]  # collapse many missed runs into one
-APSCHEDULER_MISFIRE_GRACE_TIME: Final = int(
-    os.getenv("APSCHEDULER_MISFIRE_GRACE_TIME", 3600)
+APSCHEDULER_MISFIRE_GRACE_TIME: Final = get_env_int(
+    "APSCHEDULER_MISFIRE_GRACE_TIME", 3600
 )  # ignore runs older than 1 hour (was 120)
-APSCHEDULER_MAX_INSTANCES: Final = int(os.getenv("APSCHEDULER_MAX_INSTANCES", 1))  # prevent concurrent job instances
+APSCHEDULER_MAX_INSTANCES: Final = get_env_int("APSCHEDULER_MAX_INSTANCES", 1)  # prevent concurrent job instances
 APSCHEDULER_REPLACE_EXISTING: Final = os.getenv("APSCHEDULER_REPLACE_EXISTING", "True").lower() in [
     "true",
     "1",
@@ -1867,25 +1905,25 @@ DEFAULT_STAGGER_WINDOW_SECONDS: Final = 300
 # This will run tag spcific tasks at a later time to smooth QPS
 DAILY_TAG_SPEND_BATCH_MULTIPLIER: Final = 2.3
 
-DEFAULT_HEALTH_CHECK_INTERVAL: Final = int(os.getenv("DEFAULT_HEALTH_CHECK_INTERVAL", 300))  # 5 minutes
-DEFAULT_SHARED_HEALTH_CHECK_TTL: Final = int(
-    os.getenv("DEFAULT_SHARED_HEALTH_CHECK_TTL", 300)
+DEFAULT_HEALTH_CHECK_INTERVAL: Final = get_env_int("DEFAULT_HEALTH_CHECK_INTERVAL", 300)  # 5 minutes
+DEFAULT_SHARED_HEALTH_CHECK_TTL: Final = get_env_int(
+    "DEFAULT_SHARED_HEALTH_CHECK_TTL", 300
 )  # 5 minutes - TTL for cached health check results
-DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL: Final = int(
-    os.getenv("DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL", 60)
+DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL: Final = get_env_int(
+    "DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL", 60
 )  # 1 minute - TTL for health check lock
 DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER: Final = 2  # health state is stale after interval * this
-PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS: Final = int(os.getenv("PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS", 9))
-DEFAULT_MODEL_CREATED_AT_TIME: Final = int(
-    os.getenv("DEFAULT_MODEL_CREATED_AT_TIME", 1677610602)
+PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS: Final = get_env_int("PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS", 9)
+DEFAULT_MODEL_CREATED_AT_TIME: Final = get_env_int(
+    "DEFAULT_MODEL_CREATED_AT_TIME", 1677610602
 )  # returns on `/models` endpoint
-DEFAULT_SLACK_ALERTING_THRESHOLD: Final = int(os.getenv("DEFAULT_SLACK_ALERTING_THRESHOLD", 300))
-MAX_TEAM_LIST_LIMIT: Final = int(os.getenv("MAX_TEAM_LIST_LIMIT", 20))
-MAX_POLICY_ESTIMATE_IMPACT_ROWS: Final = int(os.getenv("MAX_POLICY_ESTIMATE_IMPACT_ROWS", 1000))
-DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD = float(os.getenv("DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD", 0.7))
-LENGTH_OF_LITELLM_GENERATED_KEY: Final = int(os.getenv("LENGTH_OF_LITELLM_GENERATED_KEY", 16))
-MINIMUM_CUSTOM_KEY_LENGTH: Final = int(os.getenv("MINIMUM_CUSTOM_KEY_LENGTH", 16))
-SECRET_MANAGER_REFRESH_INTERVAL: Final = int(os.getenv("SECRET_MANAGER_REFRESH_INTERVAL", 86400))
+DEFAULT_SLACK_ALERTING_THRESHOLD: Final = get_env_int("DEFAULT_SLACK_ALERTING_THRESHOLD", 300)
+MAX_TEAM_LIST_LIMIT: Final = get_env_int("MAX_TEAM_LIST_LIMIT", 20)
+MAX_POLICY_ESTIMATE_IMPACT_ROWS: Final = get_env_int("MAX_POLICY_ESTIMATE_IMPACT_ROWS", 1000)
+DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD = get_env_float("DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD", 0.7)
+LENGTH_OF_LITELLM_GENERATED_KEY: Final = get_env_int("LENGTH_OF_LITELLM_GENERATED_KEY", 16)
+MINIMUM_CUSTOM_KEY_LENGTH: Final = get_env_int("MINIMUM_CUSTOM_KEY_LENGTH", 16)
+SECRET_MANAGER_REFRESH_INTERVAL: Final = get_env_int("SECRET_MANAGER_REFRESH_INTERVAL", 86400)
 OPENAI_SYSTEM_MESSAGES_FIRST_PROVIDERS: Final = frozenset({"openai", "azure"})
 LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
     "default_internal_user_params",
@@ -1908,6 +1946,7 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
     "openai_system_messages_first",
     "max_ui_session_budget",
     "budget_rollover",
+    "personal_key_model_access_from_teams",
     "mcp_tool_search",
     "turn_off_message_logging",
     "datadog_params",
@@ -1917,8 +1956,9 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
     "aws_sqs_callback_params",
 ]
 SPECIAL_LITELLM_AUTH_TOKEN: Final = ["ui-token"]
-DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60))
-DEFAULT_ACCESS_GROUP_CACHE_TTL: Final = int(os.getenv("DEFAULT_ACCESS_GROUP_CACHE_TTL", 600))
+DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = get_env_int("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60)
+AUTH_OBJECTS_TARGET: Final = "auth_objects"
+DEFAULT_ACCESS_GROUP_CACHE_TTL: Final = get_env_int("DEFAULT_ACCESS_GROUP_CACHE_TTL", 600)
 SPEND_LOG_KEY_METADATA_CACHE_TTL: Final = 600
 SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL: Final = 30
 SPEND_LOG_KEY_METADATA_CACHE_MAX_ITEMS: Final = 10000
@@ -2026,14 +2066,14 @@ SENTRY_PII_DENYLIST: Final = [
 ]
 
 # CoroutineChecker cache configuration
-COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY: Final = int(os.getenv("COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY", 1000))
+COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY: Final = get_env_int("COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY", 1000)
 
 ########################### RAG Text Splitter Constants ###########################
-DEFAULT_CHUNK_SIZE: Final = int(os.getenv("DEFAULT_CHUNK_SIZE", 1000))
-DEFAULT_CHUNK_OVERLAP: Final = int(os.getenv("DEFAULT_CHUNK_OVERLAP", 200))
+DEFAULT_CHUNK_SIZE: Final = get_env_int("DEFAULT_CHUNK_SIZE", 1000)
+DEFAULT_CHUNK_OVERLAP: Final = get_env_int("DEFAULT_CHUNK_OVERLAP", 200)
 
 ########################### S3 Vectors RAG Constants ###########################
-S3_VECTORS_DEFAULT_DIMENSION: Final = int(os.getenv("S3_VECTORS_DEFAULT_DIMENSION", 1024))
+S3_VECTORS_DEFAULT_DIMENSION: Final = get_env_int("S3_VECTORS_DEFAULT_DIMENSION", 1024)
 S3_VECTORS_DEFAULT_DISTANCE_METRIC: Final = str(os.getenv("S3_VECTORS_DEFAULT_DISTANCE_METRIC", "cosine"))
 S3_VECTORS_DEFAULT_NON_FILTERABLE_METADATA_KEYS: Final = ["source_text"]
 
@@ -2046,11 +2086,11 @@ MICROSOFT_USER_LAST_NAME_ATTRIBUTE: Final = str(os.getenv("MICROSOFT_USER_LAST_N
 
 # Maximum payload size (in bytes) to fully serialize for DEBUG logging.
 # Payloads larger than this are truncated to avoid multi-second json.dumps blocking the response.
-MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG: Final = int(os.getenv("MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG", 102400))  # 100 KB
+MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG: Final = get_env_int("MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG", 102400)  # 100 KB
 
 # Policy template enrichment
-MAX_COMPETITOR_NAMES: Final = int(os.getenv("MAX_COMPETITOR_NAMES", 100))
-COMPETITOR_LLM_TEMPERATURE: Final = float(os.getenv("COMPETITOR_LLM_TEMPERATURE", 0.3))
+MAX_COMPETITOR_NAMES: Final = get_env_int("MAX_COMPETITOR_NAMES", 100)
+COMPETITOR_LLM_TEMPERATURE: Final = get_env_float("COMPETITOR_LLM_TEMPERATURE", 0.3)
 DEFAULT_COMPETITOR_DISCOVERY_MODEL: Final = "gpt-4o-mini"
 
 # Advisor tool orchestration
@@ -2166,6 +2206,8 @@ USAGE_TOP_API_KEYS_DEFAULT: Final[int] = 100
 USAGE_TOP_API_KEYS_MAX: Final[int] = 1000
 USAGE_KEY_PAGE_DEFAULT: Final[int] = 50
 USAGE_KEY_PAGE_MAX: Final[int] = 100
+USAGE_USER_PAGE_DEFAULT: Final[int] = 50
+USAGE_USER_PAGE_MAX: Final[int] = 100
 USAGE_KEY_SEARCH_DEFAULT: Final[int] = 100
 USAGE_KEY_SEARCH_MAX: Final[int] = 100
 USAGE_MODEL_TOP_KEYS_DEFAULT: Final[int] = 5
@@ -2203,6 +2245,16 @@ BATCH_ENQUEUED_TOKEN_TTL_SECONDS: Final[int] = 8 * 24 * 60 * 60
 # admins may write it: when present it replaces the standard RPM/TPM checks for
 # batch submissions.
 BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY: Final = "batch_enqueued_token_limit"
+MAX_BATCH_FILE_RECORDS_KEY: Final = "max_batch_file_records"
+MAX_BATCH_FILE_UPLOADS_PER_DAY_KEY: Final = "max_batch_file_uploads_per_day"
+MAX_FILE_DOWNLOADS_PER_MINUTE_KEY: Final = "max_file_downloads_per_minute"
+ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS: Final = (
+    BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY,
+    MAX_BATCH_FILE_RECORDS_KEY,
+    MAX_BATCH_FILE_UPLOADS_PER_DAY_KEY,
+    MAX_FILE_DOWNLOADS_PER_MINUTE_KEY,
+)
+FILE_USAGE_MAX_TRACKED_COUNTERS: Final = 20_000
 
 # Shared read-only empty mapping, for defaulting optional Mapping parameters without
 # constructing a fresh mutable dict at each call site.
@@ -2233,3 +2285,5 @@ HARNESS_SNAPSHOT_SKIP_DIRS: Final = frozenset(
         ".ruff_cache",
     }
 )
+
+DEFAULT_TOOL_LOOP_MAX_ROUNDS: Final = 20
