@@ -386,9 +386,9 @@ class LiteLLMAnthropicMessagesAdapter:
 
         raw_id: Final[object] = _optional_attr(tool_call, "id")
         if isinstance(raw_id, str) and THOUGHT_SIGNATURE_SEPARATOR in raw_id:
-            parts: Final[list[str]] = raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)
-            if len(parts) == 2 and parts[1]:
-                return parts[1]
+            _, _, embedded = raw_id.partition(THOUGHT_SIGNATURE_SEPARATOR)
+            if embedded:
+                return embedded
 
         return None
 
