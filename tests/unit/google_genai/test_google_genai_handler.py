@@ -351,3 +351,32 @@ async def test_generate_content_adapter_returns_provider_400_without_retrying(
     assert rejected.value.status_code == 400
     assert "Invalid 'max_completion_tokens'" in rejected.value.message
     assert route.call_count == 1
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected_error"),
+    [
+        pytest.param(401, litellm.AuthenticationError, id="401"),
+        pytest.param(503, litellm.ServiceUnavailableError, id="503"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_generate_content_adapter_keeps_provider_error_status(
+    status_code: int,
+    expected_error: type[Exception],
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(status_code, json={"error": {"message": "provider error", "type": "error"}})
+    )
+
+    with pytest.raises(expected_error) as raised:
+        await litellm.agenerate_content(
+            **{**_REJECTED_ADAPTER_REQUEST, "model": "openai/gpt-5.4-mini"},
+            api_key="sk-generate-content-adapter-status",
+            max_retries=0,
+        )
+
+    assert getattr(raised.value, "status_code", None) == status_code
