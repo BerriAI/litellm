@@ -5,7 +5,7 @@ use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
 use crate::fork_gate::{ForkGate, Refused, RuntimeAlreadyStarted};
-use crate::{Pythonized, panic_to_pyerr, release_gil};
+use crate::{Error, Pythonized, panic_to_pyerr, release_gil};
 use futures_util::FutureExt;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -112,9 +112,7 @@ where
     F: Future<Output = PyResult<T>> + Send + 'static,
 {
     if Handle::try_current().is_ok() {
-        return Err(PyRuntimeError::new_err(
-            "synchronous native routes cannot run from a Tokio context; use the async route",
-        ));
+        return Err(Error::SyncInsideTokio.into());
     }
     release_gil(py, move || runtime.block_on(wait_for_sync_result(future)))?
 }
@@ -131,9 +129,7 @@ where
     F: Future<Output = Result<T, E>> + Send + 'static,
 {
     if Handle::try_current().is_ok() {
-        return Err(PyRuntimeError::new_err(
-            "synchronous native routes cannot run from a Tokio context; use the async route",
-        ));
+        return Err(Error::SyncInsideTokio.into());
     }
 
     let result = release_gil(py, move || runtime.block_on(wait_for_sync_result(future)))?;

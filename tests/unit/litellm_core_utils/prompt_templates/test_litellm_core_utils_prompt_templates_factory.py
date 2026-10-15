@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Final, List
 from unittest.mock import MagicMock, patch
 
@@ -57,8 +58,12 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     llama_2_chat_pt,
     prompt_factory,
 )
-from litellm.litellm_core_utils.prompt_templates.common_utils import get_completion_messages
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    encrypted_reasoning_signature,
+    get_completion_messages,
+)
 from litellm.llms.vertex_ai.gemini.transformation import gemini_convert_messages_with_history
+from litellm.types.llms.bedrock import BedrockConverseReasoningContentBlock
 from litellm.types.llms.openai import AllMessageValues
 
 
@@ -307,6 +312,31 @@ def test_convert_to_ollama_image_downloads_an_http_image_url_to_bare_base64(monk
 
 
 @pytest.mark.asyncio
+def test_anthropic_messages_pt_drops_the_stream_index_from_replayed_thinking_blocks():
+    """Streamed thinking blocks carry the OpenAI SDK list-position `index`. Anthropic's native thinking block schema
+    rejects unknown fields, so the field must not reach the request when a client replays the streamed message"""
+    messages: Final = [
+        {"role": "user", "content": "Capital of France?"},
+        {
+            "role": "assistant",
+            "content": "Paris",
+            "thinking_blocks": [
+                {"type": "thinking", "thinking": "Step 1.", "signature": "sig-a", "index": 0},
+                {"type": "redacted_thinking", "data": "EmwKAhgB", "index": 1},
+            ],
+        },
+        {"role": "user", "content": "And Spain?"},
+    ]
+
+    replayed: Final = anthropic_messages_pt(messages=messages, model="claude-haiku-4-5", llm_provider="anthropic")
+
+    assert replayed[1]["content"] == [
+        {"type": "thinking", "thinking": "Step 1.", "signature": "sig-a"},
+        {"type": "redacted_thinking", "data": "EmwKAhgB"},
+        {"type": "text", "text": "Paris"},
+    ]
+
+
 async def test_anthropic_bedrock_thinking_blocks_with_none_content():
     """
     Test the specific function that processes thinking_blocks when content is None
@@ -411,6 +441,175 @@ def test_bedrock_converse_assistant_with_empty_thinking_block_and_tool_calls():
     assert len(tool_use_blocks) == 2
 
 
+_NATIVE_REDACTED_DATA: Final = "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpP"
+_CONVERSE_REDACTED_DATA: Final = base64.b64encode(_NATIVE_REDACTED_DATA.encode()).decode()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("placement", ["thinking_blocks", "content"])
+async def test_bedrock_converse_replays_redacted_thinking_as_redacted_content(use_async: bool, placement: str):
+    """A redacted_thinking block that Bedrock returned must go back as reasoningContent.redactedContent,
+    in order, ahead of text and toolUse. It used to collapse into an empty unsigned reasoningText and get dropped."""
+    bedrock_reasoning_blocks: Final[list[BedrockConverseReasoningContentBlock]] = [
+        {"reasoningText": {"text": "Let me look this up.", "signature": "sig-abc"}},
+        {"redactedContent": _CONVERSE_REDACTED_DATA},
+    ]
+    thinking_blocks: Final = litellm.AmazonConverseConfig()._transform_thinking_blocks(bedrock_reasoning_blocks)
+    assistant_text: Final = "Checking the weather."
+    assistant_message: Final = (
+        {"role": "assistant", "content": assistant_text, "thinking_blocks": thinking_blocks}
+        if placement == "thinking_blocks"
+        else {"role": "assistant", "content": [*thinking_blocks, {"type": "text", "text": assistant_text}]}
+    )
+    messages: Final = [
+        {"role": "user", "content": "What's the weather in Paris?"},
+        {
+            **assistant_message,
+            "tool_calls": [
+                {
+                    "id": "tooluse_weather_1",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "tooluse_weather_1", "content": "18C, sunny"},
+    ]
+    model: Final = "us.anthropic.claude-sonnet-4-6"
+
+    result: Final = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages, model=model, llm_provider="bedrock"
+        )
+        if use_async
+        else _bedrock_converse_messages_pt(messages=messages, model=model, llm_provider="bedrock")
+    )
+
+    assistant_content: Final = next(m["content"] for m in result if m["role"] == "assistant")
+    assert assistant_content == [
+        {"reasoningContent": bedrock_reasoning_blocks[0]},
+        {"reasoningContent": bedrock_reasoning_blocks[1]},
+        {"text": assistant_text},
+        {"toolUse": {"toolUseId": "tooluse_weather_1", "name": "get_weather", "input": {"city": "Paris"}}},
+    ]
+
+
+_SENT_REDACTED: Final = [{"reasoningContent": {"redactedContent": _CONVERSE_REDACTED_DATA}}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("placement", ["thinking_blocks", "content"])
+@pytest.mark.parametrize(
+    "block, sent",
+    [
+        pytest.param({"type": "redacted_thinking", "data": _NATIVE_REDACTED_DATA}, _SENT_REDACTED, id="native"),
+        pytest.param(
+            {"type": "redacted_thinking", "data": _CONVERSE_REDACTED_DATA}, _SENT_REDACTED, id="legacy-wrapped"
+        ),
+        pytest.param(
+            {"type": "redacted_thinking", "data": encrypted_reasoning_signature("gAAAA_1")}, [], id="openai-redacted"
+        ),
+        pytest.param(
+            {"type": "thinking", "thinking": "Plan.", "signature": encrypted_reasoning_signature("gAAAA_1")},
+            [],
+            id="openai-thinking",
+        ),
+    ],
+)
+async def test_bedrock_converse_replays_reasoning_to_claude_only_as_base64_of_claude_native_data(
+    use_async: bool, placement: str, block: dict[str, str], sent: list[dict[str, dict[str, str]]]
+):
+    """Converse wants base64 of Claude's own ``data``, which the Anthropic API, Vertex, Bedrock Invoke and now
+    Converse replies all hand out. Histories saved before Converse replies were decoded still hold it wrapped once.
+    Claude cannot verify OpenAI encrypted reasoning from the Responses bridge, so Bedrock 400ed on it."""
+    assistant_message: Final = (
+        {"role": "assistant", "content": "hello", "thinking_blocks": [block]}
+        if placement == "thinking_blocks"
+        else {"role": "assistant", "content": [block, {"type": "text", "text": "hello"}]}
+    )
+    messages: Final = [{"role": "user", "content": "hi"}, assistant_message, {"role": "user", "content": "again"}]
+    model: Final = "us.anthropic.claude-sonnet-4-6"
+
+    result: Final = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages, model=model, llm_provider="bedrock"
+        )
+        if use_async
+        else _bedrock_converse_messages_pt(messages=messages, model=model, llm_provider="bedrock")
+    )
+
+    assistant_content: Final = next(m["content"] for m in result if m["role"] == "assistant")
+    assert assistant_content == [*sent, {"text": "hello"}]
+
+
+def test_translate_thinking_blocks_keeps_dropping_redacted_data_when_called_the_old_way():
+    """Outside callers that only pass the thinking blocks keep the old behavior, with no redactedContent sent."""
+    assert BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(
+        [{"type": "redacted_thinking", "data": _CONVERSE_REDACTED_DATA}]
+    ) == [{"reasoningContent": {"reasoningText": {"text": ""}}}]
+
+
+@pytest.mark.parametrize("data", ["", "  "])
+def test_bedrock_converse_drops_redacted_thinking_with_blank_data(data: str):
+    """Bedrock 400s on a blank redactedContent, so a redacted block with no payload is dropped, not sent."""
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": [{"type": "redacted_thinking", "data": data}, {"type": "text", "text": "hello"}],
+            "thinking_blocks": [{"type": "redacted_thinking", "data": data}],
+        },
+        {"role": "user", "content": "again"},
+    ]
+
+    result: Final = _bedrock_converse_messages_pt(
+        messages=messages, model="us.anthropic.claude-sonnet-4-6", llm_provider="bedrock"
+    )
+
+    assistant_content: Final = next(m["content"] for m in result if m["role"] == "assistant")
+    assert assistant_content == [{"text": "hello"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("placement", ["thinking_blocks", "content"])
+@pytest.mark.parametrize(
+    "model",
+    [
+        "us.amazon.nova-pro-v1:0",
+        "us.meta.llama4-maverick-17b-instruct-v1:0",
+        "us.deepseek.r1-v1:0",
+        "openai.gpt-oss-120b-1:0",
+        "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/abc123",
+    ],
+)
+async def test_bedrock_converse_keeps_dropping_redacted_thinking_for_non_claude_targets(
+    use_async: bool, placement: str, model: str
+):
+    """Only Claude takes redactedContent back. Any other Converse target 400s on it, so a Claude history replayed
+    there (a Router fallback or a model switch) drops the redacted block and keeps the call working."""
+    redacted: Final = {"type": "redacted_thinking", "data": _CONVERSE_REDACTED_DATA}
+    assistant_message: Final = (
+        {"role": "assistant", "content": "hello", "thinking_blocks": [redacted]}
+        if placement == "thinking_blocks"
+        else {"role": "assistant", "content": [redacted, {"type": "text", "text": "hello"}]}
+    )
+    messages: Final = [{"role": "user", "content": "hi"}, assistant_message, {"role": "user", "content": "again"}]
+
+    result: Final = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages, model=model, llm_provider="bedrock"
+        )
+        if use_async
+        else _bedrock_converse_messages_pt(messages=messages, model=model, llm_provider="bedrock")
+    )
+
+    assistant_content: Final = next(m["content"] for m in result if m["role"] == "assistant")
+    assert assistant_content == [{"text": "hello"}]
+
+
 @pytest.mark.parametrize(
     "thinking_block",
     [
@@ -456,6 +655,31 @@ def test_anthropic_messages_pt_drops_unsignable_thinking_block(thinking_block):
     assert any(block.get("type") == "text" and block.get("text") == "2+2 equals 4." for block in content), (
         f"assistant answer text must be preserved, got {content!r}"
     )
+
+
+@pytest.mark.parametrize("data", [_NATIVE_REDACTED_DATA, _CONVERSE_REDACTED_DATA], ids=["native", "legacy-wrapped"])
+def test_anthropic_messages_pt_replays_redacted_thinking_as_claude_native_data(data: str):
+    """Histories saved from Converse before its replies were decoded hold the data base64-wrapped, and the
+    Anthropic API, Vertex and Bedrock Invoke 400 on it with "Invalid `data` in `redacted_thinking` block"."""
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": "hello",
+            "thinking_blocks": [{"type": "redacted_thinking", "data": data, "cache_control": {"type": "ephemeral"}}],
+        },
+        {"role": "user", "content": "again"},
+    ]
+
+    result: Final = anthropic_messages_pt(messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic")
+
+    assert result[1] == {
+        "role": "assistant",
+        "content": [
+            {"type": "redacted_thinking", "data": _NATIVE_REDACTED_DATA, "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": "hello"},
+        ],
+    }
 
 
 def test_anthropic_messages_pt_keeps_signed_thinking_block():
@@ -1147,6 +1371,167 @@ def test_convert_gemini_tool_call_result_with_data_url_extra_params():
     assert inline_parts[0]["mime_type"] == "image/png", (
         f"expected clean 'image/png', got '{inline_parts[0]['mime_type']}'"
     )
+
+
+def _gemini_tool_result_fixture(
+    content: str,
+) -> tuple[ChatCompletionToolMessage, dict]:
+    message = ChatCompletionToolMessage(
+        role="tool",
+        tool_call_id="call_schema",
+        content=content,
+    )
+    last_message_with_tool_calls = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call_schema",
+                "type": "function",
+                "index": 0,
+                "function": {"name": "inspect_schema", "arguments": "{}"},
+            }
+        ],
+    }
+    return message, last_message_with_tool_calls
+
+
+def test_convert_gemini_tool_result_wraps_output_containing_json_schema_ref():
+    """
+    Gemini treats {"$ref": ...} objects inside function_response.response as
+    references to named parts in function_response.parts, so schema-bearing
+    tool output must be delivered opaquely instead of structurally.
+    Fixes: https://github.com/BerriAI/litellm/issues/38223
+    """
+    schema_json = (
+        '{"$defs":{"humanScalar":{"type":"string"}},'
+        '"type":"object","properties":{"value":{"$ref":"#/$defs/humanScalar"}}}'
+    )
+    message, last_message_with_tool_calls = _gemini_tool_result_fixture(schema_json)
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+
+    function_response = result["function_response"]
+    assert function_response["name"] == "inspect_schema"
+    assert function_response["response"] == {"content": schema_json}
+
+
+def test_convert_gemini_tool_result_wraps_deeply_nested_json_schema_ref():
+    """
+    A $ref key at any depth must trigger opaque delivery.
+    Fixes: https://github.com/BerriAI/litellm/issues/38223
+    """
+    nested_json = '{"results":[{"schemas":[{"node":{"$ref":"#/$defs/deep"}}]}]}'
+    message, last_message_with_tool_calls = _gemini_tool_result_fixture(nested_json)
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+
+    function_response = result["function_response"]
+    assert function_response["response"] == {"content": nested_json}
+
+
+def test_convert_gemini_tool_result_wraps_non_schema_string_ref():
+    """Gemini reads any non-empty string $ref as a part name, a MongoDB DBRef included."""
+    dbref_json = '{"owner":{"$ref":"users","$id":{"$oid":"64b7f0c2a1"}}}'
+    message, last_message_with_tool_calls = _gemini_tool_result_fixture(dbref_json)
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+
+    assert result["function_response"]["response"] == {"content": dbref_json}
+
+
+def test_convert_gemini_tool_result_wraps_top_level_ref():
+    """A $ref on the tool result's root object is read as a part name too."""
+    root_ref_json = '{"$ref":"#/$defs/Config","$defs":{"Config":{"type":"object"}}}'
+    message, last_message_with_tool_calls = _gemini_tool_result_fixture(root_ref_json)
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+
+    assert result["function_response"]["response"] == {"content": root_ref_json}
+
+
+def _json_unicode_escape(text: str) -> str:
+    return "".join(f"\\u{ord(char):04x}" for char in text)
+
+
+@pytest.mark.parametrize(
+    "ref_key",
+    ["$ref"[:index] + _json_unicode_escape("$ref"[index]) + "$ref"[index + 1 :] for index in range(4)],
+)
+def test_convert_gemini_tool_result_wraps_unicode_escaped_ref_key(ref_key: str):
+    """A $ref key spelled with JSON unicode escapes still decodes to $ref, so it must be wrapped too."""
+    escaped_json = '{"v":{"' + ref_key + '":"#/a"}}'
+    message, last_message_with_tool_calls = _gemini_tool_result_fixture(escaped_json)
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+
+    assert result["function_response"]["response"] == {"content": escaped_json}
+
+
+@pytest.mark.parametrize(
+    "schema_json",
+    [
+        '{"$defs":{"Foo":{"type":"string"}},"type":"object","properties":{"bar":{"type":"string"}}}',
+        '{"definitions":{"Foo":{"type":"string"}},"type":"object","properties":{"bar":{"type":"string"}}}',
+        '{"status":"ok","count":2,"tags":["a","b"]}',
+        '{"v":{"$ref":null}}',
+        '{"v":{"$ref":""}}',
+        '{"v":{"$ref":5}}',
+        '{"v":{"$ref":true}}',
+        '{"v":{"$ref":{"a":1}}}',
+        '{"v":{"$ref":["#/a"]}}',
+        '{"columns":["user","name"],"rows":[[{"$ref":"#/users/1"},"alice"]]}',
+        '{"a":[1,[{"b":{"$ref":"x"}}]]}',
+    ],
+)
+def test_convert_gemini_tool_result_preserves_structured_passthrough_without_part_references(
+    schema_json: str,
+):
+    """
+    Gemini only rejects a $ref holding a non-empty string outside a list nested
+    directly in a list, so tool output with no $ref, a $ref holding any other
+    value, or a $ref under a list of lists stays structured.
+    Google does not document that rule. It was observed on the Gemini API and
+    Vertex AI (gemini-3.8-flash, gemini-4-argon) on 2026-10-15.
+    Fixes: https://github.com/BerriAI/litellm/issues/38223
+    """
+    message, last_message_with_tool_calls = _gemini_tool_result_fixture(schema_json)
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+
+    function_response = result["function_response"]
+    assert function_response["name"] == "inspect_schema"
+    assert function_response["response"] == json.loads(schema_json)
+
+
+def test_convert_gemini_tool_result_malformed_json_still_wrapped_as_content():
+    """Unparseable tool output keeps taking the existing content-wrapping path."""
+    message, last_message_with_tool_calls = _gemini_tool_result_fixture("{not valid json")
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+
+    assert result["function_response"]["response"] == {"content": "{not valid json"}
 
 
 def test_bedrock_tools_unpack_defs():
@@ -7110,3 +7495,90 @@ def test_completion_bedrock_invalid_role_exception(monkeypatch):
         str(exc_info.value)
         == "litellm.BadRequestError: Invalid Message passed in {'role': 'very-bad-role', 'content': 'hello'}"
     )
+
+
+def test_anthropic_messages_pt_drops_replayed_tool_search_call_without_its_result():
+    messages: Final = [
+        {"role": "user", "content": "What is the weather in Paris?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "srvtoolu_01Search",
+                    "type": "function",
+                    "function": {"name": "tool_search_tool_regex", "arguments": '{"pattern": "weather"}'},
+                },
+                {
+                    "id": "toolu_01Weather",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C and cloudy"},
+        {"role": "user", "content": "And tomorrow?"},
+    ]
+
+    result: Final = anthropic_messages_pt(messages=messages, model="claude-sonnet-5-5", llm_provider="anthropic")
+
+    assert [(block["type"], block["id"]) for block in result[1]["content"]] == [("tool_use", "toolu_01Weather")]
+    assert [block["tool_use_id"] for block in result[2]["content"] if block["type"] == "tool_result"] == [
+        "toolu_01Weather"
+    ]
+
+
+def test_anthropic_messages_pt_keeps_a_replayed_tool_search_call_the_caller_answered():
+    messages: Final = [
+        {"role": "user", "content": "What is the weather in Paris?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "srvtoolu_01Search",
+                    "type": "function",
+                    "function": {"name": "tool_search_tool_regex", "arguments": '{"pattern": "weather"}'},
+                },
+                {
+                    "id": "toolu_01Weather",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "srvtoolu_01Search", "content": '[{"name": "get_weather"}]'},
+        {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C and cloudy"},
+    ]
+
+    result: Final = anthropic_messages_pt(messages=messages, model="claude-sonnet-5-5", llm_provider="anthropic")
+
+    assert [(block["type"], block["id"]) for block in result[1]["content"]] == [
+        ("tool_use", "srvtoolu_01Search"),
+        ("tool_use", "toolu_01Weather"),
+    ]
+    assert [block["tool_use_id"] for block in result[2]["content"] if block["type"] == "tool_result"] == [
+        "srvtoolu_01Search",
+        "toolu_01Weather",
+    ]
+
+
+def _merged_assistant_run_cost(run_length: int) -> float:
+    messages: Final = [
+        {"role": "user", "content": "Plan the trip"},
+        *({"role": "assistant", "content": "Working on it", "tool_calls": []} for _ in range(run_length)),
+        {"role": "user", "content": "Go on"},
+    ]
+
+    def once() -> float:
+        started: Final = time.perf_counter()
+        anthropic_messages_pt(messages=messages, model="claude-sonnet-5-5", llm_provider="anthropic")
+        return time.perf_counter() - started
+
+    return min(once() for _ in range(3))
+
+
+def test_anthropic_messages_pt_merges_a_long_assistant_run_in_linear_time():
+    growth: Final = _merged_assistant_run_cost(4000) / _merged_assistant_run_cost(1000)
+
+    assert growth < 8.0, f"cost grew {growth:.1f}x for 4x the assistant run"

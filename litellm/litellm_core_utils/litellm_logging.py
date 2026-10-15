@@ -5856,7 +5856,7 @@ class StandardLoggingPayloadSetup:
         return messages
 
     @staticmethod
-    def merge_litellm_metadata(litellm_params: Mapping[str, object]) -> dict:
+    def merge_litellm_metadata(litellm_params: Mapping[str, object]) -> dict[str, object]:
         """
         Merge both litellm_metadata and metadata from litellm_params.
 
@@ -6483,7 +6483,7 @@ class StandardLoggingPayloadSetup:
     @staticmethod
     def get_request_tags(
         litellm_params: dict[str, object],
-        proxy_server_request: dict[str, object],
+        proxy_server_request: Mapping[str, object],
     ) -> list[str]:
         metadata: Final = cast(  # cast-ok: request metadata is caller-provided
             Mapping[str, object], litellm_params.get("metadata") or {}

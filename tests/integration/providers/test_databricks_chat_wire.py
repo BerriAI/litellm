@@ -13,6 +13,8 @@ from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
+from integration.translation.chat_completions.cross_model.contracts import assert_completion
+from integration.translation.response_contracts import responses_structure
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 _BACKEND: Final = "databricks-glm-5-2"
@@ -79,6 +81,43 @@ _JSON_TOOL_CALL_MESSAGE: Final[dict[str, JsonValue]] = {
         }
     ],
 }
+
+
+def test_databricks_responses_reasoning_summary_keeps_reasoning_effort_a_string(gateway: Gateway) -> None:
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST" and request.target == "/chat/completions"
+        assert _JSON_OBJECT.validate_json(request.body) == {
+            "model": _BACKEND,
+            "messages": [{"role": "user", "content": "Say hello."}],
+            "max_tokens": 64,
+            "reasoning_effort": "low",
+        }
+        return Reply(body=_chat_completion_response(_BACKEND, {"role": "assistant", "content": "Hello."}, "stop"))
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        alias: Final = scenario.model(model=f"databricks/{_BACKEND}", api_base=wire.url, api_key=_API_KEY)
+        response: Final = gateway.request(
+            "POST",
+            "/v1/responses",
+            {
+                "model": alias,
+                "input": "Say hello.",
+                "max_output_tokens": 64,
+                "reasoning": {"effort": "low", "summary": "auto"},
+            },
+        )
+        assert response.status_code == 200, response.text
+        body: Final = _JSON_OBJECT.validate_json(response.content)
+        responses_structure(body)
+        assert body["usage"] == {
+            "input_tokens": 1,
+            "output_tokens": 1,
+            "total_tokens": 2,
+            "input_tokens_details": None,
+            "output_tokens_details": None,
+            "cost": None,
+        }
+        assert len(wire.drain()) == 1
 
 
 def _chat_completion_response(model: str, message: dict[str, JsonValue], finish_reason: str) -> bytes:
@@ -240,7 +279,7 @@ def _shape_reply(identity: str, stream: bool) -> Reply:
         pytest.param(
             "chat_nonstream",
             "/v1/chat/completions",
-            "databricks-meta-llama-3-3-70b-instruct",
+            "databricks-gemma-3-12b",
             {
                 "messages": [{"role": "user", "content": [{"type": "text", "text": "Reply in JSON"}]}],
                 "response_format": {"type": "json_object"},
@@ -253,7 +292,7 @@ def _shape_reply(identity: str, stream: bool) -> Reply:
         pytest.param(
             "chat_stream",
             "/v1/chat/completions",
-            "databricks-meta-llama-3-3-70b-instruct",
+            "databricks-gemma-3-12b",
             {
                 "messages": [{"role": "user", "content": [{"type": "text", "text": "Reply in JSON"}]}],
                 "response_format": {"type": "json_object"},
@@ -267,7 +306,7 @@ def _shape_reply(identity: str, stream: bool) -> Reply:
         pytest.param(
             "responses-mode-bridge",
             "/v1/chat/completions",
-            "databricks-meta-llama-3-1-8b-instruct",
+            "databricks-qwen3-next-80b-a3b-instruct",
             {
                 "messages": [{"role": "user", "content": "Reply in JSON"}],
                 "response_format": {"type": "json_object"},
@@ -293,7 +332,7 @@ def _shape_reply(identity: str, stream: bool) -> Reply:
         pytest.param(
             "messages-endpoint",
             "/v1/messages",
-            "databricks-meta-llama-3-3-70b-instruct",
+            "databricks-gemma-3-12b",
             {
                 "max_tokens": 32,
                 "messages": [{"role": "user", "content": [{"type": "text", "text": "Reply in JSON"}]}],
@@ -306,7 +345,7 @@ def _shape_reply(identity: str, stream: bool) -> Reply:
         pytest.param(
             "responses-endpoint",
             "/v1/responses",
-            "databricks-meta-llama-3-3-70b-instruct",
+            "databricks-gemma-3-12b",
             {"input": [{"role": "user", "content": [{"type": "input_text", "text": "Reply in JSON"}]}]},
             [{"role": "user", "content": "Reply in JSON"}],
             False,
@@ -363,21 +402,21 @@ def test_databricks_non_claude_single_text_block_reaches_upstream_as_string(
     [
         pytest.param(
             "cache-control",
-            "databricks-meta-llama-3-3-70b-instruct",
+            "databricks-gemma-3-12b",
             [{"type": "text", "text": "Reply in JSON", "cache_control": {"type": "ephemeral"}}],
             [{"type": "text", "text": "Reply in JSON", "cache_control": {"type": "ephemeral"}}],
             id="B1-cache-control-stays-list",
         ),
         pytest.param(
             "two-text-blocks",
-            "databricks-meta-llama-3-3-70b-instruct",
+            "databricks-gemma-3-12b",
             [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}],
             [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}],
             id="B2-two-text-blocks-stays-list",
         ),
         pytest.param(
             "text-and-image",
-            "databricks-meta-llama-3-3-70b-instruct",
+            "databricks-gemma-3-12b",
             [
                 {"type": "text", "text": "Reply in JSON"},
                 {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}},
@@ -455,6 +494,7 @@ def test_databricks_json_schema_refs_are_preserved_in_chat_completions(gateway: 
         )
         assert response.status_code == 200, response.text
         body: Final = _JSON_OBJECT.validate_json(response.content)
+        assert_completion(body)
         assert body["choices"] == [
             {
                 "index": 0,
@@ -1094,7 +1134,7 @@ def test_databricks_json_schema_burst_through_an_upstream_outage_keeps_every_ref
     assert tuple(_outcome(*result) for result in recovered) == ((200, _EXPECTED_JSON),) * len(recovery)
 
 
-_LLAMA_BACKEND: Final = "databricks-meta-llama-3-3-70b-instruct"
+_GEMMA_BACKEND: Final = "databricks-gemma-3-12b"
 _NO_CACHE: Final[dict[str, JsonValue]] = {"no-cache": True}
 
 
@@ -1219,7 +1259,7 @@ def test_databricks_non_claude_message_shapes_reach_upstream(
     gateway: Gateway, messages: list[JsonValue], expected_messages: list[JsonValue]
 ) -> None:
     with wire_server(_plain_reply) as wire, gateway.scenario() as scenario:
-        model: Final = scenario.model(model=f"databricks/{_LLAMA_BACKEND}", api_base=wire.url, api_key=_API_KEY)
+        model: Final = scenario.model(model=f"databricks/{_GEMMA_BACKEND}", api_base=wire.url, api_key=_API_KEY)
         response: Final = gateway.request(
             "POST",
             "/v1/chat/completions",
@@ -1233,7 +1273,7 @@ def test_databricks_non_claude_message_shapes_reach_upstream(
 
 def test_databricks_responses_instructions_and_one_block_developer_reach_upstream_joined(gateway: Gateway) -> None:
     with wire_server(_plain_reply) as wire, gateway.scenario() as scenario:
-        model: Final = scenario.model(model=f"databricks/{_LLAMA_BACKEND}", api_base=wire.url, api_key=_API_KEY)
+        model: Final = scenario.model(model=f"databricks/{_GEMMA_BACKEND}", api_base=wire.url, api_key=_API_KEY)
         response: Final = gateway.request(
             "POST",
             "/v1/responses",
@@ -1257,15 +1297,15 @@ def test_databricks_responses_instructions_and_one_block_developer_reach_upstrea
 
 def test_databricks_fallback_sends_the_collapsed_string_to_both_deployments(gateway: Gateway) -> None:
     marker: Final = uuid.uuid4().hex
-    fallback_backend: Final = "databricks-meta-llama-3-1-8b-instruct"
+    fallback_backend: Final = "databricks-qwen3-next-80b-a3b-instruct"
 
     def respond(request: Request) -> Reply:
-        if _JSON_OBJECT.validate_json(request.body)["model"] == _LLAMA_BACKEND:
+        if _JSON_OBJECT.validate_json(request.body)["model"] == _GEMMA_BACKEND:
             return Reply(status=500, body=b'{"error_code": "INTERNAL_ERROR", "message": "primary deployment is down"}')
         return _shape_reply(f"databricks-fallback-{marker}", False)
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
-        primary: Final = scenario.model(model=f"databricks/{_LLAMA_BACKEND}", api_base=wire.url, api_key=_API_KEY)
+        primary: Final = scenario.model(model=f"databricks/{_GEMMA_BACKEND}", api_base=wire.url, api_key=_API_KEY)
         fallback: Final = scenario.model(model=f"databricks/{fallback_backend}", api_base=wire.url, api_key=_API_KEY)
         response: Final = gateway.request(
             "POST",
@@ -1283,7 +1323,7 @@ def test_databricks_fallback_sends_the_collapsed_string_to_both_deployments(gate
     assert response.status_code == 200, response.text
     assert _JSON_OBJECT.validate_json(response.content)["id"] == f"databricks-fallback-{marker}"
     assert [_JSON_OBJECT.validate_json(request.body)["model"] for request in received] == [
-        _LLAMA_BACKEND,
+        _GEMMA_BACKEND,
         fallback_backend,
     ]
     assert [_sent_messages(request) for request in received] == [
@@ -1302,7 +1342,7 @@ def test_databricks_openai_sdk_sync_one_block_reaches_upstream_as_string_and_log
         gateway.scenario() as scenario,
         openai.OpenAI(base_url=f"{_proxy_root(gateway)}/v1", api_key=gateway.key, max_retries=0) as client,
     ):
-        model: Final = scenario.model(model=f"databricks/{_LLAMA_BACKEND}", api_base=wire.url, api_key=_API_KEY)
+        model: Final = scenario.model(model=f"databricks/{_GEMMA_BACKEND}", api_base=wire.url, api_key=_API_KEY)
         completion: Final = client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": [{"type": "text", "text": "Reply in JSON"}]}],
@@ -1323,7 +1363,7 @@ def test_databricks_openai_sdk_sync_one_block_reaches_upstream_as_string_and_log
 async def test_databricks_openai_sdk_async_stream_one_block_reaches_upstream_as_string(gateway: Gateway) -> None:
     identity: Final = f"databricks-openai-async-{uuid.uuid4().hex}"
     with wire_server(lambda _request: _shape_reply(identity, True)) as wire, gateway.scenario() as scenario:
-        model: Final = scenario.model(model=f"databricks/{_LLAMA_BACKEND}", api_base=wire.url, api_key=_API_KEY)
+        model: Final = scenario.model(model=f"databricks/{_GEMMA_BACKEND}", api_base=wire.url, api_key=_API_KEY)
         async with openai.AsyncOpenAI(
             base_url=f"{_proxy_root(gateway)}/v1", api_key=gateway.key, max_retries=0
         ) as client:
@@ -1346,7 +1386,7 @@ async def test_databricks_anthropic_sdk_async_stream_one_block_system_and_user_r
 ) -> None:
     identity: Final = f"databricks-anthropic-async-{uuid.uuid4().hex}"
     with wire_server(lambda _request: _shape_reply(identity, True)) as wire, gateway.scenario() as scenario:
-        model: Final = scenario.model(model=f"databricks/{_LLAMA_BACKEND}", api_base=wire.url, api_key=_API_KEY)
+        model: Final = scenario.model(model=f"databricks/{_GEMMA_BACKEND}", api_base=wire.url, api_key=_API_KEY)
         async with anthropic.AsyncAnthropic(
             base_url=_proxy_root(gateway), api_key=gateway.key, max_retries=0
         ) as client:
@@ -1415,7 +1455,7 @@ def test_databricks_transform_request_shows_the_collapsed_string(gateway: Gatewa
             {
                 "call_type": "completion",
                 "request_body": {
-                    "model": f"databricks/{_LLAMA_BACKEND}",
+                    "model": f"databricks/{_GEMMA_BACKEND}",
                     "messages": [{"role": "user", "content": _one_block("Reply in JSON")}],
                 },
             },
@@ -1431,7 +1471,7 @@ def test_databricks_transform_request_shows_the_collapsed_string(gateway: Gatewa
 
 def test_databricks_non_string_text_block_is_rejected_before_reaching_upstream(gateway: Gateway) -> None:
     with wire_server(_plain_reply) as wire, gateway.scenario() as scenario:
-        model: Final = scenario.model(model=f"databricks/{_LLAMA_BACKEND}", api_base=wire.url, api_key=_API_KEY)
+        model: Final = scenario.model(model=f"databricks/{_GEMMA_BACKEND}", api_base=wire.url, api_key=_API_KEY)
         response: Final = gateway.request(
             "POST",
             "/v1/chat/completions",

@@ -4,7 +4,7 @@ import json
 import uuid
 from types import SimpleNamespace
 from typing import Final
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
@@ -17,6 +17,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transfor
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
 ONE_PIXEL_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
@@ -1746,3 +1747,23 @@ class TestBedrockAnthropicCombinedRegressions:
             user_msg = result["messages"][0]
             has_cache_control = any(isinstance(c, dict) and "cache_control" in c for c in user_msg["content"])
             assert has_cache_control
+
+
+def test_refusal_stop_details_kept_through_bedrock_invoke_transform():
+    body: Final = ANTHROPIC_DOCS_REFUSAL_MESSAGE
+    result: Final = AmazonAnthropicClaudeConfig().transform_response(
+        model="anthropic.claude-sonnet-5-5-v1:0",
+        raw_response=httpx.Response(status_code=200, headers={}, json=body),
+        model_response=litellm.ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert result.choices[0].finish_reason == "content_filter"
+    provider_fields: Final = result.choices[0].message.provider_specific_fields
+    assert provider_fields["stop_reason"] == "refusal"
+    assert provider_fields["stop_details"] == ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]

@@ -102,7 +102,7 @@ def test_cors_exposes_cache_key_header_to_browser_js():
     from litellm.constants import LITELLM_UI_ALLOW_HEADERS
 
     cors_middleware = next(m for m in app.user_middleware if m.cls is CORSMiddleware)
-    assert cors_middleware.kwargs["expose_headers"] is LITELLM_UI_ALLOW_HEADERS
+    assert set(LITELLM_UI_ALLOW_HEADERS) <= set(cors_middleware.kwargs["expose_headers"])
     assert "x-litellm-cache-key" in cors_middleware.kwargs["expose_headers"]
 
 
@@ -2710,7 +2710,7 @@ async def test_apply_search_filter_honours_exact_model_name_in_db_query():
         proxy_config=proxy_config,
     )
     where = prisma_client.db.litellm_proxymodeltable.count.call_args.kwargs["where"]
-    assert where["model_name"] == {"contains": "sonnet", "mode": "insensitive"}
+    assert where == {"model_name": {"contains": "sonnet", "mode": "insensitive"}}
 
 
 @pytest.mark.asyncio

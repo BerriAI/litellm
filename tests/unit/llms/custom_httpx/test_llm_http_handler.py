@@ -2733,6 +2733,62 @@ def test_sync_retrieve_file_content_raises_on_http_error():
     assert exc_info.value.status_code == 404
 
 
+@pytest.mark.asyncio
+async def test_handle_error_surfaces_provider_error_raised_while_aiohttp_streams_the_body(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+    from litellm.llms.vertex_ai.files.transformation import VertexAIFilesConfig
+
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+    monkeypatch.setenv("no_proxy", "127.0.0.1")
+    message: Final = "Batch input file line 3 is not valid JSON: Expecting value at column 1"
+
+    async def read_until_client_hangs_up(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await reader.read()
+        writer.close()
+
+    async def body_with_bad_third_row():
+        yield b'{"custom_id": "r1"}\n'
+        raise VertexAIError(status_code=400, message=message)
+
+    server: Final = await asyncio.start_server(read_until_client_hangs_up, "127.0.0.1", 0)
+    port: Final = server.sockets[0].getsockname()[1]
+    handler: Final = AsyncHTTPHandler()
+    try:
+        async with server:
+            with pytest.raises(httpx.HTTPError) as sent:
+                await handler.post(f"http://127.0.0.1:{port}/upload", content=body_with_bad_third_row())
+    finally:
+        await handler.close()
+
+    with pytest.raises(VertexAIError) as surfaced:
+        BaseLLMHTTPHandler()._handle_error(e=sent.value, provider_config=VertexAIFilesConfig())
+
+    assert surfaced.value.status_code == 400
+    assert surfaced.value.message == message
+
+
+def _runtime_error_caused_by(cause: Exception) -> RuntimeError:
+    try:
+        raise RuntimeError("upload bookkeeping failed") from cause
+    except RuntimeError as outer:
+        return outer
+
+
+def test_handle_error_reports_its_own_failure_when_it_is_not_a_transport_error():
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+    from litellm.llms.vertex_ai.files.transformation import VertexAIFilesConfig
+
+    outer: Final = _runtime_error_caused_by(VertexAIError(status_code=400, message="inner provider error"))
+
+    with pytest.raises(VertexAIError) as surfaced:
+        BaseLLMHTTPHandler()._handle_error(e=outer, provider_config=VertexAIFilesConfig())
+
+    assert surfaced.value.status_code == 500
+    assert "upload bookkeeping failed" in surfaced.value.message
+
+
 _FILE_CONTENT_WIF_ENV = {
     "ANTHROPIC_FEDERATION_RULE_ID": "fdrl_llm_http_handler_seam",
     "ANTHROPIC_ORGANIZATION_ID": "org-llm-http-handler-seam",

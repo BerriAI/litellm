@@ -29,11 +29,17 @@ prompt cache readable across turns. Messages are handled in OpenAI format; the
 Anthropic wire shape is built later by ``anthropic_messages_pt``.
 """
 
-from collections.abc import Iterator, Mapping, Sequence
-from itertools import chain, groupby
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from itertools import chain, dropwhile, groupby, takewhile
+from types import MappingProxyType
 from typing import Final, Literal, TypeAlias, TypeVar
 
-from litellm.types.llms.anthropic import AnthropicMessagesSystemMessageParam, AnthropicSystemMessageContent
+from litellm.types.llms.anthropic import (
+    ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX,
+    ANTHROPIC_TOOL_SEARCH_TOOL_NAMES,
+    AnthropicMessagesSystemMessageParam,
+    AnthropicSystemMessageContent,
+)
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionCachedContent,
@@ -50,6 +56,7 @@ CONVERTED_SYSTEM_NOTE: Final = (
 
 _USER_TYPE_ROLES: Final = frozenset({"user", "tool", "function"})
 _TOOL_ROLES: Final = frozenset({"tool", "function"})
+_NO_IDS: Final[frozenset[str]] = frozenset()
 _RENDERED_PART_TYPES: Final = frozenset({"text", "image_url", "document", "file"})
 _RENDERED_ASSISTANT_PART_TYPES: Final = frozenset({"text", "server_tool_use"})
 _THINKING_BLOCK_TYPES: Final = frozenset({"thinking", "redacted_thinking"})
@@ -282,13 +289,112 @@ def _separate_thinking_blocks_render(message: object, parts: Sequence[object]) -
     return any(_thinking_block_renders(block) for block in parts_of(message_field(message, "thinking_blocks")))
 
 
-def _assistant_renders(message: object) -> bool:
+def is_anthropic_tool_search_use(tool_id: str, tool_name: str) -> bool:
+    return tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX) and tool_name in ANTHROPIC_TOOL_SEARCH_TOOL_NAMES
+
+
+def find_anthropic_server_tool_result(
+    tool_id: str,
+    web_search_results: Sequence[object] | None,
+    tool_results: Sequence[object] | None,
+) -> dict[str, object] | None:
+    if not tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX):
+        return None
+    candidates: Final = (*(web_search_results or ()), *(tool_results or ()))
+    return next(
+        (result for result in candidates if isinstance(result, dict) and result.get("tool_use_id") == tool_id),
+        None,
+    )
+
+
+def _tool_result_ids(answers: Iterable[object]) -> Iterator[str]:
+    for message in answers:
+        if isinstance(tool_call_id := message_field(message, "tool_call_id"), str) and tool_call_id:
+            yield tool_call_id
+
+
+def answered_tool_call_ids(messages: Sequence[object], assistant_index: int) -> frozenset[str]:
+    from_assistant: Final = (messages[index] for index in range(assistant_index, len(messages)))
+    following: Final = dropwhile(lambda message: message_field(message, "role") == "assistant", from_assistant)
+    answers: Final = takewhile(lambda message: message_field(message, "role") in _TOOL_ROLES, following)
+    return frozenset(_tool_result_ids(answers))
+
+
+def _role_group(message: object) -> str:
+    role: Final = message_field(message, "role")
+    if role == "assistant":
+        return "assistant"
+    return "tool" if role in _TOOL_ROLES else "other"
+
+
+def _answered_by_assistant_index(
+    groups: Sequence[tuple[str, tuple[tuple[int, object], ...]]], group_index: int
+) -> Iterator[tuple[int, frozenset[str]]]:
+    following: Final = groups[group_index + 1] if group_index + 1 < len(groups) else ("other", ())
+    answered: Final = (
+        frozenset(_tool_result_ids(message for _, message in following[1])) if following[0] == "tool" else _NO_IDS
+    )
+    return ((index, answered) for index, _ in groups[group_index][1])
+
+
+def _answered_ids_by_index(messages: Sequence[object]) -> Mapping[int, frozenset[str]]:
+    """``answered_tool_call_ids`` for every assistant message, computed in one pass over the messages."""
+    groups: Final = tuple(
+        (role_group, tuple(group))
+        for role_group, group in groupby(enumerate(messages), key=lambda pair: _role_group(pair[1]))
+    )
+    return MappingProxyType(
+        dict(
+            chain.from_iterable(
+                _answered_by_assistant_index(groups, group_index)
+                for group_index, (role_group, _) in enumerate(groups)
+                if role_group == "assistant"
+            )
+        )
+    )
+
+
+def _unresolved_tool_search_id(tool_call: object, message: object) -> str | None:
+    tool_id: Final = message_field(tool_call, "id")
+    tool_name: Final = message_field(message_field(tool_call, "function"), "name")
+    if not isinstance(tool_id, str) or not isinstance(tool_name, str):
+        return None
+    if not is_anthropic_tool_search_use(tool_id, tool_name):
+        return None
+    provider_fields: Final = message_field(message, "provider_specific_fields")
+    server_result: Final = find_anthropic_server_tool_result(
+        tool_id,
+        parts_of(message_field(provider_fields, "web_search_results")),
+        parts_of(message_field(provider_fields, "tool_results")),
+    )
+    return tool_id if server_result is None else None
+
+
+def _unresolved_tool_search_ids(message: object) -> tuple[str, ...]:
+    return tuple(
+        tool_id
+        for tool_call in parts_of(message_field(message, "tool_calls"))
+        if (tool_id := _unresolved_tool_search_id(tool_call, message)) is not None
+    )
+
+
+def _tool_calls_render(message: object, answered: frozenset[str]) -> bool:
+    tool_calls: Final = parts_of(message_field(message, "tool_calls"))
+    search_ids: Final = _unresolved_tool_search_ids(message)
+    if len(search_ids) < len(tool_calls):
+        return True
+    return bool(search_ids) and not answered.isdisjoint(search_ids)
+
+
+def _assistant_renders(message: object, answered: frozenset[str]) -> bool:
     """Whether ``anthropic_messages_pt`` puts a block on the wire for this assistant message.
 
     String content (the converter pads an empty one with a placeholder), a text part,
     a signed thinking part, a server tool part, tool calls, a function call, a kept
-    thinking block and compaction blocks each render. An assistant message with none
-    of them, such as ``content: None`` or an empty list, vanishes from the wire.
+    thinking block and compaction blocks each render. A tool search use with neither a
+    server result nor a caller's answer is dropped, so it renders nothing. An assistant
+    message with none of them, such as ``content: None`` or an empty list, vanishes
+    from the wire.
     """
     content: Final = message_field(message, "content")
     if isinstance(content, str):
@@ -297,13 +403,13 @@ def _assistant_renders(message: object) -> bool:
     return (
         any(_assistant_part_renders(part) for part in parts)
         or _separate_thinking_blocks_render(message, parts)
-        or bool(message_field(message, "tool_calls"))
+        or _tool_calls_render(message, answered)
         or bool(message_field(message, "function_call"))
         or bool(message_field(message_field(message, "provider_specific_fields"), "compaction_blocks"))
     )
 
 
-def _renders(message: object) -> bool:
+def _renders(message: object, answered: frozenset[str]) -> bool:
     """Whether ``anthropic_messages_pt`` puts a block on the wire for this message.
 
     A tool message always becomes a ``tool_result`` and a user message with string
@@ -315,26 +421,31 @@ def _renders(message: object) -> bool:
     if role in _TOOL_ROLES:
         return True
     if role == "assistant":
-        return _assistant_renders(message)
+        return _assistant_renders(message, answered)
     content: Final = message_field(message, "content")
     return isinstance(content, str) or any(
         message_field(part, "type") in _RENDERED_PART_TYPES for part in parts_of(content)
     )
 
 
+def _rendered_indices(messages: Sequence[object]) -> frozenset[int]:
+    answered: Final = _answered_ids_by_index(messages)
+    return frozenset(index for index, message in enumerate(messages) if _renders(message, answered.get(index, _NO_IDS)))
+
+
 def _rendered_block(
     message_index: int,
-    messages: Sequence[AllMessageValues],
+    rendered: frozenset[int],
     blocks: Sequence[tuple[bool, tuple[int, ...]]],
 ) -> int | None:
     block_index: Final = _block_containing(message_index, blocks)
     _, indices = blocks[block_index]
-    return block_index if any(_renders(messages[index]) for index in indices) else None
+    return block_index if not rendered.isdisjoint(indices) else None
 
 
 def _system_may_follow(
     block_index: int,
-    messages: Sequence[AllMessageValues],
+    rendered: frozenset[int],
     blocks: Sequence[tuple[bool, tuple[int, ...]]],
 ) -> bool:
     """Whether a system message behind this block precedes an assistant turn or ends the array on the wire.
@@ -343,11 +454,7 @@ def _system_may_follow(
     first later block that puts anything on the wire is an assistant block.
     """
     return next(
-        (
-            not is_user
-            for is_user, indices in blocks[block_index + 1 :]
-            if any(_renders(messages[index]) for index in indices)
-        ),
+        (not is_user for is_user, indices in blocks[block_index + 1 :] if not rendered.isdisjoint(indices)),
         True,
     )
 
@@ -355,6 +462,7 @@ def _system_may_follow(
 def _anchor_block(
     run: Sequence[int],
     messages: Sequence[AllMessageValues],
+    rendered: frozenset[int],
     blocks: Sequence[tuple[bool, tuple[int, ...]]],
 ) -> int | None:
     """The user-type block a system run must follow, or ``None`` when it converts in place.
@@ -372,8 +480,8 @@ def _anchor_block(
     neighbour: Final = previous if _is_user_type(messages[previous]) else run[-1] + 1
     if neighbour >= len(messages) or not _is_user_type(messages[neighbour]):
         return None
-    block_index: Final = _rendered_block(neighbour, messages, blocks)
-    if block_index is None or not _system_may_follow(block_index, messages, blocks):
+    block_index: Final = _rendered_block(neighbour, rendered, blocks)
+    if block_index is None or not _system_may_follow(block_index, rendered, blocks):
         return None
     return block_index
 
@@ -388,7 +496,8 @@ def _placed_for_flagged_model(messages: Sequence[AllMessageValues]) -> tuple[All
     move it. Runs that share a user turn merge into one system message.
     """
     blocks: Final = _user_type_blocks(messages)
-    anchors: Final = tuple((run, _anchor_block(run, messages, blocks)) for run in _system_runs(messages))
+    rendered: Final = _rendered_indices(messages)
+    anchors: Final = tuple((run, _anchor_block(run, messages, rendered, blocks)) for run in _system_runs(messages))
 
     def messages_of(run: tuple[int, ...]) -> tuple[AllMessageValues, ...]:
         return tuple(messages[index] for index in run)
