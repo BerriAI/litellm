@@ -287,6 +287,10 @@ class TestFilterWebSearchDeployments:
         assert "deployment-2" in result_ids
         assert "deployment-3" not in result_ids
 
+    def test_web_search_in_a_tuple_filters_unsupported(self, sample_deployments):
+        result = filter_web_search_deployments(sample_deployments, {"tools": ({"type": "web_search"},)})
+        assert [d["model_info"]["id"] for d in result] == ["deployment-1", "deployment-2"]
+
     def test_web_search_preview_filters_unsupported(self, sample_deployments):
         """web_search_preview type should also trigger filtering"""
         request_kwargs = {"tools": [{"type": "web_search_preview"}]}
