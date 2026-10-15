@@ -1,5 +1,6 @@
 from typing import Any, Final
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.cohere.rerank.transformation import CohereRerankConfig
 from litellm.types.rerank import OptionalRerankParams, RerankRequest
 
@@ -19,11 +20,7 @@ class CohereRerankV2Config(CohereRerankConfig):
         optional_params: dict | None = None,
     ) -> str:
         if api_base:
-            # Remove trailing slashes and ensure clean base URL
-            api_base = api_base.rstrip("/")
-            if not api_base.endswith("/v2/rerank"):
-                api_base = f"{api_base}/v2/rerank"
-            return api_base
+            return join_api_base(api_base, "v2/rerank")
         return "https://api.cohere.ai/v2/rerank"
 
     def get_supported_cohere_rerank_params(self, model: str) -> list:

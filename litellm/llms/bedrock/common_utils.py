@@ -29,6 +29,7 @@ import litellm
 from litellm import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -1127,10 +1128,7 @@ def build_mantle_messages_url(
     """
     override: Final = api_base or aws_bedrock_runtime_endpoint or _mantle_api_base_from_env()
     if override:
-        base: Final = override.rstrip("/")
-        if base.endswith(MANTLE_MESSAGES_PATH):
-            return base
-        return f"{base}{MANTLE_MESSAGES_PATH}"
+        return join_api_base(override, MANTLE_MESSAGES_PATH)
     return f"https://bedrock-mantle.{region}.api.aws{MANTLE_MESSAGES_PATH}"
 
 

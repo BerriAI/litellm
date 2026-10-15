@@ -11,7 +11,7 @@ import httpx
 from httpx import Headers
 
 import litellm
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
@@ -297,15 +297,14 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
         """
         Construct the ElevenLabs endpoint URL, including path voice_id and query params.
         """
-        base_url = api_base or get_secret_str("ELEVENLABS_API_BASE") or self.TTS_BASE_URL
-        base_url = base_url.rstrip("/")
+        base_url: Final = api_base or get_secret_str("ELEVENLABS_API_BASE") or self.TTS_BASE_URL
 
         voice_id: Final = litellm_params.get(self.ELEVENLABS_VOICE_ID_KEY)
         if not isinstance(voice_id, str) or not voice_id.strip():
             raise ValueError("ElevenLabs voice_id is required. Pass `voice` when calling `litellm.speech()`.")
 
         encoded_voice_id: Final = encode_url_path_segment(voice_id, field_name="voice_id")
-        url = f"{base_url}{self.TTS_ENDPOINT_PATH}/{encoded_voice_id}"
+        url = join_api_base(base_url, f"{self.TTS_ENDPOINT_PATH}/{encoded_voice_id}")
 
         query_params: Final = litellm_params.get(self.ELEVENLABS_QUERY_PARAMS_KEY, {})
         if query_params:

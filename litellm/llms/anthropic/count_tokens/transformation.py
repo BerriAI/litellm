@@ -15,6 +15,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     anthropic_system_blocks,
     split_leading_system_run,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.common_utils import merge_anthropic_beta_headers
 from litellm.llms.anthropic.wif import resolve_anthropic_base
 from litellm.types.llms.openai import ChatCompletionImageObject
@@ -98,7 +99,7 @@ class AnthropicCountTokensConfig:
         Returns:
             The endpoint URL for the CountTokens API
         """
-        return resolve_anthropic_base(api_base) + "/v1/messages/count_tokens"
+        return join_api_base(resolve_anthropic_base(api_base), "v1/messages/count_tokens")
 
     def transform_request_to_count_tokens(
         self,

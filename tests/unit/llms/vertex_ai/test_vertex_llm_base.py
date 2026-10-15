@@ -972,6 +972,22 @@ class TestVertexBase:
 
         assert result_url == f"{gateway_api_base}:embedContent"
 
+    def test_check_custom_proxy_vertex_api_base_with_path_and_trailing_slash_appends_endpoint_once(self):
+        gateway_api_base: Final = "https://gateway.example.com/vertex/v1/projects/p/locations/us-central1/endpoints/123"
+
+        _, result_url = VertexBase()._check_custom_proxy(
+            api_base=f"{gateway_api_base}/",
+            custom_llm_provider="vertex_ai",
+            gemini_api_key=None,
+            endpoint="predict",
+            stream=None,
+            auth_header="Bearer token123",
+            url="https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1/endpoints/123:predict",
+            model="123",
+        )
+
+        assert result_url == f"{gateway_api_base}:predict"
+
     def test_check_custom_proxy_vertex_api_base_with_version_path_grafts_default_path(self):
         vertex_base = VertexBase()
 

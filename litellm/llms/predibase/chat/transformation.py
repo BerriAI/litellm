@@ -342,9 +342,9 @@ class PredibaseConfig(BaseConfig):
         completion_url = join_api_base(base_url, f"{tenant_id}/deployments/v2/llms/{model}")
         should_stream: Final = stream if stream is not None else optional_params.get("stream", False)
         if should_stream is True:
-            completion_url += "/generate_stream"
+            completion_url = join_api_base(completion_url, "generate_stream")
         else:
-            completion_url += "/generate"
+            completion_url = join_api_base(completion_url, "generate")
         return completion_url
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:

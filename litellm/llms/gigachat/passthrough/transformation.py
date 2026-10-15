@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, Final
 
 import httpx
 
-from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
 from litellm.llms.gigachat.authenticator import get_access_token
 from litellm.llms.gigachat.chat.streaming import GigaChatModelResponseIterator
@@ -41,7 +40,7 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
         if base_target_url is None:
             raise Exception("GigaChat api base not found")
 
-        complete_url: Final = join_api_base(base_target_url, endpoint)
+        complete_url: Final = f"{base_target_url.rstrip('/')}/{endpoint.lstrip('/')}"
 
         return (
             httpx.URL(complete_url),

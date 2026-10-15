@@ -19,7 +19,7 @@ from litellm.litellm_core_utils.audio_utils.utils import (
     DEFAULT_SPEECH_MEDIA_TYPE,
     speech_media_type_from_audio_bytes,
 )
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
     TextToSpeechRequestData,
@@ -588,13 +588,14 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
                 },
             )
         location: Final = self.safe_get_vertex_ai_location(litellm_params) or self.get_default_vertex_location()
-        base_url: Final = self.get_api_base(api_base=api_base, vertex_location=location).rstrip("/")
+        base_url: Final = self.get_api_base(api_base=api_base, vertex_location=location)
         encoded_project: Final = encode_url_path_segment(project, field_name="project")
         encoded_location: Final = encode_url_path_segment(location, field_name="location")
         encoded_model: Final = encode_url_path_segment(base_model, field_name="model")
-        return (
-            f"{base_url}/v1/projects/{encoded_project}/locations/{encoded_location}"
-            f"/publishers/google/models/{encoded_model}:predict"
+        return join_api_base(
+            base_url,
+            f"v1/projects/{encoded_project}/locations/{encoded_location}"
+            f"/publishers/google/models/{encoded_model}:predict",
         )
 
     def transform_text_to_speech_request(

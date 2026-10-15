@@ -180,7 +180,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         api_key: Final = litellm_params.get("api_key") or GeminiModelInfo.get_api_key()
         if not api_key:
             raise ValueError("GEMINI_API_KEY or GOOGLE_API_KEY is required")
-        url: Final = f"{api_base}/models/{model}:generateContent"
+        url: Final = join_api_base(api_base, f"models/{model}:generateContent")
 
         # Build file_search tool configuration (using snake_case as per Gemini docs)
         file_search_config: Final[dict[str, object]] = {"file_search_store_names": [vector_store_id]}
@@ -319,7 +319,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         """
         Transform create request to Gemini's fileSearchStores format.
         """
-        url: Final = f"{api_base}/fileSearchStores"
+        url: Final = join_api_base(api_base, "fileSearchStores")
 
         # API key is passed via x-goog-api-key header (set in validate_environment)
 

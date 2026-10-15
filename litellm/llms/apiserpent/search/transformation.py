@@ -14,6 +14,7 @@ from urllib.parse import urlencode
 import httpx
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.apiserpent.search.defaults import (
     DEEP_SEARCH_PATH,
     NUM_MAX,
@@ -77,13 +78,11 @@ class APISerpentSearchConfig(BaseSearchConfig):
         Build the search URL. APISerpent uses GET, so the transformed request is
         serialized into the query string. The endpoint path (quick vs deep) is
         always applied; an ``api_base`` / ``APISERPENT_API_BASE`` override only
-        changes the host. The ``endswith`` guard keeps this idempotent, since the
+        changes the host. ``join_api_base`` keeps this idempotent, since the
         handler re-invokes this method with the already-resolved URL as api_base.
         """
-        base = (api_base or get_secret_str("APISERPENT_API_BASE") or APISERPENT_BASE).rstrip("/")
         path: Final = DEEP_SEARCH_PATH if self._is_deep_search(optional_params) else QUICK_SEARCH_PATH
-        if not base.endswith(path):
-            base = f"{base}{path}"
+        base: Final = join_api_base(api_base or get_secret_str("APISERPENT_API_BASE") or APISERPENT_BASE, path)
 
         if data and isinstance(data, dict) and APISERPENT_PARAMS_KEY in data:
             query_string: Final = urlencode(data[APISERPENT_PARAMS_KEY], doseq=True)

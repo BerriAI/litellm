@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, Final, Literal
 import httpx
 from pydantic import ConfigDict, ValidationError
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.search.transformation import (
     BaseSearchConfig,
@@ -341,10 +342,7 @@ class BingGroundingSearchConfig(BaseSearchConfig):
                 f"{PROJECT_ENDPOINT_ENV} is not set. Set it to your Microsoft Foundry project "
                 f"endpoint, e.g. https://<account>.services.ai.azure.com/api/projects/<project>."
             )
-        trimmed: Final = resolved_base.rstrip("/")
-        if trimmed.endswith(_RESPONSES_PATH):
-            return trimmed
-        return f"{trimmed}{_RESPONSES_PATH}"
+        return join_api_base(resolved_base, _RESPONSES_PATH)
 
     def transform_search_request(
         self,

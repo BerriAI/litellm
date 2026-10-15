@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Final
 import httpx
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.search.transformation import (
     BaseSearchConfig,
@@ -124,10 +125,7 @@ class NimbleSearchConfig(BaseSearchConfig):
         data: dict[str, object] | list[dict[str, object]] | None = None,  # mutable-ok: base signature
         **kwargs: object,  # kwargs-ok: BaseSearchConfig.get_complete_url signature
     ) -> str:
-        resolved_base: Final = (api_base or get_secret_str("NIMBLE_API_BASE") or self.NIMBLE_API_BASE).rstrip("/")
-        if resolved_base.endswith("/search"):
-            return resolved_base
-        return f"{resolved_base}/search"
+        return join_api_base(api_base or get_secret_str("NIMBLE_API_BASE") or self.NIMBLE_API_BASE, "search")
 
     def transform_search_request(
         self,

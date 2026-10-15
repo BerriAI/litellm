@@ -20,6 +20,7 @@ from pydantic import ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.exceptions import AuthenticationError
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.types.llms.openai import AllEmbeddingInputValues
 from litellm.types.utils import EmbeddingResponse
@@ -120,7 +121,7 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
         user_session: Final = require_github_copilot_user_session(
             cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
         )
-        effective_api_base = (
+        effective_api_base: Final = (
             (user_session.api_base if user_session is not None else None)
             or api_base
             or self.authenticator.get_api_base()
@@ -128,11 +129,7 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
             or DEFAULT_GITHUB_COPILOT_API_BASE
         )
 
-        # Remove trailing slashes
-        effective_api_base = effective_api_base.rstrip("/")
-
-        # Return the embeddings endpoint
-        return f"{effective_api_base}/embeddings"
+        return join_api_base(effective_api_base, "embeddings")
 
     def transform_embedding_request(
         self,

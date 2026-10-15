@@ -18,7 +18,7 @@ from pydantic import ConfigDict
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.transformation import BaseFilesConfig, LiteLLMLoggingObj
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -130,11 +130,11 @@ class MistralFilesConfig(BaseFilesConfig):
         litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
-        return f"{get_mistral_api_base(api_base)}/v1/files"
+        return join_api_base(get_mistral_api_base(api_base), "v1/files")
 
     def _file_url(self, file_id: str, litellm_params: Mapping[str, object], suffix: str = "") -> str:
         encoded_file_id: Final = encode_url_path_segment(file_id, field_name="file_id")
-        return f"{_api_base_from(litellm_params)}/v1/files/{encoded_file_id}{suffix}"
+        return join_api_base(_api_base_from(litellm_params), f"v1/files/{encoded_file_id}{suffix}")
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Mapping[str, str] | httpx.Headers
@@ -233,7 +233,7 @@ class MistralFilesConfig(BaseFilesConfig):
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
     ) -> tuple[str, dict[str, str]]:  # mutable-ok: BaseFilesConfig signature
-        url: Final = f"{_api_base_from(litellm_params)}/v1/files"
+        url: Final = join_api_base(_api_base_from(litellm_params), "v1/files")
         if not purpose:
             return url, _NO_QUERY_PARAMS
         return url, {"purpose": _to_mistral_purpose(purpose)}

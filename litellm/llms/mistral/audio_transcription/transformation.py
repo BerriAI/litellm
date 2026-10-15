@@ -9,6 +9,7 @@ from typing import Final
 import httpx
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
@@ -57,8 +58,7 @@ class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        api_base = "https://api.mistral.ai/v1" if api_base is None else api_base.rstrip("/")
-        return f"{api_base}/audio/transcriptions"
+        return join_api_base("https://api.mistral.ai/v1" if api_base is None else api_base, "audio/transcriptions")
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return MistralAudioTranscriptionException(

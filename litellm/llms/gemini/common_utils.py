@@ -10,6 +10,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
@@ -405,7 +406,7 @@ class GeminiModelInfo(BaseLLMModelInfo):
             )
 
         response: Final = litellm.module_level_client.get(
-            url=f"{api_base}{endpoint}",
+            url=join_api_base(api_base, endpoint),
             headers={"x-goog-api-key": api_key},
         )
 

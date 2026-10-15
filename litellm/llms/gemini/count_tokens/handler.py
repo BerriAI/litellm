@@ -6,6 +6,7 @@ from pydantic import ConfigDict, RootModel, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.utils import LlmProviders
 
@@ -65,7 +66,7 @@ class GoogleAIStudioTokenCounter:
         Construct the URL for the Google Gen AI Studio countTokens endpoint.
         """
         base_url: Final = api_base or "https://generativelanguage.googleapis.com"
-        return f"{base_url}/v1beta/models/{model}:countTokens"
+        return join_api_base(base_url, f"v1beta/models/{model}:countTokens")
 
     async def validate_environment(
         self,

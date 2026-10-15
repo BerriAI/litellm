@@ -22,7 +22,7 @@ from openai.types.file_deleted import FileDeleted
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
@@ -80,7 +80,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         stream: bool | None = None,
     ) -> str:
         api_base = AnthropicModelInfo.get_api_base(api_base) or ANTHROPIC_FILES_API_BASE
-        return f"{api_base.rstrip('/')}/v1/files"
+        return join_api_base(api_base, "v1/files")
 
     def get_error_class(
         self,
@@ -226,7 +226,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
     ) -> tuple[str, dict]:
         api_base: Final = AnthropicModelInfo.get_api_base(litellm_params.get("api_base")) or ANTHROPIC_FILES_API_BASE
         encoded_file_id: Final = encode_url_path_segment(file_id, field_name="file_id")
-        return f"{api_base.rstrip('/')}/v1/files/{encoded_file_id}", {}
+        return join_api_base(api_base, f"v1/files/{encoded_file_id}"), {}
 
     def transform_retrieve_file_response(
         self,
@@ -245,7 +245,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
     ) -> tuple[str, dict]:
         api_base: Final = AnthropicModelInfo.get_api_base(litellm_params.get("api_base")) or ANTHROPIC_FILES_API_BASE
         encoded_file_id: Final = encode_url_path_segment(file_id, field_name="file_id")
-        return f"{api_base.rstrip('/')}/v1/files/{encoded_file_id}", {}
+        return join_api_base(api_base, f"v1/files/{encoded_file_id}"), {}
 
     def transform_delete_file_response(
         self,
@@ -264,7 +264,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         litellm_params: dict,
     ) -> tuple[str, dict]:
         api_base: Final = AnthropicModelInfo.get_api_base(litellm_params.get("api_base")) or ANTHROPIC_FILES_API_BASE
-        url: Final = f"{api_base.rstrip('/')}/v1/files"
+        url: Final = join_api_base(api_base, "v1/files")
         params: Final[dict[str, str]] = {}
         if purpose:
             params["purpose"] = purpose
@@ -299,8 +299,8 @@ class AnthropicFilesConfig(BaseFilesConfig):
         api_base: Final = AnthropicModelInfo.get_api_base(litellm_params.get("api_base")) or ANTHROPIC_FILES_API_BASE
         encoded_file_id: Final = encode_url_path_segment(file_id, field_name="file_id")
         if file_id.startswith(ANTHROPIC_MESSAGE_BATCH_ID_PREFIX):
-            return f"{api_base.rstrip('/')}/v1/messages/batches/{encoded_file_id}/results", {}
-        return f"{api_base.rstrip('/')}/v1/files/{encoded_file_id}/content", {}
+            return join_api_base(api_base, f"v1/messages/batches/{encoded_file_id}/results"), {}
+        return join_api_base(api_base, f"v1/files/{encoded_file_id}/content"), {}
 
     def transform_file_content_response(
         self,

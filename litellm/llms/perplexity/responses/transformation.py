@@ -14,6 +14,7 @@ from typing import Any, Final
 import httpx
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
@@ -51,7 +52,7 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
 
     def get_complete_url(self, api_base: str | None, litellm_params: dict) -> str:
         api_base = api_base or get_secret_str("PERPLEXITY_API_BASE") or "https://api.perplexity.ai"
-        return f"{api_base.rstrip('/')}/v1/responses"
+        return join_api_base(api_base, "v1/responses")
 
     def _ensure_message_type(self, input: str | ResponseInputParam) -> str | ResponseInputParam:
         """Ensure list input items have type='message' (required by Perplexity)."""

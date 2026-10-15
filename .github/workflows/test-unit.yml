@@ -215,6 +215,7 @@ jobs:
 
           - shard: llms-providers
             test-path: |-
+              tests/unit/llms/test_api_base_trailing_slash_routes.py
               tests/unit/llms/test_cache_control_and_reasoning.py
               tests/unit/llms/test_custom_llm.py
               tests/unit/llms/test_file_content_block.py

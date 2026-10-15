@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx
 from pydantic import ConfigDict, TypeAdapter
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -202,11 +203,10 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
         """
         Get the complete URL for the Black Forest Labs API request.
         """
-        base_url: str = api_base or get_secret_str("BFL_API_BASE") or DEFAULT_API_BASE
-        base_url = base_url.rstrip("/")
+        base_url: Final = api_base or get_secret_str("BFL_API_BASE") or DEFAULT_API_BASE
 
         endpoint: Final = self._get_model_endpoint(model)
-        return f"{base_url}{endpoint}"
+        return join_api_base(base_url, endpoint)
 
     def transform_image_generation_request(
         self,

@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     select_anthropic_content_block_type_for_file,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import async_inline_remote_media
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator as AnthropicStreamParser
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.common_utils import normalize_cache_control_in_anthropic_payload
@@ -237,8 +238,8 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
     ) -> str:
         api_base = self._get_api_base(api_base, optional_params)
         if is_snowflake_claude_model(model):
-            return f"{api_base}/cortex/v1/messages"
-        return f"{api_base}/cortex/v1/chat/completions"
+            return join_api_base(api_base, "cortex/v1/messages")
+        return join_api_base(api_base, "cortex/v1/chat/completions")
 
     def validate_environment(
         self,

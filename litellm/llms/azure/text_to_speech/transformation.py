@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
     TextToSpeechRequestData,
@@ -329,8 +330,6 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
                 f"https://{{region}}.{self.TTS_SPEECH_DOMAIN}"
             )
 
-        # Remove trailing slash and parse URL
-        api_base = api_base.rstrip("/")
         parsed_url: Final = urlparse(api_base)
         hostname: Final = parsed_url.hostname or ""
 
@@ -339,22 +338,11 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
             region: Final = self._extract_region_from_hostname(hostname=hostname, domain=self.COGNITIVE_SERVICES_DOMAIN)
             return self._build_tts_url(region=region)
 
-        # Check if it's already a TTS endpoint
-        if self._is_tts_endpoint(hostname=hostname):
-            if not api_base.endswith(self.TTS_ENDPOINT_PATH):
-                return f"{api_base}{self.TTS_ENDPOINT_PATH}"
-            return api_base
-
-        # Assume it's a custom endpoint, append the path
-        return f"{api_base}{self.TTS_ENDPOINT_PATH}"
+        return join_api_base(api_base, self.TTS_ENDPOINT_PATH)
 
     def _is_cognitive_services_endpoint(self, hostname: str) -> bool:
         """Check if hostname is a Cognitive Services endpoint"""
         return hostname == self.COGNITIVE_SERVICES_DOMAIN or hostname.endswith(f".{self.COGNITIVE_SERVICES_DOMAIN}")
-
-    def _is_tts_endpoint(self, hostname: str) -> bool:
-        """Check if hostname is a TTS endpoint"""
-        return hostname == self.TTS_SPEECH_DOMAIN or hostname.endswith(f".{self.TTS_SPEECH_DOMAIN}")
 
     def _extract_region_from_hostname(self, hostname: str, domain: str) -> str:
         """

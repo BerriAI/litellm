@@ -9,7 +9,7 @@ from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.containers.main import (
     ContainerCreateOptionalRequestParams,
@@ -127,7 +127,7 @@ class OpenAIContainerConfig(BaseContainerConfig):
             or "https://api.openai.com/v1"
         )
 
-        return f"{api_base.rstrip('/')}/containers"
+        return join_api_base(api_base, "containers")
 
     def transform_container_create_request(
         self,

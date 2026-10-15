@@ -7,6 +7,7 @@ Extends the base Anthropic CountTokens transformation with Azure authentication.
 from typing import Final
 
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.count_tokens.transformation import (
     AnthropicCountTokensConfig,
 )
@@ -82,7 +83,7 @@ class AzureAIAnthropicCountTokensConfig(AnthropicCountTokensConfig):
         # Ensure the URL has /anthropic path
         if not api_base.endswith("/anthropic"):
             if "/anthropic" not in api_base:
-                api_base = f"{api_base}/anthropic"
+                api_base = join_api_base(api_base, "anthropic")
 
         # Add the count_tokens path
-        return f"{api_base}/v1/messages/count_tokens"
+        return join_api_base(api_base, "v1/messages/count_tokens")

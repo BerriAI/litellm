@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx
 from pydantic import ConfigDict, TypeAdapter
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -72,11 +73,8 @@ class RecraftImageGenerationConfig(BaseImageGenerationConfig):
 
         Some providers need `model` in `api_base`
         """
-        complete_url: str = api_base or get_secret_str("RECRAFT_API_BASE") or self.DEFAULT_BASE_URL
-
-        complete_url = complete_url.rstrip("/")
-        complete_url = f"{complete_url}/{self.IMAGE_GENERATION_ENDPOINT}"
-        return complete_url
+        base_url: Final = api_base or get_secret_str("RECRAFT_API_BASE") or self.DEFAULT_BASE_URL
+        return join_api_base(base_url, self.IMAGE_GENERATION_ENDPOINT)
 
     def validate_environment(
         self,

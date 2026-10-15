@@ -8,6 +8,7 @@ alongside its standard OpenAI-compatible chat completions endpoint.
 from typing import Any
 
 import litellm
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
@@ -82,4 +83,4 @@ class TencentAnthropicMessagesConfig(AnthropicMessagesConfig):
         elif base_url.endswith("/v1"):
             base_url = base_url[: -len("/v1")]
 
-        return f"{base_url}/v1/messages"
+        return join_api_base(base_url, "v1/messages")

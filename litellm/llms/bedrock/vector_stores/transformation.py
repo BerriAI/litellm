@@ -212,7 +212,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             query = " ".join(query)
 
         encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
-        url: Final = f"{api_base}/{encoded_vector_store_id}/retrieve"
+        url: Final = join_api_base(api_base, f"{encoded_vector_store_id}/retrieve")
 
         request_body: Final[dict[str, object]] = {
             "retrievalQuery": BedrockKBRetrievalQuery(text=query),

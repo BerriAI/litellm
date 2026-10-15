@@ -9,6 +9,7 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 from litellm.secret_managers.main import get_secret_str
@@ -91,13 +92,9 @@ def create_config_class(provider: SimpleProviderConfig):
             if not api_base:
                 api_base = provider.base_url
 
-            if api_base is None:
-                raise ValueError(f"api_base is required for provider {provider.slug}")
-
-            if not api_base.endswith("/chat/completions"):
-                api_base = f"{api_base}/chat/completions"
-
-            return api_base
+            if isinstance(api_base, str):
+                return join_api_base(api_base, "chat/completions")
+            raise ValueError(f"api_base is required for provider {provider.slug}")
 
         def get_supported_openai_params(self, model: str) -> list:
             """Get supported OpenAI params, excluding tool-related params for models
@@ -226,11 +223,9 @@ def create_responses_config_class(provider: SimpleProviderConfig) -> "type[OpenA
                 if not api_base:
                     api_base = provider.base_url
 
-            if api_base is None:
-                raise ValueError(f"api_base is required for provider {provider.slug}")
-
-            api_base = api_base.rstrip("/")
-            return f"{api_base}/responses"
+            if isinstance(api_base, str):
+                return join_api_base(api_base, "responses")
+            raise ValueError(f"api_base is required for provider {provider.slug}")
 
         def transform_responses_api_request(
             self,

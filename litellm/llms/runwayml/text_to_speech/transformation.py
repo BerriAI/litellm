@@ -18,6 +18,7 @@ from litellm.constants import (
     RUNWAYML_DEFAULT_API_VERSION,
     RUNWAYML_POLLING_TIMEOUT,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
     TextToSpeechRequestData,
@@ -230,10 +231,8 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         """
         Get the complete URL for RunwayML TTS request
         """
-        complete_url = api_base or get_secret_str("RUNWAYML_API_BASE") or self.DEFAULT_BASE_URL
-
-        complete_url = complete_url.rstrip("/")
-        return f"{complete_url}/{self.TTS_ENDPOINT_PATH}"
+        base_url: Final = api_base or get_secret_str("RUNWAYML_API_BASE") or self.DEFAULT_BASE_URL
+        return join_api_base(base_url, self.TTS_ENDPOINT_PATH)
 
     @staticmethod
     def _check_timeout(start_time: float, timeout_secs: float) -> None:
@@ -311,8 +310,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         start_time: Final = time.time()
 
         # Build task status URL
-        api_base = api_base.rstrip("/")
-        task_url: Final = f"{api_base}/v1/tasks/{task_id}"
+        task_url: Final = join_api_base(api_base, f"v1/tasks/{task_id}")
 
         verbose_logger.debug("Polling RunwayML TTS task: %s", task_url)
 
@@ -359,8 +357,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         start_time: Final = time.time()
 
         # Build task status URL
-        api_base = api_base.rstrip("/")
-        task_url: Final = f"{api_base}/v1/tasks/{task_id}"
+        task_url: Final = join_api_base(api_base, f"v1/tasks/{task_id}")
 
         verbose_logger.debug("Polling RunwayML TTS task (async): %s", task_url)
 

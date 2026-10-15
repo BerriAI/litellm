@@ -6,6 +6,7 @@ from typing import Final
 
 import httpx
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
 )
@@ -40,11 +41,7 @@ class HostedVLLMAudioTranscriptionConfig(OpenAIWhisperAudioTranscriptionConfig):
         stream: bool | None = None,
     ) -> str:
         if api_base:
-            # Remove trailing slashes and ensure clean base URL
-            api_base = api_base.rstrip("/")
-            if not api_base.endswith("/v1/audio/transcriptions"):
-                api_base = f"{api_base}/v1/audio/transcriptions"
-            return api_base
+            return join_api_base(api_base, "v1/audio/transcriptions")
         raise ValueError("api_base must be provided for Hosted VLLM rerank")
 
     def transform_audio_transcription_request(

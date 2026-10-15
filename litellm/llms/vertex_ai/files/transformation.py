@@ -35,6 +35,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_file_data,
     extract_file_metadata,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.batch_records import responses_batch_body_to_chat_body
@@ -1019,12 +1020,12 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         if object_prefix:
             object_name = f"{object_prefix}/{object_name}"
         encoded_object_name: Final = encode_gcs_object_name_for_url(object_name)
-        endpoint: Final = f"upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={encoded_object_name}"
+        upload_path: Final = f"upload/storage/v1/b/{bucket_name}/o"
         api_base = api_base or "https://storage.googleapis.com"
         if not api_base:
             raise ValueError("api_base is required")
 
-        return f"{api_base}/{endpoint}"
+        return f"{join_api_base(api_base, upload_path)}?uploadType=media&name={encoded_object_name}"
 
     def get_supported_openai_params(self, model: str) -> list[OpenAICreateFileRequestOptionalParams]:
         return []

@@ -4,7 +4,7 @@ from typing import Final, cast
 import httpx
 
 import litellm
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.vector_store_files.transformation import (
     BaseVectorStoreFilesConfig,
 )
@@ -89,16 +89,15 @@ class OpenAIVectorStoreFilesConfig(BaseVectorStoreFilesConfig):
         vector_store_id: str,
         litellm_params: Mapping[str, object],
     ) -> str:
-        base_url = (
+        base_url: Final = (
             api_base
             or litellm.api_base
             or get_secret_str("OPENAI_BASE_URL")
             or get_secret_str("OPENAI_API_BASE")
             or "https://api.openai.com/v1"
         )
-        base_url = base_url.rstrip("/")
         encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
-        return f"{base_url}/vector_stores/{encoded_vector_store_id}/files"
+        return join_api_base(base_url, f"vector_stores/{encoded_vector_store_id}/files")
 
     def transform_create_vector_store_file_request(
         self,
@@ -184,7 +183,7 @@ class OpenAIVectorStoreFilesConfig(BaseVectorStoreFilesConfig):
         api_base: str,
     ) -> tuple[str, dict[str, object]]:
         encoded_file_id: Final = encode_url_path_segment(file_id, field_name="file_id")
-        return f"{api_base}/{encoded_file_id}/content", {}
+        return join_api_base(api_base, f"{encoded_file_id}/content"), {}
 
     def transform_retrieve_vector_store_file_content_response(
         self,

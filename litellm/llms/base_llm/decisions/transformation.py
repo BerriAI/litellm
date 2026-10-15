@@ -11,6 +11,7 @@ from pydantic import TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 import litellm
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.decisions import (
@@ -491,7 +492,7 @@ class BaseDecisionsConfig(ABC):
         }
 
     def get_complete_url(self, api_base: str, model: str) -> str:
-        return f"{api_base.rstrip('/').removesuffix('/v1')}{self.path}"
+        return join_api_base(api_base.rstrip("/").removesuffix("/v1"), self.path)
 
     def signs_with_aws(self, api_base: str) -> bool:
         return False

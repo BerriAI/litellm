@@ -14,6 +14,7 @@ from _pytest.mark.structures import ParameterSet
 import litellm
 from litellm.llms.elevenlabs.text_to_speech.transformation import ElevenLabsTextToSpeechConfig
 from litellm.llms.meta.realtime.transformation import MUSE_MODEL
+from litellm.llms.openai_like.dynamic_config import create_config_class, create_responses_config_class
 from litellm.llms.openai_like.json_loader import SimpleProviderConfig
 
 API_BASE_WITH_TRAILING_SLASH: Final = "https://gw.example.com/p/"
@@ -37,6 +38,15 @@ ARGUMENTS_BY_NAME: Final[Mapping[str, object]] = MappingProxyType(
 )
 
 
+SAMPLE_JSON_PROVIDER: Final = SimpleProviderConfig(
+    "json-provider", {"base_url": "https://json-provider.example.com", "api_key_env": "UNSET_KEY"}
+)
+FACTORY_BUILDERS: Final[tuple[type, ...]] = (
+    create_config_class(SAMPLE_JSON_PROVIDER),
+    create_responses_config_class(SAMPLE_JSON_PROVIDER),
+)
+
+
 async def _resolve_access_token() -> str:
     return "token"
 
@@ -54,7 +64,10 @@ INPUTS_BY_BUILDER: Final[Mapping[str, BuilderInputs]] = MappingProxyType(
             call={"litellm_params": {"api_version": "2025-04-01-preview"}}
         ),
         "bedrock.chat.agentcore.transformation.AmazonAgentCoreConfig": BuilderInputs(
-            call={"model": "agentcore/arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/test-runtime"}
+            call={
+                "model": "agentcore/arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/test-runtime",
+                "optional_params": {"aws_bedrock_runtime_endpoint": API_BASE_WITH_TRAILING_SLASH},
+            }
         ),
         "bedrock.chat.invoke_agent.transformation.AmazonInvokeAgentConfig": BuilderInputs(
             call={"model": "agent/AGENT_ID/ALIAS_ID"}
@@ -71,11 +84,7 @@ INPUTS_BY_BUILDER: Final[Mapping[str, BuilderInputs]] = MappingProxyType(
         "meta.realtime.transformation.MetaRealtimeConfig": BuilderInputs(call={"model": MUSE_MODEL}),
         "openai.evals.transformation.OpenAIEvalsConfig": BuilderInputs(call={"endpoint": "evals"}),
         "openai_like.messages.transformation.JSONProviderAnthropicMessagesConfig": BuilderInputs(
-            constructor={
-                "provider": SimpleProviderConfig(
-                    "json-provider", {"base_url": "https://json-provider.example.com", "api_key_env": "UNSET_KEY"}
-                )
-            }
+            constructor={"provider": SAMPLE_JSON_PROVIDER}
         ),
         "predibase.chat.transformation.PredibaseConfig": BuilderInputs(
             call={"litellm_params": {"predibase_tenant_id": "tenant"}}
@@ -126,7 +135,7 @@ def _builder_modules() -> tuple[ModuleType, ...]:
 
 
 def _defined_builders(module: ModuleType) -> tuple[type, ...]:
-    classes: Final = tuple(cls for _, cls in inspect.getmembers(module, inspect.isclass))
+    classes: Final = (*(cls for _, cls in inspect.getmembers(module, inspect.isclass)), *FACTORY_BUILDERS)
     return tuple(cls for cls in classes if cls.__module__ == module.__name__ and "get_complete_url" in vars(cls))
 
 

@@ -21,6 +21,7 @@ from collections.abc import Awaitable, Callable
 from typing import Final
 
 from litellm import verbose_logger
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
 from litellm.llms.vertex_ai.audio_transcription.realtime_transformation import (
     VertexChirpRealtimeConfig,
@@ -65,9 +66,8 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
         """
         if api_base:
             # Allow callers to supply a fully-qualified wss:// base URL.
-            base = api_base.rstrip("/")
-            base = base.replace("https://", "wss://").replace("http://", "ws://")
-            return f"{base}/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
+            base: Final = api_base.replace("https://", "wss://").replace("http://", "ws://")
+            return join_api_base(base, "ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent")
 
         host: Final = get_vertex_base_url(self._location).removeprefix("https://")
         return f"wss://{host}/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"

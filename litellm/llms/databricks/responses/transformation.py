@@ -10,6 +10,7 @@ Reference: https://docs.databricks.com/aws/en/machine-learning/foundation-model-
 import os
 from typing import TYPE_CHECKING, Any, Final
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.databricks.common_utils import DatabricksBase
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import ResponseInputParam
@@ -70,8 +71,7 @@ class DatabricksResponsesAPIConfig(DatabricksBase, OpenAIResponsesAPIConfig):
     ) -> str:
         api_base = api_base or os.getenv("DATABRICKS_API_BASE")
         api_base = self._get_api_base(api_base)
-        api_base = api_base.rstrip("/")
-        return f"{api_base}/responses"
+        return join_api_base(api_base, "responses")
 
     def transform_responses_api_request(
         self,

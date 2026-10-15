@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUsageBlock
 from litellm.types.llms.watsonx import WatsonXAIEndpoint
@@ -342,7 +343,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
             endpoint = endpoint.format(deployment_id=deployment_id)
         else:
             endpoint = WatsonXAIEndpoint.TEXT_GENERATION_STREAM if stream else WatsonXAIEndpoint.TEXT_GENERATION
-        url = url.rstrip("/") + endpoint
+        url = join_api_base(url, endpoint)
 
         ## add api version
         url = self._add_api_version_to_url(url=url, api_version=optional_params.pop("api_version", None))

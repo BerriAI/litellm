@@ -7,7 +7,7 @@ import httpx
 from httpx import Headers, Response
 from typing_extensions import ReadOnly, TypedDict
 
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues, CreateBatchRequest
@@ -106,10 +106,8 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         data: CreateBatchRequest,
     ) -> str:
         """Get the complete URL for batch creation request."""
-        api_base = api_base or self.anthropic_model_info.get_api_base(api_base)
-        if not api_base.endswith("/v1/messages/batches"):
-            api_base = f"{api_base.rstrip('/')}/v1/messages/batches"
-        return api_base
+        api_base = self.anthropic_model_info.resolve_api_base(api_base)
+        return join_api_base(api_base, "v1/messages/batches")
 
     def transform_create_batch_request(
         self,
@@ -158,9 +156,9 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         Returns:
             Complete URL for Anthropic batch retrieval: {api_base}/v1/messages/batches/{batch_id}
         """
-        api_base = api_base or self.anthropic_model_info.get_api_base(api_base)
+        api_base = self.anthropic_model_info.resolve_api_base(api_base)
         encoded_batch_id: Final = encode_url_path_segment(batch_id, field_name="batch_id")
-        return f"{api_base.rstrip('/')}/v1/messages/batches/{encoded_batch_id}"
+        return join_api_base(api_base, f"v1/messages/batches/{encoded_batch_id}")
 
     def transform_retrieve_batch_request(
         self,

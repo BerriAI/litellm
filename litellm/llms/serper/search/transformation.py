@@ -11,6 +11,7 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.search.transformation import (
     BaseSearchConfig,
     SearchResponse,
@@ -84,12 +85,7 @@ class SerperSearchConfig(BaseSearchConfig):
         Get complete URL for Search endpoint.
         """
         api_base = api_base or get_secret_str("SERPER_API_BASE") or self.SERPER_API_BASE
-        api_base = api_base.rstrip("/")
-
-        if not api_base.endswith("/search"):
-            api_base = f"{api_base}/search"
-
-        return api_base
+        return join_api_base(api_base, "search")
 
     def transform_search_request(
         self,

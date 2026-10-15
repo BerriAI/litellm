@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_litellm_response_only_fields,
     unpack_legacy_defs,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -825,7 +826,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         base = api_base.rstrip("/")
         base = base.removesuffix("/v1")
         response: Final = litellm.module_level_client.get(
-            url=f"{base}/v1/accounts/{account_id}/models",
+            url=join_api_base(base, f"v1/accounts/{account_id}/models"),
             headers={"Authorization": f"Bearer {api_key}"},
         )
 

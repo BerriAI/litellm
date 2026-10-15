@@ -4,6 +4,7 @@ Azure Anthropic messages transformation config - extends AnthropicMessagesConfig
 
 from typing import Any, Final
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
@@ -106,12 +107,12 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
                 # /anthropic exists, ensure we end with /anthropic/v1/messages
                 # Extract the base URL up to and including /anthropic
                 parts: Final = api_base.split("/anthropic", 1)
-                api_base = parts[0] + "/anthropic"
+                api_base = join_api_base(parts[0], "anthropic")
             else:
                 # /anthropic not in path, add it
-                api_base = api_base + "/anthropic"
+                api_base = join_api_base(api_base, "anthropic")
             # Add /v1/messages
-            api_base = api_base + "/v1/messages"
+            api_base = join_api_base(api_base, "v1/messages")
 
         return api_base
 

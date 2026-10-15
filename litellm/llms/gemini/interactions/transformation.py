@@ -302,7 +302,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
             raise ValueError("Google API key is required")
         encoded_interaction_id: Final = encode_url_path_segment(interaction_id, field_name="interaction_id")
         return (
-            f"{resolved_api_base}/{self.api_version}/interactions/{encoded_interaction_id}",
+            join_api_base(resolved_api_base, f"{self.api_version}/interactions/{encoded_interaction_id}"),
             {},
         )
 
@@ -342,7 +342,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
             raise ValueError("Google API key is required")
         encoded_interaction_id: Final = encode_url_path_segment(interaction_id, field_name="interaction_id")
         return (
-            f"{resolved_api_base}/{self.api_version}/interactions/{encoded_interaction_id}",
+            join_api_base(resolved_api_base, f"{self.api_version}/interactions/{encoded_interaction_id}"),
             {},
         )
 
@@ -373,7 +373,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
             raise ValueError("Google API key is required")
         encoded_interaction_id: Final = encode_url_path_segment(interaction_id, field_name="interaction_id")
         return (
-            f"{resolved_api_base}/{self.api_version}/interactions/{encoded_interaction_id}:cancel",
+            join_api_base(resolved_api_base, f"{self.api_version}/interactions/{encoded_interaction_id}:cancel"),
             {},
         )
 

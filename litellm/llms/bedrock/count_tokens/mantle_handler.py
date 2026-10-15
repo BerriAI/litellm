@@ -6,6 +6,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.count_tokens.transformation import AnthropicCountTokensConfig
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, run_aws_signing
 from litellm.llms.bedrock.common_utils import BedrockError, build_mantle_messages_url
@@ -41,7 +42,7 @@ class BedrockMantleCountTokensHandler(BaseAWSLLM):
         messages_url: Final = build_mantle_messages_url(
             api_base=None, aws_bedrock_runtime_endpoint=None, region=aws_region_name
         )
-        return f"{messages_url}{MANTLE_COUNT_TOKENS_SUFFIX}"
+        return join_api_base(messages_url, MANTLE_COUNT_TOKENS_SUFFIX)
 
     async def handle_count_tokens_request(
         self,
