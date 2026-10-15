@@ -1,0 +1,30 @@
+[package]
+name = "litellm-gateway-ui"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+axum = { workspace = true, features = ["json", "original-uri", "query"] }
+axum-login.workspace = true
+base64.workspace = true
+governor = { version = "0.10.4", default-features = false, features = ["std"] }
+jsonwebtoken = { workspace = true, features = ["rust_crypto"] }
+litellm-gateway-auth.workspace = true
+rand.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tower = { version = "0.5", features = ["util"] }
+tower-cookies = "0.11.0"
+tower-http = { version = "0.6.11", features = ["fs", "set-header"] }
+tower-sessions.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tower = { version = "0.5", features = ["util"] }
+litellm-auth-types.workspace = true
+rstest.workspace = true
+tempfile.workspace = true
+tokio.workspace = true

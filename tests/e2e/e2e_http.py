@@ -24,6 +24,7 @@ from typing import Final, Generic, Literal, NewType, Protocol, TypeVar, cast
 
 import pytest
 import requests
+from e2e_metadata import step
 from pydantic import BaseModel, ConfigDict, Field
 
 URL = NewType("URL", str)
@@ -69,6 +70,7 @@ class FileUploadForm(BaseModel):
     purpose: str = "batch"
     target_model_names: str | None = None
     custom_llm_provider: str | None = None
+    passthrough: bool | None = None
 
 
 # ---------- Result types ----------
@@ -376,10 +378,16 @@ class ProxyErrorDetail(BaseModel):
     message: str
     type: str
     code: str
+    param: str | None = None
 
 
 class _ProxyErrorBody(BaseModel):
     error: ProxyErrorDetail
+
+
+def proxy_error(body: str) -> ProxyErrorDetail:
+    """The proxy's own error envelope (`{"error": {message, type, param, code}}`) parsed off a rejected call."""
+    return _ProxyErrorBody.model_validate_json(body).error
 
 
 def relayed_provider_rate_limit(outcome: RateLimitedError) -> ProxyErrorDetail | None:
@@ -466,6 +474,7 @@ def get[R: BaseModel](
     return classify(resp, response_type)
 
 
+@step("GET the external URL {url}")
 def get_external[R: BaseModel](
     url: str,
     *,

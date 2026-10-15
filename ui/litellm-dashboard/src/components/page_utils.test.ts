@@ -195,6 +195,13 @@ describe("Page Utils - LeftNav Sync", () => {
     expect(pageKeys.length, "All page keys should be unique (no duplicates)").toBe(uniquePageKeys.size);
   });
 
+  it("offers Projects in the internal-user page picker so team admins can be granted it", () => {
+    expect(getAvailablePages().find((page) => page.page === "projects")).toMatchObject({
+      label: "Projects",
+      group: "ACCESS CONTROL",
+    });
+  });
+
   it("should match the structure expected by PageVisibilitySettings component", () => {
     const availablePages = getAvailablePages();
 

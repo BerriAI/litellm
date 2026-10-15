@@ -67,7 +67,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
                 optional_params["responseFormat"] = self._normalize_response_format(value)
         return optional_params
 
-    def _normalize_response_format(self, value: Any) -> Any:
+    def _normalize_response_format(self, value: Any) -> object:
         """Normalize response_format to TwelveLabs format.
 
         TwelveLabs expects:

@@ -28,6 +28,8 @@ class ResponseSpec:
     events: tuple[tuple[str, object], ...] = ()
 
     def payloads(self) -> tuple[bytes, ...]:
+        if isinstance(self.body, bytes):
+            return (self.body,)
         if not self.events:
             return (json.dumps(self.body).encode(),)
         return tuple(f"event: {event}\ndata: {json.dumps(data)}\n\n".encode() for event, data in self.events)
@@ -95,6 +97,7 @@ def recording_service() -> Iterator[RecordingServer]:
 
         do_POST = _handle
         do_GET = _handle
+        do_DELETE = _handle
 
         def log_message(self, format: str, *args: object) -> None:
             pass
@@ -117,3 +120,9 @@ def recording_service() -> Iterator[RecordingServer]:
         if recording_server.expected_requests is not None:
             assert len(recording_server.requests) == recording_server.expected_requests
         assert recording_server.responses == []
+
+
+def relaxed(server: RecordingServer) -> Iterator[RecordingServer]:
+    server.expected_requests = None
+    yield server
+    server.responses.clear()

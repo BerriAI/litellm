@@ -4,20 +4,21 @@ Support for gpt model family
 
 import json
 import os
-from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast, overload
 from urllib.parse import urlparse
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.constants import OPENAI_SYSTEM_MESSAGES_FIRST_PROVIDERS
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-    _extract_reasoning_content,
-    _handle_invalid_parallel_tool_calls,
-    _should_convert_tool_call_to_json_mode,
+    extract_reasoning_content,
+    handle_invalid_parallel_tool_calls,
+    should_convert_tool_call_to_json_mode,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     drop_non_python_regex_patterns,
@@ -58,6 +59,7 @@ from litellm.types.utils import (
 from litellm.utils import convert_to_model_response_object
 
 from ..common_utils import OpenAIError
+from ..workload_identity import get_workload_identity_bearer_token, resolve_openai_workload_identity_config
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -71,6 +73,20 @@ else:
 
 
 _NO_TOOLS_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
+_OBJECT_MAPPING: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def _litellm_params_str(litellm_params: Mapping[str, object] | None, key: str) -> str | None:
+    value: Final = litellm_params.get(key) if litellm_params is not None else None
+    return value if isinstance(value, str) else None
+
+
+def _prompt_cache_options(optional_params: Mapping[str, object]) -> object | None:
+    try:
+        extra_body: Final = _OBJECT_MAPPING.validate_python(optional_params.get("extra_body"))
+    except ValidationError:
+        return None
+    return extra_body.get("prompt_cache_options")
 
 
 class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
@@ -129,7 +145,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         top_p: int | None = None,
         response_format: dict | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -381,6 +397,17 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                         )
             return hoisted_messages
 
+    def transform_messages(
+        self,
+        messages: list[AllMessageValues],  # mutable-ok: mirrors override contract
+        model: str,
+        is_async: bool = False,
+    ) -> (
+        list[AllMessageValues]  # mutable-ok: mirrors override contract
+        | Coroutine[object, object, list[AllMessageValues]]
+    ):
+        return self._transform_messages(messages, model, is_async)
+
     def remove_cache_control_flag_from_messages_and_tools(
         self,
         model: str,  # allows overrides to selectively run this
@@ -435,6 +462,38 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             custom_llm_provider, api_base
         )
 
+    def _messages_and_tools_in_cache_mark_dialect(
+        self,
+        model: str,
+        messages: Sequence[AllMessageValues],
+        tools: Sequence["ChatCompletionToolParam"] | None,
+        prompt_cache_options: object,
+        litellm_params: Mapping[str, object],
+    ) -> tuple[Sequence[AllMessageValues], Sequence["ChatCompletionToolParam"] | None]:
+        """
+        A deployment that reads OpenAI's ``prompt_cache_breakpoint`` (gpt-5.6+ on
+        api.openai.com, or one opted in through ``prompt_cache_options`` or the cost
+        map) gets each Anthropic ``cache_control`` mark rewritten in place. Any other
+        endpoint keeps or strips the marks exactly as before.
+        """
+        from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+
+        custom_llm_provider: Final = _litellm_params_str(litellm_params, "custom_llm_provider")
+        api_base: Final = _litellm_params_str(litellm_params, "api_base")
+        reads_breakpoints: Final = AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
+            model, custom_llm_provider, api_base, prompt_cache_options
+        )
+        if not reads_breakpoints and self._should_preserve_cache_control_for_endpoint(custom_llm_provider, api_base):
+            return messages, tools
+        renamed: Final = (
+            [AnthropicCacheControlHook.cache_control_as_prompt_cache_breakpoints(message) for message in messages]
+            if reads_breakpoints
+            else list(messages)
+        )
+        return self.remove_cache_control_flag_from_messages_and_tools(
+            model=model, messages=renamed, tools=list(tools) if tools is not None else None
+        )
+
     def _sanitized_tools_update_for_openai(
         self,
         optional_params: Mapping[str, object],
@@ -459,7 +518,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             if self._targets_openai_hosted_endpoint(provider, raw_api_base if isinstance(raw_api_base, str) else None)
             else drop_non_python_regex_patterns
         )
-        sanitized: Final = [  # mutable-ok: request tools are a JSON list
+        sanitized: Final = [
             tool_with_sanitized_parameters(tool, sanitize) if isinstance(tool, dict) else tool for tool in tools
         ]
         return MappingProxyType({"tools": sanitized})
@@ -487,17 +546,17 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         Returns:
             dict: The transformed request. Sent as the body of the API call.
         """
-        messages = self._transform_messages(
-            messages=self._prompt_cache_ordered_messages(messages, litellm_params), model=model
+        transformed_messages, tools = self._messages_and_tools_in_cache_mark_dialect(
+            model=model,
+            messages=self._transform_messages(
+                messages=self._prompt_cache_ordered_messages(messages, litellm_params), model=model
+            ),
+            tools=optional_params.get("tools", []),
+            prompt_cache_options=_prompt_cache_options(optional_params),
+            litellm_params=litellm_params,
         )
-        if not self._should_preserve_cache_control_for_endpoint(
-            litellm_params.get("custom_llm_provider"), litellm_params.get("api_base")
-        ):
-            messages, tools = self.remove_cache_control_flag_from_messages_and_tools(
-                model=model, messages=messages, tools=optional_params.get("tools", [])
-            )
-            if tools is not None and len(tools) > 0:
-                optional_params["tools"] = tools
+        if tools is not None and len(tools) > 0:
+            optional_params["tools"] = tools
 
         optional_params.pop("max_retries", None)
         if not optional_params.get("tools") and not optional_params.get("functions"):
@@ -505,7 +564,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
         return {
             "model": model,
-            "messages": messages,
+            "messages": transformed_messages,
             **optional_params,
             **self._sanitized_tools_update_for_openai(optional_params, litellm_params),
         }
@@ -518,22 +577,17 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        transformed_messages = await self._transform_messages(
-            messages=self._prompt_cache_ordered_messages(messages, litellm_params), model=model, is_async=True
+        transformed_messages, tools = self._messages_and_tools_in_cache_mark_dialect(
+            model=model,
+            messages=await self._transform_messages(
+                messages=self._prompt_cache_ordered_messages(messages, litellm_params), model=model, is_async=True
+            ),
+            tools=optional_params.get("tools", []),
+            prompt_cache_options=_prompt_cache_options(optional_params),
+            litellm_params=litellm_params,
         )
-        if not self._should_preserve_cache_control_for_endpoint(
-            litellm_params.get("custom_llm_provider"), litellm_params.get("api_base")
-        ):
-            (
-                transformed_messages,
-                tools,
-            ) = self.remove_cache_control_flag_from_messages_and_tools(
-                model=model,
-                messages=transformed_messages,
-                tools=optional_params.get("tools", []),
-            )
-            if tools is not None and len(tools) > 0:
-                optional_params["tools"] = tools
+        if tools is not None and len(tools) > 0:
+            optional_params["tools"] = tools
         if self.__class__._is_base_class:
             if not optional_params.get("tools") and not optional_params.get("functions"):
                 optional_params.pop("tool_choice", None)
@@ -596,16 +650,14 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         for choice in choices:
             ## HANDLE JSON MODE - anthropic returns single function call]
             tool_calls = choice["message"].get("tool_calls", None)
-            new_tool_calls: list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | None = (
-                None  # mutable-ok: holds _handle_invalid_parallel_tool_calls' list; Message.__init__ expects list
-            )
+            new_tool_calls: list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | None = None
             message_content = choice["message"].get("content", None)
             if tool_calls is not None:
                 _openai_tool_calls = []
                 for _tc in tool_calls:
                     _openai_tc = chat_completion_tool_call_from_dict(_tc)
                     _openai_tool_calls.append(_openai_tc)
-                fixed_tool_calls = _handle_invalid_parallel_tool_calls(_openai_tool_calls)
+                fixed_tool_calls = handle_invalid_parallel_tool_calls(_openai_tool_calls)
 
                 if fixed_tool_calls is not None:
                     new_tool_calls = fixed_tool_calls
@@ -617,7 +669,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
             translated_message: Message | None = None
             finish_reason: str | None = None
-            if new_tool_calls and _should_convert_tool_call_to_json_mode(
+            if new_tool_calls and should_convert_tool_call_to_json_mode(
                 tool_calls=new_tool_calls,
                 convert_tool_call_to_json_mode=json_mode,
             ):
@@ -632,7 +684,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 (
                     reasoning_content,
                     content_str,
-                ) = _extract_reasoning_content(cast(dict, choice["message"]))
+                ) = extract_reasoning_content(cast(dict, choice["message"]))
 
                 translated_message = Message(
                     role="assistant",
@@ -767,28 +819,39 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         """
         Calls OpenAI's `/v1/models` endpoint and returns the list of models.
         """
-
-        if api_base is None:
-            api_base = "https://api.openai.com"
-        if api_key is None:
-            api_key = get_secret_str("OPENAI_API_KEY")
-
-        # Strip api_base to just the base URL (scheme + host + port)
-        parsed_url: Final = httpx.URL(api_base)
-        base_url = f"{parsed_url.scheme}://{parsed_url.host}"
-        if parsed_url.port:
-            base_url += f":{parsed_url.port}"
-
-        response: Final = litellm.module_level_client.get(
-            url=f"{base_url}/v1/models",
-            headers={"Authorization": f"Bearer {api_key}"},
+        return self._fetch_model_ids(
+            api_base=api_base, bearer_token=get_secret_str("OPENAI_API_KEY") if api_key is None else api_key
         )
 
+    def discover_models(
+        self, litellm_params: Mapping[str, object] | None = None
+    ) -> list[str]:  # mutable-ok: matches get_models' list[str] contract shared by every provider override
+        if type(self) is not OpenAIGPTConfig:
+            return super().discover_models(litellm_params)
+        api_key: Final = _litellm_params_str(litellm_params, "api_key")
+        api_base: Final = _litellm_params_str(litellm_params, "api_base")
+        workload_identity_config: Final = resolve_openai_workload_identity_config(
+            api_key=api_key, api_base=api_base, litellm_params=litellm_params
+        )
+        if workload_identity_config is None:
+            return self.get_models(api_key=api_key, api_base=api_base)
+        return self._fetch_model_ids(
+            api_base=api_base, bearer_token=get_workload_identity_bearer_token(workload_identity_config)
+        )
+
+    @staticmethod
+    def _fetch_model_ids(
+        api_base: str | None, bearer_token: str | None
+    ) -> list[str]:  # mutable-ok: matches get_models' list[str] contract shared by every provider override
+        parsed_url: Final = httpx.URL(api_base or "https://api.openai.com")
+        port_suffix: Final = f":{parsed_url.port}" if parsed_url.port else ""
+        response: Final = litellm.module_level_client.get(
+            url=f"{parsed_url.scheme}://{parsed_url.host}{port_suffix}/v1/models",
+            headers={"Authorization": f"Bearer {bearer_token}"},
+        )
         if response.status_code != 200:
             raise Exception(f"Failed to get models: {response.text}")
-
-        models: Final = response.json()["data"]
-        return [model["id"] for model in models]
+        return [model["id"] for model in response.json()["data"]]
 
     @staticmethod
     def get_api_key(api_key: str | None = None) -> str | None:
@@ -833,7 +896,7 @@ class OpenAIUnknownModelConfig(OpenAIGPTConfig):
     forward reasoning_effort and let the server decide whether it is supported."""
 
     def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: inherited contract
-        return super().get_supported_openai_params(model) + ["reasoning_effort"]  # mutable-ok: inherited contract
+        return super().get_supported_openai_params(model) + ["reasoning_effort"]
 
 
 class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
@@ -892,6 +955,9 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
             }
             if "usage" in chunk and chunk["usage"] is not None:
                 kwargs["usage"] = chunk["usage"]
+            service_tier: Final = chunk.get("service_tier")
+            if isinstance(service_tier, str) and service_tier:
+                kwargs["service_tier"] = service_tier
             return ModelResponseStream(**kwargs)
         except Exception as e:
             raise e

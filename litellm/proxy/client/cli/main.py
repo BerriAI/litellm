@@ -1,11 +1,12 @@
 # stdlib imports
 
 # third party imports
-from typing import Final
+from typing import Final, Protocol
 
 import click
 
 from litellm._version import version as litellm_version
+from litellm.litellm_core_utils.cli_token_utils import load_cli_token
 from litellm.proxy.client.health import HealthManagementClient
 
 from .commands.agents import agent_commands
@@ -14,6 +15,7 @@ from .commands.auth import (
     auth_group,
     context_secret_vault,
     get_stored_api_key,
+    keychain_unreadable_notice,
     login,
     logout,
     whoami,
@@ -21,7 +23,7 @@ from .commands.auth import (
 from .commands.autoroute.commands import autoroute_group
 from .commands.chat import chat
 from .commands.config import config_commands, get_config_value, hidden_command_names
-from .commands.configure import configure_group, unconfigure_group
+from .commands.configure import configure_group, reconfigure_group, unconfigure_group
 from .commands.credentials import credentials
 from .commands.debug import debug
 from .commands.encryption import encryption
@@ -35,6 +37,15 @@ from .commands.teams import teams
 from .commands.up import down, up
 from .commands.users import users
 from .interface import interactive_shell
+
+
+class _CliContextObjView(Protocol):
+    @property
+    def obj(self) -> CliContextObj: ...
+
+
+def _cli_context_obj(view: _CliContextObjView) -> CliContextObj:
+    return view.obj
 
 
 def print_version(base_url: str, api_key: str | None):
@@ -80,7 +91,7 @@ class HideConfiguredCommandsGroup(click.Group):
     envvar="LITELLM_PROXY_URL",
     show_envvar=True,
     default=None,
-    show_default="base_url from `lite config`, else http://localhost:4000",
+    show_default="base_url from `lite config`, else the `lite login` server for a bare `lite` with no key, else http://localhost:4000",
     help="Base URL of the LiteLLM proxy server",
 )
 @click.option(
@@ -96,14 +107,32 @@ def cli(ctx: click.Context, show_version: bool, base_url: str | None, api_key: s
 
     stored_base_url: Final = get_config_value("base_url")
     base_url_provided: Final = base_url is not None
+    shell: Final = ctx.invoked_subcommand is None and not show_version
+    login: Final = (
+        load_cli_token(vault=context_secret_vault(ctx))
+        if shell and base_url is None and not stored_base_url and api_key is None
+        else None
+    )
+    login_base_url: Final = login.base_url if login is not None and login.key else None
+    if login is not None and login.base_url and not login.key:
+        click.secho(
+            keychain_unreadable_notice(
+                context_secret_vault(ctx), login_command=f"lite --base-url {login.base_url} login"
+            ),
+            fg="yellow",
+            err=True,
+        )
 
     # Normalize once here so every downstream command (login, agents, http, ...) can safely
     # do f"{base_url}/some/path" without producing a double slash.
-    base_url = ((stored_base_url or "http://localhost:4000") if base_url is None else base_url).rstrip("/")
+    base_url = (
+        (stored_base_url or login_base_url or "http://localhost:4000") if base_url is None else base_url
+    ).rstrip("/")
 
     # If no API key provided via flag or environment variable, try to load from saved token.
     # Pass base_url so we only use the stored key when it was issued for this server.
-    api_key_from_token_file: Final = api_key is None and ctx.invoked_subcommand not in ("configure", "unconfigure")
+    setup_command: Final = ctx.invoked_subcommand in ("configure", "reconfigure", "unconfigure")
+    api_key_from_token_file: Final = api_key is None and not setup_command
     resolved_api_key: Final = (
         get_stored_api_key(expected_base_url=base_url, vault=context_secret_vault(ctx))
         if api_key_from_token_file
@@ -119,7 +148,7 @@ def cli(ctx: click.Context, show_version: bool, base_url: str | None, api_key: s
     # "user said localhost:4000 on purpose" so they can fall back to
     # whatever server the stored token was actually issued for. A base_url
     # saved via `lite config set` counts as the user saying it.
-    ctx.obj["base_url_explicit"] = base_url_provided or bool(stored_base_url)
+    ctx.obj["base_url_explicit"] = base_url_provided or (bool(stored_base_url) and not setup_command)
 
     if show_version:
         print_version(base_url, resolved_api_key)
@@ -127,14 +156,14 @@ def cli(ctx: click.Context, show_version: bool, base_url: str | None, api_key: s
 
     # If no subcommand was invoked, start interactive mode
     if ctx.invoked_subcommand is None:
-        interactive_shell(ctx)
+        interactive_shell(ctx, cli)
 
 
 @cli.command()
 @click.pass_context
 def version(ctx: click.Context):
     """Show the LiteLLM Proxy CLI and server version."""
-    ctx_obj: Final[CliContextObj] = ctx.obj
+    ctx_obj: Final = _cli_context_obj(ctx)
     print_version(ctx_obj.get("base_url"), ctx_obj.get("api_key"))
 
 
@@ -174,6 +203,7 @@ cli.add_command(autoroute_group, name="autoroute")
 cli.add_command(config_commands)
 # Add configure/unconfigure (persistently wire a coding agent to the proxy with a virtual key)
 cli.add_command(configure_group)
+cli.add_command(reconfigure_group)
 cli.add_command(unconfigure_group)
 
 

@@ -292,6 +292,9 @@ describe("TeamMembersComponent", () => {
 
     expect(screen.getByText("$100.50")).toBeInTheDocument();
     expect(screen.getByText("$1,538.26")).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "$100.50" })).toHaveClass("text-right");
+    expect(screen.getByRole("columnheader", { name: /^Team Member Budget \(USD\)/ })).toHaveClass("text-right");
+    expect(screen.getByRole("columnheader", { name: "User Email" })).not.toHaveClass("text-right");
     expect(screen.getByText(/100 RPM/)).toBeInTheDocument();
     expect(screen.getByText(/10000 TPM/)).toBeInTheDocument();
   });
@@ -429,8 +432,29 @@ describe("TeamMembersComponent", () => {
       allowed_models: [],
       temp_budget_increase: 0,
       temp_budget_expiry: "2030-01-02T03:04:00Z",
+      model_max_budget: null,
     };
     expect(seedMemberBudgetFields({ user_id: "user1@test.com", role: "member" }, budget)).toStrictEqual(seeded);
+  });
+
+  it("seeds the team's default per-model budget when the member has no per-model override", () => {
+    const teamDefault = { "gpt-4o": { max_budget: 10, budget_duration: "30d" } };
+    const ownRowWithoutModelCaps = {
+      ...createMockTeamData().team_memberships[0].litellm_budget_table,
+      model_max_budget: {},
+    };
+    const memberOverride = { "gpt-4o": { max_budget: 2.5, budget_duration: "7d" } };
+    const ownRowWithModelCaps = { ...ownRowWithoutModelCaps, model_max_budget: memberOverride };
+
+    expect(
+      seedMemberBudgetFields({ user_id: "u", role: "user" }, ownRowWithoutModelCaps, teamDefault).model_max_budget,
+    ).toBe(teamDefault);
+    expect(seedMemberBudgetFields({ user_id: "u", role: "user" }, undefined, teamDefault).model_max_budget).toBe(
+      teamDefault,
+    );
+    expect(
+      seedMemberBudgetFields({ user_id: "u", role: "user" }, ownRowWithModelCaps, teamDefault).model_max_budget,
+    ).toBe(memberOverride);
   });
 
   it("seeds null temporary budget fields for a member without a budget row", () => {
@@ -575,7 +599,7 @@ describe("TeamMembersComponent", () => {
       POST.mockRejectedValue(new Error("Cannot reset your own spend. Ask a proxy admin."));
       renderEditableTab();
 
-      await user.click(screen.getByTestId("reset-member-spend"));
+      await user.click(within(screen.getByRole("row", { name: /user1@test\.com/ })).getByTestId("reset-member-spend"));
       const dialog = await screen.findByRole("dialog", { name: "Reset Team Member Spend" });
       await user.click(within(dialog).getByRole("button", { name: "Reset" }));
 
@@ -588,7 +612,7 @@ describe("TeamMembersComponent", () => {
       const user = userEvent.setup();
       renderEditableTab();
 
-      await user.click(screen.getByTestId("reset-member-spend"));
+      await user.click(within(screen.getByRole("row", { name: /user1@test\.com/ })).getByTestId("reset-member-spend"));
       const dialog = await screen.findByRole("dialog", { name: "Reset Team Member Spend" });
       await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
 
@@ -596,31 +620,47 @@ describe("TeamMembersComponent", () => {
       expect(POST).not.toHaveBeenCalled();
     });
 
-    it("only offers the reset on members that have current cycle spend", () => {
+    it("disables the reset with a reason on members that have no current cycle spend", async () => {
+      const user = userEvent.setup();
       renderEditableTab();
 
-      expect(
-        within(screen.getByRole("row", { name: /user1@test\.com/ })).getByTestId("reset-member-spend"),
-      ).toBeVisible();
-      expect(
-        within(screen.getByRole("row", { name: /user2@test\.com/ })).queryByTestId("reset-member-spend"),
-      ).not.toBeInTheDocument();
+      const resetButton = within(screen.getByRole("row", { name: /user2@test\.com/ })).getByTestId(
+        "reset-member-spend",
+      );
+      await user.hover(resetButton);
+      expect(await screen.findByText("No current cycle spend to reset")).toBeInTheDocument();
+
+      await user.click(resetButton);
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
 
-    it("hides the reset on the caller's own row for a team admin, since the backend rejects it", () => {
+    it("disables the reset with a reason on the caller's own row for a team admin, since the backend rejects it", async () => {
+      const user = userEvent.setup();
       vi.mocked(useAuthorized).mockReturnValue({ userId: "user1@test.com", userRole: "Internal User" } as never);
       vi.mocked(isProxyAdminRole).mockReturnValue(false);
       renderEditableTab();
 
-      expect(screen.queryByTestId("reset-member-spend")).not.toBeInTheDocument();
+      const resetButton = within(screen.getByRole("row", { name: /user1@test\.com/ })).getByTestId(
+        "reset-member-spend",
+      );
+      await user.hover(resetButton);
+      expect(await screen.findByText("Ask a proxy admin to reset your own spend")).toBeInTheDocument();
+
+      await user.click(resetButton);
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
 
-    it("shows the reset on the caller's own row for a proxy admin", () => {
+    it("allows the reset on the caller's own row for a proxy admin", async () => {
+      const user = userEvent.setup();
       vi.mocked(useAuthorized).mockReturnValue({ userId: "user1@test.com", userRole: "Admin" } as never);
       vi.mocked(isProxyAdminRole).mockReturnValue(true);
       renderEditableTab();
 
-      expect(screen.getByTestId("reset-member-spend")).toBeVisible();
+      await user.click(within(screen.getByRole("row", { name: /user1@test\.com/ })).getByTestId("reset-member-spend"));
+
+      expect(await screen.findByRole("dialog", { name: "Reset Team Member Spend" })).toHaveTextContent(
+        "user1@test.com",
+      );
     });
   });
 
@@ -680,6 +720,44 @@ describe("TeamMembersComponent", () => {
       expect(customRow).toHaveTextContent("$1,000.00");
       expect(within(inheritedRow).getByTestId("member-budget-source")).toHaveTextContent("Team default");
       expect(inheritedRow).toHaveTextContent("$25.00");
+    });
+
+    it("caps a Custom member at the team default when the private row has no budget limit", () => {
+      const base = createMockTeamData();
+      renderTab(
+        createMockTeamData({
+          team_info: {
+            ...base.team_info,
+            team_member_budget_table: { max_budget: 20, budget_duration: null, tpm_limit: null, rpm_limit: null },
+          },
+          team_memberships: [
+            {
+              user_id: "user2@test.com",
+              team_id: "team-123",
+              budget_id: "budget2",
+              budget_source: "custom",
+              spend: 0,
+              total_spend: 0,
+              litellm_budget_table: {
+                budget_id: "budget3",
+                soft_budget: null,
+                max_budget: null,
+                max_parallel_requests: null,
+                tpm_limit: null,
+                rpm_limit: 100,
+                model_max_budget: null,
+                budget_duration: null,
+                budget_reset_at: null,
+              },
+            },
+          ],
+        }),
+      );
+
+      const row = screen.getByRole("row", { name: /user2@test\.com/ });
+      expect(within(row).getByTestId("member-budget-source")).toHaveTextContent("Custom");
+      expect(row).toHaveTextContent("$20.00");
+      expect(row).not.toHaveTextContent("Unlimited");
     });
 
     it("shows no source label for a member with neither a custom nor a team budget", () => {

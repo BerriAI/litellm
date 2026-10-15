@@ -1,11 +1,17 @@
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, TypeAlias
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, PrivateAttr, StrictInt
+from pydantic import ConfigDict, Field, PrivateAttr, StrictInt, field_validator
 from typing_extensions import ReadOnly, Required, TypedDict
 
-from litellm.types.llms.base import LiteLLMPydanticObjectBase
+from litellm.types.llms.base import LiteLLMBaseModel, LiteLLMPydanticObjectBase
+from litellm.types.proxy.agent_identity import (
+    AgentExecutionMode,
+    AgentIdentityBinding,
+    EntraIdentityConfig,
+)
 
 if TYPE_CHECKING:
     from a2a.types import SendMessageResponse
@@ -178,9 +184,80 @@ class AgentObjectPermission(TypedDict, total=False):
     agents: list[str] | None
 
 
+class AgentKillSwitchBearerAuth(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["bearer"]
+    token: str
+
+
+class AgentKillSwitchApiKeyAuth(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["api_key"]
+    header_name: str = "x-api-key"
+    api_key: str
+
+
+class AgentKillSwitchBasicAuth(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["basic"]
+    username: str
+    password: str
+
+
+AgentKillSwitchAuth: TypeAlias = Annotated[
+    AgentKillSwitchBearerAuth | AgentKillSwitchApiKeyAuth | AgentKillSwitchBasicAuth,
+    Field(discriminator="type"),
+]
+
+AgentKillSwitchMethod: TypeAlias = Literal["POST", "PUT", "PATCH", "DELETE", "GET"]
+
+
+class AgentKillSwitchConfig(LiteLLMBaseModel):
+    """Webhook an admin fires to shut an agent down out of band. LiteLLM only
+    makes the call; whatever the endpoint does with it is the agent's business."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    url: str
+    method: AgentKillSwitchMethod = "POST"
+    headers: Mapping[str, str] = Field(default_factory=dict)
+    query_params: Mapping[str, str] = Field(default_factory=dict)
+    body: Mapping[str, object] | None = None
+    auth: AgentKillSwitchAuth | None = None
+
+    @field_validator("url")
+    @classmethod
+    def _require_absolute_http_url(cls, value: str) -> str:
+        parts: Final = urlsplit(value)
+        if parts.scheme not in ("http", "https") or not parts.netloc:
+            raise ValueError("kill_switch.url must be an absolute http(s) URL")
+        return value
+
+
+class AgentKillSwitchResult(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    agent_id: str
+    url: str
+    method: AgentKillSwitchMethod
+    status_code: int | None = None
+    response_body: str | None = None
+    error: str | None = None
+
+    @property
+    def succeeded(self) -> bool:
+        return self.status_code is not None and 200 <= self.status_code < 300
+
+
 class AgentConfig(TypedDict, total=False):
+    identity: ReadOnly[EntraIdentityConfig | None]
+    enabled: ReadOnly[bool]
+    execution_mode: ReadOnly[AgentExecutionMode]
     agent_name: Required[str]
-    agent_card_params: Required[AgentCard]
+    agent_card_params: ReadOnly[AgentCard]
     litellm_params: dict[str, object]  # allow for any future litellm params
     object_permission: AgentObjectPermission
     tpm_limit: int | None
@@ -190,9 +267,13 @@ class AgentConfig(TypedDict, total=False):
     static_headers: dict[str, str] | None
     extra_headers: list[str] | None
     access_group_ids: ReadOnly[Sequence[str] | None]
+    kill_switch: ReadOnly[AgentKillSwitchConfig | None]
 
 
 class PatchAgentRequest(TypedDict, total=False):
+    identity: ReadOnly[EntraIdentityConfig | None]
+    enabled: ReadOnly[bool]
+    execution_mode: ReadOnly[AgentExecutionMode]
     agent_name: str
     agent_card_params: AgentCard
     litellm_params: dict[str, object]
@@ -204,13 +285,14 @@ class PatchAgentRequest(TypedDict, total=False):
     static_headers: dict[str, str] | None
     extra_headers: list[str] | None
     access_group_ids: ReadOnly[Sequence[str] | None]
+    kill_switch: ReadOnly[AgentKillSwitchConfig | None]
 
 
 AGENT_CALLER_USER_ID_HEADER: Final = "x-litellm-user-id"
 AGENT_CALLER_TEAM_ID_HEADER: Final = "x-litellm-team-id"
 
 
-class AgentCaller(BaseModel):
+class AgentCaller(LiteLLMBaseModel):
     """The user and team that invoked an agent, echoed back by the agent on its own proxy calls.
     Only ever narrows what the agent's key may do."""
 
@@ -223,13 +305,18 @@ class AgentCaller(BaseModel):
 # Request/Response models for CRUD endpoints
 
 
-class AgentKeySummary(BaseModel):
+class AgentKeySummary(LiteLLMBaseModel):
     token: str
     key_alias: str | None = None
     key_name: str | None = None
 
 
-class AgentResponse(BaseModel):
+class AgentResponse(LiteLLMBaseModel):
+    identity: AgentIdentityBinding | None = None
+    identity_managed: bool = False
+    enabled: bool = True
+    execution_mode: AgentExecutionMode = "autonomous"
+    jwt_auth_configured: bool = False
     agent_id: str
     agent_name: str
     litellm_params: dict[str, object] | None = None
@@ -243,6 +330,7 @@ class AgentResponse(BaseModel):
     static_headers: dict[str, str] | None = None
     extra_headers: list[str] | None = None
     access_group_ids: Sequence[str] | None = None
+    kill_switch: AgentKillSwitchConfig | None = None
     keys: list[AgentKeySummary] | None = None
     search_score: float | None = None
     created_at: datetime | None = None
@@ -251,7 +339,7 @@ class AgentResponse(BaseModel):
     updated_by: str | None = None
 
 
-class ListAgentsResponse(BaseModel):
+class ListAgentsResponse(LiteLLMBaseModel):
     agents: list[AgentResponse]
 
 
@@ -272,6 +360,14 @@ class AgentCreateResponse(LiteLLMPydanticObjectBase):
 
     _hidden_params: dict[str, object] = PrivateAttr(default_factory=dict)
 
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
 
 class AgentDeleteResult(LiteLLMPydanticObjectBase):
     """Result of a provider-side agent deletion (e.g. Gemini DELETE /v1beta/agents/{name}).
@@ -285,6 +381,14 @@ class AgentDeleteResult(LiteLLMPydanticObjectBase):
     model_config = {"extra": "allow"}
 
     _hidden_params: dict[str, object] = PrivateAttr(default_factory=dict)
+
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
 
 
 class AgentListResponse(LiteLLMPydanticObjectBase):
@@ -300,6 +404,14 @@ class AgentListResponse(LiteLLMPydanticObjectBase):
 
     _hidden_params: dict[str, object] = PrivateAttr(default_factory=dict)
 
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
 
 class AgentVersionsResponse(LiteLLMPydanticObjectBase):
     """Response from listing versions of an agent (e.g. Gemini GET /v1beta/agents/{name}/versions).
@@ -314,18 +426,26 @@ class AgentVersionsResponse(LiteLLMPydanticObjectBase):
 
     _hidden_params: dict[str, object] = PrivateAttr(default_factory=dict)
 
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
 
-class AgentMakePublicResponse(BaseModel):
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
+
+class AgentMakePublicResponse(LiteLLMBaseModel):
     message: str
     public_agent_groups: list[str]
     updated_by: str
 
 
-class MakeAgentsPublicRequest(BaseModel):
+class MakeAgentsPublicRequest(LiteLLMBaseModel):
     agent_ids: list[str]
 
 
-def _normalize_a2a_jsonrpc_response(
+def normalize_a2a_jsonrpc_response(
     response_dict: Mapping[str, object],
     request_id: object | None = None,
 ) -> dict[str, object]:
@@ -355,6 +475,9 @@ def _normalize_a2a_jsonrpc_response(
     return normalized
 
 
+_normalize_a2a_jsonrpc_response = normalize_a2a_jsonrpc_response
+
+
 class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
     """
     LiteLLM wrapper for A2A SendMessageResponse.
@@ -377,6 +500,14 @@ class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
     # LiteLLM private attributes for logging/cost tracking
     _hidden_params: dict[str, object] = PrivateAttr(default_factory=dict)
 
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
     @classmethod
     def from_a2a_response(
         cls,
@@ -393,7 +524,7 @@ class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
         Returns:
             LiteLLMSendMessageResponse with _hidden_params support
         """
-        response_dict: Final = _normalize_a2a_jsonrpc_response(
+        response_dict: Final = normalize_a2a_jsonrpc_response(
             response.model_dump(mode="json", exclude_none=True), request_id=request_id
         )
         return cls.model_validate(response_dict)
@@ -414,4 +545,4 @@ class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
         Returns:
             LiteLLMSendMessageResponse with _hidden_params support
         """
-        return cls.model_validate(_normalize_a2a_jsonrpc_response(response_dict, request_id=request_id))
+        return cls.model_validate(normalize_a2a_jsonrpc_response(response_dict, request_id=request_id))

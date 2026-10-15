@@ -5,9 +5,8 @@ import { useWorker } from "@/hooks/useWorker";
 import { getProxyBaseUrl } from "@/components/networking";
 import { uiHref } from "@/utils/uiHref";
 import { useTheme } from "@/contexts/ThemeContext";
-import { clearTokenCookies } from "@/utils/cookieUtils";
-import { clearStoredReturnUrl, getLoginUrl } from "@/utils/returnUrlUtils";
-import useProxySettings from "@/app/(dashboard)/hooks/proxySettings/useProxySettings";
+import { revokeSessionAndClearClientState, useLogout } from "@/app/(dashboard)/hooks/useLogout";
+import { getLoginUrl } from "@/utils/returnUrlUtils";
 import { Badge } from "@/components/ui/badge";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import Link from "next/link";
@@ -27,6 +26,7 @@ interface NavbarProps {
   isPublicPage: boolean;
   sidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
+  deploymentHealth?: React.ReactNode;
 }
 
 const NAV_LOGO_CLASS_NAME = "h-auto max-h-full w-auto max-w-full object-contain";
@@ -36,9 +36,9 @@ const Navbar: React.FC<NavbarProps> = ({
   isPublicPage = false,
   sidebarCollapsed = false,
   onToggleSidebar,
+  deploymentHealth,
 }) => {
   const baseUrl = getProxyBaseUrl();
-  const proxySettings = useProxySettings(accessToken);
   const { logoUrl } = useTheme();
   const { data: healthData } = useHealthReadinessDetails(accessToken);
   const version = healthData?.litellm_version;
@@ -50,19 +50,12 @@ const Navbar: React.FC<NavbarProps> = ({
   const imageUrl = logoUrl || `${baseUrl}/get_image`;
   const darkImageUrl = logoUrl || `${baseUrl}/get_image?theme=dark`;
 
-  const handleLogout = () => {
-    clearTokenCookies();
-    localStorage.removeItem("litellm_selected_worker_id");
-    localStorage.removeItem("litellm_worker_url");
-    window.location.href = proxySettings.PROXY_LOGOUT_URL || "";
-  };
+  const handleLogout = useLogout(accessToken);
 
   const handleWorkerSwitch = (workerId: string) => {
-    clearTokenCookies();
-    clearStoredReturnUrl();
-    localStorage.removeItem("litellm_selected_worker_id");
-    localStorage.removeItem("litellm_worker_url");
-    window.location.href = `${getLoginUrl()}?worker=${encodeURIComponent(workerId)}`;
+    void revokeSessionAndClearClientState(accessToken).finally(() => {
+      window.location.href = `${getLoginUrl()}?worker=${encodeURIComponent(workerId)}`;
+    });
   };
 
   return (
@@ -158,7 +151,8 @@ const Navbar: React.FC<NavbarProps> = ({
                 <div className="flex items-center gap-0.5 rounded-lg bg-muted px-1 py-0 transition-colors hover:bg-accent">
                   <ThemeToggle />
                   <span className="mx-0.5 h-6 w-px shrink-0 bg-border" aria-hidden />
-                  <NotificationsBell />
+                  {deploymentHealth}
+                  <NotificationsBell accessToken={accessToken} />
                   <span className="mx-0.5 h-6 w-px shrink-0 bg-border" aria-hidden />
                   <UserDropdown onLogout={handleLogout} />
                 </div>

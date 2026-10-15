@@ -2,17 +2,17 @@ use std::sync::Arc;
 
 use aws_credential_types::provider::{ProvideCredentials, error::CredentialsError, future};
 use litellm_auth_aws::{
-    AwsAuthConfig,
+    AwsAuthConfig, AwsAuthService,
     constants::{AWS_DEFAULT_REGION, AWS_REGION, AWS_REGION_NAME},
-    resolve_credentials,
 };
 use litellm_core_utils::settings::Lookup;
-use litellm_secrets_types::KeyManagementSettings;
+use litellm_secrets_types::{AwsOperationContext, KeyManagementSettings};
 
 use crate::Error;
 
 #[derive(Clone)]
 pub(crate) struct Credentials {
+    auth: AwsAuthService,
     config: AwsAuthConfig,
     environment: Arc<dyn Lookup + Send + Sync>,
 }
@@ -22,8 +22,35 @@ impl Credentials {
         settings: &KeyManagementSettings,
         environment: Arc<dyn Lookup + Send + Sync>,
     ) -> Self {
+        Self::with_context(
+            AwsAuthService::default(),
+            settings,
+            environment,
+            &AwsOperationContext::default(),
+        )
+    }
+
+    pub(crate) fn with_context(
+        auth: AwsAuthService,
+        settings: &KeyManagementSettings,
+        environment: Arc<dyn Lookup + Send + Sync>,
+        context: &AwsOperationContext,
+    ) -> Self {
         Self {
+            auth,
             config: AwsAuthConfig {
+                access_key_id: context
+                    .access_key_id
+                    .as_ref()
+                    .map(|value| value.expose().to_owned()),
+                secret_access_key: context
+                    .secret_access_key
+                    .as_ref()
+                    .map(|value| value.expose().to_owned()),
+                session_token: context
+                    .session_token
+                    .as_ref()
+                    .map(|value| value.expose().to_owned()),
                 region_name: region(settings, environment.as_ref()).ok(),
                 role_name: settings.aws_role_name.clone(),
                 session_name: settings.aws_session_name.clone(),
@@ -37,7 +64,6 @@ impl Credentials {
                     .as_ref()
                     .map(|v| v.expose().to_owned()),
                 sts_endpoint: settings.aws_sts_endpoint.clone(),
-                ..Default::default()
             },
             environment,
         }
@@ -50,7 +76,8 @@ impl ProvideCredentials for Credentials {
         Self: 'a,
     {
         future::ProvideCredentials::new(async {
-            resolve_credentials(self.config.clone(), &|name| self.environment.get(name))
+            self.auth
+                .resolve_credentials(self.config.clone(), &|name| self.environment.get(name))
                 .await
                 .map_err(|_| {
                     CredentialsError::provider_error("secret manager authentication failed")

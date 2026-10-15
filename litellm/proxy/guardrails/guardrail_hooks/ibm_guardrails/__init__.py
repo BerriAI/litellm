@@ -49,6 +49,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         verify_ssl=verify_ssl,
         default_on=litellm_params.default_on,
         event_hook=litellm_params.mode,
+        timeout=litellm_params.timeout,
     )
 
     litellm.logging_callback_manager.add_litellm_callback(ibm_guardrail)

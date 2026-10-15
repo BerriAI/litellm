@@ -25,6 +25,16 @@ type ModelResponse struct {
 	Additional    map[string]interface{} `json:"additional"`
 }
 
+// ModelInfoPatch is the body for PATCH /model/{id}/update; display_name is sent even when empty so it can be cleared.
+type ModelInfoPatch struct {
+	ModelInfo ModelInfoPatchFields `json:"model_info"`
+}
+
+type ModelInfoPatchFields struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"display_name"`
+}
+
 // ModelRequest represents a request to create or update a model.
 type ModelRequest struct {
 	ModelName     string                 `json:"model_name"`
@@ -63,6 +73,12 @@ type TeamResponse struct {
 	ModelRPMLimit            map[string]interface{} `json:"model_rpm_limit,omitempty"`
 	ModelTPMLimit            map[string]interface{} `json:"model_tpm_limit,omitempty"`
 	AllowedPassthroughRoutes []string               `json:"allowed_passthrough_routes,omitempty"`
+	TeamMemberBudgetTable    *TeamMemberBudgetTable `json:"team_member_budget_table,omitempty"`
+}
+
+// TeamMemberBudgetTable is the team's default member budget row, the only place /team/info returns team_member_model_max_budget.
+type TeamMemberBudgetTable struct {
+	ModelMaxBudget map[string]interface{} `json:"model_max_budget,omitempty"`
 }
 
 // OrganizationResponse represents a response from the API containing organization information.
@@ -108,18 +124,20 @@ type LiteLLMParams struct {
 
 // ModelInfo represents information about a model.
 type ModelInfo struct {
-	ID        string `json:"id"`
-	DBModel   bool   `json:"db_model"`
-	BaseModel string `json:"base_model"`
-	Tier      string `json:"tier"`
-	Mode      string `json:"mode"`
-	TeamID    string `json:"team_id,omitempty"`
+	ID          string `json:"id"`
+	DBModel     bool   `json:"db_model"`
+	BaseModel   string `json:"base_model"`
+	Tier        string `json:"tier"`
+	Mode        string `json:"mode"`
+	TeamID      string `json:"team_id,omitempty"`
+	DisplayName string `json:"display_name,omitempty"`
 }
 
 // Key represents a LiteLLM API key.
 type Key struct {
 	Key                      string                 `json:"key,omitempty"`
 	TokenID                  string                 `json:"token_id,omitempty"`
+	KeyType                  string                 `json:"key_type,omitempty"`
 	Models                   []string               `json:"models"`
 	Spend                    float64                `json:"spend,omitempty"`
 	MaxBudget                *float64               `json:"max_budget,omitempty"`

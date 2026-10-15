@@ -6,6 +6,7 @@ import { useTags } from "@/app/(dashboard)/hooks/tags/useTags";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useCan from "@/app/(dashboard)/hooks/useCan";
+import { parseTeamAdminEditableFields } from "@/components/team/teamAdminEditAccess";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -80,6 +81,14 @@ import {
 import CreatedKeyDisplay from "../shared/CreatedKeyDisplay";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
+import {
+  administersTeam,
+  anotherUserScope,
+  effectiveKeyOwner,
+  isTeamMemberOwner,
+  teamMemberOwnerOptions,
+  teamMemberOwnerPlaceholder,
+} from "./createKeyOwnerAccess";
 import { buildKeyCreatePayload, type KeyCreateInput } from "./createKeyPayload";
 import { simplifyKeyGenerateError } from "./utils";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -248,7 +257,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const [apiKey, setApiKey] = useState(null);
   const [userModels, setUserModels] = useState<string[]>([]);
   const [modelsToPick, setModelsToPick] = useState<string[]>([]);
-  const [keyOwner, setKeyOwner] = useState("you");
+  const [requestedKeyOwner, setKeyOwner] = useState("you");
   const [hasPrefilled, setHasPrefilled] = useState(false);
   const [pendingPrefillModels, setPendingPrefillModels] = useState<string[] | null>(null);
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
@@ -279,6 +288,13 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const [agentsList, setAgentsList] = useState<{ agent_id: string; agent_name: string }[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const selectedModels: string[] = (useWatch({ control: form.control, name: "models" }) as string[] | undefined) ?? [];
+  const teamAdminEditableFields = parseTeamAdminEditableFields(uiSettingsData?.values);
+  const keyOwnerViewer = { userRole, userId: userID, teamAdminEditableFields, teams };
+  const ownerScope = anotherUserScope(keyOwnerViewer);
+  const keyOwner = effectiveKeyOwner(requestedKeyOwner, ownerScope);
+  const ownerLimitedToTeamMembers = keyOwner === "another_user" && ownerScope === "team_members";
+  const memberOwnerOptions = teamMemberOwnerOptions(selectedCreateKeyTeam, userID);
+  const ownerRequiresTeam = keyOwner === "service_account" || ownerLimitedToTeamMembers;
   const handleCancel = () => {
     setIsModalVisible(false);
     setApiKey(null);
@@ -383,14 +399,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
 
       // Apply prefill data if provided
       if (prefillData) {
-        // Set key owner (owned_by) - validate that "another_user" is only allowed for Admin
         if (prefillData.owned_by) {
-          if (prefillData.owned_by === "another_user" && userRole !== "Admin") {
-            // Ignore invalid owned_by for non-admin users, fall back to default
-            setKeyOwner("you");
-          } else {
-            setKeyOwner(prefillData.owned_by);
-          }
+          setKeyOwner(prefillData.owned_by);
         }
 
         // Set team - find the team by ID and set it (only if team exists in user's teams)
@@ -616,6 +626,23 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     }
   };
 
+  const changeKeyOwner = (owner: string) => {
+    setKeyOwner(owner);
+    const limitsOwnerToTeamMembers = owner === "another_user" && ownerScope === "team_members";
+    if (limitsOwnerToTeamMembers && selectedCreateKeyTeam && !administersTeam(selectedCreateKeyTeam, userID)) {
+      selectTeam(null);
+      form.setValue("team_id", null);
+    }
+  };
+
+  useEffect(() => {
+    if (!ownerLimitedToTeamMembers) return;
+    const owner = form.getValues("user_id");
+    if (owner != null && !isTeamMemberOwner(owner, selectedCreateKeyTeam, userID)) {
+      form.setValue("user_id", null);
+    }
+  }, [ownerLimitedToTeamMembers, selectedCreateKeyTeam, userID, form]);
+
   const changeProject = (write: FieldWrite) => (projectId: string | null) => {
     write(projectId);
     if (!projectId) {
@@ -650,6 +677,68 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     }
   };
 
+  const memberOwnerPlaceholder = teamMemberOwnerPlaceholder(memberOwnerOptions, selectedCreateKeyTeam);
+  const requiredTeamHelp = ownerLimitedToTeamMembers
+    ? "required, the key's owner must be a member of this team"
+    : "required";
+  const teamFieldHelp = ownerRequiresTeam ? requiredTeamHelp : "";
+  const ownerField = keyOwner === "another_user" && (
+    <MountedFormField
+      label={
+        <span>
+          User ID{" "}
+          <SimpleTooltip content="The user who will own this key and be responsible for its usage">
+            <Info className="ml-1 inline size-3.5 align-text-bottom" />
+          </SimpleTooltip>
+        </span>
+      }
+      name="user_id"
+      className="mt-4"
+      required
+      rules={requiredRule(
+        keyOwner === "another_user",
+        `Please input the user ID of the user you are assigning the key to`,
+      )}
+    >
+      {(control) =>
+        ownerLimitedToTeamMembers ? (
+          <SearchSelect
+            inputId={control.id}
+            options={memberOwnerOptions}
+            value={typeof control.value === "string" ? control.value : null}
+            onValueChange={control.onChange}
+            disabled={memberOwnerOptions.length === 0}
+            placeholder={memberOwnerPlaceholder}
+            emptyText="No team members found"
+          />
+        ) : (
+          <div>
+            <div className="mb-2 flex">
+              <PaginatedSearchSelect
+                options={userOptions}
+                value={typeof control.value === "string" ? control.value : undefined}
+                onValueChange={control.onChange}
+                onSearchChange={fetchUsers}
+                isLoading={userSearchLoading}
+                placeholder="Type email or user ID to search for users"
+                emptyText="No users found"
+                loadingText="Searching..."
+                inputId={control.id}
+                aria-required={control["aria-required"] === "true" ? true : undefined}
+                aria-invalid={control["aria-invalid"] === "true" ? true : undefined}
+                aria-describedby={control["aria-describedby"]}
+              />
+              <Button variant="outline" className="ml-2" onClick={() => setIsCreateUserModalVisible(true)}>
+                Create User
+              </Button>
+            </div>
+            <div className="text-xs text-muted-foreground">Search by email or user ID to find users</div>
+          </div>
+        )
+      }
+    </MountedFormField>
+  );
+
   return (
     <div>
       {userRole && rolesWithWriteAccess.includes(userRole) && (
@@ -679,7 +768,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   <RadioGroup
                     className="flex flex-wrap items-center gap-4"
                     value={keyOwner}
-                    onValueChange={(value: unknown) => setKeyOwner(String(value))}
+                    onValueChange={(value: unknown) => changeKeyOwner(String(value))}
                   >
                     <label className={KEY_OWNER_LABEL_CLASS}>
                       <RadioGroupItem value="you" />
@@ -689,7 +778,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                       <RadioGroupItem value="service_account" />
                       Service Account
                     </label>
-                    {userRole === "Admin" && (
+                    {ownerScope !== "none" && (
                       <label className={KEY_OWNER_LABEL_CLASS}>
                         <RadioGroupItem value="another_user" />
                         Another User
@@ -702,50 +791,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   </RadioGroup>
                 </Field>
 
-                {keyOwner === "another_user" && (
-                  <MountedFormField
-                    label={
-                      <span>
-                        User ID{" "}
-                        <SimpleTooltip content="The user who will own this key and be responsible for its usage">
-                          <Info className="ml-1 inline size-3.5 align-text-bottom" />
-                        </SimpleTooltip>
-                      </span>
-                    }
-                    name="user_id"
-                    className="mt-4"
-                    required
-                    rules={requiredRule(
-                      keyOwner === "another_user",
-                      `Please input the user ID of the user you are assigning the key to`,
-                    )}
-                  >
-                    {(control) => (
-                      <div>
-                        <div className="mb-2 flex">
-                          <PaginatedSearchSelect
-                            options={userOptions}
-                            value={typeof control.value === "string" ? control.value : undefined}
-                            onValueChange={control.onChange}
-                            onSearchChange={fetchUsers}
-                            isLoading={userSearchLoading}
-                            placeholder="Type email or user ID to search for users"
-                            emptyText="No users found"
-                            loadingText="Searching..."
-                            inputId={control.id}
-                            aria-required={control["aria-required"] === "true" ? true : undefined}
-                            aria-invalid={control["aria-invalid"] === "true" ? true : undefined}
-                            aria-describedby={control["aria-describedby"]}
-                          />
-                          <Button variant="outline" className="ml-2" onClick={() => setIsCreateUserModalVisible(true)}>
-                            Create User
-                          </Button>
-                        </div>
-                        <div className="text-xs text-muted-foreground">Search by email or user ID to find users</div>
-                      </div>
-                    )}
-                  </MountedFormField>
-                )}
+                {!ownerLimitedToTeamMembers && ownerField}
                 {keyOwner === "agent" && (
                   <div className="mt-4 p-4 bg-purple-50 border border-purple-200 rounded-md dark:bg-purple-950 dark:border-purple-800">
                     <div className="mb-3">
@@ -803,9 +849,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   }
                   name="team_id"
                   className="mt-4"
-                  required={keyOwner === "service_account"}
-                  rules={requiredRule(keyOwner === "service_account", "Please select a team for the service account")}
-                  help={keyOwner === "service_account" ? "required" : ""}
+                  required={ownerRequiresTeam}
+                  rules={requiredRule(
+                    ownerRequiresTeam,
+                    ownerLimitedToTeamMembers
+                      ? "Please select the team the key's owner belongs to"
+                      : "Please select a team for the service account",
+                  )}
+                  help={teamFieldHelp}
                 >
                   {(control) => (
                     <TeamDropdown
@@ -815,9 +866,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                       disabled={selectedProjectId !== null}
                       organizationId={selectedOrganizationId}
                       onTeamSelect={selectTeam}
+                      filterTeam={ownerLimitedToTeamMembers ? (team) => administersTeam(team, userID) : undefined}
                     />
                   )}
                 </MountedFormField>
+                {ownerLimitedToTeamMembers && ownerField}
                 {enableProjectsUI && (
                   <MountedFormField
                     label={
@@ -1293,40 +1346,42 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           />
                         )}
                       </MountedFormField>
-                      <MountedFormField
-                        label={
-                          <span>
-                            Disable Global Guardrails{" "}
-                            <SimpleTooltip content="When enabled, this key will bypass any guardrails configured to run on every request (global guardrails)">
-                              <a
-                                href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start"
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
-                              >
-                                <Info className="ml-1 inline size-3.5 align-text-bottom" />
-                              </a>
-                            </SimpleTooltip>
-                          </span>
-                        }
-                        name="disable_global_guardrails"
-                        className="mt-4"
-                        help={
-                          canEditGuardrails
-                            ? "Bypass global guardrails for this key"
-                            : "Premium feature - Upgrade to disable global guardrails by key"
-                        }
-                      >
-                        {(control) => (
-                          <Switch
-                            id={control.id}
-                            checked={control.value === true}
-                            onCheckedChange={control.onChange}
-                            disabled={!canEditGuardrails}
-                            aria-describedby={control["aria-describedby"]}
-                          />
-                        )}
-                      </MountedFormField>
+                      {userRole != null && isProxyAdminRole(userRole) && (
+                        <MountedFormField
+                          label={
+                            <span>
+                              Disable Global Guardrails{" "}
+                              <SimpleTooltip content="When enabled, this key will bypass any guardrails configured to run on every request (global guardrails)">
+                                <a
+                                  href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start"
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
+                                >
+                                  <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                                </a>
+                              </SimpleTooltip>
+                            </span>
+                          }
+                          name="disable_global_guardrails"
+                          className="mt-4"
+                          help={
+                            canEditGuardrails
+                              ? "Bypass global guardrails for this key"
+                              : "Premium feature - Upgrade to disable global guardrails by key"
+                          }
+                        >
+                          {(control) => (
+                            <Switch
+                              id={control.id}
+                              checked={control.value === true}
+                              onCheckedChange={control.onChange}
+                              disabled={!canEditGuardrails}
+                              aria-describedby={control["aria-describedby"]}
+                            />
+                          )}
+                        </MountedFormField>
+                      )}
                       {canViewPolicies && (
                         <MountedFormField
                           label={

@@ -1,12 +1,13 @@
 from datetime import datetime, time, timezone
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 
 import litellm
 from litellm.litellm_core_utils.duration_parser import get_next_standardized_reset_time
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class BudgetResetSettings(BaseModel):
+class BudgetResetSettings(LiteLLMBaseModel):
     """Immutable, validated settings that govern when budgets reset.
 
     Parsed once from `litellm_settings` and injected into consumers (the reset

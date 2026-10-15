@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import MemberTable from "@/components/common_components/MemberTable";
+import type { StoredModelMaxBudget } from "@/components/key_team_helpers/modelMaxBudgetPayload";
 import { Member } from "@/components/networking";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
 import { DateCell, MoneyCell } from "@/components/shared/table_cells";
@@ -25,9 +26,13 @@ const BUDGET_SOURCE_LABELS: Record<Exclude<TeamMemberBudgetSource, "none">, stri
 const formatBudget = (value: number | null): string =>
   value === null ? "Unlimited" : `$${formatNumberWithCommas(value, 2)}`;
 
+const hasModelBudgets = (budget: StoredModelMaxBudget | null | undefined): budget is StoredModelMaxBudget =>
+  budget != null && Object.keys(budget).length > 0;
+
 export const seedMemberBudgetFields = (
   record: Member,
   budget: TeamMembership["litellm_budget_table"] | undefined,
+  teamDefaultModelMaxBudget?: StoredModelMaxBudget | null,
 ): Member => ({
   ...record,
   max_budget_in_team: budget?.max_budget ?? null,
@@ -37,6 +42,9 @@ export const seedMemberBudgetFields = (
   allowed_models: budget?.allowed_models || [],
   temp_budget_increase: budget?.temp_budget_increase ?? null,
   temp_budget_expiry: budget?.temp_budget_expiry ?? null,
+  model_max_budget: hasModelBudgets(budget?.model_max_budget)
+    ? budget.model_max_budget
+    : teamDefaultModelMaxBudget ?? null,
 });
 
 interface TeamMemberTabProps {
@@ -106,10 +114,7 @@ export default function TeamMemberTab({
   const getUserBudget = (userId: string | null): number | null => {
     if (!userId) return null;
     const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
-    return (
-      membership?.litellm_budget_table?.max_budget ??
-      (membership?.budget_source === "team_default" ? teamDefaultBudget : null)
-    );
+    return membership?.litellm_budget_table?.max_budget ?? teamDefaultBudget;
   };
 
   // Helper function to get rate limits for a user
@@ -189,6 +194,7 @@ export default function TeamMemberTab({
         </span>
       ),
       key: "spend",
+      numeric: true,
       sortValue: (record: Member) => getUserCurrentCycleSpend(record.user_id),
       render: (record: Member) => <MoneyCell value={getUserCurrentCycleSpend(record.user_id)} decimals={2} />,
     },
@@ -202,6 +208,7 @@ export default function TeamMemberTab({
         </span>
       ),
       key: "total_spend",
+      numeric: true,
       sortValue: (record: Member) => getUserTotalSpend(record.user_id),
       render: (record: Member) => <MoneyCell value={getUserTotalSpend(record.user_id)} decimals={2} />,
     },
@@ -215,11 +222,12 @@ export default function TeamMemberTab({
         </span>
       ),
       key: "budget",
+      numeric: true,
       sortValue: (record: Member) => getUserBudget(record.user_id),
       render: (record: Member) => {
         const source = getUserBudgetSource(record.user_id);
         return (
-          <span className="flex items-center gap-2">
+          <span className="flex items-center justify-end gap-2">
             <MoneyCell value={getUserBudget(record.user_id)} decimals={2} emptyText="Unlimited" showZero />
             {source !== "none" && (
               <Badge variant={source === "custom" ? "outline" : "secondary"} data-testid="member-budget-source">
@@ -291,6 +299,12 @@ export default function TeamMemberTab({
     );
   };
 
+  const resetSpendDisabledReason = (member: Member): string | null => {
+    if (!isProxyAdmin && member.user_id === userId) return "Ask a proxy admin to reset your own spend";
+    if (getUserCurrentCycleSpend(member.user_id) <= 0) return "No current cycle spend to reset";
+    return null;
+  };
+
   return (
     <>
       <MemberTable
@@ -299,7 +313,13 @@ export default function TeamMemberTab({
         canEdit={canEditTeam}
         onEdit={(record) => {
           const membership = teamData.team_memberships.find((tm) => tm.user_id === record.user_id);
-          setSelectedEditMember(seedMemberBudgetFields(record, membership?.litellm_budget_table));
+          setSelectedEditMember(
+            seedMemberBudgetFields(
+              record,
+              membership?.litellm_budget_table,
+              teamData.team_info.team_member_budget_table?.model_max_budget,
+            ),
+          );
           setIsEditMemberModalVisible(true);
         }}
         onDelete={handleMemberDelete}
@@ -311,9 +331,7 @@ export default function TeamMemberTab({
           isProxyAdmin || (canEditTeam && !isUserTeamAdmin) || (isUserTeamAdmin && !disableTeamAdminDeleteTeamUser)
         }
         onResetSpend={setMemberToResetSpend}
-        showResetSpendForMember={(record) =>
-          getUserCurrentCycleSpend(record.user_id) > 0 && (isProxyAdmin || record.user_id !== userId)
-        }
+        resetSpendDisabledReason={resetSpendDisabledReason}
       />
       <Dialog open={memberToResetSpend !== null} onOpenChange={(open) => !open && setMemberToResetSpend(null)}>
         <DialogContent>
