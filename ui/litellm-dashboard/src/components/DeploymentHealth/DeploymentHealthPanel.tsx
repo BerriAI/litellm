@@ -131,7 +131,7 @@ const IgnoreMeta = ({ ignore }: { ignore: IgnoreState }) => {
   if (ignore.source === "env_var") {
     return (
       <span>
-        By env var <code className="font-mono wrap-break-word">{ignore.env_var}</code>
+        By env var <code className="font-mono wrap-anywhere">{ignore.env_var}</code>
       </span>
     );
   }
@@ -182,7 +182,7 @@ const WarningItem = ({ warning, ...permissions }: ItemPermissions & { warning: D
     >
       <SeverityIcon aria-hidden />
       <AlertTitle>{content.title}</AlertTitle>
-      <AlertDescription className="flex flex-col [&_a]:no-underline [&_a]:hover:underline [&_p:not(:last-child)]:mb-0 text-[13px] leading-5 text-pretty [&_code]:font-mono [&_code]:text-[12px] [&_code]:wrap-break-word [&_code]:text-foreground">
+      <AlertDescription className="flex flex-col [&_a]:no-underline [&_a]:hover:underline [&_p:not(:last-child)]:mb-0 text-[13px] leading-5 text-pretty [&_code]:font-mono [&_code]:text-[12px] [&_code]:wrap-anywhere [&_code]:text-foreground">
         {content.fix ? <p className="mt-0.5">{content.fix}</p> : null}
         {warning.ignore ? <IgnoreStatus ignore={warning.ignore} /> : null}
         <div className="mt-2 flex items-center gap-2">
