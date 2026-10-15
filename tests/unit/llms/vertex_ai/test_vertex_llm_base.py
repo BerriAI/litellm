@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import logging
 from typing import Final
@@ -1442,6 +1443,18 @@ class TestVertexBase:
             "aws_region_name": "us-east-1",
         }
 
+    def test_extract_aws_params_keeps_values_that_are_not_strings(self):
+        json_with_null_region = {
+            "type": "external_account",
+            "aws_region_name": None,
+            "aws_session_name": 123,
+        }
+
+        assert VertexAIAwsWifAuth.extract_aws_params(json_with_null_region) == {
+            "aws_region_name": None,
+            "aws_session_name": 123,
+        }
+
     def test_credentials_from_aws_with_explicit_auth(self):
         """Test that explicit AWS auth creates credentials via supplier, not metadata."""
         json_obj = {
@@ -2275,7 +2288,8 @@ class TestVertexCredentialsSource:
         assert project_id == "from-file"
         assert from_sa.call_args.args[0] == {"type": "service_account", "project_id": "from-file"}
 
-    def test_inline_credentials_json_is_still_parsed(self):
+    @pytest.mark.parametrize("leading", ["", "\n  "])
+    def test_inline_credentials_json_is_still_parsed(self, leading):
         vertex_base = VertexBase()
         mock_creds = MagicMock()
         mock_creds.project_id = "from-inline"
@@ -2285,7 +2299,7 @@ class TestVertexCredentialsSource:
             patch.object(vertex_base, "refresh_auth"),
         ):
             creds, project_id = vertex_base.load_auth(
-                credentials=json.dumps({"type": "service_account", "project_id": "from-inline"}),
+                credentials=leading + json.dumps({"type": "service_account", "project_id": "from-inline"}),
                 project_id=None,
             )
 
@@ -2333,6 +2347,42 @@ class TestVertexCredentialsSource:
         assert creds is mock_creds
         assert project_id == "from-braced-file"
         assert from_sa.call_args.args[0] == {"type": "service_account", "project_id": "from-braced-file"}
+
+    def test_base64_encoded_credentials_are_named_and_kept_out_of_the_log(self, caplog):
+        encoded = base64.b64encode(
+            json.dumps({"type": "service_account", "private_key_id": "kid-123", "private_key": "MIIEvQIBADA"}).encode()
+        ).decode()
+
+        with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+            with pytest.raises(ValueError, match="is base64-encoded JSON") as exc_info:
+                VertexBase().load_auth(credentials=encoded, project_id="p")
+
+        assert encoded not in str(exc_info.value)
+        assert encoded[8:40] not in caplog.text
+
+    @pytest.mark.parametrize(
+        "wrapped",
+        [
+            pytest.param(json.dumps(json.dumps({"type": "service_account"})), id="double-encoded"),
+            pytest.param("'" + json.dumps({"type": "service_account"}) + "'", id="single-quoted"),
+            pytest.param("\ufeff" + json.dumps({"type": "service_account"}), id="byte-order-mark"),
+        ],
+    )
+    def test_wrapped_inline_json_is_reported_as_inline_not_as_a_file(self, wrapped):
+        with pytest.raises(ValueError, match="The inline `vertex_credentials` value is not valid JSON"):
+            VertexBase().load_auth(credentials=wrapped, project_id="p")
+
+    @pytest.mark.parametrize("empty", ["", "  \n"])
+    def test_an_empty_value_is_named_as_empty(self, empty):
+        with pytest.raises(ValueError, match="The `vertex_credentials` value is empty"):
+            VertexBase().load_auth(credentials=empty, project_id="p")
+
+    def test_a_malformed_file_named_like_json_is_reported_as_a_bad_file(self, tmp_path, monkeypatch):
+        (tmp_path / "{vertex}.json").write_text('{"type": "service_account",')
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(ValueError, match="The vertex credentials file is not valid JSON"):
+            VertexBase().load_auth(credentials="{vertex}.json", project_id="p")
 
     def test_a_credentials_file_that_is_not_text_is_reported_as_such(self, tmp_path):
         not_text = tmp_path / "vertexai.json"

@@ -1,11 +1,4 @@
-"""
-Resolve the `vertex_credentials` config value into the JSON object google-auth needs.
-
-The value is either the credentials JSON itself or a path to a file holding it. Which one
-it is decides what a failure means, so the two are told apart by the shape of the value and
-each failure is returned as its own case instead of collapsing into one parse error.
-"""
-
+import base64
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -41,12 +34,20 @@ class VertexCredentialsInlineNotJson:
 
 
 @dataclass(frozen=True, slots=True)
+class VertexCredentialsUnusable:
+    problem: str
+
+
+@dataclass(frozen=True, slots=True)
 class _NotAJsonObject:
     detail: str
 
 
 VertexCredentialsFailure: TypeAlias = (
-    VertexCredentialsFileUnreadable | VertexCredentialsFileNotJson | VertexCredentialsInlineNotJson
+    VertexCredentialsFileUnreadable
+    | VertexCredentialsFileNotJson
+    | VertexCredentialsInlineNotJson
+    | VertexCredentialsUnusable
 )
 VertexCredentialsSource: TypeAlias = VertexCredentialsJson | VertexCredentialsFailure
 _VertexCredentialsFile: TypeAlias = (
@@ -55,15 +56,13 @@ _VertexCredentialsFile: TypeAlias = (
 
 
 _JSON_OBJECT_ADAPTER: Final = TypeAdapter(dict[str, object])
+_INLINE_JSON_LEADING_NOISE: Final = " \t\r\n﻿\"'"
 
 
 def _parse_json_object(raw: str) -> Mapping[str, object] | _NotAJsonObject:
-    """Parse *raw*, describing any failure without echoing it: the input can be key material."""
     try:
         return _JSON_OBJECT_ADAPTER.validate_json(raw)
     except ValidationError as e:
-        # Only "msg" is reported. Pydantic keeps the offending value under "input", and that
-        # value is the credential.
         return _NotAJsonObject("; ".join(detail["msg"] for detail in e.errors()))
 
 
@@ -76,7 +75,6 @@ def _read_json_file(path: str) -> _VertexCredentialsFile:
     except UnicodeDecodeError:
         return VertexCredentialsFileNotJson(path, "file is not UTF-8 text")
     except ValueError as e:
-        # open() rejects a few paths before touching the filesystem, e.g. "embedded null byte".
         return VertexCredentialsFileUnreadable(path, f"{e} ({type(e).__name__})")
 
     parsed: Final = _parse_json_object(contents)
@@ -86,51 +84,56 @@ def _read_json_file(path: str) -> _VertexCredentialsFile:
 
 
 def _is_inline_credentials_json(credentials: str) -> bool:
-    """Whether *credentials* carries the JSON itself rather than a path to a file holding it."""
-    return credentials.lstrip().startswith("{")
+    return credentials.lstrip(_INLINE_JSON_LEADING_NOISE).startswith("{")
 
 
-def load_vertex_credentials_source(credentials: str) -> VertexCredentialsSource:
-    """Read *credentials* as the credentials JSON when it is shaped like one, else as a path to it.
+def _is_base64_encoded_json(credentials: str) -> bool:
+    try:
+        decoded: Final = base64.b64decode("".join(credentials.split()), validate=True)
+    except ValueError:
+        return False
+    return decoded.lstrip().startswith(b"{")
 
-    Telling the two apart by shape rather than by `os.path.exists()` is what keeps a read
-    failure recognisable: `os.path.exists()` answers False for an unreadable path as well as
-    an absent one, so both used to reach the inline branch and be reported as malformed JSON.
-    """
-    inline_first: Final = _is_inline_credentials_json(credentials)
-    verbose_logger.debug(
-        "Vertex: Loading vertex credentials, is_file_path=%s, current dir %s", not inline_first, os.getcwd()
-    )
-    if not inline_first:
-        return _read_json_file(credentials)
 
+def _load_inline_credentials(credentials: str) -> VertexCredentialsSource:
     inline: Final = _parse_json_object(credentials)
     if not isinstance(inline, _NotAJsonObject):
         return VertexCredentialsJson(inline)
 
-    # A file can legitimately be named "{vertex}.json", so a brace-prefixed value that does
-    # not parse is still given the file read it used to get before dispatch moved to shape.
+    from_file_named_like_json: Final = _read_json_file(credentials)
+    if isinstance(from_file_named_like_json, VertexCredentialsFileUnreadable):
+        return VertexCredentialsInlineNotJson(inline.detail)
+    return from_file_named_like_json
+
+
+def _load_credentials_file(credentials: str) -> VertexCredentialsSource:
     from_file: Final = _read_json_file(credentials)
-    if isinstance(from_file, VertexCredentialsJson):
-        return from_file
-    return VertexCredentialsInlineNotJson(inline.detail)
+    if isinstance(from_file, VertexCredentialsFileUnreadable) and _is_base64_encoded_json(credentials):
+        return VertexCredentialsUnusable("is base64-encoded JSON, not the JSON itself")
+    return from_file
+
+
+def load_vertex_credentials_source(credentials: str) -> VertexCredentialsSource:
+    if not credentials.strip():
+        return VertexCredentialsUnusable("is empty")
+
+    inline_first: Final = _is_inline_credentials_json(credentials)
+    verbose_logger.debug(
+        "Vertex: Loading vertex credentials, is_file_path=%s, current dir %s", not inline_first, os.getcwd()
+    )
+    if inline_first:
+        return _load_inline_credentials(credentials)
+    return _load_credentials_file(credentials)
 
 
 def raise_vertex_credentials_failure(failure: VertexCredentialsFailure) -> NoReturn:
-    """Map a load failure onto the ValueError the auth flow already surfaces to the caller.
-
-    The caller is told which of the three faults it was; the path goes to the proxy log
-    instead, because the message reaches whoever sent the request and the operator who can
-    act on the path is reading the log anyway. The path is redacted on the way there too, so
-    a credential misconfigured into this field does not become a log entry.
-    """
     match failure:
         case VertexCredentialsFileUnreadable():
             verbose_logger.error(
                 "Vertex: cannot read the credentials file at %s: %s", redact_string(failure.path), failure.reason
             )
             raise ValueError(
-                f"Unable to read the vertex credentials file: {failure.reason}. The proxy log names the path. "
+                f"Unable to read the vertex credentials file: {failure.reason}. LiteLLM's log names the path. "
                 "Set `vertex_credentials` to a readable file path, or to the credentials JSON itself."
             )
         case VertexCredentialsFileNotJson():
@@ -138,13 +141,18 @@ def raise_vertex_credentials_failure(failure: VertexCredentialsFailure) -> NoRet
                 "Vertex: credentials file at %s is not valid JSON: %s", redact_string(failure.path), failure.detail
             )
             raise ValueError(
-                f"The vertex credentials file is not valid JSON: {failure.detail}. The proxy log names the path. "
+                f"The vertex credentials file is not valid JSON: {failure.detail}. LiteLLM's log names the path. "
                 "Check for unescaped newlines in private_key."
             )
         case VertexCredentialsInlineNotJson():
             raise ValueError(
                 f"The inline `vertex_credentials` value is not valid JSON: {failure.detail}. "
                 "Check for unescaped newlines in private_key."
+            )
+        case VertexCredentialsUnusable():
+            raise ValueError(
+                f"The `vertex_credentials` value {failure.problem}. "
+                "Set it to a readable file path, or to the credentials JSON itself."
             )
         case _:  # pragma: no cover - exhaustiveness guard, unreachable while the union holds
             assert_never(failure)  # pragma: no cover

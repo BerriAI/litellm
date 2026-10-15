@@ -41,14 +41,14 @@ class VertexAIAwsWifAuth:
     """
 
     @staticmethod
-    def extract_aws_params(json_obj: Mapping[str, object]) -> dict[str, str]:
+    def extract_aws_params(json_obj: Mapping[str, object]) -> Mapping[str, object]:
         """
         Extract LiteLLM-specific aws_* keys from a WIF credential JSON dict.
 
         Returns a dict of {param_name: value} for any recognized aws_* keys
         found in the JSON. Returns empty dict if none are present.
         """
-        return {key: value for key, value in json_obj.items() if key in _AWS_CREDENTIAL_KEYS and isinstance(value, str)}
+        return {key: value for key, value in json_obj.items() if key in _AWS_CREDENTIAL_KEYS}
 
     @staticmethod
     def credentials_from_explicit_aws(json_obj, aws_params, scopes):
