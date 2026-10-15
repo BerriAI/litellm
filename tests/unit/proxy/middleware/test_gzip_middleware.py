@@ -1,6 +1,7 @@
 import asyncio
 import gzip
 import json
+import threading
 from typing import Final
 
 import pytest
@@ -10,6 +11,7 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from litellm.proxy.middleware import gzip_middleware
 from litellm.proxy.middleware.gzip_middleware import (
     MINIMUM_SIZE_BYTES,
     OFF_LOOP_SIZE_BYTES,
@@ -17,6 +19,7 @@ from litellm.proxy.middleware.gzip_middleware import (
 )
 
 LARGE_PAYLOAD = {"rows": [{"date": f"2026-09-{day:02d}", "spend": day * 1.5} for day in range(1, 31)] * 20}
+BASE64_EMBEDDINGS_RESPONSE_BYTES: Final = 824_000
 STREAM_CHUNKS = tuple(json.dumps({"part": part, "pad": "x" * MINIMUM_SIZE_BYTES}).encode() for part in range(3))
 
 
@@ -48,6 +51,18 @@ async def _huge(request: Request) -> Response:
     return Response(b"z" * (OFF_LOOP_SIZE_BYTES * 2), media_type="application/json")
 
 
+async def _under_off_loop(request: Request) -> Response:
+    return Response(b"u" * (OFF_LOOP_SIZE_BYTES - 1), media_type="application/json")
+
+
+async def _at_off_loop(request: Request) -> Response:
+    return Response(b"a" * OFF_LOOP_SIZE_BYTES, media_type="application/json")
+
+
+async def _base64_embeddings_sized(request: Request) -> Response:
+    return Response(b"e" * BASE64_EMBEDDINGS_RESPONSE_BYTES, media_type="application/json")
+
+
 async def _json_stream(request: Request) -> Response:
     async def chunks():
         for chunk in STREAM_CHUNKS:
@@ -64,6 +79,9 @@ APP = Starlette(
         Route("/stream", _json_stream),
         Route("/etag", _with_etag),
         Route("/huge", _huge),
+        Route("/under-off-loop", _under_off_loop),
+        Route("/at-off-loop", _at_off_loop),
+        Route("/base64-embeddings-sized", _base64_embeddings_sized),
         Route("/partial", _partial),
         Route("/no-transform", _no_transform),
     ]
@@ -120,6 +138,28 @@ async def test_body_above_off_loop_threshold_round_trips():
 
     assert _headers(messages)["content-encoding"] == "gzip"
     assert gzip.decompress(_body(messages)) == b"z" * (OFF_LOOP_SIZE_BYTES * 2)
+
+
+@pytest.mark.parametrize(
+    "path, compressed_on_loop_thread",
+    [("/under-off-loop", True), ("/at-off-loop", False), ("/base64-embeddings-sized", False), ("/huge", False)],
+)
+@pytest.mark.asyncio
+async def test_only_bodies_under_the_off_loop_threshold_compress_on_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch, path: str, compressed_on_loop_thread: bool
+) -> None:
+    loop_thread: Final = threading.get_ident()
+    real_compress: Final = gzip.compress
+
+    def compress_naming_its_thread(data: bytes, compresslevel: int = 9) -> bytes:
+        return real_compress(b"loop" if threading.get_ident() == loop_thread else b"worker", compresslevel)
+
+    monkeypatch.setattr(gzip_middleware.gzip, "compress", compress_naming_its_thread)
+
+    messages = await _send_messages(path, "gzip")
+
+    assert _headers(messages)["content-encoding"] == "gzip"
+    assert gzip.decompress(_body(messages)) == (b"loop" if compressed_on_loop_thread else b"worker")
 
 
 @pytest.mark.parametrize(
