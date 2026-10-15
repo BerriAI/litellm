@@ -2,6 +2,8 @@
 Common utility functions used for translating messages across providers
 """
 
+import base64
+import binascii
 import io
 import json
 import mimetypes
@@ -12,6 +14,8 @@ from os import PathLike
 from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, cast
+
+from pydantic import TypeAdapter
 
 import litellm
 from litellm import verbose_logger
@@ -29,6 +33,7 @@ from litellm.types.llms.openai import (
     ChatCompletionThinkingBlock,
     ChatCompletionToolParam,
     ChatCompletionUserMessage,
+    PromptCacheBreakpoint,
 )
 from litellm.types.utils import (
     Choices,
@@ -190,6 +195,33 @@ def get_str_from_messages(messages: list[AllMessageValues]) -> str:
     for message in messages:
         text += convert_content_list_to_str(message=message)
     return text
+
+
+def get_semantic_cache_prompt_from_messages(messages: Sequence[Mapping[str, object]]) -> str:
+    """
+    The text a semantic cache embeds for a request: `get_str_from_messages` plus the text inside
+    Messages API `tool_result` blocks, so a tool turn does not embed identically to the turn before it
+    """
+    return "".join(
+        _semantic_cache_content_text(message.get("content"))
+        + extract_search_results_text(message.get("search_results"))
+        for message in messages
+    )
+
+
+def _semantic_cache_content_text(content: object) -> str:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    return "".join(_semantic_cache_block_text(block) for block in content if isinstance(block, Mapping))
+
+
+def _semantic_cache_block_text(block: Mapping[str, object]) -> str:
+    if block.get("type") == "tool_result":
+        return _semantic_cache_content_text(block.get("content"))
+    text: Final = block.get("text")
+    return text if isinstance(text, str) else ""
 
 
 def is_non_content_values_set(message: AllMessageValues) -> bool:
@@ -538,9 +570,9 @@ def update_messages_with_model_file_ids(
     }
     """
     from litellm.proxy.openai_files_endpoints.common_utils import (
-        _is_base64_encoded_unified_file_id,
         convert_b64_uid_to_unified_uid,
         get_original_file_id,
+        is_base64_encoded_unified_file_id,
         is_model_embedded_id,
     )
 
@@ -576,7 +608,7 @@ def update_messages_with_model_file_ids(
                                 if model_file_id_mapping and model_id is not None
                                 else None
                             )
-                            if not provider_file_id and _is_base64_encoded_unified_file_id(file_id):
+                            if not provider_file_id and is_base64_encoded_unified_file_id(file_id):
                                 unified_file_id = convert_b64_uid_to_unified_uid(file_id)
                                 if "llm_output_file_id," in unified_file_id:
                                     provider_file_id = unified_file_id.split("llm_output_file_id,")[1].split(";")[0]
@@ -607,9 +639,9 @@ def update_responses_input_with_model_file_ids(
                                Format: {"litellm_file_id": {"model_id": "provider_file_id"}}
     """
     from litellm.proxy.openai_files_endpoints.common_utils import (
-        _is_base64_encoded_unified_file_id,
         convert_b64_uid_to_unified_uid,
         get_original_file_id,
+        is_base64_encoded_unified_file_id,
         is_model_embedded_id,
     )
 
@@ -644,7 +676,7 @@ def update_responses_input_with_model_file_ids(
                             updated_content.append(updated_content_item)
                         else:
                             # Check if this is a base64-encoded unified file ID without mapping
-                            is_unified_file_id = _is_base64_encoded_unified_file_id(file_id)
+                            is_unified_file_id = is_base64_encoded_unified_file_id(file_id)
                             if is_unified_file_id:
                                 # Fallback: decode unified file ID
                                 unified_file_id = convert_b64_uid_to_unified_uid(file_id)
@@ -1760,24 +1792,106 @@ _MarkedT: Final = TypeVar("_MarkedT", bound=Mapping[str, object])
 
 
 def with_prompt_cache_breakpoint(target: _MarkedT, marker: object) -> _MarkedT:
-    if marker is None:
+    """A breakpoint the client already wrote on the block wins, TTL included."""
+    if marker is None or target.get("prompt_cache_breakpoint") is not None:
         return target
     marked: Final = {**target, "prompt_cache_breakpoint": marker}
     return cast(_MarkedT, marked)  # cast-ok: same block shape as the input plus the marker key
 
 
-LITELLM_INTERNAL_MESSAGE_FIELDS: Final = frozenset({"thinking_blocks", "reasoning_content", "provider_specific_fields"})
+def cache_control_as_prompt_cache_breakpoint(block: _MarkedT) -> _MarkedT:
+    """Anthropic's ``cache_control`` mark rewritten as OpenAI's ``prompt_cache_breakpoint`` on the same block."""
+    if block.get("cache_control") is None:
+        return block
+    unmarked: Final = {key: value for key, value in block.items() if key != "cache_control"}
+    return cast(  # cast-ok: same block shape as the input with the marker key renamed
+        _MarkedT, with_prompt_cache_breakpoint(unmarked, PromptCacheBreakpoint(mode="explicit"))
+    )
+
+
+_BREAKPOINT_BLOCK_LIST_KEYS: Final = frozenset({"content", "tool_calls"})
+_BREAKPOINT_FIELDS: Final = TypeAdapter(Mapping[str, object])
+_BREAKPOINT_BLOCKS: Final = TypeAdapter(list[object])
+
+
+def _without_prompt_cache_breakpoint(value: object) -> object:
+    if not isinstance(value, Mapping):
+        return value
+    fields: Final = _BREAKPOINT_FIELDS.validate_python(value)
+    return {key: item for key, item in fields.items() if key != "prompt_cache_breakpoint"}
+
+
+def _breakpoints_stripped_from(key: str, value: object) -> object:
+    if key in _BREAKPOINT_BLOCK_LIST_KEYS and isinstance(value, list):
+        return [_without_prompt_cache_breakpoint(block) for block in _BREAKPOINT_BLOCKS.validate_python(value)]
+    return _without_prompt_cache_breakpoint(value) if key == "function" else value
+
+
+def without_prompt_cache_breakpoints(block: _MarkedT) -> _MarkedT:
+    """A message or tool definition with every ``prompt_cache_breakpoint`` removed: its own, its content parts',
+    its tool calls' and its ``function``'s."""
+    stripped: Final = {
+        key: _breakpoints_stripped_from(key, value) for key, value in block.items() if key != "prompt_cache_breakpoint"
+    }
+    return cast(_MarkedT, stripped)  # cast-ok: same block shape as the input minus the marker keys
+
+
+LITELLM_RESPONSE_ONLY_MESSAGE_FIELDS: Final = frozenset(
+    {"thinking_blocks", "reasoning_items", "provider_specific_fields"}
+)
+LITELLM_INTERNAL_MESSAGE_FIELDS: Final = LITELLM_RESPONSE_ONLY_MESSAGE_FIELDS | {"reasoning_content"}
+
+
+def _tool_call_without_provider_specific_fields(tool_call: object) -> object:
+    if not isinstance(tool_call, dict):
+        return tool_call
+    fields: Final = cast(dict[str, object], tool_call)  # cast-ok: untyped JSON tool call, keys forwarded verbatim
+    function_fields: Final = (
+        cast("dict[str, object]", fields.get("function"))  # cast-ok: untyped JSON function chunk
+        if isinstance(fields.get("function"), dict)
+        else None
+    )
+    if "provider_specific_fields" not in fields and (
+        function_fields is None or "provider_specific_fields" not in function_fields
+    ):
+        return cast("dict[str, object]", tool_call)  # cast-ok: untyped JSON tool call, no strip needed
+    return {
+        key: (
+            {fkey: fvalue for fkey, fvalue in function_fields.items() if fkey != "provider_specific_fields"}
+            if key == "function" and function_fields is not None
+            else value
+        )
+        for key, value in fields.items()
+        if key != "provider_specific_fields"
+    }
+
+
+def _message_without_fields(message: AllMessageValues, dropped: frozenset[str]) -> AllMessageValues:
+    kept: Final = {key: value for key, value in message.items() if key not in dropped}
+    tool_calls: Final = message.get("tool_calls")
+    if not isinstance(tool_calls, list):
+        return cast(AllMessageValues, kept)  # cast-ok: same TypedDict minus dropped keys
+    return cast(  # cast-ok: same TypedDict minus dropped keys, tool calls minus their provider_specific_fields
+        AllMessageValues,
+        {
+            **kept,
+            "tool_calls": [
+                _tool_call_without_provider_specific_fields(tool_call)
+                for tool_call in cast(list[object], tool_calls)  # cast-ok: untyped JSON tool calls
+            ],
+        },
+    )
+
+
+def strip_litellm_response_only_fields(message: AllMessageValues) -> AllMessageValues:
+    """Drop the fields litellm attaches to a returned message (e.g. Anthropic thinking blocks or Responses
+    API items) that no OpenAI-compatible endpoint accepts back, so a reply can be sent to a strict one."""
+    return _message_without_fields(message, LITELLM_RESPONSE_ONLY_MESSAGE_FIELDS)
 
 
 def strip_litellm_internal_message_fields(message: AllMessageValues) -> AllMessageValues:
-    """Drop the fields litellm attaches to assistant messages (e.g. when translating Anthropic thinking
-    blocks) that OpenAI-compatible endpoints with strict schemas reject as extra inputs."""
-    if LITELLM_INTERNAL_MESSAGE_FIELDS.isdisjoint(message):
-        return message
-    return cast(  # cast-ok: same TypedDict minus internal keys
-        AllMessageValues,
-        {key: value for key, value in message.items() if key not in LITELLM_INTERNAL_MESSAGE_FIELDS},
-    )
+    """``strip_litellm_response_only_fields`` plus ``reasoning_content``, for endpoints that reject it too."""
+    return _message_without_fields(message, LITELLM_INTERNAL_MESSAGE_FIELDS)
 
 
 def filter_value_from_dict(dictionary: dict, key: str, depth: int = 0) -> Any:
@@ -2091,6 +2205,32 @@ def is_unsignable_thinking_block(block: object) -> bool:
         return True
     thinking_text: Final = mapping.get("thinking")
     return not (isinstance(thinking_text, str) and len(thinking_text.strip()) > 0)
+
+
+def native_redacted_thinking_data(data: str) -> str:
+    """Claude's own `data` string for a redacted_thinking block.
+
+    Bedrock Converse carries it base64-wrapped as `redactedContent`, and LiteLLM passed that
+    wrapper through as `data` until it started decoding Converse replies, so histories saved
+    before then still hold it. Claude's own value never decodes twice, since its first byte
+    decodes to a protobuf tag outside the base64 alphabet.
+    """
+    return _converse_wrapped_payload(data) or data
+
+
+def converse_redacted_content(data: str) -> str:
+    """The `redactedContent` Bedrock Converse expects for a redacted_thinking block's `data`."""
+    return base64.b64encode(native_redacted_thinking_data(data).encode()).decode()
+
+
+def _converse_wrapped_payload(data: str) -> str | None:
+    try:
+        payload: Final = base64.b64decode(data, validate=True).decode("ascii")
+        _ = base64.b64decode(payload, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    else:
+        return payload
 
 
 def strip_encrypted_reasoning_from_messages(

@@ -1118,15 +1118,15 @@ def test_validate_environment_sets_x_goog_api_key():
 
 def test_get_gemini_url_excludes_api_key():
     """
-    Verify that _get_gemini_url never embeds the API key in the URL.
+    Verify that get_gemini_url never embeds the API key in the URL.
 
     API keys in URLs leak through httpx error tracebacks. The key must be
     sent via the x-goog-api-key header instead.
     """
-    from litellm.llms.vertex_ai.common_utils import _get_gemini_url
+    from litellm.llms.vertex_ai.common_utils import get_gemini_url
 
     for mode in ("chat", "embedding", "batch_embedding", "count_tokens"):
-        url, _ = _get_gemini_url(
+        url, _ = get_gemini_url(
             mode=mode,
             model="gemini-2.5-flash",
             stream=False,
@@ -1134,7 +1134,7 @@ def test_get_gemini_url_excludes_api_key():
         assert "key=" not in url, f"API key found in URL for mode={mode}: {url}"
 
     # Streaming chat should only have ?alt=sse
-    url, _ = _get_gemini_url(mode="chat", model="gemini-2.5-flash", stream=True)
+    url, _ = get_gemini_url(mode="chat", model="gemini-2.5-flash", stream=True)
     assert "key=" not in url, f"API key found in streaming URL: {url}"
     assert "alt=sse" in url, f"Missing alt=sse in streaming URL: {url}"
 

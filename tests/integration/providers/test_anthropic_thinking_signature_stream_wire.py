@@ -1,7 +1,6 @@
 import asyncio
 import json
 import re
-import signal
 import threading
 import uuid
 from collections.abc import Mapping, Sequence
@@ -395,7 +394,7 @@ def test_two_signed_blocks_each_keep_their_own_text_through_a_replay(gateway: Ga
         first: Final = _stream_chat(gateway, _chat_body(model, marker))
         assert first.status_code == 200, first.text
         deltas: Final = deltas_of(chunks_of(first.text))
-        assert signed_blocks(deltas) == (signature_only(SIGNATURE), signature_only(_SECOND_SIGNATURE)), deltas
+        assert signed_blocks(deltas) == (signature_only(SIGNATURE), signature_only(_SECOND_SIGNATURE, index=1)), deltas
         assert accumulate(deltas) == (
             thinking_block("one two", SIGNATURE),
             thinking_block("three four", _SECOND_SIGNATURE),
@@ -466,7 +465,7 @@ def test_signature_only_block_without_thinking_deltas_is_relayed_as_is(gateway: 
         assert response.status_code == 200, response.text
         deltas: Final = deltas_of(chunks_of(response.text))
         assert signed_blocks(deltas) == (signature_only(SIGNATURE),), deltas
-        assert accumulate(deltas) == (signature_only(SIGNATURE),), deltas
+        assert accumulate(deltas) == (thinking_block("", SIGNATURE),), deltas
         assert reasoning_text(deltas) == "", deltas
         assert content_text(deltas) == answer(marker), deltas
         assert len(wire.drain()) == 1
@@ -763,19 +762,19 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_streaming_signed_thin
             held_by: Final = MappingProxyType({pid: _open_upstream_connections(pid, wire.url) for pid in workers})
             assert sum(held_by.values()) == 20, held_by
             victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-            victim: Final = psutil.Process(victim_pid)
-            victim.suspend()
-            victim.send_signal(signal.SIGKILL)
-            release.set()
-            served: Final = await burst
-            assert held_by[survivor_pid] >= 10, held_by
-            completed: Final = tuple(item for item in served if item.status == 200)
-            assert len(completed) == held_by[survivor_pid], (held_by, [item.status for item in served])
-            for item in completed:
-                if item.call.stream:
-                    _assert_signed_once(deltas_of(chunks_of(item.text)), item.call.marker)
-                else:
-                    assert answer(item.call.marker) in item.text, item.text
+            with owned.replacing_worker(victim_pid) as kill:
+                kill.freeze()
+                await asyncio.to_thread(kill)
+                release.set()
+                served: Final = await burst
+                assert held_by[survivor_pid] >= 10, held_by
+                completed: Final = tuple(item for item in served if item.status == 200)
+                assert len(completed) == held_by[survivor_pid], (held_by, [item.status for item in served])
+                for item in completed:
+                    if item.call.stream:
+                        _assert_signed_once(deltas_of(chunks_of(item.text)), item.call.marker)
+                    else:
+                        assert answer(item.call.marker) in item.text, item.text
             follow_up: Final = _Call(endpoint="chat", stream=True, marker=uuid.uuid4().hex)
             (answered,) = await _burst(str(candidate.client.base_url), candidate.key, _CONFIG_MODEL, (follow_up,))
             assert answered.status == 200, answered.text

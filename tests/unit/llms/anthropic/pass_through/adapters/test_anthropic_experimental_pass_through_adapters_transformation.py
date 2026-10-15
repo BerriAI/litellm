@@ -1,5 +1,7 @@
 import base64
+import functools
 import json
+from types import MappingProxyType
 from typing import Any, Final, cast
 
 import pytest
@@ -43,6 +45,7 @@ from litellm.types.utils import (
     StreamingChoices,
     Usage,
 )
+from litellm.utils import remove_additional_properties, remove_strict_from_schema
 
 
 def test_translate_openai_response_to_anthropic_empty_choices() -> None:
@@ -188,9 +191,7 @@ def test_translate_streaming_openai_chunk_to_anthropic_content_block():
     (
         block_type,
         content_block_start,
-    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
-        choices=choices
-    )
+    ) = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_chunk_to_anthropic_content_block(choices=choices)
 
     print(content_block_start)
 
@@ -236,9 +237,7 @@ def test_translate_streaming_openai_chunk_strips_gemini_thought_from_tool_call_i
     (
         block_type,
         content_block_start,
-    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
-        choices=choices
-    )
+    ) = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_chunk_to_anthropic_content_block(choices=choices)
 
     assert block_type == "tool_use"
     assert content_block_start["id"] == base
@@ -283,9 +282,7 @@ def test_translate_streaming_openai_chunk_to_anthropic_thinking_content_block():
     (
         block_type,
         content_block_start,
-    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
-        choices=choices
-    )
+    ) = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_chunk_to_anthropic_content_block(choices=choices)
 
     assert block_type == "thinking"
     assert content_block_start == {
@@ -321,9 +318,7 @@ def test_translate_streaming_openai_chunk_to_anthropic_reasoning_content_only_co
     (
         block_type,
         content_block_start,
-    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
-        choices=choices
-    )
+    ) = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_chunk_to_anthropic_content_block(choices=choices)
 
     assert block_type == "thinking"
     assert content_block_start == {
@@ -369,9 +364,7 @@ def test_translate_streaming_openai_chunk_to_anthropic_thinking_signature_block(
     (
         block_type,
         content_block_start,
-    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
-        choices=choices
-    )
+    ) = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_chunk_to_anthropic_content_block(choices=choices)
 
     assert block_type == "thinking"
     assert content_block_start == {
@@ -424,9 +417,7 @@ def test_translate_streaming_openai_chunk_to_anthropic_content_block_thinking_an
     (
         block_type,
         content_block_start,
-    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
-        choices=choices
-    )
+    ) = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_chunk_to_anthropic_content_block(choices=choices)
 
     assert block_type == "thinking"
 
@@ -1545,9 +1536,7 @@ def test_translate_streaming_openai_chunk_to_anthropic_emits_signature_when_thin
     (
         block_type,
         content_block_start,
-    ) = adapter._translate_streaming_openai_chunk_to_anthropic_content_block(
-        choices=choices
-    )
+    ) = adapter.translate_streaming_openai_chunk_to_anthropic_content_block(choices=choices)
 
     assert block_type == "thinking"
 
@@ -2040,9 +2029,7 @@ def test_streaming_chunk_with_both_text_and_tool_calls_issue_18238():
     (
         block_type,
         content_block_start,
-    ) = adapter._translate_streaming_openai_chunk_to_anthropic_content_block(
-        choices=choices
-    )
+    ) = adapter.translate_streaming_openai_chunk_to_anthropic_content_block(choices=choices)
 
     assert block_type == "tool_use"
     assert content_block_start["name"] == "Bash"
@@ -2086,9 +2073,7 @@ def test_streaming_chunk_with_text_and_empty_tool_calls_returns_text_delta():
     (
         block_type,
         content_block_start,
-    ) = adapter._translate_streaming_openai_chunk_to_anthropic_content_block(
-        choices=choices
-    )
+    ) = adapter.translate_streaming_openai_chunk_to_anthropic_content_block(choices=choices)
 
     assert block_type == "text"
     assert content_block_start == {"type": "text", "text": ""}
@@ -3350,9 +3335,7 @@ def test_translate_openai_usage_to_anthropic_cache_tokens_from_dict_details_with
         "cache_write_tokens": 20.0,
     }
 
-    anthropic_usage = LiteLLMAnthropicMessagesAdapter._translate_openai_usage_to_anthropic_usage_delta(
-        usage
-    )
+    anthropic_usage = LiteLLMAnthropicMessagesAdapter.translate_openai_usage_to_anthropic_usage_delta(usage)
 
     assert anthropic_usage["input_tokens"] == 70
     assert anthropic_usage["output_tokens"] == 50
@@ -3371,9 +3354,7 @@ def test_translate_openai_usage_to_anthropic_ignores_fractional_cache_tokens():
         "cache_creation_tokens": 20.25,
     }
 
-    anthropic_usage = LiteLLMAnthropicMessagesAdapter._translate_openai_usage_to_anthropic_usage_delta(
-        usage
-    )
+    anthropic_usage = LiteLLMAnthropicMessagesAdapter.translate_openai_usage_to_anthropic_usage_delta(usage)
 
     assert anthropic_usage["input_tokens"] == 120
     assert anthropic_usage["output_tokens"] == 50
@@ -3390,9 +3371,7 @@ def test_translate_openai_usage_to_anthropic_ignores_bool_cache_tokens():
     usage.cache_read_input_tokens = True
     usage.cache_creation_input_tokens = True
 
-    anthropic_usage = LiteLLMAnthropicMessagesAdapter._translate_openai_usage_to_anthropic_usage_delta(
-        usage
-    )
+    anthropic_usage = LiteLLMAnthropicMessagesAdapter.translate_openai_usage_to_anthropic_usage_delta(usage)
 
     assert anthropic_usage["input_tokens"] == 120
     assert anthropic_usage["output_tokens"] == 50
@@ -4483,6 +4462,95 @@ def test_tool_result_plain_text_unchanged_by_openai_transform():
     assert len(tool_messages) == 1
     assert tool_messages[0]["content"] == "42 files found"
     assert _image_urls_in_user_messages(result) == []
+
+
+def _caller_tools_with_strict_schemas() -> list[dict[str, object]]:
+    return [
+        {
+            "type": "custom",
+            "name": "lint",
+            "strict": True,
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "additionalProperties": False,
+                    },
+                    "strict": {"type": "boolean"},
+                },
+                "additionalProperties": False,
+            },
+            "input_examples": [{"target": {"path": "a.py"}, "strict": True}],
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "strict": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "additionalProperties": False,
+                },
+            },
+        },
+    ]
+
+
+def test_translate_anthropic_tools_to_openai_leaves_caller_tools_untouched_by_schema_cleanup():
+    adapter: Final = LiteLLMAnthropicMessagesAdapter()
+    tools: Final = _caller_tools_with_strict_schemas()
+
+    translated_tools, _ = adapter.translate_anthropic_tools_to_openai(tools=tools)
+    remove_strict_from_schema(remove_additional_properties(translated_tools))
+
+    assert tools == _caller_tools_with_strict_schemas()
+
+
+def _schema_nested_past_the_recursion_limit() -> dict[str, object]:
+    return functools.reduce(
+        lambda inner, level: {"type": "object", "properties": {f"p{level}": inner}},
+        range(600),
+        cast(dict[str, object], {"type": "string"}),
+    )
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [
+        MappingProxyType(
+            {
+                "name": "lint",
+                "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}},
+                "input_examples": [{"path": "a.py"}],
+            }
+        ),
+        {"name": "lint", "input_schema": _schema_nested_past_the_recursion_limit(), "input_examples": [{}]},
+    ],
+    ids=["frozen_mapping", "schema_nested_past_the_recursion_limit"],
+)
+def test_translate_anthropic_tools_to_openai_leaves_tools_deepcopy_cannot_copy_untouched(tool):
+    adapter: Final = LiteLLMAnthropicMessagesAdapter()
+
+    translated_tools, _ = adapter.translate_anthropic_tools_to_openai(tools=[tool])
+
+    assert [translated["function"]["name"] for translated in translated_tools] == ["lint"]
+    assert translated_tools[0]["function"]["parameters"]["input_examples"] == tool["input_examples"]
+    assert set(tool["input_schema"]) == {"type", "properties"}
+
+
+def test_translate_anthropic_tools_to_openai_translates_a_tool_json_cannot_copy():
+    adapter: Final = LiteLLMAnthropicMessagesAdapter()
+    properties: Final = {"level": {"enum": {1, 2}}}
+
+    translated_tools, _ = adapter.translate_anthropic_tools_to_openai(
+        tools=[{"name": "lint", "input_schema": {"type": "object", "properties": properties}}]
+    )
+
+    assert [translated["function"]["name"] for translated in translated_tools] == ["lint"]
+    assert translated_tools[0]["function"]["parameters"]["properties"] == properties
 
 
 TOOL_RESULT_PDF_B64 = base64.b64encode(b"%PDF-1.4 minimal regression fixture").decode()

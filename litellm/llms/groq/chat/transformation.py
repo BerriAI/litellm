@@ -11,6 +11,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.prompt_templates.common_utils import strip_litellm_response_only_fields
 from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
 )
@@ -152,12 +153,23 @@ class GroqChatConfig(OpenAILikeChatConfig):
                 for k, v in _message.items():
                     if v is not None:
                         new_message[k] = v
-                messages[idx] = new_message
+                messages[idx] = strip_litellm_response_only_fields(new_message)
 
         if is_async:
             return super()._transform_messages(messages=messages, model=model, is_async=True)
         else:
             return super()._transform_messages(messages=messages, model=model, is_async=False)
+
+    def transform_messages(
+        self,
+        messages: list[AllMessageValues],  # mutable-ok: mirrors override contract
+        model: str,
+        is_async: bool = False,
+    ) -> (
+        list[AllMessageValues]  # mutable-ok: mirrors override contract
+        | Coroutine[object, object, list[AllMessageValues]]
+    ):
+        return self._transform_messages(messages, model, is_async)
 
     def _get_openai_compatible_provider_info(
         self, api_base: str | None, api_key: str | None
@@ -166,6 +178,13 @@ class GroqChatConfig(OpenAILikeChatConfig):
         api_base = api_base or get_secret_str("GROQ_API_BASE") or "https://api.groq.com/openai/v1"
         dynamic_api_key: Final = api_key or get_secret_str("GROQ_API_KEY")
         return api_base, dynamic_api_key
+
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
 
     def _should_fake_stream(self, optional_params: dict) -> bool:
         """

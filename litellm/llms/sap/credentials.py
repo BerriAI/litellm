@@ -15,7 +15,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.llms.custom_httpx.http_handler import HTTPHandler, _get_httpx_client
+from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_httpx_client
 
 AUTH_ENDPOINT_SUFFIX: Final = "/oauth/token"
 
@@ -388,7 +388,7 @@ def _request_token(
                 handler = HTTPHandler(client=raw_client)
                 resp = handler.post(auth_url, data=data, timeout=timeout)
                 return _bearer_token_and_expiry(resp)
-        handler = _get_httpx_client()
+        handler = get_httpx_client()
         resp = handler.post(auth_url, data=data, timeout=timeout)
         return _bearer_token_and_expiry(resp)
     except Exception as e:

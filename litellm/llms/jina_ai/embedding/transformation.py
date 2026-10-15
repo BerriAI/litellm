@@ -90,6 +90,13 @@ class JinaAIEmbeddingConfig(BaseEmbeddingConfig):
         )
         return LlmProviders.JINA_AI.value, api_base, dynamic_api_key
 
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str, str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
+
     def get_complete_url(
         self,
         api_base: str | None,
@@ -99,7 +106,12 @@ class JinaAIEmbeddingConfig(BaseEmbeddingConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        return f"{api_base}/embeddings" if api_base else "https://api.jina.ai/v1/embeddings"
+        if api_base:
+            clean_api_base: Final = api_base.rstrip("/")
+            if not clean_api_base.endswith("/embeddings"):
+                return f"{clean_api_base}/embeddings"
+            return clean_api_base
+        return "https://api.jina.ai/v1/embeddings"
 
     def transform_embedding_request(
         self,

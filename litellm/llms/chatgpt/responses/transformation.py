@@ -1,10 +1,11 @@
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     safe_convert_created_field,
 )
@@ -225,7 +226,8 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def _extract_error_message(self, parsed_chunk: dict[str, Any]) -> str | None:
         error_obj: Final = parsed_chunk.get("error") or (parsed_chunk.get("response") or {}).get("error")
         if error_obj is None:
-            return None
+            top_level_message: Final = parsed_chunk.get("message")
+            return top_level_message if isinstance(top_level_message, str) else None
         if isinstance(error_obj, dict):
             return error_obj.get("message") or str(error_obj)
         return str(error_obj)
@@ -237,10 +239,13 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
     ) -> None:
         raw_headers: Final = dict(raw_response.headers)
         processed_headers: Final = process_response_headers(raw_headers)
-        if not hasattr(completed_response, "_hidden_params"):
-            setattr(completed_response, "_hidden_params", {})
-        completed_response._hidden_params["additional_headers"] = processed_headers
-        completed_response._hidden_params["headers"] = raw_headers
+        if not hasattr(completed_response, HIDDEN_PARAMS_ATTR):
+            set_hidden_params(completed_response, {})
+        hidden_params: Final = cast(  # cast-ok: preserve dynamic mapping behavior
+            dict[str, object], getattr(completed_response, HIDDEN_PARAMS_ATTR)
+        )
+        hidden_params["additional_headers"] = processed_headers
+        hidden_params["headers"] = raw_headers
 
     def get_complete_url(
         self,

@@ -1,3 +1,8 @@
+import asyncio
+import os
+import unittest
+from unittest.mock import patch
+
 import pytest
 from fastapi import HTTPException
 
@@ -7,6 +12,9 @@ from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import (
     PassthroughEndpointRouter,
 )
 from litellm.types.utils import CredentialItem
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
 @pytest.fixture(autouse=True)
@@ -46,7 +54,10 @@ def test_credential_loaded_after_deployment_registration_still_resolves():
 
     CredentialAccessor.upsert_credentials([_credential("cred_openai", "sk-loaded-after-boot")])
 
-    assert passthrough_router.get_credentials(custom_llm_provider="openai", region_name=None) == "sk-loaded-after-boot"
+    assert (
+        passthrough_router.get_credentials(custom_llm_provider="openai", region_name=None)
+        == "sk-loaded-after-boot"
+    )
 
 
 def test_credential_rotation_is_reflected_without_deployment_update():
@@ -56,11 +67,17 @@ def test_credential_rotation_is_reflected_without_deployment_update():
     )
     passthrough_router = _passthrough_router(llm_router)
 
-    assert passthrough_router.get_credentials(custom_llm_provider="openai", region_name=None) == "sk-before-rotation"
+    assert (
+        passthrough_router.get_credentials(custom_llm_provider="openai", region_name=None)
+        == "sk-before-rotation"
+    )
 
     CredentialAccessor.upsert_credentials([_credential("cred_openai", "sk-after-rotation")])
 
-    assert passthrough_router.get_credentials(custom_llm_provider="openai", region_name=None) == "sk-after-rotation"
+    assert (
+        passthrough_router.get_credentials(custom_llm_provider="openai", region_name=None)
+        == "sk-after-rotation"
+    )
 
 
 def test_deleted_deployment_stops_serving_its_key(monkeypatch):
@@ -72,7 +89,9 @@ def test_deleted_deployment_stops_serving_its_key(monkeypatch):
     llm_router.set_model_list([])
     monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
 
-    assert passthrough_router.get_credentials(custom_llm_provider="openai", region_name=None) == "sk-from-env"
+    assert (
+        passthrough_router.get_credentials(custom_llm_provider="openai", region_name=None) == "sk-from-env"
+    )
 
 
 def test_inline_api_key_resolves_without_credential_name():
@@ -81,7 +100,10 @@ def test_inline_api_key_resolves_without_credential_name():
     )
     passthrough_router = _passthrough_router(llm_router)
 
-    assert passthrough_router.get_credentials(custom_llm_provider="anthropic", region_name=None) == "sk-ant-inline"
+    assert (
+        passthrough_router.get_credentials(custom_llm_provider="anthropic", region_name=None)
+        == "sk-ant-inline"
+    )
 
 
 def test_missing_credential_and_no_inline_key_falls_back_to_env(monkeypatch):
@@ -91,7 +113,9 @@ def test_missing_credential_and_no_inline_key_falls_back_to_env(monkeypatch):
     passthrough_router = _passthrough_router(llm_router)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
 
-    assert passthrough_router.get_credentials(custom_llm_provider="openai", region_name=None) == "sk-from-env"
+    assert (
+        passthrough_router.get_credentials(custom_llm_provider="openai", region_name=None) == "sk-from-env"
+    )
 
 
 def test_deployment_for_other_provider_does_not_match():
@@ -132,7 +156,9 @@ def test_first_matching_deployment_wins():
 def test_assemblyai_region_matching():
     llm_router = litellm.Router(
         model_list=[
-            _flagged_deployment("assemblyai/best", api_key="sk-eu", api_base="https://api.eu.assemblyai.com"),
+            _flagged_deployment(
+                "assemblyai/best", api_key="sk-eu", api_base="https://api.eu.assemblyai.com"
+            ),
             _flagged_deployment("assemblyai/best", api_key="sk-us", api_base="https://api.assemblyai.com"),
         ]
     )
@@ -162,7 +188,9 @@ def test_env_fallback_when_no_router(monkeypatch):
     passthrough_router = _passthrough_router(None)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
 
-    assert passthrough_router.get_credentials(custom_llm_provider="openai", region_name=None) == "sk-from-env"
+    assert (
+        passthrough_router.get_credentials(custom_llm_provider="openai", region_name=None) == "sk-from-env"
+    )
 
 
 def test_returns_none_when_no_router_and_no_env():
@@ -197,7 +225,9 @@ def test_vertex_deployment_resolves_via_named_credential():
     )
     llm_router = litellm.Router(
         model_list=[
-            _vertex_deployment("gemini-live", "vertex_ai/gemini-live-2.5-flash", litellm_credential_name="cred_gcp")
+            _vertex_deployment(
+                "gemini-live", "vertex_ai/gemini-live-2.5-flash", litellm_credential_name="cred_gcp"
+            )
         ]
     )
     passthrough_router = _passthrough_router(llm_router)
@@ -255,7 +285,9 @@ def test_vertex_model_hint_prefers_matching_deployment():
     passthrough_router = _passthrough_router(_two_vertex_deployments_router())
 
     by_alias = passthrough_router.get_vertex_credentials_from_router_deployments(model="gemini-live")
-    by_upstream_id = passthrough_router.get_vertex_credentials_from_router_deployments(model="gemini-live-2.5-flash")
+    by_upstream_id = passthrough_router.get_vertex_credentials_from_router_deployments(
+        model="gemini-live-2.5-flash"
+    )
 
     assert by_alias is not None and by_alias.vertex_project == "proj-live"
     assert by_upstream_id is not None and by_upstream_id.vertex_project == "proj-live"
@@ -365,7 +397,9 @@ def test_vertex_deployment_with_deleted_credential_is_skipped(monkeypatch):
     )
     llm_router = litellm.Router(
         model_list=[
-            _vertex_deployment("gemini-live", "vertex_ai/gemini-live-2.5-flash", litellm_credential_name="cred_gone")
+            _vertex_deployment(
+                "gemini-live", "vertex_ai/gemini-live-2.5-flash", litellm_credential_name="cred_gone"
+            )
         ]
     )
     passthrough_router = _passthrough_router(llm_router)
@@ -462,3 +496,333 @@ def test_network_backed_oidc_reference_is_not_fetched_inline(monkeypatch):
         _passthrough_router(None).get_credentials(custom_llm_provider="openai", region_name=None)
         == "oidc/google/https://example.com"
     )
+
+
+@pytest.fixture()
+async def _drain_logging_worker():
+    """
+    The logging queue is bound to the running loop, so anything left queued when a test's loop
+    goes away is carried onto the next loop and fires against that test's callbacks.
+    """
+    GLOBAL_LOGGING_WORKER.start()
+    try:
+        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+    except asyncio.TimeoutError:
+        pass
+    await GLOBAL_LOGGING_WORKER.stop()
+    yield
+
+@pytest.fixture()
+def _vcr_outcome_gate(request, vcr):
+    install_live_call_probe(request, vcr)
+    yield
+    record_vcr_outcome(request, vcr)
+
+passthrough_endpoint_router = PassthroughEndpointRouter()
+
+"""
+1. Basic Usage
+    - Set OpenAI, AssemblyAI, Anthropic, Cohere credentials
+    - GET credentials from passthrough_endpoint_router
+
+2. Basic Usage - when not using DB
+- No credentials set
+- call GET credentials with provider name, assert that it reads the secret from the environment variable
+
+
+3. Unit test for _get_default_env_variable_name_passthrough_endpoint
+"""
+
+@pytest.mark.usefixtures("_drain_logging_worker", "_vcr_outcome_gate")
+class TestPassthroughEndpointRouter(unittest.TestCase):
+    def setUp(self):
+        self.router = PassthroughEndpointRouter(llm_router_getter=lambda: None)
+
+    def test_deployment_and_get_credentials(self):
+        """
+        1. Basic Usage:
+            - Flag deployments for OpenAI, AssemblyAI, Anthropic, Cohere with use_in_pass_through
+            - GET credentials from passthrough_endpoint_router (resolved live from the llm router)
+        """
+        import litellm
+
+        llm_router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o",
+                        "api_key": "openai_key",
+                        "use_in_pass_through": True,
+                    },
+                },
+                {
+                    "model_name": "best",
+                    "litellm_params": {
+                        "model": "assemblyai/best",
+                        "api_key": "assemblyai_key",
+                        "api_base": "https://api.eu.assemblyai.com",
+                        "use_in_pass_through": True,
+                    },
+                },
+                {
+                    "model_name": "claude-sonnet-4-5",
+                    "litellm_params": {
+                        "model": "anthropic/claude-sonnet-4-5",
+                        "api_key": "anthropic_key",
+                        "use_in_pass_through": True,
+                    },
+                },
+                {
+                    "model_name": "embed-english-v3.0",
+                    "litellm_params": {
+                        "model": "cohere/embed-english-v3.0",
+                        "api_key": "cohere_key",
+                        "use_in_pass_through": True,
+                    },
+                },
+            ]
+        )
+        router = PassthroughEndpointRouter(llm_router_getter=lambda: llm_router)
+
+        self.assertEqual(router.get_credentials("openai", None), "openai_key")
+        # AssemblyAI: an API base that contains 'eu' triggers regional matching
+        self.assertEqual(router.get_credentials("assemblyai", "eu"), "assemblyai_key")
+        self.assertEqual(router.get_credentials("anthropic", None), "anthropic_key")
+        self.assertEqual(router.get_credentials("cohere", None), "cohere_key")
+
+    def test_get_credentials_from_env(self):
+        """
+        2. Basic Usage - when not using the database:
+            - No credentials set in memory
+            - Call get_credentials with provider name and expect it to read from the environment variable (via get_secret_str)
+        """
+        # Patch the get_secret_str function within the router's module.
+        with patch(
+            "litellm.proxy.pass_through_endpoints.passthrough_endpoint_router.get_secret_str"
+        ) as mock_get_secret:
+            mock_get_secret.return_value = "env_openai_key"
+            # For "openai", if credentials are not set, it should fallback to the env variable.
+            result = self.router.get_credentials("openai", None)
+            self.assertEqual(result, "env_openai_key")
+            mock_get_secret.assert_called_once_with("OPENAI_API_KEY")
+
+        with patch(
+            "litellm.proxy.pass_through_endpoints.passthrough_endpoint_router.get_secret_str"
+        ) as mock_get_secret:
+            mock_get_secret.return_value = "env_cohere_key"
+            result = self.router.get_credentials("cohere", None)
+            self.assertEqual(result, "env_cohere_key")
+            mock_get_secret.assert_called_once_with("COHERE_API_KEY")
+
+        with patch(
+            "litellm.proxy.pass_through_endpoints.passthrough_endpoint_router.get_secret_str"
+        ) as mock_get_secret:
+            mock_get_secret.return_value = "env_anthropic_key"
+            result = self.router.get_credentials("anthropic", None)
+            self.assertEqual(result, "env_anthropic_key")
+            mock_get_secret.assert_called_once_with("ANTHROPIC_API_KEY")
+
+        with patch(
+            "litellm.proxy.pass_through_endpoints.passthrough_endpoint_router.get_secret_str"
+        ) as mock_get_secret:
+            mock_get_secret.return_value = "env_azure_key"
+            result = self.router.get_credentials("azure", None)
+            self.assertEqual(result, "env_azure_key")
+            mock_get_secret.assert_called_once_with("AZURE_API_KEY")
+
+    def test_default_env_variable_method(self):
+        """
+        3. Unit test for _get_default_env_variable_name_passthrough_endpoint:
+            - Should return the provider in uppercase followed by _API_KEY.
+        """
+        self.assertEqual(
+            PassthroughEndpointRouter._get_default_env_variable_name_passthrough_endpoint("openai"),
+            "OPENAI_API_KEY",
+        )
+        self.assertEqual(
+            PassthroughEndpointRouter._get_default_env_variable_name_passthrough_endpoint("assemblyai"),
+            "ASSEMBLYAI_API_KEY",
+        )
+        self.assertEqual(
+            PassthroughEndpointRouter._get_default_env_variable_name_passthrough_endpoint("anthropic"),
+            "ANTHROPIC_API_KEY",
+        )
+        self.assertEqual(
+            PassthroughEndpointRouter._get_default_env_variable_name_passthrough_endpoint("cohere"),
+            "COHERE_API_KEY",
+        )
+
+    def test_get_deployment_key(self):
+        """Test _get_deployment_key with various inputs"""
+        router = PassthroughEndpointRouter()
+
+        # Test with valid inputs
+        key = router._get_deployment_key("test-project", "us-central1")
+        assert key == "test-project-us-central1"
+
+        # Test with None values
+        key = router._get_deployment_key(None, "us-central1")
+        assert key is None
+
+        key = router._get_deployment_key("test-project", None)
+        assert key is None
+
+        key = router._get_deployment_key(None, None)
+        assert key is None
+
+    def test_add_vertex_credentials(self):
+        """Test add_vertex_credentials functionality"""
+        router = PassthroughEndpointRouter()
+
+        # Test adding valid credentials
+        router.add_vertex_credentials(
+            project_id="test-project",
+            location="us-central1",
+            vertex_credentials='{"credentials": "test-creds"}',
+        )
+
+        assert "test-project-us-central1" in router.deployment_key_to_vertex_credentials
+        creds = router.deployment_key_to_vertex_credentials["test-project-us-central1"]
+        assert creds.vertex_project == "test-project"
+        assert creds.vertex_location == "us-central1"
+        assert creds.vertex_credentials == '{"credentials": "test-creds"}'
+
+        # Test adding with None values
+        router.add_vertex_credentials(
+            project_id=None,
+            location=None,
+            vertex_credentials='{"credentials": "test-creds"}',
+        )
+        # Should not add None values
+        assert len(router.deployment_key_to_vertex_credentials) == 1
+
+    def test_default_credentials(self):
+        """
+        Test get_vertex_credentials with stored credentials.
+
+        Tests if default credentials are used if set.
+
+        Tests if no default credentials are used, if no default set
+        """
+        router = PassthroughEndpointRouter()
+        router.add_vertex_credentials(
+            project_id="test-project",
+            location="us-central1",
+            vertex_credentials='{"credentials": "test-creds"}',
+        )
+
+        creds = router.get_vertex_credentials(project_id="test-project", location="us-central2")
+
+        assert creds is None
+
+    def test_get_vertex_env_vars(self):
+        """Test that _get_vertex_env_vars correctly reads environment variables"""
+        # Set environment variables for the test
+        os.environ["DEFAULT_VERTEXAI_PROJECT"] = "test-project-123"
+        os.environ["DEFAULT_VERTEXAI_LOCATION"] = "us-central1"
+        os.environ["DEFAULT_GOOGLE_APPLICATION_CREDENTIALS"] = "/path/to/creds"
+
+        try:
+            result = self.router._get_vertex_env_vars()
+            print(result)
+
+            # Verify the result
+            assert isinstance(result, VertexPassThroughCredentials)
+            assert result.vertex_project == "test-project-123"
+            assert result.vertex_location == "us-central1"
+            assert result.vertex_credentials == "/path/to/creds"
+
+        finally:
+            # Clean up environment variables
+            del os.environ["DEFAULT_VERTEXAI_PROJECT"]
+            del os.environ["DEFAULT_VERTEXAI_LOCATION"]
+            del os.environ["DEFAULT_GOOGLE_APPLICATION_CREDENTIALS"]
+
+    def test_set_default_vertex_config(self):
+        """Test set_default_vertex_config with various inputs"""
+        # Test with None config - set environment variables first
+        os.environ["DEFAULT_VERTEXAI_PROJECT"] = "env-project"
+        os.environ["DEFAULT_VERTEXAI_LOCATION"] = "env-location"
+        os.environ["DEFAULT_GOOGLE_APPLICATION_CREDENTIALS"] = "env-creds"
+        os.environ["GOOGLE_CREDS"] = "secret-creds"
+
+        try:
+            # Test with None config
+            self.router.set_default_vertex_config()
+
+            assert self.router.default_vertex_config.vertex_project == "env-project"
+            assert self.router.default_vertex_config.vertex_location == "env-location"
+            assert self.router.default_vertex_config.vertex_credentials == "env-creds"
+
+            # Test with valid config.yaml settings on vertex_config
+            test_config = {
+                "vertex_project": "my-project-123",
+                "vertex_location": "us-central1",
+                "vertex_credentials": "path/to/creds",
+            }
+            self.router.set_default_vertex_config(test_config)
+
+            assert self.router.default_vertex_config.vertex_project == "my-project-123"
+            assert self.router.default_vertex_config.vertex_location == "us-central1"
+            assert self.router.default_vertex_config.vertex_credentials == "path/to/creds"
+
+            # Test with environment variable reference
+            test_config = {
+                "vertex_project": "my-project-123",
+                "vertex_location": "us-central1",
+                "vertex_credentials": "os.environ/GOOGLE_CREDS",
+            }
+            self.router.set_default_vertex_config(test_config)
+
+            assert self.router.default_vertex_config.vertex_credentials == "secret-creds"
+
+        finally:
+            # Clean up environment variables
+            del os.environ["DEFAULT_VERTEXAI_PROJECT"]
+            del os.environ["DEFAULT_VERTEXAI_LOCATION"]
+            del os.environ["DEFAULT_GOOGLE_APPLICATION_CREDENTIALS"]
+            del os.environ["GOOGLE_CREDS"]
+
+    def test_vertex_passthrough_router_init(self):
+        """Test VertexPassThroughRouter initialization"""
+        router = PassthroughEndpointRouter()
+        assert isinstance(router.deployment_key_to_vertex_credentials, dict)
+        assert len(router.deployment_key_to_vertex_credentials) == 0
+
+    def test_get_vertex_credentials_none(self):
+        """Test get_vertex_credentials with various inputs"""
+        router = PassthroughEndpointRouter()
+
+        router.set_default_vertex_config(
+            config={
+                "vertex_project": None,
+                "vertex_location": None,
+                "vertex_credentials": None,
+            }
+        )
+
+        # Test with None project_id and location - should return default config
+        creds = router.get_vertex_credentials(None, None)
+        assert isinstance(creds, VertexPassThroughCredentials)
+
+        # Test with valid project_id and location but no stored credentials
+        creds = router.get_vertex_credentials("test-project", "us-central1")
+        assert isinstance(creds, VertexPassThroughCredentials)
+        assert creds.vertex_project is None
+        assert creds.vertex_location is None
+        assert creds.vertex_credentials is None
+
+    def test_get_vertex_credentials_stored(self):
+        """Test get_vertex_credentials with stored credentials"""
+        router = PassthroughEndpointRouter()
+        router.add_vertex_credentials(
+            project_id="test-project",
+            location="us-central1",
+            vertex_credentials='{"credentials": "test-creds"}',
+        )
+
+        creds = router.get_vertex_credentials(project_id="test-project", location="us-central1")
+        assert creds.vertex_project == "test-project"
+        assert creds.vertex_location == "us-central1"
+        assert creds.vertex_credentials == '{"credentials": "test-creds"}'

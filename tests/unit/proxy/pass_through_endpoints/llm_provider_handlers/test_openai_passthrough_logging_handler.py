@@ -1249,7 +1249,7 @@ class TestOpenAIPassthroughIntegration:
         assert result["kwargs"]["response_cost"] == 2.8e-07
         assert result["kwargs"]["model"] == "text-embedding-3-small"
         assert result["kwargs"]["custom_llm_provider"] == "openai"
-        assert result["result"]._hidden_params["response_cost"] == 2.8e-07
+        assert result["result"].hidden_params["response_cost"] == 2.8e-07
         mock_completion_cost.assert_called_once()
         assert mock_completion_cost.call_args.kwargs["call_type"] == "aembedding"
         assert mock_logging_obj.model_call_details["response_cost"] == 2.8e-07
@@ -1555,7 +1555,7 @@ class TestOpenAIPassthroughIntegration:
         )
 
         # Mock the _handle_logging method to capture calls
-        self.handler._handle_logging = AsyncMock()
+        self.handler.handle_logging = AsyncMock()
 
         # Act
         result = await self.handler.pass_through_async_success_handler(
@@ -1575,7 +1575,7 @@ class TestOpenAIPassthroughIntegration:
         )
 
         # Assert - Should call the base handler, not our OpenAI handler
-        self.handler._handle_logging.assert_called_once()
+        self.handler.handle_logging.assert_called_once()
 
     @patch("litellm.cost_calculator.default_image_cost_calculator")
     def test_calculate_image_generation_cost(self, mock_image_cost_calculator):
@@ -1742,6 +1742,7 @@ class TestOpenAIPassthroughIntegration:
         assert result["kwargs"]["response_cost"] == 0.040
         assert result["kwargs"]["model"] == "dall-e-3"
         assert result["kwargs"]["custom_llm_provider"] == "openai"
+        assert result["result"].hidden_params["response_cost"] == 0.040
 
         # Verify cost calculation was called
         mock_image_cost_calculator.assert_called_once()
@@ -1803,6 +1804,7 @@ class TestOpenAIPassthroughIntegration:
         assert result["kwargs"]["response_cost"] == 0.020
         assert result["kwargs"]["model"] == "dall-e-2"
         assert result["kwargs"]["custom_llm_provider"] == "openai"
+        assert result["result"].hidden_params["response_cost"] == 0.020
 
         # Verify cost calculation was called
         mock_image_cost_calculator.assert_called_once()

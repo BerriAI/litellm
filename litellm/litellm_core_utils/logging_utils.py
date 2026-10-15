@@ -5,7 +5,7 @@ import re
 import time
 from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, TypeAlias, cast
 
 from litellm._logging import format_base64_size, verbose_logger
 from litellm.constants import (
@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     )
 
     LiteLLMModelResponse = _ModelResponse
-    Span = _Span | Any
+    Span: TypeAlias = _Span
 else:
     LiteLLMModelResponse = Any
     LiteLLMLoggingObject = Any
@@ -43,7 +43,7 @@ Helper utils used for logging callbacks
 
 # Regex matching data-URI base64 content: "data:<mime>;base64,<payload>"
 # Captures: group(1)=mime_type, group(2)=base64_payload
-_DATA_URI_RE: Final = re.compile(r"data:([^;]+);base64,([A-Za-z0-9+/=]+)")
+_DATA_URI_RE: Final = re.compile(r"data:([^;,\s]{1,255});base64,([A-Za-z0-9+/=]+)")
 
 # Maximum nesting depth for _truncate_base64_in_value to guard against
 # pathological payloads. OpenAI message format is typically 3-4 levels deep.
