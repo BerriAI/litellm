@@ -51,7 +51,33 @@ def test_transform_thinking_blocks_unwraps_converse_redacted_content_to_claude_n
         {"redactedContent": base64.b64encode(native_data.encode()).decode()}
     )
 
-    assert thinking_blocks == [{"type": "redacted_thinking", "data": native_data}]
+    assert thinking_blocks == [{"type": "redacted_thinking", "data": native_data, "index": 0}]
+
+
+def test_converse_reasoning_deltas_index_thinking_blocks_by_reasoning_block_for_the_openai_sdk():
+    """The OpenAI SDK's `.stream()` accumulator needs a list-position `index` on every streamed `thinking_blocks`
+    entry, stable across one reasoning block's fragments and sequential across blocks even when a text block sits
+    between them (Converse `contentBlockIndex` 0 and 2 become thinking indexes 0 and 1)"""
+    decoder: Final = AWSEventStreamDecoder(model="test")
+    chunks: Final = (
+        {"delta": {"reasoningContent": {"text": "Step 1. "}}, "contentBlockIndex": 0},
+        {"delta": {"reasoningContent": {"text": "Step 2."}}, "contentBlockIndex": 0},
+        {"delta": {"reasoningContent": {"signature": "sig-a"}}, "contentBlockIndex": 0},
+        {"delta": {"text": "Paris"}, "contentBlockIndex": 1},
+        {"delta": {"reasoningContent": {"text": "Step 3."}}, "contentBlockIndex": 2},
+        {"delta": {"reasoningContent": {"signature": "sig-b"}}, "contentBlockIndex": 2},
+    )
+
+    deltas: Final = tuple(decoder.chunk_parser(chunk).choices[0].delta for chunk in chunks)
+    streamed: Final = tuple(block for delta in deltas for block in (getattr(delta, "thinking_blocks", None) or []))
+
+    assert streamed == (
+        {"type": "thinking", "thinking": "Step 1. ", "index": 0},
+        {"type": "thinking", "thinking": "Step 2.", "index": 0},
+        {"type": "thinking", "thinking": "", "signature": "sig-a", "index": 0},
+        {"type": "thinking", "thinking": "Step 3.", "index": 1},
+        {"type": "thinking", "thinking": "", "signature": "sig-b", "index": 1},
+    )
 
 
 def test_transform_tool_calls_index():
