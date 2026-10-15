@@ -92,6 +92,10 @@ class _EntityTotal(NamedTuple):
     spend: float
     requests: float
     tokens: float
+    prompt_tokens: float = 0.0
+    completion_tokens: float = 0.0
+    cache_read_input_tokens: float = 0.0
+    cache_creation_input_tokens: float = 0.0
 
 
 class _UsageDump(Protocol):
@@ -133,8 +137,10 @@ _TOOL_USAGE: Final[_ToolDef] = {
         "name": "get_usage_data",
         "description": (
             "Fetch aggregated global usage/spend data. Returns daily spend, "
-            "token counts, request counts, and breakdowns by model, provider, "
-            "and API key. Use for overall spend, top models, top providers."
+            "token counts split into prompt, completion, cache read and cache "
+            "creation tokens, request counts, and breakdowns by model, provider, "
+            "and API key. Use for overall spend, top models, top providers, and "
+            "per-model token type breakdowns."
         ),
         "parameters": {
             "type": "object",
@@ -359,6 +365,23 @@ def _accumulate_breakdown(
     return totals
 
 
+TOKEN_TYPE_FIELDS: Final = (
+    "prompt_tokens",
+    "completion_tokens",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+)
+
+
+def _token_types(d: Mapping[str, float]) -> str:
+    """Render the four token-type counters the daily aggregates carry."""
+    return (
+        f"prompt {int(d.get('prompt_tokens', 0))}, completion {int(d.get('completion_tokens', 0))}, "
+        f"cache read {int(d.get('cache_read_input_tokens', 0))}, "
+        f"cache creation {int(d.get('cache_creation_input_tokens', 0))}"
+    )
+
+
 def _ranked_lines(
     totals: dict[str, dict[str, float]],
     fmt: Callable[[str, dict[str, float]], str],
@@ -377,15 +400,26 @@ def _summarise_usage_data(data: _UsageDump) -> str:
         f"Total Requests: {meta.get('total_api_requests', 0)}\n"
         f"Successful: {meta.get('total_successful_requests', 0)} | "
         f"Failed: {meta.get('total_failed_requests', 0)}\n"
-        f"Total Tokens: {meta.get('total_tokens', 0)}"
+        f"Total Tokens: {meta.get('total_tokens', 0)} "
+        f"(prompt {meta.get('total_prompt_tokens', 0)}, "
+        f"completion {meta.get('total_completion_tokens', 0)}, "
+        f"cache read {meta.get('total_cache_read_input_tokens', 0)}, "
+        f"cache creation {meta.get('total_cache_creation_input_tokens', 0)})"
     )
 
-    models: Final = _accumulate_breakdown(results, "models", ["spend", "api_requests", "total_tokens"])
+    models: Final = _accumulate_breakdown(
+        results,
+        "models",
+        ["spend", "api_requests", "total_tokens", *TOKEN_TYPE_FIELDS],
+    )
     providers: Final = _accumulate_breakdown(results, "providers", ["spend", "api_requests"])
 
     model_lines: Final = _ranked_lines(
         models,
-        lambda n, d: f"  - {n}: ${d['spend']:.4f} ({int(d['api_requests'])} reqs, {int(d['total_tokens'])} tokens)",
+        lambda n, d: (
+            f"  - {n}: ${d['spend']:.4f} ({int(d['api_requests'])} reqs, {int(d['total_tokens'])} tokens: "
+            f"{_token_types(d)})"
+        ),
         TOP_N_MODELS,
     )
     provider_lines: Final = _ranked_lines(
@@ -416,12 +450,22 @@ def _summarise_entity_data(data: _UsageDump, entity_label: str) -> str:
                 spend=(previous.spend if previous is not None else 0.0) + m.get("spend", 0),
                 requests=(previous.requests if previous is not None else 0) + m.get("api_requests", 0),
                 tokens=(previous.tokens if previous is not None else 0) + m.get("total_tokens", 0),
+                prompt_tokens=(previous.prompt_tokens if previous is not None else 0) + m.get("prompt_tokens", 0),
+                completion_tokens=(previous.completion_tokens if previous is not None else 0)
+                + m.get("completion_tokens", 0),
+                cache_read_input_tokens=(previous.cache_read_input_tokens if previous is not None else 0)
+                + m.get("cache_read_input_tokens", 0),
+                cache_creation_input_tokens=(previous.cache_creation_input_tokens if previous is not None else 0)
+                + m.get("cache_creation_input_tokens", 0),
             )
 
     lines: Final = [f"{entity_label} Usage ({len(totals)} {entity_label.lower()}s):", ""]
     for eid, d in sorted(totals.items(), key=lambda x: -x[1].spend):
         label = d.alias if d.alias != eid else eid
-        lines.append(f"- {label} (ID: {eid}): ${d.spend:.4f} | {int(d.requests)} reqs | {int(d.tokens)} tokens")
+        lines.append(
+            f"- {label} (ID: {eid}): ${d.spend:.4f} | {int(d.requests)} reqs | {int(d.tokens)} tokens "
+            f"({_token_types(d._asdict())})"
+        )
     return "\n".join(lines)
 
 
