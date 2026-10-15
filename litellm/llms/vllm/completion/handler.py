@@ -56,7 +56,9 @@ def completion(
     if model in custom_prompt_dict:
         # check if the model has a registered custom prompt
         model_prompt_details: Final = custom_prompt_dict[model]
-        prompt = render_custom_prompt_template(template=model_prompt_details, messages=messages)
+        prompt = render_custom_prompt_template(
+            template=model_prompt_details, messages=messages, model=model, llm_provider="vllm"
+        )
     else:
         prompt = prompt_factory(model=model, messages=messages)
 
@@ -139,7 +141,9 @@ def batch_completions(model: str, messages: list, optional_params=None, custom_p
         # check if the model has a registered custom prompt
         model_prompt_details: Final = custom_prompt_dict[model]
         for message in messages:
-            prompt = render_custom_prompt_template(template=model_prompt_details, messages=message)
+            prompt = render_custom_prompt_template(
+                template=model_prompt_details, messages=message, model=model, llm_provider="vllm"
+            )
             prompts.append(prompt)
     else:
         for message in messages:

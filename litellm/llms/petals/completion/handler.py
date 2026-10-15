@@ -42,7 +42,9 @@ def completion(
     if model in litellm.custom_prompt_dict:
         # check if the model has a registered custom prompt
         model_prompt_details: Final = litellm.custom_prompt_dict[model]
-        prompt = render_custom_prompt_template(template=model_prompt_details, messages=messages)
+        prompt = render_custom_prompt_template(
+            template=model_prompt_details, messages=messages, model=model, llm_provider="petals"
+        )
     else:
         prompt = prompt_factory(model=model, messages=messages)
 

@@ -120,11 +120,15 @@ class SagemakerConfig(BaseConfig):
         if model in custom_prompt_dict:
             # check if the model has a registered custom prompt
             model_prompt_details = custom_prompt_dict[model]
-            prompt = render_custom_prompt_template(template=model_prompt_details, messages=messages)
+            prompt = render_custom_prompt_template(
+                template=model_prompt_details, messages=messages, model=model, llm_provider="sagemaker"
+            )
         elif hf_model_name in custom_prompt_dict:
             # check if the base huggingface model has a registered custom prompt
             model_prompt_details = custom_prompt_dict[hf_model_name]
-            prompt = render_custom_prompt_template(template=model_prompt_details, messages=messages)
+            prompt = render_custom_prompt_template(
+                template=model_prompt_details, messages=messages, model=model, llm_provider="sagemaker"
+            )
         else:
             if hf_model_name is None:
                 if "llama-2" in model.lower():  # llama-2 model

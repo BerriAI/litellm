@@ -65,6 +65,19 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.llms.vertex_ai.gemini.transformation import gemini_convert_messages_with_history
 from litellm.types.llms.bedrock import BedrockConverseReasoningContentBlock
 from litellm.types.llms.openai import AllMessageValues
+import sys
+import types
+from litellm.litellm_core_utils.prompt_templates.factory import response_schema_prompt
+from litellm.llms.anthropic.completion.transformation import AnthropicTextConfig
+from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import AmazonInvokeConfig
+from litellm.llms.codestral.completion.handler import CodestralTextCompletion
+from litellm.llms.ollama.completion.transformation import OllamaConfig
+from litellm.llms.petals.completion import handler as petals_handler
+from litellm.llms.predibase.chat.transformation import PredibaseConfig
+from litellm.llms.sagemaker.completion.transformation import SagemakerConfig
+from litellm.llms.vllm.completion import handler as vllm_handler
+from litellm.llms.watsonx.common_utils import _convert_watsonx_messages_core
+from litellm.types.utils import ModelResponse, TextCompletionResponse
 
 
 def test_function_call_prompt_preserves_append_failure_for_non_string_content() -> None:
@@ -7582,3 +7595,272 @@ def test_anthropic_messages_pt_merges_a_long_assistant_run_in_linear_time():
     growth: Final = _merged_assistant_run_cost(4000) / _merged_assistant_run_cost(1000)
 
     assert growth < 8.0, f"cost grew {growth:.1f}x for 4x the assistant run"
+
+
+TEMPLATE_MODEL = "partial-template-model"
+TEMPLATE_ROLES = {"user": {"pre_message": "[INST] ", "post_message": " [/INST]"}}
+TEMPLATE_MESSAGES = [{"role": "user", "content": "hi"}]
+TEMPLATE_RENDERED_MESSAGES = "[INST] hi [/INST]"
+TEMPLATE_BARE_MESSAGES = "hi"
+
+TEMPLATE_RESPONSE_SCHEMA = {"type": "object"}
+TEMPLATE_RENDERED_SCHEMA = f"[INST] {TEMPLATE_RESPONSE_SCHEMA} [/INST]"
+TEMPLATE_BARE_SCHEMA = str(TEMPLATE_RESPONSE_SCHEMA)
+
+TEMPLATE_INITIAL = "<start>"
+TEMPLATE_FINAL = "<end>"
+
+PARTIAL_TEMPLATE = {"roles": TEMPLATE_ROLES}
+FULL_TEMPLATE = {"roles": TEMPLATE_ROLES, "initial_prompt_value": TEMPLATE_INITIAL, "final_prompt_value": TEMPLATE_FINAL}
+ROLELESS_TEMPLATE = {"initial_prompt_value": TEMPLATE_INITIAL, "final_prompt_value": TEMPLATE_FINAL}
+
+
+class _PromptCaptured(Exception):
+    def __init__(self, prompt):
+        super().__init__(prompt)
+        self.prompt = prompt
+
+
+class _CapturingLogging:
+    def pre_call(self, input, api_key, additional_args=None, **kwargs):
+        raise _PromptCaptured(input)
+
+    def post_call(self, *args, **kwargs):
+        pass
+
+
+def _captured_prompt(call):
+    with pytest.raises(_PromptCaptured) as excinfo:
+        call()
+    return excinfo.value.prompt
+
+
+def _stub_vllm_import(monkeypatch):
+    class _SamplingParams:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class _LLM:
+        def __init__(self, model):
+            self.model = model
+
+        def generate(self, prompts, sampling_params):
+            raise _PromptCaptured(prompts)
+
+    stub = types.ModuleType("vllm")
+    stub.LLM = _LLM
+    stub.SamplingParams = _SamplingParams
+
+    monkeypatch.setitem(sys.modules, "vllm", stub)
+    monkeypatch.setattr(vllm_handler, "llm", None)
+
+
+def _render_ollama(template, monkeypatch, messages=TEMPLATE_MESSAGES):
+    request = OllamaConfig().transform_request(
+        model=TEMPLATE_MODEL,
+        messages=messages,
+        optional_params={},
+        litellm_params={"custom_prompt_dict": {TEMPLATE_MODEL: template}},
+        headers={},
+    )
+    return request["prompt"]
+
+
+def _render_predibase(template, monkeypatch):
+    request = PredibaseConfig().transform_request(
+        model=TEMPLATE_MODEL,
+        messages=TEMPLATE_MESSAGES,
+        optional_params={},
+        litellm_params={"custom_prompt_dict": {TEMPLATE_MODEL: template}},
+        headers={},
+    )
+    return request["inputs"]
+
+
+def _render_anthropic_text(template, monkeypatch):
+    monkeypatch.setattr(litellm, "custom_prompt_dict", {TEMPLATE_MODEL: template})
+    return AnthropicTextConfig()._get_anthropic_text_prompt_from_messages(
+        messages=TEMPLATE_MESSAGES, model=TEMPLATE_MODEL
+    )
+
+
+def _render_response_schema_prompt(template, monkeypatch):
+    monkeypatch.setattr(litellm, "custom_prompt_dict", {f"{TEMPLATE_MODEL}/response_schema_prompt": template})
+    return response_schema_prompt(
+        model=TEMPLATE_MODEL, response_schema=TEMPLATE_RESPONSE_SCHEMA, llm_provider="vertex_ai"
+    )
+
+
+def _render_petals(template, monkeypatch):
+    monkeypatch.setattr(litellm, "custom_prompt_dict", {TEMPLATE_MODEL: template})
+    return _captured_prompt(
+        lambda: petals_handler.completion(
+            model=TEMPLATE_MODEL,
+            messages=TEMPLATE_MESSAGES,
+            api_base="http://petals.invalid",
+            model_response=ModelResponse(),
+            print_verbose=lambda *args, **kwargs: None,
+            encoding=None,
+            logging_obj=_CapturingLogging(),
+            optional_params={},
+        )
+    )
+
+
+def _render_codestral(template, monkeypatch):
+    return _captured_prompt(
+        lambda: CodestralTextCompletion().completion(
+            model=TEMPLATE_MODEL,
+            messages=TEMPLATE_MESSAGES,
+            api_base="http://codestral.invalid",
+            custom_prompt_dict={TEMPLATE_MODEL: template},
+            model_response=TextCompletionResponse(),
+            print_verbose=lambda *args, **kwargs: None,
+            encoding=None,
+            api_key="sk-not-used",
+            logging_obj=_CapturingLogging(),
+            optional_params={},
+            timeout=1.0,
+        )
+    )
+
+
+def _render_vllm_completion(template, monkeypatch):
+    _stub_vllm_import(monkeypatch)
+    return _captured_prompt(
+        lambda: vllm_handler.completion(
+            model=TEMPLATE_MODEL,
+            messages=TEMPLATE_MESSAGES,
+            model_response=ModelResponse(),
+            print_verbose=lambda *args, **kwargs: None,
+            encoding=None,
+            logging_obj=_CapturingLogging(),
+            optional_params={},
+            custom_prompt_dict={TEMPLATE_MODEL: template},
+        )
+    )
+
+
+def _render_vllm_batch(template, monkeypatch):
+    _stub_vllm_import(monkeypatch)
+    prompts = _captured_prompt(
+        lambda: vllm_handler.batch_completions(
+            model=TEMPLATE_MODEL,
+            messages=[TEMPLATE_MESSAGES],
+            optional_params={},
+            custom_prompt_dict={TEMPLATE_MODEL: template},
+        )
+    )
+    assert len(prompts) == 1
+    return prompts[0]
+
+
+def _render_bedrock_invoke(template, monkeypatch):
+    prompt, _ = AmazonInvokeConfig().convert_messages_to_prompt(
+        model=TEMPLATE_MODEL, messages=TEMPLATE_MESSAGES, provider="meta", custom_prompt_dict={TEMPLATE_MODEL: template}
+    )
+    return prompt
+
+
+def _render_sagemaker(template, monkeypatch):
+    return SagemakerConfig()._transform_prompt(
+        model=TEMPLATE_MODEL,
+        messages=TEMPLATE_MESSAGES,
+        custom_prompt_dict={TEMPLATE_MODEL: template},
+        hf_model_name=None,
+    )
+
+
+def _render_watsonx(template, monkeypatch):
+    return _convert_watsonx_messages_core(
+        model=TEMPLATE_MODEL,
+        messages=TEMPLATE_MESSAGES,
+        provider="ibm",
+        custom_prompt_dict={TEMPLATE_MODEL: template},
+        apply_template_fn=None,
+    )
+
+
+TEMPLATE_CALL_SITES = [
+    pytest.param(_render_ollama, TEMPLATE_RENDERED_MESSAGES, TEMPLATE_BARE_MESSAGES, id="ollama"),
+    pytest.param(_render_petals, TEMPLATE_RENDERED_MESSAGES, TEMPLATE_BARE_MESSAGES, id="petals"),
+    pytest.param(_render_vllm_completion, TEMPLATE_RENDERED_MESSAGES, TEMPLATE_BARE_MESSAGES, id="vllm-completion"),
+    pytest.param(_render_vllm_batch, TEMPLATE_RENDERED_MESSAGES, TEMPLATE_BARE_MESSAGES, id="vllm-batch-completions"),
+    pytest.param(_render_predibase, TEMPLATE_RENDERED_MESSAGES, TEMPLATE_BARE_MESSAGES, id="predibase"),
+    pytest.param(_render_codestral, TEMPLATE_RENDERED_MESSAGES, TEMPLATE_BARE_MESSAGES, id="codestral"),
+    pytest.param(_render_anthropic_text, TEMPLATE_RENDERED_MESSAGES, TEMPLATE_BARE_MESSAGES, id="anthropic-text"),
+    pytest.param(
+        _render_response_schema_prompt, TEMPLATE_RENDERED_SCHEMA, TEMPLATE_BARE_SCHEMA, id="response-schema-prompt"
+    ),
+    pytest.param(_render_bedrock_invoke, TEMPLATE_RENDERED_MESSAGES, TEMPLATE_BARE_MESSAGES, id="bedrock-invoke"),
+    pytest.param(_render_sagemaker, TEMPLATE_RENDERED_MESSAGES, TEMPLATE_BARE_MESSAGES, id="sagemaker"),
+    pytest.param(_render_watsonx, TEMPLATE_RENDERED_MESSAGES, TEMPLATE_BARE_MESSAGES, id="watsonx"),
+]
+
+
+@pytest.mark.parametrize(("render", "rendered_body", "bare_body"), TEMPLATE_CALL_SITES)
+def test_template_without_the_optional_prompt_values_renders(render, rendered_body, bare_body, monkeypatch):
+    assert render(PARTIAL_TEMPLATE, monkeypatch) == rendered_body
+
+
+@pytest.mark.parametrize(("render", "rendered_body", "bare_body"), TEMPLATE_CALL_SITES)
+def test_template_with_the_optional_prompt_values_still_applies_them(render, rendered_body, bare_body, monkeypatch):
+    assert render(FULL_TEMPLATE, monkeypatch) == TEMPLATE_INITIAL + rendered_body + TEMPLATE_FINAL
+
+
+@pytest.mark.parametrize(("render", "rendered_body", "bare_body"), TEMPLATE_CALL_SITES)
+def test_template_without_roles_renders_messages_unwrapped(render, rendered_body, bare_body, monkeypatch):
+    assert render(ROLELESS_TEMPLATE, monkeypatch) == TEMPLATE_INITIAL + bare_body + TEMPLATE_FINAL
+
+
+def test_template_wraps_only_the_roles_it_defines_across_a_conversation(monkeypatch):
+    messages = [
+        {"role": "system", "content": "Be terse."},
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello"},
+        {"role": "user", "content": "sky colour?"},
+    ]
+
+    rendered = _render_ollama(FULL_TEMPLATE, monkeypatch, messages=messages)
+
+    assert rendered == "<start>Be terse.[INST] hi [/INST]hello[INST] sky colour? [/INST]<end>"
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        pytest.param({"roles": {**TEMPLATE_ROLES, "tool": None}}, id="null-role-entry"),
+        pytest.param({"roles": {"user": {**TEMPLATE_ROLES["user"], "priority": 1}}}, id="extra-role-key"),
+        pytest.param({"roles": {**TEMPLATE_ROLES, "tool": {"pre_message": 5}}}, id="unused-role-wrong-type"),
+        pytest.param({"roles": TEMPLATE_ROLES, "initial_prompt_value": None, "bos_token": 7}, id="null-and-unread-keys"),
+    ],
+)
+def test_template_shapes_main_rendered_keep_rendering(template, monkeypatch):
+    assert _render_ollama(template, monkeypatch) == TEMPLATE_RENDERED_MESSAGES
+
+
+def test_null_entry_for_a_role_in_use_renders_that_role_unwrapped(monkeypatch):
+    assert _render_ollama({"roles": {"user": None}}, monkeypatch) == TEMPLATE_BARE_MESSAGES
+
+
+@pytest.mark.parametrize(
+    ("template", "field"),
+    [
+        pytest.param({"initial_prompt_value": 5}, "initial_prompt_value", id="initial-prompt-value"),
+        pytest.param({"final_prompt_value": ["x"]}, "final_prompt_value", id="final-prompt-value"),
+        pytest.param({"roles": {"user": {"pre_message": 5}}}, "roles.user.pre_message", id="pre-message"),
+        pytest.param({"roles": {"user": "[INST]"}}, "roles.user", id="role-entry"),
+        pytest.param({"roles": ["user"]}, "roles", id="roles"),
+    ],
+)
+def test_wrong_type_template_field_fails_as_bad_request_naming_it(template, field):
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        litellm.completion(
+            model=f"ollama/{TEMPLATE_MODEL}",
+            messages=TEMPLATE_MESSAGES,
+            api_base="http://ollama.invalid",
+            **template,
+        )
+
+    assert excinfo.value.status_code == 400
+    assert f"\n{field}\n" in excinfo.value.message

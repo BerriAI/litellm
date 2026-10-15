@@ -275,7 +275,9 @@ class PredibaseConfig(BaseConfig):
         custom_prompt_dict: Final = litellm_params.get("custom_prompt_dict", {})
         if model in custom_prompt_dict:
             model_prompt_details: Final = custom_prompt_dict[model]
-            prompt = render_custom_prompt_template(template=model_prompt_details, messages=messages)
+            prompt = render_custom_prompt_template(
+                template=model_prompt_details, messages=messages, model=model, llm_provider="predibase"
+            )
         else:
             prompt = prompt_factory(model=model, messages=messages)
 

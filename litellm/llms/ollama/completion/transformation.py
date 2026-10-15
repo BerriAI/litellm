@@ -437,7 +437,9 @@ class OllamaConfig(BaseConfig):
         if model in custom_prompt_dict:
             # check if the model has a registered custom prompt
             model_prompt_details: Final = custom_prompt_dict[model]
-            ollama_prompt = render_custom_prompt_template(template=model_prompt_details, messages=messages)
+            ollama_prompt = render_custom_prompt_template(
+                template=model_prompt_details, messages=messages, model=model, llm_provider="ollama"
+            )
         elif text_completion_request:  # handle `/completions` requests
             ollama_prompt = get_str_from_messages(messages=messages)
         else:  # handle `/chat/completions` requests

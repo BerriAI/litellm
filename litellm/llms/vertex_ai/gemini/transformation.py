@@ -1150,6 +1150,7 @@ def transform_request_body(
             user_response_schema_message: Final = response_schema_prompt(
                 model=model,
                 response_schema=optional_params.get("response_schema"),
+                llm_provider=custom_llm_provider,
             )
             messages.append({"role": "user", "content": user_response_schema_message})
             optional_params.pop("response_schema")

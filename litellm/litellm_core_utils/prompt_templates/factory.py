@@ -12,7 +12,7 @@ from types import MappingProxyType
 from typing import Any, Final, TypeAlias, TypedDict, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 
 import litellm
 import litellm.types
@@ -5471,7 +5471,7 @@ def function_call_prompt(
     return messages
 
 
-def response_schema_prompt(model: str, response_schema: dict) -> str:
+def response_schema_prompt(model: str, response_schema: dict, llm_provider: str) -> str:
     """
     Decides if a user-defined custom prompt or default needs to be used
 
@@ -5487,7 +5487,9 @@ def response_schema_prompt(model: str, response_schema: dict) -> str:
         custom_prompt_details = litellm.custom_prompt_dict["response_schema_prompt"]
 
     if custom_prompt_details is not None:
-        return render_custom_prompt_template(template=custom_prompt_details, messages=response_schema_as_message)
+        return render_custom_prompt_template(
+            template=custom_prompt_details, messages=response_schema_as_message, model=model, llm_provider=llm_provider
+        )
     else:
         return default_response_schema_prompt(response_schema=response_schema)
 
@@ -5506,20 +5508,58 @@ def default_response_schema_prompt(response_schema: dict) -> str:
 
 
 # Custom prompt template
+class CustomPromptRole(BaseModel):
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+
+    pre_message: str | None = None
+    post_message: str | None = None
+
+
+class CustomPromptRoles(BaseModel):
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True, title="custom prompt template")
+
+    roles: Mapping[str, CustomPromptRole | None]
+
+
 class CustomPromptTemplate(BaseModel):
-    model_config = ConfigDict(frozen=True, strict=True, hide_input_in_errors=True)
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True, title="custom prompt template")
 
-    roles: Mapping[str, Mapping[str, str]] = Field(default_factory=dict)
-    initial_prompt_value: str = ""
-    final_prompt_value: str = ""
+    roles: Mapping[str, object] | None = None
+    initial_prompt_value: str | None = None
+    final_prompt_value: str | None = None
 
 
-def render_custom_prompt_template(template: Mapping[str, object], messages: Sequence[Mapping[str, object]]) -> str:
+def render_custom_prompt_template(
+    template: Mapping[str, object],
+    messages: Sequence[Mapping[str, object]],
+    model: str,
+    llm_provider: str,
+) -> str:
+    try:
+        return _render_custom_prompt_template(template=template, messages=messages)
+    except ValidationError as error:
+        raise litellm.BadRequestError(
+            message=f"The custom prompt template for {model} is invalid: {error}",
+            model=model,
+            llm_provider=llm_provider,
+        ) from error
+
+
+def _render_custom_prompt_template(template: Mapping[str, object], messages: Sequence[Mapping[str, object]]) -> str:
     validated: Final = CustomPromptTemplate.model_validate(template)
+    message_roles: Final = frozenset(message.get("role") for message in messages)
+    template_roles: Final = validated.roles or {}
+    used_roles: Final = CustomPromptRoles.model_validate(
+        {"roles": {role: entry for role, entry in template_roles.items() if role in message_roles}}
+    )
     return custom_prompt(
-        role_dict=validated.roles,
-        initial_prompt_value=validated.initial_prompt_value,
-        final_prompt_value=validated.final_prompt_value,
+        role_dict={
+            role: {"pre_message": entry.pre_message or "", "post_message": entry.post_message or ""}
+            for role, entry in used_roles.roles.items()
+            if entry is not None
+        },
+        initial_prompt_value=validated.initial_prompt_value or "",
+        final_prompt_value=validated.final_prompt_value or "",
         messages=list(messages),
     )
 
