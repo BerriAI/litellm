@@ -7,7 +7,9 @@ import asyncio, importlib
 import json
 import threading
 from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
+from functools import partial
 from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -35,6 +37,7 @@ from litellm.types.llms.openai import (
 )
 from contextlib import suppress
 from litellm.responses import streaming_iterator as streaming_module
+from litellm.router_utils.cooldown_handlers import get_cooldown_deployments
 from litellm.types.utils import CallTypes
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from types import SimpleNamespace
@@ -541,6 +544,94 @@ async def test_failure_logging_finishes_before_the_error_reaches_the_consumer(mo
     await _wait_until(lambda: recorder.failure_finished)
 
     assert recorder.failure_deployment_id == "primary-deployment"
+
+
+class _DeferredJob(Future[object]):
+    """Runs its job as late as a pool thread could, once a task is suspended on it or the test calls run()."""
+
+    def __init__(self, job: Callable[[], object]) -> None:
+        super().__init__()
+        self._job: Final = job
+
+    def run(self) -> None:
+        if not self.done():
+            self.set_result(self._job())
+
+    def add_done_callback(self, fn: Callable[[Future[object]], object]) -> None:
+        super().add_done_callback(fn)
+        waiter: Final = asyncio.current_task()
+        if waiter is not None:
+            waiter.get_loop().call_soon(lambda: None if waiter.done() else self.run())
+
+
+class _DeferredExecutor:
+    def __init__(self) -> None:
+        self.jobs: tuple[_DeferredJob, ...] = ()
+
+    def submit(self, fn: Callable[..., object], /, *args: object, **kwargs: object) -> _DeferredJob:
+        job: Final = _DeferredJob(partial(fn, *args, **kwargs))
+        self.jobs = (*self.jobs, job)
+        return job
+
+
+@pytest.mark.asyncio
+async def test_mid_stream_rate_limit_is_not_charged_to_the_fallback_deployment(monkeypatch):
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "primary", "litellm_params": {"model": "openai/primary"}, "model_info": {"id": "primary-1"}},
+            {"model_name": "backup", "litellm_params": {"model": "openai/backup"}, "model_info": {"id": "backup-a"}},
+            {"model_name": "backup", "litellm_params": {"model": "openai/backup"}, "model_info": {"id": "backup-b"}},
+        ]
+    )
+    deferred: Final = _DeferredExecutor()
+    monkeypatch.setattr(streaming_module, "executor", deferred)
+    logging_obj: Final = _real_logging_obj(
+        litellm_params={"aresponses": True, "model_info": {"id": "primary-1"}, "metadata": {"model_group": "primary"}}
+    )
+    iterator: Final = _make_iterator(sse_events=[], logging_obj=logging_obj)
+    rate_limit: Final = litellm.RateLimitError(message="rate limit", llm_provider="openai", model="primary")
+
+    iterator._handle_failure(
+        MidStreamFallbackError(message="rate limit", model="primary", llm_provider="openai", original_exception=rate_limit)
+    )
+    await iterator._await_pending_logging()
+    logging_obj.update_from_kwargs(
+        kwargs={"metadata": {"model_group": "backup"}}, litellm_params={"model_info": {"id": "backup-a"}}
+    )
+    for job in deferred.jobs:
+        job.run()
+
+    assert get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None) == [], (
+        "the primary's mid-stream 429 was charged to the fallback deployment"
+    )
+
+
+def _consume_async_stream(logging_obj: Mock, trailing_error: Exception) -> None:
+    async def consume() -> None:
+        async for _ in _make_iterator(sse_events=[], logging_obj=logging_obj, trailing_error=trailing_error):
+            pass
+
+    asyncio.run(asyncio.wait_for(consume(), timeout=5))
+
+
+def _consume_sync_stream(logging_obj: Mock, trailing_error: Exception) -> None:
+    for _ in _make_sync_iterator(sse_events=[], logging_obj=logging_obj, trailing_error=trailing_error):
+        pass
+
+
+@pytest.mark.parametrize("consume", [_consume_async_stream, _consume_sync_stream], ids=["async", "sync"])
+def test_stream_keeps_its_fallback_error_when_the_logging_pool_is_shut_down(monkeypatch, consume):
+    stopped_pool: Final = ThreadPoolExecutor(max_workers=1)
+    stopped_pool.shutdown()
+    monkeypatch.setattr(streaming_module, "executor", stopped_pool)
+    logging_obj: Final = _failure_tracking_logging_obj()
+    trailing_error: Final = httpx.ReadError("Response payload is not completed")
+
+    with pytest.raises(MidStreamFallbackError) as exc_info:
+        consume(logging_obj, trailing_error)
+
+    assert exc_info.value.original_exception is trailing_error
+    _assert_failure_logged_once(logging_obj, trailing_error)
 
 
 @pytest.mark.asyncio
