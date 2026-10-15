@@ -28,6 +28,7 @@ from litellm.llms.base_llm.anthropic_messages.transformation import (
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.native.messages import execute_messages
 from litellm.native.route_plan import NativeChat, NativeResponses, native_messages_config, plan_messages_route
 from litellm.types.llms.anthropic import AllAnthropicToolsValues
 from litellm.types.llms.anthropic_messages.anthropic_request import AnthropicMetadata
@@ -47,7 +48,7 @@ from ..safeguards import (
     with_safeguard_results,
 )
 from .interceptors import get_messages_interceptors
-from .utils import AnthropicMessagesRequestUtils, mock_response, prepare_native_messages
+from .utils import mock_response, prepare_native_messages
 
 __all__ = ("anthropic_messages", "anthropic_messages_handler")
 
@@ -610,7 +611,6 @@ def anthropic_messages_handler(
             **kwargs,
         )
 
-    anthropic_messages_provider_config: Final = route.config
     if custom_llm_provider is None:
         raise ValueError(
             f"custom_llm_provider is required for Anthropic messages, passed in model={model}, custom_llm_provider={custom_llm_provider}"
@@ -623,23 +623,11 @@ def anthropic_messages_handler(
     if marked_tools is not None:
         AnthropicCacheControlHook.record_gateway_injection(request_kwargs, 1)
     local_vars.update({**request_kwargs, **({"tools": list(marked_tools)} if marked_tools is not None else {})})
-    anthropic_messages_optional_request_params: Final = (
-        AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
-            params=local_vars,
-            model=model,
-            drop_params=litellm_params.get("drop_params") is True,
-            custom_llm_provider=custom_llm_provider,
-        )
-    )
-    resolved_api_base: Final = (
-        dynamic_api_base
-        if dynamic_api_base is not None and anthropic_messages_provider_config.uses_get_llm_provider_api_base()
-        else api_base
-    )
     safeguard_kwargs: Final = (
         _SAFEGUARD_KWARGS.validate_python(kwargs) if is_async is True and "safeguards" in kwargs else None
     )
-    native_response: Final = base_llm_http_handler.anthropic_messages_handler(
+    native_response: Final = execute_messages(
+        http_handler=base_llm_http_handler,
         model=model,
         messages=cast(  # cast-ok: anthropic messages are dicts at runtime
             "list[dict[str, object]]",
@@ -647,22 +635,23 @@ def anthropic_messages_handler(
                 cast(Sequence[object], messages)  # cast-ok: anthropic payloads arrive as untyped dicts
             ),
         ),
-        anthropic_messages_provider_config=anthropic_messages_provider_config,
-        anthropic_messages_optional_request_params=dict(anthropic_messages_optional_request_params),
-        _is_async=is_async,
-        client=client,
+        provider_config=route.config,
+        request_params=local_vars,
         custom_llm_provider=custom_llm_provider,
         litellm_params=litellm_params,
         logging_obj=litellm_logging_obj,
         api_key=api_key,
-        api_base=resolved_api_base,
+        api_base=api_base,
+        dynamic_api_base=dynamic_api_base,
+        client=client,
+        is_async=is_async,
         stream=stream,
-        kwargs=kwargs,
+        request_kwargs=kwargs,
     )
     if safeguard_kwargs is None or not isinstance(native_response, Coroutine):
         return native_response
     return _with_native_safeguard_results(
         native_response,
-        partial(_proxy_classifies, model, safeguard_kwargs.get("safeguards"), anthropic_messages_provider_config),
+        partial(_proxy_classifies, model, safeguard_kwargs.get("safeguards"), route.config),
         partial(_native_safeguards_evaluator, safeguard_kwargs, messages),
     )
