@@ -214,7 +214,7 @@ class TestRouterCredentialResolutionS3OutputBucket:
 def test_azure_anthropic_request_body_does_not_include_azure_credentials() -> None:
     from litellm.llms.azure_ai.anthropic.transformation import AzureAnthropicConfig
 
-    credential_params: Final = {
+    credential_params: Final[dict[str, str]] = {
         "api_key": "test-api-key",
         "azure_ad_token": "test-access-token",
         "azure_ad_token_provider": "test-token-provider",
@@ -225,13 +225,13 @@ def test_azure_anthropic_request_body_does_not_include_azure_credentials() -> No
         "azure_username": "test-username",
         "azure_password": "test-password",
     }
-    output_config: Final = {"format": {"type": "json_object"}}
-    extra_body_params: Final = {
+    output_config: Final[dict[str, dict[str, str]]] = {"format": {"type": "json_object"}}
+    extra_body_params: Final[dict[str, str]] = {
         key: value
         for key, value in credential_params.items()
         if key not in {"api_key", "azure_ad_token"}
     }
-    body: Final = AzureAnthropicConfig().transform_request(
+    body: Final[dict[str, object]] = AzureAnthropicConfig().transform_request(
         model="claude-3-5-sonnet-20241022",
         messages=[{"role": "user", "content": "hello"}],
         optional_params={
