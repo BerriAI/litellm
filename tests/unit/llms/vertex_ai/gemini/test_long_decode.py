@@ -21,7 +21,7 @@ from litellm.llms.vertex_ai.gemini.long_decode import (
     with_initial_prompt_tokens,
 )
 from litellm.types.llms.vertex_ai import RequestBody
-from litellm.types.utils import Usage
+from litellm.types.utils import ChatCompletionDeltaToolCall, ChatCompletionMessageToolCall, Usage
 
 MODEL: Final = "gemini/gemini-3.8-flash"
 MESSAGES: Final = ({"role": "user", "content": "Prove it"},)
@@ -713,6 +713,73 @@ async def test_streaming_long_decode_chains_hops_into_one_stream_with_one_finish
     assert chunks[-1].usage.prompt_tokens == 20
     assert chunks[-1].usage.completion_tokens == 50
     assert chunks[-1].usage.prompt_tokens_details.initial_prompt_tokens == 10
+
+
+TOOL_CALL_PART: Final = {
+    "functionCall": {"name": "get_weather", "args": {"city": "Paris"}},
+    "thoughtSignature": "c2lnLTI=",
+}
+HOP_2_CALLING_A_TOOL: Final = {
+    "candidates": [{"content": {"role": "model", "parts": [TOOL_CALL_PART]}, "finishReason": "STOP"}],
+    "usageMetadata": HOP_2["usageMetadata"],
+}
+
+
+@dataclass(frozen=True, slots=True)
+class _ToolAnswer:
+    requests: int
+    text: str | None
+    tool_calls: tuple[Mapping[str, object], ...]
+    finish_reasons: tuple[str | None, ...]
+
+
+def _without_id(tool_call: ChatCompletionMessageToolCall | ChatCompletionDeltaToolCall) -> Mapping[str, object]:
+    return tool_call.model_dump(exclude={"id"})
+
+
+async def _tool_answer(stream: bool, hops: Sequence[httpx.Response]) -> _ToolAnswer:
+    sent: Final[list[dict[str, object]]] = []
+    if not stream:
+        choice: Final = (await _answer(hops, sent)).choices[0]
+        return _ToolAnswer(
+            len(sent),
+            choice.message.content,
+            tuple(map(_without_id, choice.message.tool_calls or ())),
+            (choice.finish_reason,),
+        )
+    chunks: Final = await _collect_stream(True, hops, sent)
+    deltas: Final = chain.from_iterable(chunk.choices[0].delta.tool_calls or () for chunk in chunks if chunk.choices)
+    return _ToolAnswer(
+        len(sent), _stream_text(chunks), tuple(map(_without_id, deltas)), tuple(_stream_finish_reasons(chunks))
+    )
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.asyncio
+async def test_long_decode_returns_a_follow_ups_tool_call_with_its_signature_as_one_request_would(stream: bool):
+    one_request_parts: Final = {"role": "model", "parts": [{"text": "lo" if stream else "hello"}, TOOL_CALL_PART]}
+    one_request_end: Final = {
+        **HOP_2_CALLING_A_TOOL,
+        "candidates": [{**HOP_2_CALLING_A_TOOL["candidates"][0], "content": one_request_parts}],
+    }
+    one_request: Final = (
+        (_sse(STREAM_FIRST_CHUNK, one_request_end),) if stream else (httpx.Response(200, json=one_request_end),)
+    )
+    continued: Final = (
+        (_sse(STREAM_FIRST_CHUNK, STREAM_HOP_1_END), _sse(HOP_2_CALLING_A_TOOL))
+        if stream
+        else (httpx.Response(200, json=HOP_1), httpx.Response(200, json=HOP_2_CALLING_A_TOOL))
+    )
+
+    answer: Final = await _tool_answer(stream, continued)
+
+    assert answer.requests == 2
+    assert [call["provider_specific_fields"] for call in answer.tool_calls] == [{"thought_signature": "c2lnLTI="}]
+    assert (answer.text, answer.tool_calls, answer.finish_reasons) == (
+        "hello",
+        (await _tool_answer(stream, one_request)).tool_calls,
+        ("tool_calls",),
+    )
 
 
 @pytest.mark.parametrize("fields", NO_CITATIONS_OR_URL_CONTEXT)
