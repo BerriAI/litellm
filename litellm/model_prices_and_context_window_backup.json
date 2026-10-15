@@ -35679,6 +35679,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
@@ -35796,6 +35797,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
@@ -35972,6 +35974,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true
@@ -36048,6 +36051,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true
@@ -36133,6 +36137,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true
@@ -36206,6 +36211,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true
@@ -36281,6 +36287,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true
@@ -36355,6 +36362,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true
@@ -36429,6 +36437,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true
@@ -36714,6 +36723,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
@@ -36776,6 +36786,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
@@ -36830,6 +36841,7 @@
         "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
@@ -36881,6 +36893,7 @@
         "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
@@ -36935,6 +36948,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_none_reasoning_effort": true,
         "default_reasoning_effort": "none",
@@ -36992,6 +37006,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_none_reasoning_effort": true,
         "default_reasoning_effort": "none",
@@ -37045,6 +37060,7 @@
         "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
@@ -37097,6 +37113,7 @@
         "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
@@ -37152,6 +37169,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
@@ -37206,6 +37224,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
@@ -37559,6 +37578,7 @@
         "supports_response_schema": true,
         "supports_system_messages": false,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
@@ -61352,8 +61372,8 @@
             {
                 "name": "claude-tool-search",
                 "pattern": "claude-[a-z]+-(?:4[-._](?:[5-9]|[1-9]\\d)(?!\\d)|[5-9](?!\\d)(?:[-._]\\d{1,2}(?!\\d))?)",
-                "fill_missing_for_providers": ["anthropic", "bedrock", "bedrock_converse", "vertex_ai-anthropic_models"],
-                "description": "Claude at version 4.5 or higher, in any id shape that contains claude-<family>-: minors 4.5 through 4.99, any later major-minor, and bare 5+ majors so a new family like claude-fable-5 matches. Two-digit majors are deliberately not matched so ids like claude-opus-41 (4.1) are not read as major 41. Anthropic's tool search docs list every Claude 4.5 and newer model as supported and Opus 4.1 and earlier as unsupported, so the flag follows the version instead of a per-model list. azure_ai is left out on purpose: Anthropic documents tool search as unavailable on Azure-hosted Foundry deployments, and the azure_ai/ key cannot tell those from Anthropic-hosted ones.",
+                "fill_missing_for_providers": ["anthropic", "azure_ai", "bedrock", "bedrock_converse", "vertex_ai-anthropic_models"],
+                "description": "Claude at version 4.5 or higher, in any id shape that contains claude-<family>-: minors 4.5 through 4.99, any later major-minor, and bare 5+ majors so a new family like claude-fable-5 matches. Two-digit majors are deliberately not matched so ids like claude-opus-41 (4.1) are not read as major 41. Anthropic's tool search docs list every Claude 4.5 and newer model as supported and Opus 4.1 and earlier as unsupported, so the flag follows the version instead of a per-model list. azure_ai is included because Microsoft Foundry runs tool search for Claude on both Anthropic-hosted and Azure-hosted deployments.",
                 "model_info": {
                     "supports_tool_search": true
                 }
@@ -69844,13 +69864,24 @@
     "typesafe/jev-1.13.0": {
         "input_cost_per_token": 4.2e-08,
         "litellm_provider": "typesafe",
+        "max_input_tokens": 65536,
         "mode": "evaluation",
         "output_cost_per_token": 0.0,
         "source": "https://docs.typesafe.ai/models"
     },
+    "typesafe/jev-1.14.0": {
+        "input_cost_per_token": 4.2e-08,
+        "litellm_provider": "typesafe",
+        "max_input_tokens": 65536,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://docs.typesafe.ai/models",
+        "supports_box_questions": true
+    },
     "typesafe/jev-latest": {
         "input_cost_per_token": 4.2e-08,
         "litellm_provider": "typesafe",
+        "max_input_tokens": 65536,
         "mode": "evaluation",
         "output_cost_per_token": 0.0,
         "source": "https://docs.typesafe.ai/models"
@@ -69858,9 +69889,11 @@
     "typesafe/jev-preview": {
         "input_cost_per_token": 4.2e-08,
         "litellm_provider": "typesafe",
+        "max_input_tokens": 65536,
         "mode": "evaluation",
         "output_cost_per_token": 0.0,
-        "source": "https://docs.typesafe.ai/models"
+        "source": "https://docs.typesafe.ai/models",
+        "supports_box_questions": true
     },
     "wandb/deepseek-ai/DeepSeek-V4.1-Flash": {
         "cache_read_input_token_cost": 3e-08,
@@ -72261,6 +72294,7 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
+        "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true
@@ -73916,5 +73950,65 @@
         "supports_parallel_function_calling": true,
         "supports_reasoning": true,
         "supports_vision": true
+    },
+    "xai/grok-voice-3.0": {
+        "input_cost_per_second": 0.001333333333333,
+        "litellm_provider": "xai",
+        "mode": "realtime",
+        "source": "https://docs.x.ai/developers/pricing",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "text",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
+        "supports_function_calling": true
+    },
+    "xai/grok-voice-latest": {
+        "input_cost_per_second": 0.001333333333333,
+        "litellm_provider": "xai",
+        "mode": "realtime",
+        "source": "https://docs.x.ai/developers/pricing",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "text",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
+        "supports_function_calling": true
+    },
+    "xai/grok-voice-2.0": {
+        "input_cost_per_second": 0.001333333333333,
+        "litellm_provider": "xai",
+        "mode": "realtime",
+        "source": "https://docs.x.ai/developers/pricing",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "text",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
+        "supports_function_calling": true
     }
 }

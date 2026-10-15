@@ -35,6 +35,7 @@ from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.bridges.completion_transformation import (
     CompletionTransformationBridge,
 )
+from litellm.responses.litellm_completion_transformation.tool_search import is_anthropic_tool_search_chat_tool
 from litellm.responses.sse_output_recovery import (
     parse_sse_json_chunk,
     record_output_item_chunk,
@@ -304,6 +305,136 @@ def _reasoning_items_from_output_items(output_items: Sequence[object]) -> tuple[
     )
 
 
+_TOOL_SEARCH_ITEM_TYPES: Final = frozenset({"tool_search_call", "tool_search_output"})
+_TOOL_SEARCH_REPLAY_ITEM_TYPES: Final = frozenset({"reasoning", *_TOOL_SEARCH_ITEM_TYPES})
+_TOOL_SEARCH_ITEMS_KEY: Final = "tool_search_items"
+
+
+def _json_field(value: object, key: str) -> object:
+    return cast(Mapping[str, object], value).get(key) if isinstance(value, dict) else None  # cast-ok: untyped JSON
+
+
+def _tool_search_replay_item(item: object) -> Mapping[str, object] | None:
+    raw: Final[object] = item.model_dump(exclude_unset=True) if isinstance(item, BaseModel) else item
+    if not isinstance(raw, dict):
+        return None
+    fields: Final = cast(dict[str, object], raw)  # cast-ok: provider JSON item, keys forwarded verbatim
+    if fields.get("type") not in _TOOL_SEARCH_REPLAY_ITEM_TYPES:
+        return None
+    return {key: value for key, value in fields.items() if value is not None}
+
+
+def _tool_search_items_from_output_items(output_items: object) -> tuple[Mapping[str, object], ...]:
+    if not isinstance(output_items, list):
+        return ()
+    entries: Final = cast(Sequence[object], output_items)  # cast-ok: each entry is re-validated
+    items: Final = tuple(item for item in (_tool_search_replay_item(entry) for entry in entries) if item is not None)
+    last_search: Final = max(
+        (index for index, item in enumerate(items) if item.get("type") in _TOOL_SEARCH_ITEM_TYPES), default=-1
+    )
+    return items[: last_search + 1]
+
+
+def _tool_search_provider_fields(
+    items: Sequence[Mapping[str, object]],
+) -> dict[str, object] | None:  # mutable-ok: Message.provider_specific_fields is typed as a dict
+    return {_TOOL_SEARCH_ITEMS_KEY: [dict(item) for item in items]} if items else None
+
+
+def _tool_search_input_items(msg: object) -> tuple[Mapping[str, object], ...]:
+    return _tool_search_items_from_output_items(
+        _json_field(_json_field(msg, "provider_specific_fields"), _TOOL_SEARCH_ITEMS_KEY)
+    )
+
+
+def carries_tool_search_items(provider_specific_fields: object) -> bool:
+    return bool(_json_field(provider_specific_fields, _TOOL_SEARCH_ITEMS_KEY))
+
+
+def _tool_definition_name(tool: object) -> tuple[str, ...]:
+    name: Final = _json_field(tool, "server_label" if _json_field(tool, "type") == "mcp" else "name")
+    return (name,) if isinstance(name, str) else ()
+
+
+def _namespace_members(tool: object) -> Sequence[object]:
+    members: Final = _json_field(tool, "tools")
+    if _json_field(tool, "type") != "namespace" or not isinstance(members, list):
+        return (tool,)
+    return cast(Sequence[object], members)  # cast-ok: untyped JSON, each member re-checked
+
+
+def _loaded_tools(item: Mapping[str, object]) -> Sequence[object]:
+    tools: Final = item.get("tools")
+    if item.get("type") != "tool_search_output" or not isinstance(tools, list):
+        return ()
+    return cast(Sequence[object], tools)  # cast-ok: untyped JSON, each tool re-checked
+
+
+def _json_list(value: object) -> Sequence[object] | None:
+    return cast(Sequence[object], value) if isinstance(value, list) else None  # cast-ok: untyped JSON
+
+
+def _message_loaded_tools(message: object) -> Iterator[object]:
+    loaded: Final = chain.from_iterable(_loaded_tools(item) for item in _tool_search_input_items(message))
+    return chain.from_iterable(_namespace_members(tool) for tool in loaded)
+
+
+def replayed_tool_search_tools(request: object) -> tuple[object, ...]:
+    messages: Final = _json_list(_json_field(request, "messages")) or ()
+    return tuple(chain.from_iterable(_message_loaded_tools(message) for message in messages))
+
+
+def replayed_tool_search_tool_names(request: object) -> tuple[str, ...]:
+    return tuple(chain.from_iterable(_tool_definition_name(tool) for tool in replayed_tool_search_tools(request)))
+
+
+def _loads_any_tool(message: object, names: frozenset[str]) -> bool:
+    loaded_names: Final = chain.from_iterable(_tool_definition_name(tool) for tool in _message_loaded_tools(message))
+    return any(name in names for name in loaded_names)
+
+
+def _without_tool_search_items(message: object) -> object:
+    fields: Final = _json_field(message, "provider_specific_fields")
+    if not isinstance(fields, dict):
+        return message
+    kept: Final = {
+        key: value
+        for key, value in cast(Mapping[str, object], fields).items()  # cast-ok: untyped JSON
+        if key != _TOOL_SEARCH_ITEMS_KEY
+    }
+    return {**cast(Mapping[str, object], message), "provider_specific_fields": kept}  # cast-ok: dict checked above
+
+
+def without_tool_search_items_loading(
+    request: object, names: frozenset[str]
+) -> list[object] | None:  # mutable-ok: request messages stay a list for every downstream handler
+    messages: Final = _json_list(_json_field(request, "messages"))
+    if messages is None:
+        return None
+    return [_without_tool_search_items(message) if _loads_any_tool(message, names) else message for message in messages]
+
+
+def _effective_tools(request: object) -> Sequence[object]:
+    override: Final = _json_list(_json_field(_json_field(request, "extra_body"), "tools"))
+    return override if override is not None else (_json_list(_json_field(request, "tools")) or ())
+
+
+def _requests_tool_search(request: object) -> bool:
+    return any(_json_field(tool, "type") == "tool_search" for tool in _effective_tools(request))
+
+
+def _reasoning_ids(items: Sequence[Mapping[str, object]]) -> frozenset[str]:
+    ids: Final = (item.get("id") for item in items if item.get("type") == "reasoning")
+    return frozenset(item_id for item_id in ids if isinstance(item_id, str))
+
+
+def _assistant_replay_items(msg: "AllMessageValues", replay_tool_search: bool) -> tuple[Mapping[str, object], ...]:
+    searched: Final = _tool_search_input_items(msg) if replay_tool_search else ()
+    searched_reasoning_ids: Final = _reasoning_ids(searched)
+    reasoning: Final = (item for item in _reasoning_input_items(msg) if item.get("id") not in searched_reasoning_ids)
+    return (*searched, *reasoning)
+
+
 def _as_chat_reasoning_items(
     reasoning_items: Sequence[_BuiltReasoningItem | ChatCompletionReasoningItem],
 ) -> list[ChatCompletionReasoningItem] | None:
@@ -346,6 +477,7 @@ def _fold_choices_into_one(
     tool_calls: Sequence[Mapping[str, object]],
     trailing_reasoning_content: str | None,
     trailing_reasoning_item: _BuiltReasoningItem | None,
+    tool_search_items: Sequence[Mapping[str, object]],
     structured_output: bool = False,
 ) -> "Choices":
     """Clients that only read choices[0] must still see every text and tool call.
@@ -373,6 +505,7 @@ def _fold_choices_into_one(
             tool_calls=list(tool_calls) or None,
             reasoning_content=" ".join(value for value in reasoning_contents if value) or None,
             reasoning_items=_as_chat_reasoning_items(reasoning_items),
+            provider_specific_fields=_tool_search_provider_fields(tool_search_items),
         ),
         finish_reason="tool_calls" if tool_calls else "stop",
         index=0,
@@ -457,7 +590,9 @@ class _ChatToolCallDict(ChatCompletionToolCallChunk, total=False):
     provider_specific_fields: Mapping[str, object]
 
 
-def tool_call_dict_from_output_item(item: Mapping[str, Any], index: int) -> _ChatToolCallDict:
+def tool_call_dict_from_output_item(
+    item: Mapping[str, Any], index: int, *, include_namespace: bool = False
+) -> _ChatToolCallDict:
     """Convert a ``function_call`` or ``custom_tool_call`` output item dict to a chat
     completions tool_call dict. Custom (grammar/freeform) tool calls carry their raw
     string payload in ``input`` rather than ``arguments``; both map to
@@ -486,10 +621,22 @@ def tool_call_dict_from_output_item(item: Mapping[str, Any], index: int) -> _Cha
         provider_specific_fields = vars(raw_provider_fields)
     else:
         provider_specific_fields = None
-    if provider_specific_fields:
-        tool_call_dict["provider_specific_fields"] = provider_specific_fields
-        function_chunk["provider_specific_fields"] = provider_specific_fields
+    namespace: Final = item.get("namespace") if include_namespace else None
+    merged_provider_fields: Final = {
+        **(provider_specific_fields or {}),
+        **({"namespace": namespace} if isinstance(namespace, str) else {}),
+    }
+    if merged_provider_fields:
+        tool_call_dict["provider_specific_fields"] = merged_provider_fields
+        function_chunk["provider_specific_fields"] = merged_provider_fields
     return tool_call_dict
+
+
+def _tool_call_namespace(tool_call: object) -> str | None:
+    top_level: Final = _json_field(_json_field(tool_call, "provider_specific_fields"), "namespace")
+    function_fields: Final = _json_field(_json_field(tool_call, "function"), "provider_specific_fields")
+    nested: Final = _json_field(function_fields, "namespace")
+    return top_level if isinstance(top_level, str) else nested if isinstance(nested, str) else None
 
 
 def _flat_responses_tool_choice(choice_type: str, name: str) -> ToolChoiceFunctionParam | ToolChoiceCustomParam:
@@ -641,9 +788,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         *,
         drop_params: bool = False,
         keep_prompt_cache_breakpoints: bool = False,
+        replay_tool_search: bool = False,
+        include_namespace: bool = False,
     ) -> tuple[list[object], str | None]:
         converted_input_items, instructions = self._convert_chat_completion_messages_to_responses_input(
-            messages, drop_params=drop_params
+            messages,
+            drop_params=drop_params,
+            replay_tool_search=replay_tool_search,
+            include_namespace=include_namespace,
         )
         return (
             converted_input_items
@@ -653,7 +805,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         )
 
     def _convert_chat_completion_messages_to_responses_input(
-        self, messages: list["AllMessageValues"], *, drop_params: bool = False
+        self,
+        messages: list["AllMessageValues"],
+        *,
+        drop_params: bool = False,
+        replay_tool_search: bool = False,
+        include_namespace: bool = False,
     ) -> tuple[list[object], str | None]:
         input_items: Final[list[object]] = []
         instructions: str | None = None
@@ -735,7 +892,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         )
                     )
             elif role == "assistant" and tool_calls and isinstance(tool_calls, list):
-                input_items.extend(_reasoning_input_items(msg))
+                input_items.extend(_assistant_replay_items(msg, replay_tool_search))
                 if content:
                     input_items.append(
                         {
@@ -758,6 +915,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                             input_tool_call["name"] = function["name"]
                         if "arguments" in function:
                             input_tool_call["arguments"] = function["arguments"]
+                        if include_namespace and (
+                            namespace := _tool_call_namespace(cast(object, tool_call))  # cast-ok: untyped
+                        ):
+                            input_tool_call["namespace"] = namespace
                         input_items.append(input_tool_call)
                     elif isinstance(custom, dict):
                         input_items.append(
@@ -772,7 +933,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         raise ValueError(f"tool call not supported: {tool_call}")
             elif content is not None:
                 if role == "assistant":
-                    input_items.extend(_reasoning_input_items(msg))
+                    input_items.extend(_assistant_replay_items(msg, replay_tool_search))
                 input_items.append(
                     {
                         "type": "message",
@@ -783,7 +944,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     }
                 )
             elif role == "assistant":
-                input_items.extend(_reasoning_input_items(msg))
+                input_items.extend(_assistant_replay_items(msg, replay_tool_search))
 
         return input_items, instructions
 
@@ -890,6 +1051,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         litellm_logging_obj: "LiteLLMLoggingObj",
         client: object | None = None,
     ) -> dict:
+        optional_params = self._extract_extra_body_params(optional_params)
         provider: Final = _served_provider(litellm_params)
         base_model: Final = litellm_params.get("base_model")
         supports_prompt_cache_breakpoint: Final = supports_openai_prompt_cache_breakpoint(model, provider) or (
@@ -901,6 +1063,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             messages,
             drop_params=bool(litellm_params.get("drop_params") or litellm.drop_params),
             keep_prompt_cache_breakpoints=supports_prompt_cache_breakpoint,
+            replay_tool_search=_requests_tool_search(cast(object, optional_params)),  # cast-ok: upcast
+            include_namespace=True,
         )
         # OpenAI's Responses API rejects an empty input. For a system-only
         # request, carry the system message as a system-role input item instead
@@ -924,8 +1088,6 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             else target_input_items
         )
         instructions: Final = None if is_system_only_request else converted_instructions
-
-        optional_params = self._extract_extra_body_params(optional_params)
 
         # Build responses API request using the reverse transformation logic
         responses_api_request: Final = ResponsesAPIOptionalRequestParams()
@@ -1100,7 +1262,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     # Tool calls accumulate into the single trailing tool_calls choice
                     # like the typed branches above; a choice per call would hide every
                     # call after choices[0] from chat clients
-                    accumulated_tool_calls.append(tool_call_dict_from_output_item(raw_item, tool_call_index))
+                    accumulated_tool_calls.append(
+                        tool_call_dict_from_output_item(raw_item, tool_call_index, include_namespace=True)
+                    )
                     tool_call_index += 1
                 elif handle_raw_dict_callback is not None:
                     choice, index = handle_raw_dict_callback(item=raw_item, index=index)
@@ -1109,22 +1273,31 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             else:
                 pass  # don't fail request if item in list is not supported
 
+        tool_search_items: Final = _tool_search_items_from_output_items(output_items)
         if not choices and not accumulated_tool_calls:
-            return choices
+            if not tool_search_items:
+                return choices
+            return [
+                LiteLLMResponsesTransformationHandler._build_empty_choice(
+                    output_items, "stop", tool_search_items=tool_search_items
+                )
+            ]
         return [
             _fold_choices_into_one(
                 choices=choices,
                 tool_calls=accumulated_tool_calls,
                 trailing_reasoning_content=reasoning_content,
                 trailing_reasoning_item=pending_reasoning_item,
+                tool_search_items=tool_search_items,
                 structured_output=structured_output,
             )
         ]
 
     @staticmethod
-    def _build_empty_incomplete_choice(
+    def _build_empty_choice(
         output_items: Sequence[object],
-        finish_reason: Literal["length", "content_filter"],
+        finish_reason: Literal["stop", "length", "content_filter"],
+        tool_search_items: Sequence[Mapping[str, object]] = (),
     ) -> "Choices":
         from litellm.types.utils import Choices, Message
 
@@ -1136,9 +1309,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             if summary_block.get("text")
         )
         message: Final = Message(
-            content="",
+            content=None if tool_search_items else "",
             reasoning_content=reasoning_content if reasoning_content else None,
             reasoning_items=_as_chat_reasoning_items(reasoning_items),
+            provider_specific_fields=_tool_search_provider_fields(tool_search_items),
         )
         return Choices(message=message, finish_reason=finish_reason, index=0)
 
@@ -1265,7 +1439,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 raw_response.incomplete_details.reason if raw_response.incomplete_details is not None else None
             )
             if len(choices) == 0:
-                choices.append(self._build_empty_incomplete_choice(output_items, incomplete_finish_reason))
+                choices.append(self._build_empty_choice(output_items, incomplete_finish_reason))
             else:
                 for choice in choices:
                     choice.finish_reason = incomplete_finish_reason
@@ -1473,7 +1647,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             "client"
             if any(tool.get("type") == "tool_search" and tool.get("execution") == "client" for tool in tools)
             else "hosted"
-            if any(tool.get("type") == "tool_search" for tool in tools)
+            if any(tool.get("type") == "tool_search" or is_anthropic_tool_search_chat_tool(tool) for tool in tools)
             else "absent"
         )
         responses_tools: Final[list[ALL_RESPONSES_API_TOOL_PARAMS]] = []
@@ -1802,7 +1976,9 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             # New output item added
             output_item = parsed_chunk.get("item", {})
             if output_item.get("type") in ("function_call", "custom_tool_call"):
-                converted: Final = tool_call_dict_from_output_item(output_item, parsed_chunk.get("output_index", 0))
+                converted: Final = tool_call_dict_from_output_item(
+                    output_item, parsed_chunk.get("output_index", 0), include_namespace=True
+                )
                 provider_specific_fields: Final = converted.get("provider_specific_fields")
 
                 function_chunk: Final = ChatCompletionToolCallFunctionChunk(
@@ -1815,14 +1991,13 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 tool_call_index = OpenAiResponsesToChatCompletionStreamIterator._sequential_tool_call_index(
                     tool_call_index_map, parsed_chunk.get("output_index", 0)
                 )
-                tool_call_chunk: Final = ChatCompletionToolCallChunk(
+                tool_call_chunk: Final = _ChatToolCallDict(
                     id=converted["id"],
                     index=tool_call_index,
                     type="function",
                     function=function_chunk,
+                    **({"provider_specific_fields": provider_specific_fields} if provider_specific_fields else {}),
                 )
-                if provider_specific_fields:
-                    tool_call_chunk.provider_specific_fields = provider_specific_fields
 
                 return ModelResponseStream(
                     choices=[
@@ -1878,7 +2053,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                                 delta=Delta(
                                     tool_calls=(
                                         tool_call_dict_from_output_item(
-                                            output_item, parsed_chunk.get("output_index", 0)
+                                            output_item, parsed_chunk.get("output_index", 0), include_namespace=True
                                         ),
                                     )
                                 ),
@@ -1973,6 +2148,9 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                         delta=Delta(
                             content="",
                             reasoning_items=terminal_reasoning_items_typed,
+                            provider_specific_fields=_tool_search_provider_fields(
+                                _tool_search_items_from_output_items(cast(object, output_items))  # cast-ok: untyped
+                            ),
                         ),
                         finish_reason=finish_reason,
                     )

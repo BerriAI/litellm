@@ -22,6 +22,8 @@ from litellm._uuid import uuid
 from litellm.constants import REDACTED_BY_LITELLM
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     anthropic_system_messages,
+    find_anthropic_server_tool_result,
+    is_anthropic_tool_search_use,
     message_field,
     parts_of,
 )
@@ -1822,23 +1824,6 @@ def convert_function_to_anthropic_tool_invoke(
         raise e
 
 
-ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX: Final = "srvtoolu_"
-
-
-def find_anthropic_server_tool_result(
-    tool_id: str,
-    web_search_results: Sequence[object] | None,
-    tool_results: Sequence[object] | None,
-) -> dict[str, object] | None:
-    if not tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX):
-        return None
-    candidates: Final = (*(web_search_results or ()), *(tool_results or ()))
-    return next(
-        (result for result in candidates if isinstance(result, dict) and result.get("tool_use_id") == tool_id),
-        None,
-    )
-
-
 def _tool_call_ids_in_tool_messages(messages: Sequence[object]) -> frozenset[str]:
     return frozenset(
         tool_call_id for message in messages if isinstance(tool_call_id := message_field(message, "tool_call_id"), str)
@@ -1976,6 +1961,8 @@ def convert_to_anthropic_tool_invoke(
                 }
             )
             anthropic_tool_invoke.append(server_tool_result)
+        elif is_anthropic_tool_search_use(tool_id, tool_name) and tool_id not in answered_tool_ids:
+            continue
         else:
             sanitized_tool_id = _sanitize_anthropic_tool_use_id(tool_id)
             _anthropic_tool_use_param = AnthropicMessagesToolUseParam(
@@ -2492,7 +2479,22 @@ def sanitize_messages_for_tool_calling(
 def _replayable_thinking_blocks(
     thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
 ) -> list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock]:
-    return [_with_native_redacted_data(block) for block in thinking_blocks if not is_unsignable_thinking_block(block)]
+    return [
+        _without_stream_index(_with_native_redacted_data(block))
+        for block in thinking_blocks
+        if not is_unsignable_thinking_block(block)
+    ]
+
+
+def _without_stream_index(
+    block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
+) -> ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock:
+    if "index" not in block:
+        return block
+    return cast(  # cast-ok: dropping one key keeps the block's TypedDict shape
+        ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
+        {key: value for key, value in block.items() if key != "index"},
+    )
 
 
 def _with_native_redacted_data(

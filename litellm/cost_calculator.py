@@ -20,6 +20,7 @@ from litellm.constants import (
     DEFAULT_MAX_LRU_CACHE_SIZE,
     DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND,
     OPENAI_LIVE_TERMINAL_RESPONSE_EVENT_TYPES,
+    REALTIME_METERED_USAGE_KEY,
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.cost_discount import resolve_cost_discount
@@ -117,6 +118,7 @@ from litellm.types.llms.openai import (
     ResponseAPIUsage,
     ResponsesAPIResponse,
 )
+from litellm.types.llms.xai import RealtimeMeteredUsage
 from litellm.types.rerank import RerankBilledUnits, RerankResponse
 from litellm.types.utils import (
     CallTypesLiteral,
@@ -828,7 +830,14 @@ def _get_hidden_str_for_cost_calc(hidden_params: object, key: str) -> str | None
 
 
 _NON_TOKEN_RATE_FIELDS: Final = frozenset(
-    {"cost_per_second", "input_cost_per_second", "output_cost_per_second", "input_cost_per_query", "tiered_pricing"}
+    {
+        "cost_per_second",
+        "input_cost_per_second",
+        "output_cost_per_second",
+        "input_cost_per_query",
+        "input_cost_per_text_message",
+        "tiered_pricing",
+    }
 )
 
 
@@ -3119,29 +3128,41 @@ def _live_session_wall_clock_seconds(litellm_logging_obj: LitellmLoggingObject |
     return 0.0
 
 
-def _live_input_cost_per_second(model_name: str, custom_llm_provider: str) -> float | None:
+def _live_model_rate(
+    model_name: str,
+    custom_llm_provider: str,
+    rate_field: Literal["input_cost_per_second", "input_cost_per_text_message"],
+) -> float | None:
     model_info: Final = _lookup_model_info_or_none(model_name, custom_llm_provider)
     if model_info is None:
         return None
-    rate: Final = model_info.get("input_cost_per_second")
+    rate: Final = model_info.get(rate_field)
     if isinstance(rate, (int, float)) and not isinstance(rate, bool) and math.isfinite(rate):
         return float(rate)
     return None
 
 
-def _first_live_input_cost_per_second(
+def _first_live_model_rate(
     potential_model_names: Sequence[str | None],
     custom_llm_provider: str,
+    rate_field: Literal["input_cost_per_second", "input_cost_per_text_message"],
 ) -> float:
     return next(
         (
             rate
             for model_name in potential_model_names
             if model_name is not None
-            and (rate := _live_input_cost_per_second(model_name, custom_llm_provider)) is not None
+            and (rate := _live_model_rate(model_name, custom_llm_provider, rate_field)) is not None
         ),
         0.0,
     )
+
+
+def _xai_metered_usage(litellm_logging_obj: LitellmLoggingObject | None) -> RealtimeMeteredUsage | None:
+    if litellm_logging_obj is None:
+        return None
+    usage: Final = litellm_logging_obj.model_call_details.get(REALTIME_METERED_USAGE_KEY)
+    return usage if isinstance(usage, RealtimeMeteredUsage) else None
 
 
 def _live_response_token_costs(
@@ -3303,9 +3324,28 @@ def handle_realtime_stream_cost_calculation(
     live_model_names: Final = (
         (custom_pricing_model, base_pricing_model, received_model, litellm_model_name) if live_event_seen else ()
     )
-    live_voice_cost: Final = voice_seconds * _first_live_input_cost_per_second(
+    live_voice_cost: Final = voice_seconds * _first_live_model_rate(
         live_model_names,
         custom_llm_provider,
+        "input_cost_per_second",
+    )
+    xai_metered: Final = (
+        _xai_metered_usage(litellm_logging_obj) if custom_llm_provider == LlmProviders.XAI.value else None
+    )
+    xai_audio_seconds: Final = (
+        xai_metered.audio_seconds_sent + xai_metered.audio_seconds_received
+        if xai_metered is not None and xai_metered.push_to_talk
+        else _live_session_wall_clock_seconds(litellm_logging_obj)
+        if custom_llm_provider == LlmProviders.XAI.value
+        else 0.0
+    )
+    audio_duration_cost: Final = xai_audio_seconds * _first_live_model_rate(
+        potential_model_names,
+        custom_llm_provider,
+        "input_cost_per_second",
+    )
+    text_message_cost: Final = (xai_metered.text_messages if xai_metered is not None else 0) * _first_live_model_rate(
+        potential_model_names, custom_llm_provider, "input_cost_per_text_message"
     )
     live_response_costs: Final = tuple(
         _live_response_token_costs(
@@ -3319,10 +3359,17 @@ def handle_realtime_stream_cost_calculation(
     live_response_output_cost: Final = sum(costs[1] for costs in live_response_costs)
     input_cost: Final = input_cost_per_token + live_response_input_cost
     output_cost: Final = output_cost_per_token + live_response_output_cost
-    total_cost: Final = input_cost + output_cost + transcription_cost + live_voice_cost
+    total_cost: Final = (
+        input_cost + output_cost + transcription_cost + live_voice_cost + audio_duration_cost + text_message_cost
+    )
     additional_costs: Final = tuple(
         (cost_name, cost)
-        for cost_name, cost in (("transcription_cost", transcription_cost), ("live_voice_cost", live_voice_cost))
+        for cost_name, cost in (
+            ("transcription_cost", transcription_cost),
+            ("live_voice_cost", live_voice_cost),
+            ("audio_duration_cost", audio_duration_cost),
+            ("text_message_cost", text_message_cost),
+        )
         if cost > 0
     )
 

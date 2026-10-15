@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.types.llms.databricks import DatabricksTool
 from litellm.types.llms.openai import (
+    ChatCompletionReasoningItem,
     ChatCompletionThinkingBlock,
     ImageURLListItem,
     OpenAIModerationResponse,
@@ -156,6 +157,21 @@ def _clear_later_replay_slice_metadata(choice: StreamingChoices) -> None:
         del choice.enhancements
 
 
+def _first_replay_delta(
+    message: Mapping[str, object], reasoning_items: Sequence[ChatCompletionReasoningItem] | None
+) -> Delta:
+    return Delta(
+        content=message.get("content"),
+        role=message["role"],
+        function_call=message.get("function_call"),
+        tool_calls=message.get("tool_calls"),
+        reasoning_items=None if reasoning_items is None else list(reasoning_items),
+        provider_specific_fields=_cached_provider_specific_fields(
+            _CACHED_MESSAGE_PROVIDER_FIELDS.validate_python(message)
+        ),
+    )
+
+
 def _invalid_choices_message(response_object: Mapping[str, object]) -> str:
     raw_keys: Final = list(response_object.keys())
     if "choices" not in response_object:
@@ -217,15 +233,7 @@ async def convert_to_streaming_response_async(
                     t["index"] = index
                 pydantic_tool_calls.append(ChatCompletionDeltaToolCall(**t))
             choice["message"]["tool_calls"] = pydantic_tool_calls
-        delta = Delta(
-            content=choice["message"].get("content", None),
-            role=choice["message"]["role"],
-            function_call=choice["message"].get("function_call", None),
-            tool_calls=choice["message"].get("tool_calls", None),
-            provider_specific_fields=_cached_provider_specific_fields(
-                _CACHED_MESSAGE_PROVIDER_FIELDS.validate_python(choice["message"])
-            ),
-        )
+        delta = _first_replay_delta(choice["message"], choice["message"].get("reasoning_items"))
         finish_reason = choice.get("finish_reason", None)
 
         if finish_reason is None:
@@ -754,6 +762,7 @@ def convert_to_model_response_object(
                         provider_specific_fields=provider_specific_fields,
                         reasoning_content=reasoning_content,
                         thinking_blocks=thinking_blocks,
+                        reasoning_items=choice["message"].get("reasoning_items", None),
                         annotations=choice["message"].get("annotations", None),
                         images=_normalize_images_for_message(choice["message"].get("images", None)),
                     )

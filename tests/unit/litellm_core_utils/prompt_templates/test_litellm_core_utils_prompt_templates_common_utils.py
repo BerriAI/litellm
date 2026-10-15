@@ -4,7 +4,7 @@ import functools
 import json
 import os
 import sys
-from typing import Final
+from typing import Final, cast
 
 import pytest
 
@@ -31,6 +31,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     salvage_concatenated_tool_arguments,
     split_concatenated_json_objects,
     strip_encrypted_reasoning_from_messages,
+    strip_litellm_response_only_fields,
     system_messages_first,
     update_messages_with_model_file_ids,
     with_prompt_cache_breakpoint,
@@ -2334,3 +2335,30 @@ def test_native_redacted_thinking_data_only_unwraps_the_converse_base64_layer(da
 @pytest.mark.parametrize("data", [_NATIVE_REDACTED_DATA, _CONVERSE_REDACTED_DATA], ids=["native", "legacy-wrapped"])
 def test_converse_redacted_content_wraps_claude_native_data_exactly_once(data: str) -> None:
     assert converse_redacted_content(data) == _CONVERSE_REDACTED_DATA
+
+
+def test_strip_litellm_response_only_fields_drops_nested_tool_call_provider_fields() -> None:
+    message: Final = {
+        "role": "assistant",
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "provider_specific_fields": {"namespace": "ns"},
+                "function": {
+                    "name": "get_weather",
+                    "arguments": '{"city": "Paris"}',
+                    "provider_specific_fields": {"namespace": "ns"},
+                },
+            }
+        ],
+    }
+
+    stripped: Final = strip_litellm_response_only_fields(message)
+
+    tool_call: Final = cast("dict[str, object]", stripped["tool_calls"][0])
+    assert "provider_specific_fields" not in tool_call
+    function: Final = cast("dict[str, object]", tool_call["function"])
+    assert "provider_specific_fields" not in function
+    assert function["name"] == "get_weather"
+    assert function["arguments"] == '{"city": "Paris"}'
