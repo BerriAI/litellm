@@ -5016,6 +5016,137 @@ async def test_ProxyConfig_load_config_redacts_secret_litellm_setting_keeps_plai
     )
 
 
+_REVISION_TEST_KEYS: Final = (
+    "REVISION_TEST_CONFIG_FILE",
+    "REVISION_TEST_DB_ONLY",
+    "REVISION_TEST_NULLED",
+    "REVISION_TEST_KEPT",
+    "revision_test_lower",
+    "REVISION_TEST_LOWER",
+    "GOOGLE_CLIENT_ID",
+)
+
+
+def _revision_test_environment() -> dict[str, str | None]:
+    return {key: os.environ.get(key) for key in _REVISION_TEST_KEYS}
+
+
+@pytest.fixture
+def revision_test_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
+    for key in _REVISION_TEST_KEYS:
+        monkeypatch.setenv(key, "restored-by-monkeypatch")
+        monkeypatch.delenv(key)
+
+
+async def _sync_environment_variables_row(
+    monkeypatch: pytest.MonkeyPatch, pc: ProxyConfig, values: Mapping[str, str | None], revision: int | None
+) -> None:
+    row: Final = SimpleNamespace(
+        param_name="environment_variables",
+        param_value={key: None if value is None else encrypt_value_helper(value) for key, value in values.items()},
+        reload_revision=revision,
+    )
+
+    async def get_config_param(_prisma_client: object, param_name: str) -> SimpleNamespace | None:
+        return row if param_name == "environment_variables" else None
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.get_config_param", get_config_param)
+    await pc._update_config_from_db(MagicMock(), {}, store_model_in_db=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("revision_test_environment")
+async def test_newer_environment_variables_row_restores_the_keys_it_no_longer_stores(monkeypatch):
+    pc: Final = ProxyConfig()
+    monkeypatch.setenv("REVISION_TEST_CONFIG_FILE", "from-config-file")
+
+    await _sync_environment_variables_row(
+        monkeypatch,
+        pc,
+        {
+            "REVISION_TEST_CONFIG_FILE": "from-db",
+            "REVISION_TEST_DB_ONLY": "db-only",
+            "REVISION_TEST_NULLED": "nulled-later",
+            "REVISION_TEST_KEPT": "kept-1",
+            "revision_test_lower": "lower",
+        },
+        revision=1,
+    )
+    assert _revision_test_environment() == {
+        "REVISION_TEST_CONFIG_FILE": "from-db",
+        "REVISION_TEST_DB_ONLY": "db-only",
+        "REVISION_TEST_NULLED": "nulled-later",
+        "REVISION_TEST_KEPT": "kept-1",
+        "revision_test_lower": "lower",
+        "REVISION_TEST_LOWER": "lower",
+        "GOOGLE_CLIENT_ID": None,
+    }
+
+    await _sync_environment_variables_row(
+        monkeypatch, pc, {"REVISION_TEST_NULLED": None, "REVISION_TEST_KEPT": "kept-2"}, revision=2
+    )
+    assert _revision_test_environment() == {
+        "REVISION_TEST_CONFIG_FILE": "from-config-file",
+        "REVISION_TEST_DB_ONLY": None,
+        "REVISION_TEST_NULLED": None,
+        "REVISION_TEST_KEPT": "kept-2",
+        "revision_test_lower": None,
+        "REVISION_TEST_LOWER": None,
+        "GOOGLE_CLIENT_ID": None,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("revision_test_environment")
+async def test_environment_variables_row_older_than_the_applied_one_changes_nothing(monkeypatch):
+    pc: Final = ProxyConfig()
+
+    await _sync_environment_variables_row(monkeypatch, pc, {"REVISION_TEST_KEPT": "newer"}, revision=5)
+    await _sync_environment_variables_row(
+        monkeypatch, pc, {"REVISION_TEST_KEPT": "older", "REVISION_TEST_DB_ONLY": "older-only"}, revision=4
+    )
+
+    assert (os.environ.get("REVISION_TEST_KEPT"), os.environ.get("REVISION_TEST_DB_ONLY")) == ("newer", None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("revision_test_environment")
+async def test_environment_variables_row_without_a_revision_only_sets_keys_a_later_revision_can_restore(monkeypatch):
+    pc: Final = ProxyConfig()
+
+    await _sync_environment_variables_row(
+        monkeypatch, pc, {"REVISION_TEST_KEPT": "kept", "REVISION_TEST_DB_ONLY": "db-only"}, revision=2
+    )
+    await _sync_environment_variables_row(
+        monkeypatch, pc, {"REVISION_TEST_KEPT": "kept", "REVISION_TEST_NULLED": "from-an-older-pod"}, revision=None
+    )
+    assert (
+        os.environ.get("REVISION_TEST_DB_ONLY"),
+        os.environ.get("REVISION_TEST_NULLED"),
+    ) == ("db-only", "from-an-older-pod")
+
+    await _sync_environment_variables_row(monkeypatch, pc, {"REVISION_TEST_KEPT": "kept"}, revision=3)
+    assert (
+        os.environ.get("REVISION_TEST_KEPT"),
+        os.environ.get("REVISION_TEST_DB_ONLY"),
+        os.environ.get("REVISION_TEST_NULLED"),
+    ) == ("kept", None, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("revision_test_environment")
+async def test_newer_environment_variables_row_leaves_sso_settings_it_no_longer_stores(monkeypatch):
+    pc: Final = ProxyConfig()
+
+    await _sync_environment_variables_row(
+        monkeypatch, pc, {"GOOGLE_CLIENT_ID": "sso-client-id", "REVISION_TEST_DB_ONLY": "db-only"}, revision=1
+    )
+    await _sync_environment_variables_row(monkeypatch, pc, {}, revision=2)
+
+    assert (os.environ.get("GOOGLE_CLIENT_ID"), os.environ.get("REVISION_TEST_DB_ONLY")) == ("sso-client-id", None)
+
+
 # ---------------------------------------------------------------------------
 # ProxyConfig agents from config.yaml
 # ---------------------------------------------------------------------------

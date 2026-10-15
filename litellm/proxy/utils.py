@@ -4518,11 +4518,12 @@ litellm_config_cache: Final[DualCache] = DualCache(
 class _ConfigRow:
     """Mimics the Prisma litellm_config row shape for cached entries."""
 
-    __slots__ = ("param_name", "param_value")
+    __slots__ = ("param_name", "param_value", "reload_revision")
 
-    def __init__(self, param_name: str, param_value: object) -> None:
+    def __init__(self, param_name: str, param_value: object, reload_revision: int | None = None) -> None:
         self.param_name = param_name
         self.param_value = param_value
+        self.reload_revision = reload_revision
 
 
 CONFIG_PARAMS_TARGET: Final = "config_params"
@@ -4533,14 +4534,23 @@ def _config_cache_key(param_name: str) -> str:
 
 
 def _pack_config_row(row: Any) -> dict[str, object]:
-    return {"param_name": row.param_name, "param_value": row.param_value}
+    return {
+        "param_name": row.param_name,
+        "param_value": row.param_value,
+        "reload_revision": getattr(row, "reload_revision", None),
+    }
 
 
 def _unpack_config_row(cached: object) -> _ConfigRow | None:
     if cached is None or cached == _CONFIG_CACHE_MISS:
         return None
     if isinstance(cached, dict):
-        return _ConfigRow(cached["param_name"], cached["param_value"])
+        revision: Final = cached.get("reload_revision")
+        return _ConfigRow(
+            cached["param_name"],
+            cached["param_value"],
+            revision if isinstance(revision, int) and not isinstance(revision, bool) else None,
+        )
     return None
 
 

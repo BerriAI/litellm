@@ -1,5 +1,7 @@
 import json
 import os
+import subprocess
+import sys
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -1111,3 +1113,117 @@ def test_credential_value_update_and_model_reload_reach_provider(gateway: Gatewa
                 observed.raise_for_status()
                 assert len(observed.json()["requests"]) == 1, (value, reload, observed.text)
                 assert observed.json()["requests"][0]["authorization"] == f"Bearer {value}"
+
+
+_ENVIRONMENT_VARIABLES_REVISION_MIGRATION: Final = (
+    "litellm-proxy-extras/litellm_proxy_extras/migrations/"
+    "20261015000000_add_environment_variables_revision_trigger/migration.sql"
+)
+
+
+def _push_schema_with_environment_variables_revision_trigger() -> None:
+    for prisma_arguments in (
+        ("db", "push", "--schema", "litellm/proxy/schema.prisma", "--skip-generate"),
+        (
+            "db",
+            "execute",
+            "--schema",
+            "litellm/proxy/schema.prisma",
+            "--file",
+            _ENVIRONMENT_VARIABLES_REVISION_MIGRATION,
+        ),
+    ):
+        subprocess.run(
+            (sys.executable, "-I", "-m", "prisma", *prisma_arguments), check=True, capture_output=True, text=True
+        )
+
+
+def _provider_echoing_its_key(source: str) -> Callable[[Request], Reply]:
+    def provider(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.target == "/v1/chat/completions", request.target
+        return _completion_reply(f"{source} {request.headers['authorization']}")
+
+    return provider
+
+
+def _chat_answer(proxy: Gateway, alias: str) -> str:
+    response: Final = proxy.request(
+        "POST", "/v1/chat/completions", {"model": alias, "messages": [{"role": "user", "content": "which key"}]}
+    )
+    assert response.status_code == 200, response.text
+    return string_value(object_value(object_value(response.json()["choices"][0])["message"])["content"])
+
+
+def test_removing_db_environment_variables_restores_process_and_config_file_values_on_every_proxy(
+    gateway: Gateway, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    alias: Final = "environment-variables-" + marker
+    process_key: Final = "process-key-" + marker
+    database_key: Final = "database-key-" + marker
+
+    with (
+        scratch_database() as database_url,
+        wire_server(_provider_echoing_its_key("config-file")) as config_file_provider,
+        wire_server(_provider_echoing_its_key("database")) as database_provider,
+    ):
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        _push_schema_with_environment_variables_revision_trigger()
+        config: Final = tmp_path / "environment-variables-proxy.yaml"
+        config.write_text(
+            json.dumps(
+                {
+                    "model_list": [{"model_name": alias, "litellm_params": {"model": "openai/gpt-4o-mini"}}],
+                    "general_settings": {"master_key": gateway.key, "store_model_in_db": True},
+                    "environment_variables": {"OPENAI_BASE_URL": config_file_provider.url + "/v1"},
+                }
+            )
+        )
+        environment: Final = {
+            "DATABASE_URL": database_url,
+            "DISABLE_SCHEMA_UPDATE": "true",
+            "LITELLM_CONFIG_PARAM_CACHE_TTL_SECONDS": "1",
+            "OPENAI_API_KEY": process_key,
+            "PROXY_CONFIG_RELOAD_INTERVAL_SECONDS": "2",
+        }
+        removed: Final = ("DATABASE_URL_READ_REPLICA", "OPENAI_API_BASE", "OPENAI_BASE_URL")
+        with (
+            owned_proxy(
+                gateway, tmp_path / "first", environment, config=config, database_setup=(), remove_environment=removed
+            ) as first,
+            owned_proxy(
+                gateway, tmp_path / "peer", environment, config=config, database_setup=(), remove_environment=removed
+            ) as peer,
+        ):
+
+            def answers() -> tuple[str, str]:
+                return (_chat_answer(first, alias), _chat_answer(peer, alias))
+
+            from_process_and_config_file: Final = (f"config-file Bearer {process_key}",) * 2
+            assert answers() == from_process_and_config_file
+
+            stored: Final = first.request(
+                "POST",
+                "/config/update",
+                {
+                    "environment_variables": {
+                        "OPENAI_API_KEY": database_key,
+                        "OPENAI_BASE_URL": database_provider.url + "/v1",
+                    }
+                },
+            )
+            assert stored.status_code == 200, stored.text
+            eventually(answers, lambda values: values == (f"database Bearer {database_key}",) * 2, seconds=30)
+
+            unset: Final = first.request(
+                "POST",
+                "/config/update",
+                {"environment_variables": {"OPENAI_API_KEY": None, "OPENAI_BASE_URL": None}},
+            )
+            assert unset.status_code == 200, unset.text
+            assert _config_section(database_url, "environment_variables") == {
+                "OPENAI_API_KEY": None,
+                "OPENAI_BASE_URL": None,
+            }
+            eventually(answers, lambda values: values == from_process_and_config_file, seconds=30)

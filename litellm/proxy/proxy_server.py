@@ -549,6 +549,7 @@ from litellm.proxy.config_resolvers.settings_rules import (
 from litellm.proxy.config_resolvers.settings_rules import (
     JsonValue as SettingsJsonValue,
 )
+from litellm.proxy.config_resolvers.sso import SSO_FIELD_ENV_VARS
 from litellm.proxy.container_endpoints.endpoints import router as container_router
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
 from litellm.proxy.db.create_views import SupportsRawQueries
@@ -5499,6 +5500,23 @@ def _as_settings_mapping(value: object) -> Mapping[str, SettingsJsonValue]:
     return _SETTINGS_MAPPING.validate_python(value)
 
 
+_SSO_ENVIRONMENT_VARIABLES: Final = frozenset(SSO_FIELD_ENV_VARS.values())
+_ENVIRONMENT_VALUES: Final = TypeAdapter(Mapping[str, str])
+
+
+def _config_row_revision(row: object) -> int | None:
+    revision: Final[object] = getattr(row, "reload_revision", None)
+    return revision if isinstance(revision, int) and not isinstance(revision, bool) else None
+
+
+def _restore_environment(keys: frozenset[str], values: Mapping[str, str]) -> None:
+    for key in keys:
+        if (value := values.get(key)) is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
+
 def _get_field_default(field_info: FieldInfo) -> JsonValue:
     if field_info.default is PydanticUndefined:
         return None
@@ -5660,6 +5678,9 @@ class ProxyConfig:
         self.router_settings: Final[SettingsStore] = SettingsStore("router_settings")
         self.litellm_settings: Final[SettingsStore] = SettingsStore("litellm_settings")
         self.environment_variables: Final[SettingsStore] = SettingsStore("environment_variables")
+        self._environment_before_db: Mapping[str, str] | None = None
+        self._db_environment_revision: int | None = None
+        self._db_environment_keys: frozenset[str] = frozenset()
         self._warned_shadowed_keys: frozenset[tuple[Section, str]] = frozenset()
         self._db_config_callback_entries: Mapping[tuple[str, str], _DbCallbackRegistration] = MappingProxyType({})
         self._settings_stores: Final[Mapping[Section, SettingsStore]] = MappingProxyType(
@@ -8302,6 +8323,8 @@ class ProxyConfig:
             )
             if section == "litellm_settings":
                 self._apply_litellm_settings_db_values(self._prepared_db_settings_values(section, param_value))
+            elif section == "environment_variables":
+                self._apply_db_environment_variables(param_value, _config_row_revision(response))
             else:
                 self._settings_stores[section].apply_db_row(
                     section,
@@ -8322,20 +8345,36 @@ class ProxyConfig:
         self._warned_shadowed_keys = shadowed
 
     def _prepared_db_settings_values(self, section: Section, value: object) -> Mapping[str, SettingsJsonValue]:
-        if section == "environment_variables":
-            decrypted: Final = self.decrypt_and_set_db_env_variables(
-                dict(_as_settings_mapping(value)), return_original_value=True
-            )
-            normalized: Final = {
-                **decrypted,
-                **{key.upper(): decrypted_value for key, decrypted_value in decrypted.items()},
-            }
-            for key, decrypted_value in normalized.items():
-                os.environ[key] = decrypted_value
-            return _as_settings_mapping(normalized)
-
         scrubbed: Final = _scrub_db_overlay_remote_module_loads(section=section, db_value=value)
         return _as_settings_mapping(scrubbed)
+
+    def _apply_db_environment_variables(self, value: object, revision: int | None) -> None:
+        applied_revision: Final = self._db_environment_revision
+        if revision is not None and applied_revision is not None and revision < applied_revision:
+            return
+        row: Final = _as_settings_mapping(value)
+        environment_before_db: Final = self._captured_environment_before_db()
+        decrypted: Final = _ENVIRONMENT_VALUES.validate_python(
+            self.decrypt_and_set_db_env_variables(dict(row), return_original_value=True)
+        )
+        applied: Final = {**decrypted, **{key.upper(): decrypted_value for key, decrypted_value in decrypted.items()}}
+        os.environ.update(applied)
+        if revision is None or revision == applied_revision:
+            self._db_environment_keys = self._db_environment_keys | frozenset(applied)
+        else:
+            stored: Final = frozenset(key for key, stored_value in row.items() if stored_value is not None)
+            still_stored: Final = stored | frozenset(key.upper() for key in stored)
+            _restore_environment(
+                self._db_environment_keys - still_stored - _SSO_ENVIRONMENT_VARIABLES, environment_before_db
+            )
+            self._db_environment_keys = (self._db_environment_keys & still_stored) | frozenset(applied)
+            self._db_environment_revision = revision
+        self.environment_variables.apply_db_row("environment_variables", _as_settings_mapping(applied))
+
+    def _captured_environment_before_db(self) -> Mapping[str, str]:
+        if self._environment_before_db is None:
+            self._environment_before_db = MappingProxyType(dict(os.environ))
+        return self._environment_before_db
 
     def _apply_litellm_settings_db_values(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
         self.litellm_settings.apply_db_row("litellm_settings", db_values)
