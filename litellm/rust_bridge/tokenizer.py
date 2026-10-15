@@ -8,7 +8,7 @@ import tiktoken
 from litellm.litellm_core_utils.tokenizer import HuggingFaceTokenizer, OpenAIEncoding
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.bindings import NativeBinding
-from litellm.rust_bridge.catalog import Route, RouteContext
+from litellm.rust_bridge.catalog import Route, RouteContext, Rules
 
 if TYPE_CHECKING:
     from tokenizers import Tokenizer as PythonHuggingFaceTokenizer
@@ -69,12 +69,13 @@ def _python_encoding(name: str) -> tiktoken.Encoding:
     return encoding if name == encoding.name else tiktoken.get_encoding(name)
 
 
-def get_encoding(name: str) -> Encoding:
+def get_encoding(name: str, *, rules: Rules | None = None) -> Encoding:
     return runtime.run(
         TIKTOKEN_CONTEXT,
         binding=TOKENIZER,
         native=lambda factory: _native_encoding(factory, name),
         python=lambda: _python_encoding(name),
+        rules=rules,
     )
 
 
@@ -88,7 +89,7 @@ def _python_tokenizer() -> type[PythonHuggingFaceTokenizer]:
     return Tokenizer
 
 
-def anthropic() -> HuggingFace:
+def anthropic(*, rules: Rules | None = None) -> HuggingFace:
     """The packaged Anthropic tokenizer on the selected backend."""
     from litellm.utils import claude_json_str
 
@@ -97,19 +98,23 @@ def anthropic() -> HuggingFace:
         binding=TOKENIZER,
         native=lambda factory: HuggingFaceTokenizer(_native_anthropic(factory)),
         python=lambda: _python_tokenizer().from_str(claude_json_str),
+        rules=rules,
     )
 
 
-def from_str(json: str) -> HuggingFace:
+def from_str(json: str, *, rules: Rules | None = None) -> HuggingFace:
     return runtime.run(
         HUGGINGFACE_CONTEXT,
         binding=TOKENIZER,
         native=lambda factory: HuggingFaceTokenizer(factory.from_json(json)),
         python=lambda: _python_tokenizer().from_str(json),
+        rules=rules,
     )
 
 
-def from_pretrained(identifier: str, revision: str = "main", token: str | None = None) -> HuggingFace:
+def from_pretrained(
+    identifier: str, revision: str = "main", token: str | None = None, *, rules: Rules | None = None
+) -> HuggingFace:
     return runtime.run(
         HUGGINGFACE_CONTEXT,
         binding=TOKENIZER,
@@ -117,4 +122,5 @@ def from_pretrained(identifier: str, revision: str = "main", token: str | None =
             factory.from_pretrained(identifier, revision=revision, token=token)
         ),
         python=lambda: _python_tokenizer().from_pretrained(identifier, revision=revision, token=token),
+        rules=rules,
     )

@@ -7,7 +7,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.anthropic.pass_through.messages import handler as main
 from litellm.llms.anthropic.pass_through.safeguards import native_route_classifies
 from litellm.rust_bridge.catalog import Route, RouteContext
-from litellm.rust_bridge.dispatch import PublicDispatch
+from litellm.rust_bridge.dispatch import AsyncPublicRoute, AsyncVariant, PublicRoute
 from litellm.rust_bridge.messages.entrypoints import (
     NATIVE_AMESSAGES,
     NATIVE_MESSAGES,
@@ -16,7 +16,6 @@ from litellm.rust_bridge.public_call import (
     NativeCall,
     bind,
     native_call,
-    native_call_hook,
     optional_sequence,
     optional_str,
     signature,
@@ -61,7 +60,8 @@ def _public_request(
     max_tokens: Final = fields.get("max_tokens")
     if not isinstance(model, str) or messages is None or not isinstance(max_tokens, int):
         return None
-    return native_call(legacy, args, kwargs)
+    request: Final = native_call(legacy, args, kwargs)
+    return None if _python_serves(request) else request
 
 
 def _resolved_provider(request: NativeCall) -> str | None:
@@ -91,18 +91,21 @@ def _context(request: NativeCall) -> RouteContext:
     )
 
 
-_DISPATCH: Final = PublicDispatch(
-    route=Route.MESSAGES,
-    request=lambda args, kwargs: _public_request(_MESSAGES, args, kwargs),
-    context=_context,
-    bypass=lambda request: request.kwargs.get("is_async") is True or _python_serves(request),
-)
-
-_ADISPATCH: Final = PublicDispatch(
+ANTHROPIC_MESSAGES: Final = AsyncPublicRoute(
     route=Route.MESSAGES,
     request=lambda args, kwargs: _public_request(_AMESSAGES, args, kwargs),
     context=_context,
-    bypass=_python_serves,
+    binding=NATIVE_AMESSAGES,
+    python=_PYTHON_AMESSAGES,
+)
+
+ANTHROPIC_MESSAGES_HANDLER: Final = PublicRoute(
+    route=Route.MESSAGES,
+    request=lambda args, kwargs: _public_request(_MESSAGES, args, kwargs),
+    context=_context,
+    binding=NATIVE_MESSAGES,
+    python=_PYTHON_MESSAGES,
+    asynchronous=AsyncVariant("is_async", NATIVE_AMESSAGES),
 )
 
 
@@ -110,25 +113,11 @@ def anthropic_messages_handler(
     *args: object,
     **kwargs: object,  # kwargs-ok: preserve the public Anthropic Messages call shape
 ) -> MessagesResult | Coroutine[object, object, MessagesResult]:
-    python: Final = _PYTHON_MESSAGES
-    return _DISPATCH.run(
-        args,
-        kwargs,
-        python=python,
-        binding=NATIVE_MESSAGES,
-        native=native_call_hook,
-    )
+    return ANTHROPIC_MESSAGES_HANDLER.run(args, kwargs)
 
 
 async def anthropic_messages(*args: object, **kwargs: object) -> MessagesResult:  # kwargs-ok: public call shape
-    python: Final = _PYTHON_AMESSAGES
-    return await _ADISPATCH.arun(
-        args,
-        kwargs,
-        python=python,
-        binding=NATIVE_AMESSAGES,
-        native=native_call_hook,
-    )
+    return await ANTHROPIC_MESSAGES.arun(args, kwargs)
 
 
 anthropic_messages_handler.__doc__ = _PYTHON_MESSAGES.__doc__

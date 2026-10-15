@@ -15,5 +15,5 @@ A concern that exists for only one route gets its own file there, never a provid
 
 - Route data and the route's `call` live in `<route>/data.py`, and `<route>/conftest.py` owns the `server` fixture
 - `support/` holds only route-neutral helpers. Never parametrize one test across routes, except in feature folders such as `cache/`
-- Call the public API inside `support.routing.native_route(...)`. Call `_native` directly only for a case the public API cannot reach
+- Call a public function through its route object in `litellm/<route>/dispatch.py` (`COMPLETION`, `ACOMPLETION`, `ANTHROPIC_MESSAGES`, ...) with `rules=support.routing.rust_required(...)` or `python_only(...)`. Never select a backend by rebinding the catalog's `RULES` or setting `LITELLM_RUST`. Call `_native` directly only for a case the route object cannot reach
 - Check the native path with `support.routing.assert_served_natively`

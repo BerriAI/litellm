@@ -1,25 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable
-from typing import Final, Protocol, cast  # noqa: TID251  # validates dynamically loaded native callables
+from collections.abc import Awaitable, Callable
+from typing import Final, TypeAlias, cast  # noqa: TID251  # validates dynamically loaded native callables
 
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.utils import ModelResponse
 
+NativeCompletion: TypeAlias = Callable[[NativeCall], ModelResponse]
 
-class NativeCompletion(Protocol):
-    def __call__(
-        self,
-        call: NativeCall,
-    ) -> ModelResponse: ...
-
-
-class NativeAcompletion(Protocol):
-    def __call__(
-        self,
-        call: NativeCall,
-    ) -> Awaitable[ModelResponse]: ...
+NativeAcompletion: TypeAlias = Callable[[NativeCall], Awaitable[ModelResponse]]
 
 
 def _completion_binding(value: object) -> NativeCompletion | None:

@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final
 
 import litellm
@@ -7,7 +8,7 @@ from tests.test_litellm_rust.support.recording_server import RecordingServer
 OCR_DOCUMENT: Final = {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"}
 OCR_MODEL: Final = "mistral/mistral-ocr-latest"
 OCR_TEXT: Final = "native OCR response"
-OCR_RESPONSE: Final = {
+OCR_RESPONSE: Final[Mapping[str, object]] = {
     "pages": [{"index": 0, "markdown": OCR_TEXT, "images": [], "dimensions": None}],
     "model": "mistral-ocr-latest",
     "usage_info": {"pages_processed": 1, "doc_size_bytes": 3},

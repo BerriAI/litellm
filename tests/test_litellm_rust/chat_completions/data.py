@@ -1,6 +1,6 @@
 from typing import Final
 
-import litellm
+from litellm.chat_completions.dispatch import ACOMPLETION, COMPLETION
 from litellm.rust_bridge.catalog import Route
 from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_MODEL
 from tests.test_litellm_rust.support.recording_server import RecordingServer
@@ -19,8 +19,8 @@ RATE_LIMITED: Final = _error("rate_limit_error")
 async def call(server: RecordingServer, *, asynchronous: bool = True, **kwargs: object) -> object:
     return await call_natively(
         Route.CHAT_COMPLETIONS,
-        litellm.completion,
-        litellm.acompletion,
+        COMPLETION.run,
+        ACOMPLETION.arun,
         REQUEST,
         server,
         asynchronous=asynchronous,

@@ -5,12 +5,13 @@ import pytest
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.responses.dispatch import ARESPONSES, RESPONSES
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.rust_bridge.catalog import Route
 from litellm.types.llms.openai import ResponsesAPIResponse
 from tests.test_litellm_rust.responses.data import RESPONSES_MODEL, RESPONSES_TEXT, call
 from tests.test_litellm_rust.support.recording_server import RecordingServer
-from tests.test_litellm_rust.support.routing import assert_served_natively, native_route
+from tests.test_litellm_rust.support.routing import assert_served_natively, rust_required
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -23,12 +24,12 @@ async def test_positional_parameters_reach_the_wire(server: RecordingServer, asy
     arguments: Final = ("hello", RESPONSES_MODEL, None, "Be brief", 16)
     supplied: Final = {"api_key": "test-key", "api_base": server.base_url}
 
-    with native_route(Route.RESPONSES):
-        result: Final = (
-            await litellm.aresponses(*arguments, **supplied)
-            if asynchronous
-            else await asyncio.to_thread(litellm.responses, *arguments, **supplied)
-        )
+    rules: Final = rust_required(Route.RESPONSES)
+    result: Final = (
+        await ARESPONSES.arun(arguments, supplied, rules=rules)
+        if asynchronous
+        else await asyncio.to_thread(RESPONSES.run, arguments, supplied, rules=rules)
+    )
 
     assert isinstance(result, ResponsesAPIResponse)
     assert result.output_text == RESPONSES_TEXT

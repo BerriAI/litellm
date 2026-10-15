@@ -3,13 +3,14 @@ from types import MappingProxyType
 from typing import Final
 
 import httpx
+from typing_extensions import Never
 
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.catalog import Route, RouteContext
-from litellm.rust_bridge.dispatch import PublicDispatch
+from litellm.rust_bridge.dispatch import AsyncPublicRoute, AsyncVariant, PublicRoute
 from litellm.rust_bridge.ocr.entrypoints import NATIVE_AOCR, NATIVE_OCR
-from litellm.rust_bridge.public_call import NativeCall, native_call, native_call_hook, optional_str, signature
+from litellm.rust_bridge.public_call import NativeCall, native_call, optional_str, signature
 
 __all__ = ("aocr", "ocr")
 
@@ -55,17 +56,21 @@ def _context(request: NativeCall) -> RouteContext:
     return RouteContext(Route.OCR, provider=provider, model=str(request.resolved["model"]))
 
 
-_DISPATCH: Final = PublicDispatch(
-    route=Route.OCR,
-    request=lambda args, kwargs: _public_request("ocr", args, kwargs),
-    context=_context,
-    bypass=lambda request: request.kwargs.get("aocr") is True,
-)
-
-_ADISPATCH: Final = PublicDispatch(
+AOCR: Final[AsyncPublicRoute[NativeCall, OCRResponse, Never]] = AsyncPublicRoute(
     route=Route.OCR,
     request=lambda args, kwargs: _public_request("aocr", args, kwargs),
     context=_context,
+    binding=NATIVE_AOCR,
+    python=runtime.NO_PYTHON,
+)
+
+OCR: Final[PublicRoute[NativeCall, OCRResponse, Never, OCRResponse]] = PublicRoute(
+    route=Route.OCR,
+    request=lambda args, kwargs: _public_request("ocr", args, kwargs),
+    context=_context,
+    binding=NATIVE_OCR,
+    python=runtime.NO_PYTHON,
+    asynchronous=AsyncVariant("aocr", NATIVE_AOCR),
 )
 
 
@@ -73,20 +78,8 @@ def ocr(
     *args: object,
     **kwargs: object,  # kwargs-ok: preserve the public OCR call shape
 ) -> OCRResponse | Coroutine[object, object, OCRResponse]:
-    return _DISPATCH.run(
-        args,
-        kwargs,
-        python=runtime.NO_PYTHON,
-        binding=NATIVE_OCR,
-        native=native_call_hook,
-    )
+    return OCR.run(args, kwargs)
 
 
 async def aocr(*args: object, **kwargs: object) -> OCRResponse:  # kwargs-ok: preserve the public OCR call shape
-    return await _ADISPATCH.arun(
-        args,
-        kwargs,
-        python=runtime.NO_PYTHON,
-        binding=NATIVE_AOCR,
-        native=native_call_hook,
-    )
+    return await AOCR.arun(args, kwargs)

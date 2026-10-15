@@ -4,12 +4,12 @@ from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding sele
 
 from litellm import main
 from litellm.rust_bridge.catalog import Route, RouteContext
-from litellm.rust_bridge.dispatch import PublicDispatch
+from litellm.rust_bridge.dispatch import AsyncPublicRoute, AsyncVariant, PublicRoute
 from litellm.rust_bridge.embeddings.entrypoints import (
     NATIVE_AEMBEDDING,
     NATIVE_EMBEDDING,
 )
-from litellm.rust_bridge.public_call import NativeCall, bind, native_call, native_call_hook, optional_str, signature
+from litellm.rust_bridge.public_call import NativeCall, bind, native_call, optional_str, signature
 from litellm.types.utils import EmbeddingResponse
 
 __all__ = ("aembedding", "embedding")
@@ -46,17 +46,21 @@ def _context(request: NativeCall) -> RouteContext:
     )
 
 
-_DISPATCH: Final = PublicDispatch(
+AEMBEDDING: Final = AsyncPublicRoute(
     route=Route.EMBEDDINGS,
     request=lambda args, kwargs: _public_request(_EMBEDDING_SIGNATURE, args, kwargs),
     context=_context,
-    bypass=lambda request: request.kwargs.get("aembedding") is True,
+    binding=NATIVE_AEMBEDDING,
+    python=_PYTHON_AEMBEDDING,
 )
 
-_ADISPATCH: Final = PublicDispatch(
+EMBEDDING: Final = PublicRoute(
     route=Route.EMBEDDINGS,
     request=lambda args, kwargs: _public_request(_EMBEDDING_SIGNATURE, args, kwargs),
     context=_context,
+    binding=NATIVE_EMBEDDING,
+    python=_PYTHON_EMBEDDING,
+    asynchronous=AsyncVariant("aembedding", NATIVE_AEMBEDDING),
 )
 
 
@@ -64,23 +68,11 @@ def embedding(
     *args: object,
     **kwargs: object,  # kwargs-ok: preserve the public embedding call shape
 ) -> EmbeddingResponse | Coroutine[object, object, EmbeddingResponse]:
-    return _DISPATCH.run(
-        args,
-        kwargs,
-        python=_PYTHON_EMBEDDING,
-        binding=NATIVE_EMBEDDING,
-        native=native_call_hook,
-    )
+    return EMBEDDING.run(args, kwargs)
 
 
 async def aembedding(*args: object, **kwargs: object) -> EmbeddingResponse:  # kwargs-ok: preserve the public call shape
-    return await _ADISPATCH.arun(
-        args,
-        kwargs,
-        python=_PYTHON_AEMBEDDING,
-        binding=NATIVE_AEMBEDDING,
-        native=native_call_hook,
-    )
+    return await AEMBEDDING.arun(args, kwargs)
 
 
 embedding.__doc__ = _PYTHON_EMBEDDING.__doc__

@@ -1,25 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Mapping
-from typing import Final, Protocol, cast  # noqa: TID251  # validates dynamically loaded native callables
+from collections.abc import Awaitable, Callable, Mapping
+from typing import Final, Protocol, TypeAlias, cast  # noqa: TID251  # validates dynamically loaded native callables
 
 from litellm.llms.base_llm.ocr.transformation import DocumentType, OCRResponse
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.public_call import NativeCall
 
+NativeOcr: TypeAlias = Callable[[NativeCall], OCRResponse]
 
-class NativeOcr(Protocol):
-    def __call__(
-        self,
-        request: NativeCall,
-    ) -> OCRResponse: ...
-
-
-class NativeAocr(Protocol):
-    def __call__(
-        self,
-        request: NativeCall,
-    ) -> Awaitable[OCRResponse]: ...
+NativeAocr: TypeAlias = Callable[[NativeCall], Awaitable[OCRResponse]]
 
 
 def _ocr_binding(value: object) -> NativeOcr | None:

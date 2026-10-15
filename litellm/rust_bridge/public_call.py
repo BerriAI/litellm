@@ -6,7 +6,7 @@ import inspect
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, TypeVar, cast  # noqa: TID251  # narrows caller-owned containers without copying them
+from typing import Final, cast  # noqa: TID251  # narrows caller-owned containers without copying them
 
 import litellm
 
@@ -113,15 +113,3 @@ def native_call(legacy: inspect.Signature, args: tuple[object, ...], kwargs: Map
     positional: Final = legacy.bind_partial(*args)
     positional.apply_defaults()
     return NativeCall(args=args, kwargs=kwargs, base=_without_bags(legacy, positional.arguments))
-
-
-NativeResultT: Final = TypeVar("NativeResultT")
-
-
-def native_call_hook(
-    hook: Callable[[NativeCall], NativeResultT],
-    call: NativeCall,
-    _args: tuple[object, ...],
-    _kwargs: Mapping[str, object],
-) -> NativeResultT:
-    return hook(call)

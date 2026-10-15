@@ -1,25 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable
-from typing import Final, Protocol, cast  # noqa: TID251  # validates dynamically loaded native callables
+from collections.abc import Awaitable, Callable
+from typing import Final, TypeAlias, cast  # noqa: TID251  # validates dynamically loaded native callables
 
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.utils import EmbeddingResponse
 
+NativeEmbedding: TypeAlias = Callable[[NativeCall], EmbeddingResponse]
 
-class NativeEmbedding(Protocol):
-    def __call__(
-        self,
-        call: NativeCall,
-    ) -> EmbeddingResponse: ...
-
-
-class NativeAembedding(Protocol):
-    def __call__(
-        self,
-        call: NativeCall,
-    ) -> Awaitable[EmbeddingResponse]: ...
+NativeAembedding: TypeAlias = Callable[[NativeCall], Awaitable[EmbeddingResponse]]
 
 
 def _embedding_binding(value: object) -> NativeEmbedding | None:

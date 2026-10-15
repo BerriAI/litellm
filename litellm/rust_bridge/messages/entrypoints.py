@@ -1,25 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Awaitable, Iterator
-from typing import Final, Protocol, cast  # noqa: TID251  # validates dynamically loaded native callables
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from typing import Final, TypeAlias, cast  # noqa: TID251  # validates dynamically loaded native callables
 
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 
+NativeMessages: TypeAlias = Callable[[NativeCall], AnthropicMessagesResponse | Iterator[bytes]]
 
-class NativeMessages(Protocol):
-    def __call__(
-        self,
-        request: NativeCall,
-    ) -> AnthropicMessagesResponse | Iterator[bytes]: ...
-
-
-class NativeAmessages(Protocol):
-    def __call__(
-        self,
-        request: NativeCall,
-    ) -> Awaitable[AnthropicMessagesResponse | AsyncIterator[bytes]]: ...
+NativeAmessages: TypeAlias = Callable[[NativeCall], Awaitable[AnthropicMessagesResponse | AsyncIterator[bytes]]]
 
 
 def _messages_binding(value: object) -> NativeMessages | None:
