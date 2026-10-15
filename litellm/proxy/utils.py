@@ -7438,7 +7438,7 @@ def _is_sha256_hex(value: str) -> bool:
 
 
 def _is_hashed_password(value: str) -> bool:
-    return value.startswith(PBKDF2_PREFIX) or value.startswith(SCRYPT_PREFIX) or _is_sha256_hex(value)
+    return value.startswith((PBKDF2_PREFIX, SCRYPT_PREFIX)) or _is_sha256_hex(value)
 
 
 def needs_password_rehash(stored: str) -> bool:
