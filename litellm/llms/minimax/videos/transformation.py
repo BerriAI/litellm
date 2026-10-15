@@ -26,6 +26,8 @@ from litellm.litellm_core_utils.url_utils import (
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
     _get_httpx_client,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # house cached-client factory has no public alias and its stub leaves params untyped
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # factory stub leaves params untyped
 )
@@ -40,7 +42,6 @@ from litellm.utils import get_model_info
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 
 class MinimaxVideoError(BaseLLMException):
@@ -589,7 +590,7 @@ class MinimaxVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: "Logging",
         custom_llm_provider: str | None = None,
-        client: "HTTPHandler | None" = None,
+        client: HTTPHandler | None = None,
     ) -> VideoObject:
         task: Final = _parse_task_response(raw_response)
         video_obj: Final = _video_object_from_task(task)
@@ -613,11 +614,12 @@ class MinimaxVideoConfig(BaseVideoConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: "Logging",
+        client: HTTPHandler | None = None,
     ) -> bytes:
         task: Final = _parse_task_response(raw_response)
         video_url: Final = _video_url_from_task(task)
 
-        httpx_client: Final = _get_httpx_client()
+        httpx_client: Final[HTTPHandler] = client if client is not None else _get_httpx_client()
         video_response: Final = safe_get(httpx_client, video_url)
         video_response.raise_for_status()
 
@@ -627,12 +629,13 @@ class MinimaxVideoConfig(BaseVideoConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: "Logging",
+        client: AsyncHTTPHandler | None = None,
     ) -> bytes:
         task: Final = _parse_task_response(raw_response)
         video_url: Final = _video_url_from_task(task)
 
-        async_httpx_client: Final = get_async_httpx_client(
-            llm_provider=litellm.LlmProviders.MINIMAX,
+        async_httpx_client: Final[AsyncHTTPHandler] = (
+            client if client is not None else get_async_httpx_client(llm_provider=litellm.LlmProviders.MINIMAX)
         )
         video_response: Final = await async_safe_get(async_httpx_client, video_url)
         video_response.raise_for_status()

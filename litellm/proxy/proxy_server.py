@@ -26,12 +26,16 @@ from collections.abc import (
     MutableMapping,
     Sequence,
 )
+from collections.abc import (
+    Set as AbstractSet,
+)
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from itertools import chain
 from types import MappingProxyType, UnionType
 from typing import (
     TYPE_CHECKING,
+    Annotated,
     Any,
     Final,
     Literal,
@@ -73,6 +77,7 @@ from litellm.constants import (
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
     LITELLM_UI_ALLOW_HEADERS,
     LITELLM_UI_SESSION_DURATION,
+    OPENAI_LIVE_SESSION_START_TIMEOUT_SECONDS,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
@@ -334,6 +339,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     mask_sensitive_keys,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.openai.live import parse_live_session_start
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._experimental.mcp_server.byok_credential_cache import byok_credential_cache
@@ -347,6 +353,7 @@ from litellm.proxy.analytics_endpoints.analytics_endpoints import (
 from litellm.proxy.auth.auth_checks import (
     ROLE_BASED_PERMISSIONS_ADAPTER,
     ExperimentalUIJWTToken,
+    can_agent_call_model,
     can_key_call_resolved_model,
     get_team_object,
     log_db_metrics,
@@ -391,6 +398,8 @@ from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401, RUF100  # lega
     _fetch_global_spend_with_event_coordination,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     fetch_global_spend_with_event_coordination,
     user_api_key_auth,
+    user_api_key_auth_accepted_websocket_for_model,
+    user_api_key_auth_live_websocket,
     user_api_key_auth_websocket,
 )
 from litellm.proxy.batches_endpoints.endpoints import router as batches_router
@@ -584,6 +593,7 @@ from litellm.proxy.health_check import (
     perform_health_check,
 )
 from litellm.proxy.health_endpoints._health_endpoints import router as health_router
+from litellm.proxy.health_endpoints.deployment_warning_endpoints import router as deployment_warning_router
 from litellm.proxy.hooks.model_max_budget_limiter import (  # noqa: F401, RUF100  # legacy module exports
     PROXY_VirtualKeyModelMaxBudgetLimiter,
     _PROXY_VirtualKeyModelMaxBudgetLimiter,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -750,6 +760,11 @@ from litellm.proxy.spend_tracking.spend_event_producer import (
     SpendEventProducer,
     build_spend_event_producer,
 )
+from litellm.proxy.telemetry.endpoints import router as telemetry_router
+from litellm.proxy.telemetry.middleware import TelemetryMiddleware
+from litellm.proxy.telemetry.runtime import TelemetryRuntime
+from litellm.proxy.telemetry.settings import describe_errors as describe_telemetry_errors
+from litellm.proxy.telemetry.settings import load_settings as load_telemetry_settings
 
 try:
     from litellm.proxy.enterprise_billing.billing_metrics import (
@@ -1692,6 +1707,27 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
         state: Final[ProxyLifespanState] = {"tracing_receiver": receiver}
         from litellm.proxy.admin_mcp import admin_mcp_lifespan
 
+        telemetry_settings: Final = load_telemetry_settings()
+        if isinstance(telemetry_settings, ValidationError):
+            verbose_proxy_logger.warning(
+                "telemetry: invalid settings, leaving it off: %s", describe_telemetry_errors(telemetry_settings)
+            )
+        telemetry_start: Final = (
+            None
+            if isinstance(telemetry_settings, ValidationError)
+            else asyncio.create_task(
+                telemetry_runtime.start(
+                    litellm_version=version,
+                    settings=telemetry_settings,
+                    db=lambda: (  # pyright: ignore[reportArgumentType]  # PrismaWrapper forwards raw queries via __getattr__
+                        prisma_client.writer_db if prisma_client is not None else None
+                    ),
+                    register=litellm.logging_callback_manager.add_litellm_callback,
+                )
+            )
+        )
+        if telemetry_start is not None:
+            telemetry_start.add_done_callback(_log_telemetry_start_failure)
         try:
             async with AsyncExitStack() as admin_mcp_stack:
                 try:
@@ -1745,6 +1781,10 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
                     verbose_proxy_logger.error("Error stopping the spend view setup task: %s", e)
 
             await _drain_spend_event_producer_on_shutdown()
+            if telemetry_start is not None:
+                telemetry_start.cancel()
+                await asyncio.gather(telemetry_start, return_exceptions=True)
+            await telemetry_runtime.stop()
 
             # Shutdown event - finish or cancel in-flight scheduled jobs before the shutdown flushes and the DB disconnect
             if scheduler is not None and scheduler_executor is not None:
@@ -1869,7 +1909,11 @@ app = FastAPI(
 ## middleware after an application has started". See
 ## ``litellm.integrations.otel.mount`` for the full rationale; the call is a safe
 ## no-op when the gate is off or the instrumentation package is unavailable.
-from litellm.integrations.otel.mount import instrument_fastapi_app
+from litellm.integrations.otel.mount import (
+    instrument_fastapi_app,
+    trace_response_expose_headers,
+    trace_response_headers,
+)
 
 instrument_fastapi_app(app)
 
@@ -2186,6 +2230,12 @@ async def otel_request_validation_exception_handler(request: Request, exc: Reque
 async def otel_unhandled_exception_handler(request: Request, exc: Exception):
     if isinstance(exc, (ProxyException, HTTPException, RequestValidationError)):
         raise exc
+    response: Final = await _unhandled_exception_response(request, exc)
+    response.headers.update(trace_response_headers(getattr(request.state, "parent_otel_span", None)))
+    return response
+
+
+async def _unhandled_exception_response(request: Request, exc: Exception) -> Response:
     if PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(exc):
         verbose_proxy_logger.warning("Database unavailable during request: %s", type(exc).__name__)
         return await openai_exception_handler(
@@ -2569,7 +2619,7 @@ app.add_middleware(
     allow_credentials=allow_cors_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=LITELLM_UI_ALLOW_HEADERS,
+    expose_headers=[*LITELLM_UI_ALLOW_HEADERS, *trace_response_expose_headers()],
 )
 
 app.add_middleware(PrometheusAuthMiddleware)
@@ -2602,6 +2652,21 @@ app.add_middleware(
     # since without one the fold would never be drained. Read at call time, so
     # it sees prisma_client as of the first request rather than import time.
     sink_factory=lambda: gateway_request_accumulator if prisma_client is not None else None,
+)
+telemetry_runtime: Final = TelemetryRuntime()
+
+
+def _log_telemetry_start_failure(task: asyncio.Task[None]) -> None:
+    error: Final = None if task.cancelled() else task.exception()
+    if error is not None:
+        verbose_proxy_logger.warning("telemetry: failed to start, leaving it off: %s", error)
+
+
+app.add_middleware(
+    TelemetryMiddleware,
+    sink_provider=lambda: telemetry_runtime.sink,
+    spawn=telemetry_runtime.spawn,
+    settle_timeout_s=lambda: telemetry_runtime.settings.settle_timeout_seconds,
 )
 app.add_middleware(BudgetReservationReleaseMiddleware, release=release_unbound_budget_reservation)
 app.add_middleware(RedisRequestBatchMiddleware)
@@ -3917,14 +3982,8 @@ async def invalidate_spend_counter(counter_key: str) -> None:
     forget_spend_counter(counter_key)
     spend_counter_cache.in_memory_cache.delete_cache(key=counter_key)
     if spend_counter_cache.redis_cache is not None:
-        try:
+        with contextlib.suppress(Exception):
             await spend_counter_cache.redis_cache.async_delete_cache(key=counter_key)
-        except Exception:
-            verbose_proxy_logger.debug(
-                "Unable to delete stale spend counter %s after increment failure",
-                counter_key,
-                exc_info=True,
-            )
 
 
 _invalidate_spend_counter: Final = invalidate_spend_counter
@@ -13202,6 +13261,17 @@ async def _release_realtime_max_parallel_slot(user_api_key_dict: UserAPIKeyAuth)
     await release_like_http_disconnect(user_api_key_dict)
 
 
+class _RealtimeErrorBody(TypedDict):
+    type: ReadOnly[str]
+    message: ReadOnly[str]
+    code: NotRequired[ReadOnly[str]]
+
+
+class _RealtimeErrorEvent(TypedDict):
+    type: ReadOnly[str]
+    error: ReadOnly[_RealtimeErrorBody]
+
+
 async def _reject_realtime_session(
     websocket: WebSocket,
     user_api_key_dict: UserAPIKeyAuth,
@@ -13209,13 +13279,19 @@ async def _reject_realtime_session(
     code: int,
     reason: str,
     error_message: str | None = None,
+    error_type: str = "guardrail_error",
+    error_code: str | None = None,
 ) -> None:
     try:
         if error_message is not None:
             try:
-                await websocket.send_text(
-                    json.dumps({"type": "error", "error": {"type": "guardrail_error", "message": error_message}})
-                )
+                error_event: Final[_RealtimeErrorEvent] = {
+                    "type": "error",
+                    "error": {"type": error_type, "message": error_message}
+                    if error_code is None
+                    else {"type": error_type, "message": error_message, "code": error_code},
+                }
+                await websocket.send_text(json.dumps(error_event))
             except Exception:  # noqa: BLE001  # best-effort notice: a dead client socket must not skip the close below
                 verbose_proxy_logger.debug("Could not send realtime pre-call error event to client; closing anyway")
         await websocket.close(code=code, reason=reason)
@@ -13237,12 +13313,11 @@ async def realtime_websocket_endpoint(
     ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),
 ):
-    requested_protocols: Final = [
-        p.strip() for p in (websocket.headers.get("sec-websocket-protocol") or "").split(",") if p.strip()
-    ]
-    accept_kwargs: Final[dict] = {}
-    if requested_protocols:
-        accept_kwargs["subprotocol"] = requested_protocols[0]
+    requested_protocols: Final = tuple(
+        protocol.strip()
+        for protocol in (websocket.headers.get("sec-websocket-protocol") or "").split(",")
+        if protocol.strip()
+    )
 
     route_model = model
     if route_model is None:
@@ -13265,26 +13340,47 @@ async def realtime_websocket_endpoint(
         log_model_access_denial(e)
         await _reject_realtime_session(websocket, user_api_key_dict, code=1008, reason=e.message[:120])
         return
-    await websocket.accept(**accept_kwargs)
+    await websocket.accept(subprotocol=requested_protocols[0] if requested_protocols else None)
+    await _route_realtime_websocket_session(
+        websocket,
+        user_api_key_dict,
+        route_model=route_model,
+        model=model,
+        intent=intent,
+        guardrails=guardrails,
+    )
 
+
+async def _route_realtime_websocket_session(
+    websocket: WebSocket,
+    user_api_key_dict: UserAPIKeyAuth,
+    *,
+    route_model: str,
+    model: str | None,
+    intent: str | None,
+    guardrails: str | None,
+    request_path: str | None = None,
+    live_session_start: Mapping[str, object] | None = None,
+) -> None:
     # Only use explicit parameters, not all query params
     query_params: Final = cast(RealtimeQueryParams, dict(_realtime_query_params_template(model, intent)))
-
     data: dict[str, object] = {
         "model": route_model,
         "websocket": websocket,
         "query_params": query_params,  # Only explicit params
     }
-
     # Pass guardrails into data so pre-call guardrail processing picks them up
     if guardrails:
         data["guardrails"] = [g.strip() for g in guardrails.split(",") if g.strip()]
+    if live_session_start is not None:
+        data["live_session_start"] = live_session_start
 
     # Use raw ASGI headers (already lowercase bytes) to avoid extra work
     headers_list: Final = list(websocket.scope.get("headers") or [])
-
     scope: Final = REALTIME_REQUEST_SCOPE_TEMPLATE.copy()
     scope["headers"] = headers_list
+    if request_path is not None:
+        scope["path"] = request_path
 
     request: Final = Request(scope=scope)
 
@@ -13327,6 +13423,7 @@ async def realtime_websocket_endpoint(
         )
         return
     except BaseException:
+        await _release_realtime_budget_reservation(user_api_key_dict)
         await _release_realtime_max_parallel_slot(user_api_key_dict)
         raise
 
@@ -13362,6 +13459,141 @@ async def realtime_websocket_endpoint(
             await _release_realtime_budget_reservation(user_api_key_dict)
             if not litellm_logging_obj.model_call_details.get(REALTIME_SESSION_FAILURE_LOGGED_KEY):
                 await _release_realtime_max_parallel_slot(user_api_key_dict)
+
+
+async def _reject_invalid_live_session_start(
+    websocket: WebSocket,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    await _reject_realtime_session(
+        websocket,
+        user_api_key_dict,
+        code=1008,
+        reason="Invalid session.start frame",
+        error_message="First message must be a session.start JSON object with a non-empty session.model.",
+        error_type="invalid_request_error",
+        error_code="invalid_session_start",
+    )
+
+
+LiveSessionModelAuthorizer: TypeAlias = Callable[[WebSocket, str], Awaitable[UserAPIKeyAuth]]
+
+
+def live_session_model_authorizer() -> LiveSessionModelAuthorizer:
+    return user_api_key_auth_accepted_websocket_for_model
+
+
+async def _authorize_live_session_model(
+    authorize_session_model: LiveSessionModelAuthorizer,
+    websocket: WebSocket,
+    model: str,
+) -> UserAPIKeyAuth:
+    session_auth: Final = await authorize_session_model(websocket, model)
+    try:
+        await can_key_call_resolved_model(
+            model=model,
+            llm_model_list=llm_model_list,
+            valid_token=session_auth,
+            llm_router=llm_router,
+        )
+        await can_agent_call_model(
+            model=model,
+            valid_token=session_auth,
+            llm_router=llm_router,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except BaseException:
+        await _release_realtime_budget_reservation(session_auth)
+        raise
+    return session_auth
+
+
+def _live_session_denial_code(error: ProxyException | HTTPException) -> str:
+    model_denied: Final = isinstance(error, ProxyException) and str(error.type).endswith("_model_access_denied")
+    return "model_not_allowed" if model_denied else "session_not_allowed"
+
+
+@app.websocket("/openai/v1/live/sessions")
+@app.websocket("/v1/live/sessions")
+@app.websocket("/live/sessions")
+async def live_sessions_websocket_endpoint(
+    websocket: WebSocket,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth_live_websocket)],
+    authorize_session_model: Annotated[LiveSessionModelAuthorizer, Depends(live_session_model_authorizer)],
+) -> None:
+    requested_protocols: Final = tuple(
+        protocol.strip()
+        for protocol in (websocket.headers.get("sec-websocket-protocol") or "").split(",")
+        if protocol.strip()
+    )
+    try:
+        await websocket.accept(subprotocol=requested_protocols[0] if requested_protocols else None)
+    except BaseException:
+        await _release_realtime_budget_reservation(user_api_key_dict)
+        await _release_realtime_max_parallel_slot(user_api_key_dict)
+        raise
+
+    try:
+        first_message: Final = await asyncio.wait_for(
+            websocket.receive_text(),
+            timeout=OPENAI_LIVE_SESSION_START_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        await _reject_invalid_live_session_start(websocket, user_api_key_dict)
+        return
+    except WebSocketDisconnect:
+        await _release_realtime_budget_reservation(user_api_key_dict)
+        await _release_realtime_max_parallel_slot(user_api_key_dict)
+        return
+    except RuntimeError:
+        await _reject_invalid_live_session_start(websocket, user_api_key_dict)
+        return
+    except BaseException:
+        await _release_realtime_budget_reservation(user_api_key_dict)
+        await _release_realtime_max_parallel_slot(user_api_key_dict)
+        raise
+
+    session_start: Final = parse_live_session_start(first_message)
+    if session_start is None:
+        await _reject_invalid_live_session_start(websocket, user_api_key_dict)
+        return
+
+    upgrade_auth: Final = user_api_key_dict.model_copy()
+    await _release_realtime_budget_reservation(upgrade_auth)
+    try:
+        session_auth: Final = await _authorize_live_session_model(
+            authorize_session_model, websocket, session_start.model
+        )
+    except (ProxyException, HTTPException) as error:
+        denial_message: Final = error.message if isinstance(error, ProxyException) else str(error.detail)
+        if isinstance(error, ProxyException):
+            log_model_access_denial(error)
+        await _reject_realtime_session(
+            websocket,
+            upgrade_auth,
+            code=1008,
+            reason=websocket_close_reason(denial_message, fallback="Session not allowed"),
+            error_message=denial_message,
+            error_type="invalid_request_error",
+            error_code=_live_session_denial_code(error),
+        )
+        return
+    except BaseException:
+        await _release_realtime_max_parallel_slot(upgrade_auth)
+        raise
+
+    await _route_realtime_websocket_session(
+        websocket,
+        session_auth,
+        route_model=session_start.model,
+        model=None,
+        intent=None,
+        guardrails=None,
+        request_path=websocket.url.path,
+        live_session_start=session_start.frame,
+    )
 
 
 ######################################################################
@@ -14116,19 +14348,12 @@ async def _try_provider_token_count(
             code=status_code,
         )
     if result is not None and result.error is True:
-        if litellm.disable_token_counter is True:
-            raise ProxyException(
-                message=result.error_message or "Token counting failed",
-                type="token_counting_error",
-                param="model",
-                code=result.status_code or 500,
-            )
-        verbose_proxy_logger.warning(
-            "Provider token counting failed (%s): %s. Falling back to local tokenizer.",
-            result.status_code,
-            result.error_message,
+        raise ProxyException(
+            message=result.error_message or "Token counting failed",
+            type="token_counting_error",
+            param="model",
+            code=result.status_code or 500,
         )
-        return None
     return result
 
 
@@ -14874,6 +15099,20 @@ def _byok_row_outside_caller_teams(model_info_dict: dict[str, JsonValue], allowe
 _SORTED_SEARCH_DB_FETCH_CAP: Final = 500
 
 
+def _insensitive_contains(value: str) -> Mapping[str, object]:
+    """Case-insensitive Prisma substring filter for the model search."""
+    return {"contains": value, "mode": "insensitive"}
+
+
+def _blocked_equals(blocked: bool) -> Mapping[str, object]:
+    return {"blocked": blocked}
+
+
+def _not_in_router_ids(ids: AbstractSet[str]) -> Mapping[str, object]:
+    """Prisma filter excluding models already materialized in the router."""
+    return {"model_id": {"not": {"in": list(ids)}}}
+
+
 async def _fetch_db_models_for_search(
     prisma_client: PrismaClient,
     proxy_config: ProxyConfig,
@@ -14885,6 +15124,7 @@ async def _fetch_db_models_for_search(
     sort_by: str | None,
     is_byok_outside_caller_teams: Callable[[dict[str, JsonValue]], bool],
     model_name: str | None = None,
+    blocked: bool | None = None,
 ) -> tuple[list[dict[str, object]], int]:
     """
     Run the bounded DB query that backs `/v2/model/info?search=`. Returns
@@ -14899,13 +15139,18 @@ async def _fetch_db_models_for_search(
     Postgres, which let any authenticated caller force a full BYOK-table
     read via `/v2/model/info?search=x`. We rely on the router-side
     filter for `team_public_model_name` instead and keep the DB cost
-    bounded by `search`.
+    bounded by `search`. The upstream model name is encrypted in the DB,
+    so provider/upstream search is limited to router-loaded deployments.
     """
-    db_where_condition: Final[dict[str, object]] = {
-        "model_name": {"contains": search_lower, "mode": "insensitive"} if model_name is None else model_name
-    }
-    if db_model_ids_in_router:
-        db_where_condition["model_id"] = {"not": {"in": list(db_model_ids_in_router)}}
+    model_name_condition: Final[Mapping[str, object]] = (
+        {"model_name": _insensitive_contains(search_lower)} if model_name is None else {"model_name": model_name}
+    )
+    status_conditions: Final = (_blocked_equals(blocked),) if blocked is not None else ()
+    router_conditions: Final = (_not_in_router_ids(db_model_ids_in_router),) if db_model_ids_in_router else ()
+    match_conditions: Final = (model_name_condition, *status_conditions, *router_conditions)
+    db_where_condition: Final[Mapping[str, object]] = (
+        match_conditions[0] if len(match_conditions) == 1 else {"AND": list(match_conditions)}
+    )
 
     # Unsorted searches only need enough DB rows to fill the current
     # page after counting router-side matches. Sorted searches need
@@ -14951,7 +15196,8 @@ async def _apply_search_filter_to_models(
     size: int = 50,
     sort_by: str | None = None,
     model_name: str | None = None,
-) -> tuple[list[dict[str, Any]], int | None]:
+    blocked: bool | None = None,
+) -> tuple[list[dict[str, object]], int | None]:
     """
     Apply search filter to models, querying database for additional matching models.
 
@@ -14971,6 +15217,9 @@ async def _apply_search_filter_to_models(
         sort_by: Sort field. When set, results must be sorted across the
             full match set, so the DB fetch is capped at
             ``_SORTED_SEARCH_DB_FETCH_CAP`` instead of one page.
+        blocked: Routing-status filter (false = active, true = paused). Applied
+        to the router matches and pushed into the DB query, so rows of the
+        other status never consume the bounded fetch.
         model_name: Exact ``model_name`` the caller already narrowed
             ``all_models`` to (``?model=``). The DB query matches it
             exactly instead of the substring, and is skipped when the
@@ -15001,7 +15250,14 @@ async def _apply_search_filter_to_models(
         if search_lower in (m.get("model_name") or "").lower():
             return True
         team_public_model_name: Final = (m.get("model_info") or {}).get("team_public_model_name") or ""
-        return search_lower in team_public_model_name.lower()
+        if search_lower in team_public_model_name.lower():
+            return True
+        # Also match the underlying LiteLLM model name (e.g.
+        # "openrouter/deepseek/deepseek-chat"), so users can find
+        # deployments by typing the provider or the upstream model id.
+        litellm_params: Final[Mapping[str, object]] = m.get("litellm_params") or MappingProxyType({})
+        litellm_model: Final = litellm_params.get("model")
+        return isinstance(litellm_model, str) and search_lower in litellm_model.lower()
 
     # Filter models in router by search term, dropping BYOK rows that
     # belong to teams the caller is not a member of so search can't leak
@@ -15010,7 +15266,9 @@ async def _apply_search_filter_to_models(
     filtered_router_models: Final = [
         m
         for m in all_models
-        if _model_matches_search(m) and not _is_byok_outside_caller_teams(m.get("model_info") or {})
+        if _model_matches_search(m)
+        and _matches_routing_status(m, blocked)
+        and not _is_byok_outside_caller_teams(m.get("model_info") or {})
     ]
 
     # Separate filtered models into config vs db models, and track db model IDs
@@ -15047,6 +15305,7 @@ async def _apply_search_filter_to_models(
                 sort_by=sort_by,
                 is_byok_outside_caller_teams=_is_byok_outside_caller_teams,
                 model_name=model_name,
+                blocked=blocked,
             )
             search_total_count = router_models_count + db_models_total_count
         except Exception as e:
@@ -15101,10 +15360,10 @@ def _normalize_datetime_for_sorting(dt: object) -> datetime | None:
 
 
 def _sort_models(
-    all_models: list[dict[str, Any]],
+    all_models: list[dict[str, object]],
     sort_by: str | None,
     sort_order: str = "asc",
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     """
     Sort models by the specified field and order.
 
@@ -15213,15 +15472,28 @@ def _model_in_access_group(model: Mapping[str, object], access_group: str) -> bo
     return isinstance(access_groups, (list, tuple)) and access_group in access_groups
 
 
+def _matches_routing_status(model: Mapping[str, object], blocked: bool | None) -> bool:
+    if blocked is not True and blocked is not False:
+        return True
+    match model.get("model_info"):
+        case {"blocked": True}:
+            return blocked is True
+        case _:
+            return blocked is False
+
+
 def _matches_model_info_filters(
     model: Mapping[str, object],
     exclude_auto_routers: bool | None,
     access_group: str | None,
     wildcard_only: bool | None,
+    blocked: bool | None = None,
 ) -> bool:
     if exclude_auto_routers is True and _is_auto_router_model(model):
         return False
     if isinstance(access_group, str) and not _model_in_access_group(model, access_group):
+        return False
+    if not _matches_routing_status(model, blocked):
         return False
     return wildcard_only is not True or "*" in str(model.get("model_name") or "")
 
@@ -15394,7 +15666,7 @@ async def _filter_models_by_team_id(
     prisma_client: PrismaClient,
     llm_router: Router,
     user_api_key_dict: UserAPIKeyAuth | None = None,
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     """
     Filter models by team ID. Returns models where:
     - team_id matches the model's BYOK team_id, OR
@@ -15527,6 +15799,13 @@ async def model_info_v2(
         "asc",
         description="Sort order. Options: asc, desc",
     ),
+    blocked: bool | None = fastapi.Query(
+        None,
+        description=(
+            "Filter by routing status: false = active deployments, true = paused (blocked) "
+            "deployments. Omit to return both."
+        ),
+    ),
     exclude_auto_routers: bool | None = fastapi.Query(
         False,
         description=(
@@ -15561,6 +15840,7 @@ async def model_info_v2(
         modelId: Return a single deployment by LiteLLM model id.
         teamId: Filter to models with direct access or team membership for this team id.
         sortBy / sortOrder: Sort by model_name, created_at, updated_at, costs, or status.
+        blocked: Filter by routing status (false = active, true = paused).
         access_group: Only return deployments in this model access group.
         wildcard_only: Only return deployments whose `model_name` contains `*`.
 
@@ -15644,6 +15924,7 @@ async def model_info_v2(
             size=size,
             sort_by=sortBy,
             model_name=model,
+            blocked=blocked,
         )
 
     if user_models_only:
@@ -15717,7 +15998,9 @@ async def model_info_v2(
     # `is True` because direct-call tests bypass FastAPI, so the Query default arrives as a
     # truthy sentinel object rather than False.
     all_models = [
-        m for m in all_models if _matches_model_info_filters(m, exclude_auto_routers, access_group, wildcard_only)
+        m
+        for m in all_models
+        if _matches_model_info_filters(m, exclude_auto_routers, access_group, wildcard_only, blocked)
     ]
 
     # Update total count to include agents
@@ -18413,6 +18696,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "pass_through_endpoints": "PydanticModel",
         "store_model_in_db": "Boolean",
         "store_prompts_in_spend_logs": "Boolean",
+        "disable_requester_ip_address_logging": "Boolean",
         "disable_fallbacks_on_per_model_rate_limits": "Boolean",
         "maximum_spend_logs_retention_period": "String",
         "maximum_health_check_retention_period": "String",
@@ -20191,6 +20475,7 @@ app.include_router(openai_files_router)
 reserve_lazy_slot(app, "llm_passthrough")
 app.include_router(pass_through_router)
 app.include_router(health_router)
+app.include_router(deployment_warning_router)
 app.include_router(key_management_router)
 app.include_router(internal_user_router)
 app.include_router(daily_activity_router)
@@ -20230,6 +20515,7 @@ app.include_router(coordination_redis_settings_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(gateway_request_router)
 app.include_router(request_error_router)
+app.include_router(telemetry_router)
 app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)
 app.include_router(agent_skills_discovery_router)

@@ -16,6 +16,7 @@ from _s3_v2_support import RecordingS3Sink, collect_payloads
 from _s3_v2_support import s3_config as _recording_s3_config
 from integration._support.client import Gateway, JsonValue, eventually
 from integration._support.process import owned_proxy, owned_proxy_process
+from integration._support.timing import assert_enforced_within
 from integration._support.wire import Reply, Request, Wire, wire_server
 
 BUCKET: Final = "integration-bucket"
@@ -473,7 +474,7 @@ def test_s3_v2_aged_out_object_is_dropped_next_to_delivered_siblings(gateway: Ga
             _send(owned.gateway, model, key, f"{marker}-trigger")
             eventually(
                 lambda: owned.log.read_text(),
-                lambda text: "retrying longer than s3_max_retry_age_seconds=1)" in text,
+                lambda text: "0 rejected as terminal by S3, 1 retrying longer than s3_max_retry_age_seconds=1" in text,
                 seconds=60,
             )
             exhausted: Final = sink.rejected_attempts
@@ -565,30 +566,27 @@ def test_s3_v2_retry_age_zero_keeps_aged_object_queued(gateway: Gateway, tmp_pat
     )
 
 
-def test_s3_v2_throttled_429_object_is_put_once_per_flush(gateway: Gateway, tmp_path: Path) -> None:
+def test_s3_v2_throttled_429_object_backs_off_in_call_and_lands_once_cleared(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "s3throttle" + uuid.uuid4().hex[:8]
     sink: Final = RejectingS3Sink(reject_marker=f"{marker}-throttled", reject_status=429, reject_code="TooManyRequests")
     with wire_server(_chat_reply) as provider, wire_server(sink.respond) as bucket:
         config: Final = _s3_config(tmp_path, bucket.url, {"s3_batch_file_upload": False})
         with (
-            owned_proxy(gateway, tmp_path, {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "2"}, config=config) as candidate,
+            owned_proxy(gateway, tmp_path, {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "10"}, config=config) as candidate,
             candidate.scenario() as scenario,
         ):
             model: Final = scenario.model(api_base=provider.url + "/v1", api_key="synthetic-provider-key")
             key: Final = scenario.key(models=[model])
             _send(candidate, model, key, f"{marker}-throttled")
-            _send_and_wait_until_landed(candidate, model, key, sink, f"{marker}-sibling")
-            _send_and_wait_until_landed(candidate, model, key, sink, f"{marker}-second-flush")
-            _send_and_wait_until_landed(candidate, model, key, sink, f"{marker}-third-flush")
+            eventually(lambda: sink.rejected_attempts, lambda attempts: attempts >= 3, seconds=60)
             sink.reject_until = time.time()
             eventually(sink.landed_ids, lambda landed: f"{marker}-throttled" in landed, seconds=60)
-    assert sum(1 for r in provider.drain() if r.method == "POST") == 4
-    times: Final = tuple(sink.rejected_times)
-    gaps: Final = tuple(round(later - earlier, 3) for earlier, later in zip(times, times[1:]))
-    assert len(times) >= 3 and min(gaps) >= 1.5, (
-        f"PUTs for a 429 object ran {gaps} apart; the 2 s flush interval allows exactly one attempt per flush "
-        "because 429 is not an in-call retry status"
+    assert sum(1 for r in provider.drain() if r.method == "POST") == 1
+    first_backoff, second_backoff = (
+        later - earlier for earlier, later in zip(sink.rejected_times[:2], sink.rejected_times[1:3])
     )
+    assert_enforced_within(first_backoff, configured=1.5, slack=2.0, not_before=0.5)
+    assert_enforced_within(second_backoff, configured=3.0, slack=2.0, not_before=1.0)
 
 
 def test_s3_v2_default_config_retries_access_denied_and_every_event_lands(gateway: Gateway, tmp_path: Path) -> None:
