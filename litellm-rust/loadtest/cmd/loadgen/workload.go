@@ -18,10 +18,12 @@ type Workload struct {
 	// MaxInFlight caps open requests per load generator; arrivals above it are counted as shed.
 	MaxInFlight int `json:"max_in_flight"`
 	// NewConnFraction of requests use a fresh TCP connection, like many separate clients.
-	NewConnFraction float64           `json:"new_conn_fraction"`
-	Keys            KeySpec           `json:"keys"`
-	Models          map[string]Models `json:"models"`
-	Classes         []Class           `json:"classes"`
+	NewConnFraction float64 `json:"new_conn_fraction"`
+	// NonStreamMaxS caps the duration of non-streaming requests (0 = no cap).
+	NonStreamMaxS float64           `json:"nonstream_max_s"`
+	Keys          KeySpec           `json:"keys"`
+	Models        map[string]Models `json:"models"`
+	Classes       []Class           `json:"classes"`
 }
 
 type Stage struct {

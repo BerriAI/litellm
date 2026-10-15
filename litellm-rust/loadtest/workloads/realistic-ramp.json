@@ -7,6 +7,7 @@
     {"duration_s": 600, "rps": 60},
     {"duration_s": 1200, "rps": 100}
   ],
+  "nonstream_max_s": 120,
   "warmup_s": 60,
   "max_in_flight": 50000,
   "new_conn_fraction": 0.05,
@@ -24,7 +25,7 @@
     {"name": "slow-nonstream", "weight": 10, "endpoint": "chat", "stream_fraction": 0,
      "context_tokens": {"dist": "loguniform", "min": 10000, "max": 100000},
      "ttft_ms": {"dist": "const", "min": 0},
-     "duration_s": {"dist": "uniform", "min": 30, "max": 300}},
+     "duration_s": {"dist": "uniform", "min": 30, "max": 120}},
     {"name": "long-stream", "weight": 5, "endpoint": "messages", "stream_fraction": 1,
      "context_tokens": {"dist": "loguniform", "min": 50000, "max": 300000},
      "ttft_ms": {"dist": "uniform", "min": 1000, "max": 5000},

@@ -24,6 +24,7 @@ type result struct {
 	Endpoint   string  `json:"ep"`
 	Stream     bool    `json:"stream"`
 	CtxTokens  int     `json:"ctx"`
+	OutTokens  int     `json:"out"`
 	TTFTPlanMs float64 `json:"ttft_plan_ms"`
 	DurPlanMs  float64 `json:"dur_plan_ms"`
 	Status     int     `json:"status"`
@@ -36,6 +37,7 @@ type result struct {
 
 type group struct {
 	n, ok                    int
+	inTok, outTok            int64
 	first, last              int64
 	ttfbOver, totalOver, gap []float64
 }
@@ -50,6 +52,8 @@ func (g *group) add(r result) {
 		return
 	}
 	g.ok++
+	g.inTok += int64(r.CtxTokens)
+	g.outTok += int64(r.OutTokens)
 	planFirst := r.DurPlanMs
 	if r.Stream {
 		planFirst = r.TTFTPlanMs
@@ -128,7 +132,8 @@ func main() {
 	fmt.Printf("%d requests (warmup excluded: %v)\n\n", total, !*includeWarmup)
 	fmt.Println("Overheads are milliseconds added on top of the mock's planned time. First byte = first SSE event for streams, first body byte otherwise.")
 
-	fmt.Println("\n### By stage\n\n| stage | requests | ok % | arrivals/s | first-byte overhead p50 / p99 | total overhead p50 / p99 |\n|---|---|---|---|---|---|")
+	fmt.Println("\nTokens/s counts successful requests by start time: input = context sent, output = tokens the mock was told to return.")
+	fmt.Println("\n### By stage\n\n| stage | requests | ok % | arrivals/s | input tok/s | output tok/s | first-byte overhead p50 / p99 | total overhead p50 / p99 |\n|---|---|---|---|---|---|---|---|")
 	stages := make([]int, 0, len(byStage))
 	for s := range byStage {
 		stages = append(stages, s)
@@ -136,11 +141,12 @@ func main() {
 	sort.Ints(stages)
 	for _, s := range stages {
 		g := byStage[s]
-		rate := 0.0
+		rate, inRate, outRate := 0.0, 0.0, 0.0
 		if span := float64(g.last-g.first) / 1000; span > 0 {
 			rate = float64(g.n) / span
+			inRate, outRate = float64(g.inTok)/span, float64(g.outTok)/span
 		}
-		fmt.Printf("| %d | %d | %.2f | %.1f | %s / %s | %s / %s |\n", s, g.n, 100*float64(g.ok)/float64(g.n), rate,
+		fmt.Printf("| %d | %d | %.2f | %.1f | %.0f | %.0f | %s / %s | %s / %s |\n", s, g.n, 100*float64(g.ok)/float64(g.n), rate, inRate, outRate,
 			pct(g.ttfbOver, 50), pct(g.ttfbOver, 99), pct(g.totalOver, 50), pct(g.totalOver, 99))
 	}
 	table("By class", "class | endpoint | mode", byClass)

@@ -7,6 +7,7 @@
     {"duration_s": 300, "rps": 4},
     {"duration_s": 300, "rps": 8}
   ],
+  "nonstream_max_s": 120,
   "warmup_s": 30,
   "keys": {"file": "out/keys.txt", "zipf_s": 0},
   "models": {"chat": {"prefix": "chat-", "count": 10}, "messages": {"prefix": "msg-", "count": 10}},

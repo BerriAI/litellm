@@ -1,6 +1,7 @@
 {
   "name": "many unique keys, short requests, some fresh connections: the auth cache miss path",
   "stages": [{"duration_s": 300, "rps": 100}, {"duration_s": 300, "rps": 300}, {"duration_s": 300, "rps": 600}],
+  "nonstream_max_s": 120,
   "warmup_s": 30,
   "new_conn_fraction": 0.3,
   "keys": {"file": "out/keys.txt", "zipf_s": 0},

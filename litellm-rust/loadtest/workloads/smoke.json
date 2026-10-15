@@ -1,6 +1,7 @@
 {
   "name": "smoke: both endpoints, streaming and not, small contexts, 1 minute",
   "stages": [{"duration_s": 60, "rps": 5}],
+  "nonstream_max_s": 120,
   "warmup_s": 5,
   "keys": {"file": "out/keys.txt", "zipf_s": 0},
   "models": {"chat": {"prefix": "chat-", "count": 4}, "messages": {"prefix": "msg-", "count": 4}},

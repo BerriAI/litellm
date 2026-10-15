@@ -41,6 +41,7 @@ type result struct {
 	Stream     bool    `json:"stream"`
 	NewConn    bool    `json:"new_conn,omitempty"`
 	CtxTokens  int     `json:"ctx"`
+	OutTokens  int     `json:"out"`
 	BodyBytes  int     `json:"bytes"`
 	TTFTPlanMs int64   `json:"ttft_plan_ms"`
 	DurPlanMs  int64   `json:"dur_plan_ms"`
@@ -185,7 +186,11 @@ schedule:
 		} else if len(keys) > 1 {
 			keyIdx = rng.IntN(len(keys))
 		}
+		stream := rng.Float64() < cl.StreamFraction
 		durS := cl.DurationS.Sample(rng)
+		if !stream && w.NonStreamMaxS > 0 {
+			durS = min(durS, w.NonStreamMaxS)
+		}
 		ttftMs := int64(cl.TTFTMs.Sample(rng))
 		durMs := max(int64(durS*1000), ttftMs)
 		tps := cl.OutputTokensPerS
@@ -197,11 +202,12 @@ schedule:
 			Class: cl.Name, Endpoint: cl.Endpoint,
 			Model:     fmt.Sprintf("%s%d", models.Prefix, rng.IntN(models.Count)),
 			KeyIdx:    keyIdx,
-			Stream:    rng.Float64() < cl.StreamFraction,
+			Stream:    stream,
 			NewConn:   rng.Float64() < w.NewConnFraction,
 			CtxTokens: int(cl.ContextTokens.Sample(rng)), TTFTPlanMs: ttftMs, DurPlanMs: durMs,
 		}
 		outTokens := max(int(float64(durMs-ttftMs)/1000*tps), 1)
+		res.OutTokens = outTokens
 		id++
 		body := buildBody(pool, rng, res, outTokens, fmt.Sprintf("%d-%d", *shard, id))
 		res.BodyBytes = len(body)

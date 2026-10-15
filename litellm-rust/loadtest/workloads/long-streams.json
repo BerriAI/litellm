@@ -1,6 +1,7 @@
 {
   "name": "thousands of concurrent 10 to 30 minute streams (2 rps x about 20 min = about 2,400 open streams)",
   "stages": [{"duration_s": 3600, "rps": 2}],
+  "nonstream_max_s": 120,
   "warmup_s": 0,
   "keys": {"file": "out/keys.txt", "zipf_s": 0},
   "models": {"chat": {"prefix": "chat-", "count": 10}, "messages": {"prefix": "msg-", "count": 10}},
