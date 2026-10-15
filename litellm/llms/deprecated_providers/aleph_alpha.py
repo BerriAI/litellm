@@ -1,24 +1,13 @@
 import json
 import time
 import types
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from typing import Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.utils import Choices, Message, ModelResponse, Usage
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _AlephAlphaCompletion(TypedDict):
-    completion: ReadOnly[str]
-    finish_reason: ReadOnly[object]
-
-
-_COMPLETIONS: Final = TypeAdapter(Sequence[_AlephAlphaCompletion])
 
 
 class AlephAlphaError(Exception):
@@ -268,7 +257,7 @@ def completion(
         else:
             try:
                 choices_list: Final = []
-                for idx, item in enumerate(_COMPLETIONS.validate_python(completion_response["completions"])):
+                for idx, item in enumerate(completion_response["completions"]):
                     if len(item["completion"]) > 0:
                         message_obj = Message(content=item["completion"])
                     else:

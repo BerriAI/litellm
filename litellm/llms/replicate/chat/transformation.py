@@ -168,8 +168,7 @@ class ReplicateConfig(BaseConfig):
         headers: dict,
     ) -> dict:
         ## Load Config
-        raw_config: Final[object] = litellm.ReplicateConfig.get_config()
-        config: Final = _JSON_DICT.validate_python(raw_config)
+        config: Final = litellm.ReplicateConfig.get_config()
         for k, v in config.items():
             if (
                 k not in optional_params

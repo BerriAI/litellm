@@ -9,8 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Final, cast
 
-from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import NotRequired, ReadOnly, TypedDict
+from pydantic import ConfigDict
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
@@ -25,26 +24,6 @@ from litellm.types.llms.base import LiteLLMBaseModel
 if TYPE_CHECKING:
     from litellm import Router
     from litellm.types.rag import RAGIngestOptions
-
-
-@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
-class _CreatedFileSearchStore(TypedDict):
-    name: NotRequired[ReadOnly[str]]
-
-
-@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
-class _UploadedFileRef(TypedDict):
-    name: NotRequired[ReadOnly[str]]
-
-
-@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
-class _UploadFileResponse(TypedDict):
-    name: NotRequired[ReadOnly[str | None]]
-    file: NotRequired[ReadOnly[_UploadedFileRef]]
-
-
-_CREATED_FILE_SEARCH_STORE: Final = TypeAdapter(_CreatedFileSearchStore)
-_UPLOAD_FILE_RESPONSE: Final = TypeAdapter(_UploadFileResponse)
 
 
 class _WhiteSpaceConfig(LiteLLMBaseModel):
@@ -191,7 +170,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
             verbose_logger.error(error_msg)
             raise Exception(error_msg)
 
-        response_data: Final = _CREATED_FILE_SEARCH_STORE.validate_python(response.json())
+        response_data: Final = response.json()
         store_name: Final = response_data.get("name", "")
 
         verbose_logger.debug("Created File Search store: %s", store_name)
@@ -353,7 +332,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
 
         # Parse response to get file/document ID
         try:
-            response_data: Final = _UPLOAD_FILE_RESPONSE.validate_python(response.json())
+            response_data: Final = response.json()
             # The response should contain the document name or file reference
             file_id: Final = response_data.get("name", "") or response_data.get("file", {}).get("name", "")
             verbose_logger.debug("Upload complete. File ID: %s", file_id)

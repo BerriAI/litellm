@@ -12,8 +12,6 @@ from types import MappingProxyType
 from typing import Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.caching.caching import InMemoryCache
@@ -37,17 +35,6 @@ TOKEN_EXPIRY_BUFFER_MS: Final = 60000
 
 _token_cache: Final = InMemoryCache()
 _NO_LITELLM_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _TokenResponse(TypedDict):
-    tok: ReadOnly[NotRequired[str | None]]
-    access_token: ReadOnly[NotRequired[str | None]]
-    exp: ReadOnly[NotRequired[int | str | None]]
-    expires_at: ReadOnly[NotRequired[int | str | None]]
-
-
-_TOKEN_RESPONSE: Final = TypeAdapter(_TokenResponse)
 
 
 class GigaChatAuthError(BaseLLMException):
@@ -243,7 +230,7 @@ async def _request_token_async(
 
 def _parse_token_response(response: httpx.Response) -> tuple[str, int]:
     """Parse OAuth token response."""
-    data: Final = _TOKEN_RESPONSE.validate_python(response.json())
+    data: Final = response.json()
 
     # GigaChat returns either 'tok'/'exp' or 'access_token'/'expires_at'
     access_token: Final = data.get("tok") or data.get("access_token")

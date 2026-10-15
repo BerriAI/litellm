@@ -11,8 +11,6 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal, Optional
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm._version import version as litellm_version
@@ -40,20 +38,6 @@ if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 GUARDRAIL_NAME: Final = "generic_guardrail_api"
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _GenericGuardrailAPIResponsePayload(TypedDict):
-    action: NotRequired[ReadOnly[str]]
-    blocked_reason: NotRequired[ReadOnly[str | None]]
-    texts: NotRequired[ReadOnly[Sequence[str] | None]]
-    images: NotRequired[ReadOnly[Sequence[str] | None]]
-    tools: NotRequired[ReadOnly[Sequence[object] | None]]
-    stream_holdback_chars: NotRequired[ReadOnly[object]]
-    structured_messages: NotRequired[ReadOnly[object]]
-
-
-_GENERIC_GUARDRAIL_API_RESPONSE_ADAPTER: Final = TypeAdapter(_GenericGuardrailAPIResponsePayload)
 
 # Headers whose values are forwarded as-is (case-insensitive). Glob patterns supported (e.g. x-stainless-*, x-litellm*).
 _HEADER_VALUE_ALLOWLIST: Final = frozenset(
@@ -500,11 +484,11 @@ class GenericGuardrailAPI(CustomGuardrail):
             )
 
             response.raise_for_status()
-            response_json: Final = _GENERIC_GUARDRAIL_API_RESPONSE_ADAPTER.validate_python(response.json())
+            response_json: Final = response.json()
 
             verbose_proxy_logger.debug("Generic Guardrail API response: %s", response_json)
 
-            guardrail_response: Final = GenericGuardrailAPIResponse.from_dict(dict(response_json))
+            guardrail_response: Final = GenericGuardrailAPIResponse.from_dict(response_json)
 
             # Handle the response
             if guardrail_response.action == "BLOCKED":

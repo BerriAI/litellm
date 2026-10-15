@@ -12,12 +12,8 @@ import ast
 import asyncio
 import json
 import os
-from collections.abc import Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Protocol, cast
-
-from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import NotRequired, ReadOnly, TypedDict
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 import litellm
 from litellm._logging import print_verbose
@@ -45,27 +41,6 @@ _WAIT_FOR_INDEXING: Final = MappingProxyType({"wait": "true"})
 
 if TYPE_CHECKING:
     from litellm.router import Router
-
-
-@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
-class _QdrantHitPayload(TypedDict):
-    litellm_cache_key: NotRequired[ReadOnly[object]]
-    text: ReadOnly[object]
-    response: ReadOnly[str | None]
-
-
-@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
-class _QdrantSearchHit(TypedDict):
-    score: ReadOnly[int | float]
-    payload: ReadOnly[_QdrantHitPayload]
-
-
-@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
-class _QdrantSearchResponse(TypedDict):
-    result: ReadOnly[list[_QdrantSearchHit] | None]
-
-
-_QDRANT_SEARCH_RESPONSE: Final = TypeAdapter(_QdrantSearchResponse)
 
 
 class _QdrantCollectionDetailsResponse(Protocol):
@@ -197,13 +172,14 @@ class QdrantSemanticCache(BaseCache):
             else:
                 raise Exception("Error while creating new collection")
 
-    def _get_cache_logic(self, cached_response: str | None) -> object:
+    def _get_cache_logic(self, cached_response: Any):
         if cached_response is None:
             return cached_response
         try:
-            return json.loads(cached_response)  # Convert string to dictionary
+            cached_response = json.loads(cached_response)  # Convert string to dictionary
         except Exception:
-            return ast.literal_eval(cached_response)
+            cached_response = ast.literal_eval(cached_response)
+        return cached_response
 
     def _get_qdrant_cache_key_filter(self, key: str) -> dict:
         return {
@@ -233,7 +209,7 @@ class QdrantSemanticCache(BaseCache):
         except Exception as exc:
             print_verbose(f"Qdrant semantic-cache could not create cache-key payload index: {exc}")
 
-    def _payload_matches_cache_key(self, payload: Mapping[str, object], key: str) -> bool:
+    def _payload_matches_cache_key(self, payload: dict, key: str) -> bool:
         # Pre-isolation points stored only prompt + response with no cache-key
         # payload field. Reassigning them to a caller's key would risk
         # cross-scope hits, so they're treated as misses and re-populated on
@@ -379,14 +355,15 @@ class QdrantSemanticCache(BaseCache):
             headers=self.headers,
             json=data,
         )
-        results: Final = _QDRANT_SEARCH_RESPONSE.validate_python(search_response.json())["result"]
+        results: Final = search_response.json()["result"]
 
         if results is None:
             kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
             return None
-        if len(results) == 0:
-            kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
-            return None
+        if isinstance(results, list):
+            if len(results) == 0:
+                kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
+                return None
 
         similarity: Final = results[0]["score"]
         payload: Final = results[0]["payload"]
@@ -485,14 +462,15 @@ class QdrantSemanticCache(BaseCache):
             json=data,
         )
 
-        results: Final = _QDRANT_SEARCH_RESPONSE.validate_python(search_response.json())["result"]
+        results: Final = search_response.json()["result"]
 
         if results is None:
             kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
             return None
-        if len(results) == 0:
-            kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
-            return None
+        if isinstance(results, list):
+            if len(results) == 0:
+                kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
+                return None
 
         similarity: Final = results[0]["score"]
         payload: Final = results[0]["payload"]

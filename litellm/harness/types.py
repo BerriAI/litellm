@@ -7,10 +7,9 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Final, Literal
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, with_config
-from typing_extensions import NotRequired, ReadOnly, TypedDict
+from pydantic import BaseModel
 
 from litellm.harness.errors import StateIncompatible
 
@@ -19,23 +18,6 @@ PermissionMode = Literal["read-only", "ask", "edit", "full"]
 FileChangeKind = Literal["created", "modified", "deleted"]
 
 STATE_VERSION = 1
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _StateHeader(TypedDict):
-    harness: ReadOnly[object]
-    version: ReadOnly[int | float | str | bool]
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _StateBody(TypedDict):
-    workdir: ReadOnly[str]
-    native_session_id: NotRequired[ReadOnly[str | None]]
-    model: NotRequired[ReadOnly[str | None]]
-
-
-_STATE_HEADER: Final = TypeAdapter(_StateHeader)
-_STATE_BODY: Final = TypeAdapter(_StateBody)
 
 
 class Harness(Enum):
@@ -217,18 +199,17 @@ class State:
     @classmethod
     def loads(cls, data: bytes) -> State:
         try:
-            raw: Final = _STATE_HEADER.validate_python(json.loads(data.decode("utf-8")))
+            raw = json.loads(data.decode("utf-8"))
             harness = Harness(raw["harness"])
             version = int(raw["version"])
         except (ValueError, KeyError, TypeError, UnicodeDecodeError) as e:
             raise StateIncompatible(f"Unreadable harness state: {e}") from e
         if version != STATE_VERSION:
             raise StateIncompatible(f"State version {version} is not supported (expected {STATE_VERSION})")
-        body: Final = _STATE_BODY.validate_python(raw)
         return cls(
             harness=harness,
-            native_session_id=body.get("native_session_id"),
-            workdir=body["workdir"],
-            model=body.get("model"),
+            native_session_id=raw.get("native_session_id"),
+            workdir=raw["workdir"],
+            model=raw.get("model"),
             version=version,
         )

@@ -6,8 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import ReadOnly, TypedDict
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -16,20 +15,6 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import TokenCountResponse
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _GeminiModel(TypedDict):
-    name: ReadOnly[str]
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _GeminiModelsResponse(TypedDict):
-    models: ReadOnly[list[_GeminiModel]]
-
-
-_GEMINI_MODELS_RESPONSE: Final = TypeAdapter(_GeminiModelsResponse)
-
 
 GEMINI_IMAGE_ASPECT_RATIOS: Final[dict[str, float]] = {
     "1:1": 1 / 1,
@@ -402,10 +387,7 @@ class GeminiModelInfo(BaseLLMModelInfo):
     def get_base_model(model: str) -> str | None:
         return model.replace("gemini/", "")
 
-    def process_model_name(
-        self,
-        models: Sequence[_GeminiModel] | Sequence[Mapping[str, str]],
-    ) -> list[str]:
+    def process_model_name(self, models: list[dict[str, str]]) -> list[str]:
         litellm_model_names: Final = []
         for model in models:
             stripped_model_name = model["name"].replace("models/", "")
@@ -432,9 +414,9 @@ class GeminiModelInfo(BaseLLMModelInfo):
                 f"Failed to fetch models from Gemini. Status code: {response.status_code}, Response: {response.json()}"
             )
 
-        models_response: Final = _GEMINI_MODELS_RESPONSE.validate_python(response.json())
+        models: Final[list[dict[str, str]]] = response.json()["models"]
 
-        litellm_model_names: Final = self.process_model_name(models_response["models"])
+        litellm_model_names: Final = self.process_model_name(models)
         return litellm_model_names
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:

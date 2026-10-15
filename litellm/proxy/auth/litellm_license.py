@@ -7,8 +7,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import ReadOnly, TypedDict
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import NON_LLM_CONNECTION_TIMEOUT
@@ -22,14 +21,6 @@ AUTO_ROUTER_LICENSE_FEATURE: Final = "auto_router"
 LICENSE_ALL_FEATURES: Final = "*"
 AUTO_ROUTER_LICENSE_REMEDY: Final = "A LiteLLM license with the 'auto_router' feature lifts the limit."
 _LICENSE_VERDICT: Final = TypeAdapter(object)
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _AirgappedLicense(TypedDict):
-    expiration_date: ReadOnly[str]
-
-
-_AIRGAPPED_LICENSE: Final = TypeAdapter(_AirgappedLicense)
 
 
 class LicenseCheck:
@@ -209,7 +200,7 @@ class LicenseCheck:
             )
 
             # Decode and parse the data
-            license_data: Final = _AIRGAPPED_LICENSE.validate_python(json.loads(message.decode()))
+            license_data: Final = json.loads(message.decode())
 
             # Check expiration date
             expiration_date: Final = datetime.strptime(license_data["expiration_date"], "%Y-%m-%d")

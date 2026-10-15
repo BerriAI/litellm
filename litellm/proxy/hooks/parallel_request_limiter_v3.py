@@ -27,7 +27,7 @@ from typing import (
 )
 
 from fastapi import HTTPException
-from pydantic import ConfigDict, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 from starlette.status import HTTP_503_SERVICE_UNAVAILABLE
 from typing_extensions import NotRequired, ReadOnly
 
@@ -94,7 +94,7 @@ if TYPE_CHECKING:
     from litellm.types.agents import AgentResponse
     from litellm.types.caching import RedisPipelineIncrementOperation
 
-    Span = _Span
+    Span = _Span | Any
     InternalUsageCache = _InternalUsageCache
 else:
     Span = Any
@@ -521,21 +521,6 @@ def _as_counter_values(reply: object) -> list[CacheCounterValue]:
 ReservationWindowIdentity: TypeAlias = tuple[str, str, Literal["redis", "local"]]
 
 ParallelGaugeCacheValue: TypeAlias = dict[str, object] | int | float | str | bytes
-
-_CACHE_COUNTER_VALUE_ADAPTER: Final[TypeAdapter[CacheCounterValue | None]] = TypeAdapter(
-    CacheCounterValue | None, config=ConfigDict(strict=True)
-)
-_PARALLEL_GAUGE_CACHE_VALUE_ADAPTER: Final[TypeAdapter[ParallelGaugeCacheValue | None]] = TypeAdapter(
-    ParallelGaugeCacheValue | None, config=ConfigDict(strict=True)
-)
-
-
-def _cache_counter_as_int(value: CacheCounterValue) -> int:
-    return int(value.decode() if isinstance(value, bytes) else value)
-
-
-def _cache_counter_as_float(value: CacheCounterValue) -> float:
-    return float(value.decode() if isinstance(value, bytes) else value)
 
 
 class _AsyncLuaScript(Protocol):
@@ -1239,12 +1224,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             increment_value = 1
 
             # Get the window start time
-            window_start = _CACHE_COUNTER_VALUE_ADAPTER.validate_python(
-                await self.internal_usage_cache.async_get_cache(
-                    key=window_key,
-                    litellm_parent_otel_span=None,
-                    local_only=True,
-                )
+            window_start: CacheCounterValue | None = await self.internal_usage_cache.async_get_cache(
+                key=window_key,
+                litellm_parent_otel_span=None,
+                local_only=True,
             )
 
             # Check if window exists and is valid
@@ -1276,12 +1259,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 results.append(increment_value)  # counter
             else:
                 # Increment the counter
-                current_counter = _CACHE_COUNTER_VALUE_ADAPTER.validate_python(
-                    await self.internal_usage_cache.async_get_cache(
-                        key=counter_key,
-                        litellm_parent_otel_span=None,
-                        local_only=True,
-                    )
+                current_counter: CacheCounterValue | None = await self.internal_usage_cache.async_get_cache(
+                    key=counter_key,
+                    litellm_parent_otel_span=None,
+                    local_only=True,
                 )
                 new_counter_value = (int(current_counter) if current_counter is not None else 0) + increment_value
                 await self.internal_usage_cache.async_set_cache(
@@ -1907,12 +1888,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         cutoff: Final = now - PARALLEL_REQUEST_SLOT_TTL_SECONDS
         states: Final[list[tuple[dict[str, float] | None, int]]] = []
         for gauge in gauges:
-            raw_value = _PARALLEL_GAUGE_CACHE_VALUE_ADAPTER.validate_python(
-                await self.internal_usage_cache.async_get_cache(
-                    key=gauge["counter_key"],
-                    litellm_parent_otel_span=parent_otel_span,
-                    local_only=True,
-                )
+            raw_value: ParallelGaugeCacheValue | None = await self.internal_usage_cache.async_get_cache(
+                key=gauge["counter_key"],
+                litellm_parent_otel_span=parent_otel_span,
+                local_only=True,
             )
             if isinstance(raw_value, dict):
                 registry: dict[str, float] | None = {
@@ -2048,12 +2027,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     ) -> None:
         async with self._check_and_increment_lock:
             for counter_key in counter_keys:
-                raw_value = _PARALLEL_GAUGE_CACHE_VALUE_ADAPTER.validate_python(
-                    await self.internal_usage_cache.async_get_cache(
-                        key=counter_key,
-                        litellm_parent_otel_span=parent_otel_span,
-                        local_only=True,
-                    )
+                raw_value: ParallelGaugeCacheValue | None = await self.internal_usage_cache.async_get_cache(
+                    key=counter_key,
+                    litellm_parent_otel_span=parent_otel_span,
+                    local_only=True,
                 )
                 if isinstance(raw_value, dict):
                     if slot_id not in raw_value:
@@ -2489,26 +2466,22 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         descriptor_state: Final[list[AtomicCounterState]] = []
         for meta in per_counter_meta:
             window_size = meta["window_size"]
-            window_start = _CACHE_COUNTER_VALUE_ADAPTER.validate_python(
-                await self.internal_usage_cache.async_get_cache(
-                    key=meta["window_key"],
-                    litellm_parent_otel_span=parent_otel_span,
-                    local_only=True,
-                )
+            window_start: CacheCounterValue | None = await self.internal_usage_cache.async_get_cache(
+                key=meta["window_key"],
+                litellm_parent_otel_span=parent_otel_span,
+                local_only=True,
             )
             window_expired = window_start is None or (now_int - int(window_start)) >= window_size
             raw_counter: CacheCounterValue | None = (
                 None
                 if window_expired
-                else _CACHE_COUNTER_VALUE_ADAPTER.validate_python(
-                    await self.internal_usage_cache.async_get_cache(
-                        key=meta["counter_key"],
-                        litellm_parent_otel_span=parent_otel_span,
-                        local_only=True,
-                    )
+                else await self.internal_usage_cache.async_get_cache(
+                    key=meta["counter_key"],
+                    litellm_parent_otel_span=parent_otel_span,
+                    local_only=True,
                 )
             )
-            current_counter = 0 if window_expired or not raw_counter else _cache_counter_as_int(raw_counter)
+            current_counter = 0 if window_expired else int(raw_counter or 0)
             over_limit = (
                 current_counter + meta["increment"] > meta["current_limit"]
                 if meta["increment"] > 0
@@ -4522,28 +4495,24 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 expected_window_start = operation.get("expected_window_start")
                 if window_key is None or expected_window_start is None:
                     continue
-                active_window_start = _CACHE_COUNTER_VALUE_ADAPTER.validate_python(
-                    await self.internal_usage_cache.async_get_cache(
-                        key=window_key,
-                        litellm_parent_otel_span=parent_otel_span,
-                        local_only=True,
-                    )
+                active_window_start: CacheCounterValue | None = await self.internal_usage_cache.async_get_cache(
+                    key=window_key,
+                    litellm_parent_otel_span=parent_otel_span,
+                    local_only=True,
                 )
                 if active_window_start is None or str(active_window_start) != expected_window_start:
                     continue
                 current_counter = (
-                    _CACHE_COUNTER_VALUE_ADAPTER.validate_python(
-                        await self.internal_usage_cache.async_get_cache(
-                            key=operation["key"],
-                            litellm_parent_otel_span=parent_otel_span,
-                            local_only=True,
-                        )
+                    await self.internal_usage_cache.async_get_cache(
+                        key=operation["key"],
+                        litellm_parent_otel_span=parent_otel_span,
+                        local_only=True,
                     )
                     or 0
                 )
                 await self.internal_usage_cache.async_set_cache(
                     key=operation["key"],
-                    value=_cache_counter_as_float(current_counter) + operation["increment_value"],
+                    value=float(current_counter) + operation["increment_value"],
                     ttl=operation["ttl"],
                     litellm_parent_otel_span=parent_otel_span,
                     local_only=True,

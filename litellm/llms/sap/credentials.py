@@ -11,7 +11,6 @@ from threading import Lock
 from typing import Any, Final, Protocol
 
 import httpx
-from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -19,7 +18,6 @@ from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_httpx_client
 
 AUTH_ENDPOINT_SUFFIX: Final = "/oauth/token"
-_DECODED_JSON: Final = TypeAdapter(object)
 
 CONFIG_FILE_ENV_VAR: Final = "AICORE_CONFIG"
 HOME_PATH_ENV_VAR: Final = "AICORE_HOME"
@@ -41,7 +39,7 @@ def _get_nested(d: object, path: Sequence[str]) -> object:
     if isinstance(cur, str):
         # This shouldn't happen if service keys are pre-parsed correctly
         try:
-            cur = _DECODED_JSON.validate_python(json.loads(cur))
+            cur = json.loads(cur)
         except json.JSONDecodeError:
             verbose_logger.warning("SAP service key or VCAP service is a string but not valid JSON.")
             return None
@@ -426,7 +424,7 @@ def get_token_creator(
     """
 
     # Resolve credentials using your helper
-    credentials: Final[Mapping[str, str]] = fetch_credentials(service_key=service_key, profile=profile, **overrides)
+    credentials: Final[dict[str, str]] = fetch_credentials(service_key=service_key, profile=profile, **overrides)
 
     auth_url: Final = credentials.get("auth_url")
     base_url: Final = credentials.get("base_url")

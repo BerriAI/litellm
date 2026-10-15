@@ -1,7 +1,6 @@
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Optional, Protocol, TypeAlias
 
-from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -45,8 +44,6 @@ def _generic_passthrough_handler() -> "PassThroughEndpointHandler":
 
 
 _StringHolder = tuple[Any, str | int]
-
-_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 
 def _collect_strings(node: object, holders: list[_StringHolder]) -> None:
@@ -310,7 +307,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             texts: list[tuple[_StreamGroupKey, str]] = []
             if event_type == "contentBlockDelta":
                 try:
-                    payload_dict: dict[str, object] = _JSON_OBJECT.validate_python(_json.loads(payload_bytes))
+                    payload_dict: dict[str, object] = _json.loads(payload_bytes)
                     block_index = payload_dict.get("contentBlockIndex")
                     # Group per content block: a guardrail edit that changes length must not move text between blocks.
                     texts = [
@@ -402,7 +399,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             headers_bytes = frame_raw[12 : 12 + orig_hdrs_len]
 
             try:
-                payload_dict = _JSON_OBJECT.validate_python(_json.loads(frame_raw[12 + orig_hdrs_len : orig_total - 4]))
+                payload_dict = _json.loads(frame_raw[12 + orig_hdrs_len : orig_total - 4])
                 for local_idx, (_, container, key) in enumerate(
                     _collect_stream_delta_text_holders(payload_dict.get("delta"))
                 ):

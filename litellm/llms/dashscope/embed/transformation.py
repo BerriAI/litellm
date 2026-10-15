@@ -14,8 +14,6 @@ Docs - https://help.aliyun.com/zh/model-studio/text-embedding-synchronous-api
 from typing import Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -27,23 +25,6 @@ from litellm.types.utils import EmbeddingResponse, Usage
 from ..common_utils import DashScopeError
 
 DEFAULT_API_BASE: Final = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _DashScopeUsage(TypedDict):
-    prompt_tokens: ReadOnly[NotRequired[int | None]]
-    total_tokens: ReadOnly[NotRequired[int | None]]
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _DashScopeEmbeddingPayload(TypedDict):
-    data: ReadOnly[NotRequired[list[object]]]
-    model: ReadOnly[NotRequired[str | None]]
-    usage: ReadOnly[NotRequired[_DashScopeUsage | None]]
-    id: ReadOnly[NotRequired[object]]
-
-
-_DASHSCOPE_EMBEDDING_PAYLOAD: Final = TypeAdapter(_DashScopeEmbeddingPayload)
 
 
 class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
@@ -173,12 +154,11 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
                 message=message,
             )
 
-        payload: Final = _DASHSCOPE_EMBEDDING_PAYLOAD.validate_python(response_json)
         model_response.object = "list"
-        model_response.data = payload.get("data", [])
-        model_response.model = payload.get("model", model)
+        model_response.data = response_json.get("data", [])
+        model_response.model = response_json.get("model", model)
 
-        usage: Final = payload.get("usage") or {}
+        usage: Final = response_json.get("usage") or {}
         prompt_tokens: Final = usage.get("prompt_tokens", 0)
         total_tokens: Final = usage.get("total_tokens", prompt_tokens)
         setattr(
@@ -191,8 +171,8 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
             ),
         )
 
-        if "id" in payload:
-            setattr(model_response, "id", payload["id"])
+        if "id" in response_json:
+            setattr(model_response, "id", response_json["id"])
 
         return model_response
 

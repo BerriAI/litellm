@@ -51,7 +51,6 @@ if TYPE_CHECKING:
 
 router: Final = APIRouter()
 _RESPONSES_WS_CONFIG_VALUE_ADAPTER: Final[TypeAdapter[object | None]] = TypeAdapter(object | None)
-_JSON_VALUE_ADAPTER: Final[TypeAdapter[object]] = TypeAdapter(object)
 
 _ResponseDocSchemas: TypeAlias = dict[int | str, dict[str, object]]  # fastapi's responses kwarg
 
@@ -1352,7 +1351,7 @@ async def _read_ws_model_from_first_frame(
         return None
 
     try:
-        first_event: Final = _JSON_VALUE_ADAPTER.validate_python(json.loads(first_message))
+        first_event: Final = json.loads(first_message)
     except json.JSONDecodeError:
         await websocket.send_text(
             json.dumps(

@@ -1,20 +1,10 @@
 import builtins
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Any, Final
 
 import requests
-from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import ReadOnly, TypedDict
 
 from .exceptions import NotFoundError, UnauthorizedError
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _ModelListPayload(TypedDict):
-    data: ReadOnly[Sequence[Mapping[str, object]]]
-
-
-_MODEL_LIST: Final = TypeAdapter(_ModelListPayload)
 
 
 class ModelsManagementClient:
@@ -70,7 +60,7 @@ class ModelsManagementClient:
         try:
             response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
-            return [dict(model) for model in _MODEL_LIST.validate_python(response.json())["data"]]
+            return response.json()["data"]
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)
@@ -247,7 +237,7 @@ class ModelsManagementClient:
         try:
             response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
-            return [dict(model) for model in _MODEL_LIST.validate_python(response.json())["data"]]
+            return response.json()["data"]
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)

@@ -1,11 +1,9 @@
 import time
-from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
-from pydantic import TypeAdapter
-from typing_extensions import ReadOnly, TypedDict
 
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUsageBlock
@@ -23,40 +21,12 @@ from ..common_utils import (
 )
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
-
-class _WatsonXResult(TypedDict):
-    generated_text: ReadOnly[str]
-    input_token_count: ReadOnly[int]
-    generated_token_count: ReadOnly[int]
-    stop_reason: ReadOnly[str]
-
-
-class _WatsonXResponse(TypedDict, total=False):
-    model_id: ReadOnly[str | None]
-    results: ReadOnly[Sequence[_WatsonXResult]]
-    created_at: ReadOnly[str]
-
-
-class _WatsonXLoggingObj(Protocol):
-    def post_call(
-        self,
-        original_response: str,
-        input: Sequence[AllMessageValues] | None = None,
-        api_key: str | None = None,
-    ) -> None: ...
-
-
-_WATSONX_RESPONSE: Final = TypeAdapter(_WatsonXResponse)
-
-
-def _parse_created_at(created_at: str) -> datetime:
-    try:
-        return datetime.fromisoformat(created_at)
-    except ValueError:
-        # datetime.fromisoformat cannot handle 'Z' in Python 3.10
-        return datetime.fromisoformat(f"{created_at.rstrip('Z')}+00:00")
+    LiteLLMLoggingObj = _LiteLLMLoggingObj
+else:
+    LiteLLMLoggingObj = Any
 
 
 class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
@@ -304,7 +274,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         model: str,
         raw_response: httpx.Response,
         model_response: ModelResponse,
-        logging_obj: _WatsonXLoggingObj,
+        logging_obj: LiteLLMLoggingObj,
         request_data: dict,
         messages: list[AllMessageValues],
         optional_params: dict,
@@ -320,7 +290,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
             original_response=raw_response.text,
         )
 
-        json_resp: Final = _WATSONX_RESPONSE.validate_python(raw_response.json(), strict=True, extra="allow")
+        json_resp: Final = raw_response.json()
 
         if "results" not in json_resp:
             raise WatsonXAIError(
@@ -334,9 +304,13 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         completion_tokens: Final = json_resp["results"][0]["generated_token_count"]
         model_response.choices[0].message.content = generated_text
         model_response.choices[0].finish_reason = map_finish_reason(json_resp["results"][0]["stop_reason"])
-        created_at: Final = json_resp.get("created_at")
-        if created_at:
-            model_response.created = int(_parse_created_at(created_at).timestamp())
+        if json_resp.get("created_at"):
+            try:
+                created_datetime = datetime.fromisoformat(json_resp["created_at"])
+            except ValueError:
+                # datetime.fromisoformat cannot handle 'Z' in Python 3.10
+                created_datetime = datetime.fromisoformat(f"{json_resp['created_at'].rstrip('Z')}+00:00")
+            model_response.created = int(created_datetime.timestamp())
         else:
             model_response.created = int(time.time())
         usage: Final = Usage(

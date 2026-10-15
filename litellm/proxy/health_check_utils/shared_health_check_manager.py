@@ -2,10 +2,7 @@ import asyncio
 import json
 import time
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Final
-
-from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import NotRequired, ReadOnly, TypedDict
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
@@ -20,16 +17,6 @@ from litellm.router_utils.health_state_cache import HEALTH_CHECKS_TARGET
 
 if TYPE_CHECKING:
     from litellm.router import Router
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _CachedHealthCheckResults(TypedDict):
-    healthy_endpoints: ReadOnly[NotRequired[list[Mapping[str, object]]]]
-    unhealthy_endpoints: ReadOnly[NotRequired[list[Mapping[str, object]]]]
-    timestamp: ReadOnly[NotRequired[int | float]]
-
-
-_CACHED_HEALTH_CHECK_RESULTS: Final = TypeAdapter(_CachedHealthCheckResults)
 
 
 class SharedHealthCheckManager:
@@ -122,7 +109,7 @@ class SharedHealthCheckManager:
             verbose_proxy_logger.error("Error releasing health check lock: %s", str(e))
 
     @with_service_target(HEALTH_CHECKS_TARGET)
-    async def get_cached_health_check_results(self) -> _CachedHealthCheckResults | None:
+    async def get_cached_health_check_results(self) -> dict[str, Any] | None:
         """
         Get cached health check results from Redis.
 
@@ -140,9 +127,10 @@ class SharedHealthCheckManager:
                 return None
 
             # Parse the cached data
-            cached_results: Final = _CACHED_HEALTH_CHECK_RESULTS.validate_python(
-                json.loads(cached_data) if isinstance(cached_data, str) else cached_data
-            )
+            if isinstance(cached_data, str):
+                cached_results = json.loads(cached_data)
+            else:
+                cached_results = cached_data
 
             # Check if the cache is still valid
             cache_timestamp: Final = cached_results.get("timestamp", 0)

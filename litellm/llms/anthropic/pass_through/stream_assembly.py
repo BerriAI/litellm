@@ -3,9 +3,6 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Final
 
-from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import NotRequired, ReadOnly, TypedDict
-
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
@@ -98,28 +95,6 @@ _FAST_PATH_DISALLOWED_DELTA_TYPES: Final = frozenset(
 )
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
-class _FastPathContentBlock(TypedDict):
-    type: NotRequired[ReadOnly[object]]
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _FastPathDelta(TypedDict):
-    type: NotRequired[ReadOnly[object]]
-    text: NotRequired[ReadOnly[str | None]]
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _FastPathSSEFrame(TypedDict):
-    type: NotRequired[ReadOnly[object]]
-    index: NotRequired[ReadOnly[int | None]]
-    content_block: NotRequired[ReadOnly[_FastPathContentBlock | None]]
-    delta: NotRequired[ReadOnly[_FastPathDelta | None]]
-
-
-_FAST_PATH_SSE_FRAME: Final = TypeAdapter(_FastPathSSEFrame)
-
-
 def collapse_pure_text_chunks(
     all_chunks: Sequence[str | bytes],
 ) -> list[str] | None:
@@ -178,7 +153,7 @@ def collapse_pure_text_chunks(
 
         json_str = ev[idx + len("data:") :].strip()
         try:
-            data = _FAST_PATH_SSE_FRAME.validate_python(json.loads(json_str))
+            data = json.loads(json_str)
         except (json.JSONDecodeError, ValueError):
             return None
 
