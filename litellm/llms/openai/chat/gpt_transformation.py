@@ -28,6 +28,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     hoist_images_from_tool_messages,
     system_messages_first,
     tool_with_sanitized_parameters,
+    without_prompt_cache_breakpoints,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
@@ -474,7 +475,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         A deployment that reads OpenAI's ``prompt_cache_breakpoint`` (gpt-5.6+ on
         api.openai.com, or one opted in through ``prompt_cache_options`` or the cost
         map) gets each Anthropic ``cache_control`` mark rewritten in place. Any other
-        endpoint keeps or strips the marks exactly as before.
+        endpoint keeps or strips the marks as before, and under drop_params also loses
+        every ``prompt_cache_breakpoint`` it cannot read.
         """
         from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 
@@ -485,14 +487,24 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         )
         if not reads_breakpoints and self._should_preserve_cache_control_for_endpoint(custom_llm_provider, api_base):
             return messages, tools
+        drops_breakpoints: Final = not reads_breakpoints and (
+            litellm.drop_params is True or litellm_params.get("drop_params") is True
+        )
         renamed: Final = (
             [AnthropicCacheControlHook.cache_control_as_prompt_cache_breakpoints(message) for message in messages]
             if reads_breakpoints
+            else [without_prompt_cache_breakpoints(message) for message in messages]
+            if drops_breakpoints
             else list(messages)
         )
-        return self.remove_cache_control_flag_from_messages_and_tools(
-            model=model, messages=renamed, tools=list(tools) if tools is not None else None
+        kept_tools: Final = (
+            None
+            if tools is None
+            else [without_prompt_cache_breakpoints(tool) for tool in tools]
+            if drops_breakpoints
+            else list(tools)
         )
+        return self.remove_cache_control_flag_from_messages_and_tools(model=model, messages=renamed, tools=kept_tools)
 
     def _sanitized_tools_update_for_openai(
         self,
