@@ -21,7 +21,7 @@ from integration._support.aws_control_plane import ControlPlane, ControlPlaneReq
 from integration._support.client import Gateway, eventually, gateway_from_environment
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy, owned_proxy_process
-from integration._support.wire import Reply, Request, wire_server
+from integration._support.wire import Reply, Request, Wire, wire_server
 from integration.providers.test_responses_bridge_tool_search_wire import (
     _CACHE_BUST,
     _CLAUDE,
@@ -195,19 +195,85 @@ def openai_api(tmp_path_factory: pytest.TempPathFactory) -> Iterator[ControlPlan
         yield plane
 
 
+@dataclass(frozen=True, slots=True)
+class _FallbackRoute:
+    claude: str
+    openai: str
+    key: str
+
+
+@dataclass(frozen=True, slots=True)
+class _ClaudeOutage:
+    wire: Wire
+    routes: Mapping[bool, _FallbackRoute]
+
+
+def _fallback_route() -> _FallbackRoute:
+    marker: Final = uuid.uuid4().hex
+    return _FallbackRoute(
+        f"integration-claude-{marker}", f"integration-openai-{marker}", f"synthetic-openai-key-{marker}"
+    )
+
+
 @pytest.fixture(scope="module")
-def openai_gateway(openai_api: ControlPlane, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
+def claude_outage() -> Iterator[_ClaudeOutage]:
+    def respond(request: Request) -> Reply:
+        if request.method != "POST":
+            return Reply(body=b'{"object":"list","data":[]}')
+        return _anthropic_error(500, "scripted Claude failure")
+
+    with wire_server(respond) as wire:
+        yield _ClaudeOutage(wire, MappingProxyType({stream: _fallback_route() for stream in (False, True)}))
+
+
+def _proxy_config() -> dict[str, JsonValue]:
+    return rv.JSON_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
+
+
+def _fallback_deployments(outage: _ClaudeOutage, route: _FallbackRoute) -> tuple[dict[str, JsonValue], ...]:
+    return (
+        {
+            "model_name": route.claude,
+            "litellm_params": {
+                "model": f"anthropic/{_CLAUDE}",
+                "api_base": outage.wire.url,
+                "api_key": "synthetic-invalid-key",
+            },
+        },
+        {
+            "model_name": route.openai,
+            "litellm_params": {"model": _RESPONSES_MODEL, "api_base": _OPENAI_API_BASE, "api_key": route.key},
+        },
+    )
+
+
+def _fallback_config(directory: Path, outage: _ClaudeOutage) -> Path:
+    config: Final = _proxy_config()
+    models: Final = rv.ITEMS.validate_python(config["model_list"])
+    added: Final = tuple(
+        itertools.chain.from_iterable(_fallback_deployments(outage, route) for route in outage.routes.values())
+    )
+    path: Final = directory / "openai-responses-tool-search-fallbacks.yaml"
+    path.write_text(yaml.safe_dump({**config, "model_list": [*models, *added]}))
+    return path
+
+
+@pytest.fixture(scope="module")
+def openai_gateway(
+    openai_api: ControlPlane, claude_outage: _ClaudeOutage, tmp_path_factory: pytest.TempPathFactory
+) -> Iterator[Gateway]:
+    directory: Final = tmp_path_factory.mktemp("openai_gateway")
     with (
         gateway_from_environment() as parent,
-        owned_proxy(parent, tmp_path_factory.mktemp("openai_gateway"), openai_api.environment(), workers=2) as owned,
+        owned_proxy(
+            parent, directory, openai_api.environment(), config=_fallback_config(directory, claude_outage), workers=2
+        ) as owned,
     ):
         yield owned
 
 
 def _drop_params_config(directory: Path) -> Path:
-    config: Final = rv.JSON_OBJECT.validate_python(
-        yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
-    )
+    config: Final = _proxy_config()
     settings: Final = rv.JSON_OBJECT.validate_python(config["litellm_settings"])
     path: Final = directory / "openai-responses-tool-search-drop-params.yaml"
     path.write_text(yaml.safe_dump({**config, "litellm_settings": {**settings, "drop_params": True}}))
@@ -246,37 +312,21 @@ def test_anthropic_tool_search_reaches_openai_responses_as_server_tool_search(
 
 @pytest.mark.parametrize("stream", [False, True], ids=["sync", "stream"])
 def test_router_fallback_maps_anthropic_tool_search_for_openai_responses(
-    openai_gateway: Gateway, openai_api: ControlPlane, stream: bool
+    openai_gateway: Gateway, openai_api: ControlPlane, claude_outage: _ClaudeOutage, stream: bool
 ) -> None:
-    marker: Final = uuid.uuid4().hex
-    key: Final = f"synthetic-openai-key-{marker}"
-
-    def respond(request: Request) -> Reply:
-        if request.method != "POST":
-            return Reply(body=b'{"object":"list","data":[]}')
-        return _anthropic_error(500, "scripted Claude failure")
-
-    with (
-        wire_server(respond) as wire,
-        openai_gateway.scenario() as scenario,
-        openai_api.answering(key, _answered_as_openai_api(rv.ResponsesVendor().respond)),
-    ):
-        claude: Final = scenario.model(model=f"anthropic/{_CLAUDE}", api_base=wire.url, api_key="synthetic-invalid-key")
-        openai_model: Final = scenario.model(model=_RESPONSES_MODEL, api_base=_OPENAI_API_BASE, api_key=key)
-        response: Final = _raw(
-            openai_gateway,
-            "/v1/responses",
-            {**_responses_body(claude, marker, _deferred_tools(), stream), **_CACHE_BUST, "fallbacks": [openai_model]},
-        )
+    route: Final = claude_outage.routes[stream]
+    body: Final = _responses_body(route.claude, uuid.uuid4().hex, _deferred_tools(), stream)
+    with openai_api.answering(route.key, _answered_as_openai_api(rv.ResponsesVendor().respond)):
+        response: Final = _raw(openai_gateway, "/v1/responses", {**body, **_CACHE_BUST, "fallbacks": [route.openai]})
 
         assert response.status_code == 200, response.text
         assert response.headers["x-litellm-attempted-fallbacks"] == "1", response.headers
-        claude_requests: Final = [request.target for request in wire.drain() if request.method == "POST"]
+        claude_requests: Final = [request.target for request in claude_outage.wire.drain() if request.method == "POST"]
         assert claude_requests == ["/v1/messages"], claude_requests
-        (received,) = _openai_api_requests(openai_api, key)
+        (received,) = _openai_api_requests(openai_api, route.key)
         assert (received.host, received.path) == (_OPENAI_HOST, "/v1/responses"), received
-        body: Final = _JSON_OBJECT.validate_json(received.body)
-        assert (body["stream"], body["tools"]) == (stream, _mapped_tools()), body
+        forwarded: Final = _JSON_OBJECT.validate_json(received.body)
+        assert (forwarded["stream"], forwarded["tools"]) == (stream, _mapped_tools()), forwarded
 
 
 def test_responses_compact_maps_anthropic_tool_search_for_openai(
