@@ -240,8 +240,13 @@ def _without_non_function_tools(params: Mapping[str, object], drop_params: bool)
     if not kept:
         return {key: value for key, value in params.items() if key not in ("tools", "tool_choice")}
     forced: Final = _forced_tool_name(params.get("tool_choice"))
-    if forced is not None and any(forced in _tool_identifiers(tool) for tool in dropped):
-        return {**params, "tools": kept, "tool_choice": "none"}
+    forces_dropped_tool: Final = (
+        forced is not None
+        and any(forced in _tool_identifiers(tool) for tool in dropped)
+        and not any(forced in _tool_identifiers(tool) for tool in kept)
+    )
+    if forces_dropped_tool:
+        return {**{key: value for key, value in params.items() if key != "tool_choice"}, "tools": kept}
     return {**params, "tools": kept}
 
 
