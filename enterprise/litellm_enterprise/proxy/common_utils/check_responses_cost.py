@@ -5,9 +5,13 @@ finished moves its row out of a pending status, then logs the body that read alr
 one spend event stamped with BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN and the creating key's
 attribution, priced against the deployment that served it. The poll's status checks are stamped
 with BACKGROUND_RESPONSE_STATUS_POLL_CALL_ORIGIN and client reads are marked managed by the
-managed files hook, so both stay free, and billing never fetches the response a second time.
+managed files hook, so both stay free. The spend event carries the id the client holds, the row's
+unified_object_id, so its spend log is found under that id with the _background_cost suffix.
 A read that finds no row, because the create could not store one, stores it under the reading key
 and bills it the same way, so a response the create left untracked is still billed once.
+A read the caller retargets with client-side credentials, and a delete of a still-pending response,
+settle the bill from a fetch through the configured deployment instead: the client controls what a
+retargeted read returns, and a deleted response leaves the poll nothing to fetch.
 """
 
 import uuid
@@ -17,12 +21,11 @@ from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast
 
-from pydantic import TypeAdapter
-
 from litellm_enterprise.proxy.common_utils.managed_object_attribution import (
     ManagedObjectCreatorAttribution,
     ManagedObjectRow,
 )
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -30,7 +33,9 @@ from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     MANAGED_OBJECT_STALENESS_CUTOFF_DAYS,
     MAX_OBJECTS_PER_POLL_CYCLE,
+    PENDING_RESPONSE_STATUSES,
     STALE_OBJECT_CLEANUP_BATCH_SIZE,
+    TERMINAL_RESPONSE_STATUSES,
 )
 from litellm.proxy.hooks.responses_id_security import decrypted_response_id
 from litellm.repositories.table_repositories import ManagedObjectRepository
@@ -47,8 +52,6 @@ if TYPE_CHECKING:
     from litellm.repositories.prisma_protocols import TableActions
     from litellm.router import Router
 
-TERMINAL_RESPONSE_STATUSES = frozenset({"completed", "failed", "cancelled", "incomplete"})
-PENDING_RESPONSE_STATUSES: Final = ("queued", "in_progress")
 _STORED_RESPONSE_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
 _RETRIEVE_RESPONSE_CALL_TYPE: Final = "aget_responses"
 
@@ -69,7 +72,7 @@ class BilledBackgroundResponse:
     metadata: Mapping[str, object]
 
 
-BilledResponseLogger = Callable[[BilledBackgroundResponse], Awaitable[None]]
+BilledResponseLogger = Callable[[BilledBackgroundResponse], Awaitable[float | None]]
 UntrackedResponseTracker = Callable[[], Awaitable[bool]]
 
 
@@ -79,8 +82,9 @@ def _without_read_price(response: ResponsesAPIResponse) -> ResponsesAPIResponse:
     return unpriced
 
 
-async def log_billed_background_response(billed: BilledBackgroundResponse) -> None:
+async def log_billed_background_response(billed: BilledBackgroundResponse) -> float | None:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
     logging_obj: Final = LiteLLMLogging(
         model=billed.model,
@@ -97,10 +101,17 @@ async def log_billed_background_response(billed: BilledBackgroundResponse) -> No
         custom_llm_provider=billed.custom_llm_provider,
     )
     unpriced: Final = _without_read_price(billed.response)
-    await logging_obj.async_success_handler(result=unpriced)
-    logging_obj.handle_sync_success_callbacks_for_async_calls(
-        result=unpriced, start_time=logging_obj.start_time, end_time=datetime.now()
+    cost: Final = logging_obj.response_cost_calculator(result=unpriced)
+    end_time: Final = datetime.now()
+    GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+        async_coroutine=logging_obj.async_success_handler(
+            result=unpriced, start_time=logging_obj.start_time, end_time=end_time
+        )
     )
+    logging_obj.handle_sync_success_callbacks_for_async_calls(
+        result=unpriced, start_time=logging_obj.start_time, end_time=end_time
+    )
+    return cost
 
 
 def _deployment_litellm_params(deployment: Deployment) -> Mapping[str, object]:
@@ -171,9 +182,17 @@ class CheckResponsesCost:
         )
         return cast(ResponsesAPIResponse, router_response)
 
-    async def _expire_stale_rows(
-        self, cutoff: datetime, batch_size: int
-    ) -> int:
+    async def _fetch_unbilled(self, target: _PollTarget) -> ResponsesAPIResponse:
+        return await self._get_response(
+            response_id=target.response_id,
+            litellm_metadata={
+                **target.model_metadata,
+                INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_STATUS_POLL_CALL_ORIGIN,
+            },
+            via_router=target.deployment is not None,
+        )
+
+    async def _expire_stale_rows(self, cutoff: datetime, batch_size: int) -> int:
         """Execute the bounded UPDATE that marks stale rows as 'stale_expired'.
 
         Isolated so it can be swapped / mocked in tests without touching the
@@ -248,11 +267,10 @@ class CheckResponsesCost:
         job: ManagedObjectRow,
         target: _PollTarget,
         response: ResponsesAPIResponse,
-        end_user_id: str | None,
     ) -> BilledBackgroundResponse:
         deployment: Final = target.deployment
         return BilledBackgroundResponse(
-            response=response,
+            response=response.model_copy(update={"id": job.unified_object_id}),
             model=deployment.litellm_params.model if deployment is not None else (response.model or ""),
             custom_llm_provider=ResponsesAPIRequestUtils.decode_responses_api_response_id(target.response_id).get(
                 "custom_llm_provider"
@@ -261,7 +279,6 @@ class CheckResponsesCost:
             metadata=MappingProxyType(
                 {
                     **(await self._creator_attribution.build(job, job.unified_object_id)),
-                    **({"user_api_key_end_user_id": end_user_id} if end_user_id else {}),
                     INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
                     **target.model_metadata,
                     **(_deployment_metadata(deployment) if deployment is not None else {}),
@@ -274,17 +291,17 @@ class CheckResponsesCost:
         job: ManagedObjectRow,
         target: _PollTarget,
         response: ResponsesAPIResponse,
-        end_user_id: str | None = None,
-    ) -> None:
+    ) -> float | None:
         if not await self._claim_for_billing(job):
             verbose_proxy_logger.info(f"Response {job.unified_object_id} was already billed elsewhere, skipping")
-            return
+            return None
         try:
-            await self._log_billed_response(await self._billed_response(job, target, response, end_user_id))
+            cost: Final = await self._log_billed_response(await self._billed_response(job, target, response))
         except BaseException:
             await self._release_billing_claim(job)
             raise
         verbose_proxy_logger.info(f"Response {job.unified_object_id} reached a terminal status and was billed")
+        return cost
 
     async def _tracked_job(self, response_id: str) -> ManagedObjectRow | None:
         return await _managed_object_table(self.prisma_client).find_first(
@@ -305,15 +322,24 @@ class CheckResponsesCost:
         self,
         response_id: str,
         response: ResponsesAPIResponse,
-        end_user_id: str | None = None,
         track_untracked: UntrackedResponseTracker | None = None,
-    ) -> None:
+    ) -> float | None:
         if response.status not in TERMINAL_RESPONSE_STATUSES:
-            return
+            return None
         job: Final = await self._tracked_job(response_id) or await self._start_tracking(response_id, track_untracked)
         if job is None or job.status not in PENDING_RESPONSE_STATUSES:
-            return
-        await self._bill_once(job, self._poll_target(job), response, end_user_id)
+            return None
+        return await self._bill_once(job, self._poll_target(job), response)
+
+    async def bill_from_deployment(self, response_id: str) -> float | None:
+        job: Final = await self._tracked_job(response_id)
+        if job is None or job.status not in PENDING_RESPONSE_STATUSES:
+            return None
+        target: Final = self._poll_target(job)
+        response: Final = await self._fetch_unbilled(target)
+        if response.status not in TERMINAL_RESPONSE_STATUSES:
+            return None
+        return await self._bill_once(job, target, response)
 
     async def check_responses_cost(self):
         """
@@ -340,7 +366,7 @@ class CheckResponsesCost:
             take=MAX_OBJECTS_PER_POLL_CYCLE,
             order={"created_at": "asc"},
         )
-        
+
         verbose_proxy_logger.debug(f"Found {len(jobs)} response jobs to check")
         expired_jobs: Final[list[ManagedObjectRow]] = []
 
@@ -350,27 +376,16 @@ class CheckResponsesCost:
             try:
                 target = self._poll_target(job)
             except Exception as e:
-                verbose_proxy_logger.warning(
-                    f"Skipping job {unified_object_id} due to error: {e}"
-                )
+                verbose_proxy_logger.warning(f"Skipping job {unified_object_id} due to error: {e}")
                 continue
 
-            provider_response_id = ResponsesAPIRequestUtils.decode_responses_api_response_id(
-                target.response_id
-            ).get("response_id", target.response_id)
+            provider_response_id = ResponsesAPIRequestUtils.decode_responses_api_response_id(target.response_id).get(
+                "response_id", target.response_id
+            )
             try:
-                response = await self._get_response(
-                    response_id=target.response_id,
-                    litellm_metadata={
-                        **target.model_metadata,
-                        INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_STATUS_POLL_CALL_ORIGIN,
-                    },
-                    via_router=target.deployment is not None,
-                )
+                response = await self._fetch_unbilled(target)
 
-                verbose_proxy_logger.debug(
-                    f"Response {unified_object_id} status: {response.status}"
-                )
+                verbose_proxy_logger.debug(f"Response {unified_object_id} status: {response.status}")
                 if response.status in TERMINAL_RESPONSE_STATUSES:
                     await self._bill_once(job, target, response)
 
@@ -381,9 +396,7 @@ class CheckResponsesCost:
                     )
                     expired_jobs.append(job)
                     continue
-                verbose_proxy_logger.warning(
-                    f"Skipping job {unified_object_id} due to error: {e}"
-                )
+                verbose_proxy_logger.warning(f"Skipping job {unified_object_id} due to error: {e}")
                 continue
 
         if len(expired_jobs) > 0:
@@ -392,6 +405,4 @@ class CheckResponsesCost:
                 where={"id": {"in": [job.id for job in expired_jobs]}},
                 data={"status": "stale_expired"},
             )
-            verbose_proxy_logger.info(
-                f"Marked {len(expired_jobs)} response jobs as stale_expired"
-            )
+            verbose_proxy_logger.info(f"Marked {len(expired_jobs)} response jobs as stale_expired")

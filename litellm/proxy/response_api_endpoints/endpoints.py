@@ -1,7 +1,7 @@
 import asyncio
 import contextlib
 import json
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from enum import Enum
 from functools import partial
 from types import MappingProxyType
@@ -28,7 +28,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import EMPTY_MAPPING
+from litellm.constants import EMPTY_MAPPING, TERMINAL_RESPONSE_STATUSES
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.litellm_core_utils.internal_call_metadata import is_background_response
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
@@ -399,7 +399,11 @@ async def responses_api(
             llm_router=llm_router,
             general_settings=general_settings,
             proxy_config=proxy_config,
-            select_data_generator=native_data_generator,
+            select_data_generator=(
+                partial(_streamed_background_data_generator, native_data_generator, proxy_logging_obj)
+                if data.get("background")
+                else native_data_generator
+            ),
             model=None,
             user_model=user_model,
             user_temperature=user_temperature,
@@ -802,10 +806,13 @@ async def get_response(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
-    if read_settles_billing:
-        await _bill_finished_background_response(
-            response=response, response_id=response_id, user_api_key_dict=user_api_key_dict
-        )
+    await _bill_finished_background_response(
+        response=response,
+        response_id=response_id,
+        user_api_key_dict=user_api_key_dict,
+        fastapi_response=fastapi_response,
+        read_settles_billing=read_settles_billing,
+    )
     return response
 
 
@@ -847,26 +854,28 @@ def _managed_files_hook(proxy_logging_obj: "ProxyLogging") -> _BackgroundRespons
 
 
 async def _bill_finished_background_response(
-    response: object, response_id: str, user_api_key_dict: UserAPIKeyAuth
+    response: object,
+    response_id: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    fastapi_response: Response,
+    read_settles_billing: bool,
 ) -> None:
-    from litellm.proxy.proxy_server import llm_router, prisma_client, proxy_logging_obj
+    from litellm.proxy.proxy_server import proxy_logging_obj
 
     if not isinstance(response, ResponsesAPIResponse) or not is_background_response(response):
         return
-    if prisma_client is None or llm_router is None or response.status is None:
+    if response.status not in TERMINAL_RESPONSE_STATUSES:
         return
-    try:
-        from litellm_enterprise.proxy.common_utils.check_responses_cost import CheckResponsesCost
-
-        managed_files_hook: Final = _managed_files_hook(proxy_logging_obj)
-        await CheckResponsesCost(
-            proxy_logging_obj=proxy_logging_obj,
-            prisma_client=prisma_client,
-            llm_router=llm_router,
-        ).bill_if_finished(
+    if not read_settles_billing:
+        await _settle_background_billing(
+            lambda cost_check: cost_check.bill_from_deployment(response_id), fastapi_response
+        )
+        return
+    managed_files_hook: Final = _managed_files_hook(proxy_logging_obj)
+    await _settle_background_billing(
+        lambda cost_check: cost_check.bill_if_finished(
             response_id=response_id,
             response=response,
-            end_user_id=user_api_key_dict.end_user_id,
             track_untracked=(
                 partial(
                     managed_files_hook.track_untracked_background_response, response_id, response, user_api_key_dict
@@ -874,9 +883,98 @@ async def _bill_finished_background_response(
                 if managed_files_hook is not None
                 else None
             ),
+        ),
+        fastapi_response,
+    )
+
+
+class _BackgroundCostCheck(Protocol):
+    async def bill_from_deployment(self, response_id: str) -> float | None: ...
+
+    async def bill_if_finished(
+        self,
+        response_id: str,
+        response: ResponsesAPIResponse,
+        track_untracked: Callable[[], Awaitable[bool]] | None = None,
+    ) -> float | None: ...
+
+
+def _background_cost_check() -> _BackgroundCostCheck | None:
+    from litellm.proxy.proxy_server import llm_router, prisma_client, proxy_logging_obj
+
+    if prisma_client is None or llm_router is None:
+        return None
+    from litellm_enterprise.proxy.common_utils.check_responses_cost import CheckResponsesCost
+
+    return CheckResponsesCost(  # pyright: ignore[reportUnknownVariableType]  # litellm_enterprise is absent from the type-check venv
+        proxy_logging_obj=proxy_logging_obj, prisma_client=prisma_client, llm_router=llm_router
+    )
+
+
+async def _settle_background_billing(
+    settle: Callable[[_BackgroundCostCheck], Awaitable[float | None]], fastapi_response: Response | None
+) -> None:
+    try:
+        cost_check: Final = _background_cost_check()
+        if cost_check is None:
+            return
+        billed_cost: Final = await settle(cost_check)
+    except Exception as e:
+        verbose_proxy_logger.warning("Billing a finished background response failed: %s", e)
+        return
+    if billed_cost is not None and fastapi_response is not None:
+        fastapi_response.headers["x-litellm-response-cost"] = str(billed_cost)  # rebind-ok: FastAPI response headers
+
+
+def _streamed_background_data_generator(
+    select_data_generator: Callable[..., AsyncIterator[str | bytes]],
+    proxy_logging_obj: "ProxyLogging",
+    response: object,
+    user_api_key_dict: UserAPIKeyAuth,
+    request_data: dict[str, object],
+    request: Request | None = None,
+) -> AsyncIterator[str | bytes]:
+    chunks: Final = select_data_generator(
+        response=response, user_api_key_dict=user_api_key_dict, request_data=request_data, request=request
+    )
+    managed_files_hook: Final = _managed_files_hook(proxy_logging_obj)
+    if managed_files_hook is None:
+        return chunks
+    return _record_streamed_background_response(response, chunks, managed_files_hook, user_api_key_dict)
+
+
+async def _record_streamed_background_response(
+    stream: object,
+    chunks: AsyncIterator[str | bytes],
+    managed_files_hook: _BackgroundResponseStore,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> AsyncIterator[str | bytes]:
+    async for chunk in chunks:
+        completed: object = ProxyBaseLLMRequestProcessing.extract_completed_responses_response(stream)
+        if not isinstance(completed, ResponsesAPIResponse):
+            yield chunk
+            continue
+        await _store_billed_stream_response(completed, managed_files_hook, user_api_key_dict)
+        yield chunk
+        async for remaining_chunk in chunks:
+            yield remaining_chunk
+        return
+
+
+async def _store_billed_stream_response(
+    response: ResponsesAPIResponse, managed_files_hook: _BackgroundResponseStore, user_api_key_dict: UserAPIKeyAuth
+) -> None:
+    try:
+        await managed_files_hook.store_unified_object_id(
+            unified_object_id=response.id,
+            file_object=response,
+            litellm_parent_otel_span=None,
+            model_object_id=decrypted_response_id(response.id),
+            file_purpose="response",
+            user_api_key_dict=user_api_key_dict,
         )
     except Exception as e:
-        verbose_proxy_logger.warning("Billing a finished background response on read failed: %s", e)
+        verbose_proxy_logger.warning("Recording streamed background response %s as billed failed: %s", response.id, e)
 
 
 @router.delete(
@@ -959,6 +1057,7 @@ async def delete_response(
     # Normal provider response flow
     data: Final = await read_request_body(request=request)
     data["response_id"] = response_id
+    await _settle_background_billing(lambda cost_check: cost_check.bill_from_deployment(response_id), None)
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
@@ -1401,10 +1500,13 @@ async def cancel_response(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
-    if read_settles_billing:
-        await _bill_finished_background_response(
-            response=response, response_id=response_id, user_api_key_dict=user_api_key_dict
-        )
+    await _bill_finished_background_response(
+        response=response,
+        response_id=response_id,
+        user_api_key_dict=user_api_key_dict,
+        fastapi_response=fastapi_response,
+        read_settles_billing=read_settles_billing,
+    )
     return response
 
 

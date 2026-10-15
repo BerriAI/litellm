@@ -23,17 +23,19 @@ class _RecordingBilledLogger:
     """Stands in for the spend logger so a test reads the billing events a poller wrote, and can
     make the next writes raise."""
 
-    def __init__(self, failures: tuple[BaseException, ...] = ()) -> None:
+    def __init__(self, failures: tuple[BaseException, ...] = (), cost: float = 0.25) -> None:
         self.billed: tuple[BilledBackgroundResponse, ...] = ()
         self._failures = failures
+        self.cost: Final = cost
 
-    async def __call__(self, billed: BilledBackgroundResponse) -> None:
+    async def __call__(self, billed: BilledBackgroundResponse) -> float:
         await asyncio.sleep(0)
         if self._failures:
             failure, *remaining = self._failures
             self._failures = tuple(remaining)
             raise failure
         self.billed = (*self.billed, billed)
+        return self.cost
 
 
 def _deployment(model_id: str) -> Deployment:
@@ -70,6 +72,7 @@ class _StoredResponse:
     team_id: str | None = None
     org_id: str | None = None
     request_tags: object = None
+    end_user_id: str | None = None
 
 
 class _InMemoryManagedObjectTable:
@@ -292,7 +295,9 @@ class TestCheckResponsesCost:
         )
         assert [(call[1]["where"], call[1]["data"]) for call in calls] == [_claim("job-123")]
         assert [_is_billed(call[1]["litellm_metadata"]) for call in mock_aget.call_args_list] == [False]
-        assert [billed.response for billed in billed_logger.billed] == [mock_response]
+        assert [(billed.response.id, billed.response.usage) for billed in billed_logger.billed] == [
+            ("resp_test_123", mock_response.usage)
+        ]
 
     @pytest.mark.asyncio
     async def test_check_responses_cost_with_failed_response(
@@ -848,7 +853,10 @@ class TestCheckResponsesCost:
         )
         assert [(call[1]["where"], call[1]["data"]) for call in calls] == [_claim("job-1"), _claim("job-3")]
         assert [_is_billed(call[1]["litellm_metadata"]) for call in mock_aget.call_args_list] == [False, False, False]
-        assert [billed.response for billed in billed_logger.billed] == [mock_response1, mock_response3]
+        assert [(billed.response.id, billed.response.usage) for billed in billed_logger.billed] == [
+            ("resp_test_1", mock_response1.usage),
+            ("resp_test_3", mock_response3.usage),
+        ]
 
     @pytest.mark.asyncio
     async def test_encoded_response_id_is_fetched_through_router(
@@ -1210,13 +1218,13 @@ class TestCheckResponsesCost:
         mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[mock_job])
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
         mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
-            return_value=SimpleNamespace(key_alias="prod-key", organization_id=None)
+            return_value=SimpleNamespace(key_alias="prod-key", organization_id=None, spend=4.0, max_budget=5.0)
         )
         mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
-            return_value=SimpleNamespace(team_alias="Team Alpha", organization_id=None)
+            return_value=SimpleNamespace(team_alias="Team Alpha", organization_id=None, spend=40.0, max_budget=50.0)
         )
         mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
-            return_value=SimpleNamespace(user_email="alice@example.com", user_alias=None)
+            return_value=SimpleNamespace(user_email="alice@example.com", user_alias=None, spend=1.0, max_budget=2.0)
         )
 
         with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
@@ -1233,6 +1241,9 @@ class TestCheckResponsesCost:
         assert metadata["user_api_key_org_id"] == "org-1"
         assert metadata["user_api_key_alias"] == "prod-key"
         assert metadata["user_api_key_team_alias"] == "Team Alpha"
+        assert (metadata["user_api_key_spend"], metadata["user_api_key_max_budget"]) == (4.0, 5.0)
+        assert (metadata["user_api_key_team_spend"], metadata["user_api_key_team_max_budget"]) == (40.0, 50.0)
+        assert (metadata["user_api_key_user_spend"], metadata["user_api_key_user_max_budget"]) == (1.0, 2.0)
         assert metadata["tags"] == ["env:prod"]
         assert metadata["model_group"] == "gpt-5"
 
@@ -1305,13 +1316,17 @@ async def test_only_the_first_read_that_sees_a_response_finished_bills_it():
     finished: Final = _terminal_response("completed")
 
     with patch("litellm.aget_responses", side_effect=AssertionError("billing must not read the provider again")):
-        await poller.bill_if_finished(response_id="resp_read", response=_terminal_response("in_progress"))
-        await poller.bill_if_finished(response_id="resp_read", response=finished)
-        await poller.bill_if_finished(response_id="resp_read", response=finished)
+        costs: Final = (
+            await poller.bill_if_finished(response_id="resp_read", response=_terminal_response("in_progress")),
+            await poller.bill_if_finished(response_id="resp_read", response=finished),
+            await poller.bill_if_finished(response_id="resp_read", response=finished),
+        )
         await poller.check_responses_cost()
 
+    assert costs == (None, billed_logger.cost, None)
     (billed,) = billed_logger.billed
-    assert billed.response is finished
+    assert billed.response.usage == finished.usage
+    assert billed.response.id == "resp_read"
     assert billed.metadata["user_api_key_hash"] == "hash-alice"
     assert billed.metadata["user_api_key_team_id"] == "team-alpha"
     assert table.statuses == {"job-read": "completed"}
@@ -1377,21 +1392,61 @@ async def test_a_cancelled_billing_event_puts_the_response_back_for_the_next_pol
 
 
 @pytest.mark.asyncio
-async def test_the_billing_event_carries_the_readers_end_user():
-    """The stored row has no end user, so the client read that bills the response passes its own,
-    keeping the charge on that customer's spend."""
+async def test_the_billing_event_carries_the_creators_end_user():
+    """The charge belongs to the end user the create named, whoever reads the response later."""
     table: Final = _InMemoryManagedObjectTable(
-        rows=(_StoredResponse(id="job-end-user", unified_object_id="resp_end_user", status="queued"),)
+        rows=(
+            _StoredResponse(
+                id="job-end-user", unified_object_id="resp_end_user", status="queued", end_user_id="customer-42"
+            ),
+        )
     )
     billed_logger: Final = _RecordingBilledLogger()
 
     await _poller_over(table, billed_logger).bill_if_finished(
-        response_id="resp_end_user", response=_terminal_response(), end_user_id="customer-42"
+        response_id="resp_end_user", response=_terminal_response()
     )
 
     assert table.statuses == {"job-end-user": "completed"}
     (billed,) = billed_logger.billed
     assert billed.metadata["user_api_key_end_user_id"] == "customer-42"
+
+
+@pytest.mark.asyncio
+async def test_settling_from_the_deployment_bills_a_finished_response_once_from_a_free_fetch():
+    """A read the caller retargets, or a delete, bills from a fetch through the configured
+    deployment, since the client controls the body it would otherwise hand in."""
+    table: Final = _InMemoryManagedObjectTable(
+        rows=(_StoredResponse(id="job-settle", unified_object_id="resp_settle", status="in_progress"),)
+    )
+    billed_logger: Final = _RecordingBilledLogger()
+    poller: Final = _poller_over(table, billed_logger)
+    fetched: Final = _terminal_response()
+
+    with patch("litellm.aget_responses", new_callable=AsyncMock, return_value=fetched) as fetch:
+        cost: Final = await poller.bill_from_deployment("resp_settle")
+    with patch("litellm.aget_responses", side_effect=AssertionError("a billed response is never fetched again")):
+        assert await poller.bill_from_deployment("resp_settle") is None
+
+    assert cost == billed_logger.cost
+    assert [_is_billed(call.kwargs["litellm_metadata"]) for call in fetch.call_args_list] == [False]
+    (billed,) = billed_logger.billed
+    assert billed.response.usage == fetched.usage
+    assert table.statuses == {"job-settle": "completed"}
+
+
+@pytest.mark.asyncio
+async def test_settling_from_the_deployment_leaves_a_running_response_for_the_poll():
+    table: Final = _InMemoryManagedObjectTable(
+        rows=(_StoredResponse(id="job-running", unified_object_id="resp_running", status="queued"),)
+    )
+    billed_logger: Final = _RecordingBilledLogger()
+
+    with patch("litellm.aget_responses", new_callable=AsyncMock, return_value=_terminal_response("in_progress")):
+        assert await _poller_over(table, billed_logger).bill_from_deployment("resp_running") is None
+
+    assert billed_logger.billed == ()
+    assert table.statuses == {"job-running": "queued"}
 
 
 class _SpendCapture:
@@ -1418,10 +1473,18 @@ def _spend_capture_logger():
 _PRICED_COST: Final = 100 * 0.001 + 50 * 0.002
 
 
-async def _bill_through_a_priced_deployment(read: ResponsesAPIResponse) -> _InMemoryManagedObjectTable:
+@dataclass(frozen=True)
+class _PricedBilling:
+    table: _InMemoryManagedObjectTable
+    response_id: str
+    cost: float | None
+
+
+async def _bill_through_a_priced_deployment(read: ResponsesAPIResponse) -> _PricedBilling:
     import litellm
     from litellm_enterprise.proxy.common_utils.check_responses_cost import CheckResponsesCost
 
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
     from litellm.responses.utils import ResponsesAPIRequestUtils
 
     response_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
@@ -1449,10 +1512,11 @@ async def _bill_through_a_priced_deployment(read: ResponsesAPIResponse) -> _InMe
             }
         ]
     )
-    await CheckResponsesCost(
+    cost: Final = await CheckResponsesCost(
         proxy_logging_obj=MagicMock(), prisma_client=prisma_client, llm_router=router
     ).bill_if_finished(response_id=response_id, response=read)
-    return table
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+    return _PricedBilling(table=table, response_id=response_id, cost=cost)
 
 
 @pytest.mark.asyncio
@@ -1467,15 +1531,16 @@ async def test_the_billing_event_prices_the_fetched_usage_at_the_deployment_rate
     read: Final = _terminal_response()
     read.hidden_params = {"response_cost": 0.0}
 
-    table: Final = await _bill_through_a_priced_deployment(read)
+    billing: Final = await _bill_through_a_priced_deployment(read)
 
     (payload,) = capture.payloads
     assert payload["response_cost"] == pytest.approx(_PRICED_COST)
+    assert billing.cost == pytest.approx(_PRICED_COST)
     assert payload["model_id"] == "deployment-custom"
     assert payload["model_group"] == "priced-gpt"
     assert payload["metadata"]["user_api_key_hash"] == "hash-alice"
     assert read.hidden_params == {"response_cost": 0.0}
-    assert table.statuses == {"job-priced": "completed"}
+    assert billing.table.statuses == {"job-priced": "completed"}
 
 
 @pytest.mark.asyncio
@@ -1525,9 +1590,9 @@ async def test_the_billing_event_keys_its_spend_row_apart_from_the_read_it_bills
     monkeypatch.setattr(litellm, "_async_success_callback", [capture])
     read: Final = _terminal_response()
 
-    await _bill_through_a_priced_deployment(read)
+    billing: Final = await _bill_through_a_priced_deployment(read)
 
     (billed_request_id,) = capture.request_ids
-    assert billed_request_id != read.id
-    assert billed_request_id.startswith(read.id)
+    assert billed_request_id != billing.response_id
+    assert billed_request_id.startswith(billing.response_id)
 

@@ -3593,7 +3593,7 @@ class Router:
                 # fallback_iterator, or any future wrapper). Without this
                 # the proxy's container-ownership hook (which reads
                 # ``getattr(stream_response, "completed_response", None)``
-                # via _extract_completed_responses_response) silently
+                # via extract_completed_responses_response) silently
                 # records nothing on streaming /v1/responses calls — every
                 # follow-up /v1/containers/<id>/files call then 403s for
                 # the very key that created the container (#30210).

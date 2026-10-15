@@ -24,10 +24,10 @@ from uuid import NAMESPACE_URL, uuid5
 
 import httpx
 from fastapi import HTTPException
+from openai import APIConnectionError, AsyncOpenAI
+from openai.types.file_deleted import FileDeleted
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, Unpack
-
-from litellm_enterprise.proxy.common_utils.check_responses_cost import PENDING_RESPONSE_STATUSES
 
 import litellm
 from litellm import Router, verbose_logger
@@ -39,6 +39,7 @@ from litellm.constants import (
     BATCH_OUTPUT_FILE_LOOKUP_TIMEOUT_SECONDS,
     MANAGED_BACKGROUND_RESPONSE_METADATA_KEY,
     MAX_FILE_LIST_LIMIT,
+    PENDING_RESPONSE_STATUSES,
 )
 from litellm.files.types import FileRetrieveCallOptions, FileRetrieveProvider
 from litellm.integrations.custom_logger import CustomLogger
@@ -46,9 +47,6 @@ from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_file_metadata,
 )
-from openai import APIConnectionError, AsyncOpenAI
-from openai.types.file_deleted import FileDeleted
-
 from litellm.llms.base_llm.files.storage_backend_factory import get_storage_backend
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
 from litellm.llms.base_llm.managed_resources.isolation import (
@@ -89,7 +87,6 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
     request_tags_from_metadata,
 )
-from litellm.proxy.hooks.responses_id_security import decrypted_response_id
 from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (  # pyright: ignore[reportAttributeAccessIssue]
@@ -380,6 +377,14 @@ def _postgres_storable_json(file_object: BaseModel) -> str:
     return _JSON_VALUE_ADAPTER.dump_json(_storable_json_value(_JSON_VALUE_ADAPTER.validate_json(dumped))).decode()
 
 
+def _without_model_output(
+    file_object: LiteLLMBatch | LiteLLMFineTuningJob | ResponsesAPIResponse,
+) -> LiteLLMBatch | LiteLLMFineTuningJob | ResponsesAPIResponse:
+    return (
+        file_object.model_copy(update={"output": []}) if isinstance(file_object, ResponsesAPIResponse) else file_object
+    )
+
+
 def _storage_metadata_of(file_object: OpenAIFileObject | None) -> Mapping[str, str]:
     hidden_params: Final = cast(  # cast-ok: _hidden_params is an untyped attribute the upload path sets
         "Mapping[str, object]", getattr(file_object, "_hidden_params", None) or {}
@@ -398,6 +403,8 @@ _REQUEST_FIELDS: Final = TypeAdapter(dict[str, object])
 
 
 def _addresses_a_proxy_issued_response(data: Mapping[str, object]) -> bool:
+    from litellm.proxy.hooks.responses_id_security import decrypted_response_id
+
     addressed_id: Final = data.get(ADDRESSED_RESPONSE_ID_FIELD) or data.get("response_id")
     return (
         isinstance(addressed_id, str)
@@ -542,10 +549,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         """Persist a managed object row, caching it and upserting it in the DB.
 
         persist_attribution is set only by the batch and background response creates,
-        the callers that can speak for the creator; it gates the api_key and
-        request_tags columns that the cost poll jobs bill against, so a later poll or
+        the callers that can speak for the creator; it gates the api_key, request_tags, and,
+        for a response, end_user_id columns that the cost poll jobs bill against, so a later poll or
         retrieve of the same object cannot record itself as the paying key. Like created_by and team_id,
-        both are written only in the upsert create branch, never on update.
+        they are written only in the upsert create branch, never on update.
+
+        A stored response keeps no model output: billing reads only its status and model from
+        the row, so the row never holds generated content.
 
         create_if_missing is cleared by callers that observe a batch they did not
         create, such as a poll. They still refresh status and file_object, but a
@@ -558,11 +568,12 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         It is written only in the upsert create branch.
         """
         verbose_logger.info(f"Storing LiteLLM Managed {file_purpose} object with id={unified_object_id} in cache")
+        stored_object: Final = _without_model_output(file_object)
         litellm_managed_object = LiteLLM_ManagedObjectTable(
             unified_object_id=unified_object_id,
             model_object_id=model_object_id,
             file_purpose=file_purpose,
-            file_object=file_object,
+            file_object=stored_object,
         )
         await self.internal_usage_cache.async_set_cache(
             key=unified_object_id,
@@ -573,17 +584,19 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         from prisma import Json
 
         api_key = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict) or None
+        end_user_id: Final = user_api_key_dict.end_user_id if file_purpose == "response" else None
         attribution_columns = (
             {
                 **({"api_key": api_key} if api_key is not None else {}),
                 **({"request_tags": Json([_storable_text(tag) for tag in request_tags])} if request_tags else {}),
+                **({"end_user_id": end_user_id} if end_user_id else {}),
             }
             if persist_attribution
             else {}
         )
         # FIX: Update status and file_object on every operation to keep state in sync
         update_columns: Final = {
-            "file_object": _postgres_storable_json(file_object),
+            "file_object": _postgres_storable_json(stored_object),
             "status": file_object.status,
             "updated_by": user_api_key_dict.user_id,
         }
@@ -599,7 +612,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             data={
                 "create": {
                     "unified_object_id": unified_object_id,
-                    "file_object": _postgres_storable_json(file_object),
+                    "file_object": _postgres_storable_json(stored_object),
                     "model_object_id": model_object_id,
                     "file_purpose": file_purpose,
                     "created_by": resolve_resource_owner_id(user_api_key_dict),
@@ -621,6 +634,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             return False
         from prisma.errors import UniqueViolationError
 
+        from litellm.proxy.hooks.responses_id_security import decrypted_response_id
+
         api_key: Final = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict) or None
         try:
             await _managed_object_table(self.prisma_client).create(
@@ -628,13 +643,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     "unified_object_id": response_id,
                     "model_object_id": decrypted_response_id(response_id),
                     "file_purpose": "response",
-                    "file_object": _postgres_storable_json(response),
+                    "file_object": _postgres_storable_json(_without_model_output(response)),
                     "status": PENDING_RESPONSE_STATUSES[0],
                     "created_by": resolve_resource_owner_id(user_api_key_dict),
                     "team_id": user_api_key_dict.team_id,
                     "org_id": await self._resolve_creator_org_id(user_api_key_dict),
                     "updated_by": user_api_key_dict.user_id,
                     **({"api_key": api_key} if api_key is not None else {}),
+                    **({"end_user_id": user_api_key_dict.end_user_id} if user_api_key_dict.end_user_id else {}),
                 }
             )
         except UniqueViolationError:

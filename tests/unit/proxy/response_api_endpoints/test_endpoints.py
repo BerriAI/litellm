@@ -18,7 +18,7 @@ from httpx import Response
 
 import litellm
 from litellm.proxy.proxy_server import app
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from tests._master_key import MASTER_KEY
 
 
@@ -398,6 +398,16 @@ class _SpendEvents:
         self.payloads = (*self.payloads, payload)
 
 
+async def _drain_spend_events() -> None:
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+
+
+def _billed_costs(payloads: tuple[Mapping[str, object], ...]) -> list[str]:
+    return [str(payload["response_cost"]) for payload in payloads]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "background, stored, status, expected_billed_events",
@@ -408,8 +418,11 @@ async def test_reading_a_finished_background_response_bills_it(
 ):
     """The read that first sees a background response finished bills it from the body it fetched,
     since the provider may drop a store=false response before the hourly cost poll reaches it.
-    Billing never reads the provider a second time, and other reads stay free."""
+    Billing never reads the provider a second time, other reads stay free, the charge stays on the
+    end user the create named, and only the read that billed reports the cost it billed."""
     from types import SimpleNamespace
+
+    from fastapi import Response as FastAPIResponse
 
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.proxy._types import UserAPIKeyAuth
@@ -427,7 +440,7 @@ async def test_reading_a_finished_background_response_bills_it(
         created_at=1,
         model="gpt-5.6",
         output=[],
-        usage=None,
+        usage=ResponseAPIUsage(input_tokens=100, output_tokens=50, total_tokens=150),
         background=background,
     )
     stored_row = SimpleNamespace(
@@ -440,7 +453,9 @@ async def test_reading_a_finished_background_response_bills_it(
         team_id=None,
         org_id=None,
         request_tags=None,
+        end_user_id="customer-42",
     )
+    fastapi_response = FastAPIResponse()
     prisma_client = MagicMock()
     prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=stored_row if stored else None)
     prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
@@ -451,11 +466,17 @@ async def test_reading_a_finished_background_response_bills_it(
         patch("litellm.aget_responses", side_effect=AssertionError("billing must not read the provider again")),
     ):
         await _bill_finished_background_response(
-            response=read, response_id="resp_read", user_api_key_dict=UserAPIKeyAuth(end_user_id="customer-42")
+            response=read,
+            response_id="resp_read",
+            user_api_key_dict=UserAPIKeyAuth(end_user_id="another-reader"),
+            fastapi_response=fastapi_response,
+            read_settles_billing=True,
         )
+        await _drain_spend_events()
 
     assert len(spend_events.payloads) == expected_billed_events
     assert all(payload["metadata"]["user_api_key_end_user_id"] == "customer-42" for payload in spend_events.payloads)
+    assert fastapi_response.headers.getlist("x-litellm-response-cost") == _billed_costs(spend_events.payloads)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -471,6 +492,7 @@ class _ManagedObjectRow:
     team_id: str | None = None
     org_id: str | None = None
     request_tags: object = None
+    end_user_id: str | None = None
 
 
 class _UniqueManagedObjectTable:
@@ -513,6 +535,7 @@ class _UniqueManagedObjectTable:
             api_key=cast("str | None", data.get("api_key")),
             team_id=cast("str | None", data.get("team_id")),
             org_id=cast("str | None", data.get("org_id")),
+            end_user_id=cast("str | None", data.get("end_user_id")),
         )
         self.rows = (*self.rows, row)
         return row
@@ -529,6 +552,7 @@ class _UniqueManagedObjectTable:
 async def _read_twice_on_two_pods(
     monkeypatch: pytest.MonkeyPatch, table: _UniqueManagedObjectTable, response_id: str, reader: object
 ) -> tuple[Mapping[str, object], ...]:
+    from fastapi import Response as FastAPIResponse
     from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 
     from litellm.caching.caching import DualCache
@@ -569,11 +593,16 @@ async def _read_twice_on_two_pods(
         await asyncio.gather(
             *(
                 _bill_finished_background_response(
-                    response=finished, response_id=response_id, user_api_key_dict=reader
+                    response=finished,
+                    response_id=response_id,
+                    user_api_key_dict=reader,
+                    fastapi_response=FastAPIResponse(),
+                    read_settles_billing=True,
                 )
                 for _ in range(2)
             )
         )
+        await _drain_spend_events()
     return spend_events.payloads
 
 
@@ -646,31 +675,48 @@ async def test_a_finished_read_never_bills_a_response_already_billed_or_billed_b
     assert table.rows == stored
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "read_body, expected_billed_events, expected_status",
-    [(b"", 1, "completed"), (b'{"api_base": "https://caller.example/v1"}', 0, "queued")],
-)
-async def test_only_a_read_of_the_configured_deployment_settles_a_background_response(
-    monkeypatch: pytest.MonkeyPatch, read_body: bytes, expected_billed_events: int, expected_status: str
-):
-    """A read the caller sends to its own endpoint returns whatever usage that endpoint claims, so it
-    must not settle the job: the job stays pending for the poll to bill from the real provider."""
-    from fastapi import Response as FastAPIResponse
+def _configured_deployment_router(fetched: ResponsesAPIResponse) -> MagicMock:
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    router: Final = MagicMock()
+    router.get_deployment = MagicMock(
+        return_value=Deployment(
+            model_name="gpt-5.6",
+            litellm_params=LiteLLM_Params(model="openai/gpt-5.6"),
+            model_info=ModelInfo(id="deployment-read"),
+        )
+    )
+    router.aget_responses = AsyncMock(return_value=fetched)
+    return router
+
+
+def _background_response(response_id: str, status: str, input_tokens: int) -> ResponsesAPIResponse:
+    return ResponsesAPIResponse(
+        id=response_id,
+        object="response",
+        status=status,
+        created_at=1,
+        model="gpt-5.6",
+        output=[],
+        usage=ResponseAPIUsage(input_tokens=input_tokens, output_tokens=50, total_tokens=input_tokens + 50),
+        background=True,
+    )
+
+
+@dataclasses.dataclass(frozen=True)
+class _StoredBackgroundResponse:
+    response_id: str
+    table: _UniqueManagedObjectTable
+    prisma_client: MagicMock
+    proxy_logging: MagicMock
+
+
+def _one_pending_background_response() -> _StoredBackgroundResponse:
     from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
-    from starlette.requests import Request
 
     from litellm.caching.caching import DualCache
-    from litellm.integrations.custom_logger import CustomLogger
-    from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.response_api_endpoints.endpoints import get_response
     from litellm.responses.utils import ResponsesAPIRequestUtils
 
-    class _CapturingLogger(_SpendEvents, CustomLogger):
-        pass
-
-    spend_events: Final = _CapturingLogger()
-    monkeypatch.setattr(litellm, "_async_success_callback", [spend_events])
     response_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
         custom_llm_provider="openai", model_id="deployment-read", response_id="resp_read"
     )
@@ -694,53 +740,177 @@ async def test_only_a_read_of_the_configured_deployment_settles_a_background_res
     proxy_logging.get_proxy_hook = MagicMock(
         return_value=_PROXY_LiteLLMManagedFiles(internal_usage_cache=DualCache(), prisma_client=prisma_client)
     )
-    processor: Final = MagicMock()
-    processor.base_process_llm_request = AsyncMock(
-        return_value=ResponsesAPIResponse(
-            id=response_id,
-            object="response",
-            status="completed",
-            created_at=1,
-            model="gpt-5.6",
-            output=[],
-            usage=None,
-            background=True,
-        )
+    return _StoredBackgroundResponse(
+        response_id=response_id, table=table, prisma_client=prisma_client, proxy_logging=proxy_logging
     )
+
+
+def _request_for(method: str, path: str, body: bytes):
+    from starlette.requests import Request
 
     async def receive():
-        return {"type": "http.request", "body": read_body, "more_body": False}
+        return {"type": "http.request", "body": body, "more_body": False}
 
-    request: Final = Request(
-        {
-            "type": "http",
-            "method": "GET",
-            "path": f"/v1/responses/{response_id}",
-            "headers": [(b"content-type", b"application/json")],
-        },
+    return Request(
+        {"type": "http", "method": method, "path": path, "headers": [(b"content-type", b"application/json")]},
         receive,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "endpoint_name, finished_status",
+    [("get_response", "completed"), ("cancel_response", "cancelled")],
+)
+@pytest.mark.parametrize(
+    "read_body, billed_input_tokens, deployment_fetches",
+    [(b"", 1000, 0), (b'{"api_base": "https://caller.example/v1"}', 100, 1)],
+)
+async def test_a_finished_read_or_cancel_bills_usage_only_the_configured_deployment_reported(
+    monkeypatch: pytest.MonkeyPatch,
+    endpoint_name: str,
+    finished_status: str,
+    read_body: bytes,
+    billed_input_tokens: int,
+    deployment_fetches: int,
+):
+    """A read or cancel the caller sends to its own endpoint returns whatever usage that endpoint
+    claims, so it bills from a fetch through the configured deployment instead, and either way the
+    response reports the cost it billed."""
+    from fastapi import Response as FastAPIResponse
+
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.response_api_endpoints import endpoints
+
+    class _CapturingLogger(_SpendEvents, CustomLogger):
+        pass
+
+    spend_events: Final = _CapturingLogger()
+    monkeypatch.setattr(litellm, "_async_success_callback", [spend_events])
+    stored: Final = _one_pending_background_response()
+    router: Final = _configured_deployment_router(_background_response(stored.response_id, finished_status, 100))
+    processor: Final = MagicMock()
+    processor.base_process_llm_request = AsyncMock(
+        return_value=_background_response(stored.response_id, finished_status, 1000)
+    )
+    fastapi_response: Final = FastAPIResponse()
 
     with (
         patch(  # test-quality-ok: endpoint constructs the processor directly
             "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
             return_value=processor,
         ),
-        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),  # test-quality-ok: the endpoint reads the proxy singletons at call time
-        patch("litellm.proxy.proxy_server.llm_router", MagicMock()),  # test-quality-ok: the endpoint reads the proxy singletons at call time
-        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),  # test-quality-ok: the endpoint reads the proxy singletons at call time
-        patch("litellm.aget_responses", side_effect=AssertionError("billing must not read the provider again")),
+        patch("litellm.proxy.proxy_server.prisma_client", stored.prisma_client),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch("litellm.proxy.proxy_server.llm_router", router),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", stored.proxy_logging),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch("litellm.aget_responses", side_effect=AssertionError("the configured deployment answers billing reads")),
     ):
-        await get_response(
-            response_id=response_id,
-            request=request,
+        await getattr(endpoints, endpoint_name)(
+            response_id=stored.response_id,
+            request=_request_for("GET", f"/v1/responses/{stored.response_id}", read_body),
+            fastapi_response=fastapi_response,
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-reader"),
+        )
+        await _drain_spend_events()
+
+    (billed,) = spend_events.payloads
+    assert billed["prompt_tokens"] == billed_input_tokens
+    assert router.aget_responses.await_count == deployment_fetches
+    assert fastapi_response.headers.getlist("x-litellm-response-cost") == _billed_costs(spend_events.payloads)
+    (row,) = stored.table.rows
+    assert row.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_finished_unbilled_background_response_bills_it_before_the_provider_forgets_it(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A delete leaves the cost poll nothing to fetch, so a finished response no read has billed yet
+    is billed from the configured deployment before the delete reaches the provider."""
+    from fastapi import Response as FastAPIResponse
+
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.response_api_endpoints.endpoints import delete_response
+    from litellm.types.responses.main import DeleteResponseResult
+
+    class _CapturingLogger(_SpendEvents, CustomLogger):
+        pass
+
+    spend_events: Final = _CapturingLogger()
+    monkeypatch.setattr(litellm, "_async_success_callback", [spend_events])
+    stored: Final = _one_pending_background_response()
+    deleted: Final[list[str]] = []
+
+    async def provider_fetch(response_id: str, litellm_metadata: Mapping[str, object]) -> ResponsesAPIResponse:
+        if deleted:
+            raise litellm.NotFoundError(message="response not found", model="gpt-5.6", llm_provider="openai")
+        return _background_response(response_id, "completed", 100)
+
+    async def provider_delete(**_: object) -> DeleteResponseResult:
+        deleted.append(stored.response_id)
+        return DeleteResponseResult(id=stored.response_id, object="response", deleted=True)
+
+    router: Final = _configured_deployment_router(_background_response(stored.response_id, "completed", 100))
+    router.aget_responses = AsyncMock(side_effect=provider_fetch)
+    processor: Final = MagicMock()
+    processor.base_process_llm_request = AsyncMock(side_effect=provider_delete)
+
+    with (
+        patch(  # test-quality-ok: endpoint constructs the processor directly
+            "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+            return_value=processor,
+        ),
+        patch("litellm.proxy.proxy_server.prisma_client", stored.prisma_client),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch("litellm.proxy.proxy_server.llm_router", router),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", stored.proxy_logging),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+    ):
+        result: Final = await delete_response(
+            response_id=stored.response_id,
+            request=_request_for("DELETE", f"/v1/responses/{stored.response_id}", b""),
             fastapi_response=FastAPIResponse(),
             user_api_key_dict=UserAPIKeyAuth(api_key="sk-reader"),
         )
+        await _drain_spend_events()
 
-    assert len(spend_events.payloads) == expected_billed_events
-    (row,) = table.rows
-    assert row.status == expected_status
+    assert result.deleted is True
+    (billed,) = spend_events.payloads
+    assert billed["prompt_tokens"] == 100
+    (row,) = stored.table.rows
+    assert row.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_background_create_marks_its_response_billed_before_the_client_sees_it_finish():
+    """A streamed background create bills itself from its own stream, so its row is marked finished
+    before the terminal event reaches the client, and no read the client sends next bills it again."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.response_api_endpoints.endpoints import _streamed_background_data_generator
+
+    finished: Final = _background_response("resp_streamed", "completed", 100)
+    stream: Final = MagicMock(completed_response=None)
+    managed_files: Final = MagicMock()
+    managed_files.store_unified_object_id = AsyncMock()
+    managed_files.track_untracked_background_response = AsyncMock(return_value=False)
+    proxy_logging: Final = MagicMock()
+    proxy_logging.get_proxy_hook = MagicMock(return_value=managed_files)
+
+    async def provider_events(**_: object):
+        yield "event: response.created\n\n"
+        stream.completed_response = MagicMock(response=finished)
+        yield "event: response.completed\n\n"
+        yield "data: [DONE]\n\n"
+
+    stored_before_each_event: Final[list[bool]] = []
+    async for _ in _streamed_background_data_generator(
+        provider_events, proxy_logging, stream, UserAPIKeyAuth(api_key="sk-creator"), {}
+    ):
+        stored_before_each_event.append(managed_files.store_unified_object_id.await_count == 1)
+
+    assert stored_before_each_event == [False, True, True]
+    stored: Final = managed_files.store_unified_object_id.await_args.kwargs
+    assert (stored["unified_object_id"], stored["file_object"].status) == ("resp_streamed", "completed")
 
 
 @pytest.mark.asyncio

@@ -3162,7 +3162,7 @@ class ProxyBaseLLMRequestProcessing:
             )
 
     @staticmethod
-    def _extract_completed_responses_response(stream_response: object) -> object:
+    def extract_completed_responses_response(stream_response: object) -> object:
         """Pull the assembled ``ResponsesAPIResponse`` off a streaming iterator.
 
         ``ResponsesAPIStreamingIterator`` stores the terminal stream event
@@ -3198,9 +3198,7 @@ class ProxyBaseLLMRequestProcessing:
         appears, ahead of the chunk carrying ``response.completed``.
         """
         async for chunk in wrapped_generator:
-            completed_obj = ProxyBaseLLMRequestProcessing._extract_completed_responses_response(
-                original_stream_response
-            )
+            completed_obj = ProxyBaseLLMRequestProcessing.extract_completed_responses_response(original_stream_response)
             if completed_obj is None:
                 yield chunk
                 continue
@@ -3212,7 +3210,7 @@ class ProxyBaseLLMRequestProcessing:
             async for remaining_chunk in wrapped_generator:
                 yield remaining_chunk
             return
-        late_completed_obj: Final = ProxyBaseLLMRequestProcessing._extract_completed_responses_response(
+        late_completed_obj: Final = ProxyBaseLLMRequestProcessing.extract_completed_responses_response(
             original_stream_response
         )
         if late_completed_obj is not None:
