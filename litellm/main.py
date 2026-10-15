@@ -5600,6 +5600,7 @@ def completion(
                     drop_params=claude_drop_params,
                     tool_history_as_text=isinstance(provider_config, AmazonConverseConfig)
                     and AmazonConverseConfig.sends_tool_history_as_text(tools, non_default_params),
+                    one_mark_per_tool_result=isinstance(provider_config, AmazonConverseConfig),
                 ),
                 model=model,
                 llm_provider=custom_llm_provider,

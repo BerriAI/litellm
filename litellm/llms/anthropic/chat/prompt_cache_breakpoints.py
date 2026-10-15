@@ -2,6 +2,7 @@
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import chain
 from types import MappingProxyType
 from typing import Final, Literal, NoReturn, TypeAlias, cast  # noqa: TID251  # isinstance-checked hot-path JSON
 
@@ -45,6 +46,12 @@ class _Placed:
     path: _Path
     ttl: Literal["5m", "1h"]
     kind: _Kind
+
+
+@dataclass(frozen=True, slots=True)
+class _Hoisted:
+    message: object
+    replaced: tuple[object, ...]
 
 
 def _fields(value: object) -> _Fields | None:
@@ -148,27 +155,117 @@ def _without_breakpoint(block: object) -> object:
     )
 
 
-def _with_one_tool_result_mark(message: _Fields) -> _Fields:
+def _without_message_breakpoint(message: _Fields) -> _Fields:
+    return {key: value for key, value in message.items() if key != "prompt_cache_breakpoint"}
+
+
+def _block_mark(block: object, key: str) -> object:
+    return (_fields(block) or {}).get(key)
+
+
+def _joined_breakpoint(kept: object, replaced: Sequence[object]) -> object:
+    """The breakpoint that stays takes 1h when it sets no ttl and one it replaces asks for 1h."""
+    fields: Final = _fields(kept)
+    if fields is None or fields.get("ttl") is not None:
+        return kept
+    return {**fields, "ttl": "1h"} if any(_block_mark(marker, "ttl") == "1h" for marker in replaced) else kept
+
+
+def _tool_result_hoisted(message: _Fields, one_mark_per_tool_result: bool) -> _Hoisted:
     """Claude rejects a tool result marked both on the result and inside its content, so a ``cache_control`` the
-    client wrote at either level wins over every breakpoint at the other, and a breakpoint on the message wins over
-    the ones on its parts."""
+    client wrote at either level wins over every breakpoint at the other, and a breakpoint on the message replaces the
+    ones on its parts. A route that sends one mark per tool result gets its part breakpoints as one on the message,
+    or as none when the client marked a part."""
     parts: Final = _blocks(message.get("content"))
-    if message.get("role") not in _TOOL_RESULT_ROLES or parts is None:
-        return message
-    if message.get("prompt_cache_breakpoint") is not None and any(
-        (_fields(part) or {}).get("cache_control") is not None for part in parts
-    ):
-        return {key: value for key, value in message.items() if key != "prompt_cache_breakpoint"}
-    if message.get("prompt_cache_breakpoint") is None and message.get("cache_control") is None:
-        return message
-    return {**message, "content": [_without_breakpoint(part) for part in parts]}
+    if parts is None:
+        return _Hoisted(message, ())
+    own: Final = message.get("prompt_cache_breakpoint")
+    client_marked_part: Final = any(_block_mark(part, "cache_control") is not None for part in parts)
+    if own is not None and client_marked_part:
+        return _Hoisted(_without_message_breakpoint(message), ())
+    unmarked_parts: Final = [_without_breakpoint(part) for part in parts]
+    if message.get("cache_control") is not None:
+        return _Hoisted({**message, "content": unmarked_parts}, ())
+    part_breakpoints: Final = tuple(
+        marker for marker in (_block_mark(part, "prompt_cache_breakpoint") for part in parts) if marker is not None
+    )
+    if own is None and client_marked_part and one_mark_per_tool_result:
+        return _Hoisted({**message, "content": unmarked_parts}, part_breakpoints)
+    if own is None and (client_marked_part or not one_mark_per_tool_result or not part_breakpoints):
+        return _Hoisted(message, ())
+    kept: Final = part_breakpoints[0] if own is None else own
+    replaced: Final = part_breakpoints[1:] if own is None else part_breakpoints
+    return _Hoisted(
+        {**message, "prompt_cache_breakpoint": _joined_breakpoint(kept, replaced), "content": unmarked_parts}, replaced
+    )
+
+
+def _last_block(message: _Fields) -> tuple[str, Sequence[object], _Fields] | None:
+    """The block that ends a message's content, or its last tool call when it has no content."""
+    keyed: Final = ((key, _blocks(message.get(key))) for key in _MESSAGE_BLOCK_KEYS)
+    found: Final = next(((key, blocks) for key, blocks in keyed if blocks), None)
+    if found is None:
+        return None
+    key, blocks = found
+    last: Final = _fields(blocks[-1])
+    return None if last is None else (key, blocks, last)
+
+
+def _message_breakpoint_hoisted(message: _Fields) -> _Hoisted:
+    """Claude reads a mark on a block, so a message's own breakpoint moves to the block that ends its content, or to
+    its last tool call when it has none. String content keeps it, except on a developer message, whose message-level
+    keys litellm drops when it maps the role to system."""
+    own: Final = message.get("prompt_cache_breakpoint")
+    content: Final = message.get("content")
+    if own is None or message.get("cache_control") is not None:
+        return _Hoisted(message, ())
+    if isinstance(content, str):
+        return (
+            _Hoisted(
+                {
+                    **_without_message_breakpoint(message),
+                    "content": [{"type": "text", "text": content, "prompt_cache_breakpoint": own}],
+                },
+                (),
+            )
+            if message.get("role") == "developer"
+            else _Hoisted(message, ())
+        )
+    last: Final = _last_block(message)
+    if last is None:
+        return _Hoisted(_without_message_breakpoint(message), (own,))
+    key, blocks, block = last
+    if block.get("cache_control") is not None:
+        return _Hoisted(_without_message_breakpoint(message), ())
+    existing: Final = block.get("prompt_cache_breakpoint")
+    return _Hoisted(
+        {
+            **_without_message_breakpoint(message),
+            key: [
+                *blocks[:-1],
+                {**block, "prompt_cache_breakpoint": own if existing is None else _joined_breakpoint(existing, (own,))},
+            ],
+        },
+        () if existing is None else (own,),
+    )
+
+
+def _hoisted_message(message: object, one_mark_per_tool_result: bool) -> _Hoisted:
+    fields: Final = _fields(message)
+    if fields is None:
+        return _Hoisted(message, ())
+    return (
+        _tool_result_hoisted(fields, one_mark_per_tool_result)
+        if fields.get("role") in _TOOL_RESULT_ROLES
+        else _message_breakpoint_hoisted(fields)
+    )
 
 
 def _marked_message(index: int, message: object, mark: _Mark) -> object:
     fields: Final = _fields(message)
     if fields is None:
         return message
-    marked: Final = mark(("messages", index), _with_one_tool_result_mark(fields))
+    marked: Final = mark(("messages", index), fields)
     return {
         **marked,
         **_marked_blocks(marked, ("messages", index), "content", mark),
@@ -207,12 +304,16 @@ def _marked_tool(index: int, tool: object, mark: _Mark) -> object:
     return marked if function is None else {**marked, "function": mark(("tools", index, "function"), function)}
 
 
+def _marker_problem(marker: object) -> UnsupportedPromptCacheParam | None:
+    mark: Final = _breakpoint_mark(marker)
+    return mark if isinstance(mark, UnsupportedPromptCacheParam) else None
+
+
 def _breakpoint_problem(block: _Fields) -> UnsupportedPromptCacheParam | None:
     marker: Final = block.get("prompt_cache_breakpoint")
     if marker is None or block.get("cache_control") is not None:
         return None
-    mark: Final = _breakpoint_mark(marker)
-    return mark if isinstance(mark, UnsupportedPromptCacheParam) else None
+    return _marker_problem(marker)
 
 
 def _renamed(_path: _Path, block: _Fields) -> _Fields:
@@ -363,23 +464,36 @@ def claude_prompt_cache(
     *,
     drop_params: bool,
     tool_history_as_text: bool,
+    one_mark_per_tool_result: bool,
 ) -> ClaudePromptCache | UnsupportedPromptCacheParam:
     """``prompt_cache_breakpoint`` marks renamed to ``cache_control``. A mark Claude cannot honor is reported unless
     ``drop_params``, which keeps what Claude can use and, when the request ends up with more than Claude's four
     breakpoints, drops the earliest translated ones. A request-level ``cache_control`` in ``params`` takes one of the
-    four, and marks on tool history a ``tool_history_as_text`` route flattens take none. A request carrying no
-    breakpoint is returned as written."""
+    four, marks on tool history a ``tool_history_as_text`` route flattens take none, and a
+    ``one_mark_per_tool_result`` route gets a tool result's breakpoints as one. A request carrying no breakpoint is
+    returned as written."""
     listed_tools: Final = tools or ()
     if not any(map(_message_carries_breakpoint, messages)) and not any(map(_tool_carries_breakpoint, listed_tools)):
         return ClaudePromptCache(tuple(messages), None if tools is None else tuple(tools))
-    blocks: Final = tuple(block for _, block in _markable(*_marked_request(messages, listed_tools, _unchanged)))
-    problem: Final = next(filter(None, map(_breakpoint_problem, blocks)), None)
+    hoists: Final = tuple(_hoisted_message(message, one_mark_per_tool_result) for message in messages)
+    hoisted_messages: Final = tuple(hoist.message for hoist in hoists)
+    blocks: Final = tuple(block for _, block in _markable(*_marked_request(hoisted_messages, listed_tools, _unchanged)))
+    problem: Final = next(
+        filter(
+            None,
+            chain(
+                map(_breakpoint_problem, blocks),
+                map(_marker_problem, chain.from_iterable(hoist.replaced for hoist in hoists)),
+            ),
+        ),
+        None,
+    )
     if problem is not None and not drop_params:
         return problem
     if problem is not None:
         verbose_logger.debug("Claude: adjusting %s=%r because %s", problem.param, problem.value, problem.reason)
-    renamed_messages, renamed_tools = _marked_request(messages, listed_tools, _renamed)
-    translated: Final = _translated(messages, listed_tools)
+    renamed_messages, renamed_tools = _marked_request(hoisted_messages, listed_tools, _renamed)
+    translated: Final = _translated(hoisted_messages, listed_tools)
     leading_system_count: Final = _leading_system_count(messages)
     unsent_call_ids: Final = unanswered_tool_search_call_ids(messages)
     block_marks: Final = sorted(

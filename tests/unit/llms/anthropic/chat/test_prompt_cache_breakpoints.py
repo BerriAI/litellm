@@ -21,8 +21,16 @@ def _cache(
     params: dict[str, object] | None = None,
     *,
     drop_params: bool = False,
+    one_mark_per_tool_result: bool = False,
 ) -> ClaudePromptCache | UnsupportedPromptCacheParam:
-    return claude_prompt_cache(messages, tools, params or {}, drop_params=drop_params, tool_history_as_text=False)
+    return claude_prompt_cache(
+        messages,
+        tools,
+        params or {},
+        drop_params=drop_params,
+        tool_history_as_text=False,
+        one_mark_per_tool_result=one_mark_per_tool_result,
+    )
 
 
 def _resolved(
@@ -31,8 +39,11 @@ def _resolved(
     params: dict[str, object] | None = None,
     *,
     drop_params: bool = False,
+    one_mark_per_tool_result: bool = False,
 ) -> ClaudePromptCache:
-    outcome: Final = _cache(messages, tools, params, drop_params=drop_params)
+    outcome: Final = _cache(
+        messages, tools, params, drop_params=drop_params, one_mark_per_tool_result=one_mark_per_tool_result
+    )
     assert isinstance(outcome, ClaudePromptCache), outcome
     return outcome
 
@@ -302,7 +313,7 @@ def test_without_drop_params_more_than_four_marks_are_sent_for_claude_to_answer(
     ]
 
 
-def test_a_message_level_breakpoint_on_list_content_takes_no_slot_under_drop_params():
+def test_a_message_level_breakpoint_on_list_content_ending_in_a_marked_part_takes_no_extra_slot_under_drop_params():
     messages: Final = [
         {"role": "system", "content": [_part("s", prompt_cache_breakpoint=_EXPLICIT)]},
         {"role": "user", "content": [_part("u", prompt_cache_breakpoint=_EXPLICIT)]},
@@ -317,6 +328,23 @@ def test_a_message_level_breakpoint_on_list_content_takes_no_slot_under_drop_par
     result: Final = _resolved(messages, drop_params=True)
 
     assert result.messages[0] == {"role": "system", "content": [_part("s", cache_control=_EPHEMERAL)]}
+
+
+@pytest.mark.parametrize("role", ["system", "user", "assistant"])
+def test_a_message_level_breakpoint_on_list_content_reaches_claude_on_its_last_part(role: str):
+    messages: Final = [{"role": role, "content": [_part("a"), _part("b")], "prompt_cache_breakpoint": _EXPLICIT}]
+
+    result: Final = _resolved(messages)
+
+    assert list(result.messages) == [{"role": role, "content": [_part("a"), _part("b", cache_control=_EPHEMERAL)]}]
+
+
+def test_a_message_level_breakpoint_on_a_developer_message_reaches_claude_on_its_text():
+    messages: Final = [{"role": "developer", "content": "rules", "prompt_cache_breakpoint": _EXPLICIT}]
+
+    result: Final = _resolved(messages)
+
+    assert list(result.messages) == [{"role": "developer", "content": [_part("rules", cache_control=_EPHEMERAL)]}]
 
 
 def test_a_message_level_breakpoint_on_a_tool_result_counts_toward_the_cap():
@@ -373,21 +401,22 @@ def test_a_tool_breakpoint_beside_a_function_cache_control_frees_a_slot_claude_s
     ]
 
 
-def test_a_message_level_breakpoint_on_a_tool_call_turn_without_content_takes_no_slot_under_drop_params():
+def test_a_message_level_breakpoint_on_a_tool_call_turn_without_content_reaches_claude_on_its_last_call():
+    calls: Final = [
+        {"id": f"call_{index}", "type": "function", "function": {"name": "t", "arguments": "{}"}} for index in range(2)
+    ]
     messages: Final = [
-        {"role": "system", "content": [_part("s", prompt_cache_breakpoint=_EXPLICIT)]},
-        {"role": "user", "content": [_part(str(index), prompt_cache_breakpoint=_EXPLICIT) for index in range(3)]},
-        {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [{"id": "call_0", "type": "function", "function": {"name": "t", "arguments": "{}"}}],
-            "prompt_cache_breakpoint": _EXPLICIT,
-        },
+        {"role": "user", "content": "Look it up."},
+        {"role": "assistant", "content": None, "tool_calls": calls, "prompt_cache_breakpoint": _EXPLICIT},
     ]
 
-    result: Final = _resolved(messages, drop_params=True)
+    result: Final = _resolved(messages)
 
-    assert list(result.messages)[0] == {"role": "system", "content": [_part("s", cache_control=_EPHEMERAL)]}
+    assert result.messages[1] == {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [calls[0], {**calls[1], "cache_control": _EPHEMERAL}],
+    }
 
 
 def test_a_breakpoint_on_assistant_text_read_before_a_one_hour_tool_call_mark_is_sent_as_one_hour():
@@ -417,25 +446,13 @@ def test_a_breakpoint_on_assistant_text_read_before_a_one_hour_tool_call_mark_is
     assert assistant["tool_calls"][0]["cache_control"] == _ONE_HOUR
 
 
-def test_a_message_level_breakpoint_on_a_developer_message_takes_no_slot_under_drop_params():
-    messages: Final = [
-        {"role": "system", "content": [_part("s", prompt_cache_breakpoint=_EXPLICIT)]},
-        {"role": "developer", "content": "rules", "prompt_cache_breakpoint": _EXPLICIT},
-        {"role": "user", "content": [_part(str(index), prompt_cache_breakpoint=_EXPLICIT) for index in range(3)]},
-    ]
-
-    result: Final = _resolved(messages, drop_params=True)
-
-    assert result.messages[0] == {"role": "system", "content": [_part("s", cache_control=_EPHEMERAL)]}
-
-
 @pytest.mark.parametrize(
     ("message_mark", "part_mark", "sent_message_mark", "sent_part"),
     [
         (
             {"prompt_cache_breakpoint": _EXPLICIT},
             {"prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}},
-            {"cache_control": _EPHEMERAL},
+            {"cache_control": _ONE_HOUR},
             _part("r1"),
         ),
         (
@@ -467,6 +484,84 @@ def test_a_tool_result_marked_at_both_levels_reaches_claude_with_one_mark(
     assert list(result.messages) == [
         {"role": "tool", "tool_call_id": "c1", "content": [_part("r0"), sent_part], **sent_message_mark},
     ]
+
+
+def test_a_part_breakpoint_a_tool_results_own_breakpoint_replaces_is_still_reported():
+    messages: Final = [
+        {
+            "role": "tool",
+            "tool_call_id": "c1",
+            "content": [_part("r0", prompt_cache_breakpoint={"mode": "explicit", "ttl": "30m"})],
+            "prompt_cache_breakpoint": _EXPLICIT,
+        },
+    ]
+
+    outcome: Final = _cache(messages)
+
+    assert isinstance(outcome, UnsupportedPromptCacheParam)
+    assert outcome.value == {"mode": "explicit", "ttl": "30m"}
+
+
+def test_a_route_sending_one_mark_per_tool_result_counts_its_marked_parts_as_one_under_drop_params():
+    messages: Final = [
+        {"role": "system", "content": [_part("s", prompt_cache_breakpoint=_EXPLICIT)]},
+        {"role": "user", "content": [_part("u1", prompt_cache_breakpoint=_EXPLICIT)]},
+        {
+            "role": "tool",
+            "tool_call_id": "c1",
+            "content": [_part("r0", prompt_cache_breakpoint=_EXPLICIT), _part("r1", prompt_cache_breakpoint=_EXPLICIT)],
+        },
+        {"role": "user", "content": [_part("u2", prompt_cache_breakpoint=_EXPLICIT)]},
+    ]
+
+    result: Final = _resolved(messages, drop_params=True, one_mark_per_tool_result=True)
+
+    assert list(result.messages) == [
+        {"role": "system", "content": [_part("s", cache_control=_EPHEMERAL)]},
+        {"role": "user", "content": [_part("u1", cache_control=_EPHEMERAL)]},
+        {"role": "tool", "tool_call_id": "c1", "content": [_part("r0"), _part("r1")], "cache_control": _EPHEMERAL},
+        {"role": "user", "content": [_part("u2", cache_control=_EPHEMERAL)]},
+    ]
+
+
+def test_a_route_sending_one_mark_per_tool_result_lets_a_client_marked_part_win_under_drop_params():
+    messages: Final = [
+        {"role": "system", "content": [_part("s", prompt_cache_breakpoint=_EXPLICIT)]},
+        {"role": "user", "content": [_part("u1", prompt_cache_breakpoint=_EXPLICIT)]},
+        {
+            "role": "tool",
+            "tool_call_id": "c1",
+            "content": [_part("r0", cache_control=_EPHEMERAL), _part("r1", prompt_cache_breakpoint=_EXPLICIT)],
+        },
+        {"role": "user", "content": [_part("u2", prompt_cache_breakpoint=_EXPLICIT)]},
+    ]
+
+    result: Final = _resolved(messages, drop_params=True, one_mark_per_tool_result=True)
+
+    assert list(result.messages) == [
+        {"role": "system", "content": [_part("s", cache_control=_EPHEMERAL)]},
+        {"role": "user", "content": [_part("u1", cache_control=_EPHEMERAL)]},
+        {"role": "tool", "tool_call_id": "c1", "content": [_part("r0", cache_control=_EPHEMERAL), _part("r1")]},
+        {"role": "user", "content": [_part("u2", cache_control=_EPHEMERAL)]},
+    ]
+
+
+def test_a_part_breakpoint_a_client_marked_part_replaces_on_a_one_mark_route_is_still_reported():
+    messages: Final = [
+        {
+            "role": "tool",
+            "tool_call_id": "c1",
+            "content": [
+                _part("r0", cache_control=_EPHEMERAL),
+                _part("r1", prompt_cache_breakpoint={"mode": "explicit", "ttl": "30m"}),
+            ],
+        }
+    ]
+
+    outcome: Final = _cache(messages, one_mark_per_tool_result=True)
+
+    assert isinstance(outcome, UnsupportedPromptCacheParam)
+    assert outcome.value == {"mode": "explicit", "ttl": "30m"}
 
 
 def test_a_null_tool_level_breakpoint_leaves_the_function_breakpoint_in_force():
