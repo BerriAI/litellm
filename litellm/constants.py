@@ -17,7 +17,7 @@ OAUTH_TOKEN_EXCHANGE_CACHE_SAFETY_MARGIN_SECONDS: Final = 60
 MICROSOFT_365_COPILOT_DEFAULT_TOKEN_EXCHANGE_PROFILE: Final = "jwt_bearer_obo"
 MICROSOFT_365_COPILOT_DEFAULT_TOKEN_EXCHANGE_SCOPE: Final = "https://graph.microsoft.com/.default"
 # Replies depend on the caller's delegated identity, which response-cache keys do not include.
-RESPONSE_CACHE_EXCLUDED_PROVIDERS: Final = frozenset({"microsoft_365_copilot"})
+RESPONSE_CACHE_EXCLUDED_PROVIDERS: Final = frozenset({"microsoft_365_copilot", "databricks_agent"})
 MICROSOFT_365_COPILOT_DEFAULT_TIME_ZONE: Final = "UTC"
 GITHUB_COPILOT_PER_USER_AUTH_TYPE: Final = "per_user_oauth"
 GITHUB_COPILOT_AUTH_TYPE_KEY: Final = "github_copilot_auth_type"
@@ -106,6 +106,7 @@ DEFAULT_S3_MAX_ADAPTIVE_CONCURRENCY: Final = get_env_int("DEFAULT_S3_MAX_ADAPTIV
 S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS: Final = get_env_int_in_range("S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS", 30, 1, 3600)
 # https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
 MAX_S3_OBJECT_KEY_BYTES: Final = 1024
+MAX_S3_OBJECT_KEY_FILENAME_BYTES: Final = 255
 S3_BOUNDED_OBJECT_KEY_HEAD_BYTES: Final = 64
 S3_PREFIX_DIGEST_CHARS: Final = 16
 # s3 allows 2048 bytes of combined metadata headers, which Content-Disposition counts against
@@ -845,6 +846,8 @@ PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO: Final = frozenset(
     }
 )
 
+A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS: Final = frozenset({"databricks_agent"})
+
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS: Final = [
     "openai",
     "azure",
@@ -1131,6 +1134,7 @@ _openai_like_providers: Final[list[str]] = [
     "databricks",
     "lemonade",
     "watsonx",
+    "inferenceapis",
 ]  # private helper. similar to openai but require some custom auth / endpoint handling, so can't use the openai sdk
 # well supported replicate llms
 replicate_models: Final[set] = set(
@@ -1621,6 +1625,7 @@ CONSUMED_REQUEST_TAGS_METADATA_KEY: Final = "_consumed_request_tags"
 ROUTING_REQUEST_TAGS_METADATA_KEY: Final = "_routing_request_tags"
 ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY: Final = "_litellm_router_usage_counted_tokens"
 INTERNAL_CALL_ORIGIN_METADATA_KEY: Final = "internal_call_origin"
+MANAGED_BACKGROUND_RESPONSE_METADATA_KEY: Final = "_managed_background_response"
 SESSION_ID_GENERATED_METADATA_KEY: Final = "litellm_session_id_generated"
 SESSION_ID_OMITTED_METADATA_KEY: Final = "litellm_session_id_omitted"
 LITELLM_TRUNCATED_PAYLOAD_FIELD: Final = "litellm_truncated"
@@ -1860,7 +1865,13 @@ RESET_BUDGET_JOB_NAME: Final = "reset_budget_job"
 RESET_BUDGET_JOB_LOCK_TTL_SECONDS: Final[int] = 900
 PROXY_BATCH_POLLING_INTERVAL: Final = get_env_int("PROXY_BATCH_POLLING_INTERVAL", 3600)
 MAX_OBJECTS_PER_POLL_CYCLE: Final = max(1, get_env_int("MAX_OBJECTS_PER_POLL_CYCLE", 50))
+# raw request and result bytes per batch line-item object, so a large batch is built and stored one part at a time
+BATCH_LINE_ITEMS_MAX_PART_BYTES: Final = get_env_int_in_range(
+    "BATCH_LINE_ITEMS_MAX_PART_BYTES", 16 * 1024 * 1024, 1, 1024 * 1024 * 1024
+)
 MANAGED_OBJECT_STALENESS_CUTOFF_DAYS: Final = max(1, get_env_int("MANAGED_OBJECT_STALENESS_CUTOFF_DAYS", 7))
+PENDING_RESPONSE_STATUSES: Final = ("queued", "in_progress")
+TERMINAL_RESPONSE_STATUSES: Final = frozenset({"completed", "failed", "cancelled", "incomplete"})
 BATCH_OUTPUT_FILE_LOOKUP_TIMEOUT_SECONDS: Final = 10.0
 BATCH_OUTPUT_FILE_FALLBACK_RETRY_AFTER_SECONDS: Final = 60
 STALE_OBJECT_CLEANUP_BATCH_SIZE: Final = max(1, get_env_int("STALE_OBJECT_CLEANUP_BATCH_SIZE", 1000))

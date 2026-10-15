@@ -5,6 +5,7 @@ PARITY pairs the streamed case with its plain twin where both bill the same row.
 from typing import Final
 
 from integration.cost_calculation.cost_tracking_case import (
+    with_response_usage,
     with_usage,
     BinaryResponse,
     CostTrackingTestCase,
@@ -18,7 +19,7 @@ from integration.cost_calculation.cost_tracking_case import (
     SseResponse,
     WavUpload,
 )
-from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase
+from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase, bridge_pairs
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase, sse_frames
 
 
@@ -6116,6 +6117,92 @@ AZURE_GPT_6_1_SOL_TIERED_PRIORITY_ABOVE_272K: Final = with_usage(
     ExactExpected(spend=1.449888, input_cost=1.44, output_cost=0.009888, prompt_tokens=300000, completion_tokens=412),
 )
 
+AZURE_GPT_6_1_SOL_CACHE_WRITE_5M: Final = with_response_usage(
+    AZURE_GPT_6_1_SOL_CACHE_READ,
+    "azure/gpt-6.1-sol-cache_write_5m",
+    {
+        "completion_tokens": 380,
+        "completion_tokens_details": {
+            "accepted_prediction_tokens": 0,
+            "audio_tokens": 0,
+            "reasoning_tokens": 0,
+            "rejected_prediction_tokens": 0,
+        },
+        "latency_checkpoint": {
+            "engine_tbt_ms": 15,
+            "engine_ttft_ms": 1118,
+            "engine_ttlt_ms": 1221,
+            "pre_inference_ms": 172,
+            "service_tbt_ms": 15,
+            "service_ttft_ms": 1562,
+            "service_ttlt_ms": 1652,
+            "user_visible_ttft_ms": 1390,
+        },
+        "prompt_tokens": 12928,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 12288, "cached_tokens": 0},
+        "total_tokens": 13308,
+    },
+    ExactExpected(spend=0.04296, input_cost=0.0384, output_cost=0.00456, prompt_tokens=12928, completion_tokens=380),
+)
+AZURE_GPT_6_LUNA_CACHE_WRITE_5M: Final = with_response_usage(
+    AZURE_GPT_6_LUNA_CACHE_READ,
+    "azure/gpt-6-luna-cache_write_5m",
+    {
+        "completion_tokens": 380,
+        "completion_tokens_details": {
+            "accepted_prediction_tokens": 0,
+            "audio_tokens": 0,
+            "reasoning_tokens": 0,
+            "rejected_prediction_tokens": 0,
+        },
+        "latency_checkpoint": {
+            "engine_tbt_ms": 7,
+            "engine_ttft_ms": 143,
+            "engine_ttlt_ms": 309,
+            "pre_inference_ms": 132,
+            "service_tbt_ms": 8,
+            "service_ttft_ms": 566,
+            "service_ttlt_ms": 748,
+            "user_visible_ttft_ms": 434,
+        },
+        "prompt_tokens": 12928,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 12288, "cached_tokens": 0},
+        "total_tokens": 13308,
+    },
+    ExactExpected(spend=0.002327, input_cost=0.00208, output_cost=0.000247, prompt_tokens=12928, completion_tokens=380),
+    choice_updates={
+        "content_filter_result": {"error": {"code": "content_filter_error", "message": "The contents are not filtered"}}
+    },
+)
+AZURE_GPT_6_ASTRA_CACHE_WRITE_5M: Final = with_response_usage(
+    AZURE_GPT_6_ASTRA_CACHE_READ,
+    "azure/gpt-6-astra-cache_write_5m",
+    {
+        "completion_tokens": 380,
+        "completion_tokens_details": {
+            "accepted_prediction_tokens": 0,
+            "audio_tokens": 0,
+            "reasoning_tokens": 0,
+            "rejected_prediction_tokens": 0,
+        },
+        "latency_checkpoint": {
+            "engine_tbt_ms": 36,
+            "engine_ttft_ms": 537,
+            "engine_ttlt_ms": 751,
+            "pre_inference_ms": 356,
+            "service_tbt_ms": 41,
+            "service_ttft_ms": 1166,
+            "service_ttlt_ms": 1371,
+            "user_visible_ttft_ms": 810,
+        },
+        "prompt_tokens": 12928,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 12288, "cached_tokens": 0},
+        "total_tokens": 13308,
+    },
+    ExactExpected(spend=0.22375, input_cost=0.2, output_cost=0.02375, prompt_tokens=12928, completion_tokens=380),
+)
+
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     AZURE_GPT_6_SOL_MESSAGES_BRIDGED_JSON,
     AZURE_GPT_6_LUNA_MESSAGES_BRIDGED_JSON,
@@ -6214,6 +6301,9 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     AZURE_GPT_6_1_SOL_CACHE_READ,
     AZURE_GPT_6_LUNA_CACHE_READ,
     AZURE_GPT_6_ASTRA_CACHE_READ,
+    AZURE_GPT_6_1_SOL_CACHE_WRITE_5M,
+    AZURE_GPT_6_LUNA_CACHE_WRITE_5M,
+    AZURE_GPT_6_ASTRA_CACHE_WRITE_5M,
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
@@ -6229,6 +6319,10 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
 )
 
 BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
+    *bridge_pairs(
+        (AZURE_GPT_5_6_INPUT_TEXT, AZURE_GPT_5_6_CACHE_READ, AZURE_GPT_5_6_STREAM, AZURE_GPT_5_6_REASONING),
+        ("/v1/messages",),
+    ),
     BridgeCostParityTestCase(native=AZURE_GPT_6_SOL_INPUT_TEXT, bridged=AZURE_GPT_6_SOL_MESSAGES_BRIDGED_JSON),
     BridgeCostParityTestCase(native=AZURE_GPT_6_LUNA_INPUT_TEXT, bridged=AZURE_GPT_6_LUNA_MESSAGES_BRIDGED_JSON),
     BridgeCostParityTestCase(native=AZURE_GPT_6_ASTRA_INPUT_TEXT, bridged=AZURE_GPT_6_ASTRA_MESSAGES_BRIDGED_JSON),

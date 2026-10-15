@@ -13,6 +13,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 from litellm.llms.anthropic.pass_through.adapters.transformation import (
     AnthropicAdapter,
 )
@@ -367,6 +368,11 @@ async def _run_polyfill_if_enabled(
 # init adapter
 ANTHROPIC_ADAPTER: Final = AnthropicAdapter()
 ########################################################
+
+
+def _record_bridged_model_response(logging_obj: LiteLLMLoggingObject | None, completion_response: object) -> None:
+    if logging_obj is not None and isinstance(completion_response, ModelResponse):
+        logging_obj.record_bridged_model_response(completion_response)
 
 
 class LiteLLMMessagesToCompletionTransformationHandler:
@@ -737,6 +743,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         )
 
         completion_response: Final = await litellm.acompletion(**completion_kwargs)
+        logging_obj: Final = litellm_logging_obj_from_kwargs(kwargs)
 
         if stream:
             transformed_stream: Final = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
@@ -745,13 +752,14 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
                 is_async=True,
-                litellm_logging_obj=litellm_logging_obj_from_kwargs(kwargs),
+                litellm_logging_obj=logging_obj,
                 safeguards_evaluator=safeguards_evaluator,
             )
             if transformed_stream is not None:
                 return transformed_stream
             raise ValueError("Failed to transform streaming response")
         else:
+            _record_bridged_model_response(logging_obj, completion_response)
             anthropic_response: Final = ANTHROPIC_ADAPTER.translate_completion_output_params(
                 cast(ModelResponse, completion_response),
                 tool_name_mapping=tool_name_mapping,
@@ -876,6 +884,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         )
 
         completion_response: Final = litellm.completion(**completion_kwargs)
+        logging_obj: Final = litellm_logging_obj_from_kwargs(kwargs)
 
         if stream:
             transformed_stream: Final = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
@@ -884,12 +893,13 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
                 is_async=False,
-                litellm_logging_obj=litellm_logging_obj_from_kwargs(kwargs),
+                litellm_logging_obj=logging_obj,
             )
             if transformed_stream is not None:
                 return transformed_stream
             raise ValueError("Failed to transform streaming response")
         else:
+            _record_bridged_model_response(logging_obj, completion_response)
             anthropic_response: Final = ANTHROPIC_ADAPTER.translate_completion_output_params(
                 cast(ModelResponse, completion_response),
                 tool_name_mapping=tool_name_mapping,

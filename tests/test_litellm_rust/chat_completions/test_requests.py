@@ -5,11 +5,10 @@ import pytest
 from pydantic import TypeAdapter
 
 import litellm
-from litellm.rust_bridge.catalog import Route
 from litellm.types.utils import ModelResponse
 from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_MODEL, MESSAGES_TEXT
 from tests.test_litellm_rust.support.recording_server import RecordingServer
-from tests.test_litellm_rust.support.routing import assert_served_natively, native_route
+from tests.test_litellm_rust.support.routing import assert_served_natively
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -27,12 +26,11 @@ async def test_positional_parameters_reach_the_wire(server: RecordingServer, asy
     )
     supplied: Final = {"base_url": server.base_url, "api_key": "test-key", "max_tokens": 32}
 
-    with native_route(Route.CHAT_COMPLETIONS):
-        result: Final = (
-            await litellm.acompletion(*arguments, **supplied)
-            if asynchronous
-            else await asyncio.to_thread(litellm.completion, *arguments, **supplied)
-        )
+    result: Final = (
+        await litellm.acompletion(*arguments, **supplied)
+        if asynchronous
+        else await asyncio.to_thread(litellm.completion, *arguments, **supplied)
+    )
 
     assert isinstance(result, ModelResponse)
     assert result.choices[0].message.content == MESSAGES_TEXT
