@@ -247,9 +247,7 @@ async def _async_chat(rig: Rig, text: str) -> tuple[str, str]:
 def _streamed_chat(rig: Rig, text: str) -> tuple[str, str]:
     client: Final = openai.OpenAI(base_url=rig.base() + "/v1", api_key=rig.proxy.key, max_retries=0)
     chunks: Final = tuple(
-        client.chat.completions.create(
-            model=rig.chat_model, messages=[{"role": "user", "content": text}], stream=True
-        )
+        client.chat.completions.create(model=rig.chat_model, messages=[{"role": "user", "content": text}], stream=True)
     )
     return chunks[0].id, "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices)
 
