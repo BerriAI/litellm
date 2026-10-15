@@ -131,7 +131,12 @@ def _scrubbed() -> tuple[str, ...]:
 
 
 def _forward_environment(forward_url: str, **extra: str) -> dict[str, str]:
-    return {"HTTPS_PROXY": forward_url, "NO_PROXY": "127.0.0.1,localhost", **extra}
+    return {
+        "HTTPS_PROXY": forward_url,
+        "NO_PROXY": "127.0.0.1,localhost",
+        "PROXY_BATCH_POLLING_ENABLED": "false",
+        **extra,
+    }
 
 
 @pytest.fixture(scope="module")
