@@ -1007,6 +1007,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://api.lambda.ai/v1",
     "https://api.inceptionlabs.ai/v1",
     "https://api.hyperbolic.xyz/v1",
+    "https://webwright.ai/v1",
     "https://ai-gateway.helicone.ai/",
     "https://ai-gateway.vercel.sh/v1",
     "https://api.edenai.run/v3",
@@ -1082,6 +1083,7 @@ openai_compatible_providers: Final[list] = [
     "lambda_ai",
     "inception",
     "hyperbolic",
+    "webwright",
     "vercel_ai_gateway",
     "aiml",
     "edenai",
@@ -1127,6 +1129,7 @@ openai_text_completion_compatible_providers: Final[list] = [  # providers that s
     "v0",
     "lambda_ai",
     "hyperbolic",
+    "webwright",
     "wandb",
 ]
 _openai_like_providers: Final[list[str]] = [

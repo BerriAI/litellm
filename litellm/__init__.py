@@ -701,6 +701,7 @@ morph_models: Set = set()
 lambda_ai_models: Set = set()
 inception_models: Set = set()
 hyperbolic_models: Set = set()
+webwright_models: Set = set()
 black_forest_labs_models: Set = set()
 recraft_models: Set = set()
 cometapi_models: Set = set()
@@ -975,6 +976,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             inception_models.add(key)
         elif value.get("litellm_provider") == "hyperbolic":
             hyperbolic_models.add(key)
+        elif value.get("litellm_provider") == "webwright":
+            webwright_models.add(key)
         elif value.get("litellm_provider") == "black_forest_labs":
             black_forest_labs_models.add(key)
         elif value.get("litellm_provider") == "recraft":
@@ -1252,6 +1255,7 @@ def _build_models_by_provider() -> dict:
         "lambda_ai": lambda_ai_models,
         "inception": inception_models,
         "hyperbolic": hyperbolic_models,
+        "webwright": webwright_models,
         "black_forest_labs": black_forest_labs_models,
         "recraft": recraft_models,
         "cometapi": cometapi_models,
@@ -2212,6 +2216,9 @@ if TYPE_CHECKING:
     )
     from .llms.hyperbolic.chat.transformation import (
         HyperbolicChatConfig as HyperbolicChatConfig,
+    )
+    from .llms.webwright.chat.transformation import (
+        WebwrightChatConfig as WebwrightChatConfig,
     )
     from .llms.vercel_ai_gateway.chat.transformation import (
         VercelAIGatewayConfig as VercelAIGatewayConfig,

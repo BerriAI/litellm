@@ -4342,6 +4342,7 @@ class LlmProviders(str, Enum):
     MONGODB = "mongodb"
     HELICONE = "helicone"
     HYPERBOLIC = "hyperbolic"
+    WEBWRIGHT = "webwright"
     RECRAFT = "recraft"
     FAL_AI = "fal_ai"
     STABILITY = "stability"
