@@ -708,3 +708,311 @@ GEMINI_3_1_PRO_PREVIEW_TEST_CASE: Final = TranslationTestCase(
         "vertex_ai_citation_metadata": [],
     },
 )
+
+
+CLAUDE_FABLE_5_1_TEST_CASE: Final = TranslationTestCase(
+    scenario="basic",
+    litellm_endpoint="/v1/chat/completions",
+    litellm_request={
+        "model": "vertex_ai/claude-fable-5-1@default",
+        "max_tokens": 64,
+        "messages": [
+            {"role": "system", "content": "You are a terse assistant."},
+            {"role": "user", "content": "Say hello."},
+        ],
+        "cache": {"no-cache": True},
+    },
+    expected_provider_endpoint="/v1/projects/synthetic-vertex-project/locations/global/publishers/anthropic/models/claude-fable-5-1@default:rawPredict",
+    expected_provider_headers={
+        "authorization": "Bearer scripted-token",
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+        "x-api-key": "scripted-token",
+    },
+    expected_provider_request={
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "Say hello."}]}],
+        "max_tokens": 64,
+        "anthropic_version": "vertex-2023-10-16",
+        "system": [{"type": "text", "text": "You are a terse assistant."}],
+    },
+    mock_provider_response={
+        "model": "claude-fable-5-1",
+        "id": "msg_vrtx_011Cg346VGTLVWPwvR6aKfy7",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Hello."}],
+        "container": None,
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "stop_details": None,
+        "usage": {
+            "input_tokens": 23,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            "output_tokens": 6,
+            "output_tokens_details": {"thinking_tokens": 0},
+        },
+    },
+    expected_litellm_status_code=200,
+    expected_litellm_response={
+        "id": ANY,
+        "created": ANY,
+        "model": "vertex_ai/claude-fable-5-1@default",
+        "object": "chat.completion",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {
+                    "content": "Hello.",
+                    "role": "assistant",
+                    "provider_specific_fields": {"citations": None, "thinking_blocks": None},
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 6,
+            "prompt_tokens": 23,
+            "total_tokens": 29,
+            "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 6},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 23,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+        },
+    },
+)
+
+GEMINI_3_5_FLASH_TEST_CASE: Final = TranslationTestCase(
+    scenario="basic",
+    litellm_endpoint="/v1/chat/completions",
+    litellm_request={
+        "model": "vertex_ai/gemini-3.5-flash",
+        "max_tokens": 1024,
+        "messages": [
+            {"role": "system", "content": "You are a terse assistant."},
+            {"role": "user", "content": "Say hello."},
+        ],
+        "cache": {"no-cache": True},
+    },
+    expected_provider_endpoint="/v1/projects/synthetic-vertex-project/locations/global/publishers/google/models/gemini-3.5-flash:generateContent",
+    expected_provider_headers={"content-type": "application/json", "authorization": "Bearer scripted-token"},
+    expected_provider_request={
+        "contents": [{"role": "user", "parts": [{"text": "Say hello."}]}],
+        "system_instruction": {"parts": [{"text": "You are a terse assistant."}]},
+        "generationConfig": {"max_output_tokens": 1024},
+    },
+    mock_provider_response={
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [{"text": "Hello.", "thoughtSignature": GEMINI_3_5_FLASH_THOUGHT_SIGNATURE}],
+                },
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 9,
+            "candidatesTokenCount": 2,
+            "totalTokenCount": 95,
+            "trafficType": "ON_DEMAND",
+            "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 9}],
+            "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 2}],
+            "thoughtsTokenCount": 84,
+        },
+        "modelVersion": "gemini-3.5-flash",
+        "createTime": "2026-10-05T22:54:50.809002Z",
+        "responseId": "uirEaqqwMc-U9LsPjJTYuQU",
+    },
+    expected_litellm_status_code=200,
+    expected_litellm_response={
+        "id": "uirEaqqwMc-U9LsPjJTYuQU",
+        "created": ANY,
+        "model": "vertex_ai/gemini-3.5-flash",
+        "object": "chat.completion",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {
+                    "content": "Hello.",
+                    "role": "assistant",
+                    "images": [],
+                    "thinking_blocks": [],
+                    "provider_specific_fields": {"thought_signatures": [GEMINI_3_5_FLASH_THOUGHT_SIGNATURE]},
+                },
+                "provider_specific_fields": {"native_finish_reason": "STOP"},
+            }
+        ],
+        "usage": {
+            "completion_tokens": 86,
+            "prompt_tokens": 9,
+            "total_tokens": 95,
+            "completion_tokens_details": {"reasoning_tokens": 84, "text_tokens": 2},
+            "prompt_tokens_details": {"text_tokens": 9},
+        },
+        "vertex_ai_grounding_metadata": [],
+        "vertex_ai_url_context_metadata": [],
+        "vertex_ai_safety_results": [],
+        "vertex_ai_citation_metadata": [],
+    },
+)
+
+GEMINI_3_8_FLASH_TEST_CASE: Final = TranslationTestCase(
+    scenario="basic",
+    litellm_endpoint="/v1/chat/completions",
+    litellm_request={
+        "model": "vertex_ai/gemini-3.8-flash",
+        "max_tokens": 1024,
+        "messages": [
+            {"role": "system", "content": "You are a terse assistant."},
+            {"role": "user", "content": "Say hello."},
+        ],
+        "cache": {"no-cache": True},
+    },
+    expected_provider_endpoint="/v1/projects/synthetic-vertex-project/locations/global/publishers/google/models/gemini-3.8-flash:generateContent",
+    expected_provider_headers={"content-type": "application/json", "authorization": "Bearer scripted-token"},
+    expected_provider_request={
+        "contents": [{"role": "user", "parts": [{"text": "Say hello."}]}],
+        "system_instruction": {"parts": [{"text": "You are a terse assistant."}]},
+        "generationConfig": {"max_output_tokens": 1024},
+    },
+    mock_provider_response={
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [{"text": "Hello.", "thoughtSignature": GEMINI_3_8_FLASH_THOUGHT_SIGNATURE}],
+                },
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 9,
+            "candidatesTokenCount": 2,
+            "totalTokenCount": 118,
+            "trafficType": "ON_DEMAND",
+            "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 9}],
+            "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 2}],
+            "thoughtsTokenCount": 107,
+        },
+        "modelVersion": "gemini-3.8-flash",
+        "createTime": "2026-10-05T22:55:12.739855Z",
+        "responseId": "0CrEao-ULbuU9LsPk-mQ2A8",
+    },
+    expected_litellm_status_code=200,
+    expected_litellm_response={
+        "id": "0CrEao-ULbuU9LsPk-mQ2A8",
+        "created": ANY,
+        "model": "vertex_ai/gemini-3.8-flash",
+        "object": "chat.completion",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {
+                    "content": "Hello.",
+                    "role": "assistant",
+                    "images": [],
+                    "thinking_blocks": [],
+                    "provider_specific_fields": {"thought_signatures": [GEMINI_3_8_FLASH_THOUGHT_SIGNATURE]},
+                },
+                "provider_specific_fields": {"native_finish_reason": "STOP"},
+            }
+        ],
+        "usage": {
+            "completion_tokens": 109,
+            "prompt_tokens": 9,
+            "total_tokens": 118,
+            "completion_tokens_details": {"reasoning_tokens": 107, "text_tokens": 2},
+            "prompt_tokens_details": {"text_tokens": 9},
+        },
+        "vertex_ai_grounding_metadata": [],
+        "vertex_ai_url_context_metadata": [],
+        "vertex_ai_safety_results": [],
+        "vertex_ai_citation_metadata": [],
+    },
+)
+
+GEMINI_3_1_PRO_PREVIEW_TEST_CASE: Final = TranslationTestCase(
+    scenario="basic",
+    litellm_endpoint="/v1/chat/completions",
+    litellm_request={
+        "model": "vertex_ai/gemini-3.1-pro-preview",
+        "max_tokens": 1024,
+        "messages": [
+            {"role": "system", "content": "You are a terse assistant."},
+            {"role": "user", "content": "Say hello."},
+        ],
+        "cache": {"no-cache": True},
+    },
+    expected_provider_endpoint="/v1/projects/synthetic-vertex-project/locations/global/publishers/google/models/gemini-3.1-pro-preview:generateContent",
+    expected_provider_headers={"content-type": "application/json", "authorization": "Bearer scripted-token"},
+    expected_provider_request={
+        "contents": [{"role": "user", "parts": [{"text": "Say hello."}]}],
+        "system_instruction": {"parts": [{"text": "You are a terse assistant."}]},
+        "generationConfig": {"max_output_tokens": 1024},
+    },
+    mock_provider_response={
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [{"text": "Hello.", "thoughtSignature": GEMINI_3_1_PRO_PREVIEW_THOUGHT_SIGNATURE}],
+                },
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 9,
+            "candidatesTokenCount": 1,
+            "totalTokenCount": 99,
+            "trafficType": "ON_DEMAND",
+            "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 9}],
+            "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 1}],
+            "thoughtsTokenCount": 89,
+        },
+        "modelVersion": "gemini-3.1-pro-preview",
+        "createTime": "2026-10-05T22:55:14.874538Z",
+        "responseId": "0irEaqqwNbCdq8YP3L2mqQ4",
+    },
+    expected_litellm_status_code=200,
+    expected_litellm_response={
+        "id": "0irEaqqwNbCdq8YP3L2mqQ4",
+        "created": ANY,
+        "model": "vertex_ai/gemini-3.1-pro-preview",
+        "object": "chat.completion",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {
+                    "content": "Hello.",
+                    "role": "assistant",
+                    "images": [],
+                    "thinking_blocks": [],
+                    "provider_specific_fields": {"thought_signatures": [GEMINI_3_1_PRO_PREVIEW_THOUGHT_SIGNATURE]},
+                },
+                "provider_specific_fields": {"native_finish_reason": "STOP"},
+            }
+        ],
+        "usage": {
+            "completion_tokens": 90,
+            "prompt_tokens": 9,
+            "total_tokens": 99,
+            "completion_tokens_details": {"reasoning_tokens": 89, "text_tokens": 1},
+            "prompt_tokens_details": {"text_tokens": 9},
+        },
+        "vertex_ai_grounding_metadata": [],
+        "vertex_ai_url_context_metadata": [],
+        "vertex_ai_safety_results": [],
+        "vertex_ai_citation_metadata": [],
+    },
+)
