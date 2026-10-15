@@ -5444,11 +5444,9 @@ _CONTENT_BLOCKS: Final = TypeAdapter(list[object])
 
 
 def _content_with_function_prompt(content: object, function_prompt: str) -> str | Sequence[object]:
-    if content is None:
-        return function_prompt
     if isinstance(content, str):
         return f"{content} {function_prompt}"
-    if not isinstance(content, list | tuple):
+    if not isinstance(content, list):
         raise TypeError(
             f"system message content must be a string or a list of content parts, got {type(content).__name__}"
         )
