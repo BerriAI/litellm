@@ -115,24 +115,26 @@ class AzureAnthropicConfig(AnthropicConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict[str, object],
-        litellm_params: dict[str, object],
-        headers: dict[str, object],
-    ) -> dict[str, object]:
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
         """
         Transform request using parent AnthropicConfig, then remove unsupported params.
         Azure Anthropic doesn't support extra_body, max_retries, or stream_options parameters.
         """
         _promote_extra_body_to_optional_params(optional_params)
 
-        data: Final[dict[str, object]] = {
-            **super().transform_request(
-                model=model,
-                messages=messages,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                headers=headers,
-            )
-        }
+        data: Final = super().transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
 
-        return {key: value for key, value in data.items() if key not in _AZURE_ANTHROPIC_NON_BODY_PARAMS}
+        return {
+            key: value
+            for key, value in data.items()  # pyright: ignore[reportUnknownVariableType]  # Anthropic base returns a bare request dict
+            if key not in _AZURE_ANTHROPIC_NON_BODY_PARAMS
+        }
