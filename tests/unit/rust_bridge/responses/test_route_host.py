@@ -225,3 +225,38 @@ def test_provider_connection_matches_get_llm_provider(monkeypatch: pytest.Monkey
         "http://vllm:8000",
     )
     assert provider_connection("gpt-4.1", None, None, None) == (None, None)
+
+
+@pytest.mark.parametrize(
+    ("request_fields", "expected"),
+    [
+        pytest.param({"api_key": "fw-key"}, None, id="api_key"),
+        pytest.param({}, "native Fireworks Responses needs an api key", id="no_key"),
+        pytest.param(
+            {"api_key": "fw-key", "litellm_metadata": {"session_id": "sess-1"}},
+            "native Fireworks Responses does not implement session affinity",
+            id="session_affinity",
+        ),
+        pytest.param(
+            {"api_key": "fw-key", "tools": [{"type": "file_search", "vector_store_ids": ["vs_1"]}]},
+            "native Responses does not implement emulated file_search",
+            id="emulated_file_search",
+        ),
+    ],
+)
+def test_fireworks_requests_outside_the_native_config_stay_on_python(
+    monkeypatch: pytest.MonkeyPatch, request_fields: dict[str, object], expected: str | None
+) -> None:
+    for name in ("FIREWORKS_API_KEY", "FIREWORKS_AI_API_KEY", "FIREWORKSAI_API_KEY", "FIREWORKS_AI_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    assert decline_reason({"model": "fireworks_ai/qwen3", "input": "hi", **request_fields}) == expected
+
+
+def test_openai_file_search_stays_native() -> None:
+    request: Final = {
+        "model": "gpt-4.1",
+        "input": "hi",
+        "api_key": "sk-test",
+        "tools": [{"type": "file_search", "vector_store_ids": ["vs_1"]}],
+    }
+    assert decline_reason(request) is None

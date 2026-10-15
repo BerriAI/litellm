@@ -9,6 +9,7 @@ pub mod cohere;
 pub mod deepseek;
 pub mod edenai;
 mod error;
+pub mod fireworks_ai;
 pub mod hosted_vllm;
 pub mod minimax;
 pub mod mistral;

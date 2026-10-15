@@ -7,6 +7,8 @@ from typing import Final, cast  # noqa: TID251  # narrows caller json the checke
 import litellm
 from litellm import get_llm_provider
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
+from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
+from litellm.llms.fireworks_ai.responses.transformation import FireworksAIResponsesAPIConfig
 from litellm.llms.hosted_vllm.responses.transformation import HostedVLLMResponsesAPIConfig
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.llms.xai.responses.transformation import XAIResponsesAPIConfig
@@ -24,6 +26,7 @@ _CONFIGS: Final[Mapping[str, OpenAIResponsesAPIConfig]] = MappingProxyType(
         "azure": AzureOpenAIResponsesAPIConfig(),
         "xai": XAIResponsesAPIConfig(),
         "hosted_vllm": HostedVLLMResponsesAPIConfig(),
+        "fireworks_ai": FireworksAIResponsesAPIConfig(),
     }
 )
 _AZURE_KEY_ENVIRONMENT: Final = ("AZURE_OPENAI_API_KEY", "AZURE_API_KEY")
@@ -85,7 +88,7 @@ def decline_reason(request: Mapping[str, object]) -> str | None:
 def _provider_decline_reason(provider: str, model: str, request: Mapping[str, object]) -> str | None:
     if provider == "azure":
         return _azure_decline_reason(model, request)
-    if provider not in ("xai", "hosted_vllm"):
+    if provider not in ("xai", "hosted_vllm", "fireworks_ai"):
         return None
     provider_key, provider_base = provider_connection(
         str(request["model"]),
@@ -97,6 +100,10 @@ def _provider_decline_reason(provider: str, model: str, request: Mapping[str, ob
         return "native xAI Responses does not implement OAuth"
     if provider == "hosted_vllm" and not provider_base:
         return "native hosted vLLM Responses needs an api_base"
+    if provider == "fireworks_ai" and not provider_key:
+        return "native Fireworks Responses needs an api key"
+    if provider == "fireworks_ai" and get_fireworks_session_id({"metadata": request.get("litellm_metadata")}):
+        return "native Fireworks Responses does not implement session affinity"
     return None
 
 
@@ -122,6 +129,8 @@ def _model_rules_decline_reason(
     config: OpenAIResponsesAPIConfig, model: str, request: Mapping[str, object]
 ) -> str | None:
     """Request rewrites that read the model cost map or Python's regex engine stay on Python"""
+    if _has_file_search_tool(request.get("tools")) and not config.supports_native_file_search():
+        return "native Responses does not implement emulated file_search"
     params: Final = {name: request[name] for name in PARAMETERS if request.get(name) is not None}
     try:
         config.map_openai_params(params, model, drop_params=False)  # pyright: ignore[reportArgumentType, reportUnknownMemberType]  # the same rules the Python route applies
@@ -152,6 +161,14 @@ def _repairs_tool_schemas(
     return (
         config._sanitized_tool_schemas_for_openai(model=model, tools=decoded, litellm_params=litellm_params)  # pyright: ignore[reportPrivateUsage]  # the same rules the Python route applies
         is not decoded
+    )
+
+
+def _has_file_search_tool(tools: object) -> bool:
+    return isinstance(tools, list) and any(
+        isinstance(tool, Mapping)
+        and cast(Mapping[str, object], tool).get("type") == "file_search"  # cast-ok: caller json
+        for tool in cast(list[object], tools)  # cast-ok: caller json
     )
 
 

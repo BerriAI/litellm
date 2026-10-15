@@ -158,6 +158,15 @@ AFFINITY_REPLAY_INPUT: Final[list[JsonValue]] = [
 
 AZURE_MODEL: Final = "azure/my-deployment"
 XAI_MODEL: Final = "xai/grok-4"
+FIREWORKS_MODEL: Final = "fireworks_ai/qwen3-235b-a22b"
+FIREWORKS_INSTRUCTION_INPUT: Final[list[JsonValue]] = [
+    {"role": "system", "content": "Be brief"},
+    {"role": "developer", "content": [{"type": "input_text", "text": "Answer in French"}]},
+    {"role": "user", "content": "Capital of France?"},
+    {"role": "developer", "content": "Mention the river"},
+    {"role": "assistant", "content": "Paris"},
+    {"role": "developer", "content": "Now be verbose"},
+]
 HOSTED_VLLM_MODEL: Final = "hosted_vllm/meta-llama/Llama-3.1-8B-Instruct"
 
 XAI_RESPONSE: Final[Mapping[str, JsonValue]] = MappingProxyType(
@@ -354,6 +363,16 @@ CASES: Final = (
         "xai_tools_metadata_and_max_output_tokens",
         {"model": XAI_MODEL, "input": "hi", "tools": XAI_TOOLS, "metadata": {"team": "a"}, "max_output_tokens": 8},
         upstream=XAI_RESPONSE,
+    ),
+    Case(
+        "fireworks_folds_instruction_items",
+        {"model": FIREWORKS_MODEL, "input": FIREWORKS_INSTRUCTION_INPUT, "instructions": "You are helpful"},
+    ),
+    Case("fireworks_router_resource_name", {"model": "fireworks_ai/glm-fast", "input": "hi"}),
+    Case(
+        "fireworks_session_affinity_stays_on_python",
+        {"model": FIREWORKS_MODEL, "input": "hi", "litellm_metadata": {"session_id": "sess-1"}},
+        falls_back=True,
     ),
     Case("hosted_vllm_placeholder_key", {"model": HOSTED_VLLM_MODEL, "input": "hi", "api_key": None}),
     Case(
