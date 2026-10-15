@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.gemini.common_utils import (
     GeminiError,
@@ -141,15 +142,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         Note: This returns the base URL WITHOUT the API key.
         The API key will be appended to specific endpoint URLs in the transform methods.
         """
-        if api_base is None:
-            api_base = GeminiModelInfo.get_api_base()
-
-        if api_base is None:
-            raise ValueError("GEMINI_API_BASE is not set")
-
-        # Ensure we're using the v1beta version for File Search
-        api_version: Final = "v1beta"
-        return f"{api_base}/{api_version}"
+        return join_api_base(GeminiModelInfo.get_api_base(api_base), "v1beta")
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> GeminiError:
         """Return Gemini-specific error class."""

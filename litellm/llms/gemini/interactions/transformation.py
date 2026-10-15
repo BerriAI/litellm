@@ -16,7 +16,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import process_response_headers
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.interactions.transformation import BaseInteractionsAPIConfig
 from litellm.llms.gemini.common_utils import GeminiError, GeminiModelInfo
 from litellm.types.interactions import (
@@ -153,10 +153,8 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         if not api_key:
             raise ValueError("Google API key is required. Set GOOGLE_API_KEY or GEMINI_API_KEY environment variable.")
 
-        if stream:
-            return f"{api_base}/{self.api_version}/interactions?alt=sse"
-
-        return f"{api_base}/{self.api_version}/interactions"
+        collection_url: Final = join_api_base(api_base, f"{self.api_version}/interactions")
+        return f"{collection_url}?alt=sse" if stream else collection_url
 
     def transform_request(
         self,

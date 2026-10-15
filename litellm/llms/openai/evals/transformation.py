@@ -8,7 +8,7 @@ from typing import Final
 import httpx
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.evals.transformation import (
     BaseEvalsAPIConfig,
     LiteLLMLoggingObj,
@@ -76,8 +76,8 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
 
         if eval_id:
             encoded_eval_id: Final = encode_url_path_segment(eval_id, field_name="eval_id")
-            return f"{api_base}/v1/evals/{encoded_eval_id}"
-        return f"{api_base}/v1/{endpoint}"
+            return join_api_base(api_base, f"v1/evals/{encoded_eval_id}")
+        return join_api_base(api_base, f"v1/{endpoint}")
 
     def transform_create_eval_request(
         self,

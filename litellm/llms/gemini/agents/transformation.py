@@ -15,6 +15,7 @@ from typing import Any, Final
 import httpx
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.agents.transformation import BaseAgentsAPIConfig
 from litellm.llms.gemini.common_utils import GeminiError, GeminiModelInfo
 from litellm.types.agents import (
@@ -67,7 +68,7 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
         return "v1beta"
 
     def _base_url(self, api_base: str | None) -> str:
-        return f"{GeminiModelInfo.get_api_base(api_base)}/{self.api_version}"
+        return join_api_base(GeminiModelInfo.get_api_base(api_base), self.api_version)
 
     # ------------------------------------------------------------------ #
     # Shared helpers                                                       #

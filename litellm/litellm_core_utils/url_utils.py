@@ -129,6 +129,14 @@ def encode_url_path_segments(value: object, *, field_name: str = "path") -> str:
     return "/".join(encode_url_path_segment(segment, field_name=field_name) for segment in value_str.split("/"))
 
 
+def join_api_base(api_base: str, route: str) -> str:
+    base: Final = api_base.rstrip("/")
+    path: Final = route.lstrip("/")
+    if base.endswith(f"/{path}"):
+        return base
+    return f"{base}/{path}"
+
+
 def _is_blocked_ip(addr: str) -> bool:
     """Return True for any IP not safe to reach from a user-supplied URL.
 

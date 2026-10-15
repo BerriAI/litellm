@@ -6,6 +6,7 @@ import httpx
 from litellm._logging import verbose_logger
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -256,10 +257,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        api_base = AnthropicModelInfo.get_api_base(api_base) or "https://api.anthropic.com"
-        if not api_base.endswith("/v1/messages"):
-            api_base = f"{api_base}/v1/messages"
-        return api_base
+        return join_api_base(AnthropicModelInfo.get_api_base(api_base) or "https://api.anthropic.com", "v1/messages")
 
     def validate_anthropic_messages_environment(
         self,

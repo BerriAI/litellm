@@ -15,7 +15,7 @@ from litellm._uuid import uuid
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import BedrockError
@@ -101,9 +101,10 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         encoded_agent_alias_id: Final = encode_url_path_segment(agent_alias_id, field_name="agent_alias_id")
         encoded_session_id: Final = encode_url_path_segment(session_id, field_name="session_id")
 
-        endpoint_url = f"{endpoint_url}/agents/{encoded_agent_id}/agentAliases/{encoded_agent_alias_id}/sessions/{encoded_session_id}/text"
-
-        return endpoint_url
+        return join_api_base(
+            endpoint_url,
+            f"agents/{encoded_agent_id}/agentAliases/{encoded_agent_alias_id}/sessions/{encoded_session_id}/text",
+        )
 
     def sign_request(
         self,

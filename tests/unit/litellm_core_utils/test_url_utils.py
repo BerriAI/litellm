@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.url_utils import (
     assert_same_origin,
     encode_url_path_segment,
     encode_url_path_segments,
+    join_api_base,
     validate_url,
 )
 
@@ -571,3 +572,26 @@ async def test_async_safe_get_resolves_dns_off_the_event_loop(monkeypatch):
     assert response.status_code == 200
     assert resolver_threads and all(thread is not loop_thread for thread in resolver_threads)
     assert released_by_the_loop and all(released_by_the_loop)
+
+
+@pytest.mark.parametrize(
+    ("api_base", "route", "expected"),
+    [
+        ("https://gw.test/p/", "v1/messages", "https://gw.test/p/v1/messages"),
+        ("https://gw.test/p//", "v1/messages", "https://gw.test/p/v1/messages"),
+        ("https://gw.test/p", "v1/messages", "https://gw.test/p/v1/messages"),
+        ("https://gw.test/p/", "/v1/messages", "https://gw.test/p/v1/messages"),
+        ("https://gw.test/p/v1/messages/", "/v1/messages", "https://gw.test/p/v1/messages"),
+        ("https://gw.test/research", "search", "https://gw.test/research/search"),
+    ],
+    ids=(
+        "trailing-slash-base",
+        "repeated-trailing-slashes",
+        "base-without-slash",
+        "route-with-leading-slash",
+        "base-already-ends-in-route",
+        "base-ends-in-lookalike-suffix",
+    ),
+)
+def test_join_api_base_joins_with_exactly_one_slash(api_base: str, route: str, expected: str) -> None:
+    assert join_api_base(api_base, route) == expected
