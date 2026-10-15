@@ -1091,3 +1091,121 @@ def test_ollama_aembeddings(mock_aembeddings):
         )
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+class TestOllamaStreamingToolCallIds:
+    """Streaming must keep the tool call ids Ollama assigns.
+
+    Ollama's /api/chat stream carries an id on every tool call. LiteLLM used
+    to overwrite it with a freshly generated uuid even when the provider sent
+    one, so callers matching tool results by id saw ids the provider never
+    sent.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/46543
+    """
+
+    def _tool_call_chunk(self, tool_call_id: str, city: str) -> dict:
+        return {
+            "model": "qwen3.5:0.8b",
+            "created_at": "2026-10-12T19:01:10.221707224Z",
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": tool_call_id,
+                        "function": {
+                            "index": 0,
+                            "name": "get_weather",
+                            "arguments": {"city": city},
+                        },
+                    }
+                ],
+            },
+            "done": False,
+        }
+
+    def _done_chunk(self) -> dict:
+        return {
+            "model": "qwen3.5:0.8b",
+            "created_at": "2026-10-12T19:01:11.38933263Z",
+            "message": {"role": "assistant", "content": ""},
+            "done": True,
+            "done_reason": "stop",
+        }
+
+    def test_streaming_preserves_provider_tool_call_ids(self) -> None:
+        """Two parallel tool calls recorded from a real Ollama v0.40.3 stream
+        must surface with the ids Ollama sent, not freshly generated uuids.
+        """
+        from uuid import UUID
+
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        first = iterator.chunk_parser(self._tool_call_chunk("call_8uaqob2r", "Sao Paulo"))
+        second = iterator.chunk_parser(self._tool_call_chunk("call_nyjtbrz4", "Zurich"))
+        done = iterator.chunk_parser(self._done_chunk())
+
+        first_id = first.choices[0].delta.tool_calls[0].id
+        second_id = second.choices[0].delta.tool_calls[0].id
+
+        assert first_id == "call_8uaqob2r", (
+            f"Expected Ollama's id 'call_8uaqob2r' to survive the stream, got '{first_id}'"
+        )
+        assert second_id == "call_nyjtbrz4", (
+            f"Expected Ollama's id 'call_nyjtbrz4' to survive the stream, got '{second_id}'"
+        )
+
+        # Both ids came from the provider, so neither parses as a uuid.
+        for emitted_id in (first_id, second_id):
+            with pytest.raises(ValueError, match="badly formed hexadecimal UUID string"):
+                UUID(emitted_id)
+
+        # The recorded stream ends with done_reason 'stop' after tool calls,
+        # which the iterator maps to 'tool_calls'.
+        assert (
+            done.choices[0].finish_reason == "tool_calls"
+        ), f"Expected 'tool_calls' after streamed tool calls, got '{done.choices[0].finish_reason}'"
+
+    def test_streaming_generates_id_when_provider_omits_it(self) -> None:
+        """A complete tool call with no id must still get a generated one.
+
+        Keeps the behavior from https://github.com/BerriAI/litellm/issues/11262
+        intact: ids are only minted when the provider does not send them.
+        """
+        from uuid import UUID
+
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        chunk = self._tool_call_chunk("call_8uaqob2r", "Sao Paulo")
+        del chunk["message"]["tool_calls"][0]["id"]
+
+        result = iterator.chunk_parser(chunk)
+
+        emitted_id = result.choices[0].delta.tool_calls[0].id
+        assert emitted_id is not None, "Expected a generated id when the provider sends none"
+        UUID(emitted_id)  # generated ids are uuids and must parse
+
+    def test_streaming_empty_id_is_treated_as_missing(self) -> None:
+        """An empty string id must not be emitted verbatim; a fresh uuid is minted."""
+        from uuid import UUID
+
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        result = iterator.chunk_parser(self._tool_call_chunk("", "Sao Paulo"))
+
+        emitted_id = result.choices[0].delta.tool_calls[0].id
+        assert emitted_id not in (
+            None,
+            "",
+        ), f"Expected a fresh id for an empty provider id, got '{emitted_id}'"
+        UUID(emitted_id)
