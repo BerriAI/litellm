@@ -7,6 +7,7 @@ import lagoLogo from "../../public/assets/logos/lago.svg";
 import langfuseLogo from "../../public/assets/logos/langfuse.png";
 import langsmithLogo from "../../public/assets/logos/langsmith.png";
 import newrelicLogo from "../../public/assets/logos/newrelic.png";
+import nopsLogo from "../../public/assets/logos/nops.png";
 import openmeterLogo from "../../public/assets/logos/openmeter.png";
 import otelLogo from "../../public/assets/logos/otel.png";
 import pointfiveLogo from "../../public/assets/logos/pointfive.png";
@@ -154,6 +155,17 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       langsmith_sampling_rate: "number",
     },
     description: "Langsmith Logging Integration",
+  },
+  {
+    id: "nops",
+    displayName: "nOps",
+    logo: nopsLogo.src,
+    supports_key_team_logging: false,
+    dynamic_params: {
+      NOPS_API_KEY: "password",
+      NOPS_OTEL_ENDPOINT: "text",
+    },
+    description: "nOps Logging Integration",
   },
   {
     id: "openmeter",

@@ -2,6 +2,8 @@
 event loop: the preset does no network I/O, and a custom exporter mints the JWT
 lazily on its first export (in the BatchSpanProcessor worker thread)."""
 
+from typing import Final
+
 import httpx
 import pytest
 
@@ -278,3 +280,50 @@ def test_signoz_preset_accepts_the_factory_call_shape(monkeypatch):
 
     cfg = PRESET_BY_CALLBACK["signoz"](allow_missing_credentials=True)
     assert any(e.owner == ExporterOwner.SIGNOZ for e in cfg.exporters)
+
+
+@pytest.mark.parametrize("endpoint", [None, ""], ids=["unset", "empty"])
+def test_nops_preset_defaults_to_the_nops_endpoint_with_a_bearer_key(monkeypatch, endpoint):
+    monkeypatch.setenv("NOPS_API_KEY", "nops-env-key")
+    if endpoint is None:
+        monkeypatch.delenv("NOPS_OTEL_ENDPOINT", raising=False)
+    else:
+        monkeypatch.setenv("NOPS_OTEL_ENDPOINT", endpoint)
+    from litellm.integrations.otel.model.config import ExporterOwner
+    from litellm.integrations.otel.plumbing.providers import _exports_to_the_wire, _otlp_traces_endpoint
+    from litellm.integrations.otel.presets import PRESET_BY_CALLBACK
+
+    cfg: Final = PRESET_BY_CALLBACK["nops"](allow_missing_credentials=True)
+    spec: Final = next(e for e in cfg.exporters if e.owner == ExporterOwner.NOPS)
+    assert spec.kind == "otlp_http"
+    assert _otlp_traces_endpoint(spec.endpoint) == "https://api.nops.io/otel/v1/traces"
+    assert spec.headers == "Authorization=Bearer nops-env-key"
+    assert _exports_to_the_wire(spec) is True
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    ["http://clara.local:8080/otel", "http://clara.local:8080/otel/", "http://clara.local:8080/otel/v1/traces"],
+    ids=["base", "trailing-slash", "signal-path"],
+)
+def test_nops_preset_endpoint_override(monkeypatch, endpoint):
+    monkeypatch.setenv("NOPS_API_KEY", "nops-env-key")
+    monkeypatch.setenv("NOPS_OTEL_ENDPOINT", endpoint)
+    from litellm.integrations.otel.model.config import ExporterOwner
+    from litellm.integrations.otel.plumbing.providers import _otlp_traces_endpoint
+    from litellm.integrations.otel.presets.nops import nops_preset
+
+    spec: Final = next(e for e in nops_preset().exporters if e.owner == ExporterOwner.NOPS)
+    assert _otlp_traces_endpoint(spec.endpoint) == "http://clara.local:8080/otel/v1/traces"
+
+
+def test_nops_preset_without_key_skips_the_exporter(monkeypatch):
+    monkeypatch.delenv("NOPS_API_KEY", raising=False)
+    monkeypatch.delenv("NOPS_OTEL_ENDPOINT", raising=False)
+    from litellm.integrations.otel.model.config import ExporterOwner
+    from litellm.integrations.otel.plumbing.providers import _exports_to_the_wire
+    from litellm.integrations.otel.presets.nops import nops_preset
+
+    spec: Final = next(e for e in nops_preset().exporters if e.owner == ExporterOwner.NOPS)
+    assert spec.headers is None
+    assert _exports_to_the_wire(spec) is False
