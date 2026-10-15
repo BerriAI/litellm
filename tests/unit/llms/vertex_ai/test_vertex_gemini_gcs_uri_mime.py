@@ -3,7 +3,7 @@
 Split from test_vertex.py to satisfy CI per-file size limits.
 """
 import asyncio
-import time
+import threading
 
 from dotenv import load_dotenv
 
@@ -81,7 +81,7 @@ def test_process_gemini_media_rejects_gcs_metadata_mime_not_supported_by_gemini(
 
 def test_file_block_uses_mime_type_alias_for_extensionless_gcs():
     from litellm.llms.vertex_ai.gemini.transformation import (
-        _gemini_convert_messages_with_history,
+        gemini_convert_messages_with_history,
     )
     from litellm.types.llms.vertex_ai import FileDataType
 
@@ -99,9 +99,7 @@ def test_file_block_uses_mime_type_alias_for_extensionless_gcs():
             ],
         }
     ]
-    converted = _gemini_convert_messages_with_history(
-        messages=messages, model="gemini-2.5-flash"
-    )
+    converted = gemini_convert_messages_with_history(messages=messages, model="gemini-2.5-flash")
     assert converted[0]["parts"][0]["file_data"] == FileDataType(
         mime_type="application/pdf", file_uri="gs://bucket/no-extension-object"
     )
@@ -267,8 +265,10 @@ def test_async_transform_request_body_offloads_extensionless_gs_not_plain_text()
         }
     ]
 
-    def slow_http_get(*args, **kwargs):
-        time.sleep(0.5)
+    http_get_released_by_the_loop = threading.Event()
+    released_while_blocked = []
+
+    def http_get_response() -> MagicMock:
         response = MagicMock()
         response.is_error = False
         response.status_code = 200
@@ -282,14 +282,22 @@ def test_async_transform_request_body_offloads_extensionless_gs_not_plain_text()
     mock_v = MagicMock()
     mock_v.get_access_token.return_value = ("token", "project")
     mock_http = MagicMock()
-    mock_http.get.side_effect = slow_http_get
 
-    async def run_scenario() -> float:
-        async def concurrent_sleep() -> float:
-            start = time.monotonic()
-            await asyncio.sleep(0.05)
-            return time.monotonic() - start
+    async def run_scenario() -> None:
+        loop = asyncio.get_running_loop()
+        http_get_blocked = asyncio.Event()
 
+        def blocking_http_get(*args: object, **kwargs: object) -> MagicMock:
+            loop.call_soon_threadsafe(http_get_blocked.set)
+            released_while_blocked.append(http_get_released_by_the_loop.wait(timeout=5))
+            return http_get_response()
+
+        async def release_http_get_from_the_loop() -> None:
+            await http_get_blocked.wait()
+            http_get_released_by_the_loop.set()
+
+        mock_http.get.side_effect = blocking_http_get
+        releaser = asyncio.create_task(release_http_get_from_the_loop())
         task = asyncio.create_task(
             gemini_transformation.async_transform_request_body(
                 gemini_api_key=None,
@@ -308,9 +316,8 @@ def test_async_transform_request_body_offloads_extensionless_gs_not_plain_text()
                 vertex_auth_header=None,
             )
         )
-        elapsed = await concurrent_sleep()
         await task
-        return elapsed
+        await asyncio.wait_for(releaser, timeout=5)
 
     with (
         patch.object(gemini_transformation, "_GCS_METADATA_VERTEX_BASE", mock_v),
@@ -324,11 +331,10 @@ def test_async_transform_request_body_offloads_extensionless_gs_not_plain_text()
             new=fake_check_and_create_cache,
         ),
     ):
-        sleep_elapsed = asyncio.run(run_scenario())
+        asyncio.run(run_scenario())
 
-    assert sleep_elapsed < 0.4, (
-        f"Event loop blocked for {sleep_elapsed:.3f}s; "
-        "async_transform_request_body did not offload sync GCS metadata"
+    assert released_while_blocked and all(released_while_blocked), (
+        "Event loop blocked; async_transform_request_body did not offload sync GCS metadata"
     )
 
     async def fake_cache2(self, **kwargs):

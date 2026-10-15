@@ -65,7 +65,7 @@ class TeamMemberPermissionChecks:
         Main handler for checking if a team member can update a key
         """
         from litellm.proxy.management_endpoints.key_management_endpoints import (
-            _get_caller_team_role,
+            get_caller_team_role,
         )
 
         # 1. Don't execute these checks if the user role is proxy admin
@@ -85,7 +85,7 @@ class TeamMemberPermissionChecks:
             check_db_only=True,
         )
 
-        caller_team_role: Final = _get_caller_team_role(team_table=team_table, user_api_key_dict=user_api_key_dict)
+        caller_team_role: Final = get_caller_team_role(team_table=team_table, user_api_key_dict=user_api_key_dict)
 
         # 4. Check if the team member has permissions for the endpoint
         has_permission: Final = TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint(
@@ -152,7 +152,7 @@ class TeamMemberPermissionChecks:
         from fastapi import HTTPException
 
         from litellm.proxy.management_endpoints.key_management_endpoints import (
-            _get_caller_team_role,
+            get_caller_team_role,
         )
 
         # No-op when the request does not assign any access groups.
@@ -173,7 +173,7 @@ class TeamMemberPermissionChecks:
                 ),
             )
 
-        caller_team_role: Final = _get_caller_team_role(team_table=team_table, user_api_key_dict=user_api_key_dict)
+        caller_team_role: Final = get_caller_team_role(team_table=team_table, user_api_key_dict=user_api_key_dict)
 
         # Team admins always bypass (consistent with other member-permission checks).
         if caller_team_role == "admin":
@@ -209,7 +209,7 @@ class TeamMemberPermissionChecks:
         Returns True if the user belongs to the team that the key is assigned to
         """
         from litellm.proxy.management_endpoints.key_management_endpoints import (
-            _get_caller_team_role,
+            get_caller_team_role,
         )
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
@@ -223,7 +223,7 @@ class TeamMemberPermissionChecks:
             check_db_only=True,
         )
 
-        caller_team_role: Final = _get_caller_team_role(team_table=team_table, user_api_key_dict=user_api_key_dict)
+        caller_team_role: Final = get_caller_team_role(team_table=team_table, user_api_key_dict=user_api_key_dict)
         return caller_team_role is not None
 
     @staticmethod

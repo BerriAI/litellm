@@ -3,13 +3,28 @@ Unit tests for CheckResponsesCost class
 """
 
 import asyncio
+from collections.abc import Mapping
 from datetime import datetime
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
 from litellm.constants import MAX_OBJECTS_PER_POLL_CYCLE
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+
+
+class _RecordingManagedObjectTable:
+    def __init__(self, rows: tuple[object, ...]) -> None:
+        self.rows: Final = rows
+        self.updates: tuple[tuple[Mapping[str, object], Mapping[str, object]], ...] = ()
+
+    async def find_many(self, **query: object) -> tuple[object, ...]:
+        return self.rows
+
+    async def update_many(self, where: Mapping[str, object], data: Mapping[str, object]) -> int:
+        self.updates = (*self.updates, (where, data))
+        return len(self.rows)
 
 
 class TestCheckResponsesCost:
@@ -363,6 +378,264 @@ class TestCheckResponsesCost:
         assert len(calls) == 0
         # Stale cleanup still ran via _expire_stale_rows
         check_responses_cost_instance._expire_stale_rows.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_check_responses_cost_marks_404_response_stale_expired(
+        self, check_responses_cost_instance, mock_prisma_client, mock_llm_router
+    ):
+        """A provider 404 on a response polled through its deployment marks the row stale_expired."""
+        import litellm
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        encoded_response_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="openai",
+            model_id="deployment-404",
+            response_id="resp_upstream_404",
+        )
+
+        mock_job = MagicMock()
+        mock_job.unified_object_id = encoded_response_id
+        mock_job.created_by = "test-user"
+        mock_job.id = "job-404"
+        mock_job.file_object = {"model": "gpt-4o", "id": encoded_response_id}
+
+        mock_llm_router.get_deployment.return_value = {"model_id": "deployment-404"}
+        mock_llm_router.aget_responses = AsyncMock(
+            side_effect=litellm.NotFoundError(
+                message="Response with id 'resp_upstream_404' not found.", model="gpt-5", llm_provider="openai"
+            )
+        )
+
+        table = _RecordingManagedObjectTable(rows=(mock_job,))
+        mock_prisma_client.db.litellm_managedobjecttable = table
+
+        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_sdk_aget:
+            await check_responses_cost_instance.check_responses_cost()
+
+        mock_sdk_aget.assert_not_called()
+        mock_llm_router.get_deployment.assert_called_once_with(model_id="deployment-404")
+        assert mock_llm_router.aget_responses.call_args.kwargs["response_id"] == encoded_response_id
+        assert table.updates == (({"id": {"in": ["job-404"]}}, {"status": "stale_expired"}),)
+
+    @pytest.mark.asyncio
+    async def test_check_responses_cost_marks_mapped_provider_404_stale_expired(
+        self, check_responses_cost_instance, mock_prisma_client, mock_llm_router
+    ):
+        """The provider's own 404 body, mapped the way the GET path maps it, still expires the row."""
+        import json
+
+        import openai
+
+        import litellm
+        from litellm.llms.openai.common_utils import OpenAIError
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        encoded_response_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="openai",
+            model_id="deployment-404-mapped",
+            response_id="resp_upstream_404_mapped",
+        )
+        provider_body = json.dumps(
+            {
+                "error": {
+                    "message": "Response with id 'resp_upstream_404_mapped' not found.",
+                    "type": "invalid_request_error",
+                    "param": None,
+                    "code": None,
+                }
+            }
+        )
+        with pytest.raises(openai.APIStatusError) as mapped:
+            raise litellm.exception_type(
+                model="gpt-5.5",
+                custom_llm_provider="openai",
+                original_exception=OpenAIError(message=provider_body, status_code=404),
+                completion_kwargs={},
+                extra_kwargs={},
+            )
+        assert mapped.value.status_code == 404
+
+        mock_job = MagicMock()
+        mock_job.unified_object_id = encoded_response_id
+        mock_job.created_by = "test-user"
+        mock_job.id = "job-404-mapped"
+        mock_job.file_object = {"model": "gpt-5.5", "id": encoded_response_id}
+
+        mock_llm_router.get_deployment.return_value = {"model_id": "deployment-404-mapped"}
+        mock_llm_router.aget_responses = AsyncMock(side_effect=mapped.value)
+
+        table = _RecordingManagedObjectTable(rows=(mock_job,))
+        mock_prisma_client.db.litellm_managedobjecttable = table
+
+        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_sdk_aget:
+            await check_responses_cost_instance.check_responses_cost()
+
+        mock_sdk_aget.assert_not_called()
+        assert table.updates == (({"id": {"in": ["job-404-mapped"]}}, {"status": "stale_expired"}),)
+
+    @pytest.mark.asyncio
+    async def test_check_responses_cost_404_without_router_deployment_keeps_row_for_retry(
+        self, check_responses_cost_instance, mock_prisma_client, mock_llm_router
+    ):
+        """A 404 while polling without a resolved deployment skips the row for retry."""
+        import litellm
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        encoded_response_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="openai",
+            model_id="deployment-gone",
+            response_id="resp_upstream_gone",
+        )
+
+        mock_job = MagicMock()
+        mock_job.unified_object_id = encoded_response_id
+        mock_job.created_by = "test-user"
+        mock_job.id = "job-404-fallback"
+        mock_job.file_object = {"model": "gpt-4o", "id": encoded_response_id}
+
+        mock_llm_router.get_deployment.return_value = None
+
+        table = _RecordingManagedObjectTable(rows=(mock_job,))
+        mock_prisma_client.db.litellm_managedobjecttable = table
+
+        with patch(
+            "litellm.aget_responses",
+            new_callable=AsyncMock,
+            side_effect=litellm.NotFoundError(
+                message="Response not found", model="gpt-5", llm_provider="openai"
+            ),
+        ) as mock_sdk_aget:
+            await check_responses_cost_instance.check_responses_cost()
+
+        mock_sdk_aget.assert_awaited_once()
+        mock_llm_router.aget_responses.assert_not_called()
+        assert table.updates == ()
+
+    @pytest.mark.asyncio
+    async def test_check_responses_cost_404_not_naming_the_response_keeps_row_for_retry(
+        self, check_responses_cost_instance, mock_prisma_client, mock_llm_router
+    ):
+        """A 404 that does not name the response (a gateway or a reconfigured deployment) is retried, not expired."""
+        import litellm
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        encoded_response_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="azure",
+            model_id="deployment-renamed",
+            response_id="resp_upstream_still_there",
+        )
+
+        mock_job = MagicMock()
+        mock_job.unified_object_id = encoded_response_id
+        mock_job.created_by = "test-user"
+        mock_job.id = "job-404-other"
+        mock_job.file_object = {"model": "azure-gpt-5", "id": encoded_response_id}
+
+        mock_llm_router.get_deployment.return_value = {"model_id": "deployment-renamed"}
+        mock_llm_router.aget_responses = AsyncMock(
+            side_effect=litellm.NotFoundError(
+                message="Resource not found", model="gpt-5", llm_provider="azure"
+            )
+        )
+
+        table = _RecordingManagedObjectTable(rows=(mock_job,))
+        mock_prisma_client.db.litellm_managedobjecttable = table
+
+        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_sdk_aget:
+            await check_responses_cost_instance.check_responses_cost()
+
+        mock_sdk_aget.assert_not_called()
+        assert mock_llm_router.aget_responses.call_args.kwargs["response_id"] == encoded_response_id
+        assert table.updates == ()
+
+    @pytest.mark.asyncio
+    async def test_check_responses_cost_deployment_lookup_error_skips_only_that_job(
+        self, check_responses_cost_instance, mock_prisma_client, mock_llm_router
+    ):
+        """A deployment lookup that raises skips its own job and the cycle still records the next job."""
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        broken_response_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="openai", model_id="deployment-broken", response_id="resp_upstream_broken"
+        )
+        healthy_response_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="openai", model_id="deployment-healthy", response_id="resp_upstream_healthy"
+        )
+
+        broken_job = MagicMock()
+        broken_job.unified_object_id = broken_response_id
+        broken_job.created_by = "test-user"
+        broken_job.id = "job-broken"
+        broken_job.file_object = {"model": "gpt-5.5", "id": broken_response_id}
+
+        healthy_job = MagicMock()
+        healthy_job.unified_object_id = healthy_response_id
+        healthy_job.created_by = "test-user"
+        healthy_job.id = "job-healthy"
+        healthy_job.file_object = {"model": "gpt-5.5", "id": healthy_response_id}
+
+        mock_llm_router.get_deployment.side_effect = [
+            Exception("Model invalid format - <class 'str'>"),
+            {"model_id": "deployment-healthy"},
+        ]
+        mock_llm_router.aget_responses = AsyncMock(
+            return_value=ResponsesAPIResponse(
+                id=healthy_response_id,
+                object="response",
+                status="completed",
+                created_at=int(datetime.now().timestamp()),
+                output=[],
+                usage=ResponseAPIUsage(input_tokens=100, output_tokens=50, total_tokens=150),
+            )
+        )
+
+        table = _RecordingManagedObjectTable(rows=(broken_job, healthy_job))
+        mock_prisma_client.db.litellm_managedobjecttable = table
+
+        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_sdk_aget:
+            await check_responses_cost_instance.check_responses_cost()
+
+        mock_sdk_aget.assert_not_called()
+        mock_llm_router.aget_responses.assert_awaited_once()
+        assert mock_llm_router.aget_responses.call_args.kwargs["response_id"] == healthy_response_id
+        assert table.updates == (({"id": {"in": ["job-healthy"]}}, {"status": "completed"}),)
+
+    @pytest.mark.asyncio
+    async def test_check_responses_cost_non_404_error_keeps_row_for_retry(
+        self, check_responses_cost_instance, mock_prisma_client, mock_llm_router
+    ):
+        """A non-404 provider error through a resolved deployment skips the job so it is retried next cycle."""
+        import litellm
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        encoded_response_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="openai",
+            model_id="deployment-500",
+            response_id="resp_upstream_500",
+        )
+
+        mock_job = MagicMock()
+        mock_job.unified_object_id = encoded_response_id
+        mock_job.created_by = "test-user"
+        mock_job.id = "job-500"
+        mock_job.file_object = {"model": "gpt-4o", "id": encoded_response_id}
+
+        mock_llm_router.get_deployment.return_value = {"model_id": "deployment-500"}
+        mock_llm_router.aget_responses = AsyncMock(
+            side_effect=litellm.InternalServerError(
+                message="boom", model="gpt-5", llm_provider="openai"
+            )
+        )
+
+        table = _RecordingManagedObjectTable(rows=(mock_job,))
+        mock_prisma_client.db.litellm_managedobjecttable = table
+
+        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_sdk_aget:
+            await check_responses_cost_instance.check_responses_cost()
+
+        mock_sdk_aget.assert_not_called()
+        mock_llm_router.aget_responses.assert_awaited_once()
+        assert table.updates == ()
 
     @pytest.mark.asyncio
     async def test_check_responses_cost_multiple_jobs(

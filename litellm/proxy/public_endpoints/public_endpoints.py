@@ -13,11 +13,11 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_blog_posts import (
-    BlogPost,
     BlogPostsResponse,
     GetBlogPosts,
     get_blog_posts,
 )
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.proxy._types import (
     CommonProxyErrors,
 )
@@ -221,10 +221,10 @@ def _load_endpoints() -> list[_EndpointEntry]:
 async def public_model_hub():
     import litellm
     from litellm.proxy.health_endpoints._health_endpoints import (
-        _convert_health_check_to_dict,
+        convert_health_check_to_dict,
     )
     from litellm.proxy.proxy_server import (
-        _get_model_group_info,
+        get_model_group_info,
         llm_router,
         prisma_client,
     )
@@ -234,7 +234,7 @@ async def public_model_hub():
 
     model_groups: list[ModelGroupInfoProxy] = []
     if litellm.public_model_groups is not None:
-        model_groups = _get_model_group_info(
+        model_groups = get_model_group_info(  # rebind-ok: pre-existing rebinding on a rename-only line
             llm_router=llm_router,
             all_models_str=litellm.public_model_groups,
             model_group=None,
@@ -248,7 +248,7 @@ async def public_model_hub():
             for check in latest_checks:
                 key = check.model_id if check.model_id else check.model_name
                 if key:
-                    health_check_dict = _convert_health_check_to_dict(check)
+                    health_check_dict = convert_health_check_to_dict(check)
                     health_checks_map[key] = health_check_dict
                     if check.model_name:
                         health_checks_map[check.model_name] = health_check_dict
@@ -322,7 +322,9 @@ async def get_mcp_servers():
 async def public_skill_hub():
     """Return enabled (public) Claude Code skills — no auth required."""
     from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketplace import (
-        _get_prisma_client,
+        MANIFEST_FIELDS,
+        get_installation_preference,
+        get_prisma_client,
     )
     from litellm.types.proxy.claude_code_endpoints import (
         ListPluginsResponse,
@@ -330,7 +332,7 @@ async def public_skill_hub():
     )
 
     try:
-        prisma_client: Final = await _get_prisma_client()
+        prisma_client: Final = await get_prisma_client()
         plugins: Final = await _plugin_table(prisma_client).find_many(where={"enabled": True})
         items: Final = []
         for plugin in plugins:
@@ -352,6 +354,7 @@ async def public_skill_hub():
                     homepage=manifest.get("homepage"),
                     domain=manifest.get("domain"),
                     namespace=manifest.get("namespace"),
+                    installation_preference=get_installation_preference(MANIFEST_FIELDS.validate_python(manifest)),
                 )
             )
         return ListPluginsResponse(plugins=items, count=len(items))
@@ -366,7 +369,7 @@ async def public_skill_hub():
 )
 async def public_model_hub_info():
     import litellm
-    from litellm.proxy.proxy_server import _title, version
+    from litellm.proxy.proxy_server import title, version
 
     try:
         from litellm_enterprise.proxy.proxy_server import EnterpriseProxyConfig
@@ -376,7 +379,7 @@ async def public_model_hub_info():
         custom_docs_description = None
 
     return PublicModelHubInfo(
-        docs_title=_title,
+        docs_title=title,
         custom_docs_description=custom_docs_description,
         litellm_version=version,
         useful_links=litellm.public_model_groups_links,
@@ -453,15 +456,16 @@ async def get_public_fuse_presets() -> FusePresetCatalog:
     "/public/litellm_model_cost_map",
     tags=["public", "model management"],
 )
-async def get_litellm_model_cost_map():
+async def get_litellm_model_cost_map(catalog_only: bool = False):
     """
     Public endpoint to get the LiteLLM model cost map.
     Returns pricing information for all supported models.
+    With catalog_only=true, returns the catalog as loaded, without entries registered at runtime for proxy deployments.
     """
     import litellm
 
     try:
-        _model_cost_map: Final = litellm.model_cost
+        _model_cost_map: Final = GetModelCostMap.loaded_model_cost_map() if catalog_only else litellm.model_cost
         return _model_cost_map
     except Exception as e:
         raise HTTPException(
@@ -475,41 +479,43 @@ async def get_litellm_model_cost_map():
     tags=["public"],
     response_model=BlogPostsResponse,
 )
-async def get_litellm_blog_posts():
+async def get_litellm_blog_posts() -> BlogPostsResponse:
     """
-    Public endpoint to get the latest LiteLLM blog posts.
+    Public endpoint to get the latest LiteLLM blog posts, each with its RSS categories as ``tags``.
 
-    Fetches from GitHub with a 1-hour in-process cache.
+    Fetches the docs RSS feed with a 1-hour in-process cache.
     Falls back to the bundled local backup on any failure.
     """
     try:
-        posts_data = get_blog_posts(url=litellm.blog_posts_url)
+        return BlogPostsResponse(posts=get_blog_posts(url=litellm.blog_posts_url))
     except Exception as e:
         verbose_logger.warning("LiteLLM: get_litellm_blog_posts endpoint fallback triggered: %s", str(e))
-        posts_data = GetBlogPosts.load_local_blog_posts()
-
-    posts: Final = [BlogPost(**p) for p in posts_data[:5]]
-    return BlogPostsResponse(posts=posts)
+        return BlogPostsResponse(posts=GetBlogPosts.load_local_blog_posts())
 
 
 _AUTOROUTER_PRESETS_ADAPTER: Final = TypeAdapter(dict[str, AutoRouterPresetRecord])
 
 
 def _load_bundled_autorouter_presets() -> Mapping[str, AutoRouterPresetRecord]:
-    raw: Final = json.loads(
-        files("litellm.proxy.public_endpoints").joinpath("autorouter_presets.json").read_text(encoding="utf-8")
+    return _AUTOROUTER_PRESETS_ADAPTER.validate_python(
+        json.loads(
+            files("litellm.proxy.public_endpoints").joinpath("autorouter_presets.json").read_text(encoding="utf-8")
+        )
     )
-    return _AUTOROUTER_PRESETS_ADAPTER.validate_python(raw)
 
 
-async def _fetch_remote_autorouter_presets(url: str) -> Mapping[str, AutoRouterPresetRecord]:
+async def _fetch_remote_bytes(url: str) -> bytes:
     from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
     from litellm.types.llms.custom_http import httpxSpecialProvider
 
     client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.UI)
     response: Final = await client.get(url, timeout=5.0)
     response.raise_for_status()
-    presets: Final = _AUTOROUTER_PRESETS_ADAPTER.validate_python(response.json())
+    return response.content
+
+
+async def _fetch_remote_autorouter_presets(url: str) -> Mapping[str, AutoRouterPresetRecord]:
+    presets: Final = _AUTOROUTER_PRESETS_ADAPTER.validate_json(await _fetch_remote_bytes(url))
     if not presets:
         raise ValueError("remote auto-router preset catalog is empty")
     return presets

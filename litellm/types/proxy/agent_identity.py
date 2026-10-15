@@ -2,12 +2,14 @@ from datetime import datetime
 from typing import Literal, TypeAlias
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import ConfigDict, Field, field_validator
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 AgentExecutionMode: TypeAlias = Literal["autonomous", "delegated", "both"]
 
 
-class EntraIdentityConfig(BaseModel):
+class EntraIdentityConfig(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     provider: Literal["microsoft_entra"]
@@ -30,7 +32,7 @@ class EntraIdentityConfig(BaseModel):
         return f"https://login.microsoftonline.com/{self.tenant_id}/v2.0"
 
 
-class AgentIdentityBinding(BaseModel):
+class AgentIdentityBinding(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     agent_id: str
@@ -46,7 +48,7 @@ class AgentIdentityBinding(BaseModel):
     last_authenticated_at: datetime | None = None
 
 
-class AgentSubject(BaseModel):
+class AgentSubject(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     kind: Literal["application", "delegated_subject"]
@@ -54,14 +56,14 @@ class AgentSubject(BaseModel):
     mode: Literal["autonomous", "delegated"]
 
 
-class AgentIdentityFailure(BaseModel):
+class AgentIdentityFailure(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     code: Literal["identity_denied", "policy_unavailable"] = "identity_denied"
     message: str
 
 
-class ManagedAgentContext(BaseModel):
+class ManagedAgentContext(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     agent_id: str
@@ -71,7 +73,7 @@ class ManagedAgentContext(BaseModel):
     subject_oid: str | None = None
 
 
-class VerifiedHumanSubject(BaseModel):
+class VerifiedHumanSubject(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     issuer: str
@@ -80,7 +82,7 @@ class VerifiedHumanSubject(BaseModel):
     user_id: str
 
 
-class MicrosoftInteractiveSubject(BaseModel):
+class MicrosoftInteractiveSubject(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     issuer: str
@@ -88,7 +90,7 @@ class MicrosoftInteractiveSubject(BaseModel):
     oid: str
 
 
-class ManagedAgentIdentityStatus(BaseModel):
+class ManagedAgentIdentityStatus(LiteLLMBaseModel):
     identity: AgentIdentityBinding | None = None
     identity_managed: bool = False
     enabled: bool = True
