@@ -4,6 +4,7 @@ These tests focus on the helper itself — not on the proxy endpoint or
 Slack integration — so they can run without the full proxy stack.
 """
 
+import logging
 from datetime import date, datetime, timezone
 from unittest.mock import MagicMock
 
@@ -11,6 +12,7 @@ from unittest.mock import MagicMock
 
 import litellm
 from litellm import Router
+from litellm._logging import verbose_logger
 from litellm.proxy.common_utils.model_deprecation import (
     _classify,
     _parse_deprecation_date,
@@ -416,7 +418,9 @@ class TestSuccessorModel:
 
         assert [m.successor_model for m in snapshot.imminent] == [None, None]
 
-    def test_should_only_name_successors_callable_in_the_deployment_team_scope(self, monkeypatch):
+    def test_should_report_successors_as_set_and_warn_when_no_model_in_the_team_scope_matches(
+        self, monkeypatch, caplog
+    ):
         monkeypatch.setattr(litellm, "model_cost", {})
         router = Router(
             model_list=[
@@ -455,14 +459,19 @@ class TestSuccessorModel:
             ]
         )
 
-        snapshot = collect_model_deprecations(llm_router=router, warn_within_days=30, today=date(2026, 6, 1))
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            snapshot = collect_model_deprecations(llm_router=router, warn_within_days=30, today=date(2026, 6, 1))
 
         assert {m.model_name: m.successor_model for m in snapshot.imminent} == {
             "model_name_t1_old": "team-new",
-            "global-old": None,
-            "typo-old": None,
+            "global-old": "team-new",
+            "typo-old": "gpt-nwe",
             "wildcard-old": "anthropic/x",
         }
+        warnings = [record.getMessage() for record in caplog.records if "names successor" in record.getMessage()]
+        assert len(warnings) == 2
+        assert any("global-old names successor team-new" in warning for warning in warnings)
+        assert any("typo-old names successor gpt-nwe" in warning for warning in warnings)
 
     def test_should_keep_the_first_deployment_and_carry_the_group_successor_when_deduping(self, monkeypatch):
         monkeypatch.setattr(litellm, "model_cost", {})

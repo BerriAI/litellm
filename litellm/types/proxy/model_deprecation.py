@@ -34,10 +34,7 @@ class ModelDeprecationInfo(LiteLLMBaseModel):
     litellm_provider: str | None = Field(default=None, description="The provider this model belongs to.")
     successor_model: str | None = Field(
         default=None,
-        description=(
-            "The model to migrate to, as set in model_info.successor_model on the deployment, "
-            "when this proxy serves it."
-        ),
+        description=("The model to migrate to, as set in model_info.successor_model on the deployment."),
     )
 
 

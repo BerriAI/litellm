@@ -108,20 +108,19 @@ def _classify(days_until: int, warn_within_days: int) -> DeprecationStatus:
     return "upcoming"
 
 
-def _served_successor(model_name: str, model_info: Mapping[str, object], llm_router: Router) -> str | None:
-    """The deployment's successor_model when callers in its team scope can call it, None otherwise"""
+def _checked_successor(model_name: str, model_info: Mapping[str, object], llm_router: Router) -> str | None:
+    """The deployment's successor_model as set, with a warning when no model in its team scope matches it"""
     successor: Final = _successor_model(model_info.get("successor_model"))
     if successor is None:
         return None
     team_id: Final = model_info.get("team_id")
-    if llm_router.get_model_list(model_name=successor, team_id=team_id if isinstance(team_id, str) else None):
-        return successor
-    verbose_logger.warning(
-        "model_deprecation: %s names successor %s, which this proxy does not serve, so it is left out",
-        model_name,
-        successor,
-    )
-    return None
+    if not llm_router.get_model_list(model_name=successor, team_id=team_id if isinstance(team_id, str) else None):
+        verbose_logger.warning(
+            "model_deprecation: %s names successor %s, which matches no model group, alias, or wildcard route here",
+            model_name,
+            successor,
+        )
+    return successor
 
 
 def _build_info(
@@ -143,7 +142,7 @@ def _build_info(
         days_until_deprecation=days_until,
         status=_classify(days_until, warn_within_days),
         litellm_provider=resolved.litellm_provider,
-        successor_model=_served_successor(model_name, _mapping_field(deployment, "model_info"), llm_router),
+        successor_model=_checked_successor(model_name, _mapping_field(deployment, "model_info"), llm_router),
     )
 
 
