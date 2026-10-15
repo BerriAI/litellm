@@ -1,0 +1,186 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "BetaDetectionRequest",
+  "type": "object",
+  "properties": {
+    "thinking": {
+      "$ref": "#/$defs/BetaThinkingValue"
+    },
+    "messages": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/BetaMessage"
+      }
+    }
+  },
+  "$defs": {
+    "BetaThinkingType": {
+      "type": "string",
+      "enum": [
+        "enabled",
+        "adaptive",
+        "disabled"
+      ]
+    },
+    "BetaThinkingDisplay": {
+      "type": "string",
+      "enum": [
+        "summarized",
+        "omitted",
+        "updates"
+      ]
+    },
+    "BetaThinking": {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/BetaThinkingType"
+        },
+        "display": {
+          "$ref": "#/$defs/BetaDisplayValue"
+        }
+      }
+    },
+    "BetaMessage": {
+      "type": "object",
+      "required": [
+        "role",
+        "content"
+      ],
+      "properties": {
+        "role": {
+          "type": "string"
+        },
+        "content": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/BetaContentValue"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "BetaContentType": {
+      "type": "string",
+      "enum": [
+        "text",
+        "tool_addition",
+        "tool_removal"
+      ]
+    },
+    "BetaContentBlock": {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/BetaContentType"
+        },
+        "tool": {
+          "$ref": "#/$defs/BetaToolValue"
+        }
+      }
+    },
+    "BetaToolTargetType": {
+      "type": "string",
+      "enum": [
+        "tool_reference",
+        "tool_definition",
+        "mcp_tool_reference",
+        "mcp_toolset_reference"
+      ]
+    },
+    "BetaToolTarget": {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/BetaToolTargetType"
+        }
+      }
+    },
+    "JsonValue": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/JsonValue"
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          }
+        }
+      ]
+    },
+    "BetaThinkingValue": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/BetaThinking"
+        },
+        {
+          "$ref": "#/$defs/JsonValue"
+        }
+      ]
+    },
+    "BetaDisplayValue": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/BetaThinkingDisplay"
+        },
+        {
+          "$ref": "#/$defs/JsonValue"
+        }
+      ]
+    },
+    "BetaToolValue": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/BetaToolTarget"
+        },
+        {
+          "$ref": "#/$defs/JsonValue"
+        }
+      ]
+    },
+    "BetaContentValue": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/BetaContentBlock"
+        },
+        {
+          "$ref": "#/$defs/JsonValue"
+        }
+      ]
+    }
+  },
+  "required": [
+    "messages"
+  ]
+}

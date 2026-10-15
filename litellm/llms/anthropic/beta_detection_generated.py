@@ -1,48 +1,45 @@
-from collections.abc import Mapping, Sequence
-
-from pydantic import JsonValue
-
-
-def _field(value: JsonValue, name: str) -> JsonValue:
-    return value.get(name) if isinstance(value, dict) else None
-
-
-def _items(value: JsonValue) -> Sequence[JsonValue]:
-    return value if isinstance(value, list) else ()
+from .beta_detection import content_blocks, thinking_display, thinking_type, tool_type
+from .beta_detection_models import (
+    BetaContentType,
+    BetaDetectionRequest,
+    BetaThinkingDisplay,
+    BetaThinkingType,
+    BetaToolTargetType,
+)
 
 
-def detect_anthropic_betas(request: Mapping[str, JsonValue]) -> frozenset[str]:
+def detect_anthropic_betas(request: BetaDetectionRequest) -> frozenset[str]:
     return frozenset(
         beta
         for used, beta in (
             (
                 (
-                    _field(request.get("thinking"), "type")
+                    thinking_type(request)
                     in (
-                        "enabled",
-                        "adaptive",
+                        BetaThinkingType.enabled,
+                        BetaThinkingType.adaptive,
                     )
-                    and _field(request.get("thinking"), "display") in ("updates",)
+                    and thinking_display(request) in (BetaThinkingDisplay.updates,)
                 ),
                 "thinking-display-updates-2026-08-18",
             ),
             (
                 any(
                     (
-                        _field(message, "role") in ("system",)
+                        message.role in ("system",)
                         and any(
                             (
-                                _field(block, "type")
+                                block.type
                                 in (
-                                    "tool_addition",
-                                    "tool_removal",
+                                    BetaContentType.tool_addition,
+                                    BetaContentType.tool_removal,
                                 )
-                                and _field(_field(block, "tool"), "type") in ("tool_reference",)
+                                and tool_type(block) in (BetaToolTargetType.tool_reference,)
                             )
-                            for block in _items(_field(message, "content"))
+                            for block in content_blocks(message)
                         )
                     )
-                    for message in _items(request.get("messages"))
+                    for message in request.messages
                 ),
                 "mid-conversation-tool-changes-2026-07-01",
             ),

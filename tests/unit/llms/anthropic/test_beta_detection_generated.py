@@ -7,6 +7,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 from litellm.llms.anthropic.beta_detection_generated import detect_anthropic_betas
+from litellm.llms.anthropic.beta_detection_models import BetaDetectionRequest
 
 
 class Case(BaseModel):
@@ -25,5 +26,6 @@ CASES: Final = TypeAdapter(tuple[Case, ...]).validate_json(
 def test_shared_requests_select_the_expected_betas(case: Case) -> None:
     before: Final = json.dumps(case.request, sort_keys=True)
 
-    assert detect_anthropic_betas(case.request) == case.expected
+    request: Final = BetaDetectionRequest.model_validate(case.request)
+    assert detect_anthropic_betas(request) == case.expected
     assert json.dumps(case.request, sort_keys=True) == before

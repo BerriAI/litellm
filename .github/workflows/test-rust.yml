@@ -9,7 +9,7 @@ on:
       - "scripts/generate_anthropic_beta_detection.py"
       - "litellm/llms/anthropic/beta_detection*"
       - "tests/fixtures/anthropic_beta_detection.json"
-      - "tests/unit/llms/anthropic/test_beta_detection_generated.py"
+      - "tests/unit/llms/anthropic/test_beta_detection*.py"
       - "scripts/trace_codegen/**"
       - "scripts/lens_assets/**"
       - "litellm/tracing/**"
@@ -43,7 +43,7 @@ on:
       - "scripts/generate_anthropic_beta_detection.py"
       - "litellm/llms/anthropic/beta_detection*"
       - "tests/fixtures/anthropic_beta_detection.json"
-      - "tests/unit/llms/anthropic/test_beta_detection_generated.py"
+      - "tests/unit/llms/anthropic/test_beta_detection*.py"
       - "scripts/trace_codegen/**"
       - "scripts/lens_assets/**"
       - "litellm/tracing/**"
@@ -147,7 +147,7 @@ jobs:
 
       - name: Check generated Anthropic beta detection
         working-directory: .
-        run: uv run --no-sync python scripts/generate_anthropic_beta_detection.py --check
+        run: uv run scripts/generate_anthropic_beta_detection.py --check
 
       - run: cargo nextest run --workspace --locked
 

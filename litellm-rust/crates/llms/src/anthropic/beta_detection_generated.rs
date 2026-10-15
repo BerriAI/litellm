@@ -1,31 +1,33 @@
-fn thinking_display_updates_used(request: &MessagesRequest) -> bool {
+fn thinking_display_updates_used(request: &BetaDetectionRequest) -> bool {
     matches!(
-        request.params.thinking.as_ref().and_then(Recognized::known),
-        Some(ThinkingConfig::Enabled(_)) | Some(ThinkingConfig::Adaptive(_))
-    ) && matches!(thinking_display(request), Some(ThinkingDisplay::Updates))
+        thinking_type(request),
+        Some(BetaThinkingType::Enabled) | Some(BetaThinkingType::Adaptive)
+    ) && matches!(
+        thinking_display(request),
+        Some(BetaThinkingDisplay::Updates)
+    )
 }
 
-fn mid_conversation_tool_changes_used(request: &MessagesRequest) -> bool {
+fn mid_conversation_tool_changes_used(request: &BetaDetectionRequest) -> bool {
     request.messages.iter().any(|message| {
         ["system"].contains(&message.role.as_str())
-            && message.blocks().iter().any(|block| {
-                block.block_type.as_ref().is_some_and(|kind| match kind {
-                    ContentBlockType::Other(value) => {
-                        ["tool_addition", "tool_removal"].contains(&value.as_str())
-                    }
-                    _ => false,
-                }) && (block
-                    .extra
-                    .get("tool")
-                    .and_then(Value::as_object)
-                    .and_then(|tool| tool.get("type"))
-                    .and_then(Value::as_str))
-                .is_some_and(|value| ["tool_reference"].contains(&value))
+            && content_blocks(message).any(|block| {
+                matches!(
+                    block.type_,
+                    BetaContentType::ToolAddition | BetaContentType::ToolRemoval
+                ) && matches!(
+                    block
+                        .tool
+                        .as_ref()
+                        .and_then(Recognized::known)
+                        .map(|tool| &tool.type_),
+                    Some(BetaToolTargetType::ToolReference)
+                )
             })
     })
 }
 
-pub fn detect_anthropic_betas(request: &MessagesRequest) -> BetaSet {
+pub fn detect_anthropic_betas(request: &BetaDetectionRequest) -> BetaSet {
     [
         thinking_display_updates_used(request)
             .then_some(AnthropicBeta::ThinkingDisplayUpdates20260818),

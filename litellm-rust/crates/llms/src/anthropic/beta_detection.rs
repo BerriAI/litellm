@@ -1,18 +1,33 @@
 use litellm_llms_types::{
-    formats::messages::{ContentBlockType, MessagesRequest, ThinkingConfig, ThinkingDisplay},
-    providers::anthropic::{AnthropicBeta, BetaSet},
+    providers::anthropic::{
+        AnthropicBeta, BetaContentBlock, BetaContentType, BetaDetectionRequest, BetaMessage,
+        BetaMessageContent, BetaSet, BetaThinkingDisplay, BetaThinkingType, BetaToolTargetType,
+    },
     recognized::Recognized,
 };
-use serde_json::Value;
 
 include!("beta_detection_generated.rs");
 
-fn thinking_display(request: &MessagesRequest) -> Option<&ThinkingDisplay> {
-    match request.params.thinking.as_ref()?.known()? {
-        ThinkingConfig::Enabled(thinking) => thinking.display.as_ref()?.known(),
-        ThinkingConfig::Adaptive(thinking) => thinking.display.as_ref()?.known(),
-        ThinkingConfig::Disabled(_) => None,
-    }
+fn thinking_type(request: &BetaDetectionRequest) -> Option<&BetaThinkingType> {
+    Some(&request.thinking.as_ref()?.known()?.type_)
+}
+
+fn thinking_display(request: &BetaDetectionRequest) -> Option<&BetaThinkingDisplay> {
+    request
+        .thinking
+        .as_ref()?
+        .known()?
+        .display
+        .as_ref()?
+        .known()
+}
+
+fn content_blocks(message: &BetaMessage) -> impl Iterator<Item = &BetaContentBlock> {
+    let blocks = match &message.content {
+        BetaMessageContent::String(_) => &[][..],
+        BetaMessageContent::Array(blocks) => blocks.as_slice(),
+    };
+    blocks.iter().filter_map(Recognized::known)
 }
 
 #[cfg(test)]
@@ -25,7 +40,7 @@ mod tests {
     #[derive(Deserialize)]
     struct Case {
         name: String,
-        request: MessagesRequest,
+        request: BetaDetectionRequest,
         expected: BTreeSet<String>,
     }
 
