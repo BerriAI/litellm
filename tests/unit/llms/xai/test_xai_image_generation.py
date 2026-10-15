@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.xai.image_generation.transformation import XAIImageGenerationConfig
 from litellm.types.utils import ImageResponse, LlmProviders
 from litellm.utils import ProviderConfigManager
@@ -180,7 +181,7 @@ def test_get_complete_url_appends_v1_to_a_bare_custom_base():
     ],
 )
 def test_transform_response_raises_provider_error_without_images(raw):
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(BaseLLMException) as exc_info:
         XAIImageGenerationConfig().transform_image_generation_response(
             model="grok-imagine-image",
             raw_response=raw,
@@ -192,4 +193,4 @@ def test_transform_response_raises_provider_error_without_images(raw):
             encoding=None,
         )
 
-    assert getattr(exc_info.value, "status_code", None) == raw.status_code
+    assert exc_info.value.status_code == raw.status_code

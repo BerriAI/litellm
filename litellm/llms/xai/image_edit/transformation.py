@@ -1,22 +1,30 @@
 import base64
+from collections.abc import Mapping
 from io import BufferedReader, BytesIO
-from typing import IO, TYPE_CHECKING, Final, Protocol, cast, runtime_checkable  # noqa: TID251  # see _read_all_bytes
+from typing import IO, TYPE_CHECKING, Final, Protocol, TypeAlias, runtime_checkable
 
 import httpx
 from httpx._types import RequestFiles
+from typing_extensions import TypeIs  # noqa: TID251  # narrows untyped reference images without a runtime conversion
 
 from litellm.constants import XAI_API_BASE
 from litellm.exceptions import AuthenticationError
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
-from litellm.llms.xai.common_utils import XAIModelInfo
+from litellm.llms.xai.common_utils import XAIModelInfo, xai_image_response
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import FileTypes, ImageObject, ImageResponse
+from litellm.types.utils import FileTypes, ImageResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+_Params: TypeAlias = dict[str, object]
+_Headers: TypeAlias = dict[str, object]
+_ImageRef: TypeAlias = dict[str, str]
+_SupportedParams: TypeAlias = list[str]
+_ImageInputs: TypeAlias = list[FileTypes | None]
 
 _SIZE_TO_ASPECT_RATIO: Final = {
     "1024x1024": "1:1",
@@ -38,6 +46,14 @@ class _Readable(Protocol):
     def read(self) -> bytes | str: ...
 
 
+def _is_json_object(value: object) -> TypeIs[Mapping[str, object]]:  # guard-ok: JSON-style references have str keys
+    return isinstance(value, Mapping)
+
+
+def _is_seekable_binary(value: object) -> TypeIs[IO[bytes]]:  # guard-ok: both classes are binary IO[bytes] streams
+    return isinstance(value, (BytesIO, BufferedReader))
+
+
 def _read_seekable(image: IO[bytes]) -> bytes:
     current_pos: Final = image.tell()
     image.seek(0)
@@ -46,10 +62,12 @@ def _read_seekable(image: IO[bytes]) -> bytes:
     return data
 
 
+def _count(value: object) -> int | None:
+    return int(value) if isinstance(value, (int, float, str)) else None
+
+
 class XAIImageEditConfig(BaseImageEditConfig):
-    def get_supported_openai_params(
-        self, model: str
-    ) -> list:  # mutable-ok: provider JSON body and base-class dict signature
+    def get_supported_openai_params(self, model: str) -> _SupportedParams:
         return list(_OPENAI_PARAMS)
 
     def map_openai_params(
@@ -57,11 +75,11 @@ class XAIImageEditConfig(BaseImageEditConfig):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:  # mutable-ok: provider JSON body and base-class dict signature
+    ) -> _Params:
         supported: Final = frozenset(_OPENAI_PARAMS)
         allowed: Final = supported | _XAI_NATIVE_PARAMS
         raw: Final = image_edit_optional_params
-        incoming: Final = dict(raw)
+        incoming: Final[Mapping[str, object]] = dict(raw)
         unknown: Final = tuple(key for key in incoming if key not in allowed)
         if unknown and not drop_params:
             raise ValueError(
@@ -76,12 +94,10 @@ class XAIImageEditConfig(BaseImageEditConfig):
         aspect_ratio: Final = mapped.get("aspect_ratio") or (
             _SIZE_TO_ASPECT_RATIO.get(str(size), "1:1") if size else None
         )
-        n: Final = mapped.get("n")
-        resolution: Final = mapped.get("resolution")
         fields: Final = (
             ("aspect_ratio", aspect_ratio),
-            ("n", int(n) if n is not None else None),
-            ("resolution", resolution),
+            ("n", _count(mapped.get("n"))),
+            ("resolution", mapped.get("resolution")),
         )
         return {key: value for key, value in fields if value is not None}
 
@@ -92,7 +108,7 @@ class XAIImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict[str, object],  # mutable-ok: provider JSON body and base-class dict signature
+        litellm_params: _Params,
     ) -> str:
         from litellm.llms.xai.oauth import XAIOAuthAuthenticator, should_use_xai_oauth
 
@@ -108,70 +124,61 @@ class XAIImageEditConfig(BaseImageEditConfig):
             return f"{base}/images/edits"
         return f"{base}/v1/images/edits"
 
-    def validate_environment(
-        self,
-        headers: dict,  # mutable-ok: provider JSON body and base-class dict signature
-        model: str,
-        api_key: str | None = None,
-        litellm_params: dict[str, object] | None = None,  # mutable-ok: provider JSON body and base-class dict signature
-        api_base: str | None = None,
-    ) -> dict:  # mutable-ok: provider JSON body and base-class dict signature
+    def _bearer_token(self, model: str, api_key: str | None, litellm_params: _Params) -> str:
         from litellm.llms.xai.oauth import (
             XAIOAuthAuthenticator,
             XAIOAuthError,
             should_use_xai_oauth,
         )
 
-        params: Final = litellm_params or {}
         dynamic_api_key: Final = XAIModelInfo.get_api_key(api_key)
-        if should_use_xai_oauth(params) and not dynamic_api_key:
-            try:
-                headers["Authorization"] = f"Bearer {XAIOAuthAuthenticator().get_access_token()}"
-            except XAIOAuthError as exc:
-                raise AuthenticationError(
-                    model=model,
-                    llm_provider="xai",
-                    message=str(exc),
-                ) from exc
-        else:
-            if not dynamic_api_key:
-                raise AuthenticationError(
-                    model=model,
-                    llm_provider="xai",
-                    message=(
-                        "Missing xAI credentials for image edit. Pass api_key / XAI_API_KEY, or set use_xai_oauth=True."
-                    ),
-                )
-            headers["Authorization"] = f"Bearer {dynamic_api_key}"
+        if dynamic_api_key:
+            return dynamic_api_key
+        if not should_use_xai_oauth(litellm_params):
+            raise AuthenticationError(
+                model=model,
+                llm_provider="xai",
+                message="Missing xAI credentials for image edit. Pass api_key / XAI_API_KEY, or set use_xai_oauth=True.",
+            )
+        try:
+            return XAIOAuthAuthenticator().get_access_token()
+        except XAIOAuthError as exc:
+            raise AuthenticationError(model=model, llm_provider="xai", message=str(exc)) from exc
 
-        if "content-type" not in headers and "Content-Type" not in headers:
-            headers["Content-Type"] = "application/json"
-        return headers
+    def validate_environment(
+        self,
+        headers: _Headers,
+        model: str,
+        api_key: str | None = None,
+        litellm_params: _Params | None = None,
+        api_base: str | None = None,
+    ) -> _Headers:
+        has_content_type: Final = "content-type" in headers or "Content-Type" in headers
+        return {
+            **headers,
+            "Authorization": f"Bearer {self._bearer_token(model, api_key, litellm_params or {})}",
+            **({} if has_content_type else {"Content-Type": "application/json"}),
+        }
 
     def transform_image_edit_request(
         self,
         model: str,
         prompt: str | None,
-        image: FileTypes | None,
-        image_edit_optional_request_params: dict[str, object],  # mutable-ok: base-class dict signature
+        image: FileTypes | _ImageInputs | None,
+        image_edit_optional_request_params: _Params,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,  # mutable-ok: provider JSON body and base-class dict signature
-    ) -> tuple[dict, RequestFiles]:  # mutable-ok: provider JSON body and base-class dict signature
-        if image is None:
-            raise ValueError("xAI image edit requires at least one reference image.")
-
+        headers: _Headers,
+    ) -> tuple[_Params, RequestFiles]:
         image_payloads: Final = tuple(self._to_image_url(item) for item in self._as_image_list(image))
         if not image_payloads:
             raise ValueError("xAI image edit requires at least one reference image.")
 
-        n: Final = image_edit_optional_request_params.get("n")
-        prompt_body: Final = {"prompt": prompt} if prompt is not None else None
-        many: Final = {"images": list(image_payloads)}
-        one: Final = image_payloads[0]
-        image_body: Final = {"image": one} if len(image_payloads) == 1 else many
-        prompt_field: Final = prompt_body or {}
-        image_field: Final = image_body
-        request: Final[dict[str, object]] = {  # mutable-ok: provider JSON body and base-class dict signature
+        n: Final = _count(image_edit_optional_request_params.get("n"))
+        prompt_field: Final = {"prompt": prompt} if prompt is not None else {}
+        image_field: Final = (
+            {"image": image_payloads[0]} if len(image_payloads) == 1 else {"images": list(image_payloads)}
+        )
+        request: Final[_Params] = {
             "model": XAIModelInfo.get_base_model(model) or model,
             **prompt_field,
             **image_field,
@@ -180,7 +187,7 @@ class XAIImageEditConfig(BaseImageEditConfig):
                 for key in ("aspect_ratio", "resolution")
                 if image_edit_optional_request_params.get(key) is not None
             },
-            **({"n": int(n)} if isinstance(n, (int, float, str)) else {}),
+            **({"n": n} if n is not None else {}),
         }
         return request, []
 
@@ -190,45 +197,17 @@ class XAIImageEditConfig(BaseImageEditConfig):
         raw_response: httpx.Response,
         logging_obj: "LiteLLMLoggingObj",
     ) -> ImageResponse:
-        try:
-            response_data: Final = raw_response.json()
-        except Exception:  # noqa: BLE001  # any body-parse failure becomes a provider error carrying the raw payload
-            raise self.get_error_class(
-                error_message=raw_response.text,
-                status_code=raw_response.status_code,
-                headers=raw_response.headers,
-            )
+        return ImageResponse(data=list(xai_image_response(raw_response, "image edit")))
 
-        images: Final = tuple(
-            ImageObject(
-                url=item.get("url"),
-                b64_json=item.get("b64_json") or item.get("b64"),
-            )
-            for item in response_data.get("data") or ()
-            if isinstance(item, dict)
-        )
-        if not images:
-            raise self.get_error_class(
-                error_message=f"xAI image edit returned no image data: {response_data}",
-                status_code=raw_response.status_code,
-                headers=raw_response.headers,
-            )
-        return ImageResponse(data=list(images))
-
-    def _as_image_list(
-        self,
-        image: FileTypes | list[FileTypes],  # mutable-ok: the proxy passes multi-image edits as a list of uploads
-    ) -> tuple[FileTypes, ...]:
+    def _as_image_list(self, image: FileTypes | _ImageInputs | None) -> tuple[FileTypes, ...]:
         if isinstance(image, list):
             return tuple(item for item in image if item is not None)
-        return (image,)
+        return () if image is None else (image,)
 
-    def _to_image_url(
-        self, image: FileTypes
-    ) -> dict[str, str]:  # mutable-ok: provider JSON body and base-class dict signature
+    def _to_image_url(self, image: FileTypes) -> _ImageRef:
         if isinstance(image, str):
             return {"url": image}
-        if isinstance(image, dict):
+        if _is_json_object(image):
             url: Final = image.get("url")
             if isinstance(url, str) and url:
                 return {"url": url}
@@ -245,9 +224,8 @@ class XAIImageEditConfig(BaseImageEditConfig):
             return image
         if isinstance(image, bytearray):
             return bytes(image)
-        if isinstance(image, (BytesIO, BufferedReader)):
-            seekable: Final = cast(IO[bytes], image)  # cast-ok: isinstance drops BufferedReader's type argument
-            return _read_seekable(seekable)
+        if _is_seekable_binary(image):
+            return _read_seekable(image)
         if isinstance(image, _Readable):
             raw: Final = image.read()
             if isinstance(raw, str):
