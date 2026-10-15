@@ -1332,6 +1332,8 @@ class LiteLLMAnthropicMessagesAdapter:
                 return ChatCompletionTextObject(type="text", text=str(block.get("text") or ""))
             case "image" | "document":
                 return self._tool_result_image_part(block.get("source"))
+            case "search_result":
+                return self._tool_result_search_result_part(block)
             case "tool_reference":
                 return ChatCompletionToolReferenceObject(
                     type="tool_reference", tool_name=str(block.get("tool_name") or "")
@@ -1346,6 +1348,36 @@ class LiteLLMAnthropicMessagesAdapter:
         if not openai_image_url:
             return None
         return ChatCompletionImageObject(type="image_url", image_url=ChatCompletionImageUrlObject(url=openai_image_url))
+
+    @staticmethod
+    def _search_result_inner_text(item: object) -> str | None:
+        if not isinstance(item, Mapping):
+            return None
+        text: Final = cast(Mapping[str, object], item).get("text")  # cast-ok: untrusted client payload
+        return text if isinstance(text, str) and text else None
+
+    def _tool_result_search_result_part(self, block: Mapping[str, object]) -> ChatCompletionTextObject | None:
+        raw_content: Final = block.get("content")
+        inner_blocks: Final[Sequence[object]] = (
+            cast(Sequence[object], raw_content)  # cast-ok: untrusted client payload
+            if isinstance(raw_content, list)
+            else ()
+        )
+        inner_texts: Final = tuple(
+            text for text in (self._search_result_inner_text(item) for item in inner_blocks) if text is not None
+        )
+        title: Final = block.get("title")
+        source: Final = block.get("source")
+        header: Final = tuple(
+            line
+            for line in (
+                f"Title: {title}" if isinstance(title, str) and title else None,
+                f"Source: {source}" if isinstance(source, str) and source else None,
+            )
+            if line is not None
+        )
+        rendered: Final = "\n".join((*header, *inner_texts))
+        return ChatCompletionTextObject(type="text", text=rendered) if rendered else None
 
     def _translate_openai_content_to_anthropic(
         self,
