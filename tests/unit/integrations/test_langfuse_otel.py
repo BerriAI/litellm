@@ -3,6 +3,7 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -1110,6 +1111,27 @@ class TestLangfuseOtelTraceIdentity:
             identity, _ = self._identity(kwargs)
         assert identity == {"user.id": "header-1", "session.id": None}
         assert [record.message for record in caplog.records if "Overwriting" in record.message] == []
+
+    def test_end_user_still_lands_when_the_output_mapper_fails(self):
+        provider = TracerProvider()
+        with patch.dict(os.environ, LANGFUSE_ENV_ONLY, clear=True):
+            logger = LangfuseOtelLogger(callback_name="langfuse_otel", tracer_provider=provider)
+        span = provider.get_tracer("test").start_span("generation")
+        empty_message = SimpleNamespace(type="message", role="assistant", content=[])
+        logger.set_attributes(
+            span, self._kwargs(slp_metadata={"user_api_key_end_user_id": "end-1"}), {"output": [empty_message]}
+        )
+        assert {key: (span.attributes or {}).get(key) for key in ("user.id", "session.id")} == {
+            "user.id": "end-1",
+            "session.id": None,
+        }
+
+    def test_caller_trace_user_id_lands_without_a_standard_logging_object(self):
+        kwargs = self._kwargs()
+        del kwargs["standard_logging_object"]
+        kwargs["litellm_params"]["litellm_metadata"] = {"trace_user_id": "caller-1"}
+        identity, _ = self._identity(kwargs)
+        assert identity == {"user.id": "caller-1", "session.id": None}
 
     def test_internal_user_without_an_end_user_never_lands_in_user_id(self):
         identity, _ = self._identity(self._kwargs(slp_metadata={"user_api_key_user_id": "internal-1"}))

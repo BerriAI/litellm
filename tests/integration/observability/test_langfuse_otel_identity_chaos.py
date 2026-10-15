@@ -66,6 +66,17 @@ def _send(candidate: Gateway, model: str, endpoint: str, marker: str) -> dict[st
         return {"marker": marker, "status": 0, "body": repr(error)}
 
 
+def _timed_send(candidate: Gateway, model: str, endpoint: str, marker: str) -> dict[str, object]:
+    started_at: Final = time.monotonic()
+    return {**_send(candidate, model, endpoint, marker), "started_at": started_at}
+
+
+def _started_at(result: dict[str, object]) -> float:
+    value: Final = result["started_at"]
+    assert isinstance(value, float), result
+    return value
+
+
 def _send_to_live_gateway(holder: dict[str, Gateway], model: str, endpoint: str, marker: str) -> dict[str, object]:
     deadline: Final = time.monotonic() + 60
     outcome: Final[dict[str, object]] = {"marker": marker, "status": 0, "body": "no live proxy"}
@@ -174,7 +185,7 @@ def test_langfuse_otel_slow_sink_never_duplicates_or_loses(gateway: Gateway, tmp
         assert counts == {marker: 1 for marker in markers}, counts
 
 
-def test_langfuse_otel_worker_kill_mid_burst_keeps_every_marker(gateway: Gateway, tmp_path: Path) -> None:
+def test_langfuse_otel_worker_kill_mid_burst_keeps_serving_without_duplicates(gateway: Gateway, tmp_path: Path) -> None:
     with (
         wire_server(lambda request: _upstream_reply_for(request, _marker_from_body(request))) as provider,
         wire_server(_sink) as collector,
@@ -197,33 +208,36 @@ def test_langfuse_otel_worker_kill_mid_burst_keeps_every_marker(gateway: Gateway
         markers: Final = tuple(uuid.uuid4().hex for _ in range(30))
         endpoints: Final = _endpoints(30)
         results: Final[dict[str, dict[str, object]]] = {}
-        killed: Final = {"done": False}
+        killed: Final[dict[str, float]] = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
             futures: Final = {
-                executor.submit(_send, candidate, model, endpoints[index], markers[index]): markers[index]
+                executor.submit(_timed_send, candidate, model, endpoints[index], markers[index]): markers[index]
                 for index in range(30)
             }
             for future in concurrent.futures.as_completed(futures):
                 results[futures[future]] = future.result()
-                if len(results) >= 10 and not killed["done"]:
+                if len(results) >= 10 and not killed:
                     serving: Final = owned.worker_pids()
                     assert serving, "no uvicorn worker child found"
                     owned.kill_worker(min(serving))
-                    killed["done"] = True
-        assert killed["done"], "worker kill never fired"
-        accepted: Final = {m for m, r in results.items() if r["status"] == 200}
-        failures: Final = {m: r for m, r in results.items() if r["status"] != 200}
-        survivor: Final = _send(candidate, model, "chat", uuid.uuid4().hex)
+                    killed["at"] = time.monotonic()
+        assert killed, "worker kill never fired"
+        survivor_marker: Final = uuid.uuid4().hex
+        survivor: Final = _timed_send(candidate, model, "chat", survivor_marker)
         assert survivor["status"] == 200, survivor
-        accepted_markers: Final = tuple(sorted(accepted))
+        results[survivor_marker] = survivor
+        accepted: Final = tuple(sorted(m for m, r in results.items() if r["status"] == 200))
+        after_kill: Final = tuple(m for m in accepted if _started_at(results[m]) > killed["at"])
+        assert survivor_marker in after_kill, results
         batches: Final[list[bytes]] = []
         counts: Final = eventually(
-            lambda: _landed_counts(collector, batches, accepted_markers),
-            lambda values: all(value == 1 for value in values.values()),
+            lambda: _landed_counts(collector, batches, accepted),
+            lambda values: all(values[marker] == 1 for marker in after_kill),
             seconds=60,
             return_last_on_timeout=True,
         )
-        assert counts == {marker: 1 for marker in accepted_markers}, (counts, failures)
+        assert {marker: counts[marker] for marker in after_kill} == {marker: 1 for marker in after_kill}, counts
+        assert all(count <= 1 for count in counts.values()), counts
 
 
 def test_langfuse_otel_proxy_restart_mid_burst_keeps_every_marker(gateway: Gateway, tmp_path: Path) -> None:

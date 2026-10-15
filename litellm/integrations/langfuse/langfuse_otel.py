@@ -3,6 +3,7 @@ import json
 import os
 from collections.abc import Mapping
 from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Optional
 
 from litellm._logging import verbose_logger
@@ -55,8 +56,10 @@ class LangfuseOtelLogger(OpenTelemetry):
         #########################################################
         # Set Langfuse specific attributes
         #########################################################
-        LangfuseOtelLogger._set_langfuse_specific_attributes(span=span, kwargs=kwargs, response_obj=response_obj)
-        LangfuseOtelLogger._set_trace_user_attribute(span=span, kwargs=kwargs)
+        try:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(span=span, kwargs=kwargs, response_obj=response_obj)
+        finally:
+            LangfuseOtelLogger._set_trace_user_attribute(span=span, kwargs=kwargs)
 
     @staticmethod
     def _extract_langfuse_metadata(kwargs: dict) -> dict:
@@ -262,14 +265,12 @@ class LangfuseOtelLogger(OpenTelemetry):
 
     @staticmethod
     def _set_trace_user_attribute(span: Span, kwargs: Mapping[str, object]) -> None:
-        slp: Final = as_str_mapping(kwargs.get("standard_logging_object"))
-        slp_metadata: Final = as_str_mapping(slp.get("metadata")) if slp is not None else None
-        if slp is None or slp_metadata is None:
-            return
         caller: Final = caller_trace_controls(kwargs).user_id
         if caller is not None:
             safe_set_attribute(span, LangfuseSpanAttributes.TRACE_USER_ID.value, caller)
             return
+        slp: Final[Mapping[str, object]] = as_str_mapping(kwargs.get("standard_logging_object")) or MappingProxyType({})
+        slp_metadata: Final[Mapping[str, object]] = as_str_mapping(slp.get("metadata")) or MappingProxyType({})
         end_user: Final = (
             slp_metadata.get("user_api_key_end_user_id")
             or slp.get("end_user")
