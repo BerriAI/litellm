@@ -887,10 +887,31 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params["response_schema"] = self._map_response_schema(value=schema)
 
     @staticmethod
+    def _include_thoughts(requested: bool | None) -> bool:
+        return litellm.gemini_include_thoughts_default if requested is None else requested
+
+    @staticmethod
+    def _include_thoughts_requested_by_reasoning_effort(reasoning_effort: object) -> bool | None:
+        match reasoning_effort:
+            case {"summary": str()}:
+                return True
+            case _:
+                return None
+
+    @staticmethod
+    def _map_reasoning_effort(effort: str, model: str, reasoning_effort: object) -> GeminiThinkingConfig:
+        include_thoughts: Final = VertexGeminiConfig._include_thoughts_requested_by_reasoning_effort(reasoning_effort)
+        if VertexGeminiConfig._is_gemini_3_or_newer(model):
+            return VertexGeminiConfig._map_reasoning_effort_to_thinking_level(effort, model, include_thoughts)
+        return VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(effort, model, include_thoughts)
+
+    @staticmethod
     def _map_reasoning_effort_to_thinking_budget(
         reasoning_effort: str,
         model: str | None = None,
+        include_thoughts: bool | None = None,
     ) -> GeminiThinkingConfig:
+        sends_thoughts: Final = VertexGeminiConfig._include_thoughts(include_thoughts)
         if reasoning_effort == "minimal":
             # Use model-specific minimum thinking budget or fallback
             # Check for exact matches first, then partial matches
@@ -905,22 +926,22 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
             return {
                 "thinkingBudget": budget,
-                "includeThoughts": litellm.gemini_include_thoughts_default,
+                "includeThoughts": sends_thoughts,
             }
         elif reasoning_effort == "low":
             return {
                 "thinkingBudget": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
-                "includeThoughts": litellm.gemini_include_thoughts_default,
+                "includeThoughts": sends_thoughts,
             }
         elif reasoning_effort == "medium":
             return {
                 "thinkingBudget": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
-                "includeThoughts": litellm.gemini_include_thoughts_default,
+                "includeThoughts": sends_thoughts,
             }
         elif reasoning_effort == "high":
             return {
                 "thinkingBudget": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
-                "includeThoughts": litellm.gemini_include_thoughts_default,
+                "includeThoughts": sends_thoughts,
             }
         elif reasoning_effort == "disable":
             return {
@@ -947,6 +968,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def _map_reasoning_effort_to_thinking_level(
         reasoning_effort: str,
         model: str | None = None,
+        include_thoughts: bool | None = None,
     ) -> GeminiThinkingConfig:
         """
         Map reasoning_effort to thinking_level for Gemini 3+ models.
@@ -958,17 +980,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             GeminiThinkingConfig with thinkingLevel and includeThoughts
         """
         supports_minimal: Final = bool(model) and VertexGeminiConfig._supports_minimal_thinking_level(model)
+        sends_thoughts: Final = VertexGeminiConfig._include_thoughts(include_thoughts)
         if reasoning_effort == "minimal":
             if supports_minimal:
-                return {"thinkingLevel": "minimal", "includeThoughts": litellm.gemini_include_thoughts_default}
+                return {"thinkingLevel": "minimal", "includeThoughts": sends_thoughts}
             else:
-                return {"thinkingLevel": "low", "includeThoughts": litellm.gemini_include_thoughts_default}
+                return {"thinkingLevel": "low", "includeThoughts": sends_thoughts}
         elif reasoning_effort == "low":
-            return {"thinkingLevel": "low", "includeThoughts": litellm.gemini_include_thoughts_default}
+            return {"thinkingLevel": "low", "includeThoughts": sends_thoughts}
         elif reasoning_effort == "medium":
-            return {"thinkingLevel": "medium", "includeThoughts": litellm.gemini_include_thoughts_default}
+            return {"thinkingLevel": "medium", "includeThoughts": sends_thoughts}
         elif reasoning_effort == "high":
-            return {"thinkingLevel": "high", "includeThoughts": litellm.gemini_include_thoughts_default}
+            return {"thinkingLevel": "high", "includeThoughts": sends_thoughts}
         elif reasoning_effort in ("disable", "none"):
             return {
                 "thinkingLevel": "minimal" if supports_minimal else "low",
@@ -1028,6 +1051,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     ) -> GeminiThinkingConfig:
         thinking_enabled: Final = thinking_param.get("type") == "enabled"
         thinking_budget: Final = thinking_param.get("budget_tokens")
+        display: Final = thinking_param.get("display")
+        sends_thoughts: Final = VertexGeminiConfig._include_thoughts(None if display is None else display != "omitted")
 
         params: Final[GeminiThinkingConfig] = {}
 
@@ -1037,7 +1062,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 if thinking_budget == 0:
                     params["includeThoughts"] = False
                 else:
-                    params["includeThoughts"] = litellm.gemini_include_thoughts_default
+                    params["includeThoughts"] = sends_thoughts
                     # Follow provider defaults unless explicitly opted into legacy behavior.
                     if litellm.enable_gemini_default_thinking_level_low is True:
                         params["thinkingLevel"] = (
@@ -1049,7 +1074,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         else:
             # For older Gemini models, use thinkingBudget
             if thinking_enabled and not VertexGeminiConfig._is_thinking_budget_zero(thinking_budget):
-                params["includeThoughts"] = litellm.gemini_include_thoughts_default
+                params["includeThoughts"] = sends_thoughts
             if thinking_budget is not None and isinstance(thinking_budget, int):
                 params["thinkingBudget"] = thinking_budget
 
@@ -1264,14 +1289,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         param_name="reasoning_effort",
                         param_description="thinking_budget",
                     )
-                    if VertexGeminiConfig._is_gemini_3_or_newer(model):
-                        optional_params["thinkingConfig"] = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
-                            effort_value, model
-                        )
-                    else:
-                        optional_params["thinkingConfig"] = VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
-                            effort_value, model
-                        )
+                    optional_params["thinkingConfig"] = VertexGeminiConfig._map_reasoning_effort(
+                        effort=effort_value, model=model, reasoning_effort=value
+                    )
             elif param == "thinking":
                 # Validate no conflict with thinking_level
                 VertexGeminiConfig._validate_thinking_config_conflicts(

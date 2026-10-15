@@ -9741,3 +9741,87 @@ async def test_gemini_thought_summaries_off_keeps_thinking_config_otherwise_unch
 
     assert summaries_on["includeThoughts"] is True
     assert summaries_off == {**summaries_on, "includeThoughts": False}
+
+
+PER_REQUEST_THOUGHT_SUMMARY_ASKS: Final = (
+    pytest.param(
+        "gemini-3.8-flash",
+        {"thinking": {"type": "enabled", "budget_tokens": 2048, "display": "summarized"}},
+        False,
+        True,
+        id="level-display-summarized-beats-off",
+    ),
+    pytest.param(
+        "gemini-3.8-flash",
+        {"thinking": {"type": "enabled", "budget_tokens": 2048, "display": "omitted"}},
+        True,
+        False,
+        id="level-display-omitted-beats-on",
+    ),
+    pytest.param(
+        "gemini-2.5-flash",
+        {"thinking": {"type": "enabled", "budget_tokens": 2048, "display": "summarized"}},
+        False,
+        True,
+        id="budget-display-summarized-beats-off",
+    ),
+    pytest.param(
+        "gemini-2.5-flash",
+        {"thinking": {"type": "enabled", "budget_tokens": 2048, "display": "omitted"}},
+        True,
+        False,
+        id="budget-display-omitted-beats-on",
+    ),
+    pytest.param(
+        "gemini-3.8-flash",
+        {"thinking": {"type": "enabled", "budget_tokens": 2048, "display": "updates"}},
+        False,
+        True,
+        id="level-display-updates-beats-off",
+    ),
+    pytest.param(
+        "gemini-3.8-flash",
+        {"reasoning_effort": {"effort": "medium", "summary": "auto"}},
+        False,
+        True,
+        id="level-effort-summary-beats-off",
+    ),
+    pytest.param(
+        "gemini-2.5-flash",
+        {"reasoning_effort": {"effort": "medium", "summary": "detailed"}},
+        False,
+        True,
+        id="budget-effort-summary-beats-off",
+    ),
+    pytest.param(
+        "gemini-3.8-flash",
+        {"reasoning_effort": {"effort": "medium"}},
+        False,
+        False,
+        id="effort-without-summary-keeps-off",
+    ),
+    pytest.param(
+        "gemini-3.8-flash",
+        {"reasoning_effort": {"effort": "none", "summary": "auto"}},
+        True,
+        False,
+        id="effort-none-ignores-summary",
+    ),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("model", "thinking_params", "gateway_default", "expected"), PER_REQUEST_THOUGHT_SUMMARY_ASKS)
+async def test_gemini_per_request_thought_summary_ask_beats_gateway_default(
+    model: str,
+    thinking_params: dict[str, object],
+    gateway_default: bool,
+    expected: bool,
+    local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "gemini_include_thoughts_default", gateway_default)
+
+    sent: Final = await _sent_thinking_config(model, thinking_params)
+
+    assert sent["includeThoughts"] is expected
