@@ -1448,14 +1448,23 @@ def _json_children(node: JsonValue) -> Iterable[JsonValue]:
     return ()
 
 
-def _contains_json_schema_ref(payload: JsonValue) -> bool:
-    """Gemini reads any {"$ref": ...} object in a function_response as a pointer to one of its parts"""
-    level: tuple[JsonValue, ...] = (payload,)  # rebind-ok: recursion is banned here, so the walk rebinds per level
-    while level:
-        if any(isinstance(node, dict) and "$ref" in node for node in level):
-            return True
-        level = tuple(itertools.chain.from_iterable(_json_children(node) for node in level))
-    return False
+def _next_json_level(level: tuple[JsonValue, ...], _: None) -> tuple[JsonValue, ...]:
+    return tuple(itertools.chain.from_iterable(_json_children(node) for node in level))
+
+
+def _is_part_reference(node: JsonValue) -> bool:
+    if not isinstance(node, dict):
+        return False
+    ref: Final[JsonValue] = node.get("$ref")
+    return isinstance(ref, str) and ref != ""
+
+
+def _contains_part_reference(payload: JsonValue) -> bool:
+    """Gemini reads any {"$ref": "<non-empty string>"} object in a function_response as a pointer to one of its parts"""
+    levels: Final = itertools.takewhile(
+        bool, itertools.accumulate(itertools.repeat(None), _next_json_level, initial=(payload,))
+    )
+    return any(_is_part_reference(node) for node in itertools.chain.from_iterable(levels))
 
 
 def convert_to_gemini_tool_call_result(
@@ -1603,7 +1612,7 @@ def convert_to_gemini_tool_call_result(
         if content_str.strip().startswith("{") or content_str.strip().startswith("["):
             # Try to parse as JSON (for Computer Use structured responses)
             parsed: Final[JsonValue] = json.loads(content_str)
-            if isinstance(parsed, dict) and not _contains_json_schema_ref(parsed):
+            if isinstance(parsed, dict) and not _contains_part_reference(parsed):
                 response_data = parsed  # Use the parsed JSON directly
             else:
                 response_data = {"content": content_str}

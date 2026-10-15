@@ -1411,20 +1411,39 @@ def test_convert_gemini_tool_result_wraps_deeply_nested_json_schema_ref():
     assert function_response["response"] == {"content": nested_json}
 
 
+def test_convert_gemini_tool_result_wraps_non_schema_string_ref():
+    """Gemini reads any non-empty string $ref as a part name, a MongoDB DBRef included."""
+    dbref_json = '{"owner":{"$ref":"users","$id":{"$oid":"64b7f0c2a1"}}}'
+    message, last_message_with_tool_calls = _gemini_tool_result_fixture(dbref_json)
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+
+    assert result["function_response"]["response"] == {"content": dbref_json}
+
+
 @pytest.mark.parametrize(
     "schema_json",
     [
         '{"$defs":{"Foo":{"type":"string"}},"type":"object","properties":{"bar":{"type":"string"}}}',
         '{"definitions":{"Foo":{"type":"string"}},"type":"object","properties":{"bar":{"type":"string"}}}',
         '{"status":"ok","count":2,"tags":["a","b"]}',
+        '{"v":{"$ref":null}}',
+        '{"v":{"$ref":""}}',
+        '{"v":{"$ref":5}}',
+        '{"v":{"$ref":true}}',
+        '{"v":{"$ref":{"a":1}}}',
+        '{"v":{"$ref":["#/a"]}}',
     ],
 )
-def test_convert_gemini_tool_result_preserves_structured_passthrough_without_refs(
+def test_convert_gemini_tool_result_preserves_structured_passthrough_without_part_references(
     schema_json: str,
 ):
     """
-    Tool output carrying $defs / definitions / plain data but no $ref keys
-    keeps the existing structured function-response behavior unchanged.
+    Gemini only rejects a $ref holding a non-empty string, so tool output with
+    no $ref, or a $ref holding any other value, stays structured.
     Fixes: https://github.com/BerriAI/litellm/issues/38223
     """
     message, last_message_with_tool_calls = _gemini_tool_result_fixture(schema_json)
