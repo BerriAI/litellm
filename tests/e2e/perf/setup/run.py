@@ -5,6 +5,7 @@ wrote come back as `WireRecord`s."""
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -14,6 +15,7 @@ from typing import Final
 
 from e2e_config import PROXY_BASE_URL
 from pydantic import TypeAdapter
+
 from setup.performance_test_case import PerformanceTestCase
 from setup.plan import PlannedRequest
 from setup.provision import CaseSetup
@@ -60,6 +62,15 @@ def wire_request(item: PlannedRequest, setup: CaseSetup) -> WireRequest:
         stream=item.stream,
         blocked=item.blocked,
     )
+
+
+def _keep_records_artifact(records_path: Path) -> None:
+    """Copy the per-request records next to the JUnit file when the runner exposes an artifact
+    directory (`E2E_ARTIFACT_DIR`), so a red lane run can be broken down after the pod is gone."""
+    artifact_dir: Final = os.environ.get("E2E_ARTIFACT_DIR")
+    if not artifact_dir or not Path(artifact_dir).is_dir():
+        return
+    _ = shutil.copyfile(records_path, Path(artifact_dir) / "perf-records.jsonl")
 
 
 def run_plan(case: PerformanceTestCase, plan: tuple[PlannedRequest, ...], setup: CaseSetup) -> RunOutcome:
@@ -113,5 +124,6 @@ def run_plan(case: PerformanceTestCase, plan: tuple[PlannedRequest, ...], setup:
             for line in records_path.read_text(encoding="utf-8").splitlines()
             if line.strip()
         )
+        _keep_records_artifact(records_path)
     output: Final = (completed.stdout + completed.stderr)[-6000:]
     return RunOutcome(records=records, locust_exit=completed.returncode, locust_output=output)
