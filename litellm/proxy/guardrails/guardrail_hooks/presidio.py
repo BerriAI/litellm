@@ -16,7 +16,16 @@ from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaita
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    Literal,
+    Optional,
+    Protocol,
+    TypeGuard,  # noqa: TID251  # narrows request message parts masked in place
+    cast,
+)
 
 import aiohttp
 from pydantic import ConfigDict, JsonValue, TypeAdapter, with_config
@@ -94,6 +103,14 @@ async def _json_body(response: _JsonResponse) -> object:
 
 
 _LoopSemaphores = dict[asyncio.AbstractEventLoop, asyncio.Semaphore]
+
+
+def _is_str_object_dict(value: object) -> TypeGuard[dict[str, object]]:  # guard-ok: isinstance narrows correctly; message parts are JSON objects with str keys  # mutable-ok: callers mask PII in the request messages in place  # fmt: skip
+    return isinstance(value, dict)
+
+
+def _is_object_list(value: object) -> TypeGuard[list[object]]:  # guard-ok: isinstance narrows correctly; predicate is trivially correct  # mutable-ok: narrows the request's own lists, which are masked in place  # fmt: skip
+    return isinstance(value, list)
 
 
 def _json_escaped_len(text: str) -> int:
@@ -1101,9 +1118,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     messages[msg_idx]["content"][content_idx_optional]["text"] = r
 
             await self._mask_pii_in_history_tool_calls(
-                messages=messages,
+                messages=messages,  # pyright: ignore[reportUnknownArgumentType]  # messages comes from the untyped hook payload `data`
                 presidio_config=presidio_config,
-                request_data=data,
+                request_data=data,  # pyright: ignore[reportUnknownArgumentType]  # the hook signature types data as a bare dict
             )
 
             verbose_proxy_logger.debug("Presidio PII Masking: Redacted pii message: %s", data["messages"])
@@ -1116,61 +1133,57 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         self,
         value: object,
         presidio_config: PresidioPerRequestConfig | None,
-        request_data: dict,
+        request_data: dict[str, object],  # mutable-ok: shared per-request state dict, forwarded to check_pii
     ) -> object:
         if isinstance(value, str):
-            return await self.check_pii(
+            return await self.check_pii(  # pyright: ignore[reportUnknownMemberType]  # check_pii types request_data as a bare dict
                 text=value,
                 output_parse_pii=self.output_parse_pii,
                 presidio_config=presidio_config,
                 request_data=request_data,
             )
-        if isinstance(value, list):
+        if _is_object_list(value):
             return [await self._mask_pii_in_tool_input(item, presidio_config, request_data) for item in value]
-        if isinstance(value, dict):
+        if _is_str_object_dict(value):
             return {
                 key: await self._mask_pii_in_tool_input(item, presidio_config, request_data)
                 for key, item in value.items()
             }
         return value
 
+    async def _mask_pii_in_arguments(
+        self,
+        function: object,
+        presidio_config: PresidioPerRequestConfig | None,
+        request_data: dict[str, object],  # mutable-ok: shared per-request state dict, forwarded to check_pii
+    ) -> None:
+        if not _is_str_object_dict(function):
+            return
+        arguments: Final = function.get("arguments")
+        if isinstance(arguments, str):
+            masked: Final = await self._mask_pii_in_tool_input(arguments, presidio_config, request_data)
+            function["arguments"] = masked  # rebind-ok: masks the request's arguments in place
+
     async def _mask_pii_in_history_tool_calls(
         self,
-        messages: list,
+        messages: Sequence[object],
         presidio_config: PresidioPerRequestConfig | None,
-        request_data: dict,
+        request_data: dict[str, object],  # mutable-ok: shared per-request state dict, forwarded to check_pii
     ) -> None:
         for m in messages:
-            if not isinstance(m, dict):
+            if not _is_str_object_dict(m):
                 continue
 
-            tool_calls = m.get("tool_calls")
-            if isinstance(tool_calls, list):
+            if _is_object_list(tool_calls := m.get("tool_calls")):
                 for tool_call in tool_calls:
-                    if not isinstance(tool_call, dict):
-                        continue
-                    function = tool_call.get("function")
-                    if isinstance(function, dict) and isinstance(function.get("arguments"), str):
-                        function["arguments"] = await self.check_pii(
-                            text=function["arguments"],
-                            output_parse_pii=self.output_parse_pii,
-                            presidio_config=presidio_config,
-                            request_data=request_data,
-                        )
+                    if _is_str_object_dict(tool_call):
+                        await self._mask_pii_in_arguments(tool_call.get("function"), presidio_config, request_data)
 
-            function_call = m.get("function_call")
-            if isinstance(function_call, dict) and isinstance(function_call.get("arguments"), str):
-                function_call["arguments"] = await self.check_pii(
-                    text=function_call["arguments"],
-                    output_parse_pii=self.output_parse_pii,
-                    presidio_config=presidio_config,
-                    request_data=request_data,
-                )
+            await self._mask_pii_in_arguments(m.get("function_call"), presidio_config, request_data)
 
-            content = m.get("content")
-            if isinstance(content, list):
+            if _is_object_list(content := m.get("content")):
                 for c in content:
-                    if isinstance(c, dict) and c.get("type") == "tool_use" and "input" in c:
+                    if _is_str_object_dict(c) and c.get("type") == "tool_use" and "input" in c:
                         c["input"] = await self._mask_pii_in_tool_input(c["input"], presidio_config, request_data)
 
     def logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict, object]:
@@ -1827,33 +1840,36 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         # async_pre_call_hook - otherwise it is forwarded in clear. Skip on the
         # response unmasking branch above.
         if not (input_type == "response" and pii_tokens):
-            await self._apply_guardrail_to_tool_calls(inputs=inputs, request_data=request_data or {})
+            await self._apply_guardrail_to_tool_calls(
+                inputs=inputs,
+                request_data=request_data or {},  # pyright: ignore[reportUnknownArgumentType]  # apply_guardrail types request_data as a bare dict
+            )
         return inputs
 
     @staticmethod
     def _get_tool_call_arguments(tool_call: object) -> str | None:
         function: Final[object] = (
-            tool_call.get("function") if isinstance(tool_call, dict) else getattr(tool_call, "function", None)
+            tool_call.get("function") if _is_str_object_dict(tool_call) else getattr(tool_call, "function", None)
         )
         arguments: Final[object] = (
-            function.get("arguments") if isinstance(function, dict) else getattr(function, "arguments", None)
+            function.get("arguments") if _is_str_object_dict(function) else getattr(function, "arguments", None)
         )
         return arguments if isinstance(arguments, str) and arguments.strip() else None
 
     @staticmethod
     def _set_tool_call_arguments(tool_call: object, arguments: str) -> None:
         function: Final[object] = (
-            tool_call.get("function") if isinstance(tool_call, dict) else getattr(tool_call, "function", None)
+            tool_call.get("function") if _is_str_object_dict(tool_call) else getattr(tool_call, "function", None)
         )
-        if isinstance(function, dict):
+        if _is_str_object_dict(function):
             function["arguments"] = arguments
         elif function is not None and hasattr(function, "arguments"):
-            function.arguments = arguments  # type: ignore[attr-defined]
+            setattr(function, "arguments", arguments)  # noqa: B010  # the attribute is only known to exist at runtime (hasattr above)
 
     async def _apply_guardrail_to_tool_calls(
         self,
         inputs: "GenericGuardrailAPIInputs",
-        request_data: dict,
+        request_data: dict[str, object],  # mutable-ok: shared per-request state dict, forwarded to check_pii
     ) -> None:
         """Mask PII in the argument string of each extracted tool call in place.
 
@@ -1865,13 +1881,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             arguments = self._get_tool_call_arguments(tool_call)
             if arguments is None:
                 continue
-            masked_arguments = await self.check_pii(
-                text=arguments,
-                output_parse_pii=self.output_parse_pii,
-                presidio_config=None,
-                request_data=request_data,
-            )
-            if masked_arguments != arguments:
+            masked_arguments = await self._mask_pii_in_tool_input(arguments, None, request_data)
+            if isinstance(masked_arguments, str) and masked_arguments != arguments:
                 self._set_tool_call_arguments(tool_call, masked_arguments)
 
     def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
