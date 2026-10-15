@@ -114,6 +114,21 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
         [field]: callbackValue,
         callback_vars: {},
       };
+    } else if (field === "callback_type" && newValue === "failure") {
+      const callbackDisplayName = Object.entries(callback_map).find(
+        ([_, value]) => value === updatedConfigs[index].callback_name,
+      )?.[0];
+      const successOnlyParams = new Set(
+        (callbackDisplayName && callbackInfo[callbackDisplayName]?.success_event_params) || [],
+      );
+      const callbackVars = Object.fromEntries(
+        Object.entries(updatedConfigs[index].callback_vars).filter(([key]) => !successOnlyParams.has(key)),
+      );
+      updatedConfigs[index] = {
+        ...updatedConfigs[index],
+        [field]: newValue,
+        callback_vars: callbackVars,
+      };
     } else {
       updatedConfigs[index] = {
         ...updatedConfigs[index],
@@ -135,6 +150,57 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
     handleChange(updatedConfigs);
   };
 
+  const renderParamControl = (
+    config: LoggingConfig,
+    configIndex: number,
+    paramName: string,
+    param: { type: string; options: readonly string[] },
+  ) => {
+    const { type: paramType, options } = param;
+    const label = paramName.replace(/_/g, " ");
+    if (options.length > 0) {
+      return (
+        <Select
+          items={options.map((option) => ({ label: option, value: option }))}
+          value={config.callback_vars[paramName] || null}
+          onValueChange={(selected: string | null) => updateCallbackVar(configIndex, paramName, selected ?? "")}
+        >
+          <SelectTrigger aria-label={label} className="w-full">
+            <SelectValue placeholder={`Select ${label}`} />
+          </SelectTrigger>
+          <SelectContent>
+            {options.map((option) => (
+              <SelectItem key={option} value={option}>
+                {option}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      );
+    }
+    if (paramType === "number") {
+      return (
+        <NumericalInput
+          step={0.01}
+          width={400}
+          placeholder={`os.environ/${paramName.toUpperCase()}`}
+          value={config.callback_vars[paramName] || ""}
+          onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+            updateCallbackVar(configIndex, paramName, e.target.value)
+          }
+        />
+      );
+    }
+    return (
+      <CallbackVarInput
+        sensitive={paramType === "password"}
+        placeholder={`os.environ/${paramName.toUpperCase()}`}
+        value={config.callback_vars[paramName] || ""}
+        onValueChange={(newValue) => updateCallbackVar(configIndex, paramName, newValue)}
+      />
+    );
+  };
+
   const renderDynamicParams = (config: LoggingConfig, configIndex: number) => {
     if (!config.callback_name) return null;
 
@@ -144,6 +210,11 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
     if (!callbackDisplayName) return null;
 
     const dynamicParams = callbackInfo[callbackDisplayName]?.dynamic_params || {};
+    const paramOptions = callbackInfo[callbackDisplayName]?.dynamic_param_options || {};
+    const successOnlyParams =
+      config.callback_type === "failure"
+        ? new Set(callbackInfo[callbackDisplayName]?.success_event_params ?? [])
+        : new Set<string>();
 
     if (Object.keys(dynamicParams).length === 0) return null;
 
@@ -156,34 +227,24 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
           <span className="text-sm font-medium text-foreground">Integration Parameters</span>
         </div>
         <div className="grid grid-cols-1 gap-4">
-          {Object.entries(dynamicParams).map(([paramName, paramType]) => (
-            <div key={paramName} className="space-y-2">
-              <label className="text-sm font-medium text-foreground capitalize flex items-center space-x-1">
-                <span>{paramName.replace(/_/g, " ")}</span>
-                {paramType === "password" && <Badge variant="secondary">Sensitive</Badge>}
-                {paramType === "number" && <Badge variant="secondary">Number</Badge>}
-              </label>
-              {paramType === "number" && (
-                <span className="text-xs text-muted-foreground">Value must be between 0 and 1</span>
-              )}
-              {paramType === "number" ? (
-                <NumericalInput
-                  step={0.01}
-                  width={400}
-                  placeholder={`os.environ/${paramName.toUpperCase()}`}
-                  value={config.callback_vars[paramName] || ""}
-                  onChange={(e: any) => updateCallbackVar(configIndex, paramName, e.target.value)}
-                />
-              ) : (
-                <CallbackVarInput
-                  sensitive={paramType === "password"}
-                  placeholder={`os.environ/${paramName.toUpperCase()}`}
-                  value={config.callback_vars[paramName] || ""}
-                  onValueChange={(newValue) => updateCallbackVar(configIndex, paramName, newValue)}
-                />
-              )}
-            </div>
-          ))}
+          {Object.entries(dynamicParams)
+            .filter(([paramName]) => !successOnlyParams.has(paramName))
+            .map(([paramName, paramType]) => (
+              <div key={paramName} className="space-y-2">
+                <label className="text-sm font-medium text-foreground capitalize flex items-center space-x-1">
+                  <span>{paramName.replace(/_/g, " ")}</span>
+                  {paramType === "password" && <Badge variant="secondary">Sensitive</Badge>}
+                  {paramType === "number" && <Badge variant="secondary">Number</Badge>}
+                </label>
+                {paramType === "number" && (
+                  <span className="text-xs text-muted-foreground">Value must be between 0 and 1</span>
+                )}
+                {renderParamControl(config, configIndex, paramName, {
+                  type: paramType,
+                  options: paramType === "select" ? paramOptions[paramName] || [] : [],
+                })}
+              </div>
+            ))}
         </div>
       </div>
     );

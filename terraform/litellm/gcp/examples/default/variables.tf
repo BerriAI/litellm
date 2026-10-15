@@ -142,3 +142,9 @@ variable "backend_extra_secrets" {
   type        = map(string)
   default     = {}
 }
+
+variable "gateway_metrics_port" {
+  description = "Port for the Prometheus metrics sidecar in the gateway service. Null keeps /metrics on the gateway port only."
+  type        = number
+  default     = null
+}

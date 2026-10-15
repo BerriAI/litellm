@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Final
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.image_handling import RemoteMedia, inline_remote_image_urls
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
@@ -13,7 +14,7 @@ from ....anthropic.chat.transformation import AnthropicConfig
 from .output_params_utils import sanitize_vertex_anthropic_output_params
 
 if TYPE_CHECKING:
-    import tiktoken
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 class VertexAIError(Exception):
@@ -50,6 +51,9 @@ class VertexAIAnthropicConfig(AnthropicConfig):
     @property
     def custom_llm_provider(self) -> str | None:
         return "vertex_ai"
+
+    def inlines_remote_media(self, media: RemoteMedia) -> bool:
+        return inline_remote_image_urls(media)
 
     def should_strip_billing_metadata(self) -> bool:
         return True
@@ -145,6 +149,16 @@ class VertexAIAnthropicConfig(AnthropicConfig):
 
         return data
 
+    def uses_native_structured_output(self, model: str) -> bool:
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        return (
+            AnthropicModelInfo._get_provider_resolved_capability(
+                model, "supports_native_structured_output", "vertex_ai"
+            )
+            is True
+        )
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -152,36 +166,20 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        """
-        Override parent method so VertexAI uses tool-based structured outputs
-        unless the vertex map entry advertises native structured output
-        (``output_format``, which Vertex AI Claude forwards for those models).
-        """
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        original_model: Final = model
-        native_structured_output: Final = AnthropicModelInfo._get_provider_resolved_capability(
-            model, "supports_native_structured_output", "vertex_ai"
-        )
-        if "response_format" in non_default_params and native_structured_output is not True:
-            model = "claude-3-sonnet-20240229"  # Use a model that will use tool-based approach
-
-        # Call parent method with potentially modified model name
-        optional_params = super().map_openai_params(
+        mapped_params: Final = super().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
             drop_params=drop_params,
         )
 
-        # Restore original model name for any other processing
-        model = original_model
-
         AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
-            model=original_model, optional_params=optional_params, custom_llm_provider="vertex_ai"
+            model=model, optional_params=mapped_params, custom_llm_provider="vertex_ai"
         )
 
-        return optional_params
+        return mapped_params
 
     def transform_response(
         self,
@@ -193,7 +191,7 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

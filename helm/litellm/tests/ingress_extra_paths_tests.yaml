@@ -288,6 +288,17 @@ tests:
       - failedTemplate:
           errorMessage: "ingress.extraPaths[0]: path /test with pathType Exact is already routed by this chart, and a duplicate would take it over rather than add to it"
 
+  - it: rejects an entry that would take over the exact /debug/memory/summary route
+    set:
+      ingress.enabled: true
+      ingress.extraPaths:
+        - path: /debug/memory/summary
+          pathType: Exact
+          service: backend
+    asserts:
+      - failedTemplate:
+          errorMessage: "ingress.extraPaths[0]: path /debug/memory/summary with pathType Exact is already routed by this chart, and a duplicate would take it over rather than add to it"
+
   - it: allows a built-in path under a different pathType, which is a distinct rule
     set:
       ingress.enabled: true

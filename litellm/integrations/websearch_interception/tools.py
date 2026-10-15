@@ -11,6 +11,50 @@ from typing import Any, Final
 
 from litellm.constants import LITELLM_WEB_SEARCH_TOOL_NAME
 
+_WEB_SEARCH_TOOL_DESCRIPTION: Final = (
+    "Search the web for information. Use this when you need current "
+    "information or answers to questions that require up-to-date data."
+)
+
+
+def _web_search_input_schema() -> dict[str, object]:  # mutable-ok: plain-dict tool shape, as the get_* builders
+    """
+    JSON schema for the web search tool's input, shared by every tool format.
+
+    ``query`` stays required so providers and callers that only understand a
+    single query string keep working unchanged. ``objective`` and
+    ``search_queries`` are optional richer inputs; they are forwarded only to
+    search providers that support them (see
+    ``BaseSearchConfig.supports_rich_search_input``).
+    """
+    return {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "The search query to execute",
+            },
+            "objective": {
+                "type": "string",
+                "description": (
+                    "Natural-language description of the goal behind the "
+                    "search, including any source or freshness requirements."
+                ),
+            },
+            "search_queries": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Two to five short keyword queries (3-6 words each) "
+                    "covering different angles of the objective, e.g. varying "
+                    "names, synonyms, or phrasings. Provide together with "
+                    "objective for the best results."
+                ),
+            },
+        },
+        "required": ["query"],
+    }
+
 
 def get_litellm_web_search_tool() -> dict[str, object]:
     """
@@ -33,20 +77,8 @@ def get_litellm_web_search_tool() -> dict[str, object]:
     """
     return {
         "name": LITELLM_WEB_SEARCH_TOOL_NAME,
-        "description": (
-            "Search the web for information. Use this when you need current "
-            "information or answers to questions that require up-to-date data."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "The search query to execute",
-                }
-            },
-            "required": ["query"],
-        },
+        "description": _WEB_SEARCH_TOOL_DESCRIPTION,
+        "input_schema": _web_search_input_schema(),
     }
 
 
@@ -65,20 +97,8 @@ def get_litellm_web_search_tool_openai() -> dict[str, object]:
         "type": "function",
         "function": {
             "name": LITELLM_WEB_SEARCH_TOOL_NAME,
-            "description": (
-                "Search the web for information. Use this when you need current "
-                "information or answers to questions that require up-to-date data."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "The search query to execute",
-                    }
-                },
-                "required": ["query"],
-            },
+            "description": _WEB_SEARCH_TOOL_DESCRIPTION,
+            "parameters": _web_search_input_schema(),
         },
     }
 
@@ -98,20 +118,8 @@ def get_litellm_web_search_tool_responses() -> dict[str, object]:
     return {
         "type": "function",
         "name": LITELLM_WEB_SEARCH_TOOL_NAME,
-        "description": (
-            "Search the web for information. Use this when you need current "
-            "information or answers to questions that require up-to-date data."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "The search query to execute",
-                }
-            },
-            "required": ["query"],
-        },
+        "description": _WEB_SEARCH_TOOL_DESCRIPTION,
+        "parameters": _web_search_input_schema(),
     }
 
 
