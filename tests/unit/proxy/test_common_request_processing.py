@@ -2355,6 +2355,22 @@ class TestCommonRequestProcessingHelpers:
         assert plain.code == "429"
         assert plain.provider_specific_fields is None
 
+    async def test_proxy_exception_from_http_exception_preserves_exc_headers(self):
+        """Headers carried on the HTTPException itself (e.g. `retry-after` set by
+        the rate limiter on 429) must survive the conversion to ProxyException;
+        caller-supplied headers win on conflict."""
+        from litellm.proxy.common_request_processing import (
+            proxy_exception_from_http_exception,
+        )
+
+        exc = HTTPException(status_code=429, detail="slow down", headers={"retry-after": "60"})
+        result = proxy_exception_from_http_exception(exc, {"x-litellm-call-id": "abc"})
+        assert result.headers == {"retry-after": "60", "x-litellm-call-id": "abc"}
+
+        conflict = HTTPException(status_code=429, detail="slow down", headers={"retry-after": "60"})
+        overridden = proxy_exception_from_http_exception(conflict, {"retry-after": "30"})
+        assert overridden.headers == {"retry-after": "30"}
+
     async def test_proxy_exception_from_route_error_helper(self) -> None:
         """The shared route error -> ProxyException conversion keeps the status an exception
         carries, never the OpenAI SDK's ``code`` field (``None`` on most litellm exceptions)."""

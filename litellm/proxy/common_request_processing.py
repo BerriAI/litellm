@@ -637,13 +637,16 @@ def proxy_exception_from_http_exception(exc: HTTPException, headers: dict[str, s
     existing_fields: Final = getattr(exc, "provider_specific_fields", None) or {}
     merged_fields: Final = {**existing_fields, **structured_fields} if structured_fields else (existing_fields or None)
     error_status: Final = error_status_code(exc, status.HTTP_400_BAD_REQUEST)
+    # Preserve headers carried on the HTTPException itself (e.g. `retry-after`
+    # set by the rate limiter on 429); caller-supplied headers win on conflict.
+    merged_headers: Final = {**(exc.headers or {}), **headers}
     return ProxyException(
         message=message,
         type=openai_error_type(exc, error_status),
         param=openai_error_param(exc),
         code=error_status,
         provider_specific_fields=merged_fields,
-        headers=headers,
+        headers=merged_headers,
     )
 
 
