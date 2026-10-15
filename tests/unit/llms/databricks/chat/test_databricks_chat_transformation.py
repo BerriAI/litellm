@@ -28,9 +28,6 @@ from litellm.llms.databricks.chat.transformation import (
 )
 from litellm.types.utils import ChatCompletionMessageToolCall, ModelResponse
 from litellm.types.llms.openai import AllMessageValues
-import asyncio
-from unittest.mock import Mock
-from litellm._version import version
 from litellm.utils import CustomStreamWrapper
 
 DATABRICKS_API_BASE: Final = "https://my.workspace.cloud.databricks.com/serving-endpoints"
