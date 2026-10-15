@@ -1444,7 +1444,7 @@ def _json_children(node: JsonValue) -> Iterable[JsonValue]:
     if isinstance(node, dict):
         return node.values()
     if isinstance(node, list):
-        return node
+        return (child for child in node if not isinstance(child, list))
     return ()
 
 
@@ -1468,7 +1468,8 @@ def _may_spell_ref_key(raw_json: str) -> bool:
 
 
 def _contains_part_reference(payload: JsonValue) -> bool:
-    """Gemini reads any {"$ref": "<non-empty string>"} object in a function_response as a pointer to one of its parts
+    """Gemini reads a {"$ref": "<non-empty string>"} object in a function_response as a pointer to one of its parts,
+    unless it sits under a list nested directly in a list
 
     Google does not document this. It was observed on the Gemini API and Vertex AI on 2026-10-15, see issue #38223
     """

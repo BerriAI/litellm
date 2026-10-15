@@ -1470,14 +1470,17 @@ def test_convert_gemini_tool_result_wraps_unicode_escaped_ref_key(ref_key: str):
         '{"v":{"$ref":true}}',
         '{"v":{"$ref":{"a":1}}}',
         '{"v":{"$ref":["#/a"]}}',
+        '{"columns":["user","name"],"rows":[[{"$ref":"#/users/1"},"alice"]]}',
+        '{"a":[1,[{"b":{"$ref":"x"}}]]}',
     ],
 )
 def test_convert_gemini_tool_result_preserves_structured_passthrough_without_part_references(
     schema_json: str,
 ):
     """
-    Gemini only rejects a $ref holding a non-empty string, so tool output with
-    no $ref, or a $ref holding any other value, stays structured.
+    Gemini only rejects a $ref holding a non-empty string outside a list nested
+    directly in a list, so tool output with no $ref, a $ref holding any other
+    value, or a $ref under a list of lists stays structured.
     Google does not document that rule. It was observed on the Gemini API and
     Vertex AI (gemini-3.8-flash, gemini-4-argon) on 2026-10-15.
     Fixes: https://github.com/BerriAI/litellm/issues/38223
