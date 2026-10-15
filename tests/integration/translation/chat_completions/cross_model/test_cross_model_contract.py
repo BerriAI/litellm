@@ -135,8 +135,6 @@ def test_openai_sdk_stream_helper_assembles_the_agent_tool_calls(
 ) -> None:
     model: Final = case.litellm_request["model"]
     assert isinstance(model, str)
-    if "haiku" in model:
-        pytest.skip("BUG: LIT-9653, reasoning thinking_blocks lack index and crash OpenAI SDK stream assembly")
     provider.expect(streaming_reply(case))
     with OpenAI(
         api_key=gateway.key, base_url=str(gateway.client.base_url).rstrip("/") + "/v1", max_retries=0
