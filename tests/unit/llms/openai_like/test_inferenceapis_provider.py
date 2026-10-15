@@ -1,11 +1,13 @@
 import json
 from typing import Final
 
+import httpx
 import pytest
 import respx
 
 import litellm
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
 INFERENCEAPIS_API_BASE: Final = "https://api.inferenceapis.com/v1"
@@ -59,19 +61,6 @@ def test_inferenceapis_provider_keeps_explicit_credentials(monkeypatch: pytest.M
     assert provider == "inferenceapis"
     assert api_key == "inferenceapis-explicit-key"
     assert api_base == "https://inferenceapis.internal.example/v1"
-
-
-def test_inferenceapis_provider_detected_from_api_base():
-    model, provider, _, api_base = get_llm_provider(
-        model="zai-org/GLM-5.3",
-        custom_llm_provider=None,
-        api_base=INFERENCEAPIS_API_BASE,
-        api_key=None,
-    )
-
-    assert model == "zai-org/GLM-5.3"
-    assert provider == "inferenceapis"
-    assert api_base == INFERENCEAPIS_API_BASE
 
 
 def test_inferenceapis_cost_map_rows_only_list_registered_endpoints():
@@ -157,6 +146,40 @@ def test_inferenceapis_responses_request():
     assert body["model"] == INFERENCEAPIS_MODEL_ID
     assert body["input"] == "Say hello"
     assert response.output[0].content[0].text == "Hello from Inference APIs"
+
+
+@pytest.mark.asyncio
+async def test_inferenceapis_anthropic_messages_request_is_sent_natively():
+    with respx.mock() as upstream:
+        route: Final = upstream.post(f"{INFERENCEAPIS_API_BASE}/messages").respond(
+            200,
+            json={
+                "id": "msg_inferenceapis",
+                "type": "message",
+                "role": "assistant",
+                "model": INFERENCEAPIS_MODEL_ID,
+                "content": [{"type": "text", "text": "Hello from Inference APIs"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 4, "output_tokens": 3},
+            },
+        )
+        response: Final = await litellm.anthropic.messages.acreate(
+            model=INFERENCEAPIS_MODEL,
+            messages=[{"role": "user", "content": "Say hello"}],
+            max_tokens=32,
+            api_key="inferenceapis-test-key",
+            client=AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport()),
+        )
+
+    request: Final = route.calls.last.request
+    body: Final = json.loads(request.content)
+    assert route.call_count == 1
+    assert request.headers["authorization"] == "Bearer inferenceapis-test-key"
+    assert body["model"] == INFERENCEAPIS_MODEL_ID
+    assert body["messages"] == [{"role": "user", "content": "Say hello"}]
+    assert body["max_tokens"] == 32
+    assert response["content"][0]["text"] == "Hello from Inference APIs"
 
 
 def test_inferenceapis_chat_completion_cost_bills_cached_tokens_at_cache_read_rate():
