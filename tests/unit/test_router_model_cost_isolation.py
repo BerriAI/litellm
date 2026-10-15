@@ -26,7 +26,6 @@ from litellm.litellm_core_utils.ptu_pricing import ptu_config_error
 from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
-from litellm.router import _maps_to_exact_model_info
 from litellm.types.router import (
     Deployment,
     DeploymentTypedDict,
@@ -3369,10 +3368,30 @@ def _capacity_test_router(route: str, base: str, base_location: str | None, expl
     )
 
 
+def _deployments_allowed_for_2048_input_tokens(router: Router) -> int:
+    try:
+        return len(
+            router._pre_call_checks(
+                model="capacity-test",
+                healthy_deployments=router.model_list,
+                input="synthetic input",
+                input_token_count=2048,
+            )
+        )
+    except litellm.ContextWindowExceededError:
+        return 0
+
+
+def _effective_max_input_tokens(router: Router) -> object:
+    return router.get_router_model_info(id="capacity-test", deployment=None, received_model_name="capacity-test")[
+        "max_input_tokens"
+    ]
+
+
 @pytest.mark.parametrize(("provider", "route", "base"), _CAPACITY_TEST_DEPLOYMENTS)
 @pytest.mark.parametrize("base_location", ("model_info", "litellm_params", None))
 @pytest.mark.parametrize("explicit_limit", (None, 4096))
-def test_router_capacity_uses_explicit_base_model(
+def test_router_capacity_widens_to_a_larger_base_model_window(
     monkeypatch: pytest.MonkeyPatch,
     provider: str,
     route: str,
@@ -3391,73 +3410,91 @@ def test_router_capacity_uses_explicit_base_model(
     )
     _invalidate_model_cost_lowercase_map()
     router: Final = _capacity_test_router(route, base, base_location, explicit_limit)
-    effective: Final = router.get_router_model_info(
-        id="capacity-test", deployment=None, received_model_name="capacity-test"
-    )
     expected: Final = explicit_limit if explicit_limit is not None else (8192 if base_location else 1024)
-    assert effective["max_input_tokens"] == expected
-    if expected < 2048:
-        with pytest.raises(litellm.ContextWindowExceededError):
-            router._pre_call_checks(
-                model="capacity-test",
-                healthy_deployments=router.model_list,
-                input="synthetic input",
-                input_token_count=2048,
-            )
-    else:
-        allowed: Final = router._pre_call_checks(
-            model="capacity-test",
-            healthy_deployments=router.model_list,
-            input="synthetic input",
-            input_token_count=2048,
-        )
-        assert len(allowed) == 1
+    assert _effective_max_input_tokens(router) == expected
+    assert _deployments_allowed_for_2048_input_tokens(router) == (1 if expected >= 2048 else 0)
     _invalidate_model_cost_lowercase_map()
 
 
 @pytest.mark.parametrize(("provider", "route", "base"), _CAPACITY_TEST_DEPLOYMENTS)
-def test_router_capacity_keeps_route_limits_when_base_model_is_unmapped(
-    monkeypatch: pytest.MonkeyPatch, provider: str, route: str, base: str
-) -> None:
-    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, route: _capacity_test_metadata(provider, 1024)})
-    _invalidate_model_cost_lowercase_map()
-    router: Final = _capacity_test_router(route, f"{base}-unmapped", "model_info", None)
-    effective: Final = router.get_router_model_info(
-        id="capacity-test", deployment=None, received_model_name="capacity-test"
-    )
-    assert effective["max_input_tokens"] == 1024
-    with pytest.raises(litellm.ContextWindowExceededError):
-        router._pre_call_checks(
-            model="capacity-test",
-            healthy_deployments=router.model_list,
-            input="synthetic input",
-            input_token_count=2048,
-        )
-    _invalidate_model_cost_lowercase_map()
-
-
-@pytest.mark.parametrize(
-    ("base_model", "custom_llm_provider", "expected"),
-    (
-        ("bedrock/anthropic.router-capacity-test-base", "bedrock", True),
-        ("anthropic.router-capacity-test-base", "bedrock", True),
-        ("bedrock/anthropic.router-capacity-test-*", "bedrock", False),
-        ("bedrock/anthropic.claude-routercapacitytest-9-9", "bedrock", False),
-        ("bedrock/anthropic.router-capacity-test-unmapped", "bedrock", False),
-    ),
-)
-def test_maps_to_exact_model_info_accepts_only_exact_cost_map_entries(
-    monkeypatch: pytest.MonkeyPatch, base_model: str, custom_llm_provider: str, expected: bool
+@pytest.mark.parametrize("base_location", ("model_info", "litellm_params"))
+def test_router_capacity_never_narrows_to_a_smaller_base_model_window(
+    monkeypatch: pytest.MonkeyPatch, provider: str, route: str, base: str, base_location: str
 ) -> None:
     monkeypatch.setattr(
         litellm,
         "model_cost",
         {
             **litellm.model_cost,
+            route: _capacity_test_metadata(provider, 8192),
+            base: _capacity_test_metadata(provider, 1024),
+        },
+    )
+    _invalidate_model_cost_lowercase_map()
+    router: Final = _capacity_test_router(route, base, base_location, None)
+    assert _effective_max_input_tokens(router) == 8192
+    assert _deployments_allowed_for_2048_input_tokens(router) == 1
+    _invalidate_model_cost_lowercase_map()
+
+
+@pytest.mark.parametrize(("provider", "route", "base"), _CAPACITY_TEST_DEPLOYMENTS)
+def test_router_capacity_never_takes_a_window_from_base_model_when_the_route_is_unmapped(
+    monkeypatch: pytest.MonkeyPatch, provider: str, route: str, base: str
+) -> None:
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, base: _capacity_test_metadata(provider, 1024)})
+    _invalidate_model_cost_lowercase_map()
+    router: Final = _capacity_test_router(f"{route}-not-in-cost-map", base, "model_info", None)
+    assert _deployments_allowed_for_2048_input_tokens(router) == 1
+    _invalidate_model_cost_lowercase_map()
+
+
+@pytest.mark.parametrize(("provider", "route", "base"), _CAPACITY_TEST_DEPLOYMENTS)
+def test_router_capacity_never_takes_a_window_from_base_model_when_the_route_declares_none(
+    monkeypatch: pytest.MonkeyPatch, provider: str, route: str, base: str
+) -> None:
+    route_without_window: Final = {
+        key: value
+        for key, value in _capacity_test_metadata(provider, 0).items()
+        if key not in ("max_input_tokens", "max_tokens")
+    }
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {**litellm.model_cost, route: route_without_window, base: _capacity_test_metadata(provider, 1024)},
+    )
+    _invalidate_model_cost_lowercase_map()
+    router: Final = _capacity_test_router(route, base, "model_info", None)
+    assert _effective_max_input_tokens(router) is None
+    assert _deployments_allowed_for_2048_input_tokens(router) == 1
+    _invalidate_model_cost_lowercase_map()
+
+
+@pytest.mark.parametrize(
+    ("base_model", "expected"),
+    (
+        ("bedrock/anthropic.router-capacity-test-base", 8192),
+        ("anthropic.router-capacity-test-base", 8192),
+        ("bedrock/anthropic.router-capacity-test-*", 1024),
+        ("bedrock/anthropic.claude-routercapacitytest-9-9", 1024),
+        ("bedrock/anthropic.router-capacity-test-unmapped", 1024),
+    ),
+)
+def test_router_capacity_widens_only_for_an_exact_base_model_entry(
+    monkeypatch: pytest.MonkeyPatch, base_model: str, expected: int
+) -> None:
+    route: Final = "bedrock/converse/anthropic.router-capacity-test-route"
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            route: _capacity_test_metadata("bedrock", 1024),
             "bedrock/anthropic.router-capacity-test-base": _capacity_test_metadata("bedrock", 8192),
             "bedrock/anthropic.router-capacity-test-*": _capacity_test_metadata("bedrock", 8192),
         },
     )
     _invalidate_model_cost_lowercase_map()
-    assert _maps_to_exact_model_info(base_model, custom_llm_provider) is expected
+    router: Final = _capacity_test_router(route, base_model, "model_info", None)
+    assert _effective_max_input_tokens(router) == expected
+    assert _deployments_allowed_for_2048_input_tokens(router) == (1 if expected >= 2048 else 0)
     _invalidate_model_cost_lowercase_map()

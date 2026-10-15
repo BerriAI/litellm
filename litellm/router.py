@@ -990,17 +990,30 @@ def as_output_cap(value: object) -> int | None:
     return cap if cap >= 0 else None
 
 
-def _maps_to_exact_model_info(base_model: str, custom_llm_provider: str) -> bool:
+def _exact_base_model_max_input_tokens(base_model: str, custom_llm_provider: str) -> int | None:
     if "*" in base_model:
-        return False
+        return None
     lookup_name: Final = (
         base_model if base_model.startswith(f"{custom_llm_provider}/") else f"{custom_llm_provider}/{base_model}"
     )
     try:
         model_info: Final = litellm.get_model_info(model=lookup_name)
     except Exception:  # noqa: BLE001  # get_model_info raises a bare Exception for an unmapped model
-        return False
-    return not is_generalized_model_info(model_info)
+        return None
+    if is_generalized_model_info(model_info):
+        return None
+    return model_info.get("max_input_tokens")
+
+
+def _base_model_widened_window(
+    route_max_input_tokens: int | None, base_model: str, custom_llm_provider: str
+) -> Mapping[str, int]:
+    if route_max_input_tokens is None:
+        return MappingProxyType({})
+    base_max_input_tokens: Final = _exact_base_model_max_input_tokens(base_model, custom_llm_provider)
+    if base_max_input_tokens is None or base_max_input_tokens <= route_max_input_tokens:
+        return MappingProxyType({})
+    return MappingProxyType({"max_input_tokens": base_max_input_tokens})
 
 
 class Router:
@@ -11351,7 +11364,7 @@ class Router:
         Augment litellm info with additional params set in `model_info`.
 
         For azure models, ignore the `model:`. Only set max tokens, cost values if base_model is set.
-        For every other provider, a concrete base_model with its own cost-map entry wins over `model:`.
+        For every other provider, a base_model with its own cost-map entry can only widen `model:`'s context window.
 
         Returns
         - ModelInfo - If found -> typed dict with max tokens, input cost, etc.
@@ -11415,9 +11428,7 @@ class Router:
                     "Could not identify azure model '%s'. Set azure 'base_model' for accurate max tokens, cost tracking, etc.- https://docs.litellm.ai/docs/proxy/cost_tracking#spend-tracking-for-azure-openai-models",
                     _model,
                 )
-        elif custom_llm_provider != "azure" and not (
-            isinstance(base_model, str) and _maps_to_exact_model_info(base_model, custom_llm_provider)
-        ):
+        elif custom_llm_provider != "azure":
             model = _model
 
             if "*" in model:  # only call pattern_router for wildcard models
@@ -11460,6 +11471,11 @@ class Router:
         # values are skipped or Deployment's None pricing defaults would erase the map's
         merged_model_info: Final[ModelMapInfo] = {
             **copy.deepcopy(model_info),
+            **(
+                _base_model_widened_window(model_info.get("max_input_tokens"), base_model, custom_llm_provider)
+                if isinstance(base_model, str)
+                else MappingProxyType({})
+            ),
             **self.get_discovered_model_info((deployment.get("model_info") or {}).get("id")),
             **MappingProxyType(
                 {key: value for key, value in (user_model_info or MappingProxyType({})).items() if value is not None}
