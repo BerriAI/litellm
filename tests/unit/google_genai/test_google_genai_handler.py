@@ -17,6 +17,7 @@ import litellm
 from litellm import Router
 from litellm.google_genai.adapters.handler import GenerateContentToCompletionHandler
 from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+from litellm.types.router import GenericLiteLLMParams
 
 
 def test_stream_response_when_stream_requested_sync():
@@ -248,7 +249,6 @@ async def test_generate_content_adapter_preserves_proxy_server_request():
     Ensure GenerateContentToCompletionHandler forwards proxy_server_request
     to the downstream completion call so proxy spend logging captures the request body.
     """
-    from litellm.types.router import GenericLiteLLMParams
     from litellm.types.utils import Choices, Message, ModelResponse
 
     handler = GenerateContentToCompletionHandler()
@@ -302,10 +302,21 @@ _REJECTED_ADAPTER_REQUEST: Final = MappingProxyType(
         pytest.param(
             lambda router: asyncio.to_thread(router.generate_content, **_REJECTED_ADAPTER_REQUEST), id="sync"
         ),
+        pytest.param(
+            lambda router: asyncio.to_thread(router.generate_content_stream, **_REJECTED_ADAPTER_REQUEST),
+            id="sync_stream",
+        ),
+        pytest.param(
+            lambda _router: litellm.aadapter_generate_content(
+                **{**_REJECTED_ADAPTER_REQUEST, "model": "openai/gpt-5.4-mini"},
+                litellm_params=GenericLiteLLMParams(api_key="sk-generate-content-adapter-400"),
+            ),
+            id="sdk_aadapter_generate_content",
+        ),
     ],
 )
 @pytest.mark.asyncio
-async def test_router_returns_provider_400_from_generate_content_adapter_without_retrying(
+async def test_generate_content_adapter_returns_provider_400_without_retrying(
     send_rejected_request: Callable[[Router], Awaitable[object]],
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
