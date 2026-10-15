@@ -485,22 +485,27 @@ _handle_invalid_parallel_tool_calls = handle_invalid_parallel_tool_calls
 
 
 def normalize_image_response_usage(response: Mapping[str, object]) -> Mapping[str, object]:
-    usage: Final = cast(Mapping[str, object] | None, response.get("usage"))
-    if usage is None:
+    raw_usage: Final = response.get("usage")
+    if not isinstance(raw_usage, Mapping):
         return {**response}
 
-    input_tokens: Final = cast(int, usage["input_tokens"] if usage.get("input_tokens") is not None else 0)
-    output_tokens: Final = cast(int, usage["output_tokens"] if usage.get("output_tokens") is not None else 0)
-    input_details: Final = cast(Mapping[str, object], usage.get("input_tokens_details") or {})
+    usage: Final = _FIELD_MAP.validate_python(raw_usage)
+    input_tokens: Final = usage["input_tokens"] if usage.get("input_tokens") is not None else 0
+    output_tokens: Final = usage["output_tokens"] if usage.get("output_tokens") is not None else 0
+    total_tokens: Final = (
+        input_tokens + output_tokens if isinstance(input_tokens, int) and isinstance(output_tokens, int) else None
+    )
+    raw_input_details: Final = usage.get("input_tokens_details")
+    input_details: Final = (
+        _FIELD_MAP.validate_python(raw_input_details) if isinstance(raw_input_details, Mapping) else {}
+    )
     return {
         **response,
         "usage": {
             **usage,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
-            "total_tokens": usage["total_tokens"]
-            if usage.get("total_tokens") is not None
-            else input_tokens + output_tokens,
+            "total_tokens": usage["total_tokens"] if usage.get("total_tokens") is not None else total_tokens,
             "input_tokens_details": {
                 **input_details,
                 "image_tokens": input_details["image_tokens"] if input_details.get("image_tokens") is not None else 0,
@@ -519,7 +524,7 @@ class LiteLLMResponseObjectHandler:
     ) -> ImageResponse:
         response_object.update(
             {
-                **normalize_image_response_usage(cast(Mapping[str, object], response_object)),
+                **normalize_image_response_usage(_FIELD_MAP.validate_python(response_object)),
                 "hidden_params": hidden_params,
             }
         )

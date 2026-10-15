@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from io import BufferedReader
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -153,7 +154,8 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
             raw_response_json: Final = raw_response.json()
         except Exception:
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
-        return ImageResponse(**cast(dict[str, Any], normalize_image_response_usage(raw_response_json)))
+        normalized_response: Final[Mapping[str, Any]] = normalize_image_response_usage(raw_response_json)
+        return ImageResponse(**normalized_response)
 
     def validate_environment(
         self,
