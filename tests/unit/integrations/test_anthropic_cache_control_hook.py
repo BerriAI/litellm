@@ -3,6 +3,7 @@ import itertools
 import json
 import logging
 import os
+import pathlib
 import subprocess
 import sys
 import textwrap
@@ -1363,7 +1364,9 @@ def _marks_in(value: object) -> int:
 
 
 def _marks_the_route_sends(model: str, custom_llm_provider: str | None, messages: list[AllMessageValues]) -> int:
-    served_model, provider, _, _ = litellm.get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+    served_model, provider, _, _ = (
+        (model, custom_llm_provider, None, None) if custom_llm_provider else litellm.get_llm_provider(model=model)
+    )
     route_config: Final = ProviderConfigManager.get_provider_chat_config(
         model=served_model, provider=LlmProviders(provider)
     )
@@ -1396,6 +1399,7 @@ _SECOND_SEARCH_CALL: Final = {**_SEARCH_CALL, "id": "srvtoolu_02Search"}
         pytest.param("databricks-claude-sonnet-4-6", "databricks", id="provider-passed-beside-a-bare-model"),
         ("openrouter/anthropic/claude-sonnet-4.6", None),
         ("bedrock/converse/us.anthropic.claude-sonnet-4-6", None),
+        pytest.param("claude-sonnet-4.6", "github_copilot", id="copilot-with-no-stored-login"),
     ],
 )
 @pytest.mark.parametrize(
@@ -1413,12 +1417,15 @@ _SECOND_SEARCH_CALL: Final = {**_SEARCH_CALL, "id": "srvtoolu_02Search"}
 )
 def test_cache_control_hook_fills_the_mark_budget_every_claude_route_sends_after_marked_search_calls(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
     model: str,
     custom_llm_provider: str | None,
     tool_calls: tuple[dict[str, object], ...],
     follow_ups: tuple[dict[str, object], ...],
 ):
     monkeypatch.setattr(litellm, "modify_params", True)
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setenv("GITHUB_COPILOT_DEVICE_CODE_URL", "http://127.0.0.1:9/login/device/code")
     marked_text: Final = {"type": "text", "text": "Context: a trip.", "cache_control": {"type": "ephemeral"}}
     kept_searches: Final = {
         "role": "assistant",

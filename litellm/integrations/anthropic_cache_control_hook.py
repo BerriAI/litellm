@@ -261,12 +261,14 @@ def _marks_a_server_tool_call(messages: Sequence[object]) -> bool:
 
 def _builds_anthropic_messages(model: str, custom_llm_provider: str | None) -> bool:
     from litellm.exceptions import BadRequestError
-    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+    from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider, get_llm_provider
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
     from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
     from litellm.types.utils import LlmProviders
     from litellm.utils import ProviderConfigManager
 
+    if declared_authenticating_provider(model, custom_llm_provider) is not None:
+        return False
     try:
         served_model, provider, _, _ = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
         chat_config: Final = ProviderConfigManager.get_provider_chat_config(
