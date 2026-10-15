@@ -39,6 +39,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
 )
 from litellm.types.llms.openai import ChatCompletionAssistantMessage, ChatCompletionToolMessage
+from litellm.types.utils import ChatCompletionMessageToolCall, Function
 from litellm.utils import (
     _invalidate_model_cost_lowercase_map,
     function_setup,
@@ -3519,6 +3520,67 @@ def test_sanitize_messages_combined_case_a_and_case_d():
         }, f"Expected tool_call_ids {{call_missing, call_duped}}, got {tool_ids}"
     finally:
         litellm.modify_params = original
+
+
+def test_sanitize_messages_drops_tool_results_the_latest_assistant_turn_did_not_ask_for(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+    weather_call: Final = {"id": "call_a", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+    time_call: Final = ChatCompletionMessageToolCall(
+        id="call_b", type="function", function=Function(name="get_time", arguments="{}")
+    )
+    weather_answer: Final = {"role": "tool", "tool_call_id": "call_a", "content": "18C"}
+    time_answer: Final = {"role": "tool", "tool_call_id": "call_b", "content": "noon"}
+    asked_for_time: Final = {"role": "assistant", "content": None, "tool_calls": [time_call]}
+    done: Final = {"role": "assistant", "content": "Done"}
+    messages: Final = (
+        {"role": "user", "content": "Weather?"},
+        {"role": "assistant", "content": None, "tool_calls": [weather_call]},
+        weather_answer,
+        {"role": "user", "content": "Time?"},
+        asked_for_time,
+        time_answer,
+        weather_answer,
+        done,
+        time_answer,
+    )
+
+    sanitized: Final = sanitize_messages_for_tool_calling(list(messages))
+
+    assert tuple(sanitized) == (*messages[:6], done)
+
+
+def _sanitize_seconds(answers: int) -> float:
+    tool_calls: Final = [
+        {"id": f"call_{index}", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+        for index in range(answers)
+    ]
+    messages: Final = (
+        {"role": "user", "content": "Weather everywhere?"},
+        {"role": "assistant", "content": None, "tool_calls": tool_calls},
+        *({"role": "tool", "tool_call_id": f"call_{index}", "content": "18C"} for index in range(answers)),
+        {"role": "user", "content": "And now?"},
+    )
+
+    def once() -> float:
+        started: Final = time.perf_counter()
+        sanitized: Final = sanitize_messages_for_tool_calling(list(messages))
+        elapsed: Final = time.perf_counter() - started
+        assert tuple(sanitized) == messages
+        return elapsed
+
+    return min(once() for _ in range(3))
+
+
+def test_sanitize_messages_cost_grows_linearly_with_the_number_of_answered_tool_calls(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+
+    growth: Final = _sanitize_seconds(4000) / _sanitize_seconds(1000)
+
+    assert growth < 11.0, f"cost grew {growth:.1f}x for 4x the tool answers"
 
 
 def test_anthropic_messages_pt_file_block_preserves_cache_control():

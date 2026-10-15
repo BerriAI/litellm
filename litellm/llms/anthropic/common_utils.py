@@ -48,6 +48,7 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
     ANTHROPIC_OAUTH_BETA_HEADER,
     ANTHROPIC_OAUTH_TOKEN_PREFIX,
+    ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX,
     ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
     AllAnthropicToolsValues,
     AnthropicMcpServerTool,
@@ -1932,8 +1933,15 @@ def _replayed_server_tool_use(block: object) -> _ReplayedServerToolUse | None:
 def tool_call_is_rebuilt_as_server_tool_use(
     tool_call_id: object, provider_specific_fields: object, answered_tool_ids: Container[str] = frozenset()
 ) -> bool:
+    if (
+        not isinstance(tool_call_id, str)
+        or not tool_call_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX)
+        or tool_call_id in answered_tool_ids
+        or provider_specific_fields is None
+    ):
+        return False
     fields: Final = validated_object_mapping(provider_specific_fields)
-    if not isinstance(tool_call_id, str) or tool_call_id in answered_tool_ids or fields is None:
+    if fields is None:
         return False
     return (
         find_anthropic_server_tool_result(
