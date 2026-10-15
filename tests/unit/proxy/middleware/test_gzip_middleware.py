@@ -19,6 +19,7 @@ from litellm.proxy.middleware.gzip_middleware import (
 )
 
 LARGE_PAYLOAD = {"rows": [{"date": f"2026-09-{day:02d}", "spend": day * 1.5} for day in range(1, 31)] * 20}
+BASE64_EMBEDDINGS_RESPONSE_BYTES: Final = 824_000
 STREAM_CHUNKS = tuple(json.dumps({"part": part, "pad": "x" * MINIMUM_SIZE_BYTES}).encode() for part in range(3))
 
 
@@ -58,6 +59,10 @@ async def _at_off_loop(request: Request) -> Response:
     return Response(b"a" * OFF_LOOP_SIZE_BYTES, media_type="application/json")
 
 
+async def _base64_embeddings_sized(request: Request) -> Response:
+    return Response(b"e" * BASE64_EMBEDDINGS_RESPONSE_BYTES, media_type="application/json")
+
+
 async def _json_stream(request: Request) -> Response:
     async def chunks():
         for chunk in STREAM_CHUNKS:
@@ -76,6 +81,7 @@ APP = Starlette(
         Route("/huge", _huge),
         Route("/under-off-loop", _under_off_loop),
         Route("/at-off-loop", _at_off_loop),
+        Route("/base64-embeddings-sized", _base64_embeddings_sized),
         Route("/partial", _partial),
         Route("/no-transform", _no_transform),
     ]
@@ -136,26 +142,24 @@ async def test_body_above_off_loop_threshold_round_trips():
 
 @pytest.mark.parametrize(
     "path, compressed_on_loop_thread",
-    [("/under-off-loop", True), ("/at-off-loop", False), ("/huge", False)],
+    [("/under-off-loop", True), ("/at-off-loop", False), ("/base64-embeddings-sized", False), ("/huge", False)],
 )
 @pytest.mark.asyncio
 async def test_only_bodies_under_the_off_loop_threshold_compress_on_the_event_loop(
     monkeypatch: pytest.MonkeyPatch, path: str, compressed_on_loop_thread: bool
 ) -> None:
     loop_thread: Final = threading.get_ident()
-    compress_threads: list[int] = []  # mutable-ok: records the thread of each gzip.compress call
     real_compress: Final = gzip.compress
 
-    def recording_compress(data: bytes, compresslevel: int = 9) -> bytes:
-        compress_threads.append(threading.get_ident())
-        return real_compress(data, compresslevel)
+    def compress_naming_its_thread(data: bytes, compresslevel: int = 9) -> bytes:
+        return real_compress(b"loop" if threading.get_ident() == loop_thread else b"worker", compresslevel)
 
-    monkeypatch.setattr(gzip_middleware.gzip, "compress", recording_compress)
+    monkeypatch.setattr(gzip_middleware.gzip, "compress", compress_naming_its_thread)
 
     messages = await _send_messages(path, "gzip")
 
     assert _headers(messages)["content-encoding"] == "gzip"
-    assert [thread == loop_thread for thread in compress_threads] == [compressed_on_loop_thread]
+    assert gzip.decompress(_body(messages)) == (b"loop" if compressed_on_loop_thread else b"worker")
 
 
 @pytest.mark.parametrize(

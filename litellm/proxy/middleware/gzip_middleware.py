@@ -7,10 +7,6 @@ from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 MINIMUM_SIZE_BYTES: Final = 500
-# gzip.compress holds the event loop for its whole run when it is called inline, and its cost follows
-# how well the body compresses, not only its size: an 824 KB base64 embeddings response takes about
-# 165 ms, an 800 KB JSON table about 13 ms. Every other request on the worker waits for that time,
-# so only bodies that compress in well under a millisecond stay on the loop.
 OFF_LOOP_SIZE_BYTES: Final = 16 * 1024
 COMPRESS_LEVEL: Final = 6
 
