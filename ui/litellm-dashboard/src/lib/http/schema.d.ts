@@ -4628,8 +4628,9 @@ export interface paths {
          * @description Judge an `input` against 1 to 128 `questions` and get the answers back in the same order.
          *
          *     Question types are `predicate` (yes/no with `probability`), `choice` (one of the `choices`, with
-         *     `probabilities`) and `score` (an index into `levels`, with `probabilities`). Requests that break these
-         *     rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy
+         *     `probabilities`), `score` (an index into `levels`, with `probabilities`) and `box` (the image region the
+         *     `instructions` describe, with `confidence`). Requests that break these rules are rejected with a 400 before
+         *     any provider is called. `model` is any decision model in the proxy
          *     model list. System One decision models accept this format too, LiteLLM translates the request and the
          *     answers. Streaming is not supported.
          *
@@ -16347,9 +16348,10 @@ export interface paths {
          * @description Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.
          *
          *     Question types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with
-         *     `confidence` and `probabilities`) and `score` (an index into the `criteria` levels, with `confidence`,
-         *     `legend` and `probabilities`). Requests that break these rules are rejected with a 400 before any provider
-         *     is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format
+         *     `confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,
+         *     `legend` and `probabilities`) and `box` (the image region the `instructions` describe, with `confidence`).
+         *     TypeSafe models also take images in `assets`, each one referenced by its key in `state`. Requests that break
+         *     these rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format
          *     too, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.
          *
          *     [Docs](https://docs.litellm.ai/docs/decisions)
@@ -20143,8 +20145,9 @@ export interface paths {
          * @description Judge an `input` against 1 to 128 `questions` and get the answers back in the same order.
          *
          *     Question types are `predicate` (yes/no with `probability`), `choice` (one of the `choices`, with
-         *     `probabilities`) and `score` (an index into `levels`, with `probabilities`). Requests that break these
-         *     rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy
+         *     `probabilities`), `score` (an index into `levels`, with `probabilities`) and `box` (the image region the
+         *     `instructions` describe, with `confidence`). Requests that break these rules are rejected with a 400 before
+         *     any provider is called. `model` is any decision model in the proxy
          *     model list. System One decision models accept this format too, LiteLLM translates the request and the
          *     answers. Streaming is not supported.
          *
@@ -22499,9 +22502,10 @@ export interface paths {
          * @description Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.
          *
          *     Question types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with
-         *     `confidence` and `probabilities`) and `score` (an index into the `criteria` levels, with `confidence`,
-         *     `legend` and `probabilities`). Requests that break these rules are rejected with a 400 before any provider
-         *     is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format
+         *     `confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,
+         *     `legend` and `probabilities`) and `box` (the image region the `instructions` describe, with `confidence`).
+         *     TypeSafe models also take images in `assets`, each one referenced by its key in `state`. Requests that break
+         *     these rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format
          *     too, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.
          *
          *     [Docs](https://docs.litellm.ai/docs/decisions)
@@ -27781,7 +27785,7 @@ export interface components {
              * Mode
              * @description The mode to test the model with. If not provided, resolved the way /health does: the deployment's model_info.mode (only while the request tests the deployment's own model), then the mode the provider requires for that model, then the model cost map.
              */
-            mode?: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "image_edit" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "anthropic_messages" | "ocr" | "evaluation") | null;
+            mode?: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "image_edit" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "anthropic_messages" | "ocr" | "evaluation" | "decisions") | null;
             /**
              * Model Info
              * @description Model info for the health check
@@ -27872,6 +27876,19 @@ export interface components {
         Body_video_generation_videos_post: {
             /** Input Reference */
             input_reference?: string | null;
+        };
+        /** BoxAnswer */
+        BoxAnswer: {
+            box: components["schemas"]["DecisionsBox"];
+            /** Confidence */
+            confidence: number | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "box";
+        } & {
+            [key: string]: unknown;
         };
         /**
          * BreakdownMetrics
@@ -31916,11 +31933,24 @@ export interface components {
              */
             threshold: number;
         };
+        /** DecisionsBox */
+        DecisionsBox: {
+            /** Bottom */
+            bottom: number;
+            /** Left */
+            left: number;
+            /** Right */
+            right: number;
+            /** Top */
+            top: number;
+        } & {
+            [key: string]: unknown;
+        };
         /** DecisionsResponse */
         DecisionsResponse: {
             /** Answers */
             answers: {
-                [key: string]: components["schemas"]["NoulAnswer"] | components["schemas"]["ChoiceAnswer"] | components["schemas"]["ScoreAnswer"];
+                [key: string]: components["schemas"]["NoulAnswer"] | components["schemas"]["ChoiceAnswer"] | components["schemas"]["ScoreAnswer"] | components["schemas"]["BoxAnswer"];
             };
             /** Model */
             model?: string | null;
@@ -40526,6 +40556,19 @@ export interface components {
             /** Summary */
             summary: string;
         };
+        /** OpenAIBoxAnswer */
+        OpenAIBoxAnswer: {
+            box: components["schemas"]["DecisionsBox"];
+            /** Confidence */
+            confidence: number | null;
+            /** Name */
+            name: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "box";
+        };
         /** OpenAIChoiceAnswer */
         OpenAIChoiceAnswer: {
             /** Choice */
@@ -40573,7 +40616,7 @@ export interface components {
         /** OpenAIDecisionResponse */
         OpenAIDecisionResponse: {
             /** Answers */
-            answers: (components["schemas"]["OpenAIPredicateAnswer"] | components["schemas"]["OpenAIChoiceAnswer"] | components["schemas"]["OpenAIScoreAnswer"] | components["schemas"]["OpenAIRefusalAnswer"])[];
+            answers: (components["schemas"]["OpenAIPredicateAnswer"] | components["schemas"]["OpenAIChoiceAnswer"] | components["schemas"]["OpenAIScoreAnswer"] | components["schemas"]["OpenAIBoxAnswer"] | components["schemas"]["OpenAIRefusalAnswer"])[];
             /** Model */
             model: string;
             usage: components["schemas"]["OpenAIDecisionUsage"];
@@ -58623,6 +58666,23 @@ export interface operations {
                  */
                 "application/json": {
                     /**
+                     * Audio
+                     * @description Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}
+                     * @default []
+                     */
+                    audio?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded audio bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description An audio/* media type, such as audio/wav
+                         */
+                        content_type: string;
+                    })[];
+                    /**
                      * Input
                      * @description The text being judged, or user messages whose content mixes input_text and input_image parts
                      */
@@ -58737,12 +58797,45 @@ export interface operations {
                          * @constant
                          */
                         type: "score";
+                    } | {
+                        /**
+                         * Instructions
+                         * @description What to find in the input's image
+                         */
+                        instructions: string;
+                        /**
+                         * Name
+                         * @description Echoed in the matching answer
+                         */
+                        name?: string | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "box";
                     })[];
                     /**
                      * Safety Identifier
                      * @description A stable id for your end user. Sent to OpenAI and dropped for other providers
                      */
                     safety_identifier?: string | null;
+                    /**
+                     * Videos
+                     * @description Clef-omni only. Up to 2 embedded videos, each a base64 data URL or {content_type, base64}
+                     * @default []
+                     */
+                    videos?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded video bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description A video/* media type, such as video/mp4
+                         */
+                        content_type: string;
+                    })[];
                 } & {
                     [key: string]: unknown;
                 };
@@ -73959,6 +74052,60 @@ export interface operations {
                  */
                 "application/json": {
                     /**
+                     * Assets
+                     * @description TypeSafe only. Images keyed by a reference string. Write the reference in state, instructions or criteria where the image belongs
+                     */
+                    assets?: {
+                        [key: string]: {
+                            /**
+                             * Data Base64
+                             * @description Base64-encoded image bytes, no data: prefix
+                             */
+                            data_base64: string;
+                            /**
+                             * Format
+                             * @description The image's format, in lowercase
+                             * @enum {string}
+                             */
+                            format: "png" | "jpg" | "jpeg";
+                            /** Type */
+                            type?: "image" | null;
+                        };
+                    } | null;
+                    /**
+                     * Audio
+                     * @description Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}
+                     * @default []
+                     */
+                    audio?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded audio bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description An audio/* media type, such as audio/wav
+                         */
+                        content_type: string;
+                    })[];
+                    /**
+                     * Images
+                     * @description Images as data URLs or content_type plus base64, for providers that look at images
+                     */
+                    images?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded image bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description An image/* media type, such as image/png
+                         */
+                        content_type: string;
+                    })[] | null;
+                    /**
                      * Model
                      * @description A decision model from the proxy model_list
                      */
@@ -74038,6 +74185,21 @@ export interface operations {
                             type: "score";
                         } & {
                             [key: string]: unknown;
+                        }) | ({
+                            /**
+                             * Instructions
+                             * @description What to find, and in which image, such as 'the coffee mug in `photo`'
+                             */
+                            instructions: string | {
+                                [key: string]: unknown;
+                            } | unknown[];
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "box";
+                        } & {
+                            [key: string]: unknown;
                         });
                     };
                     /**
@@ -74047,6 +74209,23 @@ export interface operations {
                     state: string | {
                         [key: string]: unknown;
                     } | unknown[];
+                    /**
+                     * Videos
+                     * @description Clef-omni only. Up to 2 embedded videos, each a base64 data URL or {content_type, base64}
+                     * @default []
+                     */
+                    videos?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded video bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description A video/* media type, such as video/mp4
+                         */
+                        content_type: string;
+                    })[];
                 } & {
                     [key: string]: unknown;
                 };
@@ -79220,6 +79399,23 @@ export interface operations {
                  */
                 "application/json": {
                     /**
+                     * Audio
+                     * @description Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}
+                     * @default []
+                     */
+                    audio?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded audio bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description An audio/* media type, such as audio/wav
+                         */
+                        content_type: string;
+                    })[];
+                    /**
                      * Input
                      * @description The text being judged, or user messages whose content mixes input_text and input_image parts
                      */
@@ -79334,12 +79530,45 @@ export interface operations {
                          * @constant
                          */
                         type: "score";
+                    } | {
+                        /**
+                         * Instructions
+                         * @description What to find in the input's image
+                         */
+                        instructions: string;
+                        /**
+                         * Name
+                         * @description Echoed in the matching answer
+                         */
+                        name?: string | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "box";
                     })[];
                     /**
                      * Safety Identifier
                      * @description A stable id for your end user. Sent to OpenAI and dropped for other providers
                      */
                     safety_identifier?: string | null;
+                    /**
+                     * Videos
+                     * @description Clef-omni only. Up to 2 embedded videos, each a base64 data URL or {content_type, base64}
+                     * @default []
+                     */
+                    videos?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded video bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description A video/* media type, such as video/mp4
+                         */
+                        content_type: string;
+                    })[];
                 } & {
                     [key: string]: unknown;
                 };
@@ -82550,6 +82779,60 @@ export interface operations {
                  */
                 "application/json": {
                     /**
+                     * Assets
+                     * @description TypeSafe only. Images keyed by a reference string. Write the reference in state, instructions or criteria where the image belongs
+                     */
+                    assets?: {
+                        [key: string]: {
+                            /**
+                             * Data Base64
+                             * @description Base64-encoded image bytes, no data: prefix
+                             */
+                            data_base64: string;
+                            /**
+                             * Format
+                             * @description The image's format, in lowercase
+                             * @enum {string}
+                             */
+                            format: "png" | "jpg" | "jpeg";
+                            /** Type */
+                            type?: "image" | null;
+                        };
+                    } | null;
+                    /**
+                     * Audio
+                     * @description Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}
+                     * @default []
+                     */
+                    audio?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded audio bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description An audio/* media type, such as audio/wav
+                         */
+                        content_type: string;
+                    })[];
+                    /**
+                     * Images
+                     * @description Images as data URLs or content_type plus base64, for providers that look at images
+                     */
+                    images?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded image bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description An image/* media type, such as image/png
+                         */
+                        content_type: string;
+                    })[] | null;
+                    /**
                      * Model
                      * @description A decision model from the proxy model_list
                      */
@@ -82629,6 +82912,21 @@ export interface operations {
                             type: "score";
                         } & {
                             [key: string]: unknown;
+                        }) | ({
+                            /**
+                             * Instructions
+                             * @description What to find, and in which image, such as 'the coffee mug in `photo`'
+                             */
+                            instructions: string | {
+                                [key: string]: unknown;
+                            } | unknown[];
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "box";
+                        } & {
+                            [key: string]: unknown;
                         });
                     };
                     /**
@@ -82638,6 +82936,23 @@ export interface operations {
                     state: string | {
                         [key: string]: unknown;
                     } | unknown[];
+                    /**
+                     * Videos
+                     * @description Clef-omni only. Up to 2 embedded videos, each a base64 data URL or {content_type, base64}
+                     * @default []
+                     */
+                    videos?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded video bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description A video/* media type, such as video/mp4
+                         */
+                        content_type: string;
+                    })[];
                 } & {
                     [key: string]: unknown;
                 };

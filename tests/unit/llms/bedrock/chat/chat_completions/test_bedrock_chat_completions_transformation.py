@@ -609,7 +609,7 @@ def test_transform_request_inlines_remote_image_urls(local_cost_map, monkeypatch
 async def test_async_transform_request_inlines_remote_image_urls(local_cost_map, monkeypatch):
     import litellm.litellm_core_utils.prompt_templates.image_handling as image_handling
 
-    async def fake_convert(url):
+    async def fake_convert(url, timeout=None):
         return f"data:image/png;base64,{url}"
 
     monkeypatch.setattr(image_handling, "async_convert_url_to_base64", fake_convert)
