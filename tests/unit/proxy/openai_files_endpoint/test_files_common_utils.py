@@ -721,6 +721,8 @@ def test_a_restricted_key_outside_the_team_wildcard_never_resolves_its_credentia
     [
         ({}, "team-openai-key", "https://team.example/v1"),
         ({"api_key": ""}, "team-openai-key", "https://team.example/v1"),
+        ({"api_key": "   "}, "team-openai-key", "https://team.example/v1"),
+        ({"api_key": "\n"}, "team-openai-key", "https://team.example/v1"),
         ({"api_key": "sk-forwarded"}, "sk-forwarded", "https://team.example/v1"),
         ({"api_base": "https://caller.example/v1"}, "team-openai-key", "https://team.example/v1"),
         (
@@ -734,6 +736,7 @@ def test_a_restricted_key_outside_the_team_wildcard_never_resolves_its_credentia
             "sk-forwarded",
             "https://team.example/v1",
         ),
+        ({"api_key": "sk-forwarded", "api_base": "  "}, "sk-forwarded", "https://team.example/v1"),
         ({"litellm_credential_name": "no-such-credential"}, "team-openai-key", "https://team.example/v1"),
     ],
 )

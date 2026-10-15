@@ -648,15 +648,15 @@ def get_team_provider_credentials(
     return None
 
 
-def _non_empty_string(value: object) -> str | None:
-    return value if isinstance(value, str) and value else None
+def _non_blank_string(value: object) -> str | None:
+    return value if isinstance(value, str) and value.strip() else None
 
 
 def explicit_request_credentials(data: Mapping[str, object]) -> Mapping[str, str]:
-    api_key: Final = _non_empty_string(data.get("api_key"))
+    api_key: Final = _non_blank_string(data.get("api_key"))
     if api_key is None:
         return MappingProxyType({})
-    api_base: Final = _non_empty_string(data.get("api_base"))
+    api_base: Final = _non_blank_string(data.get("api_base"))
     if api_base is None:
         return MappingProxyType({"api_key": api_key})
     return MappingProxyType({"api_key": api_key, "api_base": api_base})
@@ -675,8 +675,7 @@ def apply_team_provider_credentials(
     caller falls back to environment-variable credentials exactly as before.
     An ``api_key`` the request carries itself (a provider key forwarded with
     ``forward_llm_provider_auth_headers``) replaces the deployment's, and the
-    request's ``api_base`` replaces the deployment's only alongside that key,
-    so the deployment's key never goes to a host the caller picked.
+    request's ``api_base`` replaces the deployment's only alongside that key.
     """
     credentials: Final = get_team_provider_credentials(
         llm_router=llm_router,
