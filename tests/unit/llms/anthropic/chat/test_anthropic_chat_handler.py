@@ -1363,6 +1363,24 @@ def test_multiple_tools_streaming_has_index_zero():
             assert parsed.choices[0].index == 0, f"Expected index=0, got {parsed.choices[0].index}"
 
 
+def test_streamed_tool_search_tool_result_is_kept_in_tool_results():
+    search_result: Final = {
+        "type": "tool_search_tool_result",
+        "tool_use_id": "srvtoolu_01Search",
+        "content": {
+            "type": "tool_search_tool_search_result",
+            "tool_references": [{"type": "tool_reference", "tool_name": "get_weather"}],
+        },
+    }
+    iterator: Final = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
+
+    parsed: Final = iterator.chunk_parser(
+        chunk={"type": "content_block_start", "index": 1, "content_block": search_result}
+    )
+
+    assert parsed.choices[0].delta.provider_specific_fields == {"tool_results": [search_result]}
+
+
 def test_streaming_chunks_have_stable_ids():
     iterator = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=False, json_mode=False)
     first_chunk = {

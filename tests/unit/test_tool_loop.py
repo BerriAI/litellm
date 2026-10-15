@@ -27,7 +27,7 @@ WEATHER_TOOLS: Final = (
 )
 
 
-def _openai_response(content: str | None, tool_calls: list | None = None) -> dict:
+def _openai_response(content: str | None, tool_calls: list | None = None, **message_fields: object) -> dict:
     return {
         "id": "chatcmpl-tool-loop",
         "object": "chat.completion",
@@ -41,6 +41,7 @@ def _openai_response(content: str | None, tool_calls: list | None = None) -> dic
                     "role": "assistant",
                     "content": content,
                     "tool_calls": tool_calls,
+                    **message_fields,
                 },
             }
         ],
@@ -418,3 +419,130 @@ async def test_arun_tool_loop_two_rounds(respx_mock: respx.MockRouter, monkeypat
         {"role": "tool", "content": '{"temp": "72F"}', "tool_call_id": "call_2"},
     ]
     assert messages == messages_snapshot
+
+
+ANTHROPIC_MESSAGES_URL: Final = "https://api.anthropic.com/v1/messages"
+TOOL_SEARCH_CALL: Final = {
+    "type": "server_tool_use",
+    "id": "srvtoolu_01Search",
+    "name": "tool_search_tool_bm25",
+    "input": {"query": "weather"},
+}
+WEATHER_CALL: Final = {"type": "tool_use", "id": "toolu_01Weather", "name": "get_weather", "input": {"city": "Paris"}}
+
+
+def _tool_search_result(tool_names: list[str]) -> dict:
+    return {
+        "type": "tool_search_tool_result",
+        "tool_use_id": "srvtoolu_01Search",
+        "content": {
+            "type": "tool_search_tool_search_result",
+            "tool_references": [{"type": "tool_reference", "tool_name": name} for name in tool_names],
+        },
+    }
+
+
+def _anthropic_response(content: list[dict], stop_reason: str) -> dict:
+    return {
+        "id": "msg_tool_loop",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-opus-5-5",
+        "content": content,
+        "stop_reason": stop_reason,
+        "stop_sequence": None,
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    }
+
+
+def test_tool_search_call_is_replayed_with_its_result_instead_of_executed(respx_mock: respx.MockRouter) -> None:
+    search_turn: Final = [TOOL_SEARCH_CALL, _tool_search_result(["get_weather"]), WEATHER_CALL]
+    respx_mock.post(ANTHROPIC_MESSAGES_URL).mock(
+        side_effect=[
+            httpx.Response(200, json=_anthropic_response(search_turn, "tool_use")),
+            httpx.Response(200, json=_anthropic_response([{"type": "text", "text": "Paris is 72F"}], "end_turn")),
+        ]
+    )
+    executed: Final = []
+
+    def executor(tc: ChatCompletionMessageToolCall) -> ChatCompletionToolMessage:
+        executed.append(tc.function.name)
+        return _tool_result(tc)
+
+    answer: Final = litellm.run_tool_loop(
+        model="anthropic/claude-opus-5-5",
+        messages=[{"role": "user", "content": "weather in Paris?"}],
+        tools=WEATHER_TOOLS,
+        execute_tool=executor,
+        api_key="sk-ant-test",
+    )
+
+    assert answer == "Paris is 72F"
+    assert executed == ["get_weather"]
+    second_messages: Final = _request_bodies(respx_mock)[1]["messages"]
+    assert second_messages[1]["content"] == search_turn
+    assert [block["tool_use_id"] for block in second_messages[2]["content"]] == ["toolu_01Weather"]
+
+
+async def test_arun_tool_loop_answers_after_a_search_that_found_nothing(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "module_level_aclient", AsyncHTTPHandler())
+    route: Final = respx_mock.post(ANTHROPIC_MESSAGES_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json=_anthropic_response(
+                [TOOL_SEARCH_CALL, _tool_search_result([]), {"type": "text", "text": "I have no flight tool."}],
+                "end_turn",
+            ),
+        )
+    )
+    executed: Final = []
+
+    async def executor(tc: ChatCompletionMessageToolCall) -> ChatCompletionToolMessage:
+        executed.append(tc.function.name)
+        return _tool_result(tc)
+
+    answer: Final = await litellm.arun_tool_loop(
+        model="anthropic/claude-opus-5-5",
+        messages=[{"role": "user", "content": "book me a flight"}],
+        tools=WEATHER_TOOLS,
+        execute_tool=executor,
+        api_key="sk-ant-test",
+    )
+
+    assert answer == "I have no flight tool."
+    assert executed == []
+    assert route.call_count == 1
+
+
+def test_client_tool_turn_is_replayed_without_its_provider_specific_fields(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post(OPENAI_CHAT_COMPLETIONS_URL).mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                json=_openai_response(
+                    None,
+                    [_tool_call("call_1", "get_weather", {"city": "Paris"})],
+                    reasoning_details=[{"type": "reasoning.text", "text": "Check the weather tool"}],
+                ),
+            ),
+            httpx.Response(200, json=_openai_response("Paris is 72F")),
+        ]
+    )
+
+    answer: Final = litellm.run_tool_loop(
+        model="openai/gpt-5-mini",
+        messages=[{"role": "user", "content": "weather in Paris?"}],
+        tools=WEATHER_TOOLS,
+        execute_tool=_tool_result,
+        api_key="sk-test",
+    )
+
+    assert answer == "Paris is 72F"
+    replayed_assistant: Final = _request_bodies(respx_mock)[1]["messages"][1]
+    assert replayed_assistant["tool_calls"][0]["id"] == "call_1"
+    assert "provider_specific_fields" not in replayed_assistant
