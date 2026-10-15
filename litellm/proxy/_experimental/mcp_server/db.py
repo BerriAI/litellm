@@ -261,7 +261,7 @@ def _drop_stale_minted_on_client_rotation(merged: dict[str, object], new_creds: 
     }
 
 
-def _is_global_env_var_scope(scope: object) -> bool:
+def is_global_env_var_scope(scope: object) -> bool:
     """``scope="user"`` entries are placeholders the user fills in; everything
     else (including a missing scope) is an admin-supplied global value."""
     return scope != MCPEnvVarScope.user and scope != "user"
@@ -276,7 +276,7 @@ def _encrypt_global_env_var_values(env_vars: Iterable[dict[str, str]]) -> None:
     secrets and are stored verbatim.
     """
     for entry in env_vars:
-        if not _is_global_env_var_scope(entry.get("scope")):
+        if not is_global_env_var_scope(entry.get("scope")):
             continue
         value = entry.get("value")
         if value:
@@ -297,7 +297,7 @@ def decrypt_global_env_var_values(env_vars: Iterable[MCPEnvVar | dict[str, str]]
     for entry in env_vars:
         is_dict = isinstance(entry, dict)
         scope = entry.get("scope") if is_dict else getattr(entry, "scope", None)
-        if not _is_global_env_var_scope(scope):
+        if not is_global_env_var_scope(scope):
             continue
         value = entry.get("value") if is_dict else getattr(entry, "value", None)
         if not value:
@@ -377,7 +377,7 @@ def _reencrypt_global_env_var_values(
     rebuilt: Final = [dict(v) for v in entries]
     rotated = False
     for entry in rebuilt:
-        if not _is_global_env_var_scope(entry.get("scope")):
+        if not is_global_env_var_scope(entry.get("scope")):
             continue
         value = entry.get("value")
         if not value:
@@ -817,21 +817,23 @@ async def _db_find_user_env_var_rows(
     return await _user_env_var_actions(prisma_client).find_many(where=where)
 
 
+MCP_CREDENTIAL_SECRET_FIELDS: Final = (
+    "auth_value",
+    "client_id",
+    "client_secret",
+    "client_private_key",
+    "id_jag_resource_client_secret",
+    "aws_access_key_id",
+    "aws_secret_access_key",
+    "aws_session_token",
+)
+
+
 def decrypt_credentials(
     credentials: MCPCredentials,
 ) -> MCPCredentials:
     """Decrypt all secret fields in an MCPCredentials dict using the global salt key."""
-    secret_fields: Final = [
-        "auth_value",
-        "client_id",
-        "client_secret",
-        "client_private_key",
-        "id_jag_resource_client_secret",
-        "aws_access_key_id",
-        "aws_secret_access_key",
-        "aws_session_token",
-    ]
-    for field in secret_fields:
+    for field in MCP_CREDENTIAL_SECRET_FIELDS:
         value = credentials.get(field)
         if value is not None and isinstance(value, str):
             credentials[field] = decrypt_value_helper(
@@ -1500,14 +1502,38 @@ def _reencrypt_mcp_credentials_blob(
     """Decrypt an at-rest MCP credentials blob with the current key and re-encrypt it under
     new_master_key, returning the serialized blob or None when there is nothing to rotate. Shared by
     every table that stores an encrypted MCP credentials blob so a master-key rotation covers them
-    uniformly and cannot silently skip one."""
+    uniformly and cannot silently skip one.
+
+    A secret field that does not decrypt under the current key (wrong-key / corrupt versioned
+    value) survives the decrypt pass as its original ciphertext; re-encrypting that would store a
+    double wrap no single key can undo, so such fields are kept byte-identical in the returned
+    blob for manual rotation by an admin — the same preserve rule the environment_variables
+    rotation branch applies."""
     if not credentials:
         return None
     from litellm.litellm_core_utils.safe_json_dumps import safe_dumps  # noqa: PLC0415  # avoids circular import
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import (  # noqa: PLC0415  # avoids import cycle through proxy_server
+        is_undecryptable_versioned,
+    )
 
     creds_dict: Final = _credentials_blob_to_mutable_dict(credentials)
     decrypted: Final = decrypt_credentials(credentials=cast(MCPCredentials, creds_dict))
+    preserved_fields: Final[dict[str, str]] = {}  # mutable-ok: filled one secret field at a time
+    for field in MCP_CREDENTIAL_SECRET_FIELDS:
+        value: object = decrypted.get(field)
+        if value is not None and is_undecryptable_versioned(value, key=field):
+            preserved_fields[field] = value
+    if preserved_fields:
+        verbose_proxy_logger.warning(
+            "Master-key rotation preserved %d MCP credentials field(s) byte-identical "
+            "because they do not decrypt under the current key "
+            "(they need manual rotation by an admin): %s",
+            len(preserved_fields),
+            sorted(preserved_fields),
+        )
     encrypted: Final = encrypt_credentials(credentials=decrypted, encryption_key=new_master_key)
+    for field, value in preserved_fields.items():
+        encrypted[field] = value
     return safe_dumps(encrypted)
 
 
@@ -1569,7 +1595,7 @@ async def rotate_mcp_server_credentials_master_key(prisma_client: PrismaClient, 
 def _decode_user_credential(stored: str) -> str | None:
     """Read back a value persisted in ``LiteLLM_MCPUserCredentials.credential_b64``.
 
-    Tries nacl decryption first (current write format).  Falls back to a
+    Tries the at-rest decryptor first (current write format).  Falls back to a
     plain ``urlsafe_b64decode`` for rows persisted by older code that wrote
     the credential without encryption.  Returns ``None`` when neither path
     yields a valid string.

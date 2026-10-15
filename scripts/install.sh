@@ -19,7 +19,9 @@ set -eu
 # example, to QA lite autoroute against an unreleased branch, which needs this proxy
 # runtime, not the thin litellm[cli] install).
 if [ -n "${LITELLM_CLI_REF:-}" ]; then
-  LITELLM_PACKAGE="litellm[proxy] @ git+https://github.com/BerriAI/litellm.git@${LITELLM_CLI_REF}"
+  # Ref installs come from this repo, whose pyproject defines the legacy-encryption
+  # extra; released PyPI versions do not carry it yet, and uv refuses unknown extras.
+  LITELLM_PACKAGE="litellm[proxy,legacy-encryption] @ git+https://github.com/BerriAI/litellm.git@${LITELLM_CLI_REF}"
 else
   LITELLM_PACKAGE="litellm[proxy]"
 fi
@@ -94,7 +96,7 @@ fi
 # ── install ────────────────────────────────────────────────────────────────
 echo ""
 if [ -n "${LITELLM_CLI_REF:-}" ]; then
-  header "Installing litellm[proxy] from ${LITELLM_CLI_REF}…"
+  header "Installing litellm[proxy,legacy-encryption] from ${LITELLM_CLI_REF}…"
 else
   header "Installing litellm[proxy]…"
 fi

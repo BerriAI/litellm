@@ -13,11 +13,14 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.auth.master_key_boot_check import SALT_KEY_ENV_VAR
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (  # noqa: F401  # legacy module exports
+    LegacyEncryptionUnavailableError,
     _get_salt_key,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     decrypt_if_encrypted_with,
     encrypt_value_helper,
     get_salt_key,
+    legacy_unreadable,
 )
+from litellm.proxy.common_utils.fips import FipsModeError
 from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.table_repositories import SearchToolsRepository
@@ -76,6 +79,10 @@ def _encrypted_search_tool_value(value: object) -> object:
         return value
     try:
         return encrypt_value_helper(value=value)
+    except (FipsModeError, LegacyEncryptionUnavailableError):
+        # The configured algorithm cannot be honored (xsalsa20 opt-in under FIPS mode, or
+        # without PyNaCl): refuse the write instead of persisting the secret unencrypted.
+        raise
     except Exception:  # noqa: BLE001  # no salt key or master key configured: store the value as written
         return value
 
@@ -91,15 +98,30 @@ def _search_tool_plaintext(value: str) -> str | None:
 
 
 def _decrypted_search_tool_value(value: object) -> object:
+    """The stored value decrypted; as stored when it was never ciphertext; None when it is legacy
+    ciphertext this install has no PyNaCl to read — never the ciphertext blob itself."""
     if not isinstance(value, str):
         return value
     plaintext: Final = _search_tool_plaintext(value)
-    return value if plaintext is None else plaintext
+    if plaintext is not None:
+        return plaintext
+    return None if legacy_unreadable(value) else value
 
 
 def decrypt_search_tool_litellm_params(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
-    """Decrypt stored litellm_params values; values that are not ciphertext are returned unchanged."""
-    return {key: _decrypted_search_tool_value(value) for key, value in litellm_params.items()}
+    """Decrypt stored litellm_params values; values that are not ciphertext are returned unchanged.
+
+    A value that is legacy ciphertext this install has no PyNaCl for reads as unset and is
+    dropped — the same read-as-unset posture as credential hydration — instead of being served
+    to the search provider as the stored blob.
+    """
+    decrypted: Final[dict[str, object]] = {}  # mutable-ok: accumulates one entry per stored param
+    for key, value in litellm_params.items():
+        resolved = _decrypted_search_tool_value(value)
+        if resolved is None and isinstance(value, str):
+            continue  # legacy-unreadable: read as unset, never serve the ciphertext
+        decrypted[key] = resolved
+    return decrypted
 
 
 def _reencrypt_search_tool_value(value: object, encryption_key: str) -> object:
@@ -165,11 +187,12 @@ _SHORTEST_CIPHERTEXT_LENGTH: Final = 47
 def _did_not_decrypt(search_tool: Mapping[str, object]) -> bool:
     litellm_params: Final = search_tool.get("litellm_params")
     search_provider: Final = litellm_params.get("search_provider") if isinstance(litellm_params, Mapping) else None
-    return (
-        isinstance(search_provider, str)
-        and search_provider not in _KNOWN_SEARCH_PROVIDERS
-        and len(search_provider) >= _SHORTEST_CIPHERTEXT_LENGTH
-    )
+    if not isinstance(search_provider, str):
+        # The write path always stores a search_provider (encrypted like every param string), so its
+        # absence after decryption means it read as legacy-unreadable and was dropped as unset: the
+        # same params-do-not-decrypt case the loaded version replaces.
+        return True
+    return search_provider not in _KNOWN_SEARCH_PROVIDERS and len(search_provider) >= _SHORTEST_CIPHERTEXT_LENGTH
 
 
 def keep_loaded_search_tools_that_do_not_decrypt(

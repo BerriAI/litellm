@@ -212,6 +212,45 @@ async def test_count_follows_the_values_from_the_previous_key_to_the_new_one():
 
 
 @pytest.mark.asyncio
+async def test_legacy_values_without_pynacl_keep_the_variable_instead_of_a_clean_bill(monkeypatch):
+    """Without PyNaCl the count must not read legacy rows as "not encrypted with the previous key":
+    the boot would report NOTHING_ENCRYPTED_WITH_PREVIOUS_KEY and tell the operator to delete
+    LITELLM_MIGRATE_FROM_MASTER_KEY while values under that key remain, unreadable. The residual is
+    reported as unreadable with the install-the-extra remedy, never as a finished migration."""
+    import sys
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"encryption_algorithm": "xsalsa20-poly1305"})
+    legacy_value = str(encrypt_value_helper("legacy-secret", new_encryption_key=PREVIOUS_KEY))
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+    tables: Tables = {
+        "LiteLLM_Config": [
+            {"param_name": "environment_variables", "param_value": {"LANGFUSE_SECRET_KEY": legacy_value}}
+        ],
+    }
+    database = _FakeDatabase(tables)
+
+    assert await count_values_encrypted_with(database, PREVIOUS_KEY) == 1
+
+    outcome = await migrate_from_previous_master_key(
+        previous_master_key=PREVIOUS_KEY,
+        master_key=NEW_KEY,
+        salt_key_is_set=False,
+        database=database,
+        log=lambda message: None,
+    )
+
+    assert isinstance(outcome, Migrated)
+    assert outcome == Migrated(migrated=0, remaining=1, unreadable=1)
+    assert database.writes == []  # nothing it cannot read is ever rewritten
+    message = describe_outcome(outcome)
+    assert "legacy-encryption extra" in message
+    assert f"keep {MIGRATE_FROM_MASTER_KEY_ENV_VAR} set" in message
+    assert "You may now delete" not in message
+
+
+@pytest.mark.asyncio
 async def test_only_rows_holding_values_under_the_previous_key_are_written():
     database = _FakeDatabase(_seeded_tables())
 
@@ -609,3 +648,367 @@ async def test_guardrail_params_move_to_the_new_key_and_legacy_plaintext_rows_ar
     assert decrypt_if_encrypted_with(migrated_key.removeprefix("litellm_enc::"), NEW_KEY) == "guardrail-vendor-key"
     assert tables["LiteLLM_GuardrailsTable"][1]["litellm_params"] == legacy_params
     assert database.writes == [("LiteLLM_GuardrailsTable", "litellm_params", "guardrail-1")]
+
+
+@pytest.mark.asyncio
+async def test_plaintext_config_and_nested_model_leaves_do_not_block_a_pynacl_free_migration(monkeypatch):
+    """Without PyNaCl the count may only consider leaves the column's writers actually
+    encrypt. Plaintext noise — a config settings row, model tags — must not read as
+    values encrypted with the previous key, or the boot migration never finishes and a
+    FIPS image (which cannot install PyNaCl) is told forever to install the extra."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+    tables: Tables = {
+        "LiteLLM_Config": [
+            {"param_name": "general_settings", "param_value": {"store_model_in_db": "true", "alerting": ["slack"]}},
+        ],
+        "LiteLLM_ProxyModelTable": [
+            {
+                "model_id": "model-1",
+                "litellm_params": {
+                    "api_key": _encrypted("provider-key"),
+                    "tags": ["prod"],
+                },
+            }
+        ],
+    }
+    database = _FakeDatabase(tables)
+
+    assert await count_values_encrypted_with(database, PREVIOUS_KEY) == 1  # only the api_key
+
+    outcome = await migrate_from_previous_master_key(
+        previous_master_key=PREVIOUS_KEY,
+        master_key=NEW_KEY,
+        salt_key_is_set=False,
+        database=database,
+        log=lambda message: None,
+    )
+
+    # The one readable value migrated; the recount sees no previous-key value anywhere,
+    # so the operator is told the variable can go instead of being stuck on the extra.
+    assert outcome == Migrated(migrated=1, remaining=0, unreadable=0)
+    assert "You may now delete" in describe_outcome(outcome)
+
+    second_boot = await migrate_from_previous_master_key(
+        previous_master_key=PREVIOUS_KEY,
+        master_key=NEW_KEY,
+        salt_key_is_set=False,
+        database=database,
+        log=lambda message: None,
+    )
+    assert second_boot == NothingToMigrate.NOTHING_ENCRYPTED_WITH_PREVIOUS_KEY
+    assert ("LiteLLM_ProxyModelTable", "litellm_params", "model-1") in database.writes
+    row = tables["LiteLLM_ProxyModelTable"][0]["litellm_params"]
+    assert row["tags"] == ["prod"]  # plaintext nested leaf untouched
+    assert decrypt_if_encrypted_with(str(row["api_key"]), NEW_KEY) == "provider-key"
+    assert tables["LiteLLM_Config"][0]["param_value"] == {
+        "store_model_in_db": "true",
+        "alerting": ["slack"],
+    }  # plaintext config row untouched
+
+
+@pytest.mark.asyncio
+async def test_guardrail_mode_and_unprefixed_params_do_not_block_a_pynacl_free_migration(monkeypatch):
+    """A guardrails row's plaintext params never read as previous-key ciphertext either:
+    its writer marks every encrypted value, so only marked sensitive leaves count."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+    tables: Tables = {
+        "LiteLLM_GuardrailsTable": [
+            {
+                "guardrail_id": "gr-1",
+                "litellm_params": {
+                    "mode": "pre_call",
+                    "guardrail_name": "presidio",
+                    "api_key": "litellm_enc::" + _encrypted("guardrail-key"),
+                },
+            }
+        ],
+    }
+    database = _FakeDatabase(tables)
+
+    assert await count_values_encrypted_with(database, PREVIOUS_KEY) == 1  # the marked api_key only
+
+
+@pytest.mark.asyncio
+async def test_integration_settings_config_rows_count_their_encrypted_fields(monkeypatch):
+    """vantage_settings / cloudzero_settings config rows hold writer-encrypted fields
+    next to plaintext metadata; the count must see the encrypted fields (so the boot
+    re-encrypts them before the variable can be deleted) and ignore the metadata."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+    tables: Tables = {
+        "LiteLLM_Config": [
+            {
+                "param_name": "vantage_settings",
+                "param_value": {
+                    "api_key": _encrypted("vantage-key"),
+                    "integration_token": _encrypted("vantage-token"),
+                    "base_url": "https://api.vantage.sh",
+                },
+            },
+            {"param_name": "cloudzero_settings", "param_value": {"api_key": _encrypted("cz-key"), "timezone": "utc"}},
+        ],
+    }
+    database = _FakeDatabase(tables)
+
+    assert await count_values_encrypted_with(database, PREVIOUS_KEY) == 3
+
+    outcome = await migrate_from_previous_master_key(
+        previous_master_key=PREVIOUS_KEY,
+        master_key=NEW_KEY,
+        salt_key_is_set=False,
+        database=database,
+        log=lambda message: None,
+    )
+
+    assert outcome == Migrated(migrated=3, remaining=0, unreadable=0)
+    assert decrypt_if_encrypted_with(tables["LiteLLM_Config"][0]["param_value"]["api_key"], NEW_KEY) == "vantage-key"
+    assert tables["LiteLLM_Config"][0]["param_value"]["base_url"] == "https://api.vantage.sh"
+    assert tables["LiteLLM_Config"][1]["param_value"]["timezone"] == "utc"
+
+
+@pytest.mark.asyncio
+async def test_mcp_metadata_and_user_scope_env_vars_do_not_block_a_pynacl_free_migration(monkeypatch):
+    """MCP credentials hold plaintext metadata (region, scopes) next to the secret fields,
+    and env_vars hold plaintext user-scope placeholders: only writer-encrypted leaves
+    count, so a no-PyNaCl install still converges."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+    tables: Tables = {
+        "LiteLLM_MCPServerTable": [
+            {
+                "server_id": "mcp-1",
+                "credentials": {
+                    "auth_value": _encrypted("mcp-secret"),
+                    "aws_region_name": "us-east-1",
+                    "scopes": ["read"],
+                },
+                "env_vars": [{"name": "API_TOKEN", "scope": "user"}],
+            }
+        ],
+    }
+    database = _FakeDatabase(tables)
+
+    assert await count_values_encrypted_with(database, PREVIOUS_KEY) == 1  # only auth_value
+
+    outcome = await migrate_from_previous_master_key(
+        previous_master_key=PREVIOUS_KEY,
+        master_key=NEW_KEY,
+        salt_key_is_set=False,
+        database=database,
+        log=lambda message: None,
+    )
+
+    assert outcome == Migrated(migrated=1, remaining=0, unreadable=0)
+    credentials = tables["LiteLLM_MCPServerTable"][0]["credentials"]
+    assert credentials["aws_region_name"] == "us-east-1"
+    assert credentials["scopes"] == ["read"]
+    assert tables["LiteLLM_MCPServerTable"][0]["env_vars"] == [{"name": "API_TOKEN", "scope": "user"}]
+
+
+@pytest.mark.asyncio
+async def test_sso_structured_fields_and_callback_metadata_do_not_block_a_pynacl_free_migration(monkeypatch):
+    """SSO structured fields (models, role_mappings) and team metadata's plaintext
+    callback strings are stored plaintext by construction; only the writers' encrypted
+    leaves (SSO top-level strings; marked sensitive callback vars) count."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+    tables: Tables = {
+        "LiteLLM_SSOConfig": [
+            {
+                "id": "sso_config",
+                "sso_settings": {
+                    "google_client_secret": _encrypted("sso-secret"),
+                    "models": ["gpt-4o", "claude-3-5-sonnet"],
+                    "role_mappings": {"admin": "proxy-admin"},
+                },
+            }
+        ],
+        "LiteLLM_TeamTable": [
+            {
+                "team_id": "team-1",
+                "metadata": {
+                    "logging": [
+                        {
+                            "callback_name": "langfuse",
+                            "callback_type": "success",
+                            "callback_vars": {
+                                "langfuse_secret_key": "litellm_enc::" + _encrypted("team-secret"),
+                                "langfuse_host": "https://cloud.langfuse.com",
+                            },
+                        }
+                    ]
+                },
+            }
+        ],
+    }
+    database = _FakeDatabase(tables)
+
+    assert await count_values_encrypted_with(database, PREVIOUS_KEY) == 2  # sso + team secrets only
+
+    outcome = await migrate_from_previous_master_key(
+        previous_master_key=PREVIOUS_KEY,
+        master_key=NEW_KEY,
+        salt_key_is_set=False,
+        database=database,
+        log=lambda message: None,
+    )
+
+    assert outcome == Migrated(migrated=2, remaining=0, unreadable=0)
+    sso = tables["LiteLLM_SSOConfig"][0]["sso_settings"]
+    assert sso["models"] == ["gpt-4o", "claude-3-5-sonnet"]
+    assert sso["role_mappings"] == {"admin": "proxy-admin"}
+    team_logging = tables["LiteLLM_TeamTable"][0]["metadata"]["logging"][0]
+    assert team_logging["callback_vars"]["langfuse_host"] == "https://cloud.langfuse.com"
+    assert team_logging["callback_name"] == "langfuse"
+
+
+@pytest.mark.asyncio
+async def test_cache_settings_structured_fields_do_not_block_a_pynacl_free_migration(monkeypatch):
+    """The cache-settings writer (update_cache_settings → encrypt_env_variables) encrypts
+    top-level string fields only — encrypt_value_helper skips non-strings — so nested
+    list/dict fields (redis kwargs, namespace lists, …) are plaintext by construction and
+    must not read as previous-key ciphertext on a no-PyNaCl install."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+    tables: Tables = {
+        "LiteLLM_CacheConfig": [
+            {
+                "id": "cache_config",
+                "cache_settings": {
+                    "password": _encrypted("redis-secret"),
+                    "host": _encrypted("redis.example.internal"),
+                    "namespace": ["team1", "team2"],
+                    "redis_kwargs": {"socket_timeout": 5, "retry": {"retries": 3}},
+                },
+            }
+        ],
+    }
+    database = _FakeDatabase(tables)
+
+    assert await count_values_encrypted_with(database, PREVIOUS_KEY) == 2  # top-level strings only
+
+    outcome = await migrate_from_previous_master_key(
+        previous_master_key=PREVIOUS_KEY,
+        master_key=NEW_KEY,
+        salt_key_is_set=False,
+        database=database,
+        log=lambda message: None,
+    )
+
+    assert outcome == Migrated(migrated=2, remaining=0, unreadable=0)
+    settings = tables["LiteLLM_CacheConfig"][0]["cache_settings"]
+    assert settings["namespace"] == ["team1", "team2"]  # plaintext nested leaves untouched
+    assert settings["redis_kwargs"] == {"socket_timeout": 5, "retry": {"retries": 3}}
+    assert decrypt_if_encrypted_with(str(settings["password"]), NEW_KEY) == "redis-secret"
+    assert decrypt_if_encrypted_with(str(settings["host"]), NEW_KEY) == "redis.example.internal"
+
+    second_boot = await migrate_from_previous_master_key(
+        previous_master_key=PREVIOUS_KEY,
+        master_key=NEW_KEY,
+        salt_key_is_set=False,
+        database=database,
+        log=lambda message: None,
+    )
+    assert second_boot == NothingToMigrate.NOTHING_ENCRYPTED_WITH_PREVIOUS_KEY
+
+    # Control: an unprefixed top-level secret (a value only PyNaCl could read) still
+    # gates the boot instead of reading as converged.
+    control = _FakeDatabase(
+        {"LiteLLM_CacheConfig": [{"id": "cache_config", "cache_settings": {"password": "unprefixed-redis-secret"}}]}
+    )
+    assert await count_values_encrypted_with(control, PREVIOUS_KEY) == 1
+    control_outcome = await migrate_from_previous_master_key(
+        previous_master_key=PREVIOUS_KEY,
+        master_key=NEW_KEY,
+        salt_key_is_set=False,
+        database=control,
+        log=lambda message: None,
+    )
+    assert control_outcome == Migrated(migrated=0, remaining=1, unreadable=1)
+    assert "You may now delete" not in describe_outcome(control_outcome)
+
+
+@pytest.mark.asyncio
+async def test_roi_calculator_config_rows_count_their_encrypted_fields(monkeypatch):
+    """roi_calculator_settings and roi_oauth_state_* config rows hold writer-encrypted
+    tokens (github/gitlab/estimator/oauth-refresh tokens, per-connection tokens, OAuth
+    state payloads) next to plaintext metadata; the count must see them so a master-key
+    rotation never declares itself finished while ROI tokens stay under the old key."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+    tables: Tables = {
+        "LiteLLM_Config": [
+            {
+                "param_name": "roi_calculator_settings",
+                "param_value": {
+                    "github_token": _encrypted("gh-token"),
+                    "estimator_key": _encrypted("estimator-key"),
+                    "oauth_refresh_token": _encrypted("refresh-token"),
+                    "gitlab_token": "",
+                    "github_api_url": "https://api.github.com",
+                    "repos": ["owner/repo"],
+                    "estimator_prompt": "estimate the cost",
+                    "connections": [
+                        {
+                            "source_provider": "github",
+                            "api_url": "https://api.github.com",
+                            "token": _encrypted("gh-token"),
+                            "oauth_refresh_token": _encrypted("refresh-token"),
+                            "repos": ["owner/repo"],
+                        }
+                    ],
+                },
+            },
+            {
+                "param_name": "roi_oauth_state_" + "a" * 64,
+                "param_value": {"payload": _encrypted("oauth-state-payload")},
+            },
+        ],
+    }
+    database = _FakeDatabase(tables)
+
+    # 3 non-empty top-level tokens + 2 connection secrets + the state payload
+    assert await count_values_encrypted_with(database, PREVIOUS_KEY) == 6
+
+    outcome = await migrate_from_previous_master_key(
+        previous_master_key=PREVIOUS_KEY,
+        master_key=NEW_KEY,
+        salt_key_is_set=False,
+        database=database,
+        log=lambda message: None,
+    )
+
+    assert outcome == Migrated(migrated=6, remaining=0, unreadable=0)
+    settings = tables["LiteLLM_Config"][0]["param_value"]
+    assert settings["github_api_url"] == "https://api.github.com"  # plaintext metadata untouched
+    assert settings["repos"] == ["owner/repo"]
+    assert settings["estimator_prompt"] == "estimate the cost"
+    assert settings["gitlab_token"] == ""
+    assert decrypt_if_encrypted_with(settings["github_token"], NEW_KEY) == "gh-token"
+    assert decrypt_if_encrypted_with(settings["estimator_key"], NEW_KEY) == "estimator-key"
+    assert decrypt_if_encrypted_with(settings["oauth_refresh_token"], NEW_KEY) == "refresh-token"
+    connection = settings["connections"][0]
+    assert connection["source_provider"] == "github"
+    assert connection["repos"] == ["owner/repo"]
+    assert decrypt_if_encrypted_with(connection["token"], NEW_KEY) == "gh-token"
+    assert decrypt_if_encrypted_with(connection["oauth_refresh_token"], NEW_KEY) == "refresh-token"
+    assert (
+        decrypt_if_encrypted_with(tables["LiteLLM_Config"][1]["param_value"]["payload"], NEW_KEY)
+        == "oauth-state-payload"
+    )

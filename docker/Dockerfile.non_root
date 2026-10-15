@@ -81,6 +81,7 @@ COPY litellm-proxy-extras/pyproject.toml litellm-proxy-extras/
 RUN --mount=type=cache,target=/app/.cache/uv,id=litellm-uv-cache \
     uv sync --frozen --no-install-project --no-install-workspace --no-default-groups --no-editable \
     --extra proxy \
+    --extra legacy-encryption \
     --extra proxy-runtime \
     --group admin-mcp \
     --extra extra_proxy \
@@ -109,6 +110,7 @@ RUN mkdir -p /var/lib/litellm/ui /var/lib/litellm/assets && \
 RUN --mount=type=cache,target=/app/.cache/uv,id=litellm-uv-cache \
     uv sync --frozen --no-default-groups --no-editable \
       --extra proxy \
+      --extra legacy-encryption \
       --extra proxy-runtime \
       --group admin-mcp \
       --extra extra_proxy \

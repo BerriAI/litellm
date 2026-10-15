@@ -7,7 +7,11 @@ proof-of-fix (real proxy + DB) is performed separately on the repro server.
 """
 
 import asyncio
+import base64
+import hashlib
 import json
+import os
+import sys
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -17,7 +21,10 @@ import pytest
 from litellm._service_logger import ServiceTypes
 from litellm.proxy import proxy_server
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
-    V2_GCM_PREFIX,
+    _V2_GCM_PREFIX,
+    _V3_GCM_PREFIX,
+    decrypt_if_encrypted_with,
+    encrypt_secret_map,
     encrypt_value_helper,
 )
 from litellm.proxy.management_endpoints import credential_migration as cm
@@ -32,15 +39,23 @@ def salt_key(monkeypatch):
 
 
 def _legacy_ct(value: str, monkeypatch) -> str:
-    """Produce a legacy (nacl) ciphertext with the AES gate off."""
-    monkeypatch.setattr(proxy_server, "general_settings", {})
+    """Produce a legacy (nacl) ciphertext through the explicit xsalsa20-poly1305 opt-in."""
+    monkeypatch.setattr(proxy_server, "general_settings", {"encryption_algorithm": "xsalsa20-poly1305"})
     return encrypt_value_helper(value)
 
 
 def _enable_aes(monkeypatch):
-    monkeypatch.setattr(
-        proxy_server, "general_settings", {"encryption_algorithm": "aes-256-gcm"}
-    )
+    monkeypatch.setattr(proxy_server, "general_settings", {"encryption_algorithm": "aes-256-gcm"})
+
+
+def _v2_ct(value: str, signing_key: str) -> str:
+    """Hand-mint a ``v2:gcm:`` value the way the previous release wrote it: AES-256-GCM under raw SHA-256."""
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    nonce: Final = os.urandom(12)
+    key: Final = hashlib.sha256(signing_key.encode()).digest()
+    sealed: Final = nonce + AESGCM(key).encrypt(nonce, value.encode(), None)
+    return _V2_GCM_PREFIX + base64.urlsafe_b64encode(sealed).decode()
 
 
 def _empty_covered_tables(client):
@@ -69,6 +84,19 @@ def test_classify_value(salt_key, monkeypatch):
     assert cm.classify_value(None) == "not-a-string"
 
 
+def test_classify_value_wrong_key_versioned_is_undecryptable_not_migrated(salt_key, monkeypatch):
+    """A ``v3:gcm:`` / ``v2:gcm:`` value sealed under a different key must NOT pass
+    the prefix fast-path as ``migrated`` — the scan attempts a real decryption so
+    it lands in ``undecryptable`` and the dry-run cannot self-report zero."""
+    _enable_aes(monkeypatch)
+
+    assert cm.classify_value(encrypt_value_helper("secret", new_encryption_key="sk-another-salt")) == "undecryptable"
+    assert cm.classify_value(_v2_ct("secret", "sk-another-salt")) == "undecryptable"
+    # Values that DO decrypt under the current key keep the fast-path result.
+    assert cm.classify_value(encrypt_value_helper("secret")) == "migrated"
+    assert cm.classify_value(_v2_ct("secret", salt_key)) == "migrated"
+
+
 def test_is_migrated(salt_key, monkeypatch):
     _enable_aes(monkeypatch)
     assert cm.is_migrated(encrypt_value_helper("x")) is True
@@ -82,7 +110,7 @@ def test_reencrypt_value_legacy_to_v2(salt_key, monkeypatch):
 
     out = cm.reencrypt_value(legacy)
     assert out != legacy
-    assert out.startswith(V2_GCM_PREFIX)
+    assert out.startswith(_V3_GCM_PREFIX)
 
 
 def test_reencrypt_value_is_idempotent(salt_key, monkeypatch):
@@ -113,7 +141,7 @@ def test_reencrypt_selective_dict(salt_key, monkeypatch):
     data = {"api_key": legacy_key, "base_url": "https://x", "integration_token": None}
     out = cm.reencrypt_selective_dict(data, ["api_key", "integration_token"])
 
-    assert out["api_key"].startswith(V2_GCM_PREFIX)
+    assert out["api_key"].startswith(_V3_GCM_PREFIX)
     assert out["base_url"] == "https://x"  # untouched non-sensitive
     assert out["integration_token"] is None  # null skipped
 
@@ -123,11 +151,230 @@ def test_reencrypt_selective_dict(salt_key, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_migrate_requires_aes_gate(salt_key, monkeypatch):
-    monkeypatch.setattr(proxy_server, "general_settings", {})  # gate off
+    monkeypatch.setattr(
+        proxy_server, "general_settings", {"encryption_algorithm": "xsalsa20-poly1305"}
+    )  # legacy opt-in
     with pytest.raises(RuntimeError, match="encryption_algorithm"):
-        await cm.migrate_encryption(
-            prisma_client=MagicMock(), user_api_key_dict=MagicMock()
-        )
+        await cm.migrate_encryption(prisma_client=MagicMock(), user_api_key_dict=MagicMock())
+
+
+@pytest.mark.asyncio
+async def test_migrate_and_check_refuse_without_pynacl_instead_of_miscounting_legacy_rows(salt_key, monkeypatch):
+    legacy: Final = _legacy_ct("model-secret", monkeypatch)
+    _enable_aes(monkeypatch)
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+    client: Final = MagicMock()
+    _empty_covered_tables(client)
+    client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    client.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
+    client.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    client.db.litellm_config.update = AsyncMock()
+
+    v3_only: Final = await cm.check_encryption(prisma_client=client)
+    assert v3_only.residual_legacy == 0
+
+    client.db.litellm_proxymodeltable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(litellm_params={"api_key": legacy})]
+    )
+    client.db.litellm_proxymodeltable.update_many = AsyncMock()
+    with pytest.raises(RuntimeError, match="legacy-encryption"):
+        await cm.check_encryption(prisma_client=client)
+    with pytest.raises(RuntimeError, match="legacy-encryption"):
+        await cm.migrate_encryption(prisma_client=client, user_api_key_dict=MagicMock())
+    client.db.litellm_proxymodeltable.update_many.assert_not_awaited()
+    client.db.litellm_config.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_check_and_rotation_preflight_pass_without_pynacl_when_only_complexity_router_config_is_plaintext(
+    salt_key, monkeypatch
+):
+    _enable_aes(monkeypatch)
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+    client: Final = MagicMock()
+    _empty_covered_tables(client)
+    client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    client.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
+    client.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    client.db.litellm_proxymodeltable.find_many = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                litellm_params={
+                    "api_key": encrypt_value_helper("migrated-secret"),
+                    "complexity_router_config": {
+                        "strong_model": "gpt-5.1",
+                        "opensource_classifier_config": {"api_base": "http://classifier.internal"},
+                    },
+                }
+            )
+        ]
+    )
+
+    report: Final = await cm.check_encryption(prisma_client=client)
+
+    assert report.residual_legacy == 0, report.as_dict()
+    assert report.as_dict()["locations"]["model_table"] == {
+        "scanned": 1,
+        "migrated": 0,
+        "already_v2": 1,
+        "plaintext": 0,
+        "undecryptable": 0,
+        "preserved": 0,
+        "legacy": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_check_and_rotation_preflight_pass_without_pynacl_for_plaintext_nested_model_params(
+    salt_key, monkeypatch
+):
+    """A fully migrated store must pass the scan/preflight without PyNaCl even when a model row
+    carries plaintext nested params (``tags``, nested dicts): the write path encrypts only
+    top-level string values, so nested strings are stored plaintext by construction and can never
+    be legacy ciphertext. A top-level stored secret with no versioned prefix must still refuse."""
+    legacy_secret: Final = _legacy_ct("unmigrated-secret", monkeypatch)  # minted while nacl is importable
+    _enable_aes(monkeypatch)
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+    client: Final = MagicMock()
+    _empty_covered_tables(client)
+    client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    client.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
+    client.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    client.db.litellm_proxymodeltable.find_many = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                litellm_params={
+                    "model": encrypt_value_helper("openai/gpt-5.4-mini"),
+                    "api_key": encrypt_value_helper("migrated-secret"),
+                    "tags": ["prod"],
+                    "routing": {"tier": "gold"},
+                }
+            )
+        ]
+    )
+    client.db.litellm_searchtoolstable.find_many = AsyncMock(
+        return_value=[
+            SimpleNamespace(litellm_params={"search_provider": encrypt_value_helper("tavily"), "tags": ["prod"]})
+        ]
+    )
+
+    report: Final = await cm.check_encryption(prisma_client=client)
+
+    assert report.residual_legacy == 0, report.as_dict()
+    assert report.as_dict()["locations"]["model_table"] == {
+        "scanned": 4,
+        "migrated": 0,
+        "already_v2": 2,
+        "plaintext": 2,
+        "undecryptable": 0,
+        "preserved": 0,
+        "legacy": 0,
+    }
+    assert report.as_dict()["locations"]["search_tools"] == {
+        "scanned": 2,
+        "migrated": 0,
+        "already_v2": 1,
+        "plaintext": 1,
+        "undecryptable": 0,
+        "preserved": 0,
+        "legacy": 0,
+    }
+
+    # A top-level stored secret with no versioned prefix still refuses the scan without PyNaCl.
+    client.db.litellm_proxymodeltable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(litellm_params={"api_key": legacy_secret})]
+    )
+    with pytest.raises(RuntimeError, match="legacy-encryption"):
+        await cm.check_encryption(prisma_client=client)
+
+
+@pytest.mark.parametrize(
+    "db_attr, build_row",
+    [
+        ("litellm_mcpservertable", lambda ct: SimpleNamespace(server_id="s1", static_headers=json.dumps(ct))),
+        ("litellm_mcpservertable", lambda ct: SimpleNamespace(server_id="s1", env=ct)),
+        ("litellm_mcpserveroauthclient", lambda ct: SimpleNamespace(server_id="s1", credentials={"client_secret": ct})),
+        ("litellm_ssoidentityassertion", lambda ct: SimpleNamespace(user_id="u1", assertion_b64=ct)),
+    ],
+)
+@pytest.mark.asyncio
+async def test_check_refuses_without_pynacl_for_every_rotation_rewritten_location(
+    db_attr, build_row, salt_key, monkeypatch
+):
+    monkeypatch.setattr(proxy_server, "general_settings", {"encryption_algorithm": "xsalsa20-poly1305"})
+    legacy_map: Final = json.loads(encrypt_secret_map({"Authorization": "Bearer legacy"}))
+    legacy_value: Final = encrypt_value_helper("legacy-secret")
+    _enable_aes(monkeypatch)
+    client: Final = MagicMock()
+    _empty_covered_tables(client)
+    client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    client.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
+    client.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    ciphertext: Final = legacy_map if db_attr == "litellm_mcpservertable" else legacy_value
+    getattr(client.db, db_attr).find_many = AsyncMock(return_value=[build_row(ciphertext)])
+
+    with_pynacl: Final = await cm.check_encryption(prisma_client=client)
+    assert with_pynacl.residual_legacy == 1, with_pynacl.to_dict()
+
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+    with pytest.raises(RuntimeError, match="legacy-encryption"):
+        await cm.check_encryption(prisma_client=client)
+
+
+@pytest.mark.asyncio
+async def test_check_without_pynacl_ignores_plaintext_mcp_metadata_next_to_v3_secrets(salt_key, monkeypatch):
+    _enable_aes(monkeypatch)
+    v3_secret: Final = encrypt_value_helper("dcr-secret")
+    client: Final = MagicMock()
+    _empty_covered_tables(client)
+    client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    client.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
+    client.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    client.db.litellm_mcpserveroauthclient.find_many = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                server_id="s1",
+                credentials={
+                    "client_id": v3_secret,
+                    "client_secret": v3_secret,
+                    "scopes": ["a"],
+                    "auth_type": "oauth2",
+                },
+            )
+        ]
+    )
+    client.db.litellm_mcpservertable.find_many = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                server_id="s1",
+                credentials={"auth_value": v3_secret, "auth_type": "api_key", "token_url": "https://idp/token"},
+                env_vars=[
+                    {"name": "TOKEN", "scope": "global", "value": v3_secret},
+                    {"name": "USER_TOKEN", "scope": "user", "value": "{{user.token}}"},
+                ],
+            )
+        ]
+    )
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+
+    report: Final = await cm.check_encryption(prisma_client=client)
+
+    by_location: Final = report.as_dict()["locations"]
+    assert report.residual_legacy == 0, by_location
+    assert by_location["mcp_oauth_client"]["already_v2"] == 2, by_location
+    assert by_location["mcp_oauth_client"]["scanned"] == 2, by_location
+    assert by_location["mcp_server"]["already_v2"] == 2, by_location
+    assert by_location["mcp_server"]["scanned"] == 2, by_location
 
 
 # --------------------------- config-row walker ---------------------------
@@ -154,31 +401,23 @@ async def test_vantage_walker_migrates_legacy_field(salt_key, monkeypatch):
     )
     client = _config_prisma(record)
 
-    report = await cm._migrate_config_settings_row(
-        client, "vantage_settings", cm._VANTAGE_SENSITIVE, dry_run=False
-    )
+    report = await cm._migrate_config_settings_row(client, "vantage_settings", cm._VANTAGE_SENSITIVE, dry_run=False)
 
     assert report.migrated == 1
     assert report.legacy == 0  # migrated -> no longer residual legacy
     client.db.litellm_config.update.assert_awaited_once()
-    written = json.loads(
-        client.db.litellm_config.update.call_args.kwargs["data"]["param_value"]
-    )
-    assert written["api_key"].startswith(V2_GCM_PREFIX)
+    written = json.loads(client.db.litellm_config.update.call_args.kwargs["data"]["param_value"])
+    assert written["api_key"].startswith(_V3_GCM_PREFIX)
     assert written["base_url"] == "https://api.vantage.sh"  # non-sensitive untouched
 
 
 @pytest.mark.asyncio
 async def test_vantage_walker_idempotent_no_write(salt_key, monkeypatch):
     _enable_aes(monkeypatch)
-    record = SimpleNamespace(
-        param_value={"api_key": encrypt_value_helper("already-v2"), "base_url": "x"}
-    )
+    record = SimpleNamespace(param_value={"api_key": encrypt_value_helper("already-v2"), "base_url": "x"})
     client = _config_prisma(record)
 
-    report = await cm._migrate_config_settings_row(
-        client, "vantage_settings", cm._VANTAGE_SENSITIVE, dry_run=False
-    )
+    report = await cm._migrate_config_settings_row(client, "vantage_settings", cm._VANTAGE_SENSITIVE, dry_run=False)
 
     assert report.already_v2 == 1
     assert report.migrated == 0
@@ -192,9 +431,7 @@ async def test_config_walker_dry_run_does_not_write(salt_key, monkeypatch):
     record = SimpleNamespace(param_value={"api_key": legacy_api_key})
     client = _config_prisma(record)
 
-    report = await cm._migrate_config_settings_row(
-        client, "vantage_settings", cm._VANTAGE_SENSITIVE, dry_run=True
-    )
+    report = await cm._migrate_config_settings_row(client, "vantage_settings", cm._VANTAGE_SENSITIVE, dry_run=True)
 
     # A dry run reports residual legacy only; nothing is migrated (no write), so
     # `migrated` and `residual_legacy` are never contradictory in --check output.
@@ -207,9 +444,7 @@ async def test_config_walker_dry_run_does_not_write(salt_key, monkeypatch):
 async def test_config_walker_handles_missing_row(salt_key, monkeypatch):
     _enable_aes(monkeypatch)
     client = _config_prisma(None)
-    report = await cm._migrate_config_settings_row(
-        client, "cloudzero_settings", cm._CLOUDZERO_SENSITIVE, dry_run=False
-    )
+    report = await cm._migrate_config_settings_row(client, "cloudzero_settings", cm._CLOUDZERO_SENSITIVE, dry_run=False)
     assert report.scanned == 0
     client.db.litellm_config.update.assert_not_awaited()
 
@@ -289,9 +524,7 @@ async def test_check_reports_zero_after_migration(salt_key, monkeypatch):
 
     def _find_unique(where):
         if where.get("param_name") == "vantage_settings":
-            return SimpleNamespace(
-                param_value={"api_key": encrypt_value_helper("already-v2")}
-            )
+            return SimpleNamespace(param_value={"api_key": encrypt_value_helper("already-v2")})
         return None
 
     client.db.litellm_config.find_unique = AsyncMock(side_effect=_find_unique)
@@ -308,11 +541,9 @@ async def test_callback_vars_walker_migrates_team_metadata(salt_key, monkeypatch
     """A team row with a legacy-encrypted callback var is rewritten to v2."""
     from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 
-    # Legacy-encrypt a callback var via the real callback path (gate off).
-    monkeypatch.setattr(proxy_server, "general_settings", {})
-    legacy_meta = encrypt_callback_vars(
-        {"logging": [{"callback_vars": {"gcs_path_service_account": "sa-secret"}}]}
-    )
+    # Legacy-encrypt a callback var via the real callback path (legacy opt-in).
+    monkeypatch.setattr(proxy_server, "general_settings", {"encryption_algorithm": "xsalsa20-poly1305"})
+    legacy_meta = encrypt_callback_vars({"logging": [{"callback_vars": {"gcs_path_service_account": "sa-secret"}}]})
     _enable_aes(monkeypatch)
 
     team_row = SimpleNamespace(team_id="team-1", metadata=legacy_meta)
@@ -325,11 +556,9 @@ async def test_callback_vars_walker_migrates_team_metadata(salt_key, monkeypatch
     assert report.migrated == 1
     assert report.scanned == 1  # one field examined, not "post-v2" count
     client.db.litellm_teamtable.update.assert_awaited_once()
-    written = json.loads(
-        client.db.litellm_teamtable.update.call_args.kwargs["data"]["metadata"]
-    )
+    written = json.loads(client.db.litellm_teamtable.update.call_args.kwargs["data"]["metadata"])
     inner = written["logging"][0]["callback_vars"]["gcs_path_service_account"]
-    assert "v2:gcm:" in inner
+    assert "v3:gcm:" in inner
 
 
 @pytest.mark.asyncio
@@ -337,10 +566,8 @@ async def test_callback_vars_walker_dry_run_reports_legacy(salt_key, monkeypatch
     """In --check (dry-run) mode, a legacy callback var counts as residual legacy."""
     from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 
-    monkeypatch.setattr(proxy_server, "general_settings", {})
-    legacy_meta = encrypt_callback_vars(
-        {"logging": [{"callback_vars": {"gcs_path_service_account": "sa-secret"}}]}
-    )
+    monkeypatch.setattr(proxy_server, "general_settings", {"encryption_algorithm": "xsalsa20-poly1305"})
+    legacy_meta = encrypt_callback_vars({"logging": [{"callback_vars": {"gcs_path_service_account": "sa-secret"}}]})
     _enable_aes(monkeypatch)
 
     team_row = SimpleNamespace(team_id="team-1", metadata=legacy_meta)
@@ -357,9 +584,7 @@ async def test_callback_vars_walker_dry_run_reports_legacy(salt_key, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_callback_vars_walker_migrates_callback_settings_shape(
-    salt_key, monkeypatch
-):
+async def test_callback_vars_walker_migrates_callback_settings_shape(salt_key, monkeypatch):
     """Regression: credentials under ``metadata.callback_settings.callback_vars``
     with no top-level ``logging`` key must be migrated, not skipped.
 
@@ -369,13 +594,9 @@ async def test_callback_vars_walker_migrates_callback_settings_shape(
     """
     from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 
-    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "general_settings", {"encryption_algorithm": "xsalsa20-poly1305"})
     legacy_meta = encrypt_callback_vars(
-        {
-            "callback_settings": {
-                "callback_vars": {"gcs_path_service_account": "sa-secret"}
-            }
-        }
+        {"callback_settings": {"callback_vars": {"gcs_path_service_account": "sa-secret"}}}
     )
     _enable_aes(monkeypatch)
     assert "logging" not in legacy_meta  # the shape that used to be skipped
@@ -390,11 +611,9 @@ async def test_callback_vars_walker_migrates_callback_settings_shape(
     assert report.migrated == 1
     assert report.scanned == 1
     client.db.litellm_teamtable.update.assert_awaited_once()
-    written = json.loads(
-        client.db.litellm_teamtable.update.call_args.kwargs["data"]["metadata"]
-    )
+    written = json.loads(client.db.litellm_teamtable.update.call_args.kwargs["data"]["metadata"])
     inner = written["callback_settings"]["callback_vars"]["gcs_path_service_account"]
-    assert "v2:gcm:" in inner
+    assert "v3:gcm:" in inner
 
 
 @pytest.mark.asyncio
@@ -404,16 +623,14 @@ async def test_check_reports_callback_var_legacy_with_gate_off(salt_key, monkeyp
 
     Detection is decrypt-based, not a re-encrypt delta, so it does not depend on
     the write gate. A heuristic that re-encrypts and counts new v2 values would
-    read zero here (gate off -> no v2 produced) and emit a false-clean
+    read zero here (legacy opt-in -> no versioned AES produced) and emit a false-clean
     attestation -- exactly the compliance trap this guards against.
     """
     from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 
-    # Legacy-encrypt a callback var, and leave the gate OFF for the check itself.
-    monkeypatch.setattr(proxy_server, "general_settings", {})
-    legacy_meta = encrypt_callback_vars(
-        {"logging": [{"callback_vars": {"gcs_path_service_account": "sa-secret"}}]}
-    )
+    # Legacy-encrypt a callback var, and keep the legacy opt-in for the check itself.
+    monkeypatch.setattr(proxy_server, "general_settings", {"encryption_algorithm": "xsalsa20-poly1305"})
+    legacy_meta = encrypt_callback_vars({"logging": [{"callback_vars": {"gcs_path_service_account": "sa-secret"}}]})
     team_row = SimpleNamespace(team_id="team-1", metadata=legacy_meta)
 
     client = MagicMock()
@@ -444,16 +661,14 @@ async def test_scan_covered_tables_classifies_legacy_and_v2(salt_key, monkeypatc
     client = MagicMock()
     _empty_covered_tables(client)
     client.db.litellm_proxymodeltable.find_many = AsyncMock(
-        return_value=[
-            SimpleNamespace(litellm_params={"api_key": legacy, "model": "gpt-4"})
-        ]
+        return_value=[SimpleNamespace(litellm_params={"api_key": legacy, "model": "gpt-4"})]
     )
     client.db.litellm_credentialstable.find_many = AsyncMock(
         return_value=[SimpleNamespace(credential_values={"api_key": v2})]
     )
     client.db.litellm_config.find_unique = AsyncMock(return_value=None)
 
-    by_loc = {r.location: r for r in await cm._scan_covered_tables(client)}
+    by_loc = {r.location: r for r in await cm.scan_covered_tables(client)}
 
     assert by_loc["model_table"].legacy == 1
     assert by_loc["model_table"].plaintext == 1  # "gpt-4" model name, not ciphertext
@@ -477,7 +692,7 @@ async def test_scan_covered_tables_classifies_search_tool_params(salt_key, monke
     )
     client.db.litellm_config.find_unique = AsyncMock(return_value=None)
 
-    by_loc = {r.location: r for r in await cm._scan_covered_tables(client)}
+    by_loc = {r.location: r for r in await cm.scan_covered_tables(client)}
 
     assert (by_loc["search_tools"].legacy, by_loc["search_tools"].already_v2) == (1, 1)
     assert by_loc["search_tools"].plaintext == 1
@@ -534,6 +749,9 @@ async def test_check_classifies_mcp_secret_maps(
         "already_v2": expected_v2,
         "plaintext": 0,
         "undecryptable": expected_invalid,
+        # A secret map that does not decode is skipped-and-preserved by the rotation
+        # rewrite, so preserved tracks undecryptable here.
+        "preserved": expected_invalid,
         "legacy": expected_legacy,
     }
     assert report.residual_legacy == expected_legacy
@@ -592,13 +810,132 @@ async def test_migrate_covered_tables_reports_real_counts(salt_key, monkeypatch)
         fake_rotate,
     )
 
-    by_loc = {
-        r.location: r for r in await cm._migrate_covered_tables(client, MagicMock())
-    }
+    by_loc = {r.location: r for r in await cm._migrate_covered_tables(client, MagicMock())}
 
     assert by_loc["model_table"].migrated == 1  # was legacy pre, v2 post
     assert by_loc["model_table"].legacy == 0  # residual zero after rotation
     assert by_loc["model_table"].already_v2 == 1
+
+
+# --------------------------- config environment_variables rewrite (gauntlet rig) ---------------------------
+
+
+def _gauntlet_env_var_rig(salt: str, monkeypatch) -> dict[str, str]:
+    """The stored config ``environment_variables`` row from the deep-gauntlet repro:
+    good v3 / v2 / nacl values, one plaintext value, one wrong-key v3 value and an
+    empty string. The old rewrite silently deleted PLAINTEXT and WRONG_KEY_V3."""
+    good_nacl: Final = _legacy_ct("good-nacl-secret", monkeypatch)
+    # The nacl mint leaves the legacy opt-in set; mint the AES values after
+    # restoring the gate so WRONG_KEY_V3 is a versioned value under a wrong key.
+    _enable_aes(monkeypatch)
+    return {
+        "GOOD_V3": encrypt_value_helper("good-v3-secret"),
+        "GOOD_V2": _v2_ct("good-v2-secret", salt),
+        "GOOD_NACL": good_nacl,
+        "PLAINTEXT": "plain-env-value",
+        "WRONG_KEY_V3": encrypt_value_helper("wrong-key-secret", new_encryption_key="sk-a-different-salt"),
+        "EMPTY": "",
+    }
+
+
+def _env_vars_prisma(stored: dict[str, str]):
+    """A prisma mock whose ``litellm_config`` holds the env-vars row in ``stored``.
+
+    ``update`` writes through to ``stored`` so the post-run scan observes the row
+    the rewrite actually persisted.
+    """
+    client = MagicMock()
+    _empty_covered_tables(client)
+    client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    client.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
+    client.db.litellm_config.find_many = AsyncMock(
+        return_value=[SimpleNamespace(param_name="environment_variables", param_value=stored)]
+    )
+
+    async def _find_unique(where):
+        if where.get("param_name") == "environment_variables":
+            return SimpleNamespace(param_name="environment_variables", param_value=dict(stored))
+        return None
+
+    client.db.litellm_config.find_unique = AsyncMock(side_effect=_find_unique)
+
+    async def _update(where, data):
+        assert where == {"param_name": "environment_variables"}
+        payload = data["param_value"]
+        new_values = payload.data if hasattr(payload, "data") else payload
+        stored.clear()
+        stored.update(new_values)
+
+    client.db.litellm_config.update = AsyncMock(side_effect=_update)
+    return client
+
+
+@pytest.mark.asyncio
+async def test_migrate_preserves_undecryptable_and_plaintext_env_vars(salt_key, monkeypatch):
+    """The migration rewrite never deletes env-var entries that do not decrypt:
+    PLAINTEXT and WRONG_KEY_V3 survive byte-identical, the good values re-encrypt
+    to v3:gcm:, and the report counts the preserved entries (skip-and-warn)."""
+    _enable_aes(monkeypatch)
+    monkeypatch.setattr(os, "environ", dict(os.environ))  # sandbox: the rewrite loads decrypted values into os.environ
+    stored = _gauntlet_env_var_rig(salt_key, monkeypatch)
+    original = dict(stored)
+    client = _env_vars_prisma(stored)
+
+    report = await cm.migrate_encryption(prisma_client=client, user_api_key_dict=MagicMock(), dry_run=False)
+
+    # Nothing deleted: every seeded entry survives the rewrite.
+    assert set(stored) == set(original)
+    # Undecryptable and plaintext entries are preserved byte-identical.
+    assert stored["PLAINTEXT"] == original["PLAINTEXT"]
+    assert stored["WRONG_KEY_V3"] == original["WRONG_KEY_V3"]
+    # Good entries re-encrypt to v3:gcm: and decrypt back to their originals.
+    for entry, secret in (
+        ("GOOD_V3", "good-v3-secret"),
+        ("GOOD_V2", "good-v2-secret"),
+        ("GOOD_NACL", "good-nacl-secret"),
+    ):
+        assert stored[entry].startswith(_V3_GCM_PREFIX)
+        assert stored[entry] != original[entry]
+        assert decrypt_if_encrypted_with(stored[entry], salt_key) == secret
+    # The empty string round-trips (decrypts to ""), so it re-encrypts like any value.
+    assert stored["EMPTY"].startswith(_V3_GCM_PREFIX)
+    assert decrypt_if_encrypted_with(stored["EMPTY"], salt_key) == ""
+
+    location: Final = report.as_dict()["locations"]["config_environment_variables"]
+    assert location["scanned"] == 6
+    assert location["migrated"] == 1  # the nacl value
+    assert location["already_v2"] == 4  # GOOD_V3, GOOD_V2, EMPTY and the migrated nacl value
+    assert location["undecryptable"] == 1  # honest scan: WRONG_KEY_V3 is not already_v2
+    assert location["plaintext"] == 1
+    assert location["preserved"] == 2  # PLAINTEXT + WRONG_KEY_V3 left byte-identical
+    assert location["legacy"] == 0
+    assert report.total_preserved == 2
+    assert report.total_undecryptable >= 1
+
+
+@pytest.mark.asyncio
+async def test_migrate_dry_run_writes_nothing_and_reports_the_same_preserved_counts(salt_key, monkeypatch):
+    _enable_aes(monkeypatch)
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+    stored = _gauntlet_env_var_rig(salt_key, monkeypatch)
+    original = dict(stored)
+    client = _env_vars_prisma(stored)
+    client.db.litellm_config.update = AsyncMock()  # any write must fail this test
+
+    report = await cm.migrate_encryption(prisma_client=client, user_api_key_dict=MagicMock(), dry_run=True)
+
+    assert stored == original  # nothing written; the row is byte-identical
+    client.db.litellm_config.update.assert_not_awaited()
+    location: Final = report.as_dict()["locations"]["config_environment_variables"]
+    assert location["scanned"] == 6
+    assert location["migrated"] == 0
+    assert location["legacy"] == 1  # the nacl value still awaiting migration
+    assert location["already_v2"] == 2  # GOOD_V3 and GOOD_V2 only — the wrong-key value is not
+    assert location["undecryptable"] == 1
+    assert location["plaintext"] == 2  # stored plaintext + empty string
+    assert location["preserved"] == 2  # same preserved counts as the real run
+    assert report.total_preserved == 2
 
 
 def _db_service_hooks() -> tuple[AsyncMock, MagicMock]:
@@ -644,4 +981,274 @@ async def test_sso_walker_write_emits_a_postgres_update_event_for_litellm_ssocon
         ServiceTypes.DB,
         "migrate_sso_credentials",
         {"table_name": "LiteLLM_SSOConfig"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Covered-table preserve (gauntlet B3): a stored value that does NOT decrypt
+# under the current key must survive migrate_encryption / master-key rotation
+# byte-identical on the model table, the credentials table, the MCP
+# credentials blob and the guardrails table — never double-wrapped.
+# ---------------------------------------------------------------------------
+
+
+def _covered_table_rig(
+    salt: str,
+    monkeypatch,
+    *,
+    wrong_key_model: bool = True,
+    control_model: bool = True,
+    wrong_key_credential: bool = True,
+    control_credential: bool = True,
+    wrong_key_mcp: bool = True,
+    control_mcp: bool = True,
+    guardrail: bool = True,
+) -> tuple:
+    """Write-through prisma fake: every seeded table mutates its in-memory row on
+    update, so post-run scans observe exactly what the rewrite persisted.
+
+    Returns (client, snapshot) where snapshot maps location -> the original
+    stored secret values the run must preserve byte-identical.
+    """
+    _enable_aes(monkeypatch)
+    client = MagicMock()
+    _empty_covered_tables(client)
+    client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    client.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
+    client.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    client.db.litellm_config.find_many = AsyncMock(return_value=[])
+
+    model_rows: list = []
+    if wrong_key_model:
+        model_rows.append(
+            SimpleNamespace(
+                model_id="model-wrong-key",
+                model_name="wrong-key-model",
+                litellm_params={"model": "openai/gpt-4", "api_key": _wrong_key_v3("model-secret")},
+                model_info={"id": "model-wrong-key"},
+                blocked=False,
+            )
+        )
+    if control_model:
+        model_rows.append(
+            SimpleNamespace(
+                model_id="model-good",
+                model_name="good-model",
+                litellm_params={"model": "openai/gpt-4", "api_key": encrypt_value_helper("good-model-secret")},
+                model_info={"id": "model-good"},
+                blocked=False,
+            )
+        )
+
+    async def _model_update_many(where, data):
+        target = next(r for r in model_rows if r.model_id == where["model_id"])
+        payload = data["litellm_params"]
+        target.litellm_params = dict(payload.data if hasattr(payload, "data") else payload)
+
+    client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=list(model_rows))
+    mock_tx = MagicMock()
+    mock_tx.litellm_proxymodeltable = MagicMock()
+    mock_tx.litellm_proxymodeltable.update_many = AsyncMock(side_effect=_model_update_many)
+    client.db.tx = MagicMock(
+        return_value=AsyncMock(
+            __aenter__=AsyncMock(return_value=mock_tx),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+
+    from litellm.types.utils import CredentialItem
+
+    credential_rows: list[CredentialItem] = []
+    if wrong_key_credential:
+        credential_rows.append(
+            CredentialItem(
+                credential_name="cred-wrong-key",
+                credential_values={"ANTHROPIC_API_KEY": _wrong_key_v3("credential-secret")},
+                credential_info={},
+            )
+        )
+    if control_credential:
+        credential_rows.append(
+            CredentialItem(
+                credential_name="cred-good",
+                credential_values={"OPENAI_API_KEY": encrypt_value_helper("good-credential-secret")},
+                credential_info={},
+            )
+        )
+
+    async def _credential_update(where, data):
+        target = next(r for r in credential_rows if r.credential_name == where["credential_name"])
+        payload = data["credential_values"]
+        target.credential_values = dict(payload.data if hasattr(payload, "data") else payload)
+
+    client.db.litellm_credentialstable.find_many = AsyncMock(return_value=list(credential_rows))
+    client.db.litellm_credentialstable.update = AsyncMock(side_effect=_credential_update)
+
+    mcp_rows: list = []
+    if wrong_key_mcp:
+        mcp_rows.append(
+            SimpleNamespace(
+                server_id="mcp-wrong-key",
+                credentials=json.dumps({"auth_value": _wrong_key_v3("mcp-secret")}),
+                env_vars=None,
+                static_headers=None,
+                env=None,
+            )
+        )
+    if control_mcp:
+        mcp_rows.append(
+            SimpleNamespace(
+                server_id="mcp-good",
+                credentials=json.dumps({"auth_value": encrypt_value_helper("good-mcp-secret")}),
+                env_vars=None,
+                static_headers=None,
+                env=None,
+            )
+        )
+
+    async def _mcp_update(where, data):
+        target = next(r for r in mcp_rows if r.server_id == where["server_id"])
+        if "credentials" in data:
+            target.credentials = data["credentials"]
+
+    client.db.litellm_mcpservertable.find_many = AsyncMock(return_value=list(mcp_rows))
+    client.db.litellm_mcpservertable.update = AsyncMock(side_effect=_mcp_update)
+
+    guardrail_rows: list = []
+    if guardrail:
+        from litellm.proxy.common_utils.callback_utils import CALLBACK_VAR_ENCRYPTED_PREFIX
+
+        guardrail_rows.append(
+            SimpleNamespace(
+                guardrail_id="gr-wrong-key",
+                updated_at="2026-01-01T00:00:00Z",
+                litellm_params={
+                    "mode": "pre_call",
+                    "api_key": CALLBACK_VAR_ENCRYPTED_PREFIX + _wrong_key_v3("guardrail-secret"),
+                    # Nested shapes the guardrails writer also encrypts: a sensitive key
+                    # inside a nested dict, and sensitive-keyed strings inside a list.
+                    "metadata": {"api_key": CALLBACK_VAR_ENCRYPTED_PREFIX + _wrong_key_v3("nested")},
+                    "secret_headers": [CALLBACK_VAR_ENCRYPTED_PREFIX + _wrong_key_v3("listed")],
+                },
+            )
+        )
+
+    async def _guardrail_update_many(where, data):
+        target = next(r for r in guardrail_rows if r.guardrail_id == where["guardrail_id"])
+        target.litellm_params = json.loads(data["litellm_params"])
+        return 1
+
+    client.db.litellm_guardrailstable.find_many = AsyncMock(return_value=list(guardrail_rows))
+    client.db.litellm_guardrailstable.update_many = AsyncMock(side_effect=_guardrail_update_many)
+
+    snapshot: Final = {
+        "model_table": model_rows,
+        "credentials": credential_rows,
+        "mcp_server": mcp_rows,
+        "guardrails": guardrail_rows,
+    }
+    return client, snapshot
+
+
+def _wrong_key_v3(secret: str) -> str:
+    """A v3:gcm value minted under a rotated-away salt: it never decrypts under the current key."""
+    return encrypt_value_helper(secret, new_encryption_key="sk-rotated-away-salt")
+
+
+@pytest.mark.asyncio
+async def test_migrate_preserves_undecryptable_values_on_every_covered_table(salt_key, monkeypatch):
+    """The covered-table legs of migrate_encryption(dry_run=False) — model table,
+    credentials table, MCP credentials blob, guardrails — must leave a stored
+    value that does not decrypt under the current key byte-identical (single
+    wrap, needs manual rotation) instead of double-wrapping it, and the report
+    must count it as preserved + undecryptable rather than laundering it to
+    already_v2."""
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+    client, rig = _covered_table_rig(salt_key, monkeypatch)
+
+    wrong_model = next(r for r in rig["model_table"] if r.model_id == "model-wrong-key")
+    good_model = next(r for r in rig["model_table"] if r.model_id == "model-good")
+    wrong_cred = next(r for r in rig["credentials"] if r.credential_name == "cred-wrong-key")
+    good_cred = next(r for r in rig["credentials"] if r.credential_name == "cred-good")
+    wrong_mcp = next(r for r in rig["mcp_server"] if r.server_id == "mcp-wrong-key")
+    good_mcp = next(r for r in rig["mcp_server"] if r.server_id == "mcp-good")
+    guardrail_row = rig["guardrails"][0]
+
+    original_wrong_model_key: Final = wrong_model.litellm_params["api_key"]
+    original_wrong_cred_values: Final = dict(wrong_cred.credential_values)
+    original_wrong_mcp_blob: Final = json.loads(wrong_mcp.credentials)
+    original_guardrail_params: Final = dict(guardrail_row.litellm_params)
+
+    report = await cm.migrate_encryption(
+        prisma_client=client, user_api_key_dict=MagicMock(user_id="admin"), dry_run=False
+    )
+
+    # --- model table: wrong-key value preserved byte-identical, control re-encrypted ---
+    assert wrong_model.litellm_params["api_key"] == original_wrong_model_key
+    assert cm.classify_value(wrong_model.litellm_params["api_key"]) == "undecryptable"
+    assert good_model.litellm_params["api_key"].startswith(_V3_GCM_PREFIX)
+    assert decrypt_if_encrypted_with(good_model.litellm_params["api_key"], salt_key) == "good-model-secret"
+
+    # --- credentials table ---
+    assert wrong_cred.credential_values["ANTHROPIC_API_KEY"] == original_wrong_cred_values["ANTHROPIC_API_KEY"]
+    assert good_cred.credential_values["OPENAI_API_KEY"] != "good-credential-secret"
+    assert (
+        decrypt_if_encrypted_with(good_cred.credential_values["OPENAI_API_KEY"], salt_key) == "good-credential-secret"
+    )
+
+    # --- MCP credentials blob ---
+    assert json.loads(wrong_mcp.credentials)["auth_value"] == original_wrong_mcp_blob["auth_value"]
+    assert decrypt_if_encrypted_with(json.loads(good_mcp.credentials)["auth_value"], salt_key) == "good-mcp-secret"
+
+    # --- guardrails: wrong-key credential row preserved ---
+    assert guardrail_row.litellm_params == original_guardrail_params
+
+    locations: Final = report.as_dict()["locations"]
+    for location in ("model_table", "credentials", "mcp_server", "guardrails"):
+        assert locations[location]["preserved"] >= 1, f"{location} must count the preserved value"
+        assert locations[location]["undecryptable"] >= 1, f"{location} must stay undecryptable-visible (no laundering)"
+    assert report.total_preserved >= 4
+
+    # No laundering: a fresh read-only check still surfaces every preserved value.
+    check: Final = await cm.check_encryption(prisma_client=client)
+    check_locations: Final = check.as_dict()["locations"]
+    for location in ("model_table", "credentials", "mcp_server", "guardrails"):
+        assert check_locations[location]["undecryptable"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_rotate_master_key_new_key_preserves_undecryptable_rows(salt_key, monkeypatch):
+    """Key-rotation mode (POST /key/regenerate with a new master key) gets the same
+    semantics: rows that do not decrypt under the current key are preserved
+    byte-identical, decryptable rows re-encrypt under the new key."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import rotate_master_key
+
+    client, rig = _covered_table_rig(salt_key, monkeypatch)
+
+    wrong_model = next(r for r in rig["model_table"] if r.model_id == "model-wrong-key")
+    good_model = next(r for r in rig["model_table"] if r.model_id == "model-good")
+    wrong_cred = next(r for r in rig["credentials"] if r.credential_name == "cred-wrong-key")
+    wrong_mcp = next(r for r in rig["mcp_server"] if r.server_id == "mcp-wrong-key")
+    guardrail_row = rig["guardrails"][0]
+
+    original_wrong_model_key: Final = wrong_model.litellm_params["api_key"]
+    original_wrong_cred_values: Final = dict(wrong_cred.credential_values)
+    original_wrong_mcp_auth: Final = json.loads(wrong_mcp.credentials)["auth_value"]
+    original_guardrail_params: Final = dict(guardrail_row.litellm_params)
+
+    await rotate_master_key(
+        prisma_client=client,
+        user_api_key_dict=MagicMock(user_id="admin"),
+        current_master_key=salt_key,
+        new_master_key="sk-brand-new-master-key",
+    )
+
+    assert wrong_model.litellm_params["api_key"] == original_wrong_model_key
+    assert wrong_cred.credential_values["ANTHROPIC_API_KEY"] == original_wrong_cred_values["ANTHROPIC_API_KEY"]
+    assert json.loads(wrong_mcp.credentials)["auth_value"] == original_wrong_mcp_auth
+    assert guardrail_row.litellm_params == original_guardrail_params
+    # Control: the decryptable value re-encrypts under the NEW key.
+    assert decrypt_if_encrypted_with(good_model.litellm_params["api_key"], "sk-brand-new-master-key") == (
+        "good-model-secret"
     )

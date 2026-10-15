@@ -53,7 +53,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_s
     rotate_sso_identity_assertions_master_key,
 )
 from litellm.proxy._types import *
-from litellm.proxy._types import Litellm_EntityType, LiteLLM_VerificationToken, hash_token
+from litellm.proxy._types import Litellm_EntityType, LiteLLM_ProxyModelTable, LiteLLM_VerificationToken, hash_token
 from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
     _delete_cache_key_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     can_team_access_model,
@@ -82,6 +82,12 @@ from litellm.proxy.common_utils.callback_utils import (
 from litellm.proxy.common_utils.config_sync_pubsub import (
     coordination_redis_cache,
     publish_config_change,
+)
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    LegacyEncryptionUnavailableError,
+    encrypt_value_helper,
+    is_undecryptable_versioned,
+    legacy_encryption_available,
 )
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
@@ -228,6 +234,37 @@ class _ModelParamsUpdate(TypedDict):
 
 class _ModelRowWhere(TypedDict):
     model_id: ReadOnly[str]
+
+
+def _parsed_model_params(stored: object) -> object:
+    """The row's params mapping, JSON-decoded when the row stored it serialized."""
+    if not isinstance(stored, str):
+        return stored
+    return cast("object", json.loads(stored))  # cast-ok: json.loads returns Any
+
+
+def _restore_preserved_model_params(
+    row: LiteLLM_ProxyModelTable,
+    preserved_params: Mapping[str, str],
+) -> None:
+    """Put undecryptable params back into a re-encrypted model row's update payload.
+
+    ``add_model_to_db`` re-encrypts every top-level string param, so a param the decrypt
+    pass could not read (its ciphertext survived unchanged) would otherwise be stored as a
+    fresh ciphertext whose plaintext IS the old ciphertext — a double wrap no single key
+    can undo. Restoring the original values keeps the persisted row byte-identical for
+    those fields while the row's other fields re-encrypt normally.
+    """
+    stored: Final[object] = cast(  # cast-ok: getattr on the row yields Any
+        "object", getattr(row, "litellm_params", None)
+    )
+    parsed: Final[object] = _parsed_model_params(stored)
+    if isinstance(parsed, dict):
+        merged: Final[dict[str, object]] = {  # mutable-ok: Json column write
+            **cast("dict[str, object]", parsed),  # cast-ok: narrowed to dict above
+            **preserved_params,
+        }
+        row.litellm_params = merged  # rebind-ok: the row is the update payload being built
 
 
 class _KeyUpdateResult(TypedDict):
@@ -5507,6 +5544,16 @@ async def delete_key_aliases(
     )
 
 
+async def _require_legacy_reader_for_stored_values(prisma_client: PrismaClient) -> None:
+    """Without PyNaCl, scan the rotation covered tables read only so an unprefixed stored value refuses the
+    rotation before any row is rewritten. A fully migrated store passes; with PyNaCl installed nothing runs"""
+    if legacy_encryption_available():
+        return
+    from litellm.proxy.management_endpoints.credential_migration import scan_covered_tables
+
+    await scan_covered_tables(prisma_client)
+
+
 async def rotate_master_key(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
@@ -5531,6 +5578,14 @@ async def rotate_master_key(
     from litellm.proxy.proxy_server import proxy_config
 
     try:
+        await _require_legacy_reader_for_stored_values(prisma_client)
+    except LegacyEncryptionUnavailableError as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": str(error)},
+        ) from error
+
+    try:
         models: list | None = cast(  # cast-ok: find_many returns a real list, which TableActions widens to Sequence
             "list[object]", await _prisma_table(ModelRepository(prisma_client)).find_many()
         )
@@ -5540,21 +5595,41 @@ async def rotate_master_key(
     if models:
         decrypted_models: Final = proxy_config.decrypt_model_list_from_db(new_models=models)
         verbose_proxy_logger.debug("ABLE TO DECRYPT MODELS - len(decrypted_models): %s", len(decrypted_models))
-        reencrypted_models: Final = tuple(
-            [
-                reencrypted
-                for model in decrypted_models
-                if (
-                    reencrypted := await add_model_to_db(
+        reencrypted_models: Final[list[LiteLLM_ProxyModelTable]] = []  # mutable-ok: row accumulator
+        for model in decrypted_models:
+            # Undecryptable stored params (wrong-key / corrupt versioned values survive the
+            # decrypt pass as their original ciphertext) are excluded from the re-encryption
+            # payload per field — the persisted row keeps them byte-identical, exactly like
+            # the environment_variables preserve branch below.
+            model_params: Mapping[str, object] = cast(  # cast-ok: row params mapping
+                "Mapping[str, object]", model["litellm_params"]
+            )
+            preserved_params: dict[str, str] = {  # mutable-ok: per-field restore payload built once per model
+                field: value for field, value in model_params.items() if is_undecryptable_versioned(value, key=field)
+            }
+            reencrypted: LiteLLM_ProxyModelTable = (
+                cast(  # cast-ok: should_create_model_in_db=False always returns the built row
+                    "LiteLLM_ProxyModelTable",
+                    await add_model_to_db(
                         model_params=Deployment(**model),
                         user_api_key_dict=user_api_key_dict,
                         prisma_client=prisma_client,
                         new_encryption_key=new_master_key,
                         should_create_model_in_db=False,
-                    )
+                    ),
                 )
-            ]
-        )
+            )
+            if preserved_params:
+                _restore_preserved_model_params(reencrypted, preserved_params)
+                verbose_proxy_logger.warning(
+                    "Master-key rotation preserved %d litellm_params field(s) on model %s "
+                    "byte-identical because they do not decrypt under the current key "
+                    "(they need manual rotation by an admin): %s",
+                    len(preserved_params),
+                    reencrypted.model_id,
+                    sorted(preserved_params),
+                )
+            reencrypted_models.append(reencrypted)
         verbose_proxy_logger.debug("Re-encrypting litellm_params on %s model rows", len(reencrypted_models))
         async with prisma_client.db.tx(timeout=timedelta(minutes=2)) as tx_ctx:
             tx: Final[_TxTables] = tx_ctx
@@ -5578,13 +5653,33 @@ async def rotate_master_key(
                 environment_variables_dict = _env_vars_param_value(c)
 
         if environment_variables_dict:
-            decrypted_env_vars: Final = proxy_config.decrypt_and_set_db_env_variables(
+            # Side effect preserved: decrypted values are loaded into os.environ
+            # (read compat), exactly as before. Keys that do NOT decrypt
+            # (wrong-key ciphertext, corrupt blobs, stored plaintext) are absent
+            # from the decrypted dict so they must be written back byte-identical,
+            # never silently dropped from the stored row.
+            decrypted_env_vars: Final[dict[str, str]] = proxy_config.decrypt_and_set_db_env_variables(
                 environment_variables=dict[str, str](environment_variables_dict)
             )
-            encrypted_env_vars: Final = proxy_config.encrypt_env_variables(
-                environment_variables=decrypted_env_vars,
-                new_encryption_key=new_master_key,
+            preserved_env_var_keys: Final = tuple(
+                env_key for env_key in environment_variables_dict if decrypted_env_vars.get(env_key) is None
             )
+            encrypted_env_vars: Final = {
+                env_key: (
+                    stored_value
+                    if env_key in preserved_env_var_keys
+                    else encrypt_value_helper(value=decrypted_env_vars[env_key], new_encryption_key=new_master_key)
+                )
+                for env_key, stored_value in environment_variables_dict.items()
+            }
+            if preserved_env_var_keys:
+                verbose_proxy_logger.warning(
+                    "Master-key rotation preserved %d environment_variables entries "
+                    "byte-identical because they do not decrypt under the current key "
+                    "(they need manual rotation by an admin): %s",
+                    len(preserved_env_var_keys),
+                    sorted(preserved_env_var_keys),
+                )
 
             if encrypted_env_vars:
                 await _config_table(prisma_client).update(
@@ -5654,6 +5749,27 @@ async def rotate_master_key(
         for cred in credentials:
             try:
                 decrypted_cred = proxy_config.decrypt_credentials(cred)
+                # Undecryptable stored values (wrong-key / corrupt versioned values pass the
+                # decrypt through as their original ciphertext) are dropped from the patch so
+                # update_db_credential keeps the stored value for those keys: the persisted row
+                # stays byte-identical per field, mirroring the environment_variables preserve
+                # branch, instead of double-wrapping the ciphertext under the new key.
+                preserved_credential_values: dict[str, str] = {  # mutable-ok: patch exclusion
+                    field: value
+                    for field, value in decrypted_cred.credential_values.items()
+                    if is_undecryptable_versioned(value, key=field)
+                }
+                for field in preserved_credential_values:
+                    decrypted_cred.credential_values.pop(field, None)
+                if preserved_credential_values:
+                    verbose_proxy_logger.warning(
+                        "Master-key rotation preserved %d credential value(s) on credential %s "
+                        "byte-identical because they do not decrypt under the current key "
+                        "(they need manual rotation by an admin): %s",
+                        len(preserved_credential_values),
+                        cred.credential_name,
+                        sorted(preserved_credential_values),
+                    )
                 encrypted_cred = update_db_credential(
                     db_credential=cred,
                     updated_patch=decrypted_cred,
@@ -5704,9 +5820,9 @@ async def migrate_encryption_endpoint(
     ),
 ):
     """
-    Re-encrypt all at-rest credentials into the AES-256-GCM (``v2:gcm:``) format.
+    Re-encrypt all at-rest credentials into the versioned AES-256-GCM (``v3:gcm:``) format.
 
-    Admin only. Requires ``general_settings.encryption_algorithm: aes-256-gcm``.
+    Admin only. Requires the proxy to write ``aes-256-gcm`` (the default).
     Idempotent and resumable — re-running skips already-migrated values. Pass
     ``dry_run=true`` for a non-mutating scan (equivalent to ``--check``).
     """
@@ -5728,7 +5844,16 @@ async def migrate_encryption_endpoint(
         user_api_key_dict=user_api_key_dict,
         dry_run=dry_run,
     )
-    return {"status": "success", "dry_run": dry_run, "report": report.as_dict()}
+    return {
+        "status": "success",
+        "dry_run": dry_run,
+        # Loud by design: entries left byte-identical because they do not decrypt
+        # under the current key (wrong-key ciphertext / plaintext). Each needs
+        # manual rotation by an admin — the run must never read as
+        # success-with-nothing-to-do while entries were preserved.
+        "preserved_needing_manual_rotation": report.total_preserved,
+        "report": report.as_dict(),
+    }
 
 
 @router.get(

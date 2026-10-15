@@ -432,7 +432,7 @@ from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_pr
 from litellm.proxy.common_utils.codex_model_catalog import codex_model_list_body
 from litellm.proxy.common_utils.config_includes import resolve_include_file_path, resolve_includes
 from litellm.proxy.common_utils.config_sync_pubsub import ConfigSyncSubscriber
-from litellm.proxy.common_utils.credential_hydration import decrypted_or_stored
+from litellm.proxy.common_utils.credential_hydration import decrypted_values
 from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
 from litellm.proxy.common_utils.discoverable_model_filter import (
@@ -443,6 +443,9 @@ from litellm.proxy.common_utils.discoverable_model_filter import (
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
+    legacy_unreadable,
+    needs_legacy_reader,
+    require_legacy_reader_for,
 )
 from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
 from litellm.proxy.common_utils.fips import (
@@ -2195,6 +2198,29 @@ def _config_param_table(client: PrismaClient | None) -> TableActions[_ConfigPara
     return cast(  # cast-ok: this is prisma's LiteLLM_Config actions object, which parses its Json column to a mapping
         "TableActions[_ConfigParamRow]", ConfigRepository(client).table
     )
+
+
+def _stored_environment_variables(row: "_ConfigParamRow | None") -> Mapping[str, object]:
+    """The stored ``environment_variables`` config row as a mapping for the legacy-reader guard.
+
+    A JSON-string ``param_value`` (the row's serialized form) is decoded; anything that is not
+    a mapping reads as empty so the guard only ever compares against real stored counterparts.
+    """
+    param_value: Final[object] = None if row is None else row.param_value
+    if isinstance(param_value, str):
+        try:
+            decoded: Final[object] = cast("object", json.loads(param_value))  # cast-ok: json.loads returns Any
+        except (ValueError, TypeError):
+            return MappingProxyType({})
+        if isinstance(decoded, dict):
+            return cast("Mapping[str, object]", decoded)  # cast-ok: narrowed above
+        return MappingProxyType({})
+    if isinstance(param_value, Mapping):
+        narrowed: Final[Mapping[str, object]] = cast(  # cast-ok: narrowed to Mapping above
+            "Mapping[str, object]", param_value
+        )
+        return dict(narrowed)
+    return MappingProxyType({})
 
 
 class _TTFTRow(TypedDict):
@@ -5810,8 +5836,20 @@ class ProxyConfig:
 
             environment_variables: Final = new_config.get("environment_variables")
             if include_env_vars and environment_variables is not None:
+                # Route the save through the same guarded door as save_environment_variables:
+                # the stored env-vars row is loaded and passed to the legacy-reader guard so a
+                # legacy unprefixed ciphertext echoed back from a config read refuses loudly
+                # (instead of being double-wrapped into the config row on a no-PyNaCl install),
+                # while fresh plaintext values with no stored counterpart still save fine.
                 encrypted_environment_variables: Final = (
-                    self.encrypt_env_variables_for_db(environment_variables=environment_variables)
+                    self.encrypt_env_variables_for_db(
+                        environment_variables=environment_variables,
+                        stored_environment_variables=_stored_environment_variables(
+                            await _config_param_table(prisma_client).find_first(
+                                where={"param_name": "environment_variables"}
+                            )
+                        ),
+                    )
                     if isinstance(environment_variables, dict) and environment_variables
                     else environment_variables
                 )
@@ -5972,7 +6010,16 @@ class ProxyConfig:
         existing: Final[dict] = dict(row.param_value) if row is not None and row.param_value is not None else {}
 
         to_set: Final = {k: v for k, v in updates.items() if v is not None}
-        encrypted: Final = self.encrypt_env_variables_for_db(environment_variables=to_set) if to_set else {}
+        encrypted: Final = (
+            self.encrypt_env_variables_for_db(
+                environment_variables=to_set,
+                stored_environment_variables=cast(  # cast-ok: the stored config row is a str-keyed JSON mapping at runtime
+                    "Mapping[str, object]", existing
+                ),
+            )
+            if to_set
+            else {}
+        )
         deleted_keys: Final = {k for k, v in updates.items() if v is None}
         merged: Final = {**{k: v for k, v in existing.items() if k not in deleted_keys}, **encrypted}
 
@@ -7901,7 +7948,12 @@ class ProxyConfig:
 
     _decrypt_db_variables = decrypt_db_variables
 
-    def encrypt_env_variables_for_db(self, environment_variables: dict, new_encryption_key: str | None = None) -> dict:
+    def encrypt_env_variables_for_db(
+        self,
+        environment_variables: dict,
+        new_encryption_key: str | None = None,
+        stored_environment_variables: Mapping[str, object] | None = None,
+    ) -> dict:
         """
         Idempotently encrypt environment variables for a DB write.
 
@@ -7915,8 +7967,32 @@ class ProxyConfig:
         Decryption here deliberately uses _decrypt_db_variables (not
         _decrypt_and_set_db_env_variables): this is a write path, and
         loading values into os.environ is the read path's responsibility.
+
+        ``stored_environment_variables`` is the stored row the save merges
+        into (already loaded by the caller). The legacy-reader guard below
+        only fires for incoming keys whose stored counterpart is unprefixed:
+        such a value may be a round-trip echo of legacy ciphertext, which
+        without PyNaCl cannot be decrypted before the rewrite and must be
+        refused instead of v3-wrapped. Keys with no stored counterpart are
+        new plaintext by construction and never need PyNaCl.
         """
-        decrypted_env_vars: Final = self.decrypt_db_variables(environment_variables)
+        require_legacy_reader_for(
+            (
+                value
+                for key, value in cast(  # cast-ok: the env-vars dict param predates generics; pin the iteration types at this read
+                    "Mapping[object, object]", environment_variables
+                ).items()
+                if stored_environment_variables is not None
+                and needs_legacy_reader(
+                    stored_environment_variables.get(cast("str", key))  # cast-ok: env-var keys are strings
+                )
+            ),
+            "re-encrypt environment variables for the config save",
+        )
+        decrypted_env_vars: Final = {
+            k: v if legacy_unreadable(v) else decrypt_value_helper(value=v, key=k, return_original_value=True)
+            for k, v in environment_variables.items()
+        }
         return self.encrypt_env_variables(
             environment_variables=decrypted_env_vars,
             new_encryption_key=new_encryption_key,
@@ -9377,19 +9453,10 @@ class ProxyConfig:
         await initialize_pass_through_endpoints_in_db()
 
     def decrypt_credentials(self, credential: dict | BaseModel) -> CredentialItem:
-        if isinstance(credential, dict):
-            credential_object = CredentialItem(**credential)
-        elif isinstance(credential, BaseModel):
-            credential_object = CredentialItem(**credential.model_dump())
-
-        decrypted_credential_values: Final = {}
-        for k, v in credential_object.credential_values.items():
-            decrypted_credential_values[k] = decrypted_or_stored(
-                k,
-                cast("str", v),  # cast-ok: credential values are str at the decrypt boundary
-            )
-
-        credential_object.credential_values = decrypted_credential_values
+        credential_object: Final = CredentialItem(
+            **(credential if isinstance(credential, dict) else credential.model_dump())
+        )
+        credential_object.credential_values = dict(decrypted_values(credential_object.credential_values))
         return credential_object
 
     async def delete_credentials(self, db_credentials: list[CredentialItem]):
@@ -18653,7 +18720,12 @@ async def update_config(
             existing = await _read_section("environment_variables")
             before_environment_variables: Final = copy.deepcopy(existing)
             existing.update(
-                proxy_config.encrypt_env_variables_for_db(environment_variables=config_info.environment_variables)
+                proxy_config.encrypt_env_variables_for_db(
+                    environment_variables=config_info.environment_variables,
+                    stored_environment_variables=cast(  # cast-ok: the stored config row is a str-keyed JSON mapping at runtime
+                        "Mapping[str, object]", existing
+                    ),
+                )
             )
             await _upsert_section("environment_variables", existing)
             asyncio.create_task(

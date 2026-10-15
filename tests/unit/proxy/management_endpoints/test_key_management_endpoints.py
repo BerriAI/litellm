@@ -9547,6 +9547,213 @@ async def test_rotate_master_key_reencrypts_model_params_in_place(
     ), "api_key must be stored re-encrypted under the new master key, not in plaintext"
 
 
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_server_credentials_master_key"
+)
+async def test_rotate_master_key_preserves_undecryptable_and_plaintext_env_vars(
+    mock_rotate_mcp,
+    monkeypatch,
+):
+    """Gauntlet rig for the master-key rotation doorway (POST /key/regenerate with
+    ``new_master_key``): env-var entries that do not decrypt under the current key
+    (stored plaintext, wrong-key v3) must survive the rotation byte-identical
+    instead of being silently deleted from the stored ``environment_variables``
+    row, and the re-encryptable entries must land under the new master key.
+    """
+    import os
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+        _V2_GCM_PREFIX,
+        _V3_GCM_PREFIX,
+        decrypt_if_encrypted_with,
+        encrypt_value_helper,
+    )
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        rotate_master_key,
+    )
+
+    salt = "sk-rotate-salt-1234"
+    new_master = "sk-rotated-new-master"
+    monkeypatch.setenv("LITELLM_SALT_KEY", salt)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    # Sandbox os.environ: the rotation loads decrypted values into it.
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+
+    def _legacy_ct(value: str) -> str:
+        monkeypatch.setattr(proxy_server, "general_settings", {"encryption_algorithm": "xsalsa20-poly1305"})
+        out = encrypt_value_helper(value)
+        monkeypatch.setattr(proxy_server, "general_settings", {})
+        return out
+
+    def _v2_ct(value: str) -> str:
+        import base64
+        import hashlib
+
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+        nonce = os.urandom(12)
+        key = hashlib.sha256(salt.encode()).digest()
+        sealed = nonce + AESGCM(key).encrypt(nonce, value.encode(), None)
+        return _V2_GCM_PREFIX + base64.urlsafe_b64encode(sealed).decode()
+
+    original = {
+        "GOOD_V3": encrypt_value_helper("good-v3-secret"),
+        "GOOD_V2": _v2_ct("good-v2-secret"),
+        "GOOD_NACL": _legacy_ct("good-nacl-secret"),
+        "PLAINTEXT": "plain-env-value",
+        "WRONG_KEY_V3": encrypt_value_helper("wrong-key-secret", new_encryption_key="sk-a-different-salt"),
+        "EMPTY": "",
+    }
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_credentialstable.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_config.find_many = AsyncMock(
+        return_value=[SimpleNamespace(param_name="environment_variables", param_value=original)]
+    )
+    mock_prisma_client.db.litellm_config.update = AsyncMock()
+    mock_rotate_mcp.return_value = None
+
+    await rotate_master_key(
+        prisma_client=mock_prisma_client,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            user_id="test-user",
+        ),
+        current_master_key=salt,
+        new_master_key=new_master,
+    )
+
+    mock_prisma_client.db.litellm_config.update.assert_awaited_once()
+    written = mock_prisma_client.db.litellm_config.update.call_args.kwargs["data"]["param_value"].data
+
+    # Nothing deleted: every seeded entry survives the rotation.
+    assert set(written) == set(original)
+    # Undecryptable and plaintext entries are preserved byte-identical, never dropped.
+    assert written["PLAINTEXT"] == original["PLAINTEXT"]
+    assert written["WRONG_KEY_V3"] == original["WRONG_KEY_V3"]
+    # Good entries re-encrypt under the new master key and decrypt back to their originals.
+    for entry, secret in (
+        ("GOOD_V3", "good-v3-secret"),
+        ("GOOD_V2", "good-v2-secret"),
+        ("GOOD_NACL", "good-nacl-secret"),
+    ):
+        assert written[entry].startswith(_V3_GCM_PREFIX)
+        assert decrypt_if_encrypted_with(written[entry], new_master) == secret
+    # The empty string round-trips (decrypts to ""), so it re-encrypts under the new key.
+    assert written["EMPTY"].startswith(_V3_GCM_PREFIX)
+    assert decrypt_if_encrypted_with(written["EMPTY"], new_master) == ""
+
+
+@pytest.mark.parametrize(
+    "legacy_table, build_row",
+    [
+        ("litellm_proxymodeltable", lambda ct: SimpleNamespace(litellm_params={"api_key": ct})),
+        ("litellm_mcpserveroauthclient", lambda ct: SimpleNamespace(server_id="s1", credentials={"client_secret": ct})),
+        ("litellm_ssoidentityassertion", lambda ct: SimpleNamespace(user_id="u1", assertion_b64=ct)),
+    ],
+)
+async def test_rotate_master_key_refuses_without_pynacl_before_touching_any_row(legacy_table, build_row, monkeypatch):
+    import sys
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _rotate_master_key,
+    )
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-rotate")
+    monkeypatch.setattr(proxy_server, "general_settings", {"encryption_algorithm": "xsalsa20-poly1305"})
+    legacy_row = build_row(encrypt_value_helper("legacy-secret"))
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    covered_tables = (
+        "litellm_proxymodeltable",
+        "litellm_credentialstable",
+        "litellm_mcpservertable",
+        "litellm_mcpusercredentials",
+        "litellm_mcpuserenvvars",
+        "litellm_mcpserveroauthclient",
+        "litellm_ssoidentityassertion",
+    )
+    for table in covered_tables:
+        rows = [legacy_row] if table == legacy_table else []
+        getattr(mock_prisma_client.db, table).find_many = AsyncMock(return_value=rows)
+        getattr(mock_prisma_client.db, table).update = AsyncMock()
+        getattr(mock_prisma_client.db, table).update_many = AsyncMock()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _rotate_master_key(
+            prisma_client=mock_prisma_client,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"),
+            current_master_key="sk-old-master-key",
+            new_master_key="sk-new-master-key",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "legacy-encryption" in exc_info.value.detail["error"]
+    for table in covered_tables:
+        getattr(mock_prisma_client.db, table).update.assert_not_awaited()
+        getattr(mock_prisma_client.db, table).update_many.assert_not_awaited()
+    mock_prisma_client.db.tx.assert_not_called()
+
+
+async def test_rotate_master_key_preflight_without_pynacl_passes_migrated_oauth_client_with_plaintext_scopes(
+    monkeypatch,
+):
+    import sys
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _require_legacy_reader_for_stored_values,
+    )
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-rotate")
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    v3_secret = encrypt_value_helper("dcr-secret")
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    for table in (
+        "litellm_proxymodeltable",
+        "litellm_credentialstable",
+        "litellm_mcpservertable",
+        "litellm_mcpusercredentials",
+        "litellm_mcpuserenvvars",
+        "litellm_ssoidentityassertion",
+    ):
+        getattr(mock_prisma_client.db, table).find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_mcpserveroauthclient.find_many = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                server_id="s1",
+                credentials={"client_id": v3_secret, "client_secret": v3_secret, "scopes": ["a"], "auth_type": "oauth2"},
+            )
+        ]
+    )
+
+    await _require_legacy_reader_for_stored_values(mock_prisma_client)
+
+    assert mock_prisma_client.db.litellm_mcpserveroauthclient.find_many.await_count == 1
+
+
 async def test_default_key_generate_params_duration(monkeypatch):
     """
     Test that default_key_generate_params with 'duration' is applied

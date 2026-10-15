@@ -29,6 +29,15 @@ def _sample_report() -> cm.MigrationReport:
     report.add(
         cm.LocationReport(location="model_table", scanned=2, migrated=1, legacy=0)
     )
+    report.add(
+        cm.LocationReport(
+            location="config_environment_variables",
+            scanned=2,
+            plaintext=1,
+            undecryptable=1,
+            preserved=2,
+        )
+    )
     return report
 
 
@@ -47,6 +56,8 @@ async def test_check_endpoint_success(monkeypatch):
     assert out["status"] == "success"
     assert out["report"]["residual_legacy"] == 0
     assert out["report"]["locations"]["model_table"]["scanned"] == 2
+    # Preserved (skip-and-warn) entries are surfaced, never folded into a zero.
+    assert out["report"]["total_preserved"] == 2
 
 
 @pytest.mark.asyncio
@@ -80,6 +91,12 @@ async def test_migrate_endpoint_success(monkeypatch, dry_run):
     assert out["status"] == "success"
     assert out["dry_run"] is dry_run
     assert out["report"]["locations"]["model_table"]["migrated"] == 1
+    # The response makes loud how many entries were left untouched because they
+    # do not decrypt under the current key (need manual rotation) — the run must
+    # never read as success-with-zero while entries were preserved.
+    assert out["preserved_needing_manual_rotation"] == 2
+    assert out["report"]["total_preserved"] == 2
+    assert out["report"]["locations"]["config_environment_variables"]["preserved"] == 2
     # dry_run is threaded through to the engine unchanged.
     assert fake.await_args.kwargs["dry_run"] is dry_run
 

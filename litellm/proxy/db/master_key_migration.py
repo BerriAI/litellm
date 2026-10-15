@@ -1,8 +1,8 @@
 import json
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import Final
+from typing import Final, cast
 
 from pydantic import JsonValue, TypeAdapter
 from typing_extensions import assert_never
@@ -10,7 +10,12 @@ from typing_extensions import assert_never
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.proxy.auth.master_key_boot_check import MIGRATE_FROM_MASTER_KEY_ENV_VAR, SALT_KEY_ENV_VAR
 from litellm.proxy.common_utils.callback_utils import CALLBACK_VAR_ENCRYPTED_PREFIX
-from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with, encrypt_value_helper
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    decrypt_if_encrypted_with,
+    encrypt_value_helper,
+    legacy_encryption_available,
+    legacy_unreadable,
+)
 from litellm.proxy.db.create_views import SupportsRawQueries
 
 
@@ -73,15 +78,15 @@ def replace_ciphertexts(value: JsonValue, replacement_for: ReplaceCiphertext, de
 
 async def count_values_encrypted_with(database: SupportsRawQueries, signing_key: str) -> int:
     def keep(value: str) -> str | None:
-        return None if decrypt_if_encrypted_with(value, signing_key) is None else value
+        decrypted: Final = decrypt_if_encrypted_with(value, signing_key)
+        if decrypted is not None:
+            return value
+        # A legacy value PyNaCl is needed to read still counts: without this, the boot would
+        # report nothing encrypted with the previous key and tell the operator to delete
+        # LITELLM_MIGRATE_FROM_MASTER_KEY while values under that key remain, unreadable.
+        return value if legacy_unreadable(value) else None
 
-    return sum(
-        [
-            replace_ciphertexts(_STORED_VALUE.validate_python(row[secret_column.column]), keep)[1]
-            for secret_column in await _secret_columns_in(database)
-            for row in await _rows_of(database, secret_column)
-        ]
-    )
+    return await _count_secret_leaves(database, lambda leaf: keep(leaf) is not None)
 
 
 async def count_values_encrypted_with_or_none(
@@ -91,6 +96,225 @@ async def count_values_encrypted_with_or_none(
         return await count_values_encrypted_with(await connect(), signing_key)
     except Exception:  # noqa: BLE001  # an unreadable database must not replace the boot refusal with a traceback
         return None
+
+
+async def _count_values_legacy_unreadable(database: SupportsRawQueries) -> int:
+    """How many stored strings only PyNaCl could read — 0 without even walking when it is installed.
+
+    Without PyNaCl an unprefixed value cannot be told apart from legacy ciphertext, so the
+    encrypted-with-previous-key count stays conservative and this walk explains the residual."""
+    if legacy_encryption_available():
+        return 0
+    return await _count_secret_leaves(database, legacy_unreadable)
+
+
+async def _count_secret_leaves(database: SupportsRawQueries, counted: Callable[[str], bool]) -> int:
+    """Count the writer-encrypted secret leaves across every secret column that satisfy ``counted``."""
+
+    def counted_in(secret_column: _SecretColumn, row: Mapping[str, object]) -> int:
+        stored: Final = _STORED_VALUE.validate_python(row[secret_column.column])
+        leaves: Final = _counted_secret_leaves(secret_column, row[secret_column.primary_key], stored)
+        return sum(1 for leaf in leaves if counted(leaf))
+
+    return sum(
+        [
+            counted_in(secret_column, row)
+            for secret_column in await _secret_columns_in(database)
+            for row in await _rows_of(database, secret_column)
+        ]
+    )
+
+
+# Columns whose writers encrypt each top-level string param and leave everything nested
+# inside a list/dict param (tags, routing metadata, …) stored as plaintext.
+_LITELLM_PARAMS_SECRET_COLUMNS: Final = frozenset(
+    (
+        ("LiteLLM_ProxyModelTable", "litellm_params"),
+        ("LiteLLM_SearchToolsTable", "litellm_params"),
+    )
+)
+_ENV_VARS_CONFIG_ROW: Final = "environment_variables"
+_ROI_SETTINGS_PARAM: Final = "roi_calculator_settings"
+_ROI_STATE_PARAM_PREFIX: Final = "roi_oauth_state_"
+# The ROI settings writer stores four encrypted token fields at the top level and
+# encrypted token/refresh-token fields on each saved connection; URLs, repo lists and
+# estimator metadata next to them are plaintext by construction.
+_ROI_SETTINGS_SECRET_FIELDS: Final = ("estimator_key", "gitlab_token", "github_token", "oauth_refresh_token")
+_ROI_CONNECTION_SECRET_FIELDS: Final = ("oauth_refresh_token", "token")
+_MCP_CREDENTIAL_TABLES: Final = frozenset(("LiteLLM_MCPServerTable", "LiteLLM_MCPServerOAuthClient"))
+# Config rows whose writers encrypt selected top-level fields (the same fields the
+# credential-migration walkers re-encrypt); the rows' other fields are plaintext metadata.
+_CONFIG_ROW_SENSITIVE_FIELDS: Final[Mapping[str, tuple[str, ...]]] = {
+    "vantage_settings": ("api_key", "integration_token"),
+    "cloudzero_settings": ("api_key",),
+}
+
+
+def _counted_secret_leaves(secret_column: _SecretColumn, primary_key: object, stored: JsonValue) -> Iterator[str]:
+    """Yield the string leaves of one stored value the writers of this column actually encrypt.
+
+    Telling ciphertext from plaintext needs PyNaCl for unprefixed values, so a count over
+    every string leaf counts plaintext noise (config booleans, model tags, guardrail modes)
+    as possibly-encrypted-with-the-previous-key and the boot migration then never finishes
+    on an install that cannot install PyNaCl (a FIPS image). Restricting the candidates to
+    the leaves each column's writers encrypt keeps that noise out — the same per-column
+    selection the credential-migration scanner applies. Columns without a known writer
+    shape keep the conservative every-string-leaf walk. The callback-encryption marker is
+    stripped exactly as ``replace_ciphertexts`` strips it before the decrypt attempt."""
+    if secret_column.table == "LiteLLM_Config":
+        yield from _config_row_leaves(primary_key, stored)
+        return
+    if (secret_column.table, secret_column.column) in _LITELLM_PARAMS_SECRET_COLUMNS:
+        yield from _top_level_string_leaves(stored)
+        return
+    if secret_column.table == "LiteLLM_GuardrailsTable":
+        yield from _sensitive_prefixed_leaves(stored)
+        return
+    if secret_column.column == "credentials" and secret_column.table in _MCP_CREDENTIAL_TABLES:
+        yield from _mcp_credential_leaves(stored)
+        return
+    if secret_column.table == "LiteLLM_MCPServerTable" and secret_column.column == "env_vars":
+        yield from _mcp_global_env_var_leaves(stored)
+        return
+    if secret_column.table == "LiteLLM_SSOConfig":
+        yield from _top_level_string_leaves(stored)
+        return
+    if secret_column.table == "LiteLLM_CacheConfig":
+        # The cache-settings writer (update_cache_settings → encrypt_env_variables)
+        # encrypts top-level string fields only — encrypt_value_helper skips non-strings —
+        # so nested list/dict fields (redis kwargs, namespace lists, …) are plaintext
+        # by construction.
+        yield from _top_level_string_leaves(stored)
+        return
+    if secret_column.only_rows_with_marked_ciphertexts:
+        # The metadata columns' writers store ciphertext only as marked sensitive
+        # callback vars; every other string in the metadata JSON (callback names,
+        # hosts, public keys, …) is plaintext by construction.
+        yield from _sensitive_prefixed_leaves(stored)
+        return
+    yield from _string_leaves(stored)
+
+
+def _top_level_string_leaves(stored: JsonValue) -> Iterator[str]:
+    if not isinstance(stored, dict):
+        return
+    for value in stored.values():
+        if isinstance(value, str):
+            yield value.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX)
+
+
+def _config_row_leaves(primary_key: object, stored: JsonValue) -> Iterator[str]:
+    param_name: Final[str] = _PRIMARY_KEY.validate_python(primary_key)
+    if param_name == _ENV_VARS_CONFIG_ROW:
+        yield from _string_leaves(stored)
+        return
+    if param_name == _ROI_SETTINGS_PARAM:
+        yield from _roi_settings_leaves(stored)
+        return
+    if param_name.startswith(_ROI_STATE_PARAM_PREFIX):
+        yield from _roi_state_leaves(stored)
+        return
+    sensitive_fields: Final[tuple[str, ...] | None] = _CONFIG_ROW_SENSITIVE_FIELDS.get(param_name)
+    if sensitive_fields is None:
+        # Every other config row (general_settings, …) stores plaintext by
+        # construction — counting its strings would read them as ciphertext.
+        return
+    if not isinstance(stored, dict):
+        return
+    for field in sensitive_fields:
+        value = stored.get(field)
+        if isinstance(value, str):
+            yield value.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX)
+
+
+def _roi_settings_leaves(stored: JsonValue) -> Iterator[str]:
+    if not isinstance(stored, dict):
+        return
+    for field in _ROI_SETTINGS_SECRET_FIELDS:
+        value = stored.get(field)
+        if isinstance(value, str):
+            yield value.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX)
+    connections: Final[JsonValue] = stored.get("connections")
+    if not isinstance(connections, list):
+        return
+    for connection in connections:
+        if not isinstance(connection, dict):
+            continue
+        for field in _ROI_CONNECTION_SECRET_FIELDS:
+            value = connection.get(field)
+            if isinstance(value, str):
+                yield value.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX)
+
+
+def _roi_state_leaves(stored: JsonValue) -> Iterator[str]:
+    # Each OAuth-state row wraps a single encrypted payload string; the state rows are
+    # short-lived, but a rotation mid-flow must still see and move the sealed verifier.
+    if not isinstance(stored, dict):
+        return
+    payload: Final = stored.get("payload")
+    if isinstance(payload, str):
+        yield payload.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX)
+
+
+def _mcp_credential_leaves(stored: JsonValue) -> Iterator[str]:
+    # The MCP credentials writer encrypts only its secret fields; region / service
+    # names and scopes next to them are stored plaintext by construction.
+    from litellm.proxy._experimental.mcp_server.db import MCP_CREDENTIAL_SECRET_FIELDS
+
+    if not isinstance(stored, dict):
+        return
+    for field in MCP_CREDENTIAL_SECRET_FIELDS:
+        value = stored.get(field)
+        if isinstance(value, str):
+            yield value.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX)
+
+
+def _mcp_global_env_var_leaves(stored: JsonValue) -> Iterator[str]:
+    # Only global-scope entries carry an encrypted value; user-scope placeholders
+    # hold a name and scope in plaintext by construction.
+    from litellm.proxy._experimental.mcp_server.db import is_global_env_var_scope
+
+    if not isinstance(stored, list):
+        return
+    for entry in stored:
+        if not isinstance(entry, dict) or not is_global_env_var_scope(entry.get("scope")):
+            continue
+        value = entry.get("value")
+        if isinstance(value, str):
+            yield value.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX)
+
+
+def _string_leaves(value: JsonValue) -> Iterator[str]:
+    """Every string leaf of a nested structure, marker-stripped, via an explicit stack."""
+    stack: Final[list[JsonValue]] = [value]  # mutable-ok: walker stack
+    while stack:
+        cur = stack.pop()
+        if isinstance(cur, str):
+            yield cur.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX)
+        elif isinstance(cur, (list, dict)):
+            stack.extend(cur.values() if isinstance(cur, dict) else cur)
+
+
+def _sensitive_prefixed_leaves(value: JsonValue) -> Iterator[str]:
+    """Sensitive-keyed, marker-prefixed string leaves at any depth of a guardrails row.
+
+    The guardrails writer stores every sensitive-keyed string with the callback
+    encryption marker — including strings inside lists under the sensitive key — and
+    everything else as plaintext by construction, so only marked leaves are candidates."""
+    from litellm.proxy.common_utils.callback_utils import is_sensitive_callback_key
+
+    stack: Final[list[tuple[str | None, JsonValue]]] = [(None, value)]  # mutable-ok: walker stack
+    while stack:
+        key, cur = stack.pop()
+        if isinstance(cur, str):
+            if key is not None and is_sensitive_callback_key(key) and cur.startswith(CALLBACK_VAR_ENCRYPTED_PREFIX):
+                yield cur.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX)
+        elif isinstance(cur, dict):
+            entries = cast("dict[str, JsonValue]", cur)  # cast-ok: JSON object keys are strings
+            stack.extend(entries.items())
+        elif isinstance(cur, list):
+            items = cast("list[JsonValue]", cur)  # cast-ok: JSON arrays hold JSON values
+            stack.extend((key, item) for item in items)
 
 
 async def reencrypt_stored_values(database: SupportsRawQueries, *, from_key: str, to_key: str) -> int:
@@ -172,6 +396,7 @@ class NothingToMigrate(Enum):
 class Migrated:
     migrated: int
     remaining: int
+    unreadable: int = 0  # values only PyNaCl could read; this build can neither migrate nor clear them
 
 
 @dataclass(frozen=True, slots=True)
@@ -265,6 +490,7 @@ async def _migrate(
     migrated: Final = Migrated(
         migrated=await reencrypt_stored_values(database, from_key=previous_master_key, to_key=master_key),
         remaining=await count_values_encrypted_with(database, previous_master_key),
+        unreadable=await _count_values_legacy_unreadable(database),
     )
     another_worker_migrated_everything: Final = migrated == Migrated(migrated=0, remaining=0)
     return NothingToMigrate.NOTHING_ENCRYPTED_WITH_PREVIOUS_KEY if another_worker_migrated_everything else migrated
@@ -287,16 +513,25 @@ def describe_outcome(outcome: MigrationOutcome) -> str:
                 f"{MIGRATE_FROM_MASTER_KEY_ENV_VAR} is still set, but nothing in the database is left to migrate "
                 f"from that key. You may now delete {MIGRATE_FROM_MASTER_KEY_ENV_VAR}."
             )
-        case Migrated(migrated=migrated, remaining=0):
+        case Migrated(migrated=migrated, remaining=0, unreadable=0):
             return (
                 f"Done re-encrypting {migrated} stored value(s) with the new master key. You may now delete the "
                 f"{MIGRATE_FROM_MASTER_KEY_ENV_VAR} environment variable."
             )
-        case Migrated(migrated=migrated, remaining=remaining):
+        case Migrated(migrated=migrated, remaining=remaining, unreadable=0):
             return (
                 f"Re-encrypted {migrated} stored value(s), but {remaining} are still encrypted with the previous key "
                 f"because they changed during the migration. Keep {MIGRATE_FROM_MASTER_KEY_ENV_VAR} set and restart "
                 "the proxy to migrate them."
+            )
+        case Migrated(migrated=migrated, remaining=remaining, unreadable=unreadable):
+            changed: Final = remaining - unreadable
+            return (
+                f"Re-encrypted {migrated} stored value(s), but {unreadable} cannot be read without the "
+                "legacy-encryption extra (pip install 'litellm[legacy-encryption]')"
+                + (f" and {changed} changed during the migration" if changed > 0 else "")
+                + f". They may still be encrypted with the previous key, so keep {MIGRATE_FROM_MASTER_KEY_ENV_VAR} "
+                "set, install the extra, and restart the proxy to finish."
             )
         case MigrationFailed(error=error):
             cause: Final = f"{type(error).__name__}: {error}"[:300]

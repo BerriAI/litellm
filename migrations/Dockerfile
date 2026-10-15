@@ -55,6 +55,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=litellm-proxy-extras/pyproject.toml,target=litellm-proxy-extras/pyproject.toml \
     uv sync --frozen --no-install-project --no-install-workspace --no-default-groups --no-editable \
         --extra proxy \
+        --extra legacy-encryption \
         --extra extra_proxy \
         --python python3.13
 
@@ -64,6 +65,7 @@ COPY . .
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-default-groups --no-editable \
         --extra proxy \
+        --extra legacy-encryption \
         --extra extra_proxy \
         --python python3.13
 

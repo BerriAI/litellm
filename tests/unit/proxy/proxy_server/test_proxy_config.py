@@ -13,13 +13,14 @@ import json
 import logging
 import os
 import re
+import sys
 from collections.abc import Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
-from typing import Any, Dict, Final
+from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -27,8 +28,11 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
 from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings
-from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
-from litellm.types.router import Deployment, LiteLLM_Params
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    LegacyEncryptionUnavailableError,
+    decrypt_value_helper,
+    encrypt_value_helper,
+)
 from litellm.proxy.proxy_server import (
     ProxyConfig,
     _is_remote_module_url,
@@ -42,6 +46,8 @@ from litellm.proxy.proxy_server import (
     validate_deployment_max_agentic_loops,
 )
 from litellm.tracing.config import is_lens_tracing_enabled
+from litellm.types.router import Deployment, LiteLLM_Params
+from tests._master_key import MASTER_KEY
 
 from .conftest import normalize
 
@@ -96,7 +102,9 @@ def test_proxy_config_upserts_existing_deployment_without_duplicating_it(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_proxy_config_preserves_models_when_config_read_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_proxy_config_preserves_models_when_config_read_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from litellm.proxy import proxy_server
 
     router = litellm.Router(model_list=[_deployment("config-deployment").to_json(exclude_none=True)])
@@ -129,7 +137,6 @@ async def test_proxy_config_keeps_database_models_and_deletes_stale_models(
 
     assert desired == frozenset({"kept-deployment"})
     assert router.get_model_ids() == ["kept-deployment"]
-from tests._master_key import MASTER_KEY
 
 
 @pytest.mark.asyncio
@@ -142,7 +149,6 @@ async def test_proxy_config_loads_lens_store_from_yaml(tmp_path, monkeypatch) ->
 
     _, _, settings = await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
     assert is_lens_tracing_enabled(settings["tracing"], {}) is True
-
 
 
 @pytest.mark.asyncio
@@ -170,7 +176,9 @@ async def test_tracing_config_automatically_exports_spend_without_a_storage_depe
     outcome: Final = pytest.raises(RuntimeError, match="shutdown failure") if shutdown_error else nullcontext()
     with outcome:
         async with manage_tracing(enabled=True, client_factory=client):
-            logger: Final = next(callback for callback in litellm._async_success_callback if isinstance(callback, LensExporter))
+            logger: Final = next(
+                callback for callback in litellm._async_success_callback if isinstance(callback, LensExporter)
+            )
             await logger.async_log_success_event(
                 {"standard_logging_object": {"id": "response-1", "response_cost": 0.25}}, None, None, None
             )
@@ -184,7 +192,6 @@ async def test_tracing_config_automatically_exports_spend_without_a_storage_depe
     assert rows[0]["response_id"] == "response-1"
     assert logger not in litellm._async_success_callback
     assert logger.task is not None and logger.task.done() and not logger.task.cancelled()
-
 
 
 # ---------------------------------------------------------------------------
@@ -226,7 +233,7 @@ def test__is_remote_module_url_raises_on_unexpected_iteration():
 
 
 def test__scrub_guardrail_inner_strips_remote_callbacks_and_guardrail():
-    inner: Dict[str, Any] = {
+    inner: dict[str, Any] = {
         "callbacks": ["safe.mod", "s3://attacker/m.py", "gcs://x/y.py"],
         "guardrail": "s3://attacker/g.py",
         "default_on": True,
@@ -280,7 +287,7 @@ def test__scrub_db_overlay_remote_module_loads_invalid_non_dict_returns_input():
 
 
 def test_resolve_complexity_router_plugins_no_plugins_key_is_a_noop():
-    config: Dict[str, Any] = {"tiers": {"SIMPLE": "gpt-4o-mini"}}
+    config: dict[str, Any] = {"tiers": {"SIMPLE": "gpt-4o-mini"}}
     resolve_complexity_router_plugins(model_name="smart-router", complexity_router_config=config, config_file_path=None)
     assert config == {"tiers": {"SIMPLE": "gpt-4o-mini"}}
 
@@ -290,7 +297,7 @@ def test_resolve_complexity_router_plugins_resolves_dotted_path_to_live_instance
     plugin_file.write_text(
         "class _Plugin:\n    async def run(self, context):\n        return context\n\nmy_plugin_instance = _Plugin()\n"
     )
-    config: Dict[str, Any] = {"plugins": ["my_plugin.my_plugin_instance"]}
+    config: dict[str, Any] = {"plugins": ["my_plugin.my_plugin_instance"]}
 
     resolve_complexity_router_plugins(
         model_name="smart-router",
@@ -607,7 +614,7 @@ def test_validate_deployment_max_agentic_loops_names_the_offending_model():
 def test_resolve_complexity_router_plugins_rejects_non_routing_plugin_object(tmp_path):
     plugin_file = tmp_path / "bad_plugin.py"
     plugin_file.write_text("not_a_plugin = object()\n")
-    config: Dict[str, Any] = {"plugins": ["bad_plugin.not_a_plugin"]}
+    config: dict[str, Any] = {"plugins": ["bad_plugin.not_a_plugin"]}
 
     with pytest.raises(ValueError, match="does not implement the RoutingPlugin interface"):
         resolve_complexity_router_plugins(
@@ -631,7 +638,7 @@ def test_resolve_complexity_router_plugins_rejects_synchronous_run_method(tmp_pa
         "\n"
         "sync_plugin_instance = _SyncPlugin()\n"
     )
-    config: Dict[str, Any] = {"plugins": ["sync_plugin.sync_plugin_instance"]}
+    config: dict[str, Any] = {"plugins": ["sync_plugin.sync_plugin_instance"]}
 
     with pytest.raises(ValueError, match="does not implement the RoutingPlugin interface"):
         resolve_complexity_router_plugins(
@@ -1466,6 +1473,53 @@ async def test_ProxyConfig_save_environment_variables_noop_without_db(monkeypatc
 
     pc = ProxyConfig()
     await pc.save_environment_variables({"UI_LOGO_PATH": "x"})
+
+    assert "value" not in captured
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_save_environment_variables_without_pynacl_saves_new_plaintext_key(monkeypatch):
+    """Regression: saving a brand-new plaintext env value (theme settings,
+    UI_LOGO_PATH) must succeed on a no-PyNaCl install and store v3, while an
+    unrelated stored key is preserved byte-for-byte."""
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-test-salt-key")
+    unrelated = encrypt_value_helper("migrated-value")
+    captured = _install_fake_config_repo(
+        monkeypatch, existing_row={"LANGFUSE_PUBLIC_KEY": unrelated, "UI_LOGO_PATH": "old-logo"}
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+
+    pc = ProxyConfig()
+    await pc.save_environment_variables({"NEW_SETTING": "first-write-plaintext"})
+
+    written = captured["value"]
+    assert written["LANGFUSE_PUBLIC_KEY"] == unrelated
+    assert written["UI_LOGO_PATH"] == "old-logo"
+    assert written["NEW_SETTING"].startswith("v3:gcm:")
+    assert decrypt_value_helper(written["NEW_SETTING"], key="NEW_SETTING") == "first-write-plaintext"
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_save_environment_variables_without_pynacl_refuses_legacy_echo_without_writing(monkeypatch):
+    """Without PyNaCl, re-submitting a key whose stored counterpart is unprefixed
+    (a legacy round-trip echo) must refuse the save with the actionable message
+    and never write a v3-wrapped legacy blob."""
+    legacy = _stored_legacy_env_value("legacy-secret", "sk-test-salt-key")
+    captured = _install_fake_config_repo(monkeypatch, existing_row={"LANGFUSE_PUBLIC_KEY": legacy})
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-test-salt-key")
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+
+    pc = ProxyConfig()
+    with pytest.raises(LegacyEncryptionUnavailableError, match=r"re-encrypt environment variables.*legacy-encryption"):
+        await pc.save_environment_variables({"LANGFUSE_PUBLIC_KEY": legacy})
 
     assert "value" not in captured
 
@@ -2583,7 +2637,7 @@ async def test_ProxyConfig_load_config_wires_config_reload_interval(tmp_path, mo
     """general_settings.proxy_config_reload_interval_seconds must reach the proxy_server
     module global that schedules the DB config-reload jobs, so operators can tune multi-pod
     convergence from config.yaml."""
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     f = tmp_path / "c.yaml"
     f.write_text(
@@ -3307,7 +3361,7 @@ def test_ProxyConfig__add_deployment_resolves_env_refs_for_aws_bedrock_auth_para
     fake_router.upsert_deployment = MagicMock(return_value=True)
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
     pc = ProxyConfig()
-    litellm_params: Dict[str, Any] = {"model": "bedrock/anthropic.claude-v2"}
+    litellm_params: dict[str, Any] = {"model": "bedrock/anthropic.claude-v2"}
     for key, (env_name, _) in aws_env.items():
         litellm_params[key] = f"os.environ/{env_name}"
     db_model = SimpleNamespace(
@@ -3482,6 +3536,28 @@ def test_ProxyConfig_decrypt_credentials_returns_an_encrypted_empty_value_as_emp
         }
     )
     assert decrypted.credential_values == {"api_base": "", "openai_service_account_id": "user-1"}
+
+
+def test_ProxyConfig_decrypt_credentials_without_pynacl_drops_a_legacy_value_instead_of_serving_the_blob(monkeypatch):
+    import base64
+    import hashlib
+
+    import nacl.secret
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-decrypt-credentials-test-salt")
+    box = nacl.secret.SecretBox(hashlib.sha256(b"sk-decrypt-credentials-test-salt").digest())
+    legacy = base64.urlsafe_b64encode(bytes(box.encrypt(b"sk-legacy-upstream"))).decode()
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+
+    decrypted = ProxyConfig().decrypt_credentials(
+        {
+            "credential_name": "openai-legacy",
+            "credential_values": {"api_key": legacy, "api_base": encrypt_value_helper("https://api.example.test")},
+            "credential_info": {"custom_llm_provider": "openai"},
+        }
+    )
+    assert decrypted.credential_values == {"api_base": "https://api.example.test"}
 
 
 def test_ProxyConfig_decrypt_model_list_from_db_returns_decrypted(monkeypatch):
@@ -3825,6 +3901,123 @@ def test_ProxyConfig__encrypt_env_variables_for_db_idempotent(monkeypatch):
     pc = ProxyConfig()
     out = pc._encrypt_env_variables_for_db({"A": "1", "B": "2", "C": "3"})
     assert out == {"A": "ENC[1]", "B": "ENC[2]", "C": "ENC[3]"}
+
+
+def test_ProxyConfig__encrypt_env_variables_for_db_without_pynacl_encrypts_new_plaintext_and_keeps_v3(monkeypatch):
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-config-save")
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    v3 = encrypt_value_helper("already-migrated")
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+    pc = ProxyConfig()
+
+    long_plaintext = "A" * 56
+    saved = pc._encrypt_env_variables_for_db({"A": v3, "B": "first-write-plaintext", "C": long_plaintext})
+    assert all(v.startswith("v3:gcm:") for v in saved.values())
+    assert {k: decrypt_value_helper(v, key=k) for k, v in saved.items()} == {
+        "A": "already-migrated",
+        "B": "first-write-plaintext",
+        "C": long_plaintext,
+    }
+
+
+def _stored_legacy_env_value(plaintext: str, salt_key: str) -> str:
+    """A stored env value the way pre-AES releases wrote it: unprefixed XSalsa20-Poly1305."""
+    import base64
+    import hashlib
+
+    import nacl.secret
+
+    box = nacl.secret.SecretBox(hashlib.sha256(salt_key.encode()).digest())
+    return base64.urlsafe_b64encode(bytes(box.encrypt(plaintext.encode()))).decode()
+
+
+def test_ProxyConfig__encrypt_env_variables_for_db_without_pynacl_saves_key_absent_from_stored_row(monkeypatch):
+    """A key with no stored counterpart is new plaintext by construction: without
+    PyNaCl it must still save, encrypted straight to v3."""
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-config-save")
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    v3 = encrypt_value_helper("migrated")
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+    pc = ProxyConfig()
+
+    saved = pc._encrypt_env_variables_for_db(
+        {"UI_LOGO_PATH": "logo.png"},
+        stored_environment_variables={"LANGFUSE_PUBLIC_KEY": v3},
+    )
+
+    assert saved["UI_LOGO_PATH"].startswith("v3:gcm:")
+    assert decrypt_value_helper(saved["UI_LOGO_PATH"], key="UI_LOGO_PATH") == "logo.png"
+
+
+def test_ProxyConfig__encrypt_env_variables_for_db_without_pynacl_refuses_legacy_stored_counterpart(monkeypatch):
+    """An unprefixed non-empty stored counterpart means the incoming value may be a
+    round-trip echo of unreadable legacy ciphertext: refuse it with the actionable
+    message instead of v3-wrapping the blob."""
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-config-save")
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    legacy = _stored_legacy_env_value("legacy-secret", "sk-salt-config-save")
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+    pc = ProxyConfig()
+
+    with pytest.raises(LegacyEncryptionUnavailableError, match=r"re-encrypt environment variables.*legacy-encryption"):
+        pc._encrypt_env_variables_for_db(
+            {"LANGFUSE_PUBLIC_KEY": legacy},
+            stored_environment_variables={"LANGFUSE_PUBLIC_KEY": legacy},
+        )
+
+
+@pytest.mark.parametrize("stored_counterpart_kind", ["v3", "v2", "absent"])
+def test_ProxyConfig__encrypt_env_variables_for_db_without_pynacl_versioned_stored_counterpart_saves(
+    monkeypatch, stored_counterpart_kind
+):
+    """A versioned (v2:/v3:) or absent stored counterpart never needs PyNaCl: the
+    incoming value is fresh plaintext and saves as v3."""
+    import base64
+    import hashlib
+    import os as _os
+
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-config-save")
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    stored: dict[str, str] = {}
+    if stored_counterpart_kind == "v3":
+        stored["LANGFUSE_PUBLIC_KEY"] = encrypt_value_helper("previously-migrated")
+    elif stored_counterpart_kind == "v2":
+        nonce = _os.urandom(12)
+        key = hashlib.sha256(b"sk-salt-config-save").digest()
+        blob = AESGCM(key).encrypt(nonce, b"v2-secret", None)
+        stored["LANGFUSE_PUBLIC_KEY"] = "v2:gcm:" + base64.urlsafe_b64encode(nonce + blob).decode()
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+    pc = ProxyConfig()
+
+    saved = pc._encrypt_env_variables_for_db(
+        {"LANGFUSE_PUBLIC_KEY": "fresh-plaintext"},
+        stored_environment_variables=stored,
+    )
+
+    assert saved["LANGFUSE_PUBLIC_KEY"].startswith("v3:gcm:")
+    assert decrypt_value_helper(saved["LANGFUSE_PUBLIC_KEY"], key="LANGFUSE_PUBLIC_KEY") == "fresh-plaintext"
+
+
+def test_ProxyConfig__encrypt_env_variables_for_db_with_pynacl_reencrypts_legacy_echo(monkeypatch):
+    """Control: with PyNaCl present a legacy echo decrypts and re-encrypts as v3."""
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-config-save")
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    legacy = _stored_legacy_env_value("legacy-secret", "sk-salt-config-save")
+    pc = ProxyConfig()
+
+    saved = pc._encrypt_env_variables_for_db(
+        {"LANGFUSE_PUBLIC_KEY": legacy},
+        stored_environment_variables={"LANGFUSE_PUBLIC_KEY": legacy},
+    )
+
+    assert saved["LANGFUSE_PUBLIC_KEY"].startswith("v3:gcm:")
+    assert decrypt_value_helper(saved["LANGFUSE_PUBLIC_KEY"], key="LANGFUSE_PUBLIC_KEY") == "legacy-secret"
 
 
 def test_ProxyConfig__encrypt_env_variables_for_db_invalid_raises():
@@ -4835,7 +5028,9 @@ async def test_ProxyConfig__update_config_from_db_keeps_keys_the_config_file_omi
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("ui_settings_already_synced", [False, True])
-async def test_ProxyConfig_add_deployment_continues_after_null_pass_through_endpoints(monkeypatch, ui_settings_already_synced):
+async def test_ProxyConfig_add_deployment_continues_after_null_pass_through_endpoints(
+    monkeypatch, ui_settings_already_synced
+):
     from litellm.proxy import proxy_server
 
     pc = ProxyConfig()
@@ -5036,7 +5231,7 @@ def clean_agent_registry():
         global_agent_registry.config_agents = original_config_agents
 
 
-def _config_agent(agent_name: str) -> Dict[str, Any]:
+def _config_agent(agent_name: str) -> dict[str, Any]:
     return {
         "agent_name": agent_name,
         "agent_card_params": {
@@ -5275,7 +5470,7 @@ async def test_add_deployment_re_reads_ui_settings_so_other_pods_converge(monkey
     Startup used to be the only read, so a proxy admin flipping a runtime flag reached the pod
     that served the PATCH and nowhere else until every other pod restarted.
     """
-    general_settings: Dict[str, Any] = {"allow_agents_for_team_admins": False}
+    general_settings: dict[str, Any] = {"allow_agents_for_team_admins": False}
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
 
     prisma_client = MagicMock()
@@ -5302,7 +5497,7 @@ async def test_add_deployment_re_reads_ui_settings_so_other_pods_converge(monkey
 @pytest.mark.asyncio
 async def test_add_deployment_syncs_ui_settings_even_when_the_model_reconcile_fails(monkeypatch):
     """A broken model reconcile must not strand every pod on stale settings."""
-    general_settings: Dict[str, Any] = {"allow_agents_for_team_admins": False}
+    general_settings: dict[str, Any] = {"allow_agents_for_team_admins": False}
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
 
     prisma_client = MagicMock()
@@ -5607,3 +5802,71 @@ async def test_proxy_config_validates_advertised_mcp_versions_at_load(tmp_path, 
         return
     with pytest.raises(ValidationError):
         await ProxyConfig().load_config(router=None, config_file_path=str(config))
+
+
+# ---------------------------------------------------------------------------
+# ProxyConfig.save_config environment_variables door (gauntlet B3): the door
+# must refuse a legacy round-trip echo on a no-PyNaCl install instead of
+# double-wrapping it into the config row.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_save_config_without_pynacl_refuses_legacy_env_var_echo(monkeypatch):
+    """Regression: save_config(include_env_vars=True) used to encrypt the
+    submitted environment_variables without the legacy-reader guard its sibling
+    doors have. On a no-PyNaCl install a legacy unprefixed ciphertext echoed
+    back from a config read was silently double-wrapped into the config row —
+    at boot the ciphertext blob would load into os.environ as the credential,
+    and the migration would later classify it migrated. The save must refuse
+    loudly and leave the stored row untouched."""
+    legacy = _stored_legacy_env_value("legacy-secret", "sk-save-config-salt")
+    proxy_config, table = _db_backed_proxy_config(
+        monkeypatch, {"environment_variables": {"LANGFUSE_PUBLIC_KEY": legacy}}
+    )
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-save-config-salt")
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+
+    with pytest.raises(LegacyEncryptionUnavailableError, match=r"re-encrypt environment variables.*legacy-encryption"):
+        await proxy_config.save_config(
+            {"environment_variables": {"LANGFUSE_PUBLIC_KEY": legacy}}, include_env_vars=True
+        )
+
+    assert table.rows == {"environment_variables": {"LANGFUSE_PUBLIC_KEY": legacy}}
+    assert table.upserted_param_names == []
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_save_config_without_pynacl_saves_fresh_plaintext_env_vars(monkeypatch):
+    """Fresh plaintext values with no stored counterpart still save on a
+    no-PyNaCl install, encrypted straight to v3:gcm:."""
+    proxy_config, table = _db_backed_proxy_config(monkeypatch, {})
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-save-config-salt")
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+
+    await proxy_config.save_config(
+        {"environment_variables": {"UI_LOGO_PATH": "first-write-plaintext"}}, include_env_vars=True
+    )
+
+    written: Final = table.rows["environment_variables"]["UI_LOGO_PATH"]
+    assert isinstance(written, str) and written.startswith("v3:gcm:")
+    assert decrypt_value_helper(written, key="UI_LOGO_PATH") == "first-write-plaintext"
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_save_config_with_pynacl_reencrypts_a_legacy_env_var_echo(monkeypatch):
+    """Control: with PyNaCl present, echoing a legacy value through save_config
+    re-encrypts it to v3:gcm: and it round-trips to the secret."""
+    legacy = _stored_legacy_env_value("legacy-secret", "sk-save-config-salt")
+    proxy_config, table = _db_backed_proxy_config(
+        monkeypatch, {"environment_variables": {"LANGFUSE_PUBLIC_KEY": legacy}}
+    )
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-save-config-salt")
+
+    await proxy_config.save_config({"environment_variables": {"LANGFUSE_PUBLIC_KEY": legacy}}, include_env_vars=True)
+
+    written: Final = table.rows["environment_variables"]["LANGFUSE_PUBLIC_KEY"]
+    assert isinstance(written, str) and written.startswith("v3:gcm:")
+    assert decrypt_value_helper(written, key="LANGFUSE_PUBLIC_KEY") == "legacy-secret"

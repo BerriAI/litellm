@@ -2,9 +2,9 @@
 At-rest credential re-encryption migration.
 
 Switches every encrypted-at-rest value from the legacy XSalsa20-Poly1305 (nacl)
-format to the versioned AES-256-GCM (``v2:gcm:``) format produced by
-``encrypt_decrypt_utils`` when ``general_settings.encryption_algorithm`` is set to
-``aes-256-gcm``.
+format to the versioned AES-256-GCM (``v3:gcm:``) format produced by
+``encrypt_decrypt_utils`` by default (``general_settings.encryption_algorithm``
+not set to the legacy ``xsalsa20-poly1305``).
 
 Design properties (see case 2026-06-24 fix plan):
 
@@ -12,12 +12,13 @@ Design properties (see case 2026-06-24 fix plan):
   it re-encrypts existing ciphertext under the same derived key but in the new
   AES format. This is achieved by decrypting with the format-detecting reader and
   re-encrypting through ``encrypt_value_helper`` with the AES gate enabled.
-* **Idempotent.** A value already carrying the ``v2:gcm:`` prefix is recognised
+* **Idempotent.** A value already carrying a ``v3:gcm:`` or ``v2:gcm:`` prefix is recognised
   and left untouched, so re-running the migration is a no-op on migrated rows.
 * **Resumable.** Walkers commit per row (or per small table), so an interrupted
   run leaves a clean mixed state that a re-run completes.
 * **Skip-on-undecryptable.** A value that cannot be decrypted is never
-  overwritten — corrupt rows are preserved and reported, never destroyed.
+  overwritten — corrupt rows are preserved and reported (the ``preserved`` /
+  ``undecryptable`` counters flag them for manual rotation), never destroyed.
 * **Attestable.** :func:`check_encryption` is a read-only scan that classifies
   every value as ``migrated`` / ``legacy`` / ``plaintext`` / ``undecryptable``.
   A residual ``legacy == 0`` is the compliance attestation.
@@ -31,8 +32,11 @@ config rows, and the SSO config table.
 """
 
 import json
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final, Literal, cast
+
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.db.db_span import db_span
@@ -46,13 +50,16 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (  # noqa: F401  # 
     _V2_GCM_PREFIX,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     ALGO_AES_GCM,
     ENCRYPTION_ALGORITHM_SETTING,
-    V2_GCM_PREFIX,
+    V2_GCM_PREFIX,  # pyright: ignore[reportUnusedImport]  # backwards-compatible package export
     SecretMapDecodeError,
+    _get_encryption_algorithm,  # pyright: ignore[reportPrivateUsage]  # algorithm selection has no public accessor
     _get_salt_key,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     decode_secret_map,
     decrypt_value_helper,
     encrypt_value_helper,
     get_salt_key,
+    is_versioned_gcm,
+    require_legacy_reader_for,
 )
 
 ValueClass = Literal["migrated", "legacy", "plaintext", "undecryptable", "not-a-string"]
@@ -64,10 +71,11 @@ class LocationReport:
 
     location: str
     scanned: int = 0
-    migrated: int = 0  # values rewritten to v2 this run
+    migrated: int = 0  # values rewritten to versioned AES this run
     already_v2: int = 0  # values already migrated (skipped)
     plaintext: int = 0  # legacy-plaintext values (no ciphertext to migrate)
     undecryptable: int = 0  # could not decrypt — preserved, not overwritten
+    preserved: int = 0  # left byte-identical by the rewrite (undecryptable / plaintext) — needs manual rotation
 
     # Used by --check (read-only classification):
     legacy: int = 0  # nacl ciphertext still awaiting migration
@@ -93,6 +101,7 @@ class LocationReport:
             "already_v2": self.already_v2,
             "plaintext": self.plaintext,
             "undecryptable": self.undecryptable,
+            "preserved": self.preserved,
             "legacy": self.legacy,
         }
 
@@ -115,10 +124,21 @@ class MigrationReport:
     def total_undecryptable(self) -> int:
         return sum(loc.undecryptable for loc in self.locations)
 
+    @property
+    def total_preserved(self) -> int:
+        """Entries left byte-identical by the run because they cannot be re-encrypted.
+
+        Surfaced at the top level of the report / endpoint response so a run that
+        preserved values never reads as a silent success-with-nothing-to-do: each
+        of these needs manual rotation by an admin.
+        """
+        return sum(loc.preserved for loc in self.locations)
+
     def as_dict(self) -> dict[str, object]:
         return {
             "residual_legacy": self.residual_legacy,
             "total_undecryptable": self.total_undecryptable,
+            "total_preserved": self.total_preserved,
             "locations": {loc.location: loc.as_dict() for loc in self.locations},
         }
 
@@ -129,47 +149,73 @@ class MigrationReport:
 
 
 def is_migrated(value: object) -> bool:
-    """True if ``value`` is already an AES-256-GCM (``v2:gcm:``) ciphertext."""
-    return isinstance(value, str) and value.startswith(V2_GCM_PREFIX)
+    """True if ``value`` is already a versioned AES-256-GCM (``v3:gcm:`` or ``v2:gcm:``) ciphertext."""
+    return isinstance(value, str) and is_versioned_gcm(value)
 
 
-def classify_value(value: object, key: str = "scan") -> ValueClass:
+def classify_value(value: object, key: str = "scan", *, plaintext_metadata: bool = False) -> ValueClass:
     """Classify a stored value for the residual scanner.
 
     * ``not-a-string`` — not a string (numbers/bools/None left as-is on disk).
-    * ``migrated`` — carries the ``v2:gcm:`` prefix.
+    * ``migrated`` — carries a versioned ``gcm`` prefix **and** decrypts under
+      the current key (a prefix alone proves nothing about the key).
     * ``legacy`` — decrypts under the legacy nacl reader (still needs migrating).
-    * ``plaintext`` — a non-empty string that does not decrypt and is not v2;
-      treated as legacy plaintext (nothing to migrate).
-    * ``undecryptable`` — reserved for callers that already know a value is
-      ciphertext but cannot decrypt it; ``classify_value`` itself cannot tell a
-      corrupt ciphertext from plaintext, so it returns ``plaintext`` for both.
+    * ``plaintext`` — a non-empty string that does not decrypt and is not
+      versioned; treated as legacy plaintext (nothing to migrate).
+    * ``undecryptable`` — a versioned ``gcm`` value that does not decrypt under
+      the current key (wrong key / corrupt); preserved, never deleted. For
+      unversioned values ``classify_value`` cannot tell a corrupt nacl blob
+      from plaintext, so it returns ``plaintext`` for both.
+
+    ``plaintext_metadata`` marks a leaf the write path stores as plaintext by
+    construction (a string nested inside a list/dict param, where the writer
+    only ever encrypts top-level strings). Such a leaf can never be ciphertext,
+    so it classifies as plaintext without the legacy reader — a fully migrated
+    store with nested params still passes the no-PyNaCl preflight.
     """
     if not isinstance(value, str):
         return "not-a-string"
-    if value == "":
+    if value == "" or plaintext_metadata:
         return "plaintext"
-    if value.startswith(V2_GCM_PREFIX):
-        return "migrated"
+    versioned: Final = is_versioned_gcm(value)
+    if not versioned:
+        require_legacy_reader_for((value,), "scan stored encryption")
     decrypted: Final = decrypt_value_helper(value=value, key=key, exception_type="debug", return_original_value=False)
+    if versioned:
+        # The versioned prefix proves the writer intended ciphertext, so a value
+        # that does not decrypt under the current key is undecryptable — the
+        # prefix alone must never pass a wrong-key value off as already migrated.
+        return "migrated" if decrypted is not None else "undecryptable"
     if decrypted is None:
-        # Did not decrypt under nacl and has no v2 marker: legacy plaintext.
+        # Did not decrypt under nacl and has no versioned marker: legacy plaintext.
         return "plaintext"
     return "legacy"
+
+
+def needs_manual_rotation(classification: ValueClass, value: object) -> bool:
+    """True for a stored value a rewrite leaves byte-identical because it cannot be re-encrypted.
+
+    Undecryptable ciphertext and non-empty plaintext are preserved as-is by the
+    rewrite doorways (the migration never deletes them) and stay readable only
+    via manual rotation by an admin. The empty string decrypts to itself (it
+    round-trips), so a rewrite re-encrypts it — it is not preserved.
+    """
+    return classification == "undecryptable" or (classification == "plaintext" and value != "")
 
 
 def reencrypt_value(value: object, key: str = "migrate") -> object:
     """Re-encrypt a single stored string into the configured (AES) format.
 
-    Returns the value unchanged if it is not a string, is already ``v2:``, or
+    Returns the value unchanged if it is not a string, is already versioned AES, or
     cannot be decrypted (skip-on-undecryptable). Otherwise decrypts under the
     format-detecting reader and re-encrypts through ``encrypt_value_helper``
     (which writes AES when the gate is on).
     """
     if not isinstance(value, str) or value == "":
         return value
-    if value.startswith(V2_GCM_PREFIX):
+    if is_versioned_gcm(value):
         return value  # idempotent: already migrated
+    require_legacy_reader_for((value,), "migrate stored encryption")
     decrypted: Final = decrypt_value_helper(value=value, key=key, exception_type="debug", return_original_value=False)
     if decrypted is None:
         # Either legacy plaintext (no ciphertext to migrate) or corrupt. Either
@@ -199,13 +245,11 @@ def _assert_aes_gate_enabled() -> None:
     Running the migration with the gate off would decrypt then re-encrypt right
     back into the legacy format — a no-op that silently fails the migration.
     """
-    from litellm.proxy.proxy_server import general_settings
-
-    algo: Final = general_settings.get(ENCRYPTION_ALGORITHM_SETTING)
-    if not (isinstance(algo, str) and algo.lower() == ALGO_AES_GCM):
+    algo: Final = _get_encryption_algorithm()
+    if algo != ALGO_AES_GCM:
         raise RuntimeError(
-            "Encryption migration requires general_settings.encryption_algorithm: "
-            f"'{ALGO_AES_GCM}'. Current value: {algo!r}. Set it before migrating "
+            f"Encryption migration requires general_settings.{ENCRYPTION_ALGORITHM_SETTING}: "
+            f"'{ALGO_AES_GCM}' (the default). Current value: {algo!r}. Remove the legacy opt-in before migrating "
             "so re-encrypted values are written in the AES-256-GCM format."
         )
 
@@ -247,6 +291,11 @@ async def _migrate_config_settings_row(
         if cls == "migrated":
             report.already_v2 += 1
             continue
+        if cls == "undecryptable":
+            # Wrong-key / corrupt ciphertext: preserved byte-identical, never deleted.
+            report.undecryptable += 1
+            report.preserved += 1
+            continue
         if cls == "legacy":
             if dry_run:
                 # Residual: would migrate, but a dry run writes nothing, so it
@@ -262,8 +311,10 @@ async def _migrate_config_settings_row(
                 # Defensive: a legacy value that did not re-encrypt is still
                 # residual, not migrated.
                 report.legacy += 1
-        else:  # plaintext / not-a-string — nothing to migrate
+        else:  # plaintext / not-a-string — nothing to migrate, stored value preserved as-is
             report.plaintext += 1
+            if needs_manual_rotation(cls, v):
+                report.preserved += 1
 
     if changed and not dry_run:
         async with db_span("migrate_config_credentials", "LiteLLM_Config"):
@@ -300,6 +351,11 @@ async def _migrate_sso_config(prisma_client: object, dry_run: bool) -> LocationR
         if cls == "migrated":
             report.already_v2 += 1
             continue
+        if cls == "undecryptable":
+            # Wrong-key / corrupt ciphertext: preserved byte-identical, never deleted.
+            report.undecryptable += 1
+            report.preserved += 1
+            continue
         if cls == "legacy":
             if dry_run:
                 # Residual: would migrate, but a dry run writes nothing, so it
@@ -317,6 +373,7 @@ async def _migrate_sso_config(prisma_client: object, dry_run: bool) -> LocationR
                 report.legacy += 1
         else:
             report.plaintext += 1
+            report.preserved += 1
 
     if changed and not dry_run:
         async with db_span("migrate_sso_credentials", "LiteLLM_SSOConfig"):
@@ -375,6 +432,11 @@ async def _migrate_callback_vars_table(
                     report.already_v2 += 1
                 elif cls == "legacy":
                     row_legacy += 1
+                elif cls == "undecryptable":
+                    # Wrong-key versioned ciphertext: the selective transforms
+                    # pass it through, preserving it byte-identical.
+                    report.undecryptable += 1
+                    report.preserved += 1
                 else:  # plaintext / not-a-string
                     report.plaintext += 1
 
@@ -434,7 +496,7 @@ def _classify_callback_value(value: object) -> ValueClass:
 
     Encrypted callback vars carry the ``litellm_enc::`` marker in front of the
     ciphertext; strip it, then classify the inner value the same way the
-    covered-table scanner does (``v2:gcm:`` prefix -> migrated, nacl-decryptable
+    covered-table scanner does (versioned ``gcm`` prefix -> migrated, nacl-decryptable
     -> legacy, otherwise plaintext). Detecting legacy by decrypt rather than by a
     re-encrypt delta is what makes the ``check_encryption`` attestation correct
     even when run with the AES write gate off.
@@ -467,8 +529,30 @@ _COVERED_TABLE_SPECS: Final = [
     ("mcp_server", "litellm_mcpservertable", ("credentials", "env_vars", "static_headers", "env"), ()),
     ("mcp_user_credentials", "litellm_mcpusercredentials", (), ("credential_b64",)),
     ("mcp_user_env_vars", "litellm_mcpuserenvvars", (), ("values_b64",)),
+    ("mcp_oauth_client", "litellm_mcpserveroauthclient", ("credentials",), ()),
     ("search_tools", "litellm_searchtoolstable", ("litellm_params",), ()),
+    ("sso_identity_assertion", "litellm_ssoidentityassertion", (), ("assertion_b64",)),
+    ("guardrails", "litellm_guardrailstable", ("litellm_params",), ()),
 ]
+_MCP_CREDENTIAL_TABLES: Final = frozenset({"litellm_mcpservertable", "litellm_mcpserveroauthclient"})
+_GUARDRAILS_DB_ATTR: Final = "litellm_guardrailstable"
+_PLAINTEXT_LITELLM_PARAMS: Final = frozenset({"complexity_router_config"})
+_OBJECT_MAP: Final = TypeAdapter(dict[str, object])
+_OBJECT_LIST: Final = TypeAdapter(list[object])
+
+
+def _object_map(raw: object) -> Mapping[str, object] | None:
+    try:
+        return _OBJECT_MAP.validate_python(raw)
+    except ValidationError:
+        return None
+
+
+def _object_list(raw: object) -> tuple[object, ...]:
+    try:
+        return tuple(_OBJECT_LIST.validate_python(raw))
+    except ValidationError:
+        return ()
 
 
 def _iter_encrypted_strings(obj: object):
@@ -489,24 +573,140 @@ def _iter_encrypted_strings(obj: object):
             stack.extend(cur)
 
 
-def _classify_into_report(report: LocationReport, value: str) -> None:
-    """Classify one stored string and bump the matching read-only counter.
+def _mcp_encrypted_leaves(col: str, raw: object) -> Iterator[str]:
+    """MCP ``credentials`` and ``env_vars`` columns hold plaintext field names and
+    ``scope="user"`` placeholders next to encrypted values, so only the secret
+    leaves are yielded; a plaintext leaf would otherwise be
+    mistaken for legacy ciphertext and refuse the scan"""
+    from litellm.proxy._experimental.mcp_server.db import MCP_CREDENTIAL_SECRET_FIELDS, is_global_env_var_scope
+
+    if col == "credentials":
+        credentials: Final = _object_map(raw) or {}
+        return (v for k, v in credentials.items() if k in MCP_CREDENTIAL_SECRET_FIELDS and isinstance(v, str))
+    entries: Final = tuple(entry for e in _object_list(raw) if (entry := _object_map(e)) is not None)
+    return (
+        value
+        for entry in entries
+        if is_global_env_var_scope(entry.get("scope")) and isinstance(value := entry.get("value"), str)
+    )
+
+
+# Tables whose writers encrypt each top-level litellm_params string value and leave everything
+# nested inside a list/dict param (tags, routing metadata, …) stored as plaintext.
+_LITELLM_PARAMS_TABLES: Final = frozenset({"litellm_proxymodeltable", "litellm_searchtoolstable"})
+
+
+def _top_level_param_leaves(params: Mapping[str, object]) -> Iterator[tuple[str, bool]]:
+    """(leaf, plaintext_metadata) pairs for one row of a litellm_params column.
+
+    The write path runs the encryptor per top-level param value and it encrypts
+    strings only, so only a top-level string is ever stored ciphertext: those
+    leaves stay gated on the legacy reader. Strings nested inside a list or dict
+    param are stored plaintext by construction, so they are reported as
+    plaintext metadata without the gate — a fully migrated store carrying such
+    params must still pass the no-PyNaCl preflight.
+    """
+    for k, v in params.items():
+        if k in _PLAINTEXT_LITELLM_PARAMS:
+            continue
+        if isinstance(v, str):
+            yield v, False
+        else:
+            for nested in _iter_encrypted_strings(v):
+                yield nested, True
+
+
+def _iter_keyed_strings(obj: object) -> Iterator[tuple[str | None, str]]:
+    """Yield every (dict key, string leaf) pair in a nested structure.
+
+    A list item inherits the key of the dict entry that holds the list: the guardrails
+    writer encrypts sensitive-keyed strings inside arrays under the parent key, so
+    ``["litellm_enc::<ct>"]`` under ``api_key`` is a keyed secret leaf, while items of a
+    root-level list stay keyless. Iterative like ``_iter_encrypted_strings``: the
+    code-quality recursive-function detector bans recursion here, and an explicit stack
+    walks arbitrary depth safely.
+    """
+    stack: Final[list[tuple[str | None, object]]] = [(None, obj)]  # mutable-ok: walker stack
+    while stack:
+        key, cur = stack.pop()
+        if isinstance(cur, str):
+            yield key, cur
+        elif isinstance(cur, dict):
+            entries = cast("dict[str, object]", cur)  # cast-ok: any dict is a str-keyed object map for this walk
+            stack.extend(entries.items())
+        elif isinstance(cur, list):
+            items = cast("list[object]", cur)  # cast-ok: list items are walked as opaque objects
+            stack.extend((key, item) for item in items)
+
+
+def _guardrail_encrypted_leaves(raw: object) -> Iterator[tuple[str, bool]]:
+    """(leaf, plaintext_metadata) pairs for one guardrails ``litellm_params`` column.
+
+    The guardrails writer encrypts every sensitive-keyed string at any depth and stores it
+    with the callback encrypted-value prefix, everything else (mode, guardrail type, …) as
+    plaintext by construction. Only the prefixed sensitive leaves are yielded with the
+    prefix stripped so ``classify_value`` sees the stored ciphertext itself; a plaintext
+    leaf would otherwise be mistaken for legacy ciphertext and refuse the scan.
+    """
+    from litellm.proxy.common_utils.callback_utils import (
+        CALLBACK_VAR_ENCRYPTED_PREFIX,
+        is_sensitive_callback_key,
+    )
+
+    return (
+        (value.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX), False)
+        for key, value in _iter_keyed_strings(raw)
+        if value.startswith(CALLBACK_VAR_ENCRYPTED_PREFIX) and key is not None and is_sensitive_callback_key(key)
+    )
+
+
+def _encrypted_leaves(db_attr: str, col: str, raw: object) -> Iterator[tuple[str, bool]]:
+    """(leaf, plaintext_metadata) pairs of one JSON column; plaintext_metadata is True for leaves
+    the write path stores as plaintext by construction (never gated on the legacy reader)."""
+    if db_attr in _MCP_CREDENTIAL_TABLES and col in ("credentials", "env_vars"):
+        return ((leaf, False) for leaf in _mcp_encrypted_leaves(col, raw))
+    if db_attr == _GUARDRAILS_DB_ATTR and col == "litellm_params":
+        return _guardrail_encrypted_leaves(raw)
+    if db_attr in _LITELLM_PARAMS_TABLES and (params := _object_map(raw)) is not None:
+        return _top_level_param_leaves(params)
+    return ((leaf, False) for leaf in _iter_encrypted_strings(raw))
+
+
+def _classify_into_report(report: LocationReport, value: str, *, plaintext_metadata: bool = False) -> ValueClass | None:
+    """Classify one stored string into ``report``'s read-only counters, returning the
+    classification so the caller can bump ``preserved`` for the values its rewrite
+    leaves byte-identical.
 
     Only genuine nacl ciphertext lands in ``legacy``; non-secret strings (model
     names, base URLs, …) do not decrypt and fall through to ``plaintext``, so
     over-scanning a column is harmless to the residual count.
     """
-    report.count(classify_value(value, key="scan"))
+    classification: Final = classify_value(value, key="scan", plaintext_metadata=plaintext_metadata)
+    report.count(classification)
+    return classification
+
+
+def _secret_map_ciphertext(value: object) -> object:
+    """The stored ciphertext behind an MCP secret map: the JSON quoted string is unwrapped, a plain map or
+    anything that is not JSON is returned as is for ``decode_secret_map`` to judge."""
+    if not isinstance(value, str) or not value.lstrip().startswith('"'):
+        return value
+    try:
+        return json.loads(value)
+    except ValueError:
+        return value
 
 
 def _classify_secret_map(value: object, key: str) -> ValueClass | None:
+    ciphertext: Final = _secret_map_ciphertext(value)
+    if isinstance(ciphertext, str) and not ciphertext.lstrip().startswith("{"):
+        require_legacy_reader_for((ciphertext,), "scan stored encryption")
     try:
         decoded: Final = decode_secret_map(value, key=key)
     except SecretMapDecodeError:
         return "undecryptable"
     if not decoded:
         return None
-    ciphertext: Final = json.loads(value) if isinstance(value, str) and value.lstrip().startswith('"') else value
     return "migrated" if is_migrated(ciphertext) else "legacy"
 
 
@@ -532,24 +732,39 @@ async def _scan_one_table(
             if raw is None:
                 continue
             if db_attr == "litellm_mcpservertable" and col in ("static_headers", "env"):
-                report.count(_classify_secret_map(raw, col))
+                # A secret map that fails to decode is skipped-and-preserved by the rotation
+                # rewrite, so it counts as preserved exactly like an undecryptable leaf.
+                secret_map_class = _classify_secret_map(raw, col)
+                report.count(secret_map_class)
+                if secret_map_class == "undecryptable":
+                    report.preserved += 1
                 continue
             if isinstance(raw, str):
                 try:
                     raw = json.loads(raw)
                 except (ValueError, TypeError):
                     pass
-            for s in _iter_encrypted_strings(raw):
-                _classify_into_report(report, s)
+            for leaf, plaintext_metadata in _encrypted_leaves(db_attr, col, raw):
+                if _classify_into_report(report, leaf, plaintext_metadata=plaintext_metadata) == "undecryptable":
+                    # The covered-table rewrite leaves exactly these byte-identical; count
+                    # them as preserved so the report never launders a wrong-key value into
+                    # an already-v2 success.
+                    report.preserved += 1
         for col in scalar_columns:
             v = getattr(row, col, None)
-            if isinstance(v, str):
-                _classify_into_report(report, v)
+            if isinstance(v, str) and _classify_into_report(report, v) == "undecryptable":
+                report.preserved += 1
     return report
 
 
 async def _scan_config_env_vars(prisma_client: object) -> LocationReport:
-    """Scan the ``environment_variables`` config row (``param_value`` dict)."""
+    """Scan the ``environment_variables`` config row (``param_value`` dict).
+
+    Values that do not decrypt under the current key (wrong-key versioned
+    ciphertext, corrupt blobs, stored plaintext) are preserved byte-identical by
+    the rotation rewrite — they are counted as ``preserved`` so the report makes
+    clear they were left untouched and need manual rotation.
+    """
     report: Final = LocationReport(location="config_environment_variables")
     try:
         record: Final = await prisma_client.db.litellm_config.find_unique(where={"param_name": "environment_variables"})
@@ -565,17 +780,20 @@ async def _scan_config_env_vars(prisma_client: object) -> LocationReport:
         except (ValueError, TypeError):
             value = {}
     for s in _iter_encrypted_strings(value):
-        _classify_into_report(report, s)
+        cls = classify_value(s, key="scan")
+        report.count(cls)
+        if needs_manual_rotation(cls, s):
+            report.preserved += 1
     return report
 
 
-async def _scan_covered_tables(prisma_client: object) -> list[LocationReport]:
+async def scan_covered_tables(prisma_client: object) -> list[LocationReport]:
     """Read-only classification of every rotation-covered table. No writes."""
-    reports: Final[list[LocationReport]] = []
-    for location, db_attr, json_cols, scalar_cols in _COVERED_TABLE_SPECS:
-        reports.append(await _scan_one_table(prisma_client, location, db_attr, json_cols, scalar_cols))
-    reports.append(await _scan_config_env_vars(prisma_client))
-    return reports
+    table_reports: Final = [
+        await _scan_one_table(prisma_client, location, db_attr, json_cols, scalar_cols)
+        for location, db_attr, json_cols, scalar_cols in _COVERED_TABLE_SPECS
+    ]
+    return [*table_reports, await _scan_config_env_vars(prisma_client)]
 
 
 # ---------------------------------------------------------------------------
@@ -602,7 +820,7 @@ async def _migrate_covered_tables(prisma_client: object, user_api_key_dict: obje
         rotate_master_key,
     )
 
-    pre: Final = {r.location: r for r in await _scan_covered_tables(prisma_client)}
+    pre: Final = {r.location: r for r in await scan_covered_tables(prisma_client)}
 
     current_key: Final = get_salt_key()
     if current_key is None:
@@ -616,7 +834,7 @@ async def _migrate_covered_tables(prisma_client: object, user_api_key_dict: obje
         new_master_key=current_key,  # same key, algorithm-only switch
     )
 
-    post: Final = await _scan_covered_tables(prisma_client)
+    post: Final = await scan_covered_tables(prisma_client)
     for post_report in post:
         pre_report = pre.get(post_report.location)
         pre_legacy = pre_report.legacy if pre_report else 0
@@ -633,8 +851,8 @@ async def migrate_encryption(
 ) -> MigrationReport:
     """Run the full at-rest re-encryption migration.
 
-    Requires ``general_settings.encryption_algorithm == 'aes-256-gcm'`` so writes
-    are produced in the AES format. Idempotent and resumable: re-running skips
+    Requires the proxy to write ``aes-256-gcm`` (the default) so re-encrypted
+    values are produced in the AES format. Idempotent and resumable: re-running skips
     already-migrated values and finishes any partial run.
 
     A ``dry_run`` performs no writes: the covered tables are scanned read-only
@@ -649,7 +867,7 @@ async def migrate_encryption(
     # delegate to the rotation path (with bracketing scans for counts); on a dry
     # run only classify them read-only.
     if dry_run:
-        for covered in await _scan_covered_tables(prisma_client):
+        for covered in await scan_covered_tables(prisma_client):
             report.add(covered)
     else:
         for covered in await _migrate_covered_tables(prisma_client, user_api_key_dict):
@@ -677,7 +895,7 @@ async def check_encryption(prisma_client: object) -> MigrationReport:
     report: Final = MigrationReport()
 
     # Rotation-covered tables (read-only classification).
-    for covered in await _scan_covered_tables(prisma_client):
+    for covered in await scan_covered_tables(prisma_client):
         report.add(covered)
 
     # Net-new walker locations, in dry-run (read-only) mode.

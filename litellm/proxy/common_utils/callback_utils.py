@@ -27,9 +27,11 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import CommonProxyErrors, LiteLLMPromptInjectionParams
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    LegacyEncryptionUnavailableError,
     decrypt_value_helper,
     encrypt_value_helper,
 )
+from litellm.proxy.common_utils.fips import FipsModeError
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
@@ -726,7 +728,9 @@ def encrypt_callback_vars(metadata: object) -> Any:
 def decrypt_callback_vars(metadata: object) -> Any:
     """Return a deep copy of metadata with callback_vars values decrypted.
 
-    Legacy plaintext rows pass through unchanged (decrypt failure → original).
+    Legacy plaintext rows and marked-but-undecryptable values pass through unchanged —
+    the migration round-trips this transform, so the stored bytes must survive it;
+    serving paths drop still-marked values instead of using them as credentials.
     """
     return _transform_callback_vars(metadata, _decrypt_or_passthrough)
 
@@ -775,6 +779,10 @@ def _encrypt_if_plaintext(key: str, value: object) -> object:
         return value
     try:
         return _CALLBACK_VAR_ENCRYPTED_PREFIX + encrypt_value_helper(value)
+    except (FipsModeError, LegacyEncryptionUnavailableError):
+        # The configured algorithm cannot be honored (xsalsa20 opt-in under FIPS mode, or
+        # without PyNaCl): refuse the write instead of persisting the secret unencrypted.
+        raise
     except Exception:
         # No salt key / master key configured — leave the value as-is rather
         # than crash the write. Dev environments without LITELLM_SALT_KEY hit
@@ -790,4 +798,10 @@ def _decrypt_or_passthrough(key: str, value: object) -> object:
         return value
     inner: Final = value[len(_CALLBACK_VAR_ENCRYPTED_PREFIX) :]
     decrypted: Final = decrypt_value_helper(value=inner, key=key, exception_type="debug", return_original_value=False)
-    return decrypted if decrypted is not None else value
+    if decrypted is not None:
+        return decrypted
+    # Marked-but-undecryptable (wrong key, or legacy ciphertext PyNaCl is missing for):
+    # keep the stored value byte-identical — the migration round-trips this transform,
+    # so nulling the field would destroy the only copy of the ciphertext. Consumers
+    # that hand callback vars to a provider drop still-marked values as unset.
+    return value
