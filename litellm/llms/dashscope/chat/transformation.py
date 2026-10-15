@@ -82,7 +82,7 @@ class DashScopeChatConfig(OpenAIGPTConfig):
         """
         If api_base is not provided, use the default DashScope /chat/completions endpoint.
         """
-        resolved_api_base: Final = self._resolve_chat_api_base(api_base)
+        resolved_api_base: Final = self._resolve_chat_api_base(api_base).rstrip("/")
         if resolved_api_base.endswith("/chat/completions"):
             return resolved_api_base
         return f"{resolved_api_base}/chat/completions"

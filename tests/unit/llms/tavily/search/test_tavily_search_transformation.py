@@ -186,3 +186,18 @@ def _vcr_outcome_gate(request, vcr):
     install_live_call_probe(request, vcr)
     yield
     record_vcr_outcome(request, vcr)
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://gateway.example.com/tavily",
+        "https://gateway.example.com/tavily/",
+        "https://gateway.example.com/tavily/search/",
+    ],
+)
+def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str) -> None:
+    assert (
+        TavilySearchConfig().get_complete_url(api_base=api_base, optional_params={})
+        == "https://gateway.example.com/tavily/search"
+    )

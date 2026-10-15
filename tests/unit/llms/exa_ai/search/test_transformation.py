@@ -197,3 +197,18 @@ def test_transform_search_response_rejects_malformed_result_without_naming_its_p
         _transform({"results": results})
 
     assert "429" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://gateway.example.com/exa",
+        "https://gateway.example.com/exa/",
+        "https://gateway.example.com/exa/search/",
+    ],
+)
+def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str) -> None:
+    assert (
+        ExaAISearchConfig().get_complete_url(api_base=api_base, optional_params={})
+        == "https://gateway.example.com/exa/search"
+    )

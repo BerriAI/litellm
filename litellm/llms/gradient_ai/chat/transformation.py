@@ -103,15 +103,13 @@ class GradientAIConfig(OpenAILikeChatConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        gradient_ai_endpoint: Final = get_secret_str("GRADIENT_AI_AGENT_ENDPOINT")
-        complete_url = f"{GRADIENT_AI_SERVERLESS_ENDPOINT}/v1/chat/completions"
-
-        if api_base and api_base != GRADIENT_AI_SERVERLESS_ENDPOINT:
-            complete_url = f"{api_base}/api/v1/chat/completions"
-        elif gradient_ai_endpoint and gradient_ai_endpoint != GRADIENT_AI_SERVERLESS_ENDPOINT:
-            complete_url = f"{gradient_ai_endpoint}/api/v1/chat/completions"
-
-        return complete_url
+        clean_api_base: Final = (api_base or "").rstrip("/")
+        if clean_api_base and clean_api_base != GRADIENT_AI_SERVERLESS_ENDPOINT:
+            return f"{clean_api_base}/api/v1/chat/completions"
+        agent_endpoint: Final = (get_secret_str("GRADIENT_AI_AGENT_ENDPOINT") or "").rstrip("/")
+        if agent_endpoint and agent_endpoint != GRADIENT_AI_SERVERLESS_ENDPOINT:
+            return f"{agent_endpoint}/api/v1/chat/completions"
+        return f"{GRADIENT_AI_SERVERLESS_ENDPOINT}/v1/chat/completions"
 
     def _get_openai_compatible_provider_info(
         self, api_base: str | None, api_key: str | None

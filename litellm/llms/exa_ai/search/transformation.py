@@ -92,13 +92,11 @@ class ExaAISearchConfig(BaseSearchConfig):
         """
         Get complete URL for Search endpoint.
         """
-        api_base = api_base or get_secret_str("EXA_API_BASE") or self.EXA_AI_API_BASE
-
-        # Append "/search" to the api base if it's not already there
-        if not api_base.endswith("/search"):
-            api_base = f"{api_base}/search"
-
-        return api_base
+        resolved_api_base: Final = api_base or get_secret_str("EXA_API_BASE") or self.EXA_AI_API_BASE
+        clean_api_base: Final = resolved_api_base.rstrip("/")
+        if clean_api_base.endswith("/search"):
+            return clean_api_base
+        return f"{clean_api_base}/search"
 
     def transform_search_request(
         self,
