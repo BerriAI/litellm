@@ -338,6 +338,26 @@ def test_mask_flags_redact_the_derived_trace_io(v1: Rig) -> None:
 
 
 @pytest.mark.parametrize(
+    ("headers", "masked"),
+    [
+        pytest.param({"langfuse_mask_input": "true", "langfuse_mask_output": "true"}, True, id="true"),
+        pytest.param({"langfuse_mask_input": "false", "langfuse_mask_output": "false"}, False, id="false"),
+    ],
+)
+def test_mask_flag_headers_parse_as_booleans(v1: Rig, headers: Mapping[str, str], masked: bool) -> None:
+    marker: Final = "lit8281-mask-header-" + uuid.uuid4().hex
+    _chat(v1, marker, headers=headers)
+    attributes: Final = v1.sink.one(marker).attributes
+    expected: Final = (
+        (REDACTED, REDACTED)
+        if masked
+        else (attributes.get("langfuse.observation.input"), attributes.get("langfuse.observation.output"))
+    )
+    assert (attributes.get("langfuse.trace.input"), attributes.get("langfuse.trace.output")) == expected, attributes
+    assert marker in str(attributes.get("langfuse.observation.input")), attributes
+
+
+@pytest.mark.parametrize(
     "tags",
     [
         pytest.param(5, id="int"),

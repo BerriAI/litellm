@@ -16,6 +16,7 @@ from litellm.integrations.langfuse.langfuse_otel_attributes import (
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.langfuse_otel import (
     LangfuseSpanAttributes,
 )
@@ -52,6 +53,12 @@ def _preset_cache_key(kwargs: Mapping[str, object]) -> object:
     if litellm.cache is None:
         return None
     return litellm.cache.get_preset_cache_key_from_kwargs(**kwargs)
+
+
+def _mask_flag(value: object) -> bool:
+    """A mask flag as the classic langfuse callback reads it: "true" / "false" strings parse, anything else by truthiness."""
+    parsed: Final = str_to_bool(value) if isinstance(value, str) else None
+    return bool(value) if parsed is None else parsed
 
 
 def _caller_tag_list(value: object) -> tuple[str, ...]:
@@ -248,7 +255,7 @@ class LangfuseOtelLogger(OpenTelemetry):
                 safe_set_attribute(
                     span,
                     LangfuseSpanAttributes.TRACE_INPUT.value,
-                    REDACTED_BY_LITELLM if metadata.get("mask_input") else input_json,
+                    REDACTED_BY_LITELLM if _mask_flag(metadata.get("mask_input")) else input_json,
                 )
 
         output_json: Final = LangfuseOtelLogger._observation_output(response_obj)
@@ -258,7 +265,7 @@ class LangfuseOtelLogger(OpenTelemetry):
                 safe_set_attribute(
                     span,
                     LangfuseSpanAttributes.TRACE_OUTPUT.value,
-                    REDACTED_BY_LITELLM if metadata.get("mask_output") else output_json,
+                    REDACTED_BY_LITELLM if _mask_flag(metadata.get("mask_output")) else output_json,
                 )
 
     @staticmethod

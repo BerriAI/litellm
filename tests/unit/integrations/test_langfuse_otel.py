@@ -1127,6 +1127,9 @@ class TestDerivedTraceFields:
             ({"mask_input": True}, {"langfuse.trace.input"}),
             ({"mask_output": True}, {"langfuse.trace.output"}),
             ({"mask_input": True, "mask_output": True}, {"langfuse.trace.input", "langfuse.trace.output"}),
+            ({"mask_input": "true", "mask_output": "TRUE"}, {"langfuse.trace.input", "langfuse.trace.output"}),
+            ({"mask_input": "false", "mask_output": "False"}, set()),
+            ({"mask_input": False, "mask_output": None}, set()),
         ],
     )
     def test_mask_flags_redact_the_derived_trace_io(self, mask_flags, masked_trace_keys):
