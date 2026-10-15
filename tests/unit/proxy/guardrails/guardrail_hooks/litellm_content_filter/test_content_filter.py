@@ -11,7 +11,7 @@ Tests 40 different sentences to validate the conditional matching logic:
 import importlib
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
 
@@ -1859,11 +1859,14 @@ def _policy_category(template: str, category: str) -> ContentFilterCategoryConfi
 
 
 async def _log_call(
-    guardrail: ContentFilterGuardrail, prompt: str | list[Mapping[str, object]], answer: Message
+    guardrail: ContentFilterGuardrail,
+    prompt: str | list[Mapping[str, object]],
+    answer: Message,
+    history: Sequence[Mapping[str, object]] = (),
 ) -> tuple[Mapping[str, object], ...]:
     kwargs: Final = {
         "model": "gpt-5.4-mini",
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": [{"role": "user", "content": prompt}, *history],
         "litellm_call_id": "call-observe",
         "litellm_params": {"metadata": {}},
         "optional_params": {},
@@ -1926,13 +1929,13 @@ def _detections(entry: Mapping[str, object]) -> tuple[str, ...]:
 async def test_logging_only_block_records_every_match_as_flagged(
     guardrail: ContentFilterGuardrail, prompt: str, expected: tuple[str, ...]
 ) -> None:
-    entries: Final = await _log_call(guardrail, prompt, Message(role="assistant", content=f"here: {GITHUB_TOKEN}"))
+    entries: Final = await _log_call(guardrail, prompt, Message(role="assistant", content="here you go"))
 
     request_entry, response_entry = entries
     assert request_entry["guardrail_status"] == "guardrail_flagged"
     assert _detections(request_entry)[-len(expected) :] == expected
     assert request_entry["risk_score"] == 10.0
-    assert response_entry["guardrail_status"] in ("success", "guardrail_flagged")
+    assert response_entry["guardrail_status"] == "success"
 
 
 @pytest.mark.asyncio
@@ -1949,34 +1952,37 @@ async def test_logging_only_block_scans_the_response_after_a_request_match() -> 
     ]
 
 
+@pytest.mark.parametrize(
+    ("arguments", "request_masked"),
+    (
+        pytest.param(json.dumps({AWS_KEY: 1}), {"aws_access_key": 1}, id="masked-argument-key"),
+        pytest.param(json.dumps(json.loads("[" * 150 + "1" + "]" * 150)), {}, id="too-deep"),
+    ),
+)
 @pytest.mark.asyncio
-async def test_logging_only_mask_on_a_tool_argument_key_is_recorded_not_blocked() -> None:
-    answer: Final = Message(
-        role="assistant",
-        content=None,
-        tool_calls=[
-            {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": json.dumps({AWS_KEY: 1})}}
-        ],
+async def test_logging_only_flags_tool_arguments_enforcement_rejects_and_keeps_scanning(
+    arguments: str, request_masked: Mapping[str, int]
+) -> None:
+    history: Final = (
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": arguments}}],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "done"},
     )
 
-    entries: Final = await _log_call(_observing_filter(patterns=SECRET_PATTERNS, mask_patterns=True), "hi", answer)
-
-    assert entries[-1]["guardrail_status"] == "success"
-    assert entries[-1]["masked_entity_count"] == {"aws_access_key": 1}
-
-
-@pytest.mark.asyncio
-async def test_logging_only_too_deep_tool_arguments_are_flagged_not_intervened() -> None:
-    nested: Final = json.dumps(json.loads("[" * 150 + "1" + "]" * 150))
-    answer: Final = Message(
-        role="assistant",
-        content=None,
-        tool_calls=[{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": nested}}],
+    entries: Final = await _log_call(
+        _observing_filter(patterns=SECRET_PATTERNS, mask_patterns=True),
+        "hi",
+        Message(role="assistant", content=f"here: {GITHUB_TOKEN}"),
+        history,
     )
 
-    entries: Final = await _log_call(_observing_filter(patterns=SECRET_PATTERNS), "hi", answer)
-
-    assert entries[-1]["guardrail_status"] == "guardrail_flagged"
+    assert [(entry["guardrail_status"], entry["masked_entity_count"]) for entry in entries] == [
+        ("guardrail_flagged", request_masked),
+        ("success", {"github_pat": 1}),
+    ]
 
 
 @pytest.mark.asyncio

@@ -104,6 +104,9 @@ WORD_NUMBER_TOKEN_FINDER: Final = re.compile(rf"(?:{WORD_NUMBER_TOKEN_REGEX})", 
 _logging_only_scan_guardrail: Final[contextvars.ContextVar["ContentFilterGuardrail | None"]] = contextvars.ContextVar(
     "litellm_content_filter_logging_only_scan", default=None
 )
+_logging_only_scan_would_reject: Final[contextvars.ContextVar[bool]] = contextvars.ContextVar(
+    "litellm_content_filter_logging_only_scan_would_reject", default=False
+)
 
 
 class ConditionalCategoryConfig(TypedDict):
@@ -1781,18 +1784,18 @@ class ContentFilterGuardrail(CustomGuardrail):
             return raw_name
         return None
 
+    def _reject(self, error: str) -> None:
+        """Raise the 400 an enforcing mode returns, or note it on the leg a logging_only scan is observing."""
+        if self._is_logging_only_scan():
+            _logging_only_scan_would_reject.set(True)
+            return
+        raise HTTPException(status_code=400, detail={"error": error})
+
     def _assert_argument_label_clean(
         self, text: str, detections: list[ContentFilterDetection], context_label: str
     ) -> None:
-        if self._filter_single_text(text, detections=detections) != text and not self._is_logging_only_scan():
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": (
-                        f"Content blocked: {context_label} argument matched a masking rule on a non-rewritable field"
-                    )
-                },
-            )
+        if self._filter_single_text(text, detections=detections) != text:
+            self._reject(f"Content blocked: {context_label} argument matched a masking rule on a non-rewritable field")
 
     def _filter_argument_value(
         self,
@@ -1802,10 +1805,8 @@ class ContentFilterGuardrail(CustomGuardrail):
         depth: int = 0,
     ) -> object:
         if depth > DEFAULT_MAX_RECURSE_DEPTH:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": f"Content blocked: {context_label} arguments exceed the maximum nesting depth"},
-            )
+            self._reject(f"Content blocked: {context_label} arguments exceed the maximum nesting depth")
+            return value
         if isinstance(value, str):
             return self._filter_single_text(value, detections=detections)
         if isinstance(value, (int, float)) and not isinstance(value, bool):
@@ -1937,6 +1938,7 @@ class ContentFilterGuardrail(CustomGuardrail):
         masked_entity_count: Final[dict[str, int]] = {}
         status: GuardrailStatus = "success"
         exception_str: str = ""
+        would_reject_token: Final = _logging_only_scan_would_reject.set(False)
 
         try:
             texts: Final = inputs.get("texts", [])
@@ -1980,13 +1982,13 @@ class ContentFilterGuardrail(CustomGuardrail):
             exception_str = str(e)
             raise e
         finally:
+            would_reject: Final = _logging_only_scan_would_reject.get() or any(map(self._asks_to_block, detections))
+            _logging_only_scan_would_reject.reset(would_reject_token)
             # Log guardrail information
             self._log_guardrail_information(
                 request_data=request_data,
                 detections=detections,
-                status=(
-                    "guardrail_flagged" if status == "success" and any(map(self._asks_to_block, detections)) else status
-                ),
+                status="guardrail_flagged" if status == "success" and would_reject else status,
                 start_time=start_time,
                 masked_entity_count=masked_entity_count,
                 exception_str=exception_str,
