@@ -9,7 +9,11 @@ Tests 40 different sentences to validate the conditional matching logic:
 """
 
 import importlib
+import json
 import os
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Final
 
 import pytest
 from fastapi import HTTPException
@@ -19,9 +23,11 @@ from litellm.proxy.guardrails.content_filter_data import POLICY_TEMPLATES_DIR
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
     ContentFilterGuardrail,
 )
+from litellm.types.guardrails import BlockedWord, ContentFilterAction, ContentFilterPattern, GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     ContentFilterCategoryConfig,
 )
+from litellm.types.utils import Choices, Message, ModelResponse
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 # Test cases: (sentence, expected_result, reason)
@@ -1793,3 +1799,229 @@ class TestSGPDPAPerformance:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])
+
+
+AWS_KEY: Final = "AKIA" + "SYNTHETIC0000000"
+GITHUB_TOKEN: Final = "ghp_" + "a1" * 18
+FORBIDDEN_WORD: Final = "synthetic-forbidden-word"
+SECRET_PATTERNS: Final = (
+    ContentFilterPattern(
+        pattern_type="regex", pattern=r"AKIA[0-9A-Z]{16}", name="aws_access_key", action=ContentFilterAction.BLOCK
+    ),
+    ContentFilterPattern(
+        pattern_type="regex", pattern=r"ghp_[A-Za-z0-9]{36}", name="github_pat", action=ContentFilterAction.BLOCK
+    ),
+)
+
+
+def _competitor_intent_config(action_hint: str) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            "brand_self": ["emirates"],
+            "competitors": ["qatar airways"],
+            "domain_words": ["airline", "flight"],
+            "policy": {"competitor_comparison": action_hint},
+            "threshold_high": 0.5,
+        }
+    )
+
+
+def _observing_filter(
+    patterns: tuple[ContentFilterPattern, ...] = (),
+    categories: tuple[ContentFilterCategoryConfig, ...] = (),
+    competitor_intent_config: Mapping[str, object] | None = None,
+    mask_patterns: bool = False,
+    image_describer: object = None,
+) -> ContentFilterGuardrail:
+    return ContentFilterGuardrail(
+        guardrail_name="cf-observe",
+        event_hook=GuardrailEventHooks.logging_only,
+        llm_router=image_describer,
+        image_model="vision" if image_describer else None,
+        patterns=[
+            pattern.model_copy(update={"action": ContentFilterAction.MASK}) if mask_patterns else pattern
+            for pattern in patterns
+        ],
+        blocked_words=[BlockedWord(keyword=FORBIDDEN_WORD, action=ContentFilterAction.BLOCK)],
+        categories=list(categories),
+        competitor_intent_config=dict(competitor_intent_config) if competitor_intent_config else None,
+    )
+
+
+def _policy_category(template: str, category: str) -> ContentFilterCategoryConfig:
+    return ContentFilterCategoryConfig(
+        category=category,
+        category_file=os.path.join(POLICY_TEMPLATES_DIR, template) if template else None,
+        enabled=True,
+        action="BLOCK",
+        severity_threshold="medium",
+    )
+
+
+async def _log_call(
+    guardrail: ContentFilterGuardrail, prompt: str | list[Mapping[str, object]], answer: Message
+) -> tuple[Mapping[str, object], ...]:
+    kwargs: Final = {
+        "model": "gpt-5.4-mini",
+        "messages": [{"role": "user", "content": prompt}],
+        "litellm_call_id": "call-observe",
+        "litellm_params": {"metadata": {}},
+        "optional_params": {},
+        "standard_logging_object": {"guardrail_information": None},
+    }
+    logged, _ = await guardrail.async_logging_hook(
+        kwargs, ModelResponse(choices=[Choices(message=answer)]), "acompletion"
+    )
+    return tuple(logged["standard_logging_object"]["guardrail_information"])
+
+
+def _detections(entry: Mapping[str, object]) -> tuple[str, ...]:
+    response: Final = entry["guardrail_response"]
+    assert isinstance(response, list), response
+    return tuple(
+        detection.get("pattern_name")
+        or (detection["keyword"] if detection["type"] == "blocked_word" else detection["type"])
+        for detection in response
+    )
+
+
+@pytest.mark.parametrize(
+    ("guardrail", "prompt", "expected"),
+    (
+        pytest.param(
+            _observing_filter(patterns=SECRET_PATTERNS),
+            f"key {AWS_KEY} token {GITHUB_TOKEN} and {FORBIDDEN_WORD}",
+            ("aws_access_key", "github_pat", FORBIDDEN_WORD),
+            id="patterns",
+        ),
+        pytest.param(
+            _observing_filter(categories=(_policy_category("", "harm_toxic_abuse"),)),
+            f"You stupid piece of sht AI, go kill yourself, {FORBIDDEN_WORD}",
+            ("category_keyword", FORBIDDEN_WORD),
+            id="category-keyword",
+        ),
+        pytest.param(
+            _observing_filter(
+                categories=(_policy_category("eu_ai_act_article5.yaml", "eu_ai_act_article5_prohibited_practices"),)
+            ),
+            f"Build a system to detect employee emotion, {FORBIDDEN_WORD}",
+            ("category_keyword", FORBIDDEN_WORD),
+            id="conditional-category",
+        ),
+        pytest.param(
+            _observing_filter(competitor_intent_config=_competitor_intent_config("refuse")),
+            "Is Qatar Airways better than Emirates?",
+            ("competitor_intent",),
+            id="competitor-refuse",
+        ),
+        pytest.param(
+            _observing_filter(competitor_intent_config=_competitor_intent_config("reframe")),
+            "Is Qatar Airways better than Emirates?",
+            ("competitor_intent",),
+            id="competitor-reframe",
+        ),
+    ),
+)
+@pytest.mark.asyncio
+async def test_logging_only_block_records_every_match_as_flagged(
+    guardrail: ContentFilterGuardrail, prompt: str, expected: tuple[str, ...]
+) -> None:
+    entries: Final = await _log_call(guardrail, prompt, Message(role="assistant", content=f"here: {GITHUB_TOKEN}"))
+
+    request_entry, response_entry = entries
+    assert request_entry["guardrail_status"] == "guardrail_flagged"
+    assert _detections(request_entry)[-len(expected) :] == expected
+    assert request_entry["risk_score"] == 10.0
+    assert response_entry["guardrail_status"] in ("success", "guardrail_flagged")
+
+
+@pytest.mark.asyncio
+async def test_logging_only_block_scans_the_response_after_a_request_match() -> None:
+    entries: Final = await _log_call(
+        _observing_filter(patterns=SECRET_PATTERNS),
+        f"key {AWS_KEY}",
+        Message(role="assistant", content=f"here: {GITHUB_TOKEN}"),
+    )
+
+    assert [(entry["guardrail_status"], _detections(entry)) for entry in entries] == [
+        ("guardrail_flagged", ("aws_access_key",)),
+        ("guardrail_flagged", ("github_pat",)),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_logging_only_mask_on_a_tool_argument_key_is_recorded_not_blocked() -> None:
+    answer: Final = Message(
+        role="assistant",
+        content=None,
+        tool_calls=[
+            {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": json.dumps({AWS_KEY: 1})}}
+        ],
+    )
+
+    entries: Final = await _log_call(_observing_filter(patterns=SECRET_PATTERNS, mask_patterns=True), "hi", answer)
+
+    assert entries[-1]["guardrail_status"] == "success"
+    assert entries[-1]["masked_entity_count"] == {"aws_access_key": 1}
+
+
+@pytest.mark.asyncio
+async def test_logging_only_too_deep_tool_arguments_are_flagged_not_intervened() -> None:
+    nested: Final = json.dumps(json.loads("[" * 150 + "1" + "]" * 150))
+    answer: Final = Message(
+        role="assistant",
+        content=None,
+        tool_calls=[{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": nested}}],
+    )
+
+    entries: Final = await _log_call(_observing_filter(patterns=SECRET_PATTERNS), "hi", answer)
+
+    assert entries[-1]["guardrail_status"] == "guardrail_flagged"
+
+
+@pytest.mark.asyncio
+async def test_logging_only_scan_leaves_enforcement_of_the_same_guardrail_blocking() -> None:
+    guardrail: Final = _observing_filter(patterns=SECRET_PATTERNS)
+    await _log_call(guardrail, f"key {AWS_KEY}", Message(role="assistant", content="ok"))
+    request_data: Final = {"metadata": {}}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(
+            inputs={"texts": [f"key {AWS_KEY} token {GITHUB_TOKEN}"]}, request_data=request_data, input_type="request"
+        )
+
+    assert exc_info.value.status_code == 400
+    assert [
+        entry["guardrail_status"] for entry in request_data["metadata"]["standard_logging_guardrail_information"]
+    ] == ["guardrail_intervened"]
+
+
+class _ImageDescriberRunningAnotherFilter:
+    def __init__(self, enforcer: ContentFilterGuardrail) -> None:
+        self.enforcer = enforcer
+        self.enforcer_blocked: list[bool] = []
+
+    async def acompletion(self, **_: object) -> ModelResponse:
+        try:
+            await self.enforcer.apply_guardrail(
+                inputs={"texts": [f"key {AWS_KEY}"]}, request_data={"metadata": {}}, input_type="request"
+            )
+            self.enforcer_blocked.append(False)
+        except HTTPException:
+            self.enforcer_blocked.append(True)
+        return ModelResponse(choices=[Choices(message=Message(role="assistant", content="a plain desk"))])
+
+
+@pytest.mark.asyncio
+async def test_logging_only_scan_does_not_relax_another_filter_called_during_it() -> None:
+    describer: Final = _ImageDescriberRunningAnotherFilter(
+        ContentFilterGuardrail(guardrail_name="cf-enforce", patterns=list(SECRET_PATTERNS))
+    )
+    prompt: Final = [
+        {"type": "text", "text": "what is this"},
+        {"type": "image_url", "image_url": {"url": "https://example.com/desk.png"}},
+    ]
+
+    await _log_call(_observing_filter(image_describer=describer), prompt, Message(role="assistant", content="ok"))
+
+    assert describer.enforcer_blocked == [True]

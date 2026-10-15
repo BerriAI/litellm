@@ -41,6 +41,8 @@ from litellm.proxy.guardrails.content_filter_data import DATA_ROOTS
 from litellm.proxy.guardrails.guardrail_endpoints import (
     test_custom_code_guardrail as run_custom_code_test_endpoint,
 )
+from litellm.proxy.guardrails.guardrail_hooks.azure.prompt_shield import AzureContentSafetyPromptShieldGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
 
 MOCK_ADMIN_USER = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 from litellm.proxy.guardrails.guardrail_registry import (
@@ -3143,7 +3145,36 @@ async def test_ui_settings_map_matches_runtime_supported_event_hooks():
             continue
 
         assert provider in result.supported_modes_by_provider, provider
-        assert result.supported_modes_by_provider[provider] == [hook.value for hook in declared], provider
+        offered = result.supported_modes_by_provider[provider]
+        assert offered[: len(declared)] == [hook.value for hook in declared], provider
+        assert set(offered) - {hook.value for hook in declared} <= {"logging_only"}, provider
+        assert offered.count("logging_only") == (
+            1 if guardrail_class.accepts_logging_only_mode() or GuardrailEventHooks.logging_only in declared else 0
+        ), provider
+
+
+@pytest.mark.asyncio
+async def test_ui_settings_offer_logging_only_where_the_generic_scan_runs():
+    modes_by_provider = (await get_guardrail_ui_settings()).supported_modes_by_provider
+
+    assert modes_by_provider["litellm_content_filter"] == [
+        *(hook.value for hook in ContentFilterGuardrail.get_supported_event_hooks()),
+        "logging_only",
+    ]
+    assert modes_by_provider["akto"].count("logging_only") == 1
+    assert modes_by_provider["azure/prompt_shield"] == [
+        hook.value for hook in AzureContentSafetyPromptShieldGuardrail.get_supported_event_hooks()
+    ]
+    with pytest.raises(ValueError, match="not in the supported event hooks"):
+        AzureContentSafetyPromptShieldGuardrail(
+            guardrail_name="native-logging-only",
+            api_key="k",
+            api_base="https://example.invalid",
+            event_hook="logging_only",
+        )
+    assert (
+        ContentFilterGuardrail(guardrail_name="cf-logging-only", event_hook="logging_only").event_hook == "logging_only"
+    )
 
 
 def test_content_filter_runtime_rejects_unsupported_mcp_hook():

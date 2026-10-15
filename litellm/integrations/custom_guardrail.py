@@ -691,9 +691,7 @@ class CustomGuardrail(CustomLogger):
         supported_event_hooks: list[GuardrailEventHooks],
     ) -> None:
         allowed_hooks: Final = frozenset(supported_event_hooks) | (
-            frozenset((GuardrailEventHooks.logging_only,))
-            if self.uses_apply_guardrail_interface() and not self.use_native_lifecycle_hooks
-            else frozenset()
+            frozenset((GuardrailEventHooks.logging_only,)) if self.accepts_logging_only_mode() else frozenset()
         )
 
         def _validate_event_hook_list_is_in_supported_event_hooks(
@@ -867,6 +865,10 @@ class CustomGuardrail(CustomLogger):
 
     def uses_apply_guardrail_interface(self) -> bool:
         return type(self).apply_guardrail is not CustomGuardrail.apply_guardrail
+
+    @classmethod
+    def accepts_logging_only_mode(cls) -> bool:
+        return cls.apply_guardrail is not CustomGuardrail.apply_guardrail and not cls.use_native_lifecycle_hooks
 
     @classmethod
     def supports_logging_only_scope(cls) -> bool:
