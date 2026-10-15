@@ -820,14 +820,6 @@ def bedrock_capability_model(model: str, base_model: object) -> str:
     return model
 
 
-def bedrock_cache_point_model(model: str, base_model: object) -> str:
-    """The model id to decide ``cachePoint`` support by: a deployment that declares
-    ``supports_prompt_cache_breakpoint`` itself keeps that answer, else its capability model."""
-    if bedrock_declared_cache_point_support(model) is not None:
-        return model
-    return bedrock_capability_model(model, base_model)
-
-
 def strip_bedrock_routing_prefix(model: str) -> str:
     """Strip LiteLLM routing prefixes from model name."""
     for prefix in ["bedrock/", "chat_completions/", "converse/", "invoke/", "openai/", "mantle/", "nova-2/", "nova/"]:
@@ -1187,7 +1179,7 @@ def bedrock_converse_supports_parallel_tool_use_config(model: str) -> bool:
     )
 
 
-def bedrock_model_accepts_cache_points(model: str | None) -> bool:
+def bedrock_model_accepts_cache_points(model: str | None, deployment_model: str | None = None) -> bool:
     """
     Whether Converse ``cachePoint`` blocks may be sent to this model.
 
@@ -1205,9 +1197,18 @@ def bedrock_model_accepts_cache_points(model: str | None) -> bool:
     inference profile ARN or a model newer than the map, while only the map decides whether
     a model is known: absent a map entry the model keeps emitting so existing caching setups
     never silently degrade. ``litellm.utils.supports_prompt_caching`` is not reusable here:
-    it returns False for unmapped models, the opposite polarity.
+    it returns False for unmapped models, the opposite polarity. ``deployment_model`` is the
+    model as configured when ``model`` is its ``base_model``: its own declaration wins.
     """
-    return model is None or bedrock_declared_cache_point_support(model) is not False
+    if model is None:
+        return True
+    deployment_declared: Final = (
+        None if deployment_model is None else bedrock_declared_cache_point_support(deployment_model)
+    )
+    declared: Final = (
+        deployment_declared if deployment_declared is not None else bedrock_declared_cache_point_support(model)
+    )
+    return declared is not False
 
 
 def bedrock_declared_cache_point_support(model: str) -> bool | None:
@@ -1258,6 +1259,12 @@ def supports_bedrock_prompt_cache_ttl(model: str) -> bool:
     return any(
         (litellm.model_cost.get(candidate) or {}).get("cache_creation_input_token_cost_above_1hr") is not None
         for candidate in (model, get_bedrock_base_model(model))
+    )
+
+
+def bedrock_cache_point_ttl_supported(model: str | None, deployment_model: str | None = None) -> bool:
+    return any(
+        supports_bedrock_prompt_cache_ttl(candidate) for candidate in (model, deployment_model) if candidate is not None
     )
 
 
