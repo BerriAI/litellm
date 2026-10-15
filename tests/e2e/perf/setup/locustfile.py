@@ -10,13 +10,14 @@ line), paces to `PERF_RPS` over `PERF_USERS` users, and quits once the last requ
 from __future__ import annotations
 
 import os
+import random
 import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Final, cast
 
 import gevent
-from locust import FastHttpUser, constant_throughput, task
+from locust import FastHttpUser, task
 from locust.contrib.fasthttp import FastResponse, ResponseContextManager
 from setup.wire import Endpoint, WireRecord, WireRequest, request_body
 from pydantic import TypeAdapter
@@ -28,6 +29,9 @@ _RECORDS_PATH: Final = Path(os.environ["PERF_RECORDS_FILE"])
 _RPS: Final = float(os.environ["PERF_RPS"])
 _USERS: Final = int(os.environ["PERF_USERS"])
 _NEXT: Final[Iterator[WireRequest]] = iter(_PLAN)
+_INTERVAL_S: Final = _USERS / _RPS
+_JITTER: Final = 0.25
+_RNG: Final = random.Random(_PLAN[0].marker if _PLAN else "empty-plan")
 _RECORDS: Final = _RECORDS_PATH.open("a", encoding="utf-8")
 _written = 0
 BLOCK_REASON: Final = "perf-test-block"
@@ -195,11 +199,25 @@ def _authorization(user: FastHttpUser, item: WireRequest) -> str:
 
 
 class PlanUser(FastHttpUser):
-    """One simulated client; all users share the plan and together hold the planned rate."""
+    """One simulated client; all users share the plan and together hold the planned rate. Each user starts at
+    a random point of its first interval and jitters every later interval by up to `_JITTER` either way, so the
+    users never fire in lockstep; the mean interval is unchanged and `rps` stays the total rate."""
 
-    wait_time = constant_throughput(_RPS / _USERS)
     network_timeout = 120.0
     connection_timeout = 30.0
+
+    def on_start(self) -> None:
+        self._last_run = 0.0
+        self._last_wait = 0.0
+        gevent.sleep(_RNG.uniform(0.0, _INTERVAL_S))
+
+    def wait_time(self) -> float:
+        target: Final = _INTERVAL_S * _RNG.uniform(1.0 - _JITTER, 1.0 + _JITTER)
+        now: Final = time.monotonic()
+        run_s: Final = now - self._last_run - self._last_wait if self._last_run else 0.0
+        self._last_wait = max(0.0, target - run_s)
+        self._last_run = now
+        return self._last_wait
 
     @task
     def send(self) -> None:
