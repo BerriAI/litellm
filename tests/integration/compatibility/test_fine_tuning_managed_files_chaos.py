@@ -230,6 +230,7 @@ def _assert_caller_gets_its_own_ids(rig: Rig, outcomes: tuple[tuple[int, Mapping
 
 
 def test_concurrent_sync_and_async_burst_sends_each_deployment_its_own_file_ids(rig: Rig) -> None:
+    rig.wire.drain()
     with ThreadPoolExecutor(max_workers=BURST // 2) as pool:
         synced: Final = tuple(pool.map(_create, (rig,) * (BURST // 2)))
     awaited: Final = asyncio.run(_async_creates(rig, BURST // 2))
@@ -240,6 +241,7 @@ def test_concurrent_sync_and_async_burst_sends_each_deployment_its_own_file_ids(
 
 
 def test_each_worker_alone_sends_the_provider_file_ids(rig: Rig) -> None:
+    rig.wire.drain()
     for paused in sorted(rig.owned.worker_pids()):
         with rig.owned.suspended(paused):
             outcomes = tuple(_create(rig) for _ in range(4))
@@ -248,6 +250,7 @@ def test_each_worker_alone_sends_the_provider_file_ids(rig: Rig) -> None:
 
 
 def test_a_replaced_worker_still_sends_the_provider_file_ids(rig: Rig) -> None:
+    rig.wire.drain()
     for victim in sorted(rig.owned.worker_pids()):
         rig.owned.kill_worker(victim)
     outcomes: Final = tuple(_create(rig) for _ in range(6))
@@ -276,6 +279,7 @@ def test_a_deployment_added_after_the_upload_never_receives_the_create(tmp_path:
 
 
 def test_a_model_group_without_a_copy_of_the_files_still_gets_the_providers_400(rig: Rig) -> None:
+    rig.wire.drain()
     with rig.sdk() as client, pytest.raises(BadRequestError) as rejected:
         client.fine_tuning.jobs.create(model=OTHER_MODEL, training_file=rig.training_file)
     creates: Final = _sent_creates(rig, 1)
