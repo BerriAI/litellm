@@ -51,7 +51,7 @@ def _is_grok_model(model: str) -> bool:
 
 
 class AzureAIChatCompletionResponseIterator(OpenAIChatCompletionResponseIterator):
-    def chunk_parser(self, chunk: dict[str, object]) -> ModelResponseStream:
+    def chunk_parser(self, chunk: dict[str, object]) -> ModelResponseStream:  # mutable-ok: mirrors override contract
         usage: Final = chunk.get("usage")
         if _is_grok_model(str(chunk.get("model") or "")) and isinstance(usage, dict):
             XAIChatConfig.fold_reasoning_tokens_into_completion(usage)
