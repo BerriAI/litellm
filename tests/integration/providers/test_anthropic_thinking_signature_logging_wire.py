@@ -33,11 +33,11 @@ from integration._support.anthropic_thinking import (
 )
 from integration._support.client import Gateway, eventually, gateway_from_environment
 from integration._support.database import read_rows
-from integration._support.process import graceful_stop_seconds, owned_proxy
+from integration._support.process import owned_proxy
 from integration._support.wire import Wire, wire_server
 from pydantic import JsonValue
 
-pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+pytestmark = pytest.mark.timeout(240)
 
 _ANTHROPIC_KEY: Final = "scripted-anthropic-key"
 _ANTHROPIC_BASE: Final = "http://api.anthropic.com"
