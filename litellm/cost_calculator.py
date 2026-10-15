@@ -1375,7 +1375,7 @@ def completion_cost(
     total_time: float | None = 0.0,  # used for replicate, sagemaker
     call_type: CallTypesLiteral | None = None,
     ### REGION ###
-    custom_llm_provider=None,
+    custom_llm_provider: str | None = None,
     region_name=None,  # used for bedrock pricing
     ### IMAGE GEN ###
     size: str | None = None,
@@ -1666,15 +1666,17 @@ def completion_cost(
                                 video_generation_cost,
                             )
 
-                            return (
-                                video_generation_cost(
-                                    model=model,
-                                    duration_seconds=duration_seconds,
-                                    custom_llm_provider=custom_llm_provider,
-                                    model_info=_video_model_info,
-                                    video_resolution=video_resolution,
-                                )
-                                * video_count
+                            return video_generation_cost(
+                                model=model,
+                                duration_seconds=duration_seconds,
+                                custom_llm_provider=custom_llm_provider,
+                                model_info=_video_model_info,
+                                video_resolution=video_resolution,
+                            ) * video_count + _video_input_image_cost(
+                                model,
+                                custom_llm_provider,
+                                _video_model_info,
+                                getattr(completion_response, "usage", None),
                             )
                     # Fallback to default video cost calculation if no duration available
                     return default_video_cost_calculator(
@@ -2116,6 +2118,25 @@ def response_cost_calculator(
         return response_cost
     except Exception as e:
         raise e
+
+
+def _video_input_image_cost(
+    model: str,
+    custom_llm_provider: str | None,
+    model_info: ModelInfo | None,
+    usage: object,
+) -> float:
+    match usage:
+        case {"billable_input_image_count": int(billable_input_images)} if billable_input_images > 0:
+            pricing: Final = (
+                model_info
+                if model_info is not None
+                else litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+            )
+            image_rate: Final = pricing.get("input_cost_per_image")
+            return billable_input_images * image_rate if isinstance(image_rate, (int, float)) else 0.0
+        case _:
+            return 0.0
 
 
 def _deployment_model_info(

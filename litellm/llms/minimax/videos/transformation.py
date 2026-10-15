@@ -29,7 +29,6 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # house cached-client factory has no public alias and its stub leaves params untyped
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # factory stub leaves params untyped
 )
-from litellm.llms.openai.cost_calculation import video_generation_cost
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.main import VideoCreateOptionalRequestParams, VideoObject
@@ -59,9 +58,6 @@ class _TaskUsage(BaseModel, frozen=True):
     output_seconds: int | None = None
     input_image_count: int | None = None
     input_audio_seconds: int | None = None
-    total_tokens: int | None = None
-    prompt_tokens: int | None = None
-    completion_tokens: int | None = None
 
 
 class _TaskContent(BaseModel, frozen=True):
@@ -158,8 +154,6 @@ _DROP_FROM_CREATE_BODY: Final = frozenset(
     }
 )
 
-_UNSUPPORTED_CREATE_PARAMS: Final = frozenset({"characters", "image"})
-
 _CREATE_BODY_KEYS: Final = (
     "resolution",
     "duration",
@@ -168,6 +162,10 @@ _CREATE_BODY_KEYS: Final = (
     "aigc_watermark",
     "extra",
 )
+
+_CREATE_REQUEST_PARAMS: Final = frozenset({*_CREATE_BODY_KEYS, "content", "input_reference"})
+
+_TASK_NOT_FOUND_MESSAGE: Final = "record not found"
 
 _ParsedT: Final = TypeVar("_ParsedT")
 
@@ -343,37 +341,30 @@ def _video_object_from_task(task: _MiniMaxTask) -> VideoObject:
     )
 
 
-def _create_cost_usd(model: str, duration: float, resolution: str | None, input_image_count: int) -> float | None:
-    """
-    MiniMax bills input images beyond a per-model free allowance on top of output seconds, and the create
-    call is the only billed one, so the whole charge is reported for the cost calculator to use as is.
-    """
+def _billable_input_image_count(model: str, input_image_count: int) -> int:
+    """MiniMax bills input images beyond a per-model free allowance on top of output seconds."""
     try:
         info: Final = get_model_info(model=model, custom_llm_provider="minimax")
     except Exception:  # noqa: BLE001  # get_model_info raises plain Exception for an unmapped model
-        return None
+        return 0
     provider_specific: Final = info.get("provider_specific_entry")
     free_images: Final = (
         provider_specific.get("minimax_free_input_images") if isinstance(provider_specific, Mapping) else None
     )
-    image_rate: Final = info.get("input_cost_per_image")
-    if not isinstance(free_images, (int, float)) or not isinstance(image_rate, (int, float)):
-        return None
-    output_cost: Final = video_generation_cost(
-        model=model, duration_seconds=duration, custom_llm_provider="minimax", video_resolution=resolution
-    )
-    return output_cost + max(0, input_image_count - int(free_images)) * image_rate
+    if not isinstance(free_images, int) or isinstance(free_images, bool):
+        return 0
+    return max(0, input_image_count - free_images)
 
 
 def _video_url_from_task(task: _MiniMaxTask) -> str:
-    """A task with no video yet is the caller's state to fix, so it answers the status the OpenAI
-    videos API documents for content that is not ready, which the router does not retry."""
+    """A download before the video is ready is the caller polling too early, so it answers 400, which the
+    router neither retries nor counts toward a deployment cooldown the way it counts a 404."""
     if task.content is not None and task.content.url:
         return task.content.url
 
     if task.status in ("queued", "running"):
         raise _minimax_error(
-            404, f"Video is still processing (status: {task.status}). Poll the video until it is completed."
+            400, f"Video is still processing (status: {task.status}). Poll the video until it is completed."
         )
     if task.error is not None:
         raise _minimax_error(400, f"Video generation failed: {task.error.message or 'unknown error'}")
@@ -421,17 +412,6 @@ class MinimaxVideoConfig(BaseVideoConfig):
         for key, value in video_create_optional_params.items():
             if value is None or key in _DROP_FROM_CREATE_BODY:
                 continue
-            if key in _UNSUPPORTED_CREATE_PARAMS:
-                if drop_params:
-                    continue
-                raise UnsupportedParamsError(
-                    message=(
-                        f"MiniMax video generation does not support {key!r}. "
-                        "Set litellm.drop_params=True to drop it, or remove it from the request."
-                    ),
-                    model=model,
-                    llm_provider="minimax",
-                )
             if key == "seconds":
                 mapped_params["duration"] = _duration_param(value, model)
             elif key == "size":
@@ -443,7 +423,17 @@ class MinimaxVideoConfig(BaseVideoConfig):
                     raise _invalid_param("parameters", value, "an object of MiniMax request fields", model) from e
             else:
                 mapped_params[key] = value
-        return mapped_params
+        unsupported: Final = sorted(key for key in mapped_params if key not in _CREATE_REQUEST_PARAMS)
+        if unsupported and not drop_params:
+            raise UnsupportedParamsError(
+                message=(
+                    f"MiniMax video generation does not support {', '.join(map(repr, unsupported))}. "
+                    "Set litellm.drop_params=True to drop it, or remove it from the request."
+                ),
+                model=model,
+                llm_provider="minimax",
+            )
+        return {key: value for key, value in mapped_params.items() if key in _CREATE_REQUEST_PARAMS}
 
     def validate_environment(
         self,
@@ -576,13 +566,9 @@ class MinimaxVideoConfig(BaseVideoConfig):
             usage["video_resolution"] = resolution.strip().lower()
         if input_image_count:
             usage["input_image_count"] = input_image_count
-        create_cost: Final = (
-            _create_cost_usd(model, float(duration), resolution.strip().lower(), input_image_count)
-            if isinstance(duration, (int, float)) and isinstance(resolution, str)
-            else None
-        )
-        if create_cost is not None:
-            usage["provider_reported_cost_usd"] = create_cost
+        billable_input_images: Final = _billable_input_image_count(model, input_image_count)
+        if billable_input_images:
+            usage["billable_input_image_count"] = billable_input_images
         video_obj.usage = usage
 
         return video_obj
@@ -722,6 +708,7 @@ class MinimaxVideoConfig(BaseVideoConfig):
             "object": "list",
             "data": data,
             "total": total if isinstance(total, int) and not isinstance(total, bool) else len(data),
+            "has_more": False,
         }
         if data:
             list_response["first_id"] = data[0]["id"]
@@ -757,8 +744,9 @@ class MinimaxVideoConfig(BaseVideoConfig):
         status_code: int,
         headers: dict[str, str] | httpx.Headers,  # mutable-ok: BaseVideoConfig contract
     ) -> BaseLLMException:
+        """MiniMax answers an unknown task id with a 500, which would be retried and cool the deployment down."""
         return MinimaxVideoError(
-            status_code=status_code,
+            status_code=400 if _TASK_NOT_FOUND_MESSAGE in error_message else status_code,
             message=error_message,
             headers=headers,
         )

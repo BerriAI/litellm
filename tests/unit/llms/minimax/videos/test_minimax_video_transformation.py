@@ -26,7 +26,7 @@ from litellm.types.videos.utils import (
     decode_video_id_with_provider,
     encode_video_id_with_provider,
 )
-from litellm.videos.main import avideo_content, avideo_generation
+from litellm.videos.main import avideo_content, avideo_generation, avideo_status
 
 PNG_BYTES = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
@@ -105,7 +105,17 @@ class TestMinimaxVideoCreateRequest:
 
         assert mapped == {}
 
-    @pytest.mark.parametrize("param,value", [("characters", [{"id": "c"}]), ("image", {"gcsUri": "gs://b/i.png"})])
+    @pytest.mark.parametrize(
+        "param,value",
+        [
+            ("characters", [{"id": "c"}]),
+            ("image", {"gcsUri": "gs://b/i.png"}),
+            ("seed", 7),
+            ("negative_prompt", "blurry"),
+            ("n", 2),
+            ("quality", "high"),
+        ],
+    )
     def test_unsupported_param_is_rejected_unless_drop_params(self, param, value):
         """Silently dropping a param the caller asked for hides that it had no
         effect; only drop_params opts into that."""
@@ -418,6 +428,36 @@ class TestMinimaxVideoCreateResponse:
         assert "input_image_count" not in video_obj.usage
 
 
+class TestMinimaxVideoStatusUsage:
+    def test_finished_task_reports_no_token_counts(self):
+        """Regression: MiniMax's token counts rode into every status poll's usage,
+        so each free poll added ~130k tokens to the deployment's TPM and logged a
+        $0 billable-request warning."""
+        video_obj = MinimaxVideoConfig().transform_video_status_retrieve_response(
+            raw_response=_query_response(
+                {
+                    "id": "t1",
+                    "model": "MiniMax-H3",
+                    "status": "succeeded",
+                    "content": {"url": "https://cdn.example.com/output.mp4"},
+                    "duration": 4,
+                    "usage": {
+                        "total_seconds": 4,
+                        "output_seconds": 4,
+                        "total_tokens": 130196,
+                        "prompt_tokens": 12,
+                        "completion_tokens": 130184,
+                    },
+                }
+            ),
+            logging_obj=None,
+            custom_llm_provider="minimax",
+        )
+
+        assert video_obj.usage["output_seconds"] == 4
+        assert not any(key.endswith("tokens") for key in video_obj.usage)
+
+
 class TestMinimaxVideoStatus:
     def test_succeeded_task_mapping(self):
         video_obj = MinimaxVideoConfig().transform_video_status_retrieve_response(
@@ -510,7 +550,7 @@ class TestMinimaxVideoStatus:
         with pytest.raises(MinimaxVideoError, match="sensitive content") as failed:
             _video_url_from_task(_MiniMaxTask(id="t1", status="failed", error=_TaskError(message="sensitive content")))
 
-        assert pending.value.status_code == 404
+        assert pending.value.status_code == 400
         assert failed.value.status_code == 400
 
     def test_not_ready_message_survives_the_handler_error_path(self):
@@ -523,7 +563,7 @@ class TestMinimaxVideoStatus:
         with pytest.raises(MinimaxVideoError) as rebuilt:
             BaseLLMHTTPHandler()._handle_error(e=pending.value, provider_config=MinimaxVideoConfig())
 
-        assert rebuilt.value.status_code == 404
+        assert rebuilt.value.status_code == 400
         assert "still processing" in rebuilt.value.message
 
     def test_unknown_status_fails_loud_instead_of_reporting_queued(self):
@@ -655,7 +695,8 @@ class TestMinimaxVideoContentDownload:
     async def test_downloading_a_running_task_is_a_client_error_not_a_server_error(self):
         """Regression: the caller-visible status used to be a synthesized 500, so the
         proxy retried the same poll twice and counted the caller's own early download
-        against the model's error rate."""
+        against the model's error rate. A 404 is no better, since the router cools a
+        deployment down on 404."""
         encoded = encode_video_id_with_provider("424010985738629", "minimax", "MiniMax-H3")
 
         def respond(request: httpx.Request) -> httpx.Response:
@@ -665,10 +706,34 @@ class TestMinimaxVideoContentDownload:
             handler: Final = AsyncHTTPHandler()
             await handler.close()
             handler.client = http_client
-            with pytest.raises(litellm.NotFoundError) as raised:
+            with pytest.raises(litellm.BadRequestError, match="still processing") as raised:
                 await avideo_content(video_id=encoded, api_key="sk-test", api_base=API_BASE, client=handler)
 
-        assert raised.value.status_code == 404
+        assert raised.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_unknown_task_id_is_a_client_error_not_a_retried_server_error(self):
+        """MiniMax answers an id it does not know with HTTP 500, which the router
+        retried and counted against the deployment."""
+        encoded = encode_video_id_with_provider("123456789", "minimax", "MiniMax-H3")
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                500,
+                json={
+                    "type": "error",
+                    "error": {"type": "server_error", "message": "record not found (1000)", "http_code": "500"},
+                },
+            )
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+            handler: Final = AsyncHTTPHandler()
+            await handler.close()
+            handler.client = http_client
+            with pytest.raises(litellm.BadRequestError, match="record not found") as raised:
+                await avideo_status(video_id=encoded, api_key="sk-test", api_base=API_BASE, client=handler)
+
+        assert raised.value.status_code == 400
 
 
 class TestMinimaxVideoList:
@@ -733,6 +798,7 @@ class TestMinimaxVideoList:
 
         assert response["object"] == "list"
         assert response["total"] == 476
+        assert response["has_more"] is False, "MiniMax has no cursor, so an OpenAI client paging by after loops"
         assert [item["status"] for item in response["data"]] == ["completed", "in_progress"]
         first_decoded = decode_video_id_with_provider(response["first_id"])
         last_decoded = decode_video_id_with_provider(response["last_id"])
@@ -889,6 +955,28 @@ class TestMinimaxVideoEndToEndRequest:
         assert image_item["role"] == "first_frame"
         assert image_item["image_url"]["url"] == f"data:image/png;base64,{base64.b64encode(PNG_BYTES).decode()}"
 
+    @pytest.mark.asyncio
+    async def test_a_param_minimax_cannot_honor_is_rejected_before_the_billed_call(self):
+        """Regression: seed reached the mapper, never the body, and the video was
+        still created and billed as if the caller had not asked for it."""
+        sent: Final[list[httpx.Request]] = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            sent.append(request)
+            return httpx.Response(200, json={"task_id": "t1"})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+            handler: Final = AsyncHTTPHandler()
+            await handler.close()
+            handler.client = http_client
+            with pytest.raises(litellm.BadRequestError, match="seed") as raised:
+                await avideo_generation(
+                    model="minimax/MiniMax-H3", prompt="p", seed=7, api_key="sk-test", api_base=API_BASE, client=handler
+                )
+
+        assert raised.value.status_code == 400
+        assert sent == []
+
 
 @pytest.mark.usefixtures("local_model_cost_map")
 class TestMinimaxVideoPricing:
@@ -925,7 +1013,7 @@ class TestMinimaxVideoPricing:
 @pytest.mark.usefixtures("local_model_cost_map")
 class TestMinimaxVideoInputBilling:
     @staticmethod
-    def _create_cost(model: str, image_count: int) -> float:
+    def _create_cost(model: str, image_count: int, router_model_id: str | None = None) -> float:
         import litellm
 
         content = [{"type": "text", "text": "p"}] + [
@@ -944,7 +1032,34 @@ class TestMinimaxVideoInputBilling:
             model=f"minimax/{model}",
             call_type="create_video",
             custom_llm_provider="minimax",
+            custom_pricing=router_model_id is not None,
+            router_model_id=router_model_id,
         )
+
+    @pytest.mark.parametrize("model", ["MiniMax-H3", "MiniMax-H3-Max"])
+    def test_custom_deployment_pricing_bills_images_like_the_cost_map(self, model, monkeypatch):
+        """Regression: a deployment with its own prices billed only output seconds,
+        dropping the per-image charge even when it set input_cost_per_image."""
+        from litellm import get_model_info
+
+        info = get_model_info(model=model, custom_llm_provider="minimax")
+        deployment_id = f"deployment-{model}"
+        monkeypatch.setitem(
+            litellm.model_cost,
+            deployment_id,
+            {
+                "litellm_provider": "minimax",
+                "mode": "video_generation",
+                "output_cost_per_second": info["output_cost_per_second_768p"],
+                "input_cost_per_image": info["input_cost_per_image"],
+            },
+        )
+        image_count = info["provider_specific_entry"]["minimax_free_input_images"] + 2
+
+        custom_cost = self._create_cost(model, image_count, router_model_id=deployment_id)
+
+        assert custom_cost == pytest.approx(self._create_cost(model, image_count))
+        assert custom_cost > self._create_cost(model, 0, router_model_id=deployment_id)
 
     @pytest.mark.parametrize("model", ["MiniMax-H3", "MiniMax-H3-Max"])
     def test_images_beyond_the_free_allowance_are_billed_per_image(self, model):

@@ -39437,7 +39437,6 @@
         "supported_modalities": [
             "text",
             "image",
-            "video",
             "audio"
         ],
         "supported_output_modalities": [
@@ -39464,7 +39463,6 @@
         "supported_modalities": [
             "text",
             "image",
-            "video",
             "audio"
         ],
         "supported_output_modalities": [
