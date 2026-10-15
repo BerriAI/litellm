@@ -562,7 +562,12 @@ class FalAIVideoConfig(BaseVideoConfig):
             raise ValueError(f"fal.ai video result did not include a video URL: {error_message}")
         raise ValueError("fal.ai video result did not include a video URL")
 
-    def transform_video_content_response(self, raw_response: httpx.Response, logging_obj: object) -> bytes:
+    def transform_video_content_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: object,
+        client: "HTTPHandler | None" = None,
+    ) -> bytes:
         error: Final[str | None] = _result_error(raw_response)
         if error is not None:
             raise FalAIVideoError(
@@ -580,7 +585,12 @@ class FalAIVideoConfig(BaseVideoConfig):
         video_response.raise_for_status()
         return video_response.content
 
-    async def async_transform_video_content_response(self, raw_response: httpx.Response, logging_obj: object) -> bytes:
+    async def async_transform_video_content_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: object,
+        client: "AsyncHTTPHandler | None" = None,
+    ) -> bytes:
         error: Final[str | None] = _result_error(raw_response)
         if error is not None:
             raise FalAIVideoError(

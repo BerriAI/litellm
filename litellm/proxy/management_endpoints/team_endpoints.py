@@ -18,6 +18,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from itertools import chain
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -163,11 +164,16 @@ from litellm.proxy.management_endpoints.tag_management_endpoints import (
     get_daily_activity,
 )
 from litellm.proxy.management_endpoints.team_admin_field_permissions import (
+    PROXY_CONTROLLED_TEAM_METADATA_KEYS,
     SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS,
+    TEAM_MEMBER_DEFAULT_FIELDS,
+    TeamMemberDefaults,
     resolve_team_admin_editable_fields,
+    stored_team_member_budget_id,
     team_admin_edit_verdict,
     team_admin_may_raise_max_budget,
     team_admin_request_or_raise,
+    team_member_defaults,
 )
 from litellm.proxy.management_helpers.access_group_team_sync import (
     TEAM_ADVISORY_LOCK_SQL,
@@ -531,6 +537,9 @@ def _caller_edit_access(role: TeamRole | None, general_settings: Mapping[str, ob
             return TeamEditAsTeamAdmin(
                 editable_fields=tuple(sorted(permitted)),
                 may_raise_max_budget=team_admin_may_raise_max_budget(general_settings),
+                proxy_controlled_metadata_keys=(
+                    tuple(sorted(PROXY_CONTROLLED_TEAM_METADATA_KEYS)) if "metadata" in permitted else ()
+                ),
             )
         case None:
             return TeamEditNone()
@@ -2365,13 +2374,22 @@ async def update_team(
         if access_role is None:
             team_access_denied()
         if access_role == "team_admin":
+            permitted: Final = resolve_team_admin_editable_fields(
+                _general_settings(), SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS
+            )
+            reads_member_defaults: Final = bool(permitted) and bool(data.model_fields_set & TEAM_MEMBER_DEFAULT_FIELDS)
             data = team_admin_request_or_raise(  # rebind-ok: resent values must not reach the derived writes below
                 team_admin_edit_verdict(
                     data=data,
                     existing=existing_team,
-                    permitted=resolve_team_admin_editable_fields(
-                        _general_settings(), SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS
+                    permitted=permitted,
+                    member_defaults=(
+                        await _stored_team_member_defaults(prisma_client, existing_team)
+                        if reads_member_defaults
+                        else None
                     ),
+                    proxy_controlled_metadata_keys=PROXY_CONTROLLED_TEAM_METADATA_KEYS,
+                    declared_metadata_keys=frozenset(field.key for field in TEAM_METADATA_SCHEMA_REGISTRY.get()),
                 )
             )
 
@@ -4899,6 +4917,15 @@ async def validate_membership(user_api_key_dict: UserAPIKeyAuth, team_table: Lit
     )
 
 
+async def _stored_team_member_defaults(
+    prisma_client: PrismaClient, team: LiteLLM_TeamTable
+) -> TeamMemberDefaults | None:
+    budget_id: Final = stored_team_member_budget_id(team)
+    if budget_id is None:
+        return None
+    return team_member_defaults(await BudgetRepository(prisma_client).find_by_id(budget_id))
+
+
 async def _add_team_member_budget_table(
     team_member_budget_id: str,
     prisma_client: PrismaClient,
@@ -4952,6 +4979,16 @@ def _parent_organization_models(team_row: BaseModel) -> list[str] | None:
     return organization.models if organization is not None else None
 
 
+def _effective_access_group_skill_names(
+    resolved_groups: "Sequence[prisma_models.LiteLLM_AccessGroupTable]", unresolved_ids: Sequence[str]
+) -> tuple[str, ...]:
+    """Skill names the team's keys can actually use: none while a listed group has no row,
+    because the skill check then clamps the team to public plugins (see skill_visibility)."""
+    if unresolved_ids:
+        return ()
+    return tuple(frozenset(chain.from_iterable(group.access_skill_names or () for group in resolved_groups)))
+
+
 async def _resolve_team_access_group_resources(
     _team_info: TeamInfoResponseObjectTeamTable,
 ) -> TeamInfoResponseObjectTeamTable:
@@ -4963,6 +5000,9 @@ async def _resolve_team_access_group_resources(
     resolved_groups: Final = tuple(
         ag_lookup[ag_id] for ag_id in dict.fromkeys(_team_info.access_group_ids) if ag_id in ag_lookup
     )
+    unresolved_ids: Final = tuple(
+        ag_id for ag_id in dict.fromkeys(_team_info.access_group_ids) if ag_id not in ag_lookup
+    )
     return _team_info.model_copy(
         update={
             "access_group_models": list({m for group in resolved_groups for m in (group.access_model_names or [])}),
@@ -4970,6 +5010,8 @@ async def _resolve_team_access_group_resources(
                 {s for group in resolved_groups for s in (group.access_mcp_server_ids or [])}
             ),
             "access_group_agent_ids": list({a for group in resolved_groups for a in (group.access_agent_ids or [])}),
+            "access_group_skill_names": _effective_access_group_skill_names(resolved_groups, unresolved_ids),
+            "unresolved_access_group_ids": unresolved_ids,
             "access_group_details": tuple(
                 TeamAccessGroupModelGrant(
                     access_group_id=group.access_group_id,
@@ -4977,6 +5019,7 @@ async def _resolve_team_access_group_resources(
                     models=tuple(group.access_model_names or ()),
                     mcp_server_ids=tuple(group.access_mcp_server_ids or ()),
                     agent_ids=tuple(group.access_agent_ids or ()),
+                    skill_names=tuple(group.access_skill_names or ()),
                 )
                 for group in resolved_groups
             ),
@@ -5629,6 +5672,7 @@ def _convert_teams_to_response_models(
                     **team_dict,
                     members_count=members_count,
                     keys_count=keys_count,
+                    access_group_skill_names=None,
                 )
             )
     return team_list
@@ -5915,6 +5959,9 @@ async def list_team_v2(
                 )
                 team_item.access_group_agent_ids = list(
                     {a for group in team_groups for a in (group.access_agent_ids or [])}
+                )
+                team_item.access_group_skill_names = _effective_access_group_skill_names(
+                    team_groups, tuple(ag_id for ag_id in (team_item.access_group_ids or []) if ag_id not in ag_lookup)
                 )
 
     return {

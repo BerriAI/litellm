@@ -201,7 +201,7 @@ if [ "$isolated_workers" = false ]; then
   curl --noproxy '*' -sSf -X POST "$INTEGRATION_PROXY_URL/config/update" \
     -H "Authorization: Bearer $LITELLM_MASTER_KEY" -H 'Content-Type: application/json' \
     -d '{"router_settings": {"num_retries": 0}}' > "$results/seed-router-settings.json"
-  if [ "$suite" = management ] || [ "$suite" = mcp ]; then
+  if [ "$suite" = management ] || [ "$suite" = mcp ] || [ "$suite" = accounting ]; then
     export INTEGRATION_PEER_URL=http://127.0.0.1:4001
     start_proxy 4001 peer.log
     peer_pid="$launched_pid"

@@ -1306,12 +1306,16 @@ def _stream_builder_model_map_cost(response: ModelResponse) -> float | None:
         return None
 
 
+def _set_hidden_response_cost(response: ModelResponse, response_cost: float) -> None:
+    hidden_params: Final = response._hidden_params  # pyright: ignore[reportPrivateUsage]  # no public accessor
+    hidden_params["response_cost"] = response_cost
+
+
 def _set_stream_builder_response_cost(response: ModelResponse, logging_obj: Optional["Logging"]) -> None:
     response_cost: Final = _stream_builder_response_cost(response, logging_obj)
     if response_cost is None:
         return
-    hidden_params: Final = response._hidden_params  # pyright: ignore[reportPrivateUsage]  # no public accessor
-    hidden_params["response_cost"] = response_cost
+    _set_hidden_response_cost(response, response_cost)
 
 
 def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_obj: Optional["Logging"]) -> None:
@@ -1320,8 +1324,10 @@ def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_o
     if isinstance(getattr(usage, "cost", None), (int, float)):
         return
     computed_cost: Final = logging_obj.response_cost_calculator(result=response)
-    if isinstance(computed_cost, (int, float)) and computed_cost > 0:
-        setattr(usage, "cost", computed_cost)
+    if not isinstance(computed_cost, (int, float)) or computed_cost <= 0:
+        return
+    setattr(usage, "cost", computed_cost)
+    _set_hidden_response_cost(response, float(computed_cost))
 
 
 def _field_of(value: object, name: str) -> object:
