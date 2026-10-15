@@ -3188,6 +3188,54 @@ async def test_box_questions_are_dropped_under_drop_params_and_answered_as_refus
     assert response.model_dump(mode="json")["answers"] == _DROPPED_BOX_ANSWERS[api]
 
 
+_CRACK_BOX_QUESTION: Final[Mapping[str, object]] = MappingProxyType(
+    {"type": "box", "name": "crack", "instructions": "the crack on the screen"}
+)
+_CRACK_BOX_ANSWER: Final[Mapping[str, object]] = MappingProxyType(
+    {"type": "box", "name": "crack", "box": {"top": 0.1, "bottom": 0.4, "left": 0.2, "right": 0.6}, "confidence": 0.7}
+)
+
+
+@pytest.mark.asyncio
+async def test_a_deployment_that_advertises_box_questions_gets_box_answers_from_an_openai_format_provider(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(
+        json={**_OPENAI_RESPONSE, "answers": [dict(_CRACK_BOX_ANSWER)]}
+    )
+
+    response: Final = await litellm.adecisions(
+        model="openai/gpt-6-luna",
+        input="review",
+        questions=[_CRACK_BOX_QUESTION],
+        api_key="deployment-key",
+        model_info={"supports_box_questions": True},
+    )
+
+    assert json.loads(route.calls.last.request.content)["questions"] == [dict(_CRACK_BOX_QUESTION)]
+    assert [answer.model_dump(mode="json") for answer in response.answers] == [dict(_CRACK_BOX_ANSWER)]
+
+
+@pytest.mark.asyncio
+async def test_a_deployment_that_turns_box_questions_off_is_refused_even_when_the_cost_map_allows_them(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"\['box questions'\]"):
+        await litellm.adecisions(
+            model="typesafe/jev-1.14.0",
+            input="review",
+            questions=[_CRACK_BOX_QUESTION],
+            api_key="deployment-key",
+            extra_headers={"TypeSafe-Danger-Zone-Images": "true"},
+            model_info={"supports_box_questions": False},
+        )
+
+    assert not route.called
+
+
 def test_dropping_every_question_answers_400_before_http(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
 
