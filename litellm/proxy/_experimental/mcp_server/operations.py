@@ -3399,12 +3399,15 @@ class GatewayOperations:
                     results: Final = await asyncio.gather(*tasks)
                     from litellm.proxy._experimental.mcp_server.subscriptions import subscription_capabilities
 
-                    upstream_versions, notifications = frozenset(MCP_LEGACY_VERSIONS), ServerCapabilities()
-                    remaining: Final = deadline - time.monotonic()
-                    if context.protocol_version == "2026-07-28" and not context.mcp_proxy_mode and remaining > 0:
-                        # Optional probes share the catalog budget, including target preparation.
-                        with anyio.move_on_after(remaining):
-                            upstream_versions, notifications = await subscription_capabilities(context)
+                    async def discover_notifications() -> tuple[frozenset[str], ServerCapabilities]:
+                        remaining: Final = deadline - time.monotonic()
+                        if context.protocol_version == "2026-07-28" and not context.mcp_proxy_mode and remaining > 0:
+                            # Optional probes share the catalog budget, including target preparation.
+                            with anyio.move_on_after(remaining):
+                                return await subscription_capabilities(context)
+                        return frozenset(MCP_LEGACY_VERSIONS), ServerCapabilities()
+
+                    upstream_versions, notifications = await discover_notifications()
                 finally:
                     try:
                         for task in tasks:
