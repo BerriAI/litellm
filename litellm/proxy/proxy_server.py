@@ -23,7 +23,6 @@ from collections.abc import (
     Callable,
     Collection,
     Iterable,
-    Iterator,
     Mapping,
     MutableMapping,
     Sequence,
@@ -19540,18 +19539,21 @@ _CALLBACK_LIST_KEYS: Final = ("success_callback", "failure_callback", "callbacks
 def _configured_callback_names(value: object) -> tuple[JsonValue, ...]:
     if isinstance(value, str):
         return (value,)
-    if isinstance(value, (list, tuple, dict)):
+    if isinstance(value, (list, tuple)):
         return tuple(cast(Iterable[JsonValue], value))  # cast-ok: config.yaml values are untyped
     return ()
 
 
-def _remaining_callback_names(settings: Mapping[str, object]) -> Iterator[JsonValue]:
-    for key in _CALLBACK_LIST_KEYS:
-        yield from _configured_callback_names(settings.get(key))
-
-
 def _is_callback_name(entry: object, callback_name: str) -> bool:
     return isinstance(entry, str) and entry.lower() == callback_name
+
+
+def _callback_lists_to_rewrite(
+    matching_keys: tuple[str, ...], owned_by_config: Callable[[str], bool]
+) -> tuple[str, ...]:
+    """The matching lists the database owns, or all of them when the config file owns every one."""
+    database_owned: Final = tuple(key for key in matching_keys if not owned_by_config(key))
+    return database_owned or matching_keys
 
 
 @router.post(
@@ -19589,8 +19591,8 @@ async def delete_callback(
 
     try:
         # Get current configuration
-        config: Final[dict[str, object]] = cast(  # cast-ok: get_config returns an untyped config dict
-            dict[str, object],
+        config: Final[Mapping[str, object]] = cast(  # cast-ok: get_config returns an untyped config dict
+            Mapping[str, object],
             await proxy_config.get_config(),
         )
         callback_name: Final = data.callback_name.lower()
@@ -19615,11 +19617,15 @@ async def delete_callback(
                 detail={"error": f"Callback '{callback_name}' not found in active configuration"},
             )
 
-        before_callbacks: Final[dict[str, JsonValue]] = {key: list(configured_lists[key]) for key in matching_keys}
-        after_callbacks: Final[dict[str, JsonValue]] = {
-            key: [entry for entry in configured_lists[key] if not _is_callback_name(entry, callback_name)]
-            for key in matching_keys
-        }
+        rewritten_keys: Final = _callback_lists_to_rewrite(matching_keys, proxy_config.litellm_settings.owned_by_config)
+        remaining_lists: Final = MappingProxyType(
+            {
+                key: tuple(entry for entry in configured_lists[key] if not _is_callback_name(entry, callback_name))
+                for key in rewritten_keys
+            }
+        )
+        before_callbacks: Final[JsonValue] = {key: list(configured_lists[key]) for key in rewritten_keys}
+        after_callbacks: Final[JsonValue] = {key: list(names) for key, names in remaining_lists.items()}
         updated_settings: Final = {**litellm_settings, **after_callbacks}
         updated_config: Final = {**config, "litellm_settings": updated_settings}
 
@@ -19642,7 +19648,7 @@ async def delete_callback(
         return {
             "message": f"Successfully deleted callback: {callback_name}",
             "removed_callback": callback_name,
-            "remaining_callbacks": list(_remaining_callback_names(updated_settings)),
+            "remaining_callbacks": tuple(chain.from_iterable(remaining_lists.values())),
             "deleted_at": datetime.now().isoformat(),
         }
 

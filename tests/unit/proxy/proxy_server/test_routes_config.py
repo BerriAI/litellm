@@ -955,6 +955,7 @@ def _delete_callback_roundtrip(
     monkeypatch: pytest.MonkeyPatch,
     litellm_settings: dict[str, object],
     callback_name: str,
+    owned_by_config: frozenset[str] = frozenset(),
 ) -> tuple[httpx.Response, dict[str, object]]:
     """POST /config/callback/delete as admin against a stubbed config, and
     return (response, saved litellm_settings) so each case pins the full body
@@ -970,6 +971,7 @@ def _delete_callback_roundtrip(
     fake_proxy_config.get_config = AsyncMock(return_value={"litellm_settings": litellm_settings})
     fake_proxy_config.save_config = AsyncMock()
     fake_proxy_config.add_deployment = AsyncMock()
+    fake_proxy_config.litellm_settings.owned_by_config = owned_by_config.__contains__
     monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
@@ -997,7 +999,7 @@ def test_config_callback_delete_from_failure_callback(
     assert response.status_code == 200
     assert response.json()["removed_callback"] == "datadog"
     assert saved == {"success_callback": ["slack"], "failure_callback": ["sentry"]}
-    assert response.json()["remaining_callbacks"] == ["slack", "sentry"]
+    assert response.json()["remaining_callbacks"] == ["sentry"]
 
 
 def test_config_callback_delete_from_callbacks_list(
@@ -1019,7 +1021,7 @@ def test_config_callback_delete_from_callbacks_list(
     assert response.status_code == 200
     assert response.json()["removed_callback"] == "datadog"
     assert saved == {"success_callback": ["langfuse"], "callbacks": [], "drop_params": True}
-    assert response.json()["remaining_callbacks"] == ["langfuse"]
+    assert response.json()["remaining_callbacks"] == []
 
 
 def test_config_callback_delete_from_multiple_lists(
@@ -1029,7 +1031,7 @@ def test_config_callback_delete_from_multiple_lists(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """A name present in both success_callback and callbacks is removed from
-    both, and remaining_callbacks reports the leftovers of every list."""
+    both, and remaining_callbacks reports the leftovers of the lists it left."""
     response, saved = _delete_callback_roundtrip(
         client,
         auth_as,
@@ -1048,7 +1050,29 @@ def test_config_callback_delete_from_multiple_lists(
         "failure_callback": ["sentry"],
         "callbacks": ["langfuse"],
     }
-    assert response.json()["remaining_callbacks"] == ["slack", "sentry", "langfuse"]
+    assert response.json()["remaining_callbacks"] == ["slack", "langfuse"]
+
+
+def test_config_callback_delete_skips_lists_the_config_file_owns(
+    client: TestClient,
+    auth_as: Callable[..., contextlib.AbstractContextManager[None]],
+    mock_prisma: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A name in a database-owned list and a config-file-owned list is removed
+    from the database-owned one only, so the save is not refused."""
+    response, saved = _delete_callback_roundtrip(
+        client,
+        auth_as,
+        mock_prisma,
+        monkeypatch,
+        {"success_callback": ["datadog", "slack"], "failure_callback": ["datadog"]},
+        "datadog",
+        owned_by_config=frozenset({"failure_callback"}),
+    )
+    assert response.status_code == 200
+    assert saved == {"success_callback": ["slack"], "failure_callback": ["datadog"]}
+    assert response.json()["remaining_callbacks"] == ["slack"]
 
 
 def test_config_callback_delete_case_insensitive(
@@ -1057,13 +1081,13 @@ def test_config_callback_delete_case_insensitive(
     mock_prisma: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """A mixed-case request name still matches the configured lowercase entry."""
+    """A mixed-case entry is deleted by the name GET /get/config/callbacks shows for it."""
     response, saved = _delete_callback_roundtrip(
         client,
         auth_as,
         mock_prisma,
         monkeypatch,
-        {"callbacks": ["datadog", "otel"]},
+        {"callbacks": ["DataDog", "otel"]},
         "DataDog",
     )
     assert response.status_code == 200
