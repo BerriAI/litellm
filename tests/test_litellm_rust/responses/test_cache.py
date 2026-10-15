@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Mapping
 from typing import Final, Literal
 
 import pytest
@@ -10,8 +11,13 @@ from litellm.caching.caching_handler import (
     _PENDING_CACHE_WRITES,  # pyright: ignore[reportPrivateUsage]  # await the existing background cache writer before the next request
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
-from tests.test_litellm_rust.responses.data import REQUEST, RESPONSES_TEXT, call
-from tests.test_litellm_rust.support.caching import CallerCache, use_cache
+from tests.test_litellm_rust.responses.data import REQUEST, RESPONSES_RESPONSE, RESPONSES_TEXT, call as route_call
+from tests.test_litellm_rust.support.caching import (
+    CallerCache,
+    assert_cache_hit_keeps_budget_spend_and_counts_usage,
+    settle_cache_writes,
+    use_cache,
+)
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging, request_body
 from tests.test_litellm_rust.support.recording_server import RecordingServer
 from tests.test_litellm_rust.support.results import cache_key
@@ -32,6 +38,12 @@ async def call_python(server: RecordingServer, monkeypatch: pytest.MonkeyPatch, 
             **{**REQUEST, **kwargs}, api_key="test-key", api_base=server.base_url, litellm_call_id=CALL_ID
         )
     await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
+    return response
+
+
+async def call(server: RecordingServer, **kwargs: object) -> object:
+    response: Final = await route_call(server, **kwargs)
+    await settle_cache_writes()
     return response
 
 
@@ -202,7 +214,7 @@ async def test_default_off_mode_caches_only_calls_that_opt_in(
 
 
 @pytest.mark.asyncio
-async def test_python_cache_operations_run_in_the_callers_task(
+async def test_python_cache_lookups_run_in_the_callers_task(
     server: RecordingServer, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     use_cache(monkeypatch, Cache(_backend=CallerCache()))
@@ -234,3 +246,19 @@ async def test_cancelling_a_pending_lookup_sends_and_stores_nothing(
 
     assert server.requests == []
     assert backend.storage.cache_dict == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("engine", ("python", "native"))
+async def test_a_cache_hit_keeps_budget_spend_and_counts_usage(
+    server: RecordingServer, monkeypatch: pytest.MonkeyPatch, engine: Literal["python", "native"]
+) -> None:
+    use_cache(monkeypatch)
+
+    async def send(options: Mapping[str, object]) -> object:
+        if engine == "python":
+            return await call_python(server, monkeypatch, **options)
+        return await call(server, **options)
+
+    usage: Final = TypeAdapter(dict[str, int]).validate_python(RESPONSES_RESPONSE["usage"])
+    await assert_cache_hit_keeps_budget_spend_and_counts_usage(send, server, usage["total_tokens"])

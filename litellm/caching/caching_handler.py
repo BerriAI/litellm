@@ -26,8 +26,8 @@ from pydantic import ConfigDict, SkipValidation, TypeAdapter, ValidationError
 import litellm
 from litellm._internal_context import post_response_phase
 from litellm._logging import print_verbose, verbose_logger
-from litellm.caching import InMemoryCache
-from litellm.caching.caching import S3Cache, response_cache_phase
+from litellm.caching import DualCache, InMemoryCache
+from litellm.caching.caching import Cache, RedisCache, S3Cache, response_cache_phase
 from litellm.constants import CACHE_WRITE_SHUTDOWN_FLUSH_TIMEOUT_SECONDS, RESPONSE_CACHE_EXCLUDED_PROVIDERS
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
@@ -118,9 +118,12 @@ def _is_response_cache_excluded(model: str | None, kwargs: Mapping[str, object])
     )
 
 
+_CACHE_CONTROLS: Final = TypeAdapter(Mapping[str, object])
+
+
 def _cache_controls(kwargs: Mapping[str, object]) -> Mapping[str, object]:
     controls: Final = kwargs.get("cache")
-    return TypeAdapter(Mapping[str, object]).validate_python(controls) if isinstance(controls, Mapping) else {}
+    return _CACHE_CONTROLS.validate_python(controls) if isinstance(controls, Mapping) else {}
 
 
 def is_call_type_cached(call_type: str) -> bool:
@@ -130,27 +133,29 @@ def is_call_type_cached(call_type: str) -> bool:
     return any(name in litellm.cache.supported_call_types for name in covering_call_types)
 
 
+def _reads_requested(caching: object, controls: Mapping[str, object]) -> bool:
+    return ((caching is None and litellm.cache is not None) or caching is True) and controls.get("no-cache") is not True
+
+
 def cache_reads_requested(kwargs: Mapping[str, object]) -> bool:
-    caching: Final = kwargs.get("caching")
-    return ((caching is None and litellm.cache is not None) or caching is True) and _cache_controls(kwargs).get(
-        "no-cache"
-    ) is not True
+    return _reads_requested(kwargs.get("caching"), _cache_controls(kwargs))
 
 
-def may_read_cache(model: str | None, kwargs: Mapping[str, object], call_type: str) -> bool:
-    return (
-        not _is_response_cache_excluded(model=model, kwargs=kwargs)
-        and cache_reads_requested(kwargs)
-        and is_call_type_cached(call_type)
-    )
+def cache_access(model: str | None, kwargs: Mapping[str, object], call_type: str) -> tuple[bool, bool]:
+    if _is_response_cache_excluded(model=model, kwargs=kwargs) or not is_call_type_cached(call_type):
+        return (False, False)
+    controls: Final = _cache_controls(kwargs)
+    return (_reads_requested(kwargs.get("caching"), controls), controls.get("no-store") is not True)
 
 
 def may_store_cache(model: str | None, kwargs: Mapping[str, object], call_type: str) -> bool:
-    return (
-        not _is_response_cache_excluded(model=model, kwargs=kwargs)
-        and is_call_type_cached(call_type)
-        and _cache_controls(kwargs).get("no-store") is not True
-    )
+    return cache_access(model, kwargs, call_type)[1]
+
+
+def response_memory_tier(cache: Cache) -> DualCache | None:
+    if not isinstance(cache.cache, RedisCache):
+        return None
+    return DualCache(redis_cache=cache.cache, in_memory_cache=in_memory_cache_obj)
 
 
 def _is_chat_completion_cached_dict(cached_result: dict) -> bool:
@@ -309,21 +314,13 @@ class LLMCachingHandler:
         request_kwargs: dict[str, object],
         start_time: datetime.datetime,
     ):
-        from litellm.caching import DualCache, RedisCache
-
         self.async_streaming_chunks: list[object] = []
         self.sync_streaming_chunks: list[object] = []
         self.request_kwargs = _drop_logging_obj_from_kwargs(request_kwargs)
         self.preset_cache_key: str | None = None
         self.original_function = original_function
         self.start_time = start_time
-        if litellm.cache is not None and isinstance(litellm.cache.cache, RedisCache):
-            self.dual_cache: DualCache | None = DualCache(
-                redis_cache=litellm.cache.cache,
-                in_memory_cache=in_memory_cache_obj,
-            )
-        else:
-            self.dual_cache = None
+        self.dual_cache: DualCache | None = None if litellm.cache is None else response_memory_tier(litellm.cache)
 
     async def async_get_cache(
         self,
