@@ -9,17 +9,19 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
+from starlette.testclient import TestClient
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from litellm.proxy.middleware import gzip_middleware
 from litellm.proxy.middleware.gzip_middleware import (
+    DASHBOARD_GZIP_PATHS,
     MINIMUM_SIZE_BYTES,
-    OFF_LOOP_SIZE_BYTES,
     GZipBufferedResponseMiddleware,
 )
 
 LARGE_PAYLOAD = {"rows": [{"date": f"2026-09-{day:02d}", "spend": day * 1.5} for day in range(1, 31)] * 20}
 BASE64_EMBEDDINGS_RESPONSE_BYTES: Final = 824_000
+HUGE_RESPONSE_BYTES: Final = 2 * 1024 * 1024
 STREAM_CHUNKS = tuple(json.dumps({"part": part, "pad": "x" * MINIMUM_SIZE_BYTES}).encode() for part in range(3))
 
 
@@ -48,15 +50,15 @@ async def _no_transform(request: Request) -> Response:
 
 
 async def _huge(request: Request) -> Response:
-    return Response(b"z" * (OFF_LOOP_SIZE_BYTES * 2), media_type="application/json")
+    return Response(b"z" * HUGE_RESPONSE_BYTES, media_type="application/json")
 
 
-async def _under_off_loop(request: Request) -> Response:
-    return Response(b"u" * (OFF_LOOP_SIZE_BYTES - 1), media_type="application/json")
+async def _minimum_eligible(request: Request) -> Response:
+    return Response(b"u" * MINIMUM_SIZE_BYTES, media_type="application/json")
 
 
-async def _at_off_loop(request: Request) -> Response:
-    return Response(b"a" * OFF_LOOP_SIZE_BYTES, media_type="application/json")
+async def _four_kib(request: Request) -> Response:
+    return Response(b"a" * 4096, media_type="application/json")
 
 
 async def _base64_embeddings_sized(request: Request) -> Response:
@@ -79,19 +81,30 @@ APP = Starlette(
         Route("/stream", _json_stream),
         Route("/etag", _with_etag),
         Route("/huge", _huge),
-        Route("/under-off-loop", _under_off_loop),
-        Route("/at-off-loop", _at_off_loop),
+        Route("/minimum-eligible", _minimum_eligible),
+        Route("/four-kib", _four_kib),
         Route("/base64-embeddings-sized", _base64_embeddings_sized),
         Route("/partial", _partial),
         Route("/no-transform", _no_transform),
     ]
 )
-APP.add_middleware(GZipBufferedResponseMiddleware)
+APP.add_middleware(
+    GZipBufferedResponseMiddleware, paths=frozenset(route.path for route in APP.routes if isinstance(route, Route))
+)
 
 
-async def _send_messages(path: str, accept_encoding: str | None, app: ASGIApp = APP) -> tuple[Message, ...]:
+async def _send_messages(
+    path: str, accept_encoding: str | None, app: ASGIApp = APP, method: str = "GET", root_path: str = ""
+) -> tuple[Message, ...]:
     headers = [(b"accept-encoding", accept_encoding.encode())] if accept_encoding is not None else []
-    scope = {"type": "http", "method": "GET", "path": path, "query_string": b"", "headers": headers}
+    scope = {
+        "type": "http",
+        "method": method,
+        "path": path,
+        "root_path": root_path,
+        "query_string": b"",
+        "headers": headers,
+    }
     sent: list[Message] = []  # mutable-ok: ASGI send callback collects messages in order
     requests: Final = iter(({"type": "http.request", "body": b"", "more_body": False},))
     never_disconnects: Final = asyncio.Event()
@@ -133,21 +146,19 @@ async def test_large_buffered_json_is_gzipped_and_round_trips(accept_encoding):
 
 
 @pytest.mark.asyncio
-async def test_body_above_off_loop_threshold_round_trips():
+async def test_multi_megabyte_body_round_trips():
     messages = await _send_messages("/huge", "gzip")
 
     assert _headers(messages)["content-encoding"] == "gzip"
-    assert gzip.decompress(_body(messages)) == b"z" * (OFF_LOOP_SIZE_BYTES * 2)
+    assert gzip.decompress(_body(messages)) == b"z" * HUGE_RESPONSE_BYTES
 
 
 @pytest.mark.parametrize(
-    "path, compressed_on_loop_thread",
-    [("/under-off-loop", True), ("/at-off-loop", False), ("/base64-embeddings-sized", False), ("/huge", False)],
+    "path",
+    ["/minimum-eligible", "/four-kib", "/base64-embeddings-sized", "/huge"],
 )
 @pytest.mark.asyncio
-async def test_only_bodies_under_the_off_loop_threshold_compress_on_the_event_loop(
-    monkeypatch: pytest.MonkeyPatch, path: str, compressed_on_loop_thread: bool
-) -> None:
+async def test_all_eligible_bodies_compress_on_a_worker_thread(monkeypatch: pytest.MonkeyPatch, path: str) -> None:
     loop_thread: Final = threading.get_ident()
     real_compress: Final = gzip.compress
 
@@ -159,7 +170,7 @@ async def test_only_bodies_under_the_off_loop_threshold_compress_on_the_event_lo
     messages = await _send_messages(path, "gzip")
 
     assert _headers(messages)["content-encoding"] == "gzip"
-    assert gzip.decompress(_body(messages)) == (b"loop" if compressed_on_loop_thread else b"worker")
+    assert gzip.decompress(_body(messages)) == b"worker"
 
 
 @pytest.mark.parametrize(
@@ -223,7 +234,9 @@ async def test_start_message_without_headers_key_is_still_gzipped():
         await send({"type": "http.response.start", "status": 200})
         await send({"type": "http.response.body", "body": body})
 
-    messages = await _send_messages("/", "gzip", GZipBufferedResponseMiddleware(headerless_app))
+    messages = await _send_messages(
+        "/user/daily/activity/aggregated", "gzip", GZipBufferedResponseMiddleware(headerless_app)
+    )
 
     assert _headers(messages)["content-encoding"] == "gzip"
     assert gzip.decompress(_body(messages)) == body
@@ -234,28 +247,73 @@ async def test_start_without_a_body_message_is_still_forwarded():
     async def start_only_app(scope: Scope, receive: Receive, send: Send) -> None:
         await send({"type": "http.response.start", "status": 204, "headers": [(b"x-done", b"1")]})
 
-    messages = await _send_messages("/", "gzip", GZipBufferedResponseMiddleware(start_only_app))
+    messages = await _send_messages(
+        "/user/daily/activity/aggregated", "gzip", GZipBufferedResponseMiddleware(start_only_app)
+    )
 
     assert messages == ({"type": "http.response.start", "status": 204, "headers": [(b"x-done", b"1")]},)
 
 
-def test_proxy_app_gzips_large_responses_for_clients_that_accept_it():
-    from starlette.testclient import TestClient
+@pytest.mark.parametrize("path", sorted(DASHBOARD_GZIP_PATHS))
+@pytest.mark.parametrize("root_path", ["", "/gateway"])
+@pytest.mark.asyncio
+async def test_dashboard_reads_are_compressed_under_root_paths(path: str, root_path: str) -> None:
+    async def dashboard(scope: Scope, receive: Receive, send: Send) -> None:
+        await JSONResponse(LARGE_PAYLOAD)(scope, receive, send)
 
+    messages: Final = await _send_messages(
+        root_path + path, "gzip", GZipBufferedResponseMiddleware(dashboard), root_path=root_path
+    )
+
+    assert _headers(messages)["content-encoding"] == "gzip"
+    assert json.loads(gzip.decompress(_body(messages))) == LARGE_PAYLOAD
+
+
+@pytest.mark.parametrize(
+    "path,method",
+    [
+        ("/v1/embeddings", "POST"),
+        ("/embeddings", "POST"),
+        ("/v1/chat/completions", "POST"),
+        ("/v1/responses", "POST"),
+        ("/v1/messages", "POST"),
+        ("/openai/deployments/embedding-model/embeddings", "POST"),
+        ("/custom-passthrough", "GET"),
+        ("/openapi.json", "GET"),
+        ("/health/liveliness", "GET"),
+        ("/user/daily/activity/aggregated/unknown", "GET"),
+        ("/prefix/user/daily/activity/aggregated", "GET"),
+        ("/user/daily/activity/aggregated", "POST"),
+        ("/user/daily/activity/aggregated", "HEAD"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_non_dashboard_requests_pass_through_without_changing_headers(path: str, method: str) -> None:
+    body: Final = b"e" * BASE64_EMBEDDINGS_RESPONSE_BYTES
+
+    async def inference(scope: Scope, receive: Receive, send: Send) -> None:
+        await Response(body, media_type="application/json", headers={"vary": "Origin"})(scope, receive, send)
+
+    messages: Final = await _send_messages(path, "gzip", GZipBufferedResponseMiddleware(inference), method=method)
+
+    assert _headers(messages) == {
+        "content-type": "application/json",
+        "content-length": str(len(body)),
+        "vary": "Origin",
+    }
+    assert _body(messages) == body
+
+
+def test_proxy_app_does_not_compress_openapi() -> None:
     from litellm.proxy.proxy_server import app
 
-    client = TestClient(app)
-    compressed = client.get("/openapi.json", headers={"accept-encoding": "gzip"})
-    identity = client.get("/openapi.json", headers={"accept-encoding": "identity"})
+    client: Final = TestClient(app)
+    gzip_accepted: Final = client.get("/openapi.json", headers={"accept-encoding": "gzip"})
+    identity: Final = client.get("/openapi.json", headers={"accept-encoding": "identity"})
 
-    assert compressed.status_code == identity.status_code == 200, (
-        f"gzip={compressed.status_code} {compressed.text[:MINIMUM_SIZE_BYTES]}, "
+    assert gzip_accepted.status_code == identity.status_code == 200, (
+        f"gzip={gzip_accepted.status_code} {gzip_accepted.text[:MINIMUM_SIZE_BYTES]}, "
         f"identity={identity.status_code} {identity.text[:MINIMUM_SIZE_BYTES]}"
     )
-    assert "content-encoding" in compressed.headers, (
-        f"status={compressed.status_code}, headers={dict(compressed.headers)}, "
-        f"body_bytes={len(compressed.content)}, body={compressed.text[:MINIMUM_SIZE_BYTES]}"
-    )
-    assert compressed.headers["content-encoding"] == "gzip"
-    assert int(compressed.headers["content-length"]) < int(identity.headers["content-length"])
-    assert compressed.json() == identity.json()
+    assert "content-encoding" not in gzip_accepted.headers
+    assert gzip_accepted.content == identity.content
