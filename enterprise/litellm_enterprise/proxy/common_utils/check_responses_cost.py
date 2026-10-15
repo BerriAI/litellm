@@ -263,6 +263,7 @@ class CheckResponsesCost:
 
     async def _claim_for_billing(self, job: ManagedObjectRow) -> bool:
         claimed: Final = await _managed_object_table(self.prisma_client).update_many(
+            # bounded-ok: PENDING_RESPONSE_STATUSES is a two-value constant tuple
             where={"id": job.id, "status": {"in": list(PENDING_RESPONSE_STATUSES)}},
             data={"status": "completed"},
         )
@@ -372,6 +373,7 @@ class CheckResponsesCost:
 
         jobs = await _managed_object_table(self.prisma_client).find_many(
             where={
+                # bounded-ok: PENDING_RESPONSE_STATUSES is a two-value constant tuple
                 "status": {"in": list(PENDING_RESPONSE_STATUSES)},
                 "file_purpose": "response",
             },
