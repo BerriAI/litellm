@@ -570,7 +570,7 @@ def test_anthropic_messages_keep_every_block_the_chat_converter_drops() -> None:
                     "filename": "contract.pdf",
                     "file_data": f"data:application/pdf;base64,{PDF_BASE64}",
                 },
-                {"type": "input_image", "image_url": f"data:image/png;base64,{PNG_BASE64}"},
+                {"type": "input_image", "image_url": f"data:image/png;base64,{PNG_BASE64}", "detail": "auto"},
             ],
         },
         {"type": "function_call", "call_id": "toolu_01", "name": "lookup_clause", "arguments": '{"id": "14"}'},

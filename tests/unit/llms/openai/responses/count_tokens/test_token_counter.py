@@ -217,7 +217,7 @@ async def test_anthropic_format_sends_the_document_image_and_tool_turns_to_the_c
                 "content": [
                     {"type": "input_text", "text": "Summarize."},
                     {"type": "input_file", "filename": "document.pdf", "file_data": "data:application/pdf;base64,JVBE"},
-                    {"type": "input_image", "image_url": "https://example.com/page.png"},
+                    {"type": "input_image", "image_url": "https://example.com/page.png", "detail": "auto"},
                 ],
             },
             {"type": "function_call", "call_id": "toolu_01", "name": "lookup", "arguments": "{}"},
