@@ -648,12 +648,34 @@ def get_team_provider_credentials(
     return None
 
 
+HTTP_HEADER_VALUE: Final = re.compile(r"[\x21-\x7e]+(?:[ \t]+[\x21-\x7e]+)*")
+
+
 def _non_blank_string(value: object) -> str | None:
     return value if isinstance(value, str) and value.strip() else None
 
 
-def explicit_request_credentials(data: Mapping[str, object]) -> Mapping[str, str]:
+def _request_api_key(data: Mapping[str, object]) -> str | None:
+    from fastapi import HTTPException
+
+    import litellm
+
     api_key: Final = _non_blank_string(data.get("api_key"))
+    if api_key is None or HTTP_HEADER_VALUE.fullmatch(api_key):
+        return api_key
+    if data.get("drop_params") is True or litellm.drop_params is True:
+        return None
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": "The request's provider api_key is not a valid HTTP header value. Remove surrounding "
+            "whitespace and non-ASCII characters, or set drop_params to send the request without it."
+        },
+    )
+
+
+def explicit_request_credentials(data: Mapping[str, object]) -> Mapping[str, str]:
+    api_key: Final = _request_api_key(data)
     if api_key is None:
         return MappingProxyType({})
     api_base: Final = _non_blank_string(data.get("api_base"))

@@ -4,6 +4,7 @@ from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import HTTPException
 from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 
 from litellm import Router
@@ -738,6 +739,8 @@ def test_a_restricted_key_outside_the_team_wildcard_never_resolves_its_credentia
         ),
         ({"api_key": "sk-forwarded", "api_base": "  "}, "sk-forwarded", "https://team.example/v1"),
         ({"litellm_credential_name": "no-such-credential"}, "team-openai-key", "https://team.example/v1"),
+        ({"api_key": "sk-forwarded\n", "drop_params": True}, "team-openai-key", "https://team.example/v1"),
+        ({"api_key": "sk-for warded"}, "sk-for warded", "https://team.example/v1"),
     ],
 )
 def test_the_team_key_only_goes_to_the_team_host_unless_the_request_brings_its_own_key(
@@ -745,6 +748,23 @@ def test_the_team_key_only_goes_to_the_team_host_unless_the_request_brings_its_o
 ):
     data: Final[dict[str, object]] = dict(request_credentials)
 
+    _apply_team_a_openai_credentials(data)
+
+    assert (data.get("api_key"), data.get("api_base")) == (sent_api_key, sent_api_base)
+
+
+@pytest.mark.parametrize("api_key", ["sk-forwarded\n", " sk-forwarded", "\u200b", "sk-forwarded\u00a0"])
+def test_a_request_key_that_cannot_be_an_http_header_is_a_bad_request(api_key: str):
+    data: Final[dict[str, object]] = {"api_key": api_key}
+
+    with pytest.raises(HTTPException) as refused:
+        _apply_team_a_openai_credentials(data)
+
+    assert refused.value.status_code == 400
+    assert api_key not in str(refused.value.detail)
+
+
+def _apply_team_a_openai_credentials(data: dict[str, object]) -> None:
     apply_team_provider_credentials(
         data=data,
         llm_router=Router(
@@ -765,8 +785,6 @@ def test_the_team_key_only_goes_to_the_team_host_unless_the_request_brings_its_o
         ),
         custom_llm_provider="openai",
     )
-
-    assert (data.get("api_key"), data.get("api_base")) == (sent_api_key, sent_api_base)
 
 
 def _team_openai_deployment(
