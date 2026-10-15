@@ -54,6 +54,18 @@ def _preset_cache_key(kwargs: Mapping[str, object]) -> object:
     return litellm.cache.get_preset_cache_key_from_kwargs(**kwargs)
 
 
+def _caller_tag_list(value: object) -> tuple[str, ...]:
+    """Caller tags as Langfuse ingestion reads a raw tags value: a list, a JSON array string, a comma list or one tag."""
+    parsed: Final = (
+        safe_json_loads(value, default=value) if isinstance(value, str) and value.strip().startswith("[") else value
+    )
+    if isinstance(parsed, list):
+        return tuple(tag if isinstance(tag, str) else json.dumps(tag, default=str) for tag in parsed)
+    if isinstance(parsed, str) and parsed:
+        return tuple(tag.strip() for tag in parsed.split(",")) if "," in parsed else (parsed,)
+    return ()
+
+
 class LangfuseOtelLogger(OpenTelemetry):
     def __init__(self, config=None, *args, **kwargs):
         # Prevent LangfuseOtelLogger from modifying global environment variables by constructing config manually
@@ -183,13 +195,7 @@ class LangfuseOtelLogger(OpenTelemetry):
 
         expanded: Final = tuple(_default_tag(key) for key in default_tags) if isinstance(default_tags, list) else ()
         candidates: Final = (
-            (
-                (caller_tags,)
-                if isinstance(caller_tags, str)
-                else tuple(tag for tag in caller_tags if isinstance(tag, str))
-                if isinstance(caller_tags, list)
-                else ()
-            )
+            _caller_tag_list(caller_tags)
             + (tuple(tag for tag in request_tags if isinstance(tag, str)) if isinstance(request_tags, list) else ())
             + tuple(tag for tag in expanded if tag is not None)
         )

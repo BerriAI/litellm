@@ -34,10 +34,15 @@ class SpanRecord:
     attributes: Mapping[str, object]
 
     def tags(self) -> list[object]:
+        """The trace tags Langfuse ingestion reads from the raw attribute."""
         raw: Final = self.attributes.get("langfuse.trace.tags")
         if isinstance(raw, tuple):
             return list(raw)
-        return json.loads(str(raw)) if raw is not None else []
+        if not isinstance(raw, str) or not raw:
+            return []
+        if raw.strip().startswith("["):
+            return json.loads(raw)
+        return [tag.strip() for tag in raw.split(",")] if "," in raw else [raw]
 
 
 def _attribute_value(value: AnyValue) -> object:
@@ -274,6 +279,23 @@ def test_caller_trace_name_and_tags_win_over_derived_values(v1: Rig) -> None:
     assert span.attributes["langfuse.trace.name"] == "caller-trace", span.attributes
     assert span.tags()[:2] == ["caller-tag", "second-tag"], span.tags()
     assert span.attributes.get("langfuse.trace.input") == span.attributes.get("langfuse.observation.input")
+
+
+@pytest.mark.parametrize(
+    ("metadata", "headers", "expected"),
+    [
+        pytest.param({"tags": "c1, c2"}, None, ["c1", "c2"], id="body_comma_string"),
+        pytest.param({"tags": '["j1", "j2"]'}, None, ["j1", "j2"], id="body_json_array_string"),
+        pytest.param(None, {"langfuse_tags": "h1,h2"}, ["h1", "h2"], id="header_comma_string"),
+    ],
+)
+def test_string_caller_tags_keep_the_tags_langfuse_split_them_into(
+    v1: Rig, metadata: Mapping[str, object] | None, headers: Mapping[str, str] | None, expected: list[str]
+) -> None:
+    marker: Final = "lit8281-strtags-" + uuid.uuid4().hex
+    _chat(v1, marker, metadata=metadata, headers=headers)
+    span: Final = v1.sink.one(marker)
+    assert span.tags()[: len(expected)] == expected, span.attributes
 
 
 def test_trace_name_header_wins_over_the_derived_name(v1: Rig) -> None:

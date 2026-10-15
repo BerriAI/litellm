@@ -1240,14 +1240,25 @@ class TestDerivedTraceFields:
         )
         assert json.loads(attributes["langfuse.trace.tags"]) == ["cache_key:explicit-key"]
 
-    def test_caller_tags_string_is_a_single_tag(self):
+    @pytest.mark.parametrize(
+        ("caller_tags", "expected"),
+        [
+            ("single", ["single", "req"]),
+            ("h1, h2", ["h1", "h2", "req"]),
+            ('["j1", "j2"]', ["j1", "j2", "req"]),
+            (["x", 1], ["x", "1", "req"]),
+            ("", ["req"]),
+        ],
+    )
+    def test_caller_tags_are_read_the_way_langfuse_reads_a_raw_tags_value(self, caller_tags, expected):
         attributes = _emitted(
             {
                 "call_type": "acompletion",
-                "litellm_params": {"metadata": {"tags": "single"}},
+                "litellm_params": {"metadata": {"tags": caller_tags}},
+                "standard_logging_object": {"request_tags": ["req"]},
             }
         )
-        assert json.loads(attributes["langfuse.trace.tags"]) == ["single"]
+        assert json.loads(attributes["langfuse.trace.tags"]) == expected
 
     def test_no_tags_anywhere_leaves_trace_tags_unset(self):
         attributes = _emitted(
