@@ -25,7 +25,7 @@ from fastapi import FastAPI
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from replay import Capture, Provider, body_bytes, paced, pick
+from replay import Capture, Provider, body_bytes, chunks_after, pick
 
 MARKER: Final = re.compile(r"perfreq-\d{6}-[nib]")
 DELAY_HEADER: Final = "x-mock-delay-s"
@@ -201,7 +201,7 @@ async def json_reply(decision: Decision) -> Response:
 def stream_reply(decision: Decision, media_type: str) -> Response:
     """The captured chunks back to back after the case's latency, ids swapped for this request's."""
     return StreamingResponse(
-        paced(decision.capture, decision.seed, 0.0, decision.delay_s),
+        chunks_after(decision.capture, decision.seed, decision.delay_s),
         media_type=media_type,
         headers=decision.headers,
     )

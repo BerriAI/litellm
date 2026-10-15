@@ -1,5 +1,4 @@
-"""The Bedrock-shaped perf mock: Converse, ConverseStream, InvokeModel and InvokeModelWithResponseStream
-under /model/{model_id}/..., replaying what bedrock-runtime answered to each request shape. Streams are the
+"""The Bedrock-shaped perf mock: Converse and ConverseStream under /model/{model_id}/..., replaying what bedrock-runtime answered to each request shape. Streams are the
 captured application/vnd.amazon.eventstream bytes verbatim (prelude, headers, CRCs), so the gateway's
 botocore-based decoder runs against the real framing."""
 
@@ -41,16 +40,6 @@ def build_app() -> FastAPI:
     async def converse_stream(model_id: str, request: Request) -> Response:
         return await handle(model_id, request, "converse", True)
 
-    async def invoke(model_id: str, request: Request) -> Response:
-        return await handle(model_id, request, "invoke", False)
-
-    async def invoke_with_response_stream(model_id: str, request: Request) -> Response:
-        return await handle(model_id, request, "invoke", True)
-
     app.add_api_route("/model/{model_id:path}/converse", converse, methods=["POST"])
     app.add_api_route("/model/{model_id:path}/converse-stream", converse_stream, methods=["POST"])
-    app.add_api_route("/model/{model_id:path}/invoke", invoke, methods=["POST"])
-    app.add_api_route(
-        "/model/{model_id:path}/invoke-with-response-stream", invoke_with_response_stream, methods=["POST"]
-    )
     return app

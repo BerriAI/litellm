@@ -1,12 +1,11 @@
 """Real provider responses, captured once and replayed by the mocks.
 
 `captures/<provider>/<route>_<shape>_<json|stream>.json` holds what OpenAI, Anthropic and Bedrock answered
-to one request of each shape built by `setup/corpus/session.py`: the body, or the raw stream chunks with the
-time each arrived, plus the request size and the usage the provider reported. A mock picks the capture for
-its route and stream mode whose request size is closest to the request it received, swaps the provider's
-ids for per-request ones, and sends the bytes back on the captured clock (scaled by the `p` knob). Nothing
-in the reply is invented, so the gateway sees the provider's own usage, cache fields, stop reasons, tool
-calls, reasoning items, chunk boundaries and pacing."""
+to one request of each shape built by `setup/corpus/session.py`: the body, or the raw stream chunks, plus
+the request size. A mock picks the capture for its route and stream mode whose request size is closest to
+the request it received, swaps the provider's ids for per-request ones, waits the case's `mock_latency` and
+sends the bytes back to back. Nothing in the reply is invented, so the gateway sees the provider's own usage,
+cache fields, stop reasons, tool calls, reasoning items and chunk boundaries."""
 
 from __future__ import annotations
 
@@ -30,7 +29,6 @@ _ID: Final = re.compile(r"\b(chatcmpl-|resp_|rs_|fc_|msg_|toolu_|call_|srvtoolu_
 class Chunk(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    t: float
     data: str
 
 
@@ -42,8 +40,6 @@ class Capture(BaseModel):
     shape: str
     stream: bool
     request_tokens_estimate: int
-    ttfb_s: float
-    total_s: float
     body: dict[str, object] | None
     chunks: tuple[Chunk, ...]
     events: tuple[dict[str, object], ...]
@@ -160,25 +156,6 @@ def pick(provider: Provider, route: str, stream: bool, prompt_tokens: int) -> Ca
     return min(_matching(provider, route, stream), key=lambda c: abs(c.request_tokens_estimate - prompt_tokens))
 
 
-def first_byte_s(provider: Provider, route: str, stream: bool, prompt_tokens: int) -> float:
-    """Seconds the real provider took to its first byte for a request of this size: linear between the two
-    captures nearest in size, the smallest or largest capture's own time outside the captured range."""
-    by_size: Final = sorted(_matching(provider, route, stream), key=lambda c: c.request_tokens_estimate)
-    below: Final = tuple(c for c in by_size if c.request_tokens_estimate <= prompt_tokens)
-    above: Final = tuple(c for c in by_size if c.request_tokens_estimate >= prompt_tokens)
-    if not below:
-        return by_size[0].ttfb_s
-    if not above:
-        return by_size[-1].ttfb_s
-    low, high = below[-1], above[0]
-    if high.request_tokens_estimate == low.request_tokens_estimate:
-        return low.ttfb_s
-    fraction: Final = (prompt_tokens - low.request_tokens_estimate) / (
-        high.request_tokens_estimate - low.request_tokens_estimate
-    )
-    return low.ttfb_s + fraction * (high.ttfb_s - low.ttfb_s)
-
-
 def fresh_ids(text: str, seed: str) -> str:
     """The captured provider ids replaced by ids derived from the request, same prefix and length."""
 
@@ -199,12 +176,9 @@ def chunk_bytes(capture: Capture, chunk: Chunk, seed: str) -> bytes:
     return fresh_ids(chunk.data, seed).encode()
 
 
-async def paced(capture: Capture, seed: str, scale: float, first_byte_s: float) -> AsyncIterator[bytes]:
-    """The captured chunks, the first at `first_byte_s`, the rest at their captured spacing times `scale`."""
-    loop: Final = asyncio.get_running_loop()
-    start: Final = loop.time()
-    shift: Final = first_byte_s - capture.ttfb_s * scale
+async def chunks_after(capture: Capture, seed: str, delay_s: float) -> AsyncIterator[bytes]:
+    """The captured chunks back to back once `delay_s` has passed."""
+    if delay_s > 0:
+        await asyncio.sleep(delay_s)
     for chunk in capture.chunks:
-        if (wait := start + shift + chunk.t * scale - loop.time()) > 0:
-            await asyncio.sleep(wait)
         yield chunk_bytes(capture, chunk, seed)
