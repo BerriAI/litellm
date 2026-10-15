@@ -155,21 +155,7 @@ def _counted_secret_leaves(secret_column: _SecretColumn, primary_key: object, st
     shape keep the conservative every-string-leaf walk. The callback-encryption marker is
     stripped exactly as ``replace_ciphertexts`` strips it before the decrypt attempt."""
     if secret_column.table == "LiteLLM_Config":
-        param_name: Final[str] = _PRIMARY_KEY.validate_python(primary_key)
-        if param_name == _ENV_VARS_CONFIG_ROW:
-            yield from _string_leaves(stored)
-            return
-        sensitive_fields: Final[tuple[str, ...] | None] = _CONFIG_ROW_SENSITIVE_FIELDS.get(param_name)
-        if sensitive_fields is None:
-            # Every other config row (general_settings, …) stores plaintext by
-            # construction — counting its strings would read them as ciphertext.
-            return
-        settings: Final[JsonValue] = stored
-        if isinstance(settings, dict):
-            for field in sensitive_fields:
-                value = settings.get(field)
-                if isinstance(value, str):
-                    yield value.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX)
+        yield from _config_row_leaves(primary_key, stored)
         return
     if (secret_column.table, secret_column.column) in _LITELLM_PARAMS_SECRET_COLUMNS:
         params: Final[JsonValue] = stored
@@ -182,31 +168,58 @@ def _counted_secret_leaves(secret_column: _SecretColumn, primary_key: object, st
         yield from _sensitive_prefixed_leaves(stored)
         return
     if secret_column.column == "credentials" and secret_column.table in _MCP_CREDENTIAL_TABLES:
-        # The MCP credentials writer encrypts only its secret fields; region / service
-        # names and scopes next to them are stored plaintext by construction.
-        from litellm.proxy._experimental.mcp_server.db import MCP_CREDENTIAL_SECRET_FIELDS
-
-        blob: Final[JsonValue] = stored
-        if isinstance(blob, dict):
-            for field in MCP_CREDENTIAL_SECRET_FIELDS:
-                value = blob.get(field)
-                if isinstance(value, str):
-                    yield value.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX)
+        yield from _mcp_credential_leaves(stored)
         return
     if secret_column.table == "LiteLLM_MCPServerTable" and secret_column.column == "env_vars":
-        # Only global-scope entries carry an encrypted value; user-scope placeholders
-        # hold a name and scope in plaintext by construction.
-        from litellm.proxy._experimental.mcp_server.db import is_global_env_var_scope
-
-        entries: Final[JsonValue] = stored
-        if isinstance(entries, list):
-            for entry in entries:
-                if isinstance(entry, dict) and is_global_env_var_scope(entry.get("scope")):
-                    value = entry.get("value")
-                    if isinstance(value, str):
-                        yield value.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX)
+        yield from _mcp_global_env_var_leaves(stored)
         return
     yield from _string_leaves(stored)
+
+
+def _config_row_leaves(primary_key: object, stored: JsonValue) -> Iterator[str]:
+    param_name: Final[str] = _PRIMARY_KEY.validate_python(primary_key)
+    if param_name == _ENV_VARS_CONFIG_ROW:
+        yield from _string_leaves(stored)
+        return
+    sensitive_fields: Final[tuple[str, ...] | None] = _CONFIG_ROW_SENSITIVE_FIELDS.get(param_name)
+    if sensitive_fields is None:
+        # Every other config row (general_settings, …) stores plaintext by
+        # construction — counting its strings would read them as ciphertext.
+        return
+    if not isinstance(stored, dict):
+        return
+    for field in sensitive_fields:
+        value = stored.get(field)
+        if isinstance(value, str):
+            yield value.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX)
+
+
+def _mcp_credential_leaves(stored: JsonValue) -> Iterator[str]:
+    # The MCP credentials writer encrypts only its secret fields; region / service
+    # names and scopes next to them are stored plaintext by construction.
+    from litellm.proxy._experimental.mcp_server.db import MCP_CREDENTIAL_SECRET_FIELDS
+
+    if not isinstance(stored, dict):
+        return
+    for field in MCP_CREDENTIAL_SECRET_FIELDS:
+        value = stored.get(field)
+        if isinstance(value, str):
+            yield value.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX)
+
+
+def _mcp_global_env_var_leaves(stored: JsonValue) -> Iterator[str]:
+    # Only global-scope entries carry an encrypted value; user-scope placeholders
+    # hold a name and scope in plaintext by construction.
+    from litellm.proxy._experimental.mcp_server.db import is_global_env_var_scope
+
+    if not isinstance(stored, list):
+        return
+    for entry in stored:
+        if not isinstance(entry, dict) or not is_global_env_var_scope(entry.get("scope")):
+            continue
+        value = entry.get("value")
+        if isinstance(value, str):
+            yield value.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX)
 
 
 def _string_leaves(value: JsonValue) -> Iterator[str]:
