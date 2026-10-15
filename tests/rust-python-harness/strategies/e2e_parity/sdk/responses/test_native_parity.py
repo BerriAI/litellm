@@ -25,7 +25,14 @@ pytestmark = pytest.mark.requires_rust_extension
 MODEL: Final = "openai/gpt-6.1-sol"
 _OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _LOGGED: Final = TypeAdapter(dict[str, object])
-_COMPARED_HEADERS: Final = ("api-key", "authorization", "content-type", "openai-organization", "openai-project")
+_COMPARED_HEADERS: Final = (
+    "api-key",
+    "authorization",
+    "content-type",
+    "openai-organization",
+    "openai-project",
+    "user-agent",
+)
 _COMPARED_LOG_FIELDS: Final = (
     "call_type",
     "custom_llm_provider",
@@ -374,6 +381,7 @@ CASES: Final = (
         {"model": FIREWORKS_MODEL, "input": "hi", "litellm_metadata": {"session_id": "sess-1"}},
         falls_back=True,
     ),
+    Case("databricks_gpt_endpoint", {"model": "databricks/databricks-gpt-5-nano", "input": "hi"}),
     Case("hosted_vllm_placeholder_key", {"model": HOSTED_VLLM_MODEL, "input": "hi", "api_key": None}),
     Case(
         "hosted_vllm_keeps_replayed_reasoning_and_ids",
