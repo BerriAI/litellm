@@ -749,7 +749,7 @@ class CheckBatchCost:
                 },
                 **({"api_base": mask_api_base_credentials(deployment_api_base)} if deployment_api_base else {}),
                 "metadata": {
-                    **(await self._creator_attribution.build(job, batch_id)),
+                    **(await self._creator_attribution.batch_metadata(job, batch_id)),
                     # spend logs read the deployment identity off these metadata keys, so
                     # without them the batch cost row carries no model_id or model_group
                     "model_info": {"id": model_id},

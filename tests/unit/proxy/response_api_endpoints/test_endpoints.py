@@ -409,6 +409,17 @@ def _billed_costs(payloads: tuple[Mapping[str, object], ...]) -> list[str]:
     return [str(payload["response_cost"]) for payload in payloads]
 
 
+def _advertised_cost_split(headers: Mapping[str, str]) -> list[tuple[float, float]]:
+    if "x-litellm-response-cost-original" not in headers:
+        return []
+    return [
+        (
+            float(headers["x-litellm-response-cost-original"]),
+            float(headers["x-litellm-response-cost-input"]) + float(headers["x-litellm-response-cost-output"]),
+        )
+    ]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "background, stored, status, expected_billed_events",
@@ -420,7 +431,8 @@ async def test_reading_a_finished_background_response_bills_it(
     """The read that first sees a background response finished bills it from the body it fetched,
     since the provider may drop a store=false response before the hourly cost poll reaches it.
     Billing never reads the provider a second time, other reads stay free, the charge stays on the
-    end user the create named, and only the read that billed reports the cost it billed."""
+    end user the create named, and only the read that billed reports the cost it billed, split
+    into the components the billed event priced."""
     from types import SimpleNamespace
 
     from fastapi import Response as FastAPIResponse
@@ -478,6 +490,9 @@ async def test_reading_a_finished_background_response_bills_it(
     assert len(spend_events.payloads) == expected_billed_events
     assert all(payload["metadata"]["user_api_key_end_user_id"] == "customer-42" for payload in spend_events.payloads)
     assert fastapi_response.headers.getlist("x-litellm-response-cost") == _billed_costs(spend_events.payloads)
+    assert _advertised_cost_split(fastapi_response.headers) == [
+        (pytest.approx(float(cost)), pytest.approx(float(cost))) for cost in _billed_costs(spend_events.payloads)
+    ]
 
 
 @dataclasses.dataclass(frozen=True)

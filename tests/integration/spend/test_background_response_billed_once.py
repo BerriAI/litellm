@@ -32,6 +32,7 @@ from integration.spend._background_responses import (
     create_background_response,
     create_rows,
     forget_row,
+    free_reads,
     hashed,
     json_reply,
     key_spend,
@@ -45,6 +46,7 @@ from integration.spend._background_responses import (
     response_body,
     scripted_routes,
     scripted_upstream,
+    settling_reads,
     submissions,
     tag_spend,
     team_spend,
@@ -81,20 +83,31 @@ def _forged_metadata_flow(scenario: Scenario, key: str, model: str) -> tuple[str
     )
 
 
+def _sdk_poll(client: openai.OpenAI, response_id: str, remaining: int) -> tuple[Read, ...]:
+    if remaining == 0:
+        return ()
+    raw: Final = client.responses.with_raw_response.retrieve(response_id)
+    return (_sdk_read(raw), *_sdk_poll(client, raw.parse().id, remaining - 1))
+
+
 def _sdk_sync_flow(scenario: Scenario, key: str, model: str) -> tuple[str, tuple[Read, ...]]:
     with openai.OpenAI(base_url=f"{scenario.gateway.client.base_url}/v1", api_key=key, max_retries=0) as client:
         created: Final = client.responses.create(model=model, input=PROMPT, background=True, store=False)
         scenario.cleanups.callback(forget_row, created.id)
-        return created.id, tuple(
-            _sdk_read(client.responses.with_raw_response.retrieve(created.id)) for _ in range(READS)
-        )
+        return created.id, _sdk_poll(client, created.id, READS)
+
+
+async def _sdk_async_poll(client: openai.AsyncOpenAI, response_id: str, remaining: int) -> tuple[Read, ...]:
+    if remaining == 0:
+        return ()
+    raw: Final = await client.responses.with_raw_response.retrieve(response_id)
+    return (_sdk_read(raw), *await _sdk_async_poll(client, raw.parse().id, remaining - 1))
 
 
 async def _sdk_async_reads(base_url: str, key: str, model: str) -> tuple[str, tuple[Read, ...]]:
     async with openai.AsyncOpenAI(base_url=base_url, api_key=key, max_retries=0) as client:
         created: Final = await client.responses.create(model=model, input=PROMPT, background=True, store=False)
-        reads: Final = [_sdk_read(await client.responses.with_raw_response.retrieve(created.id)) for _ in range(READS)]
-        return created.id, tuple(reads)
+        return created.id, await _sdk_async_poll(client, created.id, READS)
 
 
 def _sdk_async_flow(scenario: Scenario, key: str, model: str) -> tuple[str, tuple[Read, ...]]:
@@ -137,7 +150,7 @@ def test_a_finished_background_response_bills_its_creator_once_however_often_it_
         upstream: Final = scripted_upstream(scenario, background_routes(terminal_status))
         log: Final = upstream_log(gateway, upstream.handle)
         response_id, reads = FLOWS[client](scenario, key, upstream.model)
-        assert reads == (Read(terminal_status, "pong", 0.0),) * READS
+        assert reads in (settling_reads(terminal_status, READS), free_reads(terminal_status, READS))
         assert_charged_exactly(lambda: key_spend(key), PRICE)
         assert_billed_like_its_creator(one_charged_row(upstream.model_id), key, team_id, user_id)
         assert team_spend(team_id) == pytest.approx(PRICE)
@@ -241,7 +254,7 @@ def test_a_background_response_is_free_until_it_finishes_and_a_failed_read_bills
         assert "The server had an error." in failed.text
         assert [row["status"] for row in managed_rows(response_id)] == ["queued"]
         upstream.script(background_routes("completed"))
-        assert [read_response(gateway, key, response_id) for _ in range(2)] == [Read("completed", "pong", 0.0)] * 2
+        assert tuple(read_response(gateway, key, response_id) for _ in range(2)) == settling_reads("completed", 2)
         assert_charged_exactly(lambda: key_spend(key), PRICE)
         assert [row["status"] for row in managed_rows(response_id)] == ["completed"]
 
@@ -256,8 +269,8 @@ def test_cancelling_a_background_response_bills_it_once(gateway: Gateway) -> Non
         )
         response_id: Final = create_background_response(scenario, key, upstream.model)
         cancel: Final = gateway.request("POST", f"/v1/responses/{response_id}/cancel", key=key)
-        assert read_of(cancel) == Read("cancelled", "pong", 0.0)
-        assert read_response(gateway, key, response_id) == Read("cancelled", "pong", 0.0)
+        reads: Final = (read_of(cancel), read_response(gateway, key, response_id))
+        assert reads in (settling_reads("cancelled", 2), free_reads("cancelled", 2))
         assert_charged_exactly(lambda: key_spend(key), PRICE)
         assert number(one_charged_row(upstream.model_id)["spend"]) == pytest.approx(PRICE)
 
@@ -303,7 +316,7 @@ def _streamed_response_id(gateway: Gateway, key: str, model: str) -> str:
 
 
 @pytest.mark.timeout(240)
-def test_a_streamed_background_response_read_later_bills_its_stream_and_its_first_read(gateway: Gateway) -> None:
+def test_a_streamed_background_response_read_later_bills_its_stream_alone(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         key: Final = scenario.key()
         frames: Final = (
@@ -314,8 +327,8 @@ def test_a_streamed_background_response_read_later_bills_its_stream_and_its_firs
         response_id: Final = _streamed_response_id(gateway, key, upstream.model)
         scenario.cleanups.callback(forget_row, response_id)
         upstream.script(background_routes("completed"))
-        assert [read_response(gateway, key, response_id) for _ in range(2)] == [Read("completed", "pong", 0.0)] * 2
-        assert_charged_exactly(lambda: key_spend(key), 2 * PRICE)
+        assert tuple(read_response(gateway, key, response_id) for _ in range(2)) == free_reads("completed", 2)
+        assert_charged_exactly(lambda: key_spend(key), PRICE)
 
 
 def _finished(scenario: Scenario, key: str) -> tuple[Upstream, str]:
@@ -336,9 +349,8 @@ def test_a_finished_response_the_proxy_lost_track_of_bills_its_reader_once(gatew
     with gateway.scenario() as scenario:
         key, team_id, user_id = _team_member_key(scenario)
         upstream, response_id = _lose_the_row_then_finish(scenario, key)
-        assert [read_response(gateway, key, response_id) for _ in range(READS)] == [
-            Read("completed", "pong", 0.0)
-        ] * READS
+        reads: Final = tuple(read_response(gateway, key, response_id) for _ in range(READS))
+        assert reads == settling_reads("completed", READS)
         assert_charged_exactly(lambda: key_spend(key), PRICE)
         assert_billed_like_its_creator(one_charged_row(upstream.model_id), key, team_id, user_id)
         assert [(row["status"], row["api_key"]) for row in managed_rows(response_id)] == [("completed", hashed(key))]
@@ -352,7 +364,8 @@ def test_concurrent_reads_of_a_finished_response_bill_it_once(gateway: Gateway, 
         upstream, response_id = _finished(scenario, key) if tracked else _lose_the_row_then_finish(scenario, key)
         with ThreadPoolExecutor(max_workers=CONCURRENT_READS) as pool:
             reads: Final = tuple(pool.map(lambda _: read_response(gateway, key, response_id), range(CONCURRENT_READS)))
-        assert reads == (Read("completed", "pong", 0.0),) * CONCURRENT_READS
+        assert [(read.status, read.text) for read in reads] == [("completed", "pong")] * CONCURRENT_READS
+        assert [read.cost for read in reads if read.cost != 0.0] in ([], [pytest.approx(PRICE)])
         assert_charged_exactly(lambda: key_spend(key), PRICE)
         assert len(charged_rows(upstream.model_id)) == 1
         assert [row["status"] for row in managed_rows(response_id)] == ["completed"]
@@ -365,9 +378,8 @@ def test_another_key_of_the_same_owner_reads_for_free_and_the_creating_key_pays(
         reader: Final = scenario.key(team_id=team_id, user_id=user_id)
         upstream: Final = scripted_upstream(scenario, background_routes("completed"))
         response_id: Final = create_background_response(scenario, creator, upstream.model)
-        assert [read_response(gateway, reader, response_id) for _ in range(READS)] == [
-            Read("completed", "pong", 0.0)
-        ] * READS
+        reads: Final = tuple(read_response(gateway, reader, response_id) for _ in range(READS))
+        assert reads in (settling_reads("completed", READS), free_reads("completed", READS))
         assert_charged_exactly(lambda: key_spend(creator), PRICE)
         assert key_spend(reader) == 0
         assert_billed_like_its_creator(one_charged_row(upstream.model_id), creator, team_id, user_id)
@@ -385,9 +397,8 @@ def test_a_create_that_asks_for_background_inside_extra_body_is_billed_once(gate
             upstream.model,
             body={"model": upstream.model, "input": PROMPT, "store": False, "extra_body": {"background": True}},
         )
-        assert [read_response(gateway, key, response_id) for _ in range(READS)] == [
-            Read("completed", "pong", 0.0)
-        ] * READS
+        reads: Final = tuple(read_response(gateway, key, response_id) for _ in range(READS))
+        assert reads in (settling_reads("completed", READS), free_reads("completed", READS))
         assert_charged_exactly(lambda: key_spend(key), PRICE)
         assert [object_value(body).get("background") for body in submissions(next(log), upstream.handle)] == [True]
 
@@ -398,9 +409,8 @@ def test_a_response_whose_instructions_carry_a_nul_is_tracked_and_billed_once(ga
         key: Final = scenario.key()
         upstream: Final = scripted_upstream(scenario, background_routes("completed", instructions="be\u0000brief"))
         response_id: Final = create_background_response(scenario, key, upstream.model)
-        assert [read_response(gateway, key, response_id) for _ in range(READS)] == [
-            Read("completed", "pong", 0.0)
-        ] * READS
+        reads: Final = tuple(read_response(gateway, key, response_id) for _ in range(READS))
+        assert reads in (settling_reads("completed", READS), free_reads("completed", READS))
         assert_charged_exactly(lambda: key_spend(key), PRICE)
         stored: Final = read_rows(
             "SELECT file_object->>'instructions' AS instructions FROM \"LiteLLM_ManagedObjectTable\" "
@@ -428,13 +438,14 @@ def test_a_request_tag_carrying_a_nul_is_stored_without_it_and_lands_on_the_bill
                 "litellm_metadata": {"tags": [f"audit-nul\u0000{suffix}"]},
             },
         )
-        assert [read_response(gateway, key, response_id) for _ in range(2)] == [Read("completed", "pong", 0.0)] * 2
+        reads: Final = tuple(read_response(gateway, key, response_id) for _ in range(2))
+        assert reads in (settling_reads("completed", 2), free_reads("completed", 2))
         assert_charged_exactly(lambda: key_spend(key), PRICE)
         assert f"audit-nul{suffix}" in list_value(one_charged_row(upstream.model_id)["request_tags"])
 
 
 @pytest.mark.timeout(240)
-def test_a_read_retargeted_with_a_client_side_api_base_is_free_and_the_poll_bills_the_real_usage(
+def test_a_read_retargeted_with_a_client_side_api_base_bills_the_real_usage_once(
     gateway: Gateway,
 ) -> None:
     with gateway.scenario() as scenario:
@@ -458,7 +469,7 @@ def test_a_read_retargeted_with_a_client_side_api_base_is_free_and_the_poll_bill
         retargeted: Final = read_response(
             gateway, key, response_id, {"model": upstream.model, "api_base": decoy.api_base()}
         )
-        assert retargeted == Read("completed", "pong", 0.0)
+        assert (retargeted,) in (settling_reads("completed", 1), free_reads("completed", 1))
         assert [call["method"] for call in next(decoy_log)] == ["GET"]
         eventually(
             lambda: [row["status"] for row in managed_rows(response_id)],
@@ -482,9 +493,8 @@ def test_a_row_stored_before_the_upgrade_bills_the_creating_team_and_user_once(g
             (response_id,),
         )
         upstream.script(background_routes("completed"))
-        assert [read_response(gateway, key, response_id) for _ in range(READS)] == [
-            Read("completed", "pong", 0.0)
-        ] * READS
+        reads: Final = tuple(read_response(gateway, key, response_id) for _ in range(READS))
+        assert reads in (settling_reads("completed", READS), free_reads("completed", READS))
         assert_charged_exactly(lambda: team_spend(team_id), PRICE)
         assert user_spend(user_id) == pytest.approx(PRICE)
         charged: Final = one_charged_row(upstream.model_id)
@@ -503,7 +513,7 @@ def test_reads_of_a_response_whose_row_already_settled_are_free(gateway: Gateway
             (settled_status, response_id),
         )
         upstream.script(background_routes("completed"))
-        assert [read_response(gateway, key, response_id) for _ in range(2)] == [Read("completed", "pong", 0.0)] * 2
+        assert tuple(read_response(gateway, key, response_id) for _ in range(2)) == free_reads("completed", 2)
         assert_charged_exactly(lambda: key_spend(key), 0.0)
         assert charged_rows(upstream.model_id) == []
 
@@ -528,7 +538,10 @@ def test_a_read_of_an_id_the_proxy_never_issued_fails_without_tracking_or_billin
         refused: Final = gateway.request("GET", f"/v1/responses/{foreign_id}", key=key)
         assert refused.status_code >= 400, refused.text
         assert managed_rows(foreign_id) == []
-        assert read_response(gateway, key, response_id) == Read("completed", "pong", 0.0)
+        assert (read_response(gateway, key, response_id),) in (
+            settling_reads("completed", 1),
+            free_reads("completed", 1),
+        )
         assert_charged_exactly(lambda: key_spend(key), PRICE)
         assert len(charged_rows(upstream.model_id)) == 1
 
@@ -549,6 +562,6 @@ def test_a_background_create_answered_at_once_and_its_cached_twin_bill_the_creat
         second: Final = create_background_response(scenario, key, upstream.model)
         assert len(submissions(next(log), upstream.handle)) == 1
         reads: Final = [read_response(gateway, key, response_id) for response_id in (first, second, first, second)]
-        assert reads == [Read("completed", "pong", 0.0)] * 4
+        assert tuple(reads) == free_reads("completed", 4)
         assert_charged_exactly(lambda: key_spend(key), PRICE)
         assert len(charged_rows(upstream.model_id)) == 1

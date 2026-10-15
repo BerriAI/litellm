@@ -188,6 +188,14 @@ def read_response(gateway: Gateway, key: str, response_id: str, body: Mapping[st
     return read_of(gateway.request("GET", f"/v1/responses/{response_id}", body, key=key))
 
 
+def free_reads(status: str, count: int) -> tuple[Read, ...]:
+    return (Read(status, "pong", 0.0),) * count
+
+
+def settling_reads(status: str, count: int) -> tuple[Read, ...]:
+    return (Read(status, "pong", pytest.approx(PRICE)), *free_reads(status, count - 1))
+
+
 def hashed(key: str) -> str:
     return sha256(key.encode()).hexdigest()
 

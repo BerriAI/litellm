@@ -48,6 +48,7 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
     from litellm.proxy.utils import PrismaClient, ProxyLogging
     from litellm.repositories.prisma_protocols import TableActions
     from litellm.router import Router
@@ -72,7 +73,13 @@ class BilledBackgroundResponse:
     metadata: Mapping[str, object]
 
 
-BilledResponseLogger = Callable[[BilledBackgroundResponse], Awaitable[float | None]]
+@dataclass(frozen=True, slots=True)
+class BilledCharge:
+    cost: float | None
+    logging_obj: "LiteLLMLogging"
+
+
+BilledResponseLogger = Callable[[BilledBackgroundResponse], Awaitable[BilledCharge]]
 UntrackedResponseTracker = Callable[[], Awaitable[bool]]
 
 
@@ -82,7 +89,7 @@ def _without_read_price(response: ResponsesAPIResponse) -> ResponsesAPIResponse:
     return unpriced
 
 
-async def log_billed_background_response(billed: BilledBackgroundResponse) -> float | None:
+async def log_billed_background_response(billed: BilledBackgroundResponse) -> BilledCharge:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
     from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
@@ -111,7 +118,7 @@ async def log_billed_background_response(billed: BilledBackgroundResponse) -> fl
     logging_obj.handle_sync_success_callbacks_for_async_calls(
         result=unpriced, start_time=logging_obj.start_time, end_time=end_time
     )
-    return cost
+    return BilledCharge(cost=cost, logging_obj=logging_obj)
 
 
 class _DeploymentBaseModel(BaseModel):
@@ -291,7 +298,7 @@ class CheckResponsesCost:
             litellm_params=_deployment_litellm_params(deployment) if deployment is not None else MappingProxyType({}),
             metadata=MappingProxyType(
                 {
-                    **(await self._creator_attribution.build(job, job.unified_object_id)),
+                    **(await self._creator_attribution.response_metadata(job, job.unified_object_id)),
                     INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
                     **target.model_metadata,
                     **(_deployment_metadata(deployment) if deployment is not None else {}),
@@ -304,17 +311,17 @@ class CheckResponsesCost:
         job: ManagedObjectRow,
         target: _PollTarget,
         response: ResponsesAPIResponse,
-    ) -> float | None:
+    ) -> BilledCharge | None:
         if not await self._claim_for_billing(job):
             verbose_proxy_logger.info(f"Response {job.unified_object_id} was already billed elsewhere, skipping")
             return None
         try:
-            cost: Final = await self._log_billed_response(await self._billed_response(job, target, response))
+            charge: Final = await self._log_billed_response(await self._billed_response(job, target, response))
         except BaseException:
             await self._release_billing_claim(job)
             raise
         verbose_proxy_logger.info(f"Response {job.unified_object_id} reached a terminal status and was billed")
-        return cost
+        return charge
 
     async def _tracked_job(self, response_id: str) -> ManagedObjectRow | None:
         return await _managed_object_table(self.prisma_client).find_first(
@@ -336,7 +343,7 @@ class CheckResponsesCost:
         response_id: str,
         response: ResponsesAPIResponse,
         track_untracked: UntrackedResponseTracker | None = None,
-    ) -> float | None:
+    ) -> BilledCharge | None:
         if response.status not in TERMINAL_RESPONSE_STATUSES:
             return None
         job: Final = await self._tracked_job(response_id) or await self._start_tracking(response_id, track_untracked)
@@ -344,7 +351,7 @@ class CheckResponsesCost:
             return None
         return await self._bill_once(job, self._poll_target(job), response)
 
-    async def bill_from_deployment(self, response_id: str) -> float | None:
+    async def bill_from_deployment(self, response_id: str) -> BilledCharge | None:
         job: Final = await self._tracked_job(response_id)
         if job is None or job.status not in PENDING_RESPONSE_STATUSES:
             return None

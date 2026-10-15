@@ -1603,6 +1603,31 @@ def _get_cost_breakdown_from_logging_obj(
     )
 
 
+def _header_value(value: float | None) -> str | None:
+    return str(value) if value is not None else None
+
+
+def cost_headers(
+    response_cost: float | str | None, litellm_logging_obj: LiteLLMLoggingObj | None
+) -> Mapping[str, str | None]:
+    cost_breakdown: Final = _get_cost_breakdown_from_logging_obj(
+        litellm_logging_obj=litellm_logging_obj, response_cost=response_cost
+    )
+    return {
+        "x-litellm-response-cost": str(response_cost),
+        "x-litellm-response-cost-original": _header_value(cost_breakdown.original_cost),
+        "x-litellm-response-cost-discount-amount": _header_value(cost_breakdown.discount_amount),
+        "x-litellm-response-cost-margin-amount": _header_value(cost_breakdown.margin_total_amount),
+        "x-litellm-response-cost-margin-percent": _header_value(cost_breakdown.margin_percent),
+        "x-litellm-response-cost-input": _header_value(cost_breakdown.input_cost),
+        "x-litellm-response-cost-output": _header_value(cost_breakdown.output_cost),
+        "x-litellm-response-cost-cache-read": _header_value(cost_breakdown.cache_read_cost),
+        "x-litellm-response-cost-cache-creation": _header_value(cost_breakdown.cache_creation_cost),
+        "x-litellm-response-cost-reasoning": _header_value(cost_breakdown.reasoning_cost),
+        "x-litellm-response-cost-tool-usage": _header_value(cost_breakdown.tool_usage_cost),
+    }
+
+
 def _classifier_cost_from_request_data(request_data: Mapping[str, object] | None) -> float | None:
     """Cost of the auto-router's LLM classifier call, read from the request's routing_decision.
 
@@ -1876,10 +1901,6 @@ class ProxyBaseLLMRequestProcessing:
             use_logging_obj=read_timing_from_logging_obj,
         )
 
-        cost_breakdown: Final = _get_cost_breakdown_from_logging_obj(
-            litellm_logging_obj=litellm_logging_obj, response_cost=response_cost
-        )
-
         # Calculate updated spend for header (include current response_cost)
         current_spend: Final = user_api_key_dict.spend or 0.0
         updated_spend = current_spend
@@ -1906,37 +1927,7 @@ class ProxyBaseLLMRequestProcessing:
             ),  # don't include query params, risk of leaking sensitive info
             "x-litellm-version": version,
             "x-litellm-model-region": model_region,
-            "x-litellm-response-cost": str(response_cost),
-            "x-litellm-response-cost-original": (
-                str(cost_breakdown.original_cost) if cost_breakdown.original_cost is not None else None
-            ),
-            "x-litellm-response-cost-discount-amount": (
-                str(cost_breakdown.discount_amount) if cost_breakdown.discount_amount is not None else None
-            ),
-            "x-litellm-response-cost-margin-amount": (
-                str(cost_breakdown.margin_total_amount) if cost_breakdown.margin_total_amount is not None else None
-            ),
-            "x-litellm-response-cost-margin-percent": (
-                str(cost_breakdown.margin_percent) if cost_breakdown.margin_percent is not None else None
-            ),
-            "x-litellm-response-cost-input": (
-                str(cost_breakdown.input_cost) if cost_breakdown.input_cost is not None else None
-            ),
-            "x-litellm-response-cost-output": (
-                str(cost_breakdown.output_cost) if cost_breakdown.output_cost is not None else None
-            ),
-            "x-litellm-response-cost-cache-read": (
-                str(cost_breakdown.cache_read_cost) if cost_breakdown.cache_read_cost is not None else None
-            ),
-            "x-litellm-response-cost-cache-creation": (
-                str(cost_breakdown.cache_creation_cost) if cost_breakdown.cache_creation_cost is not None else None
-            ),
-            "x-litellm-response-cost-reasoning": (
-                str(cost_breakdown.reasoning_cost) if cost_breakdown.reasoning_cost is not None else None
-            ),
-            "x-litellm-response-cost-tool-usage": (
-                str(cost_breakdown.tool_usage_cost) if cost_breakdown.tool_usage_cost is not None else None
-            ),
+            **cost_headers(response_cost, litellm_logging_obj),
             "x-litellm-classifier-cost": (str(classifier_cost) if classifier_cost is not None else None),
             "x-litellm-key-tpm-limit": str(user_api_key_dict.tpm_limit),
             "x-litellm-key-rpm-limit": str(user_api_key_dict.rpm_limit),

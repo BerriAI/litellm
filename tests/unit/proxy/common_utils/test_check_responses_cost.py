@@ -12,7 +12,7 @@ from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
-from litellm_enterprise.proxy.common_utils.check_responses_cost import BilledBackgroundResponse
+from litellm_enterprise.proxy.common_utils.check_responses_cost import BilledBackgroundResponse, BilledCharge
 
 from litellm.constants import MAX_OBJECTS_PER_POLL_CYCLE
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
@@ -26,16 +26,16 @@ class _RecordingBilledLogger:
     def __init__(self, failures: tuple[BaseException, ...] = (), cost: float = 0.25) -> None:
         self.billed: tuple[BilledBackgroundResponse, ...] = ()
         self._failures = failures
-        self.cost: Final = cost
+        self.charge: Final = BilledCharge(cost=cost, logging_obj=MagicMock())
 
-    async def __call__(self, billed: BilledBackgroundResponse) -> float:
+    async def __call__(self, billed: BilledBackgroundResponse) -> BilledCharge:
         await asyncio.sleep(0)
         if self._failures:
             failure, *remaining = self._failures
             self._failures = tuple(remaining)
             raise failure
         self.billed = (*self.billed, billed)
-        return self.cost
+        return self.charge
 
 
 def _deployment(model_id: str) -> Deployment:
@@ -1323,7 +1323,7 @@ async def test_only_the_first_read_that_sees_a_response_finished_bills_it():
         )
         await poller.check_responses_cost()
 
-    assert costs == (None, billed_logger.cost, None)
+    assert costs == (None, billed_logger.charge, None)
     (billed,) = billed_logger.billed
     assert billed.response.usage == finished.usage
     assert billed.response.id == "resp_read"
@@ -1452,11 +1452,11 @@ async def test_settling_from_the_deployment_bills_a_finished_response_once_from_
     fetched: Final = _terminal_response()
 
     with patch("litellm.aget_responses", new_callable=AsyncMock, return_value=fetched) as fetch:
-        cost: Final = await poller.bill_from_deployment("resp_settle")
+        charge: Final = await poller.bill_from_deployment("resp_settle")
     with patch("litellm.aget_responses", side_effect=AssertionError("a billed response is never fetched again")):
         assert await poller.bill_from_deployment("resp_settle") is None
 
-    assert cost == billed_logger.cost
+    assert charge == billed_logger.charge
     assert [_is_billed(call.kwargs["litellm_metadata"]) for call in fetch.call_args_list] == [False]
     (billed,) = billed_logger.billed
     assert billed.response.usage == fetched.usage
@@ -1544,11 +1544,11 @@ async def _bill_through_a_priced_deployment(
             }
         ]
     )
-    cost: Final = await CheckResponsesCost(
+    charge: Final = await CheckResponsesCost(
         proxy_logging_obj=MagicMock(), prisma_client=prisma_client, llm_router=router
     ).bill_if_finished(response_id=response_id, response=read)
     await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
-    return _PricedBilling(table=table, response_id=response_id, cost=cost)
+    return _PricedBilling(table=table, response_id=response_id, cost=charge.cost if charge is not None else None)
 
 
 @pytest.mark.asyncio

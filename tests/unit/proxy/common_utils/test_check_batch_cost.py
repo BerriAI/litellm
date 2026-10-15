@@ -2406,7 +2406,7 @@ class TestBatchCostAttribution:
             user_row=SimpleNamespace(user_email="alice@example.com", user_alias=None),
         )
 
-        metadata = await instance.build(self._job(), "batch-1")
+        metadata = await instance.batch_metadata(self._job(), "batch-1")
 
         assert metadata["user_api_key"] == "hash-alice"
         assert metadata["user_api_key_hash"] == "hash-alice"
@@ -2423,7 +2423,7 @@ class TestBatchCostAttribution:
         instance = self._instance()
         job = self._job(api_key=None, request_tags=None)
 
-        metadata = await instance.build(job, "batch-1")
+        metadata = await instance.batch_metadata(job, "batch-1")
 
         assert metadata["user_api_key"] is None
         assert metadata["user_api_key_user_id"] == "alice"
@@ -2440,12 +2440,28 @@ class TestBatchCostAttribution:
         instance = self._instance(prisma=prisma)
         job = self._job(created_by=None)
 
-        metadata = await instance.build(job, "batch-1")
+        metadata = await instance.batch_metadata(job, "batch-1")
 
         assert metadata["user_api_key"] == "hash-alice"
         assert metadata["user_api_key_user_id"] is None
         assert metadata["user_api_key_alias"] == "svc-key"
         prisma.db.litellm_usertable.find_unique.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_batch_metadata_keeps_the_creator_column_and_adds_no_budgets(self):
+        """The batch cost event keeps the user id and fields the batch poll has always written,
+        even though background responses read budgets and drop key-scoped creators off the same rows."""
+        from types import SimpleNamespace
+
+        instance = self._instance(
+            key_row=SimpleNamespace(key_alias="svc-key", spend=4.0, max_budget=5.0),
+            team_row=SimpleNamespace(team_alias="Team Alpha", organization_id=None, spend=40.0, max_budget=50.0),
+        )
+
+        metadata = await instance.batch_metadata(self._job(created_by="key:hash-alice"), "batch-1")
+
+        assert metadata["user_api_key_user_id"] == "key:hash-alice"
+        assert [field for field in metadata if field.endswith(("_spend", "_max_budget"))] == []
 
     @pytest.mark.asyncio
     async def test_metadata_drops_non_string_tags(self):
@@ -2454,7 +2470,7 @@ class TestBatchCostAttribution:
         instance = self._instance()
         job = self._job(request_tags=["env:prod", 7, None, "team:ml"])
 
-        metadata = await instance.build(job, "batch-1")
+        metadata = await instance.batch_metadata(job, "batch-1")
 
         assert metadata["tags"] == ["env:prod", "team:ml"]
 
@@ -2466,7 +2482,7 @@ class TestBatchCostAttribution:
         prisma.db.litellm_verificationtoken.find_unique = AsyncMock(side_effect=Exception("db down"))
         instance = self._instance(prisma=prisma)
 
-        metadata = await instance.build(self._job(), "batch-1")
+        metadata = await instance.batch_metadata(self._job(), "batch-1")
 
         assert metadata["user_api_key"] == "hash-alice"
         assert metadata.get("user_api_key_alias") is None
@@ -2475,7 +2491,7 @@ class TestBatchCostAttribution:
     async def test_cli_session_batch_keeps_its_alias_without_a_key_row(self):
         instance = self._instance(key_row=None)
 
-        metadata = await instance.build(self._job(api_key="cli-session-alice"), "batch-1")
+        metadata = await instance.batch_metadata(self._job(api_key="cli-session-alice"), "batch-1")
 
         assert metadata["user_api_key"] == "cli-session-alice"
         assert metadata["user_api_key_alias"] == "cli-session-alice"
@@ -2484,7 +2500,7 @@ class TestBatchCostAttribution:
     async def test_raw_cli_session_token_on_a_legacy_batch_row_is_not_treated_as_the_alias(self):
         instance = self._instance(key_row=None)
 
-        metadata = await instance.build(
+        metadata = await instance.batch_metadata(
             self._job(api_key="cli-session-Qm7xJ2kP9sLw4vT1nR8yAa"), "batch-1"
         )
 
@@ -2502,7 +2518,7 @@ class TestBatchCostAttribution:
             user_row=SimpleNamespace(user_email="alice@example.com", user_alias="Alice Chen"),
         )
 
-        metadata = await instance.build(self._job(), "batch-1")
+        metadata = await instance.batch_metadata(self._job(), "batch-1")
 
         assert metadata["user_api_key_alias"] == "Alice Chen"
         assert metadata["user_api_key"] == "hash-alice"
@@ -2518,7 +2534,7 @@ class TestBatchCostAttribution:
             user_row=SimpleNamespace(user_email="alice@example.com", user_alias="Alice Chen"),
         )
 
-        metadata = await instance.build(self._job(), "batch-1")
+        metadata = await instance.batch_metadata(self._job(), "batch-1")
 
         assert metadata["user_api_key_alias"] == "Alice Chen"
 
@@ -2533,7 +2549,7 @@ class TestBatchCostAttribution:
             user_row=SimpleNamespace(user_email="alice@example.com", user_alias="Alice Chen"),
         )
 
-        metadata = await instance.build(self._job(), "batch-1")
+        metadata = await instance.batch_metadata(self._job(), "batch-1")
 
         assert metadata["user_api_key_alias"] == "prod-key"
 
@@ -2548,7 +2564,7 @@ class TestBatchCostAttribution:
             team_row=SimpleNamespace(team_alias="Team Alpha", organization_id="org-team"),
         )
 
-        metadata = await instance.build(self._job(org_id="org-at-creation"), "batch-1")
+        metadata = await instance.batch_metadata(self._job(org_id="org-at-creation"), "batch-1")
 
         assert metadata["user_api_key_org_id"] == "org-at-creation"
 
@@ -2563,7 +2579,7 @@ class TestBatchCostAttribution:
             team_row=SimpleNamespace(team_alias="Team Alpha", organization_id="org-team"),
         )
 
-        metadata = await instance.build(self._job(), "batch-1")
+        metadata = await instance.batch_metadata(self._job(), "batch-1")
 
         assert metadata["user_api_key_org_id"] == "org-42"
 
@@ -2578,7 +2594,7 @@ class TestBatchCostAttribution:
             team_row=SimpleNamespace(team_alias="Team Alpha", organization_id="org-team"),
         )
 
-        metadata = await instance.build(self._job(), "batch-1")
+        metadata = await instance.batch_metadata(self._job(), "batch-1")
 
         assert metadata["user_api_key_org_id"] == "org-team"
 
@@ -2592,7 +2608,7 @@ class TestBatchCostAttribution:
         prisma.db.litellm_verificationtoken.find_unique = AsyncMock(side_effect=Exception("db down"))
         instance = self._instance(prisma=prisma)
 
-        metadata = await instance.build(self._job(), "batch-1")
+        metadata = await instance.batch_metadata(self._job(), "batch-1")
 
         assert metadata["user_api_key_org_id"] == "org-team"
 
@@ -2607,7 +2623,7 @@ class TestBatchCostAttribution:
             team_row=SimpleNamespace(team_alias="Team Alpha", organization_id=None),
         )
 
-        metadata = await instance.build(self._job(), "batch-1")
+        metadata = await instance.batch_metadata(self._job(), "batch-1")
 
         assert "user_api_key_org_id" not in metadata
 
@@ -2630,7 +2646,7 @@ class TestBatchCostAttribution:
             key_row=SimpleNamespace(key_alias="prod-key"),
             user_row=SimpleNamespace(user_email="alice@example.com", user_alias=None),
         )
-        metadata = await instance.build(self._job(api_key=token_hash), "batch-1")
+        metadata = await instance.batch_metadata(self._job(api_key=token_hash), "batch-1")
 
         assert metadata["user_api_key"] == token_hash
         assert metadata["user_api_key_hash"] == token_hash

@@ -8,6 +8,7 @@ key, team, organization, user, end user, and tags carry the spend.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Protocol, cast
 
 from pydantic import TypeAdapter
@@ -85,10 +86,17 @@ def _team_table(prisma_client: PrismaClient) -> TableActions[prisma_models.LiteL
     return TeamRepository(prisma_client).table
 
 
+@dataclass(frozen=True, slots=True)
+class _CreatorRows:
+    key: prisma_models.LiteLLM_VerificationToken | None
+    team: prisma_models.LiteLLM_TeamTable | None
+    user: prisma_models.LiteLLM_UserTable | None
+
+
 class ManagedObjectCreatorAttribution:
     """Rebuilds the spend-tracking metadata of whoever created a managed object, so the poll
     job's spend row is attributed like the creating request: key hash, team, organization,
-    user, end user, aliases, budgets, and tags.
+    user, aliases, and tags.
 
     Rows created before api_key and request_tags were persisted carry only created_by and
     team_id, and fall back to those. A named creating key owns user_api_key_alias; when it
@@ -96,57 +104,47 @@ class ManagedObjectCreatorAttribution:
     user's alias, because a resolvable name is more useful on the spend row than a null.
     user_api_key_org_id is resolved too: the spend update writer reads it off this metadata
     to increment organization spend, so leaving it out drops the cost from org accounting.
+    A background response also carries its end user and the key, team, and user budgets, the
+    way the read that billed it before did, and never names a key-scoped creator as its user.
     """
 
     def __init__(self, prisma_client: PrismaClient, poller_name: str) -> None:
         self._prisma_client: Final = prisma_client
         self._poller_name: Final = poller_name
 
-    async def build(self, job: ManagedObjectRow, object_id: str) -> Mapping[str, object]:
-        api_key: Final = getattr(job, "api_key", None)
-        team_id: Final = getattr(job, "team_id", None)
+    async def batch_metadata(self, job: ManagedObjectRow, object_id: str) -> Mapping[str, object]:
+        rows: Final = await self._rows(job, object_id)
+        return {"user_api_key_user_id": job.created_by, **_shared_metadata(job, rows)}
+
+    async def response_metadata(self, job: ManagedObjectRow, object_id: str) -> Mapping[str, object]:
+        rows: Final = await self._rows(job, object_id)
         end_user_id: Final = getattr(job, "end_user_id", None)
-        key_row: Final = await self._key_row(object_id, api_key, job.created_by)
-        team_row: Final = await self._team_row(object_id, team_id)
-        key_alias: Final = _key_alias(api_key, job.created_by, key_row)
-        team_alias: Final = getattr(team_row, "team_alias", None)
-        org_id: Final = getattr(job, "org_id", None) or _organization_id(key_row) or _organization_id(team_row)
-        tags: Final = _string_tags(getattr(job, "request_tags", None))
-        user_id: Final = _creator_user_id(job.created_by)
         return {
-            "user_api_key_user_id": user_id,
-            "user_api_key": api_key,
-            "user_api_key_hash": api_key,
-            "user_api_key_team_id": team_id,
-            **(await self._user_info(object_id, user_id)),
-            **({"user_api_key_alias": key_alias} if key_alias is not None else {}),
-            **({"user_api_key_team_alias": team_alias} if team_alias is not None else {}),
-            **({"user_api_key_org_id": org_id} if org_id is not None else {}),
+            "user_api_key_user_id": _creator_user_id(job.created_by),
+            **_shared_metadata(job, rows),
             **({"user_api_key_end_user_id": end_user_id} if end_user_id else {}),
-            **_budget_fields(key_row, "user_api_key_spend", "user_api_key_max_budget"),
-            **_budget_fields(team_row, "user_api_key_team_spend", "user_api_key_team_max_budget"),
-            **({"tags": tags} if tags else {}),
+            **_budget_fields(rows.key, "user_api_key_spend", "user_api_key_max_budget"),
+            **_budget_fields(rows.team, "user_api_key_team_spend", "user_api_key_team_max_budget"),
+            **_budget_fields(rows.user, "user_api_key_user_spend", "user_api_key_user_max_budget"),
         }
 
-    async def _user_info(self, object_id: str, user_id: str | None) -> Mapping[str, object]:
+    async def _rows(self, job: ManagedObjectRow, object_id: str) -> _CreatorRows:
+        return _CreatorRows(
+            key=await self._key_row(object_id, getattr(job, "api_key", None), job.created_by),
+            team=await self._team_row(object_id, getattr(job, "team_id", None)),
+            user=await self._user_row(object_id, _creator_user_id(job.created_by)),
+        )
+
+    async def _user_row(self, object_id: str, user_id: str | None) -> prisma_models.LiteLLM_UserTable | None:
         """Objects created by a team or service account key carry no user id, and
-        find_unique(where={"user_id": None}) raises, so those return nothing."""
+        find_unique(where={"user_id": None}) raises, so those resolve no row."""
         if not user_id:
-            return {}
+            return None
         try:
-            user_row: Final[prisma_models.LiteLLM_UserTable | None] = await _user_table(
-                self._prisma_client
-            ).find_unique(where={"user_id": user_id})
+            return await _user_table(self._prisma_client).find_unique(where={"user_id": user_id})
         except Exception as e:
             verbose_proxy_logger.error(f"{self._poller_name}: could not look up user {user_id} for {object_id}: {e}")
-            return {}
-        if user_row is None:
-            return {}
-        return {
-            "user_api_key_user_email": getattr(user_row, "user_email", None),
-            "user_api_key_alias": getattr(user_row, "user_alias", None),
-            **_budget_fields(user_row, "user_api_key_user_spend", "user_api_key_user_max_budget"),
-        }
+            return None
 
     async def _key_row(
         self, object_id: str, api_key: str | None, created_by: str | None
@@ -167,6 +165,32 @@ class ManagedObjectCreatorAttribution:
         except Exception as e:
             verbose_proxy_logger.error(f"{self._poller_name}: could not look up team {team_id} for {object_id}: {e}")
             return None
+
+
+def _shared_metadata(job: ManagedObjectRow, rows: _CreatorRows) -> Mapping[str, object]:
+    api_key: Final = getattr(job, "api_key", None)
+    team_id: Final = getattr(job, "team_id", None)
+    key_alias: Final = _key_alias(api_key, job.created_by, rows.key)
+    team_alias: Final = getattr(rows.team, "team_alias", None)
+    org_id: Final = getattr(job, "org_id", None) or _organization_id(rows.key) or _organization_id(rows.team)
+    tags: Final = _string_tags(getattr(job, "request_tags", None))
+    return {
+        "user_api_key": api_key,
+        "user_api_key_hash": api_key,
+        "user_api_key_team_id": team_id,
+        **(
+            {
+                "user_api_key_user_email": getattr(rows.user, "user_email", None),
+                "user_api_key_alias": getattr(rows.user, "user_alias", None),
+            }
+            if rows.user is not None
+            else {}
+        ),
+        **({"user_api_key_alias": key_alias} if key_alias is not None else {}),
+        **({"user_api_key_team_alias": team_alias} if team_alias is not None else {}),
+        **({"user_api_key_org_id": org_id} if org_id is not None else {}),
+        **({"tags": tags} if tags else {}),
+    }
 
 
 def _is_cli_session_key(api_key: str, created_by: str | None) -> bool:

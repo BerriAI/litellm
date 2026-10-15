@@ -43,7 +43,7 @@ from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth,
     user_api_key_auth_websocket,
 )
-from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing, create_response
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing, cost_headers, create_response
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _safe_set_request_parsed_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -65,6 +65,7 @@ from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.utils import TokenCountResponse
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy.utils import ProxyLogging
     from litellm.router import Router
 
@@ -892,15 +893,23 @@ async def _bill_finished_background_response(
     )
 
 
+class _BilledCharge(Protocol):
+    @property
+    def cost(self) -> float | None: ...
+
+    @property
+    def logging_obj(self) -> "LiteLLMLoggingObj": ...
+
+
 class _BackgroundCostCheck(Protocol):
-    async def bill_from_deployment(self, response_id: str) -> float | None: ...
+    async def bill_from_deployment(self, response_id: str) -> _BilledCharge | None: ...
 
     async def bill_if_finished(
         self,
         response_id: str,
         response: ResponsesAPIResponse,
         track_untracked: Callable[[], Awaitable[bool]] | None = None,
-    ) -> float | None: ...
+    ) -> _BilledCharge | None: ...
 
 
 def _background_cost_check() -> _BackgroundCostCheck | None:
@@ -919,18 +928,20 @@ def _background_cost_check() -> _BackgroundCostCheck | None:
 
 
 async def _settle_background_billing(
-    settle: Callable[[_BackgroundCostCheck], Awaitable[float | None]], fastapi_response: Response | None
+    settle: Callable[[_BackgroundCostCheck], Awaitable[_BilledCharge | None]], fastapi_response: Response | None
 ) -> None:
     try:
         cost_check: Final = _background_cost_check()
         if cost_check is None:
             return
-        billed_cost: Final = await settle(cost_check)
+        charge: Final = await settle(cost_check)
     except Exception as e:
         verbose_proxy_logger.warning("Billing a finished background response failed: %s", e)
         return
-    if billed_cost is not None and fastapi_response is not None:
-        fastapi_response.headers["x-litellm-response-cost"] = str(billed_cost)  # rebind-ok: FastAPI response headers
+    if charge is None or charge.cost is None or fastapi_response is None:
+        return
+    billed_headers: Final = cost_headers(charge.cost, charge.logging_obj)
+    fastapi_response.headers.update({name: value for name, value in billed_headers.items() if value is not None})
 
 
 def _caller_may_address_response(

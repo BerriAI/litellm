@@ -36,6 +36,7 @@ from integration.spend._background_responses import (
     read_response,
     response_body,
     scripted_routes,
+    settling_reads,
 )
 from pydantic import JsonValue, TypeAdapter
 
@@ -220,7 +221,7 @@ def test_with_the_cost_poll_off_the_first_finished_read_bills_the_creator_once_a
             _rescript((handle,), background_routes("completed"))
             finished: Final = tuple(read_response(proxy, key, response_id) for _ in range(READS))
             assert (unfinished.status, unfinished.cost) == ("queued", 0.0)
-            assert [(read.status, read.cost) for read in finished] == [("completed", 0.0)] * READS
+            assert finished == settling_reads("completed", READS)
             assert_charged_exactly(lambda: key_spend(key), PRICE)
             _assert_each_billed_once_as_background_cost(key, 1)
             spans: Final = eventually(
@@ -360,7 +361,9 @@ def test_background_responses_read_across_a_killed_worker_are_each_billed_once_t
             assert outcomes.count(200) >= len(outcomes) // 2, outcomes
             _rescript(handles, _with_chat(background_routes("completed")))
             finished: Final = tuple(read_response(owned.gateway, key, response_id) for response_id in response_ids * 2)
-            assert [(read.status, read.cost) for read in finished] == [("completed", 0.0)] * 2 * BURST_RESPONSES
+            assert [read.status for read in finished] == ["completed"] * 2 * BURST_RESPONSES
+            assert [read.cost in (0.0, pytest.approx(PRICE)) for read in finished] == [True] * 2 * BURST_RESPONSES
+            assert sum(read.cost or 0.0 for read in finished) <= BURST_RESPONSES * PRICE + 1e-9
             assert_charged_exactly(lambda: key_spend(key), BURST_RESPONSES * PRICE)
             _assert_each_billed_once_as_background_cost(key, BURST_RESPONSES)
 
