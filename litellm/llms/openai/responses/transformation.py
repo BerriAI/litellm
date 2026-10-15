@@ -471,14 +471,18 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             )
             else validated_input
         )
-        targets_openai: Final = self._targets_openai_api(litellm_params)
+        maps_anthropic_tool_search: Final = self._targets_openai_api(litellm_params) and any(
+            is_anthropic_tool_search_chat_tool(tool) for tool in tools or ()
+        )
         mapped_tools: Final = (
             self._tools_for_openai_tool_search(model=model, tools=tools, litellm_params=litellm_params)
-            if targets_openai
+            if maps_anthropic_tool_search
             else tools
         )
         replayable_input: Final = (
-            input_without_unanswered_anthropic_tool_search_calls(marked_input) if targets_openai else marked_input
+            input_without_unanswered_anthropic_tool_search_calls(marked_input)
+            if maps_anthropic_tool_search
+            else marked_input
         )
         stripped_input, stripped_tools = self.remove_cache_control_flag_from_input_and_tools(
             model=model, input=replayable_input, tools=mapped_tools

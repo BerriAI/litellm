@@ -449,12 +449,25 @@ class TestOpenAIResponsesAPIConfig:
         result: Final = self.config.transform_responses_api_request(
             model=self.model,
             input=history,
-            response_api_optional_request_params={},
+            response_api_optional_request_params={"tools": [_BM25_TOOL, _DEFERRED_WEATHER]},
             litellm_params=_OPENAI_API,
             headers={},
         )
 
         assert result["input"] == [item for item in history if item is not _CLAUDE_SEARCH_CALL]
+
+    def test_transform_keeps_history_as_sent_when_no_anthropic_search_tool_is_mapped(self) -> None:
+        history: Final = [{"role": "user", "content": "What is the weather in Paris?"}, _CLAUDE_SEARCH_CALL]
+
+        result: Final = self.config.transform_responses_api_request(
+            model=self.model,
+            input=history,
+            response_api_optional_request_params={"tools": [_undeferred(_DEFERRED_WEATHER)]},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["input"] == history
 
     def test_transform_strips_cache_control_from_input_content_blocks(self):
         """`cache_control` markers (Anthropic-only) must be stripped from
