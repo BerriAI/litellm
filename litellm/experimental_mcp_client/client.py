@@ -1,5 +1,5 @@
 """
-LiteLLM Proxy uses this MCP Client to connnect to other MCP servers.
+LiteLLM Proxy uses this MCP Client to connect to other MCP servers.
 """
 
 import asyncio
