@@ -455,6 +455,19 @@ class TestBetaHeadersOnTheWire:
 
     @pytest.mark.asyncio
     @respx.mock
+    async def test_client_dangerous_tool_use_beta_reaches_mantle_next_to_structured_outputs(self):
+        strict_tool = {"name": "get_name", "strict": True, "input_schema": {"type": "object"}}
+
+        route = await self._send(
+            extra_headers={"anthropic-beta": "dangerous-tool-use-2026-09-03"},
+            tools=[strict_tool],
+        )
+
+        assert _sent_betas(route) == ["dangerous-tool-use-2026-09-03"]
+        assert _sent_body(route)["tools"][0]["strict"] is True
+
+    @pytest.mark.asyncio
+    @respx.mock
     async def test_betas_and_version_never_travel_in_the_body(self):
         route = await self._send(
             extra_headers={"anthropic-beta": "context-1m-2025-08-07"},

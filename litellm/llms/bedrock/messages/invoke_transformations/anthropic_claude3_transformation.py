@@ -3,6 +3,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
@@ -63,6 +64,19 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
+_REQUEST_TOOLS: Final = TypeAdapter(tuple[dict[object, object], ...])
+
+
+def _sends_structured_outputs(anthropic_messages_request: Mapping[str, object]) -> bool:
+    output_config: Final = validated_object_mapping(anthropic_messages_request.get("output_config")) or {}
+    if output_config.get("format") is not None:
+        return True
+    try:
+        tools: Final = _REQUEST_TOOLS.validate_python(anthropic_messages_request.get("tools") or ())
+    except ValidationError:
+        return False
+    return any(tool.get("strict") is True for tool in tools)
+
 
 class AmazonAnthropicClaudeMessagesConfig(
     AnthropicMessagesConfig,
@@ -84,6 +98,9 @@ class AmazonAnthropicClaudeMessagesConfig(
     @property
     def beta_headers_provider(self) -> str:
         return self.custom_llm_provider or "bedrock"
+
+    def rejects_dangerous_tool_use_beta_with_structured_outputs(self) -> bool:
+        return True
 
     BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS = frozenset(BedrockInvokeAnthropicMessagesRequest.__annotations__.keys())
 
@@ -498,7 +515,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         messages: list[dict],
         anthropic_messages_optional_request_params: dict,
         headers: dict,
-        anthropic_messages_request: dict,
+        anthropic_messages_request: dict[str, object],
         injected_thinking_for_clear_thinking: bool,
     ) -> list[str]:
         anthropic_model_info: Final = AnthropicModelInfo()
@@ -545,8 +562,17 @@ class AmazonAnthropicClaudeMessagesConfig(
         dangerous_tool_use_beta: Final = ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value
         if anthropic_messages_optional_request_params.get("safeguards") is not None:
             beta_set.add(dangerous_tool_use_beta)
-        else:
+        elif (
+            dangerous_tool_use_beta in beta_set
+            and self.rejects_dangerous_tool_use_beta_with_structured_outputs()
+            and _sends_structured_outputs(anthropic_messages_request)
+        ):
             beta_set.discard(dangerous_tool_use_beta)
+            verbose_logger.debug(
+                "Bedrock Invoke: dropping %s from client headers. The request has structured outputs and no "
+                "safeguards, and Bedrock answers that pair with 'invalid beta flag' on Claude models before Opus 4.7.",
+                dangerous_tool_use_beta,
+            )
 
         self._filter_context_management_for_bedrock_invoke(
             anthropic_messages_request=anthropic_messages_request,

@@ -1677,30 +1677,55 @@ def test_bedrock_messages_does_not_add_dangerous_tool_use_beta_without_safeguard
     assert "dangerous-tool-use-2026-09-03" not in result.get("anthropic_beta", [])
 
 
-def test_bedrock_messages_drops_client_dangerous_tool_use_beta_without_safeguards(
+_NAME_SCHEMA: Final = {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
+
+
+@pytest.mark.parametrize(
+    "structured_output_params",
+    [
+        {"output_config": {"format": {"type": "json_schema", "schema": _NAME_SCHEMA}}},
+        {"tools": [{"name": "get_name", "strict": True, "input_schema": _NAME_SCHEMA}]},
+    ],
+    ids=["output_config_format", "strict_tool"],
+)
+def test_bedrock_messages_drops_client_dangerous_tool_use_beta_with_structured_outputs_and_no_safeguards(
+    local_model_cost_map, local_beta_headers_config, structured_output_params
+):
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Name a color."}]}],
+        anthropic_messages_optional_request_params={"max_tokens": 64, **structured_output_params},
+        litellm_params=GenericLiteLLMParams(),
+        headers={"anthropic-beta": "dangerous-tool-use-2026-09-03"},
+    )
+
+    assert all(result.get(key) == value for key, value in structured_output_params.items())
+    assert "dangerous-tool-use-2026-09-03" not in result.get("anthropic_beta", [])
+
+
+def test_bedrock_messages_keeps_client_dangerous_tool_use_beta_without_structured_outputs(
     local_model_cost_map, local_beta_headers_config
 ):
     from litellm.types.router import GenericLiteLLMParams
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
-    schema_format = {
-        "type": "json_schema",
-        "schema": {"type": "object", "properties": {"name": {"type": "string"}}},
-    }
 
     result = cfg.transform_anthropic_messages_request(
         model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=[{"role": "user", "content": [{"type": "text", "text": "Name a color."}]}],
         anthropic_messages_optional_request_params={
             "max_tokens": 64,
-            "output_config": {"format": schema_format},
+            "tools": [{"name": "get_name", "input_schema": _NAME_SCHEMA}],
         },
         litellm_params=GenericLiteLLMParams(),
         headers={"anthropic-beta": "dangerous-tool-use-2026-09-03"},
     )
 
-    assert result.get("output_config") == {"format": schema_format}
-    assert "dangerous-tool-use-2026-09-03" not in result.get("anthropic_beta", [])
+    assert result["anthropic_beta"] == ["dangerous-tool-use-2026-09-03"]
 
 
 def test_bedrock_messages_stream_decoder_keeps_safeguard_results():
