@@ -21,8 +21,7 @@ def select_cases(
         case
         for strategy in strategies
         for case in strategy.cases
-        if (not sdk_functions or case.sdk_function in sdk_functions)
-        and (surface is None or case.surface == surface)
+        if (not sdk_functions or case.sdk_function in sdk_functions) and (surface is None or case.surface == surface)
     )
 
 
@@ -32,8 +31,7 @@ def run_command(
     runner_args: Sequence[str] = (),
 ) -> int:
     grouped: Final = {
-        strategy.id: tuple(case for case in cases if case.strategy_id == strategy.id)
-        for strategy in strategies
+        strategy.id: tuple(case for case in cases if case.strategy_id == strategy.id) for strategy in strategies
     }
     visible: Final = tuple(strategy for strategy in strategies if grouped[strategy.id])
     runners: Final = tuple(replace(strategy, cases=grouped[strategy.id]) for strategy in visible)

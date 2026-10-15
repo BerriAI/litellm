@@ -1,14 +1,15 @@
 from typing import Final, Literal
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.llms.vertex_ai.vertex_ai_non_gemini import VertexAIError
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
@@ -16,6 +17,9 @@ from litellm.types.llms.vertex_ai import *
 from litellm.types.utils import EmbeddingResponse
 
 from .types import *
+
+_JSON_VALUE: Final = TypeAdapter(object)
+_JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class VertexEmbedding(VertexBase):
@@ -65,8 +69,6 @@ class VertexEmbedding(VertexBase):
                 litellm_params=litellm_params,
             )
 
-        should_use_v1beta1_features: Final = self.is_using_v1beta1_features(optional_params=optional_params)
-
         _auth_header, vertex_project = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -85,7 +87,6 @@ class VertexEmbedding(VertexBase):
             stream=False,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
-            should_use_v1beta1_features=should_use_v1beta1_features,
             mode="embedding",
             use_psc_endpoint_format=use_psc_endpoint_format,
         )
@@ -103,7 +104,7 @@ class VertexEmbedding(VertexBase):
         if timeout:
             _client_params["timeout"] = timeout
         if client is None or not isinstance(client, HTTPHandler):
-            client = _get_httpx_client(params=_client_params)
+            client = get_httpx_client(params=_client_params)
         else:
             client = client
         ## LOGGING
@@ -126,12 +127,12 @@ class VertexEmbedding(VertexBase):
         except httpx.TimeoutException:
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
-        _json_response: Final = response.json()
+        _json_response: Final = _JSON_VALUE.validate_python(response.json())
         ## LOGGING POST-CALL
         logging_obj.post_call(input=input, api_key=None, original_response=_json_response)
 
         model_response = litellm.vertexAITextEmbeddingConfig.transform_vertex_response_to_openai(
-            response=_json_response, model=model, model_response=model_response
+            response=_JSON_DICT.validate_python(_json_response), model=model, model_response=model_response
         )
 
         return model_response
@@ -160,7 +161,6 @@ class VertexEmbedding(VertexBase):
         """
         Async embedding implementation
         """
-        should_use_v1beta1_features: Final = self.is_using_v1beta1_features(optional_params=optional_params)
         _auth_header, vertex_project = await self._ensure_access_token_async(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -179,7 +179,6 @@ class VertexEmbedding(VertexBase):
             stream=False,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
-            should_use_v1beta1_features=should_use_v1beta1_features,
             mode="embedding",
             use_psc_endpoint_format=use_psc_endpoint_format,
         )
@@ -220,12 +219,12 @@ class VertexEmbedding(VertexBase):
         except httpx.TimeoutException:
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
-        _json_response: Final = response.json()
+        _json_response: Final = _JSON_VALUE.validate_python(response.json())
         ## LOGGING POST-CALL
         logging_obj.post_call(input=input, api_key=None, original_response=_json_response)
 
         model_response = litellm.vertexAITextEmbeddingConfig.transform_vertex_response_to_openai(
-            response=_json_response, model=model, model_response=model_response
+            response=_JSON_DICT.validate_python(_json_response), model=model, model_response=model_response
         )
 
         return model_response

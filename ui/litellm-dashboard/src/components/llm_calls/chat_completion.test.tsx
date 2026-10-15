@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import openai from "openai";
 import { makeOpenAIChatCompletionRequest } from "./chat_completion";
 import type { TokenUsage } from "../chat_ui/ResponseMetrics";
 
 vi.mock("@/components/networking", () => ({
-  getProxyBaseUrl: vi.fn(() => "https://example.com"),
+  getGatewayBaseUrl: vi.fn(() => "https://gateway.example.com"),
 }));
 
 // Mock the OpenAI client
@@ -72,6 +73,7 @@ describe("chat_completion", () => {
   it("should make a basic chat completion request", async () => {
     await makeOpenAIChatCompletionRequest(mockChatHistory, mockUpdateUI, "gpt-4", "test-token");
 
+    expect(openai.OpenAI).toHaveBeenCalledWith(expect.objectContaining({ baseURL: "https://gateway.example.com" }));
     expect(mockCreate).toHaveBeenCalledTimes(1);
     expect(mockCreate).toHaveBeenCalledWith(
       {
@@ -613,5 +615,49 @@ describe("chat_completion response cache", () => {
     );
 
     expect(onUsageData).toHaveBeenCalledWith(expect.not.objectContaining({ servedFromResponseCache: true }));
+  });
+});
+
+describe("chat_completion custom headers", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("sends custom headers alongside the tags header on the OpenAI client", async () => {
+    mockCreate.mockReturnValueOnce(nonStreamingResponse({ choices: [{ message: { content: "Hi" } }] }));
+
+    await makeOpenAIChatCompletionRequest(
+      [{ role: "user", content: "Hello" }],
+      vi.fn(),
+      "gpt-4",
+      "test-token",
+      ["team-a"],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      { "anthropic-beta": "context-1m-2025-08-07", "x-litellm-tags": "overridden" },
+    );
+
+    expect(vi.mocked(openai.OpenAI).mock.calls[0][0]).toMatchObject({
+      defaultHeaders: { "anthropic-beta": "context-1m-2025-08-07", "x-litellm-tags": "overridden" },
+    });
   });
 });

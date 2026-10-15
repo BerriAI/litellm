@@ -16,6 +16,7 @@ export interface RouterSettingsField {
 export interface RouterFieldsResponse {
   fields: RouterSettingsField[];
   routing_strategy_descriptions: Record<string, string>;
+  routing_group_strategies?: string[];
 }
 
 const routerFieldsKeys = createQueryKeys("routerFields");

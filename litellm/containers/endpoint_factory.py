@@ -13,6 +13,8 @@ from functools import partial
 from pathlib import Path
 from typing import Final, Literal
 
+from pydantic import ConfigDict, TypeAdapter
+
 import litellm
 from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
 from litellm.containers.utils import decode_managed_container_id_for_request
@@ -33,13 +35,14 @@ RESPONSE_TYPES: Final[dict[str, type]] = {
     "ContainerFileObject": ContainerFileObject,
     "DeleteContainerFileResponse": DeleteContainerFileResponse,
 }
+_ENDPOINTS_DOCUMENT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 def _load_endpoints_config() -> dict:
     """Load the endpoints configuration from JSON file."""
     config_path: Final = Path(__file__).parent / "endpoints.json"
     with open(config_path) as f:
-        return json.load(f)
+        return _ENDPOINTS_DOCUMENT.validate_python(json.load(f))
 
 
 def create_sync_endpoint_function(endpoint_config: dict) -> Callable:

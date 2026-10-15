@@ -103,8 +103,18 @@ describe("useProjectDetails", () => {
     expect(global.fetch).not.toHaveBeenCalled();
   });
 
-  it("should not fetch when userRole is not an admin role", () => {
-    mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole: "Internal User" });
+  it.each(["Internal User", "Org Admin"])("should fetch when userRole is %s", async (userRole) => {
+    mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole });
+    (global.fetch as any).mockResolvedValue({ ok: true, json: async () => mockProject });
+    const { result } = renderHook(() => useProjectDetails("proj-1"), {
+      wrapper: makeWrapper(queryClient),
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(global.fetch).toHaveBeenCalled();
+  });
+
+  it("should not fetch when userRole cannot read projects", () => {
+    mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole: "regular_user" });
     const { result } = renderHook(() => useProjectDetails("proj-1"), {
       wrapper: makeWrapper(queryClient),
     });
