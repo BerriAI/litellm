@@ -132,6 +132,12 @@ def _resolve_proxy_base_url_env() -> str | None:
     return None
 
 
+def configured_proxy_base_url() -> str | None:
+    """The operator-configured public origin (``PROXY_BASE_URL``), or None when the gateway only
+    knows itself through the current request's Host and forwarded headers."""
+    return _resolve_proxy_base_url_env()
+
+
 CIMD_METADATA_PATH: Final = "/oauth/client-metadata.json"
 
 

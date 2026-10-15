@@ -3751,7 +3751,7 @@ class TestTemporaryMCPSessionEndpoints:
             response_types=["code"],
             token_endpoint_auth_method="client_secret_basic",
             fallback_client_id="server-1",
-            persist_credentials=True,
+            replace_stale_client=True,
             client_redirect_uris=None,
             client_application_type=None,
         )
@@ -3807,11 +3807,11 @@ class TestTemporaryMCPSessionEndpoints:
         assert register_mock.await_args.kwargs["client_redirect_uris"] == forwarded
 
     @pytest.mark.asyncio
-    async def test_mcp_register_does_not_persist_for_non_admin(self):
-        """A non-admin caller (who may have access to a real server) must not persist the DCR
-        result onto the shared server row. register_client_with_server is invoked with
-        persist_credentials=False, so user-side registration returns the DCR response without
-        writing shared client credentials. Only a full PROXY_ADMIN establishes the shared client."""
+    async def test_mcp_register_denies_non_admin_the_authority_to_replace_the_shared_client(self):
+        """A non-admin caller may mint the server's first shared DCR client (any user's connect
+        has to, or token refresh runs with no client_id), but must never replace an existing one:
+        register_client_with_server is invoked with replace_stale_client=False. Only a full
+        PROXY_ADMIN re-registers a client whose redirect_uris went stale."""
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
             mcp_register,
         )
@@ -3850,7 +3850,7 @@ class TestTemporaryMCPSessionEndpoints:
             )
 
         assert result is register_response
-        assert register_mock.await_args.kwargs["persist_credentials"] is False
+        assert register_mock.await_args.kwargs["replace_stale_client"] is False
 
     @pytest.mark.asyncio
     async def test_get_cached_temporary_mcp_server_falls_back_to_redis(self):
