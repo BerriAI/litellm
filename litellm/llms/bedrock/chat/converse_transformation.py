@@ -762,7 +762,7 @@ class AmazonConverseConfig(BaseConfig):
         return ToolChoiceValuesBlock(auto={})
 
     def map_tool_choice_values(
-        self, model: str, tool_choice: str | dict, drop_params: bool
+        self, model: str, tool_choice: object, drop_params: bool
     ) -> ToolChoiceValuesBlock | None:
         if tool_choice == "none":
             if litellm.drop_params is True or drop_params is True:
@@ -1384,7 +1384,7 @@ class AmazonConverseConfig(BaseConfig):
             return ContentBlock(cachePoint=cache_point)
 
     @staticmethod
-    def _build_cache_point_block(control: dict | None, model: str | None = None) -> CachePointBlock:
+    def _build_cache_point_block(control: Mapping[str, object] | None, model: str | None = None) -> CachePointBlock:
         """Build a Bedrock ``cachePoint`` block from an OpenAI-style ``cache_control``/``control`` dict.
 
         ``type`` is always ``"default"`` (the only value Bedrock's Converse API
@@ -1394,7 +1394,7 @@ class AmazonConverseConfig(BaseConfig):
         cache_point: Final = CachePointBlock(type="default")
         if isinstance(control, dict) and "ttl" in control:
             ttl: Final = control["ttl"]
-            if ttl in ["5m", "1h"] and model is not None and supports_bedrock_prompt_cache_ttl(model):
+            if ttl in ("5m", "1h") and model is not None and supports_bedrock_prompt_cache_ttl(model):
                 cache_point["ttl"] = ttl
         return cache_point
 
@@ -2026,7 +2026,7 @@ class AmazonConverseConfig(BaseConfig):
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         headers: dict | None = None,
     ) -> RequestObject:
         capability_model: Final = bedrock_capability_model(model, litellm_params.get("base_model"))
@@ -2095,7 +2095,7 @@ class AmazonConverseConfig(BaseConfig):
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         headers: dict | None = None,
     ) -> RequestObject:
         capability_model: Final = bedrock_capability_model(model, litellm_params.get("base_model"))
