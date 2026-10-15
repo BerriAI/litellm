@@ -4740,3 +4740,12 @@ class GenericGuardrailAPIInputs(TypedDict, total=False):
     stream_holdback_chars: list[
         int
     ]  # trailing chars to withhold from streaming emission per text (word-boundary safety)
+
+
+class ProviderRoutingHints(TypedDict, total=False):
+    custom_llm_provider: ReadOnly[str | None]
+    api_base: ReadOnly[str | None]
+
+
+class BaseUrlRoutingHint(TypedDict, total=False):
+    base_url: ReadOnly[str | None]
