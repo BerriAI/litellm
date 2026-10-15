@@ -10221,6 +10221,7 @@ class ProviderConfigManager:
     def get_provider_google_genai_generate_content_config(
         model: str,
         provider: LlmProviders,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> BaseGoogleGenAIGenerateContentConfig | None:
         if litellm.LlmProviders.GEMINI == provider:
             from litellm.llms.gemini.google_genai.transformation import (
@@ -10234,7 +10235,7 @@ class ProviderConfigManager:
                 VertexAIGoogleGenAIConfig,
             )
 
-            if not uses_vertex_gemini_api(model):
+            if not uses_vertex_gemini_api(model, litellm_params):
                 return None
             return VertexAIGoogleGenAIConfig()
         return None

@@ -1,7 +1,10 @@
 from collections.abc import AsyncIterator, Coroutine, Mapping
 from typing import Final, cast
 
+from openai.types.chat import ChatCompletionStreamOptionsParam
+
 import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.google_genai.adapters import GenerateContentCompletionKwargs
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelResponse
@@ -10,6 +13,27 @@ from .transformation import GoogleGenAIAdapter, deployment_supports_openai_param
 
 # Initialize adapter
 GOOGLE_GENAI_ADAPTER: Final = GoogleGenAIAdapter()
+
+
+def _mark_failure_logged_by_inner_completion(adapter_kwargs: Mapping[str, object]) -> None:
+    outer_logging_obj: Final = adapter_kwargs.get("litellm_logging_obj")
+    if isinstance(outer_logging_obj, LiteLLMLoggingObj):
+        outer_logging_obj.mark_logging_complete(event_type="sync_failure")
+        outer_logging_obj.mark_logging_complete(event_type="async_failure")
+
+
+def _adapter_stream_options(
+    requested: object, model: str, custom_llm_provider: str | None
+) -> ChatCompletionStreamOptionsParam | None:
+    match requested:
+        case {"include_usage": True}:
+            return {"include_usage": True}
+        case Mapping():
+            return None
+        case _ if deployment_supports_openai_param(model, custom_llm_provider, "stream_options", when_unknown=False):
+            return {"include_usage": True}
+        case _:
+            return None
 
 
 class GenerateContentToCompletionHandler:
@@ -52,13 +76,13 @@ class GenerateContentToCompletionHandler:
 
         if stream:
             completion_kwargs["stream"] = stream
-            if deployment_supports_openai_param(
+            stream_options: Final = _adapter_stream_options(
+                (extra_kwargs or {}).get("stream_options"),
                 model,
                 litellm_params.custom_llm_provider if litellm_params else None,
-                "stream_options",
-                when_unknown=False,
-            ):
-                completion_kwargs["stream_options"] = {"include_usage": True}
+            )
+            if stream_options is not None:
+                completion_kwargs["stream_options"] = stream_options
 
         return GenerateContentCompletionKwargs(**completion_kwargs)
 
@@ -82,7 +106,11 @@ class GenerateContentToCompletionHandler:
             extra_kwargs=kwargs,
         )
 
-        completion_response: Final = await litellm.acompletion(**completion_kwargs)
+        try:
+            completion_response: Final = await litellm.acompletion(**completion_kwargs)
+        except Exception:
+            _mark_failure_logged_by_inner_completion(kwargs)
+            raise
 
         if stream:
             # Check if completion_response is actually a stream or a ModelResponse
@@ -139,7 +167,11 @@ class GenerateContentToCompletionHandler:
             extra_kwargs=kwargs,
         )
 
-        completion_response: Final = litellm.completion(**completion_kwargs)
+        try:
+            completion_response: Final = litellm.completion(**completion_kwargs)
+        except Exception:
+            _mark_failure_logged_by_inner_completion(kwargs)
+            raise
 
         if stream:
             # Check if completion_response is actually a stream or a ModelResponse

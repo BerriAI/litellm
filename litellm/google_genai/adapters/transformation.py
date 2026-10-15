@@ -659,8 +659,7 @@ class GoogleGenAIAdapter:
         # Extract the main response content from streaming chunk
         choice: Final = response.choices[0] if response.choices else None
         if not choice:
-            # Return empty chunk if no choices
-            return None
+            return self._usage_only_streaming_chunk(response)
 
         # Handle streaming choice
         if isinstance(choice, StreamingChoices):
@@ -677,7 +676,7 @@ class GoogleGenAIAdapter:
 
         # Only create response chunk if we have parts or it's the final chunk
         if not parts and not finish_reason:
-            return None
+            return self._usage_only_streaming_chunk(response)
 
         # Create Google GenAI streaming format response
         streaming_chunk: Final[_JsonDict] = {
@@ -705,6 +704,15 @@ class GoogleGenAIAdapter:
             streaming_chunk["usageMetadata"] = usage_metadata
 
         return streaming_chunk
+
+    def _usage_only_streaming_chunk(self, response: ModelResponse | ModelResponseStream) -> Mapping[str, object] | None:
+        usage: Final[object] = getattr(response, "usage", None)
+        if not usage:
+            return None
+        return {
+            "candidates": [{"content": {"parts": [{"text": ""}], "role": "model"}, "index": 0}],
+            "usageMetadata": self._map_usage(usage),
+        }
 
     def _transform_openai_message_to_google_genai_parts(
         self,

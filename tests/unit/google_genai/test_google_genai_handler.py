@@ -6,6 +6,7 @@ Test to verify the Google GenAI generate_content handler functionality
 import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Final
 
 import httpx
 import pytest
@@ -301,6 +302,23 @@ _CHAT_BODY: dict[str, object] = {
 }
 
 
+_CHAT_SSE_WITH_USAGE = _CHAT_SSE.replace(
+    "data: [DONE]",
+    'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[],'
+    '"usage":{"prompt_tokens":340,"completion_tokens":1,"total_tokens":341}}\n\n'
+    "data: [DONE]",
+)
+
+
+class _FailureCallTypes(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.call_types: list[str] = []
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self.call_types.append(kwargs["call_type"])
+
+
 class _SuccessPayloads(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
@@ -364,12 +382,19 @@ async def test_generate_content_adapter_logs_router_model_group(
 
 
 @pytest.mark.parametrize(
-    ("stream", "expected_stream_options"),
-    [(True, {"include_usage": True}), (False, None)],
+    ("stream", "requested_stream_options", "expected_stream_options"),
+    [
+        (True, None, {"include_usage": True}),
+        (True, {"include_usage": False}, None),
+        (False, None, None),
+    ],
 )
 @pytest.mark.asyncio
 async def test_generate_content_adapter_asks_openai_compatible_upstream_for_stream_usage(
-    _httpx_transport: None, stream: bool, expected_stream_options: dict[str, bool] | None
+    _httpx_transport: None,
+    stream: bool,
+    requested_stream_options: dict[str, bool] | None,
+    expected_stream_options: dict[str, bool] | None,
 ):
     from litellm.types.router import GenericLiteLLMParams
 
@@ -386,8 +411,57 @@ async def test_generate_content_adapter_asks_openai_compatible_upstream_for_stre
             contents=[{"role": "user", "parts": [{"text": "Hello"}]}],
             litellm_params=GenericLiteLLMParams(api_base="http://upstream.test/v1", api_key="k"),
             stream=stream,
+            **({} if requested_stream_options is None else {"stream_options": requested_stream_options}),
         )
         if stream:
             await _drain(response)
 
     assert json.loads(route.calls[0].request.content).get("stream_options") == expected_stream_options
+
+
+@pytest.mark.asyncio
+async def test_generate_content_adapter_stream_ends_with_upstream_usage(_httpx_transport: None):
+    from litellm.types.router import GenericLiteLLMParams
+
+    with respx.mock() as upstream:
+        upstream.post("http://upstream.test/v1/chat/completions").mock(
+            return_value=httpx.Response(200, text=_CHAT_SSE_WITH_USAGE, headers={"content-type": "text/event-stream"})
+        )
+        response = await GenerateContentToCompletionHandler.async_generate_content_handler(
+            model="hosted_vllm/grok",
+            contents=[{"role": "user", "parts": [{"text": "Hello"}]}],
+            litellm_params=GenericLiteLLMParams(api_base="http://upstream.test/v1", api_key="k"),
+            stream=True,
+        )
+        events: Final = [chunk async for chunk in response]
+
+    payloads: Final = [
+        json.loads(line.removeprefix("data: "))
+        for line in b"".join(events).decode().splitlines()
+        if line.startswith("data: {")
+    ]
+    assert payloads[-1]["usageMetadata"]["promptTokenCount"] == 340
+
+
+@pytest.mark.parametrize("entrypoint", ["agenerate_content", "agenerate_content_stream"])
+@pytest.mark.asyncio
+async def test_generate_content_adapter_failure_is_logged_once(
+    _httpx_transport: None, monkeypatch: pytest.MonkeyPatch, entrypoint: str
+):
+    failures = _FailureCallTypes()
+    monkeypatch.setattr(litellm, "callbacks", [failures])
+
+    with respx.mock() as upstream:
+        upstream.post("http://upstream.test/v1/chat/completions").mock(
+            return_value=httpx.Response(400, json={"error": {"message": "max_tokens must be positive"}})
+        )
+        with pytest.raises(litellm.BadRequestError):
+            await getattr(litellm.google_genai, entrypoint)(
+                model="hosted_vllm/grok",
+                contents=[{"role": "user", "parts": [{"text": "Hello"}]}],
+                api_base="http://upstream.test/v1",
+                api_key="k",
+            )
+    await asyncio.sleep(0.5)
+
+    assert failures.call_types == ["acompletion"]

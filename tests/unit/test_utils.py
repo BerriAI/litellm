@@ -7007,21 +7007,24 @@ def test_get_model_info_gemini(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "model, expects_native_config",
+    "model, litellm_params, expects_native_config",
     [
-        ("gemini-2.5-flash", True),
-        ("xai/grok-4.6", False),
-        ("claude-haiku-4-5@20251001", False),
-        ("openai/gpt-oss-120b-maas", False),
-        ("gemma/gemma-3-12b-it", False),
-        ("agent_engine/1234567890", False),
+        ("gemini-2.5-flash", None, True),
+        ("xai/grok-4.6", None, False),
+        ("claude-haiku-4-5@20251001", None, False),
+        ("openai/gpt-oss-120b-maas", None, False),
+        ("gemma/gemma-3-12b-it", None, False),
+        ("agent_engine/1234567890", None, False),
+        ("openai/tuned-endpoint", {"base_model": "gemini-2.5-flash"}, True),
     ],
 )
-def test_vertex_generate_content_config_follows_model_route(model: str, expects_native_config: bool):
+def test_vertex_generate_content_config_follows_model_route(
+    model: str, litellm_params: dict[str, str] | None, expects_native_config: bool
+):
     from litellm.llms.vertex_ai.google_genai.transformation import VertexAIGoogleGenAIConfig
 
     config: Final = ProviderConfigManager.get_provider_google_genai_generate_content_config(
-        model=model, provider=litellm.LlmProviders.VERTEX_AI
+        model=model, provider=litellm.LlmProviders.VERTEX_AI, litellm_params=litellm_params
     )
     if expects_native_config:
         assert isinstance(config, VertexAIGoogleGenAIConfig)

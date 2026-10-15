@@ -301,8 +301,8 @@ def get_vertex_ai_model_route(model: str, litellm_params: Mapping[str, object] |
 GEMINI_API_ROUTES: Final = frozenset({VertexAIModelRoute.GEMINI, VertexAIModelRoute.NON_GEMINI})
 
 
-def uses_vertex_gemini_api(model: str) -> bool:
-    return get_vertex_ai_model_route(model) in GEMINI_API_ROUTES
+def uses_vertex_gemini_api(model: str, litellm_params: Mapping[str, object] | None = None) -> bool:
+    return get_vertex_ai_model_route(model, litellm_params) in GEMINI_API_ROUTES
 
 
 def get_supports_system_message(
