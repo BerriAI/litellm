@@ -185,6 +185,13 @@ def _caller_trace_field(data: Mapping[str, object], metadata_variable_name: str,
     return requester_value if isinstance(requester_value, str) and requester_value else None
 
 
+def _caller_body_session_id(data: Mapping[str, object], metadata_variable_name: str) -> str | None:
+    top_level: Final = data.get("litellm_session_id")
+    if isinstance(top_level, str) and top_level:
+        return top_level
+    return _caller_trace_field(data, metadata_variable_name, "session_id")
+
+
 def _stampable_key_hash(user_api_key_dict: UserAPIKeyAuth) -> str | None:
     """Only proxy-validated keys are stamped, proven by the unforgeable
     via_virtual_key marker AND a known non-secret shape: the sha256 hex digest
@@ -1625,6 +1632,7 @@ class LiteLLMProxyRequestSetup:
         # Finally update the requests metadata with the `metadata_from_headers`
         #########################################################################################
 
+        normalized_headers: Final = MappingProxyType({k.lower(): v for k, v in headers.items() if isinstance(k, str)})
         agent_id_from_header: Final = headers.get("x-litellm-agent-id")
         # Explicit litellm headers take precedence; fall back to any x-*-session-id header.
         chain_id: Final = get_chain_id_from_headers(dict(headers))
@@ -1634,13 +1642,12 @@ class LiteLLMProxyRequestSetup:
             verbose_proxy_logger.debug("Extracted agent_id from header: %s", agent_id_from_header)
 
         if chain_id:
-            chain_session_id: Final = (
-                body_session_id
-                if litellm.request_correlation_in_logs
-                and isinstance(body_session_id := request_body.get("litellm_session_id"), str)
-                and body_session_id
-                else chain_id
+            body_session_id: Final = (
+                _caller_body_session_id(request_body, _metadata_variable_name)
+                if litellm.request_correlation_in_logs and chain_id == normalized_headers.get("x-litellm-trace-id")
+                else None
             )
+            chain_session_id: Final = body_session_id or chain_id
             metadata_from_headers["trace_id"] = chain_id
             metadata_from_headers["session_id"] = chain_session_id
             data["litellm_session_id"] = chain_session_id
@@ -1664,7 +1671,6 @@ class LiteLLMProxyRequestSetup:
         # - but lets a caller's existing traceparent/baggage headers (from
         # real OTel instrumentation) correlate with litellm's own logs instead
         # of generating an unrelated trace_id.
-        normalized_headers: Final = MappingProxyType({k.lower(): v for k, v in headers.items() if isinstance(k, str)})
         if "litellm_trace_id" not in data:
             traceparent: Final = normalized_headers.get("traceparent")
             if isinstance(traceparent, str):
