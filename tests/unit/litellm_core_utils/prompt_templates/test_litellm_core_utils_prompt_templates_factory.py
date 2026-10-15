@@ -3,7 +3,9 @@ import json
 import logging
 import os
 import re
+import sys
 import time
+import types
 from typing import Final, List
 from unittest.mock import MagicMock, patch
 
@@ -65,8 +67,6 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.llms.vertex_ai.gemini.transformation import gemini_convert_messages_with_history
 from litellm.types.llms.bedrock import BedrockConverseReasoningContentBlock
 from litellm.types.llms.openai import AllMessageValues
-import sys
-import types
 from litellm.litellm_core_utils.prompt_templates.factory import response_schema_prompt
 from litellm.llms.anthropic.completion.transformation import AnthropicTextConfig
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import AmazonInvokeConfig
@@ -7832,6 +7832,7 @@ def test_template_wraps_only_the_roles_it_defines_across_a_conversation(monkeypa
         pytest.param({"roles": {**TEMPLATE_ROLES, "tool": None}}, id="null-role-entry"),
         pytest.param({"roles": {"user": {**TEMPLATE_ROLES["user"], "priority": 1}}}, id="extra-role-key"),
         pytest.param({"roles": {**TEMPLATE_ROLES, "tool": {"pre_message": 5}}}, id="unused-role-wrong-type"),
+        pytest.param({"roles": {**TEMPLATE_ROLES, 1: {"pre_message": "x"}}}, id="unused-non-string-role"),
         pytest.param({"roles": TEMPLATE_ROLES, "initial_prompt_value": None, "bos_token": 7}, id="null-and-unread-keys"),
     ],
 )
@@ -7839,8 +7840,18 @@ def test_template_shapes_main_rendered_keep_rendering(template, monkeypatch):
     assert _render_ollama(template, monkeypatch) == TEMPLATE_RENDERED_MESSAGES
 
 
-def test_null_entry_for_a_role_in_use_renders_that_role_unwrapped(monkeypatch):
-    assert _render_ollama({"roles": {"user": None}}, monkeypatch) == TEMPLATE_BARE_MESSAGES
+@pytest.mark.parametrize(
+    "template",
+    [
+        pytest.param({"roles": {"user": None}}, id="null-role-entry"),
+        pytest.param({"roles": {"user": "[INST]"}}, id="string-role-entry"),
+        pytest.param({"roles": {"user": ["[INST]"]}}, id="list-role-entry"),
+        pytest.param({"roles": ["user"]}, id="list-roles"),
+        pytest.param({"roles": "user"}, id="string-roles"),
+    ],
+)
+def test_role_entry_that_is_not_a_mapping_renders_that_role_unwrapped(template, monkeypatch):
+    assert _render_ollama(template, monkeypatch) == TEMPLATE_BARE_MESSAGES
 
 
 @pytest.mark.parametrize(
@@ -7849,12 +7860,10 @@ def test_null_entry_for_a_role_in_use_renders_that_role_unwrapped(monkeypatch):
         pytest.param({"initial_prompt_value": 5}, "initial_prompt_value", id="initial-prompt-value"),
         pytest.param({"final_prompt_value": ["x"]}, "final_prompt_value", id="final-prompt-value"),
         pytest.param({"roles": {"user": {"pre_message": 5}}}, "roles.user.pre_message", id="pre-message"),
-        pytest.param({"roles": {"user": "[INST]"}}, "roles.user", id="role-entry"),
-        pytest.param({"roles": ["user"]}, "roles", id="roles"),
     ],
 )
-def test_wrong_type_template_field_fails_as_bad_request_naming_it(template, field):
-    with pytest.raises(litellm.BadRequestError) as excinfo:
+def test_wrong_type_template_field_fails_as_a_server_error_naming_it(template, field):
+    with pytest.raises(litellm.InternalServerError) as excinfo:
         litellm.completion(
             model=f"ollama/{TEMPLATE_MODEL}",
             messages=TEMPLATE_MESSAGES,
@@ -7862,5 +7871,31 @@ def test_wrong_type_template_field_fails_as_bad_request_naming_it(template, fiel
             **template,
         )
 
-    assert excinfo.value.status_code == 400
-    assert f"\n{field}\n" in excinfo.value.message
+    assert excinfo.value.status_code == 500
+    assert f"{field}: Input should be a valid string" in excinfo.value.message
+
+
+def test_deployment_with_a_wrong_type_template_fails_over_to_a_healthy_deployment():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "template-group",
+                "litellm_params": {
+                    "model": f"ollama/{TEMPLATE_MODEL}",
+                    "api_base": "http://ollama.invalid",
+                    "initial_prompt_value": 5,
+                    "weight": 1,
+                },
+            },
+            {
+                "model_name": "template-group",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test", "mock_response": "Blue", "weight": 0},
+            },
+        ],
+        num_retries=1,
+        allowed_fails=0,
+    )
+
+    response = router.completion(model="template-group", messages=TEMPLATE_MESSAGES)
+
+    assert response.choices[0].message.content == "Blue"

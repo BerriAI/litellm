@@ -9,10 +9,10 @@ import xml.etree.ElementTree as ET
 from collections.abc import Container, Iterable, Iterator, Mapping, Sequence
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, Final, TypeAlias, TypedDict, cast, overload
+from typing import Annotated, Any, Final, TypeAlias, TypedDict, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
-from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
+from pydantic import BaseModel, BeforeValidator, ConfigDict, JsonValue, ValidationError
 
 import litellm
 import litellm.types
@@ -5508,23 +5508,27 @@ def default_response_schema_prompt(response_schema: dict) -> str:
 
 
 # Custom prompt template
+def _mapping_or_none(value: object) -> object:
+    return value if issubclass(type(value), Mapping) else None
+
+
 class CustomPromptRole(BaseModel):
-    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+    model_config = ConfigDict(frozen=True)
 
     pre_message: str | None = None
     post_message: str | None = None
 
 
 class CustomPromptRoles(BaseModel):
-    model_config = ConfigDict(frozen=True, hide_input_in_errors=True, title="custom prompt template")
+    model_config = ConfigDict(frozen=True, title="custom prompt template")
 
-    roles: Mapping[str, CustomPromptRole | None]
+    roles: Mapping[str, Annotated[CustomPromptRole | None, BeforeValidator(_mapping_or_none)]]
 
 
 class CustomPromptTemplate(BaseModel):
-    model_config = ConfigDict(frozen=True, hide_input_in_errors=True, title="custom prompt template")
+    model_config = ConfigDict(frozen=True, title="custom prompt template")
 
-    roles: Mapping[str, object] | None = None
+    roles: Annotated[Mapping[object, object] | None, BeforeValidator(_mapping_or_none)] = None
     initial_prompt_value: str | None = None
     final_prompt_value: str | None = None
 
@@ -5538,11 +5542,18 @@ def render_custom_prompt_template(
     try:
         return _render_custom_prompt_template(template=template, messages=messages)
     except ValidationError as error:
-        raise litellm.BadRequestError(
-            message=f"The custom prompt template for {model} is invalid: {error}",
+        raise litellm.InternalServerError(
+            message=f"The custom prompt template for {model} is invalid: {_describe_template_errors(error)}",
             model=model,
             llm_provider=llm_provider,
         ) from error
+
+
+def _describe_template_errors(error: ValidationError) -> str:
+    return "; ".join(
+        f"{'.'.join(str(part) for part in detail['loc'])}: {detail['msg']}"
+        for detail in error.errors(include_url=False, include_input=False)
+    )
 
 
 def _render_custom_prompt_template(template: Mapping[str, object], messages: Sequence[Mapping[str, object]]) -> str:
