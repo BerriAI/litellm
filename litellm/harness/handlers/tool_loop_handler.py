@@ -7,8 +7,9 @@ import copy
 import inspect
 import json
 import math
-from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Generator, Mapping
 from dataclasses import dataclass
+from functools import partial
 from types import MappingProxyType
 from typing import Final, Protocol, TypeAlias
 
@@ -212,7 +213,13 @@ async def _execute_tool(tool: FunctionTool, arguments: Mapping[str, object]) -> 
 
 
 async def _default_acompletion(**kwargs: object) -> ModelResponse:  # kwargs-ok: provider-specific completion options
-    response: Final[object] = await litellm.acompletion(**kwargs)
+
+    from litellm.chat_completions.dispatch import forward_acompletion
+
+    acompletion_call: Final[partial[Coroutine[object, object, litellm.ModelResponse | litellm.CustomStreamWrapper]]] = (
+        forward_acompletion()
+    )
+    response: Final[object] = await acompletion_call(**kwargs)
     return _MODEL_RESPONSE_ADAPTER.validate_python(response)
 
 

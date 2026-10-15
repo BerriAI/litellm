@@ -4,14 +4,14 @@ usage/spend data by querying the aggregated daily activity endpoints.
 """
 
 import json
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Mapping, Sequence
 from datetime import date
+from functools import partial
 from typing import Final, Literal, NamedTuple, Protocol, cast, overload
 
 from fastapi import HTTPException
 from typing_extensions import ReadOnly, TypedDict
 
-import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_COMPETITOR_DISCOVERY_MODEL
 from litellm.proxy._types import CommonProxyErrors
@@ -566,7 +566,13 @@ async def _stream_final_response(model: str, chat_messages: list[Mapping[str, ob
     """Stream the final LLM response after tool results are appended."""
     yield _sse({"type": "status", "message": "Analyzing results..."})
 
-    response: Final = await litellm.acompletion(
+    import litellm
+    from litellm.chat_completions.dispatch import forward_acompletion
+
+    acompletion_call: Final[partial[Coroutine[object, object, litellm.ModelResponse | litellm.CustomStreamWrapper]]] = (
+        forward_acompletion()
+    )
+    response: Final = await acompletion_call(
         model=model,
         messages=chat_messages,
         stream=True,
@@ -592,10 +598,18 @@ async def stream_usage_ai_chat(
         *truncated,
     ]
 
+    from litellm.chat_completions.dispatch import forward_acompletion
+
     try:
         yield _sse({"type": "status", "message": "Thinking..."})
         tools: Final = get_tools_for_role(is_admin)
-        response: Final = await litellm.acompletion(
+
+        import litellm
+
+        acompletion_call: Final[
+            partial[Coroutine[object, object, litellm.ModelResponse | litellm.CustomStreamWrapper]]
+        ] = forward_acompletion()
+        response: Final = await acompletion_call(
             model=resolved_model,
             messages=chat_messages,
             tools=tools,

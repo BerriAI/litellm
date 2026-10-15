@@ -17,6 +17,7 @@ import logging
 import secrets
 from collections.abc import AsyncIterable, AsyncIterator, Coroutine, Mapping
 from dataclasses import dataclass
+from functools import partial
 from types import MappingProxyType, ModuleType
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
@@ -645,6 +646,8 @@ class ModelEndpoint:
     ) -> object:
         if route == ROUTE_MESSAGES:
             return await litellm.anthropic.messages.acreate(**kwargs)
+        from litellm.chat_completions.dispatch import forward_acompletion
+
         if route == ROUTE_CHAT:
             if kwargs.get("stream"):
                 stream_options = kwargs.get("stream_options") or {}  # mutable-ok: empty default for a JSON field
@@ -652,7 +655,12 @@ class ModelEndpoint:
                     "include_usage": True,
                     **stream_options,
                 }
-            return await litellm.acompletion(**kwargs)
+            from functools import partial
+
+            acompletion_call: Final[
+                partial[Coroutine[object, object, litellm.ModelResponse | litellm.CustomStreamWrapper]]
+            ] = forward_acompletion()
+            return await acompletion_call(**kwargs)
         from functools import partial
 
         from litellm.responses.dispatch import ResponsesResult

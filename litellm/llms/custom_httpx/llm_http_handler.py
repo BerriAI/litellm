@@ -5875,7 +5875,12 @@ class BaseLLMHTTPHandler:
             fingerprint=fingerprint,
         )
 
-        return await litellm.acompletion(
+        from litellm.chat_completions.dispatch import forward_acompletion
+
+        acompletion_call: Final[
+            partial[Coroutine[object, object, litellm.ModelResponse | litellm.CustomStreamWrapper]]
+        ] = forward_acompletion()
+        return await acompletion_call(
             model=full_model_name,
             messages=patch.messages,
             **optional_params_for_followup,

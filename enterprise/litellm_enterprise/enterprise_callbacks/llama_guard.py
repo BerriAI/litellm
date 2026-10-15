@@ -9,11 +9,11 @@
 
 import os
 import sys
-from collections.abc import Iterable
+from collections.abc import Coroutine, Iterable
+from functools import partial
+from typing import Final
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import sys
 from typing import Literal, Optional
 
@@ -47,9 +47,7 @@ class _ENTERPRISE_LlamaGuard(CustomLogger):
 
         self.unsafe_content_categories = data
 
-        verbose_proxy_logger.debug(
-            f"self.unsafe_content_categories: {self.unsafe_content_categories}"
-        )
+        verbose_proxy_logger.debug(f"self.unsafe_content_categories: {self.unsafe_content_categories}")
 
     def print_verbose(self, print_statement):
         try:
@@ -106,11 +104,14 @@ class _ENTERPRISE_LlamaGuard(CustomLogger):
 
         The llama guard prompt template is applied automatically in factory.py
         """
+        from litellm.chat_completions.dispatch import forward_acompletion
+
         if "messages" in data:
-            safety_check_messages = data["messages"][
-                -1
-            ]  # get the last response - llama guard has a 4k token limit
-            response = await litellm.acompletion(
+            safety_check_messages = data["messages"][-1]  # get the last response - llama guard has a 4k token limit
+            acompletion_call: Final[
+                partial[Coroutine[object, object, litellm.ModelResponse | litellm.CustomStreamWrapper]]
+            ] = forward_acompletion()
+            response = await acompletion_call(
                 model=self.model,
                 messages=[safety_check_messages],
                 hf_model_name="meta-llama/LlamaGuard-7b",
@@ -123,8 +124,6 @@ class _ENTERPRISE_LlamaGuard(CustomLogger):
                 and isinstance(response.choices[0].message.content, Iterable)
                 and "unsafe" in response.choices[0].message.content
             ):
-                raise HTTPException(
-                    status_code=400, detail={"error": "Violated content safety policy"}
-                )
+                raise HTTPException(status_code=400, detail={"error": "Violated content safety policy"})
 
         return data

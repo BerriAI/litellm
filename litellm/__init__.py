@@ -607,8 +607,8 @@ vertex_ai_safety_settings: Optional[dict] = None
 ####### COMPLETION MODELS ###################
 from typing import Set
 
-open_ai_chat_completion_models: Set = set()
-open_ai_text_completion_models: Set = set()
+open_ai_chat_completion_models: Set[str] = set()
+open_ai_text_completion_models: Set[str] = set()
 cohere_models: Set = set()
 cohere_chat_models: Set = set()
 mistral_chat_models: Set = set()

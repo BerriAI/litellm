@@ -89,7 +89,7 @@ class HealthCheckHelpers:
         model_params: dict,
         litellm_logging_obj: "Logging",
     ) -> dict:
-        from litellm import acompletion
+
         from litellm.litellm_core_utils.llm_request_utils import (
             pick_cheapest_chat_models_from_llm_provider,
         )
@@ -108,7 +108,13 @@ class HealthCheckHelpers:
         model_params["litellm_logging_obj"] = litellm_logging_obj
         model_params["fallbacks"] = fallback_models
         model_params["max_tokens"] = model_params.get("max_tokens", 16)  # GPT-5 models require max_output_tokens >= 16
-        await acompletion(**model_params)
+        import litellm
+        from litellm.chat_completions.dispatch import forward_acompletion
+
+        acompletion_call: Final[
+            partial[Coroutine[object, object, litellm.ModelResponse | litellm.CustomStreamWrapper]]
+        ] = forward_acompletion()
+        await acompletion_call(**model_params)
         return {}
 
     @staticmethod
@@ -177,8 +183,13 @@ class HealthCheckHelpers:
                 litellm_params={"api_base": api_base} if api_base else None,
             )
 
+        from litellm.chat_completions.dispatch import forward_acompletion
+
         if custom_llm_provider not in LIST_BATCHES_SUPPORTED_PROVIDERS:
-            return await litellm.acompletion(**model_params)
+            acompletion_call: Final[
+                partial[Coroutine[object, object, litellm.ModelResponse | litellm.CustomStreamWrapper]]
+            ] = forward_acompletion()
+            return await acompletion_call(**model_params)
         return await litellm.alist_batches(**{**filtered_model_params, "custom_llm_provider": custom_llm_provider})
 
     @staticmethod
@@ -235,6 +246,7 @@ class HealthCheckHelpers:
             Dictionary mapping mode names to their handler functions
         """
         import litellm
+        from litellm.chat_completions.dispatch import forward_acompletion
         from litellm.litellm_core_utils.audio_utils.utils import (
             get_audio_file_for_health_check,
         )
@@ -243,10 +255,13 @@ class HealthCheckHelpers:
         from litellm.realtime_api.main import realtime_health_check
         from litellm.responses.dispatch import ResponsesResult
 
+        acompletion_call: Final[
+            partial[Coroutine[object, object, litellm.ModelResponse | litellm.CustomStreamWrapper]]
+        ] = forward_acompletion()
         messages_call: Final[partial[Coroutine[object, object, MessagesResult]]] = partial(litellm.anthropic_messages)
         responses_call: Final[partial[Coroutine[object, object, ResponsesResult]]] = partial(litellm.aresponses)
         return {
-            "chat": lambda: litellm.acompletion(
+            "chat": lambda: acompletion_call(
                 **model_params,
             ),
             "completion": lambda: litellm.atext_completion(

@@ -1,7 +1,8 @@
 """Client-side tool-calling loop helpers for litellm.completion."""
 
-from collections.abc import Awaitable, Callable, Sequence
-from typing import TypeAlias, cast
+from collections.abc import Awaitable, Callable, Coroutine, Sequence
+from functools import partial
+from typing import Final, TypeAlias, cast
 
 from typing_extensions import TypedDict, Unpack
 
@@ -108,14 +109,17 @@ def run_tool_loop(
             model="anthropic/claude-sonnet-5-5", messages=messages, tools=tools, execute_tool=execute
         )
     """
-    import litellm
 
     _validate_tool_loop_args(max_rounds, completion_kwargs)
+    import litellm
+    from litellm.chat_completions.dispatch import forward_completion
+
+    completion_call: Final[partial[litellm.ModelResponse | litellm.CustomStreamWrapper]] = forward_completion()
     history: tuple[AllMessageValues, ...] = tuple(messages)  # rebind-ok: rounds append new turns
     for round_number in range(1, max_rounds + 1):
         message = (
             _expect_model_response(
-                litellm.completion(model=model, messages=list(history), tools=list(tools), **completion_kwargs)
+                completion_call(model=model, messages=list(history), tools=list(tools), **completion_kwargs)
             )
             .choices[0]
             .message
@@ -150,14 +154,19 @@ async def arun_tool_loop(
             model="anthropic/claude-sonnet-5-5", messages=messages, tools=tools, execute_tool=execute
         )
     """
-    import litellm
 
     _validate_tool_loop_args(max_rounds, completion_kwargs)
+    import litellm
+    from litellm.chat_completions.dispatch import forward_acompletion
+
+    acompletion_call: Final[partial[Coroutine[object, object, litellm.ModelResponse | litellm.CustomStreamWrapper]]] = (
+        forward_acompletion()
+    )
     history: tuple[AllMessageValues, ...] = tuple(messages)  # rebind-ok: rounds append new turns
     for round_number in range(1, max_rounds + 1):
         message = (
             _expect_model_response(
-                await litellm.acompletion(model=model, messages=list(history), tools=list(tools), **completion_kwargs)
+                await acompletion_call(model=model, messages=list(history), tools=list(tools), **completion_kwargs)
             )
             .choices[0]
             .message

@@ -18,8 +18,9 @@ import os
 import re
 import secrets
 import traceback
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
+from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeVar, cast
 
@@ -8007,6 +8008,8 @@ async def test_key_logging(
     logger: Final = logging.getLogger()
     logger.addHandler(ch)
 
+    from litellm.chat_completions.dispatch import forward_acompletion
+
     try:
         data = {
             "model": "openai/litellm-key-health-test",
@@ -8025,7 +8028,11 @@ async def test_key_logging(
             request=request,
         )
         data["mock_response"] = "test response"
-        await litellm.acompletion(**data)  # make mock completion call to trigger key based callbacks
+
+        acompletion_call: Final[
+            partial[Coroutine[object, object, litellm.ModelResponse | litellm.CustomStreamWrapper]]
+        ] = forward_acompletion()
+        await acompletion_call(**data)  # make mock completion call to trigger key based callbacks
     except Exception as e:
         return LoggingCallbackStatus(
             callbacks=logging_callbacks,

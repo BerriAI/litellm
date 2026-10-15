@@ -2,6 +2,7 @@
 Handler for transforming /chat/completions api requests to litellm.responses requests
 """
 
+from functools import partial
 from typing import TYPE_CHECKING, Final
 
 from typing_extensions import TypedDict
@@ -87,7 +88,7 @@ class SpeechToCompletionBridgeHandler:
         custom_llm_provider: str,
     ) -> "HttpxBinaryResponseContent":
         received_args: Final = locals()
-        from litellm import completion
+
         from litellm.types.utils import ModelResponse
 
         validated_kwargs: Final = self.validate_input_kwargs(received_args)
@@ -111,7 +112,11 @@ class SpeechToCompletionBridgeHandler:
             voice=voice,
         )
 
-        result: Final = completion(
+        import litellm
+        from litellm.chat_completions.dispatch import forward_completion
+
+        completion_call: Final[partial[litellm.ModelResponse | litellm.CustomStreamWrapper]] = forward_completion()
+        result: Final = completion_call(
             **request_data,
         )
 

@@ -1,7 +1,8 @@
 # this is a patch to allow for agentic loops covering llm_http_handler.py and openai sdk based calling flows for the .completion() api
 
 import json
-from collections.abc import Mapping
+from collections.abc import Coroutine, Mapping
+from functools import partial
 from itertools import chain
 from types import MappingProxyType
 from typing import Final
@@ -176,7 +177,6 @@ async def _execute_chat_completion_agentic_plan(
     fingerprints: list[str],
     fingerprint: str,
 ) -> object:
-    import litellm
 
     patch: Final = plan.request_patch or AgenticLoopRequestPatch()
     if patch.messages is None:
@@ -204,8 +204,15 @@ async def _execute_chat_completion_agentic_plan(
         )
     )
 
+    from litellm.chat_completions.dispatch import forward_acompletion
+
     try:
-        response_followup = await litellm.acompletion(
+        import litellm
+
+        acompletion_call: Final[
+            partial[Coroutine[object, object, litellm.ModelResponse | litellm.CustomStreamWrapper]]
+        ] = forward_acompletion()
+        response_followup = await acompletion_call(
             model=full_model_name,
             messages=patch.messages,
             **optional_params_for_followup,

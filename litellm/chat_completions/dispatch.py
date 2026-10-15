@@ -1,5 +1,6 @@
 import inspect
 from collections.abc import Awaitable, Callable, Coroutine, Mapping
+from functools import partial
 from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding selects a sync result or an async awaitable
 
 from litellm import main
@@ -8,7 +9,7 @@ from litellm.rust_bridge.chat_completions.entrypoints import (
     NATIVE_ACOMPLETION,
     NATIVE_COMPLETION,
 )
-from litellm.rust_bridge.dispatch import PublicDispatch
+from litellm.rust_bridge.dispatch import PublicDispatch, typed_as
 from litellm.rust_bridge.public_call import (
     NativeCall,
     bind,
@@ -40,6 +41,18 @@ def _python_acompletion() -> PythonAcompletion:
         PythonAcompletion,
         main.acompletion,  # noqa: TID251  # dispatch boundary owns this Python fallback
     )
+
+
+def forward_completion() -> partial[ChatResult]:
+    import litellm
+
+    return partial(litellm.completion)
+
+
+def forward_acompletion() -> partial[Coroutine[object, object, ChatResult]]:
+    import litellm
+
+    return partial(litellm.acompletion)
 
 
 _PYTHON_COMPLETION: Final = _python_completion()
@@ -83,6 +96,7 @@ _ADISPATCH: Final = PublicDispatch(
 )
 
 
+@typed_as(main.completion)  # noqa: TID251  # dispatch boundary owns this Python fallback
 def completion(
     *args: object,
     **kwargs: object,  # kwargs-ok: preserve the public chat completions call shape
@@ -97,6 +111,7 @@ def completion(
     )
 
 
+@typed_as(main.acompletion)  # noqa: TID251  # dispatch boundary owns this Python fallback
 async def acompletion(*args: object, **kwargs: object) -> ChatResult:  # kwargs-ok: preserve the public call shape
     python: Final = _PYTHON_ACOMPLETION
     return await _ADISPATCH.arun(

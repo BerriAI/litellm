@@ -30,7 +30,7 @@ import threading
 import time
 import traceback
 from dataclasses import dataclass, field
-from functools import lru_cache, wraps
+from functools import lru_cache, partial, wraps
 from importlib import resources
 from inspect import iscoroutine
 from io import StringIO
@@ -290,7 +290,7 @@ except (ImportError, AttributeError, TypeError):
 # Convert to str (if necessary)
 claude_json_str = json.dumps(json_data)
 import importlib.metadata
-from collections.abc import AsyncIterator, Callable, Collection, Iterable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Collection, Coroutine, Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
 
 from typing_extensions import assert_never
@@ -7233,17 +7233,24 @@ def validate_environment(
 
 
 def acreate(*args, **kwargs):  ## Thin client to handle the acreate langchain call
-    return litellm.acompletion(*args, **kwargs)
+    from litellm.chat_completions.dispatch import forward_acompletion
+
+    acompletion_call: Final[partial[Coroutine[object, object, litellm.ModelResponse | litellm.CustomStreamWrapper]]] = (
+        forward_acompletion()
+    )
+    return acompletion_call(*args, **kwargs)
 
 
 def valid_model(model):
+    from litellm.chat_completions.dispatch import forward_completion
+
     try:
         # for a given model name, check if the user has the right permissions to access the model
         if model in litellm.open_ai_chat_completion_models or model in litellm.open_ai_text_completion_models:
             openai.models.retrieve(model)
         else:
             messages: Final = [{"role": "user", "content": "Hello World"}]
-            litellm.completion(model=model, messages=messages)
+            forward_completion()(model=model, messages=messages)
     except Exception:
         raise BadRequestError(message="", model=model, llm_provider="")
 
@@ -7260,8 +7267,10 @@ def check_valid_key(model: str, api_key: str):
         bool: True if the API key is valid for the model, False otherwise.
     """
     messages: Final = [{"role": "user", "content": "Hey, how's it going?"}]
+    from litellm.chat_completions.dispatch import forward_completion
+
     try:
-        litellm.completion(model=model, messages=messages, api_key=api_key, max_tokens=10)
+        forward_completion()(model=model, messages=messages, api_key=api_key, max_tokens=10)
         return True
     except AuthenticationError:
         return False

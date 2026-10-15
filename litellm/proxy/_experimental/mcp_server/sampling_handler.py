@@ -11,7 +11,8 @@ MCP Spec Reference:
 """
 
 import typing
-from collections.abc import Mapping, Sequence
+from collections.abc import Coroutine, Mapping, Sequence
+from functools import partial
 from typing import Any, Final, NamedTuple, Optional, Protocol, Union, runtime_checkable
 
 if typing.TYPE_CHECKING:
@@ -84,6 +85,7 @@ def _resolve_model_from_preferences(
 
     # Build list of available model names from proxy Router or litellm.model_list
     available_model_names: list[str] = []
+
     try:
         from litellm.proxy.proxy_server import llm_router
 
@@ -1124,15 +1126,19 @@ async def _run_guardrails_and_call_llm(
         raise
 
     import litellm
+    from litellm.chat_completions.dispatch import forward_acompletion
 
+    acompletion_call: Final[partial[Coroutine[object, object, litellm.ModelResponse | litellm.CustomStreamWrapper]]] = (
+        forward_acompletion()
+    )
     try:
         from litellm.proxy.proxy_server import llm_router
 
         if llm_router is not None:
             return await _AcompletionCall(fn=llm_router.acompletion).fn(**completion_kwargs)
-        return await _AcompletionCall(fn=litellm.acompletion).fn(**completion_kwargs)
+        return await _AcompletionCall(fn=acompletion_call).fn(**completion_kwargs)
     except ImportError:
-        return await _AcompletionCall(fn=litellm.acompletion).fn(**completion_kwargs)
+        return await _AcompletionCall(fn=acompletion_call).fn(**completion_kwargs)
 
 
 async def handle_sampling_create_message(

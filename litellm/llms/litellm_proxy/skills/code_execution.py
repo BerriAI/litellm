@@ -13,8 +13,9 @@ Generated files are returned directly in the response - no separate storage need
 
 import base64
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Coroutine, Mapping, Sequence
 from enum import Enum
+from functools import partial
 from typing import Any, Final, Protocol, TypedDict
 
 from typing_extensions import ReadOnly
@@ -227,7 +228,7 @@ class CodeExecutionHandler:
             - files: List of generated files with content (base64)
             - execution_results: List of code execution results
         """
-        import litellm
+
         from litellm.llms.litellm_proxy.skills.sandbox_executor import (
             SkillsSandboxExecutor,
         )
@@ -237,13 +238,19 @@ class CodeExecutionHandler:
         execution_results: Final[list[_ExecutionResult]] = []
 
         executor: Final = SkillsSandboxExecutor(timeout=self.sandbox_timeout)
+        import litellm
+        from litellm.chat_completions.dispatch import forward_acompletion
+
+        acompletion_call: Final[
+            partial[Coroutine[object, object, litellm.ModelResponse | litellm.CustomStreamWrapper]]
+        ] = forward_acompletion()
         response: Any = None  # Initialize to avoid possibly unbound error
 
         for iteration in range(self.max_iterations):
             verbose_logger.debug("CodeExecutionHandler: Iteration %s/%s", iteration + 1, self.max_iterations)
 
             # Make LLM call
-            response = await litellm.acompletion(
+            response = await acompletion_call(
                 model=model,
                 messages=current_messages,
                 tools=tools,

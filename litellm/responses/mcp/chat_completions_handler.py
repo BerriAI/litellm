@@ -1,6 +1,8 @@
 """Helpers for handling MCP-aware `/chat/completions` requests."""
 
 import logging
+from collections.abc import Coroutine
+from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast
 
@@ -105,8 +107,13 @@ async def acompletion_with_mcp(
     4. If require_approval="never" and tool calls are returned, automatically execute them
     5. Make a follow-up call with the tool results
     """
-    from litellm import acompletion as litellm_acompletion
 
+    import litellm
+    from litellm.chat_completions.dispatch import forward_acompletion
+
+    litellm_acompletion: Final[
+        partial[Coroutine[object, object, litellm.ModelResponse | litellm.CustomStreamWrapper]]
+    ] = forward_acompletion()
     # Parse MCP tools and separate from other tools
     (
         mcp_tools_with_litellm_proxy,
@@ -476,9 +483,14 @@ async def acompletion_with_mcp(
 
                 # Import litellm here to ensure we get the patched version
                 # This ensures the patch works correctly in tests
-                import litellm
 
-                follow_up_response: Final = await litellm.acompletion(**follow_up_call_args)
+                import litellm
+                from litellm.chat_completions.dispatch import forward_acompletion
+
+                acompletion_call: Final[
+                    partial[Coroutine[object, object, litellm.ModelResponse | litellm.CustomStreamWrapper]]
+                ] = forward_acompletion()
+                follow_up_response: Final = await acompletion_call(**follow_up_call_args)
 
                 # Ensure follow-up response is a CustomStreamWrapper
                 if isinstance(follow_up_response, CustomStreamWrapper):

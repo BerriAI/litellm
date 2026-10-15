@@ -324,6 +324,8 @@ async def _execute_query_pipeline(
     modified_messages: Final = messages[:-1] + [context_message] + [messages[-1]]
 
     # Use router if available to properly resolve virtual model names
+    from litellm.chat_completions.dispatch import forward_acompletion
+
     with _suppressed_sub_call_billing():
         if router is not None:
             response = await router.acompletion(
@@ -333,7 +335,10 @@ async def _execute_query_pipeline(
                 **kwargs,
             )
         else:
-            response = await litellm.acompletion(
+            acompletion_call: Final[
+                partial[Coroutine[object, object, litellm.ModelResponse | litellm.CustomStreamWrapper]]
+            ] = forward_acompletion()
+            response = await acompletion_call(
                 model=model,
                 messages=modified_messages,
                 stream=stream,
