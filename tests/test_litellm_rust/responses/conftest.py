@@ -1,10 +1,24 @@
+from functools import partial
+
 import pytest
 
-from tests.test_litellm_rust.responses.data import RESPONSES_RESPONSE
+import litellm
+from tests.test_litellm_rust.responses.data import REQUEST, RESPONSES_RESPONSE, call
+from tests.test_litellm_rust.support.caching import Call, public_call
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 
 
 @pytest.fixture
 def server(recording_server: RecordingServer) -> RecordingServer:
-    recording_server.default_response = ResponseSpec(body=RESPONSES_RESPONSE)
+    recording_server.serve(ResponseSpec(body=RESPONSES_RESPONSE))
     return recording_server
+
+
+@pytest.fixture
+def python_call(server: RecordingServer) -> Call:
+    return public_call(litellm.aresponses, REQUEST, server)
+
+
+@pytest.fixture
+def native_call(server: RecordingServer) -> Call:
+    return partial(call, server)

@@ -1,11 +1,14 @@
 import asyncio
 import threading
-from collections.abc import Awaitable, Callable, Generator, Mapping
-from typing import Final
+from collections.abc import Callable, Coroutine, Generator, Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Final, Literal, TypeAlias
 from urllib.parse import urlparse
 
 import fakeredis
 import pytest
+import redis
 from pydantic import TypeAdapter
 
 import litellm
@@ -13,8 +16,8 @@ from litellm.caching.base_cache import BaseCache
 from litellm.caching.caching import Cache
 from litellm.caching.caching_handler import (
     _PENDING_CACHE_WRITES,  # pyright: ignore[reportPrivateUsage]  # await the existing background cache writer before the next request
+    in_memory_cache_obj,
 )
-from litellm.caching.caching_handler import in_memory_cache_obj
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy._types import Litellm_EntityType
 from litellm.proxy.hooks.model_max_budget_limiter import (
@@ -26,13 +29,19 @@ from litellm.proxy.utils import InternalUsageCache
 from litellm.types.caching import LiteLLMCacheType
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
 from tests.test_litellm_rust.support.recording_server import RecordingServer
+from tests.test_litellm_rust.support.routing import CALL_ID
+
+Engine: TypeAlias = Literal["python", "native"]
+Call: TypeAlias = Callable[..., Coroutine[object, object, object]]
+
+_ENGINE: Final = TypeAdapter(Engine)
 
 
 class CallerCache(BaseCache):
     def __init__(self, lookup_entered: asyncio.Event | None = None, release: asyncio.Event | None = None) -> None:
         super().__init__()
         self.storage: Final = InMemoryCache()
-        self.caller: Final = asyncio.current_task()
+        self.lookup_tasks: Final[list[asyncio.Task[object] | None]] = []  # mutable-ok: test double records each lookup
         self.lookup_entered: Final = lookup_entered
         self.release: Final = release
 
@@ -40,10 +49,10 @@ class CallerCache(BaseCache):
         await self.storage.async_set_cache_pipeline(cache_list, ttl=ttl)
 
     async def async_get_cache(self, key: str, **kwargs: object) -> object:
+        self.lookup_tasks.append(asyncio.current_task())
         if self.lookup_entered is not None and self.release is not None:
             self.lookup_entered.set()
             await self.release.wait()
-        assert asyncio.current_task() is self.caller
         return self.storage.get_cache(key, **kwargs)
 
     async def async_set_cache(self, key: str, value: object, **kwargs: object) -> None:
@@ -61,34 +70,85 @@ class HeldWriteCache(InMemoryCache):
         await super().async_set_cache(key, value, **kwargs)
 
 
-class FailingDecisionCache(Cache):
+class FailingLookupCache(Cache):
     def should_use_cache(self, **kwargs: object) -> bool:
-        raise RuntimeError("cache decision failed")
+        raise RuntimeError("cache lookup failed")
 
 
-def use_cache(monkeypatch: pytest.MonkeyPatch, cache: Cache | None = None) -> Cache:
-    configured: Final = cache or Cache()
-    monkeypatch.setattr(litellm, "cache", configured)
-    return configured
+def use_cache(monkeypatch: pytest.MonkeyPatch, cache: Cache) -> Cache:
+    monkeypatch.setattr(litellm, "cache", cache)
+    return cache
 
 
 @pytest.fixture
-def redis_url() -> Generator[str]:
+def cache(monkeypatch: pytest.MonkeyPatch) -> Cache:
+    return use_cache(monkeypatch, Cache())
+
+
+@pytest.fixture(params=("python", "native"))
+def engine(request: pytest.FixtureRequest) -> Engine:
+    return _ENGINE.validate_python(request.param)
+
+
+def public_call(acreate: Call, request: Mapping[str, object], server: RecordingServer) -> Call:
+    async def send(**kwargs: object) -> object:
+        return await acreate(
+            **{**request, "api_key": "test-key", "api_base": server.base_url, "litellm_call_id": CALL_ID, **kwargs}
+        )
+
+    return send
+
+
+@pytest.fixture
+def calls(python_call: Call, native_call: Call, monkeypatch: pytest.MonkeyPatch) -> Mapping[Engine, Call]:
+    async def python(**kwargs: object) -> object:
+        with monkeypatch.context() as patched:
+            patched.setenv("LITELLM_RUST", "0")
+            return await python_call(**kwargs)
+
+    return MappingProxyType({"python": python, "native": native_call})
+
+
+@pytest.fixture
+def call(calls: Mapping[Engine, Call], engine: Engine) -> Call:
+    async def send(**kwargs: object) -> object:
+        response: Final = await calls[engine](**kwargs)
+        await settle_cache_writes()
+        return response
+
+    return send
+
+
+def other(engine: Engine) -> Engine:
+    return "native" if engine == "python" else "python"
+
+
+native_only: Final = pytest.mark.parametrize("engine", ("native",), indirect=True)
+
+
+@dataclass(frozen=True, slots=True)
+class FakeRedis:
+    url: str
+    client: redis.Redis
+
+    def cache(self) -> Cache:
+        parsed: Final = urlparse(self.url)
+        in_memory_cache_obj.flush_cache()
+        return Cache(type=LiteLLMCacheType.REDIS, host=parsed.hostname, port=str(parsed.port))
+
+
+@pytest.fixture
+def fake_redis() -> Generator[FakeRedis]:
     server: Final = fakeredis.TcpFakeServer(("127.0.0.1", 0), server_type="redis")
     worker: Final = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
+    url: Final = f"redis://127.0.0.1:{server.server_address[1]}"
     try:
-        yield f"redis://127.0.0.1:{server.server_address[1]}"
+        yield FakeRedis(url=url, client=redis.Redis.from_url(url))
     finally:
         server.shutdown()
         server.server_close()
         worker.join(timeout=5)
-
-
-def redis_cache(url: str) -> Cache:
-    parsed: Final = urlparse(url)
-    in_memory_cache_obj.flush_cache()
-    return Cache(type=LiteLLMCacheType.REDIS, host=parsed.hostname, port=str(parsed.port))
 
 
 async def settle_cache_writes() -> None:
@@ -96,7 +156,7 @@ async def settle_cache_writes() -> None:
 
 
 async def assert_cache_hit_keeps_budget_spend_and_counts_usage(
-    send: Callable[[Mapping[str, object]], Awaitable[object]], server: RecordingServer, tokens: int
+    send: Call, server: RecordingServer, tokens: int
 ) -> None:
     counters: Final = litellm.DualCache()
     budget: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(counters)
@@ -117,8 +177,7 @@ async def assert_cache_hit_keeps_budget_spend_and_counts_usage(
     token_key: Final = limiter.create_rate_limit_keys("api_key", key_hash, "tokens")
     objects: Final = TypeAdapter(dict[str, object])
 
-    await send(options)
-    await settle_cache_writes()
+    await send(**options)
     await drain_logging()
     miss: Final = objects.validate_python((await recorder.wait_for_async("async_log_success_event"))[0].kwargs)
     cost: Final = TypeAdapter(float).validate_python(miss["response_cost"])
@@ -126,7 +185,7 @@ async def assert_cache_hit_keeps_budget_spend_and_counts_usage(
     assert counters.get_cache(spend_key) == pytest.approx(cost)
     assert counters.get_cache(token_key) == tokens
 
-    await send(options)
+    await send(**options)
     await drain_logging()
     successes: Final = await recorder.wait_for_async("async_log_success_event", count=2)
     hit: Final = objects.validate_python(successes[-1].kwargs)

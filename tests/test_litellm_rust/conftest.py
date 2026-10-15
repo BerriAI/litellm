@@ -13,6 +13,21 @@ from litellm import utils
 from litellm.litellm_core_utils import litellm_logging, thread_pool_executor
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.rust_bridge.configuration import _CONFIGURATION
+from tests.test_litellm_rust.support.caching import (
+    cache as cache,
+)
+from tests.test_litellm_rust.support.caching import (
+    call as call,
+)
+from tests.test_litellm_rust.support.caching import (
+    calls as calls,
+)
+from tests.test_litellm_rust.support.caching import (
+    engine as engine,
+)
+from tests.test_litellm_rust.support.caching import (
+    fake_redis as fake_redis,
+)
 from tests.test_litellm_rust.support.caching import redis_url as redis_url
 from tests.test_litellm_rust.support.callback_recorder import drain_logging
 from tests.test_litellm_rust.support.clickhouse import clickhouse_url as clickhouse_url
