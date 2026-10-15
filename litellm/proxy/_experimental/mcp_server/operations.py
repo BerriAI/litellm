@@ -13,6 +13,7 @@ from functools import partial
 from types import EllipsisType
 from typing import Any, Final, NoReturn, TypeAlias, overload
 
+import anyio
 from fastapi import HTTPException
 from mcp import MCPError, ReadResourceResult, Resource
 from mcp.types import (
@@ -52,6 +53,7 @@ from typing_extensions import ReadOnly, TypedDict, assert_never
 from litellm._logging import verbose_logger
 from litellm.constants import (
     MAXIMUM_TRACEBACK_LINES_TO_LOG,
+    MCP_TOOL_LISTING_TIMEOUT,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
@@ -3375,6 +3377,7 @@ class GatewayOperations:
     async def _execute(self, operation: GatewayOperation, context: OperationContext) -> GatewayResult:
         match operation:
             case DiscoverRequest():
+                deadline: Final = time.monotonic() + MCP_TOOL_LISTING_TIMEOUT
                 listings: Final = (
                     ()
                     if context.mcp_proxy_mode
@@ -3396,11 +3399,12 @@ class GatewayOperations:
                     results: Final = await asyncio.gather(*tasks)
                     from litellm.proxy._experimental.mcp_server.subscriptions import subscription_capabilities
 
-                    upstream_versions, notifications = (
-                        await subscription_capabilities(context)
-                        if context.protocol_version == "2026-07-28" and not context.mcp_proxy_mode
-                        else (frozenset(MCP_LEGACY_VERSIONS), ServerCapabilities())
-                    )
+                    upstream_versions, notifications = frozenset(MCP_LEGACY_VERSIONS), ServerCapabilities()
+                    remaining: Final = deadline - time.monotonic()
+                    if context.protocol_version == "2026-07-28" and not context.mcp_proxy_mode and remaining > 0:
+                        # Optional probes share the catalog budget, including target preparation.
+                        with anyio.move_on_after(remaining):
+                            upstream_versions, notifications = await subscription_capabilities(context)
                 finally:
                     try:
                         for task in tasks:

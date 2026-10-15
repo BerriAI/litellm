@@ -144,7 +144,8 @@ def test_modern_protocol_is_rejected_on_legacy_sse_paths(path: str, monkeypatch:
 
 @pytest.mark.parametrize("revision,upstreams,transport,allowed", [
     ("2026-07-28", frozenset({"2026-07-28"}), MCPTransport.http, True),
-    ("2025-11-25", frozenset({"2026-07-28"}), MCPTransport.http, False),
+    ("2025-11-25", frozenset({"2026-07-28"}), MCPTransport.http, True),
+    ("2025-11-25", frozenset({"2025-11-25"}), MCPTransport.sse, True),
     ("2026-07-28", frozenset({"2025-11-25", "2026-07-28"}), MCPTransport.http, True),
     ("2026-07-28", frozenset({"2025-11-25"}), MCPTransport.http, True),
     ("2026-07-28", frozenset({"2026-07-28"}), MCPTransport.stdio, False),
@@ -164,3 +165,23 @@ def test_subscription_flags_require_a_supported_protocol_pair(revision, upstream
     assert bool(result.capabilities.resources.subscribe) is allowed
     assert result.capabilities.tasks is None
     assert result.capabilities.extensions is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["empty", "modern-stdio"])
+async def test_subscription_discovery_never_probes_unsupported_targets(mode, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from litellm.proxy._experimental.mcp_server import subscriptions
+    from litellm.proxy._experimental.mcp_server.contracts import OperationContext
+
+    probe = AsyncMock()
+    target = SimpleNamespace(
+        server=SimpleNamespace(protocol_version="2026-07-28", transport="stdio"),
+        client=SimpleNamespace(run_with_session=probe),
+    )
+    monkeypatch.setattr(subscriptions, "_targets", AsyncMock(return_value=() if mode == "empty" else (target,)))
+    versions, capabilities = await subscriptions.subscription_capabilities(OperationContext(_caller=None))
+    assert versions
+    assert capabilities == ServerCapabilities()
+    probe.assert_not_awaited()

@@ -100,7 +100,7 @@ def build_discovery(
         if operations and revision_support is not None
         else frozenset()
     )
-    subscriptions: Final = (
+    notifications: Final = revision in HANDSHAKE_PROTOCOL_VERSIONS or (
         "subscriptions/listen" in operations and revision == "2026-07-28" and transport is MCPTransport.http
     )
     caller_capabilities: Final = capabilities.model_copy(deep=True)
@@ -110,16 +110,16 @@ def build_discovery(
     return DiscoverResult(
         supported_versions=list(supported),
         capabilities=ServerCapabilities(
-            tools=tools.model_copy(update={"list_changed": tools.list_changed if subscriptions else None})
+            tools=tools.model_copy(update={"list_changed": tools.list_changed if notifications else None})
             if tools is not None and {"tools/list", "tools/call"} <= operations
             else None,
-            prompts=prompts.model_copy(update={"list_changed": prompts.list_changed if subscriptions else None})
+            prompts=prompts.model_copy(update={"list_changed": prompts.list_changed if notifications else None})
             if prompts is not None and {"prompts/list", "prompts/get"} <= operations
             else None,
             resources=resources.model_copy(
                 update={
-                    "list_changed": resources.list_changed if subscriptions else None,
-                    "subscribe": resources.subscribe if subscriptions else None,
+                    "list_changed": resources.list_changed if notifications else None,
+                    "subscribe": resources.subscribe if notifications else None,
                 }
             )
             if resources is not None and {"resources/list", "resources/read"} <= operations

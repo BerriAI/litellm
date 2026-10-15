@@ -848,7 +848,11 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
                         assert {tool.name for tool in (await other.list_tools()).tools} == {"peer-change_tools"}
 
                     if access.startswith("legacy-caller") or access in ("legacy-both", "legacy-sse"):
-                        await session.initialize()
+                        initialized = await session.initialize()
+                        assert initialized.capabilities.tools.list_changed
+                        assert initialized.capabilities.prompts.list_changed
+                        assert initialized.capabilities.resources.list_changed
+                        assert initialized.capabilities.resources.subscribe
                         before = await session.list_tools()
                         assert "peer-added" not in {tool.name for tool in before.tools}
                         if event_kind == "updated":
