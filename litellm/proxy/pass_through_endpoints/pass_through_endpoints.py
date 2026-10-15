@@ -159,6 +159,7 @@ router: Final = APIRouter()
 pass_through_endpoint_logging: Final = PassThroughEndpointLogging()
 
 _METADATA_KEYS: Final = frozenset(("litellm_metadata", "metadata"))
+_DECODED_JSON: Final = TypeAdapter(object)
 _KEPT_OUT_OF_LITELLM_PARAMS: Final = _METADATA_KEYS | frozenset(wire_names(ProxyRequestState))
 
 # Global registry to track registered pass-through routes and prevent memory leaks
@@ -1167,7 +1168,7 @@ async def pass_through_request(
         # parsed dict (hooks mutate it, breaking the signature / Content-Length).
         # Tolerate request objects without `state` (test fixtures) and only honor
         # values httpx accepts for `content=`.
-        _request_state: Final = getattr(request, "state", None)
+        _request_state: Final[object] = getattr(request, "state", None)
         state_raw_body: str | bytes | None = (
             getattr(_request_state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, None)
             if _request_state is not None
@@ -2322,7 +2323,7 @@ def _rewrite_vertex_live_setup_model(text_data: str, setup_model_rewriter: Calla
     if setup_model_rewriter is None:
         return text_data
     try:
-        message: Final[object] = json.loads(text_data)
+        message: Final[object] = _DECODED_JSON.validate_python(json.loads(text_data))
     except json.JSONDecodeError:
         return text_data
     if not isinstance(message, dict):
@@ -2357,7 +2358,9 @@ def _resolved_vertex_live_setup(
 
 def _json_object_frame(frame: str | bytes) -> dict[str, object] | None:
     try:
-        decoded: Final[object] = json.loads(frame if isinstance(frame, str) else frame.decode("utf-8"))
+        decoded: Final[object] = _DECODED_JSON.validate_python(
+            json.loads(frame if isinstance(frame, str) else frame.decode("utf-8"))
+        )
     except (json.JSONDecodeError, UnicodeDecodeError):
         return None
     return decoded if isinstance(decoded, dict) else None
@@ -2586,7 +2589,7 @@ async def websocket_passthrough_request(
                                     endpoint,
                                 )
                                 try:
-                                    client_message = json.loads(text_data)
+                                    client_message = _DECODED_JSON.validate_python(json.loads(text_data))
                                     if isinstance(client_message, dict) and "setup" in client_message:
                                         setup_data = client_message["setup"]
                                         verbose_proxy_logger.debug(
@@ -3970,7 +3973,7 @@ async def create_pass_through_endpoints(
     if data_dict.get("id") is None:
         data_dict["id"] = str(uuid.uuid4())
 
-    if response.field_value is None:
+    if _config_field_endpoints(response) is None:
         response.field_value = [data_dict]
     elif isinstance(response.field_value, list):
         response.field_value.append(data_dict)
@@ -4060,7 +4063,7 @@ async def delete_pass_through_endpoints(
 
     ## Update field by removing endpoint
     pass_through_endpoint_data: Final[list | None] = _config_field_endpoints(response)
-    if response.field_value is None or pass_through_endpoint_data is None:
+    if pass_through_endpoint_data is None:
         raise HTTPException(
             status_code=400,
             detail={"error": "There are no pass-through endpoints setup."},

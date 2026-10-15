@@ -204,7 +204,7 @@ class ResponseMetadata:
         #########################################################
         # 3. Detailed per-phase timing (opt-in via env var)
         #########################################################
-        llm_api_duration_ms: Final = logging_obj.model_call_details.get("llm_api_duration_ms")
+        llm_api_duration_ms: Final[float | None] = logging_obj.model_call_details.get("llm_api_duration_ms")
         if LITELLM_DETAILED_TIMING and llm_api_duration_ms is not None:
             detailed: Final[dict[str, float]] = {
                 "timing_llm_api_ms": round(llm_api_duration_ms, 4),

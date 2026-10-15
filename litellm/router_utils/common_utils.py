@@ -35,18 +35,28 @@ def without_router_only_kwargs(kwargs: Mapping[str, _V]) -> dict[str, _V]:
     return {key: value for key, value in kwargs.items() if key not in ROUTER_ONLY_CALL_KWARGS}
 
 
-def is_proxy_admin_request(request_kwargs: Mapping[str, object] | None) -> bool:
-    if request_kwargs is None:
-        return False
+def request_user_api_key_auth(request_kwargs: Mapping[str, object]) -> object:
+    """The caller's auth object, from whichever metadata bucket this surface writes to."""
     metadata_value: Final = request_kwargs.get("metadata")
     litellm_metadata_value: Final = request_kwargs.get("litellm_metadata")
     metadata: Final = metadata_value if isinstance(metadata_value, Mapping) else {}
     litellm_metadata: Final = litellm_metadata_value if isinstance(litellm_metadata_value, Mapping) else {}
-    user_api_key_auth: Final = metadata.get("user_api_key_auth") or litellm_metadata.get("user_api_key_auth")
-    return getattr(user_api_key_auth, "user_role", None) == "proxy_admin"
+    return metadata.get("user_api_key_auth") or litellm_metadata.get("user_api_key_auth")
+
+
+def is_proxy_admin_request(request_kwargs: Mapping[str, object] | None) -> bool:
+    if request_kwargs is None:
+        return False
+    user_role: Final[object] = getattr(request_user_api_key_auth(request_kwargs), "user_role", None)
+    return user_role == "proxy_admin"
 
 
 _is_proxy_admin_request = is_proxy_admin_request
+
+
+def team_may_use_deployment(owner_team_id: object, team_id: str | None) -> bool:
+    """A deployment owned by a team (``model_info.team_id``) serves only that team; one with no owner serves every team."""
+    return owner_team_id is None or owner_team_id == team_id
 
 
 def get_request_team_id(request_kwargs: Mapping[str, object] | None) -> str | None:

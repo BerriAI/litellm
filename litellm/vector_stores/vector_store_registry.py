@@ -2,6 +2,7 @@
 import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
+from itertools import chain
 from typing import (
     TYPE_CHECKING,
     Any,  # noqa: TID251  # untyped non_default_params dict is the only source of the unknown key type
@@ -56,8 +57,10 @@ def _tool_vector_store_ids(tool: object) -> tuple[str, ...]:
 
 
 class VectorStoreIndexRegistry:
-    def __init__(self, vector_store_indexes: list[LiteLLM_ManagedVectorStoreIndex] = []):
-        self.vector_store_indexes: list[LiteLLM_ManagedVectorStoreIndex] = vector_store_indexes
+    def __init__(self, vector_store_indexes: list[LiteLLM_ManagedVectorStoreIndex] | None = None):
+        self.vector_store_indexes: list[LiteLLM_ManagedVectorStoreIndex] = (
+            vector_store_indexes if vector_store_indexes is not None else []
+        )
 
     def get_vector_store_indexes(self) -> list[LiteLLM_ManagedVectorStoreIndex]:
         """
@@ -129,8 +132,8 @@ class VectorStoreIndexRegistry:
 
 
 class VectorStoreRegistry:
-    def __init__(self, vector_stores: list[LiteLLM_ManagedVectorStore] = []):
-        self.vector_stores: list[LiteLLM_ManagedVectorStore] = vector_stores
+    def __init__(self, vector_stores: list[LiteLLM_ManagedVectorStore] | None = None):
+        self.vector_stores: list[LiteLLM_ManagedVectorStore] = vector_stores if vector_stores is not None else []
         self.vector_store_ids_to_vector_store_map: dict[str, LiteLLM_ManagedVectorStore] = {}
 
     def _extract_tool_params(self, tool: dict) -> VectorStoreToolParams:
@@ -420,9 +423,7 @@ class VectorStoreRegistry:
             validated_tools: Final = _ITEMS.validate_python(tools)
         except ValidationError:
             return vector_store_ids
-        for tool in validated_tools:
-            vector_store_ids.extend(_tool_vector_store_ids(tool))
-        return vector_store_ids
+        return [*vector_store_ids, *chain.from_iterable(_tool_vector_store_ids(tool) for tool in validated_tools)]
 
     def load_vector_stores_from_config(self, vector_stores_config: list[dict]):
         """

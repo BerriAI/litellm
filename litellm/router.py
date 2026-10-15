@@ -106,6 +106,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY
 from litellm.litellm_core_utils.ptu_pricing import (
     PTU_COST_ATTRIBUTION_ENV_VAR,
     declares_ptu,
+    declares_ptu_shares,
     is_ptu_cost_attribution_enabled,
     ptu_config_error,
     ptu_identity_error,
@@ -199,7 +200,9 @@ from litellm.router_utils.common_utils import (
     get_request_team_id,
     is_proxy_admin_request,
     provider_for_generic_call,
+    request_user_api_key_auth,
     resolve_model_group_alias,
+    team_may_use_deployment,
     truncate_fallback_error_detail,
     warn_on_ignored_model_capability_flags,
     warn_on_provider_credential_mismatch,
@@ -272,6 +275,14 @@ from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
 )
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
     PromptCachingDeploymentCheck,
+)
+from litellm.router_utils.ptu_shares import (
+    PTUTeamCeiling,
+    filter_ptu_shared_deployments,
+    ptu_capacity_warning,
+    ptu_share_teams,
+    share_holder_request_kwargs,
+    team_ptu_ceiling,
 )
 from litellm.router_utils.reasoning_effort_capability import (
     deployment_is_catalog_mapped,
@@ -510,6 +521,7 @@ _SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
 _RESOLVED_RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy | None)
 _ROUTING_KWARGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _FALLBACK_HOP_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_OPAQUE_VALUE_ADAPTER: Final = TypeAdapter(object)
 _DEPLOYMENT_SELECTED_EVENT: Final = "litellm.request.deployment_selected"
 
 
@@ -810,7 +822,8 @@ MAX_HELD_PRE_OUTPUT_RESPONSES_EVENTS: Final = 200
 
 def _retry_policy_ceiling(policy: RetryPolicy) -> int:
     """The most retries any error class under this policy can be granted."""
-    return max((retries for retries in policy.model_dump().values() if isinstance(retries, int)), default=0)
+    retry_counts: Final[Iterable[object]] = policy.model_dump().values()
+    return max((retries for retries in retry_counts if isinstance(retries, int)), default=0)
 
 
 def _responses_stream_holds_event(item: object, held_event_count: int) -> bool:
@@ -1258,6 +1271,8 @@ class Router:
         self.cached_deployment_model_info = lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)(
             self.get_deployment_model_info
         )
+        self._ptu_share_teams = lru_cache(maxsize=1)(self._collect_ptu_share_teams)
+        self._cached_team_ptu_ceiling = lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)(self._resolve_team_ptu_ceiling)
         self._discovered_model_info_cache: InMemoryCache = InMemoryCache(
             max_size_in_memory=max(len(model_list or ()), 1),
             default_ttl=2 * MODEL_INFO_REFRESH_SECONDS,
@@ -1521,7 +1536,7 @@ class Router:
         if not startup_nodes:
             _env_cluster_nodes: Final = get_secret("REDIS_CLUSTER_NODES")
             if _env_cluster_nodes is not None and isinstance(_env_cluster_nodes, str):
-                startup_nodes = json.loads(_env_cluster_nodes)
+                startup_nodes = _OPAQUE_VALUE_ADAPTER.validate_python(json.loads(_env_cluster_nodes))
 
         if startup_nodes:
             return RedisClusterCache(**{**cache_config, "startup_nodes": startup_nodes})
@@ -4702,7 +4717,10 @@ class Router:
         **kwargs,
     ):
         await self._wait_for_scheduler_turn(
-            model=model, priority=priority, parent_otel_span=get_parent_otel_span_from_kwargs(kwargs)
+            model=model,
+            priority=priority,
+            parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
+            request_kwargs=cast(Mapping[str, object], kwargs),  # cast-ok: kwargs keys are param names
         )
         try:
             _response: Final = await self.acompletion(model=model, messages=messages, stream=stream, **kwargs)
@@ -4726,7 +4744,10 @@ class Router:
         kwargs: dict[str, object],
     ):
         await self._wait_for_scheduler_turn(
-            model=model, priority=priority, parent_otel_span=get_parent_otel_span_from_kwargs(kwargs)
+            model=model,
+            priority=priority,
+            parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
+            request_kwargs=kwargs,
         )
         try:
             _response: Final = await original_function(*args, **kwargs)
@@ -4741,9 +4762,15 @@ class Router:
             setattr(e, "priority", priority)
             raise e
 
-    async def _wait_for_scheduler_turn(self, model: str, priority: int, parent_otel_span: Span | None) -> None:
+    async def _wait_for_scheduler_turn(
+        self, model: str, priority: int, parent_otel_span: Span | None, request_kwargs: Mapping[str, object]
+    ) -> None:
         async def healthy_deployments() -> Sequence[object]:
-            deployments, _ = await self._async_get_healthy_deployments(model=model, parent_otel_span=parent_otel_span)
+            deployments, _ = await self._async_get_healthy_deployments(
+                model=model,
+                parent_otel_span=parent_otel_span,
+                request_kwargs=share_holder_request_kwargs(request_kwargs, self._ptu_share_teams()),
+            )
             return deployments
 
         await self.scheduler.wait_for_turn(
@@ -5390,17 +5417,19 @@ class Router:
             self._stamp_retry_skip_deployment_id(e, kwargs)
             raise e
 
-    async def _asearch_with_fallbacks(self, original_function: Callable, **kwargs):
+    async def _asearch_with_fallbacks(self, original_function: Callable, **kwargs) -> object:
         """
         Helper function to make a search API call through the router with load balancing and fallbacks.
         Reuses the router's retry/fallback infrastructure.
         """
         from litellm.router_utils.search_api_router import SearchAPIRouter
 
-        return await SearchAPIRouter.async_search_with_fallbacks(
-            router_instance=self,
-            original_function=original_function,
-            **kwargs,
+        return _OPAQUE_VALUE_ADAPTER.validate_python(
+            await SearchAPIRouter.async_search_with_fallbacks(
+                router_instance=self,
+                original_function=original_function,
+                **kwargs,
+            )
         )
 
     async def _asearch_with_fallbacks_helper(self, model: str, original_generic_function: Callable, **kwargs):
@@ -6050,7 +6079,9 @@ class Router:
         model_group: Final = cast(str, initial_kwargs.get("model"))  # cast-ok: kwargs always carries the model group
         retry_kwargs: Final = mid_stream_retry_kwargs(initial_kwargs)
         healthy_deployments, all_deployments = await self._async_get_healthy_deployments(
-            model=model_group, parent_otel_span=get_parent_otel_span_from_kwargs(retry_kwargs)
+            model=model_group,
+            parent_otel_span=get_parent_otel_span_from_kwargs(retry_kwargs),
+            request_kwargs=share_holder_request_kwargs(initial_kwargs, self._ptu_share_teams()),
         )
         budget, policy_applies = self._stream_retry_budget(_mid_stream_retry_trigger(e), initial_kwargs)
         last_error = e  # rebind-ok: the newest failure is what the fallback chain and the caller see
@@ -6169,16 +6200,18 @@ class Router:
                 )
                 else e
             )
-            fallback_response: Final = await self.async_function_with_fallbacks_common_utils(
-                e=fallback_trigger,
-                disable_fallbacks=fallbacks_disabled_for_request(initial_kwargs),
-                fallbacks=fallbacks,
-                context_window_fallbacks=context_window_fallbacks,
-                content_policy_fallbacks=content_policy_fallbacks,
-                model_group=model_group,
-                args=(),
-                kwargs=initial_kwargs,
-                include_fallback_errors=initial_kwargs.get("include_fallback_errors", False) is True,
+            fallback_response: Final = _OPAQUE_VALUE_ADAPTER.validate_python(
+                await self.async_function_with_fallbacks_common_utils(
+                    e=fallback_trigger,
+                    disable_fallbacks=fallbacks_disabled_for_request(initial_kwargs),
+                    fallbacks=fallbacks,
+                    context_window_fallbacks=context_window_fallbacks,
+                    content_policy_fallbacks=content_policy_fallbacks,
+                    model_group=model_group,
+                    args=(),
+                    kwargs=initial_kwargs,
+                    include_fallback_errors=initial_kwargs.get("include_fallback_errors", False) is True,
+                )
             )
             async for fallback_item in self._aanthropic_messages_yield_recovered(fallback_response, wrapper):
                 yield fallback_item
@@ -8204,6 +8237,10 @@ class Router:
             ) = await self._async_get_healthy_deployments(
                 model=kwargs.get("model") or "",
                 parent_otel_span=parent_otel_span,
+                request_kwargs=share_holder_request_kwargs(
+                    cast(Mapping[str, object], kwargs),  # cast-ok: kwargs keys are param names
+                    self._ptu_share_teams(),
+                ),
             )
 
             # Check retry policy FIRST, before should_retry_this_error
@@ -8296,6 +8333,10 @@ class Router:
                         ) = await self._async_get_healthy_deployments(
                             model=_model,
                             parent_otel_span=parent_otel_span,
+                            request_kwargs=share_holder_request_kwargs(
+                                cast(Mapping[str, object], kwargs),  # cast-ok: kwargs keys are param names
+                                self._ptu_share_teams(),
+                            ),
                         )
                     else:
                         _healthy_deployments = []
@@ -9109,18 +9150,19 @@ class Router:
         return healthy_deployments, _all_deployments
 
     async def _async_get_healthy_deployments(
-        self, model: str, parent_otel_span: Span | None
+        self, model: str, parent_otel_span: Span | None, request_kwargs: Mapping[str, object] | None = None
     ) -> tuple[list[dict], list[dict]]:
         """
         Returns Tuple of:
         - Tuple[List[Dict], List[Dict]]:
-            1. healthy_deployments: list of healthy deployments
-            2. all_deployments: list of all deployments
+            1. healthy_deployments: list of healthy deployments the caller of ``request_kwargs`` may use
+            2. all_deployments: list of all deployments that caller may use
         """
         _all_deployments: list = []
         try:
             _, _all_deployments = self._common_checks_available_deployment(
                 model=model,
+                request_kwargs=request_kwargs,
             )
             if isinstance(_all_deployments, dict):
                 return [], _all_deployments
@@ -9483,11 +9525,27 @@ class Router:
             ptu_error: Final = (
                 (ptu_config_error(_model_info, model_name=_model_name) or identity_error) if config_sourced else None
             )
-            if ptu_error is not None and is_ptu_cost_attribution_enabled():
+            declares_split: Final = declares_ptu_shares(_model_info)
+            if ptu_error is not None and (declares_split or is_ptu_cost_attribution_enabled()):
                 raise ValueError(ptu_error)
             access_windows_error: Final = access_windows_config_error(_model_info, model_name=_model_name)
             if access_windows_error is not None:
                 raise ValueError(access_windows_error)
+            capacity_warning: Final = (
+                ptu_capacity_warning(
+                    _model_name,
+                    MappingProxyType(
+                        {  # pyright: ignore[reportUnknownArgumentType]  # router deployment dicts are untyped
+                            "model_info": _model_info,
+                            "litellm_params": _litellm_params,
+                        }
+                    ),
+                )
+                if is_ptu_cost_attribution_enabled()
+                else None
+            )
+            if capacity_warning is not None:
+                verbose_router_logger.warning(capacity_warning)
             zeroed_pricing: Final = zeroed_ptu_pricing(_model_info, _litellm_params) if config_sourced else None
             merged_params: Final[Mapping[str, object]] = (
                 _litellm_params if zeroed_pricing is None else MappingProxyType({**_litellm_params, **zeroed_pricing})
@@ -10870,7 +10928,7 @@ class Router:
         """
         model_info: Final = model.get("model_info") if isinstance(model, dict) else model.model_info
         owner_team_id: Final = cast(Mapping[str, object], model_info).get("team_id") if model_info is not None else None
-        return owner_team_id is None or owner_team_id == team_id
+        return team_may_use_deployment(owner_team_id, team_id)
 
     _deployment_usable_by_team = deployment_usable_by_team
 
@@ -12700,6 +12758,34 @@ class Router:
         ]
         return [{**DeploymentTypedDict(**m), "model_name": model_name} for m in matches]
 
+    def wildcard_route_deployments(self, model: str, team_id: str | None) -> Sequence[Mapping[str, object]]:
+        """The deployments routing serves ``model`` from through a wildcard: the most specific
+        proxy-wide pattern matching it, else ``team_id``'s own pattern, never both."""
+        proxy_wide: Final[Sequence[Mapping[str, object]]] = self.pattern_router.get_deployments_by_pattern(model=model)
+        team_router: Final = self.team_pattern_routers.get(team_id) if team_id is not None else None
+        if proxy_wide or team_router is None:
+            return proxy_wide
+        return team_router.get_deployments_by_pattern(model=model)
+
+    def team_ptu_ceiling(self, team_id: str, model_group: str) -> PTUTeamCeiling | None:
+        """The per-minute ceiling ``team_id``'s PTU shares set on the group serving ``model_group``,
+        else None, kept until the model list next changes."""
+        if team_id not in self._ptu_share_teams():
+            return None
+        return self._cached_team_ptu_ceiling(team_id, model_group)
+
+    def _collect_ptu_share_teams(self) -> frozenset[str]:
+        return ptu_share_teams(self.get_model_list() or ())
+
+    def _resolve_team_ptu_ceiling(self, team_id: str, model_group: str) -> PTUTeamCeiling | None:
+        return team_ptu_ceiling(
+            self.get_model_list() or (),
+            self.model_list,
+            team_id,
+            model_group,
+            lambda name: self.wildcard_route_deployments(name, team_id),
+        )
+
     def get_model_list_of_routed_group(self, model_group: str) -> list[DeploymentTypedDict]:
         """
         The deployments a request the router has already resolved to model_group is
@@ -12747,6 +12833,8 @@ class Router:
         """
         self._cached_get_model_group_info.cache_clear()
         self.cached_deployment_model_info.cache_clear()
+        self._ptu_share_teams.cache_clear()
+        self._cached_team_ptu_ceiling.cache_clear()
         self._zero_cost_cache.clear()
         self._routing_group_rows = None
 
@@ -13310,19 +13398,9 @@ class Router:
             if team_deployments:
                 return model, team_deployments
 
-        pattern_deployments = self.pattern_router.get_deployments_by_pattern(
-            model=model,
-        )
-
-        if pattern_deployments:
-            return model, pattern_deployments
-
-        if request_team_id is not None and request_team_id in self.team_pattern_routers:
-            pattern_deployments = self.team_pattern_routers[request_team_id].get_deployments_by_pattern(
-                model=model,
-            )
-            if pattern_deployments:
-                return model, pattern_deployments
+        wildcard_deployments: Final = self.wildcard_route_deployments(model, request_team_id)
+        if wildcard_deployments:
+            return model, list(wildcard_deployments)
 
         if self.default_deployment is not None:
             # Shallow copy with nested litellm_params copy (100x+ faster than deepcopy)
@@ -13386,7 +13464,7 @@ class Router:
         messages: list[dict[str, str]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
-        request_kwargs: dict | None = None,
+        request_kwargs: Mapping[str, object] | None = None,
     ) -> tuple[str, list | dict]:
         """
         Common checks for 'get_available_deployment' across sync + async call.
@@ -13582,13 +13660,20 @@ class Router:
                 model=model,
                 llm_provider="",
             )
-        return result.deployments
+        shared: Final = filter_ptu_shared_deployments(result.deployments, request_team_id)
+        if shared.withheld and len(shared.deployments) == 0:
+            raise litellm.BadRequestError(
+                message=f"Deployment {model} is reserved for the teams holding a PTU share of it",
+                model=model,
+                llm_provider="",
+            )
+        return shared.deployments
 
     def _filter_deployments_by_model_access_groups(
         self,
         model: str,
         healthy_deployments: list,
-        request_kwargs: dict | None,
+        request_kwargs: Mapping[str, object] | None,
         request_team_id: str | None,
     ) -> list:
         """
@@ -13602,9 +13687,7 @@ class Router:
         if not healthy_deployments or request_kwargs is None:
             return healthy_deployments
 
-        metadata: Final = request_kwargs.get("metadata") or {}
-        litellm_metadata: Final = request_kwargs.get("litellm_metadata") or {}
-        user_api_key_auth: Final = metadata.get("user_api_key_auth") or litellm_metadata.get("user_api_key_auth")
+        user_api_key_auth: Final = request_user_api_key_auth(request_kwargs)
         if user_api_key_auth is None:
             return healthy_deployments
 

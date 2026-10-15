@@ -1013,7 +1013,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     tool_calls_to_check.append(tool_call_dict)
                     tool_call_task_mappings.append((choice_idx, int(tool_call_idx)))
 
-    def _convert_tool_call_to_dict(self, tool_call: dict[str, Any] | Any) -> dict[str, Any] | None:
+    def _convert_tool_call_to_dict(self, tool_call: object) -> dict[str, object] | None:
         """
         Convert a tool call object to dictionary format.
 
@@ -1023,19 +1023,16 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             return tool_call
         elif hasattr(tool_call, "id") and hasattr(tool_call, "function"):
             # Convert object to dict
-            function: Final = tool_call.function
-            function_dict: Final = {}
-            if hasattr(function, "name"):
-                function_dict["name"] = function.name
-            if hasattr(function, "arguments"):
-                function_dict["arguments"] = function.arguments
+            function: Final[object] = getattr(tool_call, "function", None)
+            function_dict: Final[Mapping[str, object]] = {
+                key: getattr(function, key, None) for key in ("name", "arguments") if hasattr(function, key)
+            }
 
-            tool_call_dict: Final = {
-                "id": tool_call.id if hasattr(tool_call, "id") else None,
-                "type": tool_call.type if hasattr(tool_call, "type") else "function",
+            return {
+                "id": getattr(tool_call, "id", None),
+                "type": getattr(tool_call, "type", "function"),
                 "function": function_dict,
             }
-            return tool_call_dict
         return None
 
     async def _apply_guardrail_responses_to_output_texts(
