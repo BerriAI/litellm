@@ -1,3 +1,5 @@
+import importlib
+import types
 from collections.abc import Mapping, Sequence
 from datetime import date
 from typing import Final
@@ -17,6 +19,7 @@ from litellm.proxy.spend_tracking.spend_report_email import (
     get_monthly_report_date_range,
     get_weekly_report_date_range,
     parse_send_time,
+    send_email_spend_reports_for_frequency,
     send_spend_report_email,
     setup_email_spend_report_jobs,
 )
@@ -729,14 +732,14 @@ async def test_default_email_sender_import_error_fallback(monkeypatch: pytest.Mo
     mock_smtp_send: Final = AsyncMock()
     monkeypatch.setattr("litellm.proxy.utils.send_email", mock_smtp_send)
 
-    real_import: Final = builtins.__import__
+    real_import_module: Final = importlib.import_module
 
-    def mock_import(name: str, *args: object, **kwargs: object) -> object:
+    def mock_import_module(name: str, package: str | None = None) -> types.ModuleType:
         if "litellm_enterprise" in name:
             raise ImportError("no enterprise module")
-        return real_import(name, *args, **kwargs)
+        return real_import_module(name, package=package)
 
-    monkeypatch.setattr(builtins, "__import__", mock_import)
+    monkeypatch.setattr(importlib, "import_module", mock_import_module)
 
     await default_email_sender(
         receiver_email="receiver@example.com",
@@ -1105,11 +1108,97 @@ def test_setup_email_spend_report_jobs_variations() -> None:
     existing_job: Final = MagicMock()
     existing_job.id = "email_spend_report_legacy_1"
 
+    def _record_remove(jid: str) -> None:
+        removed_jobs.append(jid)
+
     scheduler_with_jobs: Final = MagicMock()
     scheduler_with_jobs.get_jobs.return_value = [existing_job]
-    scheduler_with_jobs.remove_job = lambda jid: removed_jobs.append(jid)
+    scheduler_with_jobs.remove_job = _record_remove
     scheduler_with_jobs.add_job = MagicMock()
 
     settings_empty: Final = SpendReportEmailSettings()
     setup_email_spend_report_jobs(scheduler_with_jobs, settings=settings_empty)
     assert "email_spend_report_legacy_1" in removed_jobs
+
+
+@pytest.mark.asyncio
+async def test_send_email_spend_reports_for_frequency(monkeypatch: pytest.MonkeyPatch) -> None:
+    mock_send: Final = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.spend_tracking.spend_report_email.send_spend_report_email", mock_send)
+
+    alert_weekly: Final = SpendReportEmailAlert(
+        id="weekly-alert-1",
+        frequency="weekly",
+        enabled=True,
+        recipient_emails=("weekly@example.com",),
+        group_by=("team", "team_key"),
+        team_id="team-alpha",
+    )
+    alert_monthly: Final = SpendReportEmailAlert(
+        id="monthly-alert-1",
+        frequency="monthly",
+        enabled=True,
+        recipient_emails=("monthly@example.com",),
+    )
+    test_settings: Final = SpendReportEmailSettings(alerts=(alert_weekly, alert_monthly))
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_report_email.get_spend_report_email_settings",
+        lambda: test_settings,
+    )
+
+    await send_email_spend_reports_for_frequency("weekly", "2026-10-01", "2026-10-07")
+    mock_send.assert_awaited_once_with(
+        frequency="weekly",
+        recipient_emails=("weekly@example.com",),
+        group_by=("team", "team_key"),
+        start_date="2026-10-01",
+        end_date="2026-10-07",
+        team_id="team-alpha",
+    )
+
+    mock_send.reset_mock()
+    await send_email_spend_reports_for_frequency("monthly", "2026-10-01", "2026-10-31")
+    mock_send.assert_awaited_once_with(
+        frequency="monthly",
+        recipient_emails=("monthly@example.com",),
+        group_by=("team",),
+        start_date="2026-10-01",
+        end_date="2026-10-31",
+        team_id=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_send_email_spend_reports_for_frequency_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    mock_send: Final = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.spend_tracking.spend_report_email.send_spend_report_email", mock_send)
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_report_email.get_spend_report_email_settings",
+        lambda: SpendReportEmailSettings(alerts=()),
+    )
+    monkeypatch.setenv("TEST_EMAIL_ADDRESS", "fallback@example.com")
+
+    await send_email_spend_reports_for_frequency(
+        "weekly", "2026-10-01", "2026-10-07"
+    )
+    mock_send.assert_awaited_once_with(
+        frequency="weekly",
+        recipient_emails=("fallback@example.com",),
+        start_date="2026-10-01",
+        end_date="2026-10-07",
+    )
+
+
+def test_sql_queries_read_daily_team_spend() -> None:
+    from litellm.proxy.spend_tracking.spend_report_email import (
+        TEAM_KEY_MODEL_SPEND_SQL,
+        TEAM_KEY_SPEND_SQL,
+        TEAM_MODEL_SPEND_SQL,
+        TEAM_SPEND_SQL,
+    )
+
+    for query in (TEAM_SPEND_SQL, TEAM_KEY_SPEND_SQL, TEAM_MODEL_SPEND_SQL, TEAM_KEY_MODEL_SPEND_SQL):
+        assert 'FROM "LiteLLM_DailyTeamSpend" s' in query
+        assert 'FROM "LiteLLM_SpendLogs"' not in query
+        assert "s.date >= $1 AND s.date <= $2" in query
+

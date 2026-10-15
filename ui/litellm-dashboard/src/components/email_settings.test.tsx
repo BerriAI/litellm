@@ -149,11 +149,12 @@ describe("EmailSettings", () => {
     expect(screen.queryByText("spend report email settings")).not.toBeInTheDocument();
   });
 
-  it("displays Enterprise Feature label for locked fields when not premium user", () => {
+  it("displays link to enterprise form for locked fields when not premium user", () => {
     renderWithProviders(<EmailSettings accessToken="sk-test" premiumUser={false} alerts={alerts} />);
 
-    expect(screen.getByText(/Enterprise Feature/)).toBeInTheDocument();
-    expect(screen.getByText(/EMAIL_LOGO_URL/)).toBeInTheDocument();
+    const link = screen.getByRole("link", { name: /EMAIL_LOGO_URL/ });
+    expect(link).toBeInTheDocument();
+    expect(link).toHaveAttribute("href", "https://forms.gle/W3U4PZpJGFHWtHyA9");
   });
 
   it("toggles credential visibility when eye icon is clicked", async () => {

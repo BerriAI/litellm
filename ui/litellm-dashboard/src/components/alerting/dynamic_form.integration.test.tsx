@@ -61,13 +61,17 @@ const renderForm = (
   const handleInputChange = overrides.handleInputChange ?? vi.fn();
   const handleResetField = overrides.handleResetField ?? vi.fn();
   render(
-    <DynamicForm
-      alertingSettings={overrides.settings ?? SETTINGS}
-      handleInputChange={handleInputChange}
-      handleResetField={handleResetField}
-      handleSubmit={handleSubmit}
-      premiumUser={overrides.premiumUser ?? false}
-    />,
+    <table>
+      <tbody>
+        <DynamicForm
+          alertingSettings={overrides.settings ?? SETTINGS}
+          handleInputChange={handleInputChange}
+          handleResetField={handleResetField}
+          handleSubmit={handleSubmit}
+          premiumUser={overrides.premiumUser ?? false}
+        />
+      </tbody>
+    </table>,
   );
   return { handleSubmit, handleInputChange, handleResetField };
 };

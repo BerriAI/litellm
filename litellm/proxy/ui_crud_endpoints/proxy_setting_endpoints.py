@@ -1762,9 +1762,6 @@ async def update_spend_report_email_settings(
             detail="Only proxy admins can update spend report email settings.",
         )
 
-    from litellm.proxy import proxy_server
-    from litellm.proxy.spend_tracking.spend_report_email import setup_email_spend_report_jobs
-
     update_fn: Final[Callable[..., Awaitable[object]]] = _update_litellm_setting
     result: Final[object] = await update_fn(
         settings=settings,
@@ -1772,9 +1769,6 @@ async def update_spend_report_email_settings(
         success_message="Spend report email settings updated successfully",
         user_api_key_dict=user_api_key_dict,
     )
-
-    scheduler_instance: Final[object] = getattr(proxy_server, "scheduler", None)
-    setup_email_spend_report_jobs(scheduler=scheduler_instance, settings=settings)
 
     return _UI_SETTINGS_OBJECT.validate_python(result)
 

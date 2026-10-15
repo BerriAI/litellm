@@ -1,4 +1,5 @@
 import html
+import importlib
 import os
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -252,7 +253,7 @@ async def _send_with_enterprise_logger(
     html: str,
 ) -> bool:
     try:
-        module: Final[object] = __import__(module_name, fromlist=[class_name])
+        module: Final = importlib.import_module(module_name)
     except ImportError:
         return False
     logger_cls: Final[object] = getattr(module, class_name, None)
@@ -361,11 +362,10 @@ TEAM_SPEND_SQL: Final = """
 SELECT 
     COALESCE(t.team_alias, s.team_id, 'No Team') AS team,
     ROUND(SUM(s.spend)::numeric, 2) AS total_spend,
-    COUNT(*) AS request_count
-FROM "LiteLLM_SpendLogs" s
+    COALESCE(SUM(s.api_requests), 0)::bigint AS request_count
+FROM "LiteLLM_DailyTeamSpend" s
 LEFT JOIN "LiteLLM_TeamTable" t ON s.team_id = t.team_id
-WHERE s."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
-  AND s."startTime" < (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
+WHERE s.date >= $1 AND s.date <= $2
 GROUP BY COALESCE(t.team_alias, s.team_id, 'No Team')
 HAVING SUM(s.spend) > 0
 ORDER BY total_spend DESC
@@ -375,11 +375,10 @@ TEAM_SPEND_WITH_TEAM_SQL: Final = """
 SELECT 
     COALESCE(t.team_alias, s.team_id, 'No Team') AS team,
     ROUND(SUM(s.spend)::numeric, 2) AS total_spend,
-    COUNT(*) AS request_count
-FROM "LiteLLM_SpendLogs" s
+    COALESCE(SUM(s.api_requests), 0)::bigint AS request_count
+FROM "LiteLLM_DailyTeamSpend" s
 LEFT JOIN "LiteLLM_TeamTable" t ON s.team_id = t.team_id
-WHERE s."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
-  AND s."startTime" < (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
+WHERE s.date >= $1 AND s.date <= $2
   AND (s.team_id = $3 OR t.team_alias = $3 OR t.team_id = $3)
 GROUP BY COALESCE(t.team_alias, s.team_id, 'No Team')
 HAVING SUM(s.spend) > 0
@@ -391,12 +390,11 @@ SELECT
     COALESCE(t.team_alias, s.team_id, 'No Team') AS team,
     COALESCE(k.key_alias, k.key_name, NULLIF(s.api_key, ''), 'No Key') AS api_key,
     ROUND(SUM(s.spend)::numeric, 2) AS total_spend,
-    COUNT(*) AS request_count
-FROM "LiteLLM_SpendLogs" s
+    COALESCE(SUM(s.api_requests), 0)::bigint AS request_count
+FROM "LiteLLM_DailyTeamSpend" s
 LEFT JOIN "LiteLLM_TeamTable" t ON s.team_id = t.team_id
 LEFT JOIN "LiteLLM_VerificationToken" k ON s.api_key = k.token
-WHERE s."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
-  AND s."startTime" < (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
+WHERE s.date >= $1 AND s.date <= $2
 GROUP BY 
     COALESCE(t.team_alias, s.team_id, 'No Team'),
     COALESCE(k.key_alias, k.key_name, NULLIF(s.api_key, ''), 'No Key')
@@ -409,12 +407,11 @@ SELECT
     COALESCE(t.team_alias, s.team_id, 'No Team') AS team,
     COALESCE(k.key_alias, k.key_name, NULLIF(s.api_key, ''), 'No Key') AS api_key,
     ROUND(SUM(s.spend)::numeric, 2) AS total_spend,
-    COUNT(*) AS request_count
-FROM "LiteLLM_SpendLogs" s
+    COALESCE(SUM(s.api_requests), 0)::bigint AS request_count
+FROM "LiteLLM_DailyTeamSpend" s
 LEFT JOIN "LiteLLM_TeamTable" t ON s.team_id = t.team_id
 LEFT JOIN "LiteLLM_VerificationToken" k ON s.api_key = k.token
-WHERE s."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
-  AND s."startTime" < (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
+WHERE s.date >= $1 AND s.date <= $2
   AND (s.team_id = $3 OR t.team_alias = $3 OR t.team_id = $3)
 GROUP BY 
     COALESCE(t.team_alias, s.team_id, 'No Team'),
@@ -428,11 +425,10 @@ SELECT
     COALESCE(t.team_alias, s.team_id, 'No Team') AS team,
     COALESCE(NULLIF(s.model, ''), 'Unknown') AS model,
     ROUND(SUM(s.spend)::numeric, 2) AS total_spend,
-    COUNT(*) AS request_count
-FROM "LiteLLM_SpendLogs" s
+    COALESCE(SUM(s.api_requests), 0)::bigint AS request_count
+FROM "LiteLLM_DailyTeamSpend" s
 LEFT JOIN "LiteLLM_TeamTable" t ON s.team_id = t.team_id
-WHERE s."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
-  AND s."startTime" < (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
+WHERE s.date >= $1 AND s.date <= $2
 GROUP BY 
     COALESCE(t.team_alias, s.team_id, 'No Team'),
     COALESCE(NULLIF(s.model, ''), 'Unknown')
@@ -445,11 +441,10 @@ SELECT
     COALESCE(t.team_alias, s.team_id, 'No Team') AS team,
     COALESCE(NULLIF(s.model, ''), 'Unknown') AS model,
     ROUND(SUM(s.spend)::numeric, 2) AS total_spend,
-    COUNT(*) AS request_count
-FROM "LiteLLM_SpendLogs" s
+    COALESCE(SUM(s.api_requests), 0)::bigint AS request_count
+FROM "LiteLLM_DailyTeamSpend" s
 LEFT JOIN "LiteLLM_TeamTable" t ON s.team_id = t.team_id
-WHERE s."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
-  AND s."startTime" < (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
+WHERE s.date >= $1 AND s.date <= $2
   AND (s.team_id = $3 OR t.team_alias = $3 OR t.team_id = $3)
 GROUP BY 
     COALESCE(t.team_alias, s.team_id, 'No Team'),
@@ -464,12 +459,11 @@ SELECT
     COALESCE(k.key_alias, k.key_name, NULLIF(s.api_key, ''), 'No Key') AS api_key,
     COALESCE(NULLIF(s.model, ''), 'Unknown') AS model,
     ROUND(SUM(s.spend)::numeric, 2) AS total_spend,
-    COUNT(*) AS request_count
-FROM "LiteLLM_SpendLogs" s
+    COALESCE(SUM(s.api_requests), 0)::bigint AS request_count
+FROM "LiteLLM_DailyTeamSpend" s
 LEFT JOIN "LiteLLM_TeamTable" t ON s.team_id = t.team_id
 LEFT JOIN "LiteLLM_VerificationToken" k ON s.api_key = k.token
-WHERE s."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
-  AND s."startTime" < (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
+WHERE s.date >= $1 AND s.date <= $2
 GROUP BY 
     COALESCE(t.team_alias, s.team_id, 'No Team'),
     COALESCE(k.key_alias, k.key_name, NULLIF(s.api_key, ''), 'No Key'),
@@ -484,12 +478,11 @@ SELECT
     COALESCE(k.key_alias, k.key_name, NULLIF(s.api_key, ''), 'No Key') AS api_key,
     COALESCE(NULLIF(s.model, ''), 'Unknown') AS model,
     ROUND(SUM(s.spend)::numeric, 2) AS total_spend,
-    COUNT(*) AS request_count
-FROM "LiteLLM_SpendLogs" s
+    COALESCE(SUM(s.api_requests), 0)::bigint AS request_count
+FROM "LiteLLM_DailyTeamSpend" s
 LEFT JOIN "LiteLLM_TeamTable" t ON s.team_id = t.team_id
 LEFT JOIN "LiteLLM_VerificationToken" k ON s.api_key = k.token
-WHERE s."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
-  AND s."startTime" < (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
+WHERE s.date >= $1 AND s.date <= $2
   AND (s.team_id = $3 OR t.team_alias = $3 OR t.team_id = $3)
 GROUP BY 
     COALESCE(t.team_alias, s.team_id, 'No Team'),
@@ -933,6 +926,43 @@ async def send_spend_report_email(
         total_requests=total_requests,
         team_id=team_id,
     )
+
+
+async def send_email_spend_reports_for_frequency(
+    frequency: Literal["daily", "weekly", "monthly"],
+    start_date: str,
+    end_date: str,
+) -> None:
+    settings: Final = get_spend_report_email_settings()
+    matching_alerts: Final = tuple(
+        a for a in settings.alerts if a.enabled and a.frequency == frequency and a.recipient_emails
+    )
+    if matching_alerts:
+        for alert in matching_alerts:
+            await send_spend_report_email(
+                frequency=frequency,
+                recipient_emails=alert.recipient_emails,
+                group_by=alert.group_by,
+                start_date=start_date,
+                end_date=end_date,
+                team_id=alert.team_id,
+            )
+        return
+
+    fallback_recipients: Final = (
+        os.getenv("TEST_EMAIL_ADDRESS")
+        or os.getenv("SMTP_SENDER_EMAIL")
+        or os.getenv("SENDGRID_SENDER_EMAIL")
+    )
+    if fallback_recipients:
+        recipients_tuple: Final = tuple(r.strip() for r in fallback_recipients.split(",") if r.strip())
+        if recipients_tuple:
+            await send_spend_report_email(
+                frequency=frequency,
+                recipient_emails=recipients_tuple,
+                start_date=start_date,
+                end_date=end_date,
+            )
 
 
 def _safe_remove_job(remove_fn: Callable[[str], object] | None, job_id: str) -> None:

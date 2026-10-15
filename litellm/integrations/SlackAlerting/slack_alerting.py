@@ -1840,7 +1840,14 @@ Model Info:
         Args:
             time_range: A string specifying the time range for the report, e.g., "1d", "7d", "30d"
         """
-        if self.alerting is None or "spend_reports" not in self.alert_types:
+        from litellm.proxy.spend_tracking.spend_report_email import (
+            get_spend_report_email_settings,
+            send_email_spend_reports_for_frequency,
+        )
+
+        email_settings: Final = get_spend_report_email_settings()
+        has_email_alerts: Final = any(a.enabled and a.recipient_emails for a in email_settings.alerts)
+        if (self.alerting is None or "spend_reports" not in self.alert_types) and not has_email_alerts:
             return
 
         try:
@@ -1892,6 +1899,12 @@ Model Info:
                 alerting_metadata={},
             )
 
+            await send_email_spend_reports_for_frequency(
+                frequency="weekly" if days > 1 else "daily",
+                start_date=start_date.strftime("%Y-%m-%d"),
+                end_date=todays_date.strftime("%Y-%m-%d"),
+            )
+
             await self.internal_usage_cache.async_set_cache(
                 key=_event_cache_key,
                 value="SENT",
@@ -1910,6 +1923,9 @@ Model Info:
 
             from litellm.proxy.spend_tracking.spend_management_endpoints import (
                 get_spend_report_for_time_range,
+            )
+            from litellm.proxy.spend_tracking.spend_report_email import (
+                send_email_spend_reports_for_frequency,
             )
 
             todays_date: Final = datetime.datetime.now().date()
@@ -1956,6 +1972,12 @@ Model Info:
                 level="Low",
                 alert_type=AlertType.spend_reports,
                 alerting_metadata={},
+            )
+
+            await send_email_spend_reports_for_frequency(
+                frequency="monthly",
+                start_date=first_day_of_month.strftime("%Y-%m-%d"),
+                end_date=last_day_of_month.strftime("%Y-%m-%d"),
             )
 
             await self.internal_usage_cache.async_set_cache(

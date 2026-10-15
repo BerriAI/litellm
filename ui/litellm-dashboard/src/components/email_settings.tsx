@@ -158,12 +158,9 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
                           href="https://forms.gle/W3U4PZpJGFHWtHyA9"
                           target="_blank"
                           rel="noreferrer"
-                          className="inline-flex items-center gap-1.5 text-sm text-primary underline underline-offset-4"
+                          className="text-sm text-primary underline underline-offset-4"
                         >
                           ✨ {key}
-                          <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary no-underline">
-                            Enterprise Feature
-                          </span>
                         </a>
                       ) : (
                         <p className="text-sm">{key}</p>

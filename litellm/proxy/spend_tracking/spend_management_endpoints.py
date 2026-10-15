@@ -2229,49 +2229,39 @@ async def get_spend_report_for_time_range(
         )
         return None
 
-    # Normalize string inputs to tz-aware UTC datetimes so Prisma serializes
-    # them with an explicit +00:00 suffix. Raw strings get bound as untyped
-    # text, which forces Postgres to parse `::timestamptz` using the DB
-    # session timezone and drifts the window by the offset even with the
-    # AT TIME ZONE 'UTC' wrap below.
-    start_date_obj: Final = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    end_date_obj: Final = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-
     try:
         sql_query = """
         SELECT
-            t.team_alias,
+            COALESCE(t.team_alias, s.team_id, 'No Team') AS team_alias,
             SUM(s.spend) AS total_spend
         FROM
-            "LiteLLM_SpendLogs" s
+            "LiteLLM_DailyTeamSpend" s
         LEFT JOIN
             "LiteLLM_TeamTable" t ON s.team_id = t.team_id
         WHERE
-            s."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
-            AND s."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
+            s.date >= $1 AND s.date <= $2
         GROUP BY
-            t.team_alias
+            COALESCE(t.team_alias, s.team_id, 'No Team')
         ORDER BY
             total_spend DESC;
         """
         response: Final[Sequence[_TeamSpendRow] | None] = await _query_raw_or_none(
-            prisma_client, sql_query, start_date_obj, end_date_obj
+            prisma_client, sql_query, start_date, end_date
         )
 
         # get spend per tag for today
         sql_query = """
         SELECT
-        jsonb_array_elements_text(request_tags) AS individual_request_tag,
-        SUM(spend) AS total_spend
-        FROM "LiteLLM_SpendLogs"
-        WHERE "startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
-          AND "startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
-        GROUP BY individual_request_tag
+            s.tag AS individual_request_tag,
+            SUM(s.spend) AS total_spend
+        FROM "LiteLLM_DailyTagSpend" s
+        WHERE s.date >= $1 AND s.date <= $2
+        GROUP BY s.tag
         ORDER BY total_spend DESC;
         """
 
         spend_per_tag: Final[Sequence[_TagSpendRow] | None] = await _query_raw_or_none(
-            prisma_client, sql_query, start_date_obj, end_date_obj
+            prisma_client, sql_query, start_date, end_date
         )
 
         return response, spend_per_tag
