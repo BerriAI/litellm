@@ -22,6 +22,11 @@ _BODY: Final = TypeAdapter(dict[str, object])
 async def validate_codex_request(request: Request) -> None:
     from litellm.proxy.proxy_server import general_settings_view
 
+    if any(encoding.strip().lower() != "identity" for encoding in request.headers.getlist("content-encoding")):
+        raise HTTPException(
+            status_code=415,
+            detail="Compressed Codex requests are unsupported. Set features.enable_request_compression = false in Codex.",
+        )
     custom_header: Final = general_settings_view().get("litellm_key_header_name")
     gateway_key: Final = request.headers.get("x-litellm-api-key") or (
         request.headers.get(custom_header) if isinstance(custom_header, str) else None
@@ -89,7 +94,10 @@ async def codex_models(
 @router.post(
     "/backend-api/codex/responses",
     tags=["ChatGPT subscription Pass-through", "pass-through"],
-    description="Relay ChatGPT subscription Responses over HTTP/SSE. The client owns login and token refresh.",
+    description=(
+        "Relay uncompressed ChatGPT subscription Responses over HTTP/SSE. "
+        "Set features.enable_request_compression = false in Codex. The client owns login and token refresh."
+    ),
     openapi_extra={
         "requestBody": {
             "required": True,

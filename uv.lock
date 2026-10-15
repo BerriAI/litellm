@@ -4601,7 +4601,6 @@ proxy = [
     { name = "uvicorn" },
     { name = "uvloop", marker = "sys_platform != 'win32'" },
     { name = "websockets" },
-    { name = "zstandard" },
 ]
 proxy-runtime = [
     { name = "anthropic", extra = ["vertex"] },
@@ -4751,7 +4750,6 @@ proxy-dev = [
     { name = "prisma" },
     { name = "prometheus-client" },
     { name = "sentry-sdk" },
-    { name = "zstandard" },
 ]
 
 [package.metadata]
@@ -4864,7 +4862,6 @@ requires-dist = [
     { name = "uvicorn", marker = "extra == 'proxy'", specifier = ">=0.33.0,<1.0" },
     { name = "uvloop", marker = "sys_platform != 'win32' and extra == 'proxy'", specifier = ">=0.22.1,<1.0" },
     { name = "websockets", marker = "extra == 'proxy'", specifier = ">=15.0.1,<16.0" },
-    { name = "zstandard", marker = "extra == 'proxy'", specifier = ">=0.25.0,<1.0" },
 ]
 provides-extras = ["proxy", "cli", "extra-proxy", "utils", "caching", "mcp", "saml", "semantic-router", "mlflow", "grpc", "stt-vertex-chirp", "stt-nvidia-riva", "google", "bedrock-realtime", "proxy-runtime"]
 
@@ -4971,7 +4968,6 @@ proxy-dev = [
     { name = "prisma", specifier = "==0.11.0" },
     { name = "prometheus-client", specifier = "==0.20.0" },
     { name = "sentry-sdk", specifier = "==2.21.0" },
-    { name = "zstandard", specifier = "==0.25.0" },
 ]
 
 [[package]]

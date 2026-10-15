@@ -12,7 +12,6 @@ from uuid import uuid4
 import httpx
 import pytest
 import yaml
-import zstandard
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows, write_rows
 from integration._support.forward_proxy import ForwardProxy, tunnelling_forward_proxy
@@ -144,8 +143,7 @@ def _headers(key: str, subscription: str) -> dict[str, str]:
     }
 
 
-@pytest.mark.parametrize("encoding", ["identity", "zstd"])
-def test_form_media_type_cannot_authorize_a_different_json_model(codex_rig: CodexRig, encoding: str) -> None:
+def test_form_media_type_cannot_authorize_a_different_json_model(codex_rig: CodexRig) -> None:
     candidate: Final = codex_rig.gateway
     marker: Final = uuid4().hex
     payload: Final = json.dumps({"model": _FALLBACK_MODEL, "input": f"&model={_MODEL}&"}).encode()
@@ -153,14 +151,28 @@ def test_form_media_type_cannot_authorize_a_different_json_model(codex_rig: Code
         key: Final = scenario.key(models=[_MODEL])
         response: Final = candidate.client.post(
             "/backend-api/codex/responses",
-            content=zstandard.ZstdCompressor().compress(payload) if encoding == "zstd" else payload,
-            headers={
-                **_headers(key, f"synthetic-{marker}"),
-                "content-type": "application/x-www-form-urlencoded",
-                "content-encoding": encoding,
-            },
+            content=payload,
+            headers={**_headers(key, f"synthetic-{marker}"), "content-type": "application/x-www-form-urlencoded"},
         )
-        assert response.status_code in (400, 403, 415), response.text
+        assert response.status_code in (400, 403), response.text
+        assert not tuple(
+            request for request in codex_rig.provider.drain() if marker in request.headers.get("authorization", "")
+        )
+
+
+@pytest.mark.parametrize("encoding", ["zstd", "gzip"])
+def test_encoded_requests_are_rejected_without_upstream_traffic(codex_rig: CodexRig, encoding: str) -> None:
+    candidate: Final = codex_rig.gateway
+    marker: Final = uuid4().hex
+    with candidate.scenario() as scenario:
+        key: Final = scenario.key(models=[_MODEL])
+        response: Final = candidate.client.post(
+            "/backend-api/codex/responses",
+            json={"model": _MODEL, "input": marker},
+            headers={**_headers(key, f"synthetic-{marker}"), "content-encoding": encoding},
+        )
+        assert response.status_code == 415, response.text
+        assert "enable_request_compression = false" in response.json()["detail"]
         assert not tuple(
             request for request in codex_rig.provider.drain() if marker in request.headers.get("authorization", "")
         )
@@ -246,10 +258,9 @@ def test_native_usage_is_attributed_and_secrets_are_absent_from_logs_and_rows(
         }
         response: Final = candidate.client.post(
             "/backend-api/codex/responses",
-            content=zstandard.ZstdCompressor().compress(json.dumps(payload).encode()),
+            json=payload,
             headers={
                 **_headers(key, subscription),
-                "content-encoding": "zstd",
                 "content-type": "application/json",
                 "x-alias": f"Bearer {key}",
                 "x-pass-authorization": f"Bearer {key}",
@@ -293,21 +304,15 @@ def test_native_usage_is_attributed_and_secrets_are_absent_from_logs_and_rows(
         assert key not in codex_rig.log.read_text()
 
 
-def test_denied_compressed_models_and_invalid_keys_never_reach_provider(codex_rig: CodexRig) -> None:
+def test_denied_models_and_invalid_keys_never_reach_provider(codex_rig: CodexRig) -> None:
     candidate: Final = codex_rig.gateway
     marker: Final = uuid4().hex
     with candidate.scenario() as scenario:
         key: Final = scenario.key(models=[_MODEL])
         denied: Final = candidate.client.post(
             "/backend-api/codex/responses",
-            content=zstandard.ZstdCompressor().compress(
-                json.dumps({"model": "synthetic-denied-model", "input": marker}).encode()
-            ),
-            headers={
-                **_headers(key, f"synthetic-{marker}"),
-                "content-encoding": "zstd",
-                "content-type": "application/json",
-            },
+            json={"model": "synthetic-denied-model", "input": marker},
+            headers=_headers(key, f"synthetic-{marker}"),
         )
         invalid: Final = candidate.client.get(
             "/backend-api/codex/models", headers=_headers("synthetic-invalid-key", marker)
