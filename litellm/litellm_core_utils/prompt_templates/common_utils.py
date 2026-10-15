@@ -15,6 +15,8 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, cast
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm import verbose_logger
 from litellm.router_utils.batch_utils import InMemoryFile
@@ -1807,6 +1809,33 @@ def cache_control_as_prompt_cache_breakpoint(block: _MarkedT) -> _MarkedT:
     )
 
 
+_BREAKPOINT_BLOCK_LIST_KEYS: Final = frozenset({"content", "tool_calls"})
+_BREAKPOINT_FIELDS: Final = TypeAdapter(Mapping[str, object])
+_BREAKPOINT_BLOCKS: Final = TypeAdapter(list[object])
+
+
+def _without_prompt_cache_breakpoint(value: object) -> object:
+    if not isinstance(value, Mapping):
+        return value
+    fields: Final = _BREAKPOINT_FIELDS.validate_python(value)
+    return {key: item for key, item in fields.items() if key != "prompt_cache_breakpoint"}
+
+
+def _breakpoints_stripped_from(key: str, value: object) -> object:
+    if key in _BREAKPOINT_BLOCK_LIST_KEYS and isinstance(value, list):
+        return [_without_prompt_cache_breakpoint(block) for block in _BREAKPOINT_BLOCKS.validate_python(value)]
+    return _without_prompt_cache_breakpoint(value) if key == "function" else value
+
+
+def without_prompt_cache_breakpoints(block: _MarkedT) -> _MarkedT:
+    """A message or tool definition with every ``prompt_cache_breakpoint`` removed: its own, its content parts',
+    its tool calls' and its ``function``'s."""
+    stripped: Final = {
+        key: _breakpoints_stripped_from(key, value) for key, value in block.items() if key != "prompt_cache_breakpoint"
+    }
+    return cast(_MarkedT, stripped)  # cast-ok: same block shape as the input minus the marker keys
+
+
 LITELLM_RESPONSE_ONLY_MESSAGE_FIELDS: Final = frozenset(
     {"thinking_blocks", "reasoning_items", "provider_specific_fields"}
 )
@@ -2158,10 +2187,8 @@ def is_unsignable_thinking_block(block: object) -> bool:
     Anthropic verifies the signature cryptographically, so a block with a null,
     empty, or missing signature (e.g. from an open-source reasoning model) is
     rejected with a 400, and so is a block whose signature or data carries
-    another provider's encrypted reasoning. It also rejects a `thinking` block
-    whose text is empty or whitespace-only ("each thinking block must contain
-    thinking"), regardless of signature, e.g. when a `thinking_blocks` history
-    item from a non-Anthropic reasoning provider is replayed through this path.
+    another provider's encrypted reasoning. A signed block is kept whatever its
+    text, since ``display: omitted`` returns signed blocks with empty ``thinking``.
     `redacted_thinking` blocks carry no signature and are always kept.
     """
     if is_encrypted_reasoning_block(block):
@@ -2172,10 +2199,7 @@ def is_unsignable_thinking_block(block: object) -> bool:
     if mapping.get("type") != "thinking":
         return False
     signature: Final = mapping.get("signature")
-    if not (isinstance(signature, str) and len(signature) > 0):
-        return True
-    thinking_text: Final = mapping.get("thinking")
-    return not (isinstance(thinking_text, str) and len(thinking_text.strip()) > 0)
+    return not (isinstance(signature, str) and len(signature) > 0)
 
 
 def native_redacted_thinking_data(data: str) -> str:
@@ -2515,6 +2539,9 @@ def merge_consecutive_system_messages(
     ]
 
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
 def _attempt_json_repair(s: str) -> object | None:
     """
     Attempt to repair truncated JSON produced by LLM tool calls.
@@ -2566,7 +2593,7 @@ def _attempt_json_repair(s: str) -> object | None:
     candidate += "".join(reversed(opener_stack))
 
     try:
-        return json.loads(candidate)
+        return _DECODED_JSON.validate_python(json.loads(candidate))
     except json.JSONDecodeError:
         pass
 
@@ -2605,7 +2632,7 @@ def parse_tool_call_arguments(
         return {}
 
     try:
-        return json.loads(arguments)
+        return _DECODED_JSON.validate_python(json.loads(arguments))
     except json.JSONDecodeError as original_error:
         repaired: Final = _attempt_json_repair(arguments)
         if repaired is not None:

@@ -5143,6 +5143,33 @@ def _complete_langflow(ctx: CompletionDispatchContext) -> _CompletionDispatchRes
     )
 
 
+def _complete_databricks_agent(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
+    from litellm.llms.databricks.agent.transformation import DatabricksAgentConfig
+
+    api_base, api_key = DatabricksAgentConfig.resolve_api_base_and_key(
+        api_base=ctx.api_base or litellm.api_base,
+        api_key=ctx.api_key or litellm.api_key,
+    )
+    return base_llm_http_handler.completion(
+        model=ctx.model,
+        stream=ctx.stream,
+        messages=ctx.messages,
+        acompletion=ctx.acompletion,
+        api_base=api_base,
+        model_response=ctx.model_response,
+        optional_params=ctx.optional_params,
+        litellm_params={**ctx.litellm_params, "api_base": api_base},
+        shared_session=ctx.shared_session,
+        custom_llm_provider=ctx.custom_llm_provider,
+        timeout=ctx.timeout,
+        headers=ctx.headers or litellm.headers,
+        encoding=_get_encoding(),
+        api_key=api_key,
+        logging_obj=ctx.logging,
+        client=_dispatch_client_http(ctx),
+    )
+
+
 @tracer.wrap()
 @client
 def completion(
@@ -6101,6 +6128,9 @@ def completion(
             # LangFlow - Visual AI Agent Platform
             response = _complete_langflow(_dispatch_ctx)
 
+        elif custom_llm_provider == "databricks_agent":
+            response = _complete_databricks_agent(_dispatch_ctx)  # rebind-ok: dispatch chain binds response per branch
+
         else:
             raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
         return response
@@ -6804,7 +6834,7 @@ def embedding(
             response = huggingface_embed.embedding(
                 model=model,
                 input=input,
-                encoding=sys.modules[__name__].encoding,
+                encoding=_load_module_encoding(),
                 api_key=api_key,
                 api_base=api_base,
                 logging_obj=logging,
@@ -9034,9 +9064,9 @@ _encoding_cache: Tokenizer | None = None
 
 
 def _load_module_encoding() -> Tokenizer:
-    import sys
+    from litellm import main as litellm_main
 
-    return sys.modules[__name__].encoding
+    return litellm_main.encoding
 
 
 def _get_encoding() -> Tokenizer:
@@ -9059,8 +9089,6 @@ def __getattr__(name: str) -> Tokenizer:
     if name == "encoding":
         _encoding: Final = _load_default_encoding()
         # Cache it in the module's __dict__ for subsequent accesses
-        import sys
-
         sys.modules[__name__].__dict__["encoding"] = _encoding
         global _encoding_cache
         _encoding_cache = _encoding

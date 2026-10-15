@@ -5918,6 +5918,58 @@ def test_handle_anthropic_messages_response_logging_keeps_the_served_response_id
     assert result.service_tier == "flex"
 
 
+def test_handle_anthropic_messages_response_logging_bills_the_bridged_chat_completion_not_the_served_body():
+    """A chat deployment answers /v1/messages through the chat bridge. The Anthropic body served to the
+    caller has no reasoning token field, so the spend row must come from the recorded chat completion."""
+    from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+    from litellm.types.utils import CompletionTokensDetailsWrapper, Usage
+
+    chat_completion = ModelResponse(
+        id="chatcmpl-upstream",
+        model="gpt-5.6",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "answer"}, "finish_reason": "stop"}],
+        usage=Usage(
+            prompt_tokens=1240,
+            completion_tokens=4040,
+            total_tokens=5280,
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=3480),
+        ),
+    )
+    served = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response=chat_completion)
+    assert served is not None
+    logging_obj = _anthropic_messages_logging_obj()
+    logging_obj.record_bridged_model_response(chat_completion)
+
+    logged = logging_obj._handle_anthropic_messages_response_logging(result=dict(served))
+
+    assert isinstance(logged, ModelResponse)
+    assert logged.id == served["id"], "the spend log row keeps the id the caller was served"
+    assert logged.usage.completion_tokens == 4040  # type: ignore[attr-defined]
+    assert logged.usage.completion_tokens_details.reasoning_tokens == 3480  # type: ignore[attr-defined]
+
+
+def test_handle_anthropic_messages_response_logging_reparses_the_served_body_without_a_bridged_completion():
+    logging_obj = _anthropic_messages_logging_obj()
+    logging_obj.optional_params = {}
+
+    logged = logging_obj._handle_anthropic_messages_response_logging(
+        result={
+            "id": "msg_native",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-5",
+            "content": [{"type": "text", "text": "answer"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 12, "output_tokens": 7},
+        }
+    )
+
+    assert isinstance(logged, ModelResponse)
+    assert logged.id == "msg_native"
+    assert logged.usage.completion_tokens == 7  # type: ignore[attr-defined]
+
+
 def test_handle_anthropic_messages_response_logging_passes_model_response_through():
     """Anthropic-native path already yields a ModelResponse; it must be returned unchanged."""
     logging_obj = _anthropic_messages_logging_obj()
@@ -7070,6 +7122,21 @@ class TestNonInferenceCallTypesAreNotBilled:
 
         assert payload is not None
         assert payload["total_tokens"] == 6000
+
+    @pytest.mark.parametrize(
+        "litellm_metadata",
+        [
+            {"_managed_background_response": True},
+            {"internal_call_origin": "background_response_status_poll"},
+        ],
+        ids=["managed_read", "status_poll"],
+    )
+    def test_managed_read_of_a_background_response_is_free(self, litellm_metadata):
+        """The proxy's cost poll bills a background response it tracks once, so a read the managed files
+        hook marks, or the poll's own status check, must not bill the same tokens again."""
+        logging_obj = self._logging_obj("aget_responses", litellm_metadata=litellm_metadata)
+        cost = logging_obj.response_cost_calculator(result=self._retrieved_response(background=True))
+        assert cost == 0.0
 
     def test_reading_a_foreground_response_is_still_free(self):
         """Guards the test above against a blanket exemption: an explicit background=false read was

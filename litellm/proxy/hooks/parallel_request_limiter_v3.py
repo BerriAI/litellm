@@ -28,7 +28,7 @@ from typing import (
 
 from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
-from starlette.status import HTTP_503_SERVICE_UNAVAILABLE
+from starlette.status import HTTP_400_BAD_REQUEST, HTTP_503_SERVICE_UNAVAILABLE
 from typing_extensions import NotRequired, ReadOnly
 
 from litellm import DualCache
@@ -46,7 +46,9 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
+from litellm.litellm_core_utils.ptu_pricing import is_ptu_cost_attribution_enabled
 from litellm.litellm_core_utils.token_counter import offload_token_count
+from litellm.llms.azure.ptu_capacity import normalized_tokens
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     ESTIMATED_OUTPUT_TOKENS_FIELD,
@@ -74,6 +76,7 @@ from litellm.router_utils.add_retry_fallback_headers import (
     response_has_hidden_params,
 )
 from litellm.router_utils.common_utils import resolve_model_group_alias
+from litellm.router_utils.ptu_shares import PTUTeamCeiling
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject, ResponseAPIUsage
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -105,6 +108,17 @@ _REQUEST_RATE_LIMIT_DATA: Final = TypeAdapter(Mapping[str, object])
 
 
 @dataclass(frozen=True, slots=True)
+class _ReconciledUsage:
+    prompt_tokens: int
+    completion_tokens: int
+    cached_tokens: int
+
+    @property
+    def billable_input_tokens(self) -> int:
+        return max(0, self.prompt_tokens - self.cached_tokens)
+
+
+@dataclass(frozen=True, slots=True)
 class RateLimitedModel:
     requested: str
     group: str
@@ -124,6 +138,15 @@ def _resolve_model_group_alias_via_proxy_router(model: str) -> str | None:
     return resolve_model_group_alias(llm_router.model_group_alias, model)
 
 
+def _resolve_ptu_team_ceiling_via_proxy_router(team_id: str, model_group: str) -> PTUTeamCeiling | None:
+    from litellm.proxy.proxy_server import llm_router
+
+    if llm_router is None:
+        return None
+    ceiling: Final = llm_router.team_ptu_ceiling(team_id, model_group)
+    return ceiling if ceiling is not None and is_ptu_cost_attribution_enabled() else None
+
+
 FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_SETTING: Final = "fail_closed_rate_limit_enforcement"
 RATE_LIMIT_UNVERIFIABLE_MESSAGE: Final = (
     "Rate limit enforcement unavailable: request counters could not be verified against Redis, and "
@@ -137,6 +160,18 @@ class RateLimitUnverifiableError(HTTPException):
         super().__init__(
             status_code=HTTP_503_SERVICE_UNAVAILABLE,
             detail={"error": RATE_LIMIT_UNVERIFIABLE_MESSAGE},
+        )
+
+
+class PTUShareExceededError(HTTPException):
+    def __init__(self, ceiling: PTUTeamCeiling, needed_tokens: int) -> None:
+        super().__init__(
+            status_code=HTTP_400_BAD_REQUEST,
+            detail={
+                "error": f"This request needs {needed_tokens} normalized tokens, more than your team's PTU share "
+                f"of {ceiling.model_group} allows in a minute ({ceiling.tpm_limit}), so it can never be admitted. "
+                "Lower max_tokens or shorten the prompt."
+            },
         )
 
 
@@ -478,6 +513,7 @@ _AUDIO_BYTES_PER_TOKEN: Final = 1600
 # on the same project+model simultaneously without colliding on cache keys.
 PROJECT_ITPM_DESCRIPTOR_KEY: Final = "model_per_project_itpm"
 PROJECT_OTPM_DESCRIPTOR_KEY: Final = "model_per_project_otpm"
+PTU_TEAM_DESCRIPTOR_KEY: Final = "model_per_team_ptu"
 # How long an acquired slot counts toward the in-flight total before it is
 # considered leaked (worker crashed without any release callback firing) and
 # pruned. Also the longest request duration the gauge can track: a request
@@ -658,6 +694,9 @@ class RequestRateLimiterStash:
     reserved_tokens: int = 0
     reserved_model: RateLimitedModel | None = None
     reserved_scopes: frozenset[tuple[str, str]] = field(default_factory=frozenset)
+    ptu_ceiling: PTUTeamCeiling | None = None
+    ptu_reserved_tokens: int = 0
+    ptu_reserved_window_identities: frozenset[ReservationWindowIdentity] = field(default_factory=frozenset)
     itpm_reserved_tokens: int = 0
     itpm_reserved_scopes: frozenset[tuple[str, str]] = field(default_factory=frozenset)
     itpm_reserved_window_identities: frozenset[tuple[str, str, Literal["redis", "local"]]] = field(
@@ -756,6 +795,21 @@ def get_request_stash_for_call(litellm_call_id: str | None) -> RequestRateLimite
     return stash if litellm_call_id == stash.owner_litellm_call_id else None
 
 
+def _as_window_guarded(operation: RedisPipelineIncrementOperation) -> ReservationAwareIncrementOperation | None:
+    window_key: Final = operation.get("window_key")
+    expected_window_start: Final = operation.get("expected_window_start")
+    if not isinstance(window_key, str) or not isinstance(expected_window_start, str):
+        return None
+    return ReservationAwareIncrementOperation(
+        key=operation["key"],
+        increment_value=operation["increment_value"],
+        ttl=operation["ttl"],
+        window_key=window_key,
+        expected_window_start=expected_window_start,
+        reservation_backend="local" if operation.get("reservation_backend") == "local" else "redis",
+    )
+
+
 def _call_id_from_callback_kwargs(kwargs: object) -> str | None:
     if not isinstance(kwargs, dict):
         return None
@@ -788,6 +842,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         time_provider: Callable[[], datetime] | None = None,
         tag_rate_limit_resolver: TagRateLimitResolver = resolve_tag_rate_limits_from_db,
         model_group_resolver: Callable[[str], str | None] = _resolve_model_group_alias_via_proxy_router,
+        ptu_team_ceiling_resolver: Callable[
+            [str, str], PTUTeamCeiling | None
+        ] = _resolve_ptu_team_ceiling_via_proxy_router,
         fail_closed_resolver: Callable[[], bool] = _fail_closed_rate_limit_enforcement_from_general_settings,
         force_hash_tag_grouping_resolver: Callable[[], bool] = _force_redis_hash_tag_grouping_from_litellm_settings,
     ):
@@ -795,6 +852,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self._time_provider = time_provider or datetime.now
         self._tag_rate_limit_resolver = tag_rate_limit_resolver
         self._model_group_resolver = model_group_resolver
+        self._ptu_team_ceiling_resolver = ptu_team_ceiling_resolver
         self._fail_closed_resolver = fail_closed_resolver
         self._force_hash_tag_grouping_resolver = force_hash_tag_grouping_resolver
         if self.internal_usage_cache.dual_cache.redis_cache is not None:
@@ -1096,6 +1154,30 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         )
 
         return total_estimated
+
+    def _estimate_ptu_tokens_for_request(
+        self,
+        ceiling: PTUTeamCeiling | None,
+        data: Mapping[str, object],
+        min_configured_tpm_limit: int | None,
+        call_type: str | None,
+        configured_output_tokens: int | None,
+        raw_estimate: int,
+    ) -> int:
+        """The team PTU ceiling counts Azure normalized tokens, so its reservation weighs the
+        output budget the way the ceiling does instead of the raw sum the other scopes reserve."""
+        if ceiling is None:
+            return raw_estimate
+        estimated_input_tokens, max_tokens_estimate = self._estimate_input_and_output_tokens(
+            data=data,
+            min_configured_tpm_limit=min_configured_tpm_limit,
+            call_type=call_type,
+            configured_output_tokens=configured_output_tokens,
+        )
+        normalized: Final = normalized_tokens(
+            ceiling, prompt_tokens=estimated_input_tokens, completion_tokens=max_tokens_estimate
+        )
+        return max(round(normalized), 1)
 
     def _estimate_input_and_output_tokens(
         self,
@@ -2567,11 +2649,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         descriptors: list[RateLimitDescriptor],
         estimated_tokens: int,
         parent_otel_span: Span | None = None,
+        scope_estimates: Mapping[str, int] = MappingProxyType({}),
     ) -> RateLimitResponse:
         """
         Reserve ``estimated_tokens`` against every TPM-bearing descriptor
         BEFORE the upstream call, so concurrent requests cannot all observe
         "under limit" before any of them increments the counter.
+        ``scope_estimates`` replaces that amount per descriptor key for a
+        scope counted in other units, such as the team PTU ceiling.
 
         Thin wrapper around ``atomic_check_and_increment_by_n``: builds a
         TPM-only descriptor/increment list and delegates the all-or-nothing
@@ -2598,7 +2683,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             return RateLimitResponse(overall_code="OK", statuses=[])
 
         increments: Final[list[dict[Literal["requests", "tokens"], int]]] = [
-            {"tokens": estimated_tokens} for _ in tpm_descriptors
+            {"tokens": scope_estimates.get(d["key"], estimated_tokens)} for d in tpm_descriptors
         ]
         return await self.atomic_check_and_increment_by_n(
             descriptors=tpm_descriptors,
@@ -3318,6 +3403,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             requested_model=requested_model if isinstance(requested_model, str) else None,
             descriptors=descriptors,
         )
+        self._add_team_ptu_rate_limit_descriptor(
+            user_api_key_dict=user_api_key_dict,
+            requested_model=requested_model if isinstance(requested_model, str) else None,
+            descriptors=descriptors,
+        )
 
         resolved_agent_id: Final = self._get_resolved_agent_id(user_api_key_dict, data)
         for agent_id in dict.fromkeys((resolved_agent_id, user_api_key_dict.invoked_agent_id)):
@@ -3460,6 +3550,31 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     "tokens_per_unit": team_tpm_limit,
                     "window_size": self.window_size,
                 },
+            )
+        )
+
+    def _add_team_ptu_rate_limit_descriptor(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        requested_model: str | None,
+        descriptors: _RateLimitDescriptorSink,
+    ) -> None:
+        model: Final = self._rate_limited_model(requested_model)
+        if model is None or not user_api_key_dict.team_id:
+            return
+        ceiling: Final = self._ptu_team_ceiling_resolver(user_api_key_dict.team_id, model.group)
+        if ceiling is None:
+            return
+        stash: Final = get_request_stash()
+        if stash is not None:
+            stash.ptu_ceiling = ceiling
+        descriptors.append(
+            RateLimitDescriptor(
+                key=PTU_TEAM_DESCRIPTOR_KEY,
+                value=f"{user_api_key_dict.team_id}:{ceiling.model_group}",
+                rate_limit=RateLimitDescriptorRateLimitObject(
+                    requests_per_unit=None, tokens_per_unit=ceiling.tpm_limit, window_size=self.window_size
+                ),
             )
         )
 
@@ -3876,8 +3991,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             # (still-stashed) reservation and refunds it again.
             if tpm_reservation_amount > 0:
                 await self._refund_reserved_tokens(
-                    scopes=tpm_reservation_scopes,
+                    scopes=tuple(scope for scope in tpm_reservation_scopes if scope[0] != PTU_TEAM_DESCRIPTOR_KEY),
                     amount=tpm_reservation_amount,
+                    parent_otel_span=user_api_key_dict.parent_otel_span,
+                )
+                await self._refund_reserved_tokens(
+                    scopes=tuple(scope for scope in tpm_reservation_scopes if scope[0] == PTU_TEAM_DESCRIPTOR_KEY),
+                    amount=stash.ptu_reserved_tokens,
+                    reservation_windows=stash.ptu_reserved_window_identities,
                     parent_otel_span=user_api_key_dict.parent_otel_span,
                 )
                 stash.reservation_released = True
@@ -4130,13 +4251,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             # in-memory check otherwise — single-worker protection still holds
             # even without Redis.
             # ----------------------------------------------------------------
-            configured_tpm_limits: Final = [
-                int(v)
+            ptu_raw_output_limit: Final = (
+                stash.ptu_ceiling.raw_output_token_limit() if stash.ptu_ceiling is not None else None
+            )
+            configured_tpm_limits: Final = tuple(
+                ptu_raw_output_limit
+                if d["key"] == PTU_TEAM_DESCRIPTOR_KEY and ptu_raw_output_limit is not None
+                else int(v)
                 for d in descriptors
                 if d["key"] not in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
-                for v in [(d.get("rate_limit") or {}).get("tokens_per_unit")]
-                if v is not None
-            ]
+                and (v := (d.get("rate_limit") or {}).get("tokens_per_unit")) is not None
+            )
             has_tpm_limits: Final = bool(configured_tpm_limits)
 
             # Populated on a successful combined-TPM reservation below, so the
@@ -4198,10 +4323,23 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         min_configured_tpm_limit,
                     )
 
+                capped_request: Final = _REQUEST_RATE_LIMIT_DATA.validate_python(data)
+                ptu_estimated_tokens: Final = self._estimate_ptu_tokens_for_request(
+                    ceiling=stash.ptu_ceiling,
+                    data=capped_request,
+                    min_configured_tpm_limit=min_configured_tpm_limit,
+                    call_type=call_type,
+                    configured_output_tokens=configured_output_tokens,
+                    raw_estimate=estimated_tokens,
+                )
+                if stash.ptu_ceiling is not None and ptu_estimated_tokens > stash.ptu_ceiling.tpm_limit:
+                    await self._release_stashed_parallel_slot(stash, user_api_key_dict.parent_otel_span)
+                    raise PTUShareExceededError(stash.ptu_ceiling, ptu_estimated_tokens)
                 tpm_response: Final = await self.reserve_tpm_tokens(
                     descriptors=descriptors,
                     estimated_tokens=estimated_tokens,
                     parent_otel_span=user_api_key_dict.parent_otel_span,
+                    scope_estimates=MappingProxyType({PTU_TEAM_DESCRIPTOR_KEY: ptu_estimated_tokens}),
                 )
 
                 if tpm_response["overall_code"] == "OVER_LIMIT":
@@ -4217,6 +4355,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     # the (actual - reserved) delta to those — unreserved
                     # scopes get charged the full actual usage instead.
                     stash.reserved_tokens = estimated_tokens
+                    stash.ptu_reserved_tokens = ptu_estimated_tokens
+                    stash.ptu_reserved_window_identities = frozenset(
+                        identity
+                        for identity in tpm_response.get("reservation_windows", frozenset())
+                        if identity[0].startswith(f"{{{PTU_TEAM_DESCRIPTOR_KEY}:")
+                    )
                     stash.reserved_model = self._rate_limited_model(requested_model)
                     stash.reserved_scopes = frozenset(
                         (d["key"], d["value"])
@@ -4644,20 +4788,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 return max(0, total_tokens), 0, True
         return None
 
-    def _resolve_io_token_reconcile_usage(
-        self,
-        response_obj: object,
-    ) -> tuple[int, int, bool]:
-        """
-        Resolve ``(billable_input_tokens, completion_tokens, usage_resolved)``
-        for ITPM/OTPM reconciliation. Cache-read tokens are excluded from
-        billable input -- Bedrock Mantle doesn't count them toward ITPM --
-        but they're untouched everywhere else (cost/usage logging still sees
-        the full prompt token count).
-        """
+    def _resolve_reconciled_usage(self, response_obj: object) -> _ReconciledUsage | None:
+        """The prompt, completion, and cache-read token counts a response reports, else None
+        when it reports no usage at all. Cache-read tokens stay inside ``prompt_tokens`` here;
+        each consumer decides what they cost it."""
         rerank_usage: Final = self._resolve_rerank_token_usage(response_obj)
         if rerank_usage is not None:
-            return rerank_usage
+            return _ReconciledUsage(prompt_tokens=rerank_usage[0], completion_tokens=rerank_usage[1], cached_tokens=0)
 
         usage: Final = self._response_usage(response_obj)
 
@@ -4670,8 +4807,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 else 0
             )
             if prompt_tokens == 0 and completion_tokens == 0:
-                return 0, 0, False
-            return max(0, prompt_tokens - cached_tokens), completion_tokens, True
+                return None
+            return _ReconciledUsage(
+                prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, cached_tokens=cached_tokens
+            )
 
         if isinstance(usage, ResponseAPIUsage):
             response_input_tokens: Final = usage.input_tokens or 0
@@ -4680,8 +4819,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 usage.input_tokens_details.cached_tokens or 0 if usage.input_tokens_details is not None else 0
             )
             if response_input_tokens == 0 and response_output_tokens == 0:
-                return 0, 0, False
-            return max(0, response_input_tokens - response_cached_tokens), response_output_tokens, True
+                return None
+            return _ReconciledUsage(
+                prompt_tokens=response_input_tokens,
+                completion_tokens=response_output_tokens,
+                cached_tokens=response_cached_tokens,
+            )
 
         if isinstance(usage, Mapping):
             raw_prompt_tokens: Final = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
@@ -4696,10 +4839,30 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
             mapped_cached_tokens: Final = raw_cached_tokens if isinstance(raw_cached_tokens, int) else 0
             if mapped_prompt_tokens == 0 and mapped_completion_tokens == 0:
-                return 0, 0, False
-            return max(0, mapped_prompt_tokens - mapped_cached_tokens), mapped_completion_tokens, True
+                return None
+            return _ReconciledUsage(
+                prompt_tokens=mapped_prompt_tokens,
+                completion_tokens=mapped_completion_tokens,
+                cached_tokens=mapped_cached_tokens,
+            )
 
-        return 0, 0, False
+        return None
+
+    def _resolve_io_token_reconcile_usage(
+        self,
+        response_obj: object,
+    ) -> tuple[int, int, bool]:
+        """
+        Resolve ``(billable_input_tokens, completion_tokens, usage_resolved)``
+        for ITPM/OTPM reconciliation. Cache-read tokens are excluded from
+        billable input -- Bedrock Mantle doesn't count them toward ITPM --
+        but they're untouched everywhere else (cost/usage logging still sees
+        the full prompt token count).
+        """
+        usage: Final = self._resolve_reconciled_usage(response_obj)
+        if usage is None:
+            return 0, 0, False
+        return usage.billable_input_tokens, usage.completion_tokens, True
 
     def _build_io_token_reservation_ops(
         self,
@@ -4973,7 +5136,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # than parsed out of the body) carry their usage in
         # ``combined_usage_object`` instead, and would otherwise never charge
         # the TPM window.
-        _usage: Usage | dict | None = None
+        _usage: Usage | dict[str, object] | None = None
         if isinstance(
             response_obj,
             (
@@ -5047,8 +5210,83 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 reserved_tokens=reserved_tokens,
             )
         )
+        pipeline_operations.extend(
+            self._build_team_ptu_tpm_ops(
+                standard_logging_metadata,  # pyright: ignore[reportUnknownArgumentType]  # untyped logging metadata
+                usage_source=response_obj if _usage is None else _usage,
+                reconcile_model=reconcile_model,
+                reserved_scopes=reserved_scopes,
+                reserved_ceiling=stash.ptu_ceiling if stash is not None else None,
+                reserved_tokens=stash.ptu_reserved_tokens if stash is not None else 0,
+                reserved_windows=stash.ptu_reserved_window_identities if stash is not None else frozenset(),
+                total_tokens=total_tokens,
+            )
+        )
 
         return pipeline_operations
+
+    def _build_team_ptu_tpm_ops(
+        self,
+        standard_logging_metadata: Mapping[str, object],
+        usage_source: object,
+        reconcile_model: RateLimitedModel | None,
+        reserved_scopes: Set[tuple[str, str]],
+        reserved_ceiling: PTUTeamCeiling | None,
+        reserved_tokens: int,
+        reserved_windows: frozenset[ReservationWindowIdentity],
+        total_tokens: int,
+    ) -> Sequence[RedisPipelineIncrementOperation]:
+        """Settle the team's PTU counter in Azure normalized tokens: uncached input in full,
+        cached input at the model's cached ratio, output weighted by its output-to-input
+        ratio, the way Azure sizes a PTU.
+
+        The reservation was taken in those units against the ceiling admission resolved, so that
+        ceiling settles it even after the share changed or went away or the logging metadata lost
+        the team; when usage cannot be resolved it charges the raw total the other scopes charge
+        so the reservation is never left standing.
+        """
+        reserved_ptu_scopes: Final = tuple(scope for scope in reserved_scopes if scope[0] == PTU_TEAM_DESCRIPTOR_KEY)
+        if reserved_ptu_scopes:
+            return self._build_project_reservation_ops(
+                targets=reserved_ptu_scopes,
+                reserved_scopes=reserved_scopes,
+                actual_tokens=self._ptu_settlement_tokens(
+                    reserved_ceiling, self._resolve_reconciled_usage(usage_source), total_tokens
+                ),
+                reserved_tokens=reserved_tokens,
+                reservation_window_identities=reserved_windows,
+            )
+        team_id: Final = standard_logging_metadata.get("user_api_key_team_id")
+        if reconcile_model is None or not isinstance(team_id, str) or not team_id:
+            return ()
+        ceiling: Final = (
+            reserved_ceiling
+            if reserved_ceiling is not None
+            else self._ptu_team_ceiling_resolver(team_id, reconcile_model.group)
+        )
+        if ceiling is None:
+            return ()
+        return self._build_reservation_aware_tpm_ops(
+            targets=((PTU_TEAM_DESCRIPTOR_KEY, f"{team_id}:{ceiling.model_group}"),),
+            reserved_scopes=reserved_scopes,
+            actual_tokens=self._ptu_settlement_tokens(
+                ceiling, self._resolve_reconciled_usage(usage_source), total_tokens
+            ),
+            reserved_tokens=reserved_tokens,
+        )
+
+    @staticmethod
+    def _ptu_settlement_tokens(ceiling: PTUTeamCeiling | None, usage: _ReconciledUsage | None, raw_total: int) -> int:
+        if ceiling is None or usage is None:
+            return raw_total
+        return round(
+            normalized_tokens(
+                ceiling,
+                prompt_tokens=usage.prompt_tokens,
+                completion_tokens=usage.completion_tokens,
+                cache_read_tokens=usage.cached_tokens,
+            )
+        )
 
     @with_service_target("rate_limits")
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
@@ -5073,9 +5311,20 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 response_obj=response_obj,
                 rate_limit_type=rate_limit_type,
             )
-            if pipeline_operations:
+            unguarded_operations: Final = [
+                operation for operation in pipeline_operations if _as_window_guarded(operation) is None
+            ]
+            window_guarded_operations: Final = tuple(
+                guarded for operation in pipeline_operations if (guarded := _as_window_guarded(operation)) is not None
+            )
+            if unguarded_operations:
                 await self.async_increment_tokens_with_ttl_preservation(
-                    pipeline_operations=pipeline_operations,
+                    pipeline_operations=unguarded_operations,
+                    parent_otel_span=litellm_parent_otel_span,
+                )
+            if window_guarded_operations:
+                await self.async_increment_reservation_aware_tokens(
+                    pipeline_operations=window_guarded_operations,
                     parent_otel_span=litellm_parent_otel_span,
                 )
             io_token_operations: Final = self._build_io_token_reservation_ops(
@@ -5157,15 +5406,42 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 statuses=statuses,
             )
 
-    def _recovered_partial_usage_tokens(self, source: Mapping[str, object]) -> tuple[int, int, int]:
+    def _recovered_partial_usage(self, source: Mapping[str, object]) -> Usage | None:
         usage: Final = source.get("combined_usage_object")
         if not isinstance(usage, Usage) or (usage.completion_tokens or 0) <= 0:
+            return None
+        return usage
+
+    def _recovered_partial_usage_tokens(self, source: Mapping[str, object]) -> tuple[int, int, int]:
+        usage: Final = self._recovered_partial_usage(source)
+        if usage is None:
             return 0, 0, 0
         billable_input, completion_tokens, _ = self._resolve_io_token_reconcile_usage(usage)
         return (
             self._get_total_tokens_from_usage(usage=usage, rate_limit_type=self.get_rate_limit_type()),
             billable_input,
             completion_tokens,
+        )
+
+    def _build_ptu_failure_settlement_ops(
+        self, stash: RequestRateLimiterStash, source: Mapping[str, object], raw_actual_tokens: int
+    ) -> tuple[ReservationAwareIncrementOperation, ...]:
+        """Settle the team PTU reservation on failure in the normalized tokens it was taken in:
+        at the recovered partial usage when there is one, else a full refund."""
+        ptu_scopes: Final = tuple(scope for scope in stash.reserved_scopes if scope[0] == PTU_TEAM_DESCRIPTOR_KEY)
+        if not ptu_scopes:
+            return ()
+        usage: Final = self._recovered_partial_usage(source)
+        return self._build_project_reservation_ops(
+            targets=ptu_scopes,
+            reserved_scopes=stash.reserved_scopes,
+            actual_tokens=self._ptu_settlement_tokens(
+                stash.ptu_ceiling,
+                self._resolve_reconciled_usage(usage) if usage is not None else None,
+                raw_actual_tokens,
+            ),
+            reserved_tokens=stash.ptu_reserved_tokens,
+            reservation_window_identities=stash.ptu_reserved_window_identities,
         )
 
     @with_service_target("rate_limits")
@@ -5210,7 +5486,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 # refund there would drive their counter negative.
                 pipeline_operations.extend(
                     self._build_reservation_aware_tpm_ops(
-                        targets=list(stash.reserved_scopes),
+                        targets=tuple(scope for scope in stash.reserved_scopes if scope[0] != PTU_TEAM_DESCRIPTOR_KEY),
                         reserved_scopes=stash.reserved_scopes,
                         actual_tokens=tpm_actual,
                         reserved_tokens=reserved_tokens,
@@ -5257,11 +5533,21 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 else ()
             )
 
+            ptu_operations: Final = (
+                self._build_ptu_failure_settlement_ops(
+                    stash,
+                    kwargs,  # pyright: ignore[reportUnknownArgumentType]  # hook kwargs are unannotated
+                    tpm_actual,
+                )
+                if stash is not None and reserved_tokens > 0
+                else ()
+            )
+
             if pipeline_operations:
                 await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline_post_call(
                     pipeline_operations, parent_otel_span=litellm_parent_otel_span
                 )
-            for project_operations in (itpm_operations, otpm_operations):
+            for project_operations in (itpm_operations, otpm_operations, ptu_operations):
                 if isinstance(project_operations, list):
                     await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline_post_call(
                         project_operations, parent_otel_span=litellm_parent_otel_span
@@ -5408,10 +5694,19 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
             combined_ops: Final = (
                 self._build_reservation_aware_tpm_ops(
-                    targets=tuple(stash.reserved_scopes),
+                    targets=tuple(scope for scope in stash.reserved_scopes if scope[0] != PTU_TEAM_DESCRIPTOR_KEY),
                     reserved_scopes=stash.reserved_scopes,
                     actual_tokens=tpm_actual,
                     reserved_tokens=reserved_tokens,
+                )
+                if reserved_tokens > 0
+                else ()
+            )
+            ptu_ops: Final = (
+                self._build_ptu_failure_settlement_ops(
+                    stash,
+                    request_data,  # pyright: ignore[reportUnknownArgumentType]  # request_data is a bare dict
+                    tpm_actual,
                 )
                 if reserved_tokens > 0
                 else ()
@@ -5452,7 +5747,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 if otpm_reserved > 0
                 else ()
             )
-            if combined_ops or itpm_ops or otpm_ops:
+            if combined_ops or ptu_ops or itpm_ops or otpm_ops:
                 verbose_proxy_logger.debug(
                     "Releasing reserved tokens on proxy-level rejection: tpm=%s, itpm=%s, otpm=%s",
                     reserved_tokens,
@@ -5461,10 +5756,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
             if combined_ops:
                 await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
-                    increment_list=combined_ops,
+                    increment_list=list(combined_ops),
                     litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
                 )
-            for project_ops in (itpm_ops, otpm_ops):
+            for project_ops in (itpm_ops, otpm_ops, ptu_ops):
                 if isinstance(project_ops, list):
                     await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
                         increment_list=project_ops,
