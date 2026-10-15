@@ -2445,7 +2445,7 @@
     },
     "gitgot": {
       "display_name": "GitGot (`gitgot`)",
-      "url": "https://gitgot.ai/docs/quickstart",
+      "url": "https://gitgot.ai/inference",
       "endpoints": {
         "chat_completions": true,
         "messages": false,
