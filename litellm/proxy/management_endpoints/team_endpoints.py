@@ -204,6 +204,7 @@ from litellm.proxy.management_helpers.utils import (
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging, handle_exception_on_proxy
 from litellm.repositories.budget_repository import BudgetRepository
+from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
@@ -3140,11 +3141,13 @@ async def _update_team_members_list(
     )
 
 
+def _user_tx_db(tx: "Prisma") -> "TableActions[prisma_models.LiteLLM_UserTable]":
+    return tx.litellm_usertable  # pyright: ignore[reportReturnType]  # TableActions widens the generated inputs to Mapping, as the repositories do
+
+
 async def _lock_requested_member_rows(tx: "Prisma", members: Sequence[Member]) -> None:
     emails_only: Final = tuple(m.user_email for m in members if m.user_id is None and m.user_email is not None)
-    matched: Final = (
-        await tx.litellm_usertable.find_many(where={"user_email": {"in": list(emails_only)}}) if emails_only else ()
-    )
+    matched: Final = await find_many_in(_user_tx_db(tx), "user_email", emails_only)
     named: Final = (m.user_id for m in members if m.user_id is not None)
     await tx.query_raw(USER_ROWS_LOCK_SQL, sorted({*named, *(row.user_id for row in matched)}))
 
