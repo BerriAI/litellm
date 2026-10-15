@@ -768,7 +768,7 @@ def _get_response_from_batch_job_output_file(
 
 
 def _batch_response_was_successful(
-    batch_job_output_file: Mapping[str, Any], custom_llm_provider: str = "openai"
+    batch_job_output_file: Mapping[str, object], custom_llm_provider: str = "openai"
 ) -> bool:
     """
     Check if the batch job response was successful

@@ -10,7 +10,7 @@
 ## LiteLLM versions of the OpenAI Exception Types
 
 import enum
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
 import httpx
@@ -468,7 +468,7 @@ class RateLimitError(openai.RateLimitError):
         category: str | RateLimitErrorCategory = (RateLimitErrorCategory.VENDOR_RATE_LIMIT),
         rate_limit_type: str | RateLimitType | None = None,
         headers: dict[str, str] | None = None,
-        detail: Any = None,
+        detail: object = None,
         body: object | None = None,
     ):
         self.status_code = 429
@@ -1267,6 +1267,10 @@ class MidStreamFallbackError(ServiceUnavailableError):
         self.message = _saved_message
         self.args = (_saved_message,)
 
+        original_headers: Final = getattr(original_exception, "litellm_response_headers", None)
+        if original_headers is not None:
+            self.litellm_response_headers = original_headers
+
     def __str__(self):
         _message = self.message
         if self.num_retries:
@@ -1300,8 +1304,8 @@ class ModifyResponseException(Exception):
         model: str,
         request_data: dict[str, Any],
         guardrail_name: str | None = None,
-        detection_info: dict[str, Any] | None = None,
-        original_response: Any | None = None,
+        detection_info: Mapping[str, object] | None = None,
+        original_response: object = None,
     ):
         self.message = message
         self.model = model
@@ -1334,7 +1338,7 @@ class SensitiveDataRouteException(Exception):
         route_to_model: str,
         session_id: str,
         guardrail_name: str | None = None,
-        detection_info: dict[str, Any] | None = None,
+        detection_info: Mapping[str, object] | None = None,
         message: str | None = None,
         sticky_session_routing: bool = True,
     ):
