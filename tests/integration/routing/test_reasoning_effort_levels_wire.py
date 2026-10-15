@@ -965,15 +965,21 @@ CELLS: Final[Mapping[str, Cell]] = MappingProxyType(
         "chat-vllm-missing-budget-to-low": Cell(
             CHAT, "hosted_vllm", _KIMI_INFO, {"thinking": {"type": "enabled"}}, _openai_compatible("low"), _VLLM_CHAT
         ),
-        "chat-vllm-explicit-effort-beside-string-budget-400": Cell(
+        "chat-vllm-explicit-effort-wins-over-string-budget": Cell(
             CHAT,
             "hosted_vllm",
             _KIMI_INFO,
-            {"reasoning_effort": "high", "thinking": _STRING_BUDGET},
-            None,
+            {"reasoning_effort": "medium", "thinking": _STRING_BUDGET},
+            _openai_compatible("high"),
             _VLLM_CHAT,
-            status=400,
-            error="budget_tokens",
+        ),
+        "chat-vllm-explicit-effort-wins-over-bool-budget": Cell(
+            CHAT,
+            "hosted_vllm",
+            _KIMI_INFO,
+            {"reasoning_effort": "medium", "thinking": {"type": "enabled", "budget_tokens": True}},
+            _openai_compatible("high"),
+            _VLLM_CHAT,
         ),
         "chat-vllm-explicit-effort-beside-string-budget-drop-params": Cell(
             CHAT,
@@ -983,15 +989,13 @@ CELLS: Final[Mapping[str, Cell]] = MappingProxyType(
             _openai_compatible("high"),
             _VLLM_CHAT,
         ),
-        "chat-vllm-undeclared-explicit-effort-beside-string-budget-400": Cell(
+        "chat-vllm-undeclared-explicit-effort-wins-over-string-budget": Cell(
             CHAT,
             "hosted_vllm",
             _UNDECLARED,
             {"reasoning_effort": "medium", "thinking": _STRING_BUDGET},
-            None,
+            _openai_compatible("medium"),
             _VLLM_CHAT,
-            status=400,
-            error="budget_tokens",
         ),
         "chat-vllm-string-budget-deployment-drop-params": Cell(
             CHAT,
