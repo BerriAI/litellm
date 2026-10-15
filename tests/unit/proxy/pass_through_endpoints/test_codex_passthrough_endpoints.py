@@ -170,6 +170,24 @@ async def test_compressed_native_envelope_is_not_interpreted_as_relay_configurat
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("body", [b"{", b"[]"])
+@pytest.mark.parametrize("encoding", ["identity", "zstd"])
+async def test_invalid_json_object_never_contacts_provider(
+    codex_gateway: httpx.AsyncClient, body: bytes, encoding: str
+) -> None:
+    with respx.mock(assert_all_called=False) as upstream:
+        provider: Final = upstream.post(f"{_BASE}/responses").respond(json={})
+        response: Final = await codex_gateway.post(
+            "/backend-api/codex/responses",
+            content=zstandard.ZstdCompressor().compress(body) if encoding == "zstd" else body,
+            headers={**_CREDENTIALS, "content-type": "application/json", "content-encoding": encoding},
+        )
+    assert response.status_code == 400, response.text
+    assert response.json() == {"detail": "A JSON object is required"}
+    assert not provider.called
+
+
+@pytest.mark.asyncio
 async def test_gateway_credentials_in_aliases_and_x_pass_headers_cannot_escape(
     codex_gateway: httpx.AsyncClient,
 ) -> None:
