@@ -8,10 +8,11 @@ the sharded CI (coverage collection runs against this tree).
 
 import json
 import os
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
 
 import litellm
 from litellm.llms.base_llm.search.transformation import SearchResponse
@@ -629,14 +630,31 @@ class TestAgentCoreSearchEdgeCases:
         assert getattr(err, "status_code", None) == 503
         assert "boom" in str(err)
 
-    def test_search_cost_lookup_is_mapped(self, monkeypatch):
+    def test_search_cost_is_priced_per_query(self, monkeypatch):
         """Assert against the map in this checkout: the remote cost map litellm loads by
         default only carries providers already released."""
+        from pathlib import Path
+
         from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
         from litellm.search.cost_calculator import search_provider_cost_per_query
 
-        monkeypatch.setattr(litellm, "model_cost", GetModelCostMap.load_local_model_cost_map())
-        assert search_provider_cost_per_query(model="agentcore/search", custom_llm_provider="agentcore") == (0.0, 0.0)
+        local_map: Final = GetModelCostMap.load_local_model_cost_map()
+        monkeypatch.setattr(litellm, "model_cost", local_map)
+
+        rate: Final = local_map["agentcore/search"]["input_cost_per_query"]
+        assert rate > 0
+        assert search_provider_cost_per_query(
+            model="agentcore/search", custom_llm_provider="agentcore", number_of_queries=3
+        ) == (pytest.approx(3 * rate), 0.0)
+
+        repo_root: Final = Path(litellm.__file__).resolve().parent.parent
+        root_entry: Final = json.loads((repo_root / "model_prices_and_context_window.json").read_text())[
+            "agentcore/search"
+        ]
+        backup_entry: Final = json.loads(
+            (repo_root / "litellm" / "model_prices_and_context_window_backup.json").read_text()
+        )["agentcore/search"]
+        assert backup_entry == root_entry
 
 
 def _transform_text(text: str) -> SearchResponse:

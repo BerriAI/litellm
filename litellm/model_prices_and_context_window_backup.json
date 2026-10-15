@@ -24280,11 +24280,11 @@
         }
     },
     "agentcore/search": {
-        "input_cost_per_query": 0.0,
+        "input_cost_per_query": 0.007,
         "litellm_provider": "agentcore",
         "mode": "search",
         "metadata": {
-            "notes": "Web Search on Amazon Bedrock AgentCore, billed by AWS on the gateway"
+            "notes": "Web Search on Amazon Bedrock AgentCore, $0.007 per query (AWS Price List WebSearchTool:Consumption-based:Queries). The $0.000005 gateway invocation fee is not included"
         }
     },
     "bing_grounding/search": {
