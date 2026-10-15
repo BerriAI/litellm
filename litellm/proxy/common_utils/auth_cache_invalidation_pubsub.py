@@ -99,14 +99,14 @@ async def _publish_batch_to_redis(redis_cache: "RedisCache", cache_keys: tuple[s
         verbose_proxy_logger.warning("auth cache invalidation publish for %d keys failed: %s", len(cache_keys), e)
 
 
-def _has_room_for_publish(what: str) -> bool:
+def _has_room_for_publish(key_count: int) -> bool:
     _pending_publishes.difference_update({task for task in _pending_publishes if task.done()})
     if len(_pending_publishes) < _MAX_PENDING_PUBLISHES:
         return True
     verbose_proxy_logger.warning(
-        "auth cache invalidation publish for %s dropped: %d publishes already waiting on redis; "
+        "auth cache invalidation publish for %d keys dropped: %d publishes already waiting on redis; "
         "other workers keep their cached copy until its TTL expires",
-        what,
+        key_count,
         len(_pending_publishes),
     )
     return False
@@ -135,7 +135,7 @@ async def publish_auth_cache_invalidation(
     drain the shared connection pool.
     """
     redis_cache: Final = coordination_redis_cache()
-    if redis_cache is None or not _has_room_for_publish(cache_key):
+    if redis_cache is None or not _has_room_for_publish(1):
         return
     task: Final = asyncio.create_task(
         _publish_to_redis(
@@ -158,7 +158,7 @@ async def broadcast_evictions(cache_keys: Sequence[str]) -> None:
     never answers cannot hang the request.
     """
     redis_cache: Final = coordination_redis_cache()
-    if redis_cache is None or not cache_keys or not _has_room_for_publish(f"{len(cache_keys)} keys"):
+    if redis_cache is None or not cache_keys or not _has_room_for_publish(len(cache_keys)):
         return
     task: Final = asyncio.create_task(_publish_batch_to_redis(redis_cache, tuple(cache_keys)))
     _pending_publishes.add(task)

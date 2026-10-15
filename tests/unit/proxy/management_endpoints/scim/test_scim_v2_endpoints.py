@@ -114,7 +114,7 @@ def _stub_roster_sync(mocker: MockerFixture, team: LiteLLM_TeamTable | None = No
             case _:
                 assert_never(plan)
 
-    async def sync(group_id: str, plan: RosterPlan, prisma_client: MagicMock) -> RosterSync:
+    async def sync(group_id: str, plan: RosterPlan, created_via: str, prisma_client: MagicMock) -> RosterSync:
         base = await current(group_id, prisma_client)
         roster = frozenset(member.user_id for member in base.members_with_roles if member.user_id is not None)
         added, removed = diff(plan, roster)
@@ -1882,7 +1882,12 @@ async def test_update_group_e2e(mocker):
     assert metadata["scim_data"]["displayName"] == "Updated Team Name"
 
     assert sync_mock.await_args_list == [
-        call(group_id, RosterTarget(member_ids=frozenset({"user2", "user3", "user4"})), mock_prisma_client)
+        call(
+            group_id,
+            RosterTarget(member_ids=frozenset({"user2", "user3", "user4"})),
+            "scim_group_membership",
+            mock_prisma_client,
+        )
     ]
 
     # Verify the response
@@ -4200,6 +4205,52 @@ async def test_unprovisioned_group_members_are_created_concurrently_up_to_the_bu
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("newcomer_count, admitted", [(1, True), (2, False)])
+async def test_group_push_creates_its_new_members_only_when_they_all_fit_the_license_seats(
+    mocker: MockerFixture, scim_upsert_user_enabled: None, newcomer_count: int, admitted: bool
+):
+    """Members a group push creates are seats too: the batch is checked against the seat limit
+    up front, so a push cannot create users past it the way per-user checks racing each other could."""
+    from litellm.proxy.auth.litellm_license import LicenseCheck
+
+    license_check: Final = LicenseCheck()
+    license_check.airgapped_license_data = {"max_users": 3}
+    mocker.patch("litellm.proxy.proxy_server._license_check", license_check)
+
+    async def count(where: Mapping[str, object] | None = None) -> int:
+        return 0 if where is not None else 2
+
+    prisma_client: Final = _member_resolution_prisma(mocker, users=set(), teams=set())
+    prisma_client.db.litellm_usertable.count = AsyncMock(side_effect=count)
+    create_user_mock: Final = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._create_user_if_not_exists",
+        AsyncMock(side_effect=lambda user_id, created_via: NewUserResponse(user_id=user_id, key="")),
+    )
+    newcomers: Final = [f"newcomer-{index}" for index in range(newcomer_count)]
+    patch_ops: Final = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[
+            SCIMPatchOperation(op="add", path="members", value=[{"value": user_id} for user_id in newcomers])
+        ],
+    )
+    push: Final = _process_group_patch_operations(
+        patch_ops=patch_ops,
+        existing_team=LiteLLM_TeamTable(team_id="group", team_alias="Group", members=[], members_with_roles=[]),
+        prisma_client=prisma_client,
+    )
+
+    if admitted:
+        _, final_members, _ = await push
+        assert final_members == set(newcomers)
+        return
+    with pytest.raises(HTTPException) as exc_info:
+        await push
+    assert exc_info.value.status_code == 403
+    assert "License is over limit" in str(exc_info.value.detail)
+    create_user_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_process_group_patch_operations_ignores_lowercase_group_type(mocker, scim_upsert_user_enabled):
     """The ``type`` comparison is case-insensitive; IdPs are not consistent about it."""
     nested_group_id = "8f1e9d70-0000-4a0e-9a1e-nested"
@@ -6008,13 +6059,15 @@ async def test_update_group_in_strict_mode_fails_when_a_member_is_deleted_mid_pu
     mocker: MockerFixture, scim_upsert_user_disabled
 ):
     """With scim_upsert_user False a group write never creates users, so a member deleted
-    mid-push fails the request for the identity provider to retry."""
+    mid-push is refused like any member that is not a user yet, instead of being created
+    behind the setting that forbids it."""
     created: Final = _put_group_whose_member_is_deleted_mid_push(mocker, "test-team-123")
 
     with pytest.raises(ProxyException) as exc_info:
         await update_group(group_id="test-team-123", group=_engineering_group("test-team-123"))
 
-    assert exc_info.value.code == "500"
+    assert exc_info.value.code == "400"
+    assert "does not exist" in exc_info.value.message
     assert "user2" in exc_info.value.message
     assert created == set()
 
@@ -6596,15 +6649,19 @@ async def _push_group(verb: str, group_id: str, scim_group: SCIMGroup) -> SCIMGr
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "verb, expected_plan",
+    "verb, expected_plan, created_via",
     [
-        ("POST", RosterDelta(add=frozenset(_LARGE_PUSH), remove=frozenset())),
-        ("PUT", RosterTarget(member_ids=frozenset(_LARGE_PUSH))),
-        ("PATCH", RosterDelta(add=frozenset(_LARGE_PUSH), remove=frozenset())),
+        ("POST", RosterDelta(add=frozenset(_LARGE_PUSH), remove=frozenset()), "scim_group_membership"),
+        ("PUT", RosterTarget(member_ids=frozenset(_LARGE_PUSH)), "scim_group_membership"),
+        ("PATCH", RosterDelta(add=frozenset(_LARGE_PUSH), remove=frozenset()), "scim_group_patch"),
     ],
 )
 async def test_group_push_of_500_members_reads_the_user_table_once_and_writes_the_roster_once(
-    mocker: MockerFixture, scim_upsert_user_enabled: None, verb: str, expected_plan: RosterPlan
+    mocker: MockerFixture,
+    scim_upsert_user_enabled: None,
+    verb: str,
+    expected_plan: RosterPlan,
+    created_via: str,
 ):
     """A group push costs one read of the user table and one roster write however many
     members it carries. Resolving and enrolling members one at a time made a 500-member
@@ -6642,7 +6699,7 @@ async def test_group_push_of_500_members_reads_the_user_table_once_and_writes_th
     response = await _push_group(verb, group_id, scim_group)
 
     assert (response.id, sorted(member.value for member in response.members)) == (group_id, sorted(_LARGE_PUSH))
-    assert sync_mock.await_args_list == [call(group_id, expected_plan, prisma_client)]
+    assert sync_mock.await_args_list == [call(group_id, expected_plan, created_via, prisma_client)]
     assert prisma_client.db.litellm_usertable.find_many.await_count == 1
     prisma_client.db.litellm_usertable.find_unique.assert_not_awaited()
     prisma_client.db.litellm_teamtable.find_many.assert_not_awaited()

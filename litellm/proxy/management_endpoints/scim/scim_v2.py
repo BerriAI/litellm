@@ -57,6 +57,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     safe_get_request_headers,
 )
+from litellm.proxy.litellm_pre_call_utils import sanitize_for_log
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.scim.scim_transformations import (
     ScimTransformations,
@@ -922,14 +923,41 @@ async def _ensure_group_member_user(
     raise HTTPException(status_code=500, detail=detail)
 
 
+async def _raise_if_batch_over_license_limit(new_user_count: int, prisma_client: PrismaClient) -> None:
+    from litellm.proxy.proxy_server import (
+        _license_check,  # pyright: ignore[reportPrivateUsage]  # same proxy license singleton /user/new reads
+    )
+
+    if _license_check.user_seat_limit() is None:
+        return
+    billable_users: Final = await UserRepository(prisma_client).count_billable_users()
+    if _license_check.is_over_limit(total_users=billable_users + new_user_count):
+        detail: Final[_ScimErrorDetail] = {
+            "error": "License is over limit. Please contact support@berri.ai to upgrade your license."
+        }
+        raise HTTPException(status_code=403, detail=detail)
+
+
+def _member_not_provisioned_error(user_id: str) -> HTTPException:
+    detail: Final[_ScimErrorDetail] = {
+        "error": f"User with ID '{user_id}' does not exist. "
+        "Please create the user first via POST /Users before adding to group."
+    }
+    return HTTPException(status_code=400, detail=detail)
+
+
 async def _create_group_member_users(
     user_ids: Sequence[str], created_via: str, prisma_client: PrismaClient
 ) -> tuple[NewUserResponse, ...]:
-    """Create the group members' user rows, ``BULK_NEW_USER_CONCURRENCY`` at a time.
+    """Create the group members' user rows, ``BULK_NEW_USER_CONCURRENCY`` at a time, after
+    checking the license seat limit once for the whole batch, as bulk user creation does.
 
     Raises:
-        HTTPException: 500 when a user can neither be created nor found.
+        HTTPException: 403 when the batch would push the deployment over its license seat
+        limit, 500 when a user can neither be created nor found.
     """
+    if user_ids:
+        await _raise_if_batch_over_license_limit(len(user_ids), prisma_client)
     creations: Final = await _bounded(
         BULK_NEW_USER_CONCURRENCY,
         tuple(
@@ -1058,13 +1086,7 @@ async def _resolve_group_member_ids(
         )
 
     if partition.unknown_ids and not await _get_scim_upsert_user_setting():
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": f"User with ID '{partition.unknown_ids[0]}' does not exist. "
-                "Please create the user first via POST /Users before adding to group."
-            },
-        )
+        raise _member_not_provisioned_error(partition.unknown_ids[0])
 
     unique_unknown_ids: Final = tuple(dict.fromkeys(partition.unknown_ids))
     for user_id in unique_unknown_ids:
@@ -2797,7 +2819,10 @@ async def update_group(
         await _evict_group_cache(group_id, existing_team.team_alias)
 
         sync: Final = await _sync_group_roster(
-            group_id, RosterTarget(member_ids=frozenset(member_result.all_member_ids)), prisma_client
+            group_id,
+            RosterTarget(member_ids=frozenset(member_result.all_member_ids)),
+            "scim_group_membership",
+            prisma_client,
         )
 
         # A rename can flip whether this group matches scim_admin_group by display
@@ -3110,27 +3135,31 @@ def _synced_roster_or_raise(group_id: str, outcome: RosterSyncOutcome) -> Roster
             assert_never(outcome)
 
 
-async def _sync_group_roster(group_id: str, plan: RosterPlan, prisma_client: PrismaClient) -> RosterSync:
+async def _sync_group_roster(
+    group_id: str, plan: RosterPlan, created_via: str, prisma_client: PrismaClient
+) -> RosterSync:
     """Bring the group's team roster to the plan in one locked bulk transaction.
 
     A member whose user row was deleted after the members were resolved is created
-    again and the write retried once, as the per-member write did, unless
-    scim_upsert_user is False.
+    again and the write retried once, as the per-member write did. With
+    scim_upsert_user False it is refused like any member that is not a user yet.
 
     Raises:
-        HTTPException: 404 when the team is gone, 500 when an admitted member's user
-        row is still missing after that retry. Either way the request fails whole and
-        the identity provider retries, as it did when members were written one at a time.
+        HTTPException: 400 when scim_upsert_user is False and a member's user row is gone,
+        404 when the team is gone, 500 when an admitted member's user row is still missing
+        after the retry, so the identity provider retries the whole request.
     """
     outcome: Final = await _write_group_roster(group_id, plan, prisma_client)
-    if not isinstance(outcome, MembersMissing) or not await _get_scim_upsert_user_setting():
+    if not isinstance(outcome, MembersMissing):
         return _synced_roster_or_raise(group_id, outcome)
+    if not await _get_scim_upsert_user_setting():
+        raise _member_not_provisioned_error(outcome.user_ids[0])
     verbose_proxy_logger.warning(
-        "SCIM: users %s were deleted while the roster of group '%s' was being written; creating them again",
-        ", ".join(outcome.user_ids),
-        group_id,
+        "SCIM: users %s were deleted while the roster of group %s was being written; creating them again",
+        sanitize_for_log(", ".join(outcome.user_ids)),
+        sanitize_for_log(group_id),
     )
-    _ = await _create_group_member_users(outcome.user_ids, "scim_group_membership", prisma_client)
+    _ = await _create_group_member_users(outcome.user_ids, created_via, prisma_client)
     return _synced_roster_or_raise(group_id, await _write_group_roster(group_id, plan, prisma_client))
 
 
@@ -3139,7 +3168,9 @@ async def _fill_new_group(group_id: str, member_ids: frozenset[str], prisma_clie
     identity provider's retry creates the group again instead of getting a 409, or a second team
     of the same name when the POST carried neither ``id`` nor ``externalId``."""
     try:
-        return await _sync_group_roster(group_id, RosterDelta(add=member_ids, remove=frozenset()), prisma_client)
+        return await _sync_group_roster(
+            group_id, RosterDelta(add=member_ids, remove=frozenset()), "scim_group_membership", prisma_client
+        )
     except Exception:
         _ = await _table(TeamRepository(prisma_client)).delete(where={"team_id": group_id})
         raise
@@ -3185,7 +3216,7 @@ async def patch_group(
         # Apply the metadata/displayName updates to the database
         await _apply_group_patch_updates(group_id, update_data, prisma_client, existing_team.team_alias)
 
-        sync: Final = await _sync_group_roster(group_id, plan, prisma_client)
+        sync: Final = await _sync_group_roster(group_id, plan, "scim_group_patch", prisma_client)
 
         # A rename can flip whether this group matches scim_admin_group by display
         # name, so retained members must be re-resolved too, not just the ones whose
