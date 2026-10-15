@@ -10,7 +10,10 @@ from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, TypeA
 
 import httpx
 from pydantic import BaseModel, TypeAdapter, ValidationError
-from typing_extensions import assert_never
+from typing_extensions import (
+    TypeIs,  # noqa: TID251  # narrows a client input item before its mark is read
+    assert_never,
+)
 
 import litellm
 from litellm._logging import verbose_logger
@@ -568,12 +571,54 @@ def _will_bridge_to_chat_completions(
     )
 
 
-def _stamp_injection_points_with_dialect(
+def _is_a_client_input_item(
+    item: object,
+) -> TypeIs[Mapping[str, object]]:  # guard-ok: bounds a client input item before its mark is read
+    return isinstance(item, Mapping)
+
+
+_ITEM_TYPES_THE_BRIDGE_FORWARDS_MARKS_FROM: Final = frozenset(("function_call", "function_call_output"))
+
+
+def _item_carries_a_mark_outside_the_provisional_messages(item: object) -> bool:
+    return (
+        _is_a_client_input_item(item)
+        and item.get("type") in _ITEM_TYPES_THE_BRIDGE_FORWARDS_MARKS_FROM
+        and bool(item.get("cache_control"))
+    )
+
+
+def _function_tool_carries_a_mark(tool: Mapping[str, object]) -> bool:
+    return isinstance(tool, dict) and tool.get("type") == "function" and bool(tool.get("cache_control"))
+
+
+def _cache_control_marks_outside_the_provisional_messages(
+    input: str | ResponseInputParam | None, tools: Iterable[Mapping[str, object]] | None
+) -> int:
+    """Client marks on the request parts the provisional message list leaves out.
+
+    A ``function_call`` or ``function_call_output`` item has no role, so the hook's pass here
+    never sees its mark, while the bridge forwards it onto the tool call or tool message it
+    builds, where the provider counts it against the cap. A ``function`` tool's mark reaches
+    the provider the same way, on the chat tool the bridge builds from it.
+    """
+    item_marks: Final = (
+        0
+        if input is None or isinstance(input, str)
+        else sum(1 for item in input if _item_carries_a_mark_outside_the_provisional_messages(item))
+    )
+    tool_marks: Final = sum(1 for tool in tools or () if _function_tool_carries_a_mark(tool))
+    return item_marks + tool_marks
+
+
+def _stamp_injection_points_for_the_hook(
     kwargs: dict[str, object],  # mutable-ok: the points are rewritten in the caller's own kwargs for the hook to read
     model: str,
     custom_llm_provider: str | None,
+    input: str | ResponseInputParam | None,
+    tools: Iterable[Mapping[str, object]] | None,
 ) -> None:
-    """Carry the provider this layer resolved onto the points.
+    """Carry onto the points the provider this layer resolved and the marks its pass cannot see.
 
     The hook reads ``custom_llm_provider`` from the request kwargs, which never hold the one
     resolved here, and resolving the model name alone reads a Foundry deployment of an OpenAI
@@ -582,8 +627,9 @@ def _stamp_injection_points_with_dialect(
     points: Final = configured_injection_points(kwargs.get("cache_control_injection_points"))
     if not points:
         return
-    kwargs["cache_control_injection_points"] = AnthropicCacheControlHook._stamped_with_dialect(
+    kwargs["cache_control_injection_points"] = AnthropicCacheControlHook._stamped_for_prompt_hook(
         points,
+        _cache_control_marks_outside_the_provisional_messages(input, tools),
         model,
         custom_llm_provider,
         kwargs.get("api_base") or kwargs.get("base_url"),
@@ -704,7 +750,7 @@ async def aresponses(
                     _api_base_kwarg(kwargs),
                 ),
             ):
-                _stamp_injection_points_with_dialect(kwargs, model, custom_llm_provider)
+                _stamp_injection_points_for_the_hook(kwargs, model, custom_llm_provider, input, tools)
                 (
                     model,
                     merged_input,
@@ -841,6 +887,7 @@ def _resolve_prompt_swapped_provider(
 
 def _apply_prompt_management_to_responses_call(
     input: str | ResponseInputParam,
+    tools: Iterable[ToolParam] | None,
     model: str,
     custom_llm_provider: str | None,
     litellm_logging_obj: LiteLLMLoggingObj | None,
@@ -875,7 +922,7 @@ def _apply_prompt_management_to_responses_call(
                 _api_base_kwarg(kwargs),
             ),
         ):
-            _stamp_injection_points_with_dialect(kwargs, model, custom_llm_provider)
+            _stamp_injection_points_for_the_hook(kwargs, model, custom_llm_provider, input, tools)
             (
                 model,
                 merged_input,
@@ -1274,6 +1321,7 @@ def responses(
 
         input, model, custom_llm_provider, deployment_model_info = _apply_prompt_management_to_responses_call(
             input=input,
+            tools=tools,
             model=model,
             custom_llm_provider=custom_llm_provider,
             litellm_logging_obj=litellm_logging_obj,

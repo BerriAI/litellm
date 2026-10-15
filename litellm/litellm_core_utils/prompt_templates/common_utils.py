@@ -2,6 +2,8 @@
 Common utility functions used for translating messages across providers
 """
 
+import base64
+import binascii
 import io
 import json
 import mimetypes
@@ -29,6 +31,7 @@ from litellm.types.llms.openai import (
     ChatCompletionThinkingBlock,
     ChatCompletionToolParam,
     ChatCompletionUserMessage,
+    PromptCacheBreakpoint,
 )
 from litellm.types.utils import (
     Choices,
@@ -1787,10 +1790,21 @@ _MarkedT: Final = TypeVar("_MarkedT", bound=Mapping[str, object])
 
 
 def with_prompt_cache_breakpoint(target: _MarkedT, marker: object) -> _MarkedT:
-    if marker is None:
+    """A breakpoint the client already wrote on the block wins, TTL included."""
+    if marker is None or target.get("prompt_cache_breakpoint") is not None:
         return target
     marked: Final = {**target, "prompt_cache_breakpoint": marker}
     return cast(_MarkedT, marked)  # cast-ok: same block shape as the input plus the marker key
+
+
+def cache_control_as_prompt_cache_breakpoint(block: _MarkedT) -> _MarkedT:
+    """Anthropic's ``cache_control`` mark rewritten as OpenAI's ``prompt_cache_breakpoint`` on the same block."""
+    if block.get("cache_control") is None:
+        return block
+    unmarked: Final = {key: value for key, value in block.items() if key != "cache_control"}
+    return cast(  # cast-ok: same block shape as the input with the marker key renamed
+        _MarkedT, with_prompt_cache_breakpoint(unmarked, PromptCacheBreakpoint(mode="explicit"))
+    )
 
 
 LITELLM_INTERNAL_MESSAGE_FIELDS: Final = frozenset({"thinking_blocks", "reasoning_content", "provider_specific_fields"})
@@ -2118,6 +2132,32 @@ def is_unsignable_thinking_block(block: object) -> bool:
         return True
     thinking_text: Final = mapping.get("thinking")
     return not (isinstance(thinking_text, str) and len(thinking_text.strip()) > 0)
+
+
+def native_redacted_thinking_data(data: str) -> str:
+    """Claude's own `data` string for a redacted_thinking block.
+
+    Bedrock Converse carries it base64-wrapped as `redactedContent`, and LiteLLM passed that
+    wrapper through as `data` until it started decoding Converse replies, so histories saved
+    before then still hold it. Claude's own value never decodes twice, since its first byte
+    decodes to a protobuf tag outside the base64 alphabet.
+    """
+    return _converse_wrapped_payload(data) or data
+
+
+def converse_redacted_content(data: str) -> str:
+    """The `redactedContent` Bedrock Converse expects for a redacted_thinking block's `data`."""
+    return base64.b64encode(native_redacted_thinking_data(data).encode()).decode()
+
+
+def _converse_wrapped_payload(data: str) -> str | None:
+    try:
+        payload: Final = base64.b64decode(data, validate=True).decode("ascii")
+        _ = base64.b64decode(payload, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    else:
+        return payload
 
 
 def strip_encrypted_reasoning_from_messages(

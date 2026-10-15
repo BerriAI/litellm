@@ -2,6 +2,7 @@ import csv
 import hashlib
 import io
 import uuid
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from itertools import chain
 from pathlib import Path
@@ -11,10 +12,12 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from integration._support.client import JSON_OBJECT, Gateway, eventually, object_value, string_value
+from integration._support.daily_activity import DAY, TAG_SPEND, daily_rows, seeded_row
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy
 from integration._support.upstream import JsonResponse, delete_scenario, register_scenario
 from integration.spend.test_daily_activity_repository import _daily_activity_database, _PrismaDatabase, _repository
+from pydantic import JsonValue
 
 from litellm import constants
 from litellm.proxy import proxy_server
@@ -29,7 +32,10 @@ from litellm.proxy.management_endpoints.daily_activity_routes import (
 )
 from litellm.proxy.management_endpoints.internal_user_endpoints import router as internal_user_router
 from litellm.proxy.management_endpoints.team_endpoints import router as team_router
-from litellm.types.proxy.management_endpoints.common_daily_activity import DailyActivityKeyPageResponse
+from litellm.types.proxy.management_endpoints.common_daily_activity import (
+    DailyActivityKeyPageResponse,
+    SpendAnalyticsPaginatedResponse,
+)
 
 
 def _delete_organization(gateway: Gateway, organization_id: str) -> None:
@@ -363,7 +369,6 @@ def _assert_daily_activity_routes(gateway: Gateway) -> None:
                 target_digest=target_digest,
                 model=model,
             )
-
         user_cache_keys: Final = gateway.request(
             "GET",
             "/user/daily/activity/aggregated/cache_leakage_keys",
@@ -374,6 +379,188 @@ def _assert_daily_activity_routes(gateway: Gateway) -> None:
         assert isinstance(cache_rows, list) and cache_rows, user_cache_keys.text
         cache_api_keys: Final = tuple(string_value(object_value(row)["api_key"]) for row in cache_rows)
         assert target_digest in cache_api_keys, user_cache_keys.text
+
+
+def _daily_tag_metrics(
+    spend: float,
+    prompt_tokens: int,
+    completion_tokens: int,
+    api_requests: int = 1,
+) -> dict[str, JsonValue]:
+    return {
+        "spend": spend,
+        "flat_cost": 0.0,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "compression_saved_tokens": 0,
+        "compression_savings_spend": 0.0,
+        "prompt_caching_savings_spend": 0.0,
+        "gateway_injected_caching_savings_spend": 0.0,
+        "autorouter_savings_spend": 0.0,
+        "total_tokens": prompt_tokens + completion_tokens,
+        "successful_requests": api_requests,
+        "failed_requests": 0,
+        "api_requests": api_requests,
+        "total_response_time_ms": 0,
+        "timed_requests": 0,
+    }
+
+
+def _tag_activity(
+    gateway: Gateway,
+    *,
+    key: str,
+    tags: str,
+    api_key: str | None = None,
+    model: str | None = None,
+    page: int = 1,
+    page_size: int = 10,
+) -> httpx.Response:
+    params: Final = {
+        "tags": tags,
+        "start_date": DAY,
+        "end_date": DAY,
+        "page": str(page),
+        "page_size": str(page_size),
+        **({"api_key": api_key} if api_key is not None else {}),
+        **({"model": model} if model is not None else {}),
+    }
+    return gateway.request("GET", "/tag/daily/activity", params=params, key=key)
+
+
+def test_tag_daily_activity_scopes_internal_user_keys_and_filters(
+    gateway: Gateway,
+) -> None:
+    with gateway.scenario() as scenario:
+        user_one: Final = scenario.user(user_role="internal_user")
+        user_two: Final = scenario.user(user_role="internal_user")
+        key_one_a: Final = scenario.key(user_id=user_one, key_alias="tag-activity-a")
+        key_one_b: Final = scenario.key(user_id=user_one, key_alias="tag-activity-b")
+        key_two: Final = scenario.key(user_id=user_two, key_alias="tag-activity-other")
+        digest_one_a: Final = hashlib.sha256(key_one_a.encode()).hexdigest()
+        digest_one_b: Final = hashlib.sha256(key_one_b.encode()).hexdigest()
+        digest_two: Final = hashlib.sha256(key_two.encode()).hexdigest()
+        standard_model_row: Final = seeded_row(TAG_SPEND, "tag", "alpha", digest_one_a, DAY)
+        rows: Final = (
+            standard_model_row,
+            seeded_row(TAG_SPEND, "tag", "beta", digest_one_b, DAY),
+            seeded_row(TAG_SPEND, "tag", "gamma", digest_one_a, DAY),
+            seeded_row(TAG_SPEND, "tag", "alpha", digest_two, DAY),
+            replace(standard_model_row, model="gpt-4o"),
+        )
+        with daily_rows(rows):
+            scoped: Final = _tag_activity(
+                gateway,
+                key=key_one_a,
+                tags="alpha,beta",
+            )
+            assert scoped.status_code == 200, scoped.text
+            scoped_body: Final = SpendAnalyticsPaginatedResponse.model_validate_json(scoped.content)
+            assert scoped_body.metadata.total_spend == 0.75, scoped.text
+            assert scoped_body.metadata.total_prompt_tokens == 30, scoped.text
+            assert scoped_body.metadata.total_completion_tokens == 15, scoped.text
+            assert scoped_body.metadata.total_tokens == 45, scoped.text
+            assert scoped_body.metadata.total_api_requests == 3, scoped.text
+            assert len(scoped_body.results) == 1, scoped.text
+            scoped_day: Final = scoped_body.results[0]
+            assert scoped_day.date.isoformat() == DAY, scoped.text
+            assert scoped_day.metrics.model_dump(mode="json") == _daily_tag_metrics(0.75, 30, 15, 3), scoped.text
+            assert tuple(sorted(scoped_day.breakdown.entities)) == ("alpha", "beta"), scoped.text
+            assert scoped_day.breakdown.entities["alpha"].metrics.model_dump(mode="json") == _daily_tag_metrics(
+                0.5, 20, 10, 2
+            ), scoped.text
+            assert scoped_day.breakdown.entities["beta"].metrics.model_dump(mode="json") == _daily_tag_metrics(
+                0.25, 10, 5
+            ), scoped.text
+
+            hidden_key: Final = _tag_activity(
+                gateway,
+                key=key_one_a,
+                tags="alpha,beta",
+                api_key=digest_two,
+            )
+            assert hidden_key.status_code == 200, hidden_key.text
+            assert SpendAnalyticsPaginatedResponse.model_validate_json(hidden_key.content).model_dump(
+                mode="json"
+            ) == SpendAnalyticsPaginatedResponse(results=[]).model_dump(mode="json"), hidden_key.text
+
+            selected_key: Final = _tag_activity(
+                gateway,
+                key=key_one_a,
+                tags="alpha,beta",
+                api_key=digest_one_b,
+            )
+            assert selected_key.status_code == 200, selected_key.text
+            selected_body: Final = SpendAnalyticsPaginatedResponse.model_validate_json(selected_key.content)
+            assert selected_body.metadata.total_spend == 0.25, selected_key.text
+            assert selected_body.metadata.total_api_requests == 1, selected_key.text
+            assert selected_body.results[0].breakdown.entities.keys() == {"beta"}, selected_key.text
+            assert selected_body.results[0].metrics.model_dump(mode="json") == _daily_tag_metrics(0.25, 10, 5), (
+                selected_key.text
+            )
+
+            model_filter: Final = _tag_activity(
+                gateway,
+                key=key_one_a,
+                tags="alpha,beta",
+                model="gpt-4o",
+            )
+            assert model_filter.status_code == 200, model_filter.text
+            model_body: Final = SpendAnalyticsPaginatedResponse.model_validate_json(model_filter.content)
+            assert model_body.metadata.total_spend == 0.25, model_filter.text
+            assert model_body.results[0].metrics.model_dump(mode="json") == _daily_tag_metrics(0.25, 10, 5), (
+                model_filter.text
+            )
+
+            first_page: Final = _tag_activity(
+                gateway,
+                key=key_one_a,
+                tags="alpha",
+                page=1,
+                page_size=1,
+            )
+            second_page: Final = _tag_activity(
+                gateway,
+                key=key_one_a,
+                tags="alpha",
+                page=2,
+                page_size=1,
+            )
+            assert first_page.status_code == 200, first_page.text
+            assert second_page.status_code == 200, second_page.text
+            page_one: Final = SpendAnalyticsPaginatedResponse.model_validate_json(first_page.content)
+            page_two: Final = SpendAnalyticsPaginatedResponse.model_validate_json(second_page.content)
+            assert (
+                page_one.metadata.page,
+                page_one.metadata.total_pages,
+                page_one.metadata.has_more,
+                page_two.metadata.page,
+                page_two.metadata.total_pages,
+                page_two.metadata.has_more,
+            ) == (1, 2, True, 2, 2, False), (first_page.text, second_page.text)
+            page_results: Final = (*page_one.results, *page_two.results)
+            models_seen: Final = frozenset(
+                model_name for result in page_results for model_name in result.breakdown.models
+            )
+            assert len(page_results) == 2 and models_seen == frozenset(("gpt-4o-mini", "gpt-4o")), (
+                first_page.text,
+                second_page.text,
+            )
+
+            admin_control: Final = _tag_activity(
+                gateway,
+                key=gateway.key,
+                tags="alpha",
+                api_key=digest_two,
+            )
+            assert admin_control.status_code == 200, admin_control.text
+            admin_body: Final = SpendAnalyticsPaginatedResponse.model_validate_json(admin_control.content)
+            assert admin_body.metadata.total_spend == 0.25, admin_control.text
+            assert admin_body.results[0].metrics.model_dump(mode="json") == _daily_tag_metrics(0.25, 10, 5), (
+                admin_control.text
+            )
 
 
 async def _assert_route_matches_golden(client: httpx.AsyncClient, route: str, golden_name: str) -> None:
