@@ -5,24 +5,19 @@ recorded OpenAI response, then compares what reached the provider, what the call
 callback logged. The native leg fails instead of silently falling back to Python
 """
 
-from collections.abc import Awaitable, Callable, Iterator, Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Final, cast
+from typing import Final
 
 import pytest
 from pydantic import JsonValue, TypeAdapter
 
-import litellm
-from litellm.responses import dispatch
-from litellm.responses import main as python_responses
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.rust_bridge import catalog
-from litellm.rust_bridge.catalog import Route, RouteRule
-from litellm.rust_bridge.configuration import Rollout
 from litellm.types.llms.openai import ResponsesAPIResponse
+from tests.test_litellm_rust.responses.support import PUBLIC_ARESPONSES, PYTHON_ARESPONSES, FallbackProbe
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
-from tests.test_litellm_rust.support.isolation import isolated_callback_registries, rebound
+from tests.test_litellm_rust.support.isolation import isolated_callback_registries
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 
 pytestmark = pytest.mark.requires_rust_extension
@@ -42,7 +37,12 @@ _COMPARED_LOG_FIELDS: Final = (
     "total_tokens",
     "response_cost",
     "status",
+    "api_base",
+    "cache_hit",
+    "saved_cache_cost",
+    "response_cost_failure_debug_info",
 )
+_COMPARED_HIDDEN_PARAMS: Final = ("custom_llm_provider", "model_id", "api_base", "response_cost")
 
 TEXT_MESSAGE: Final[Mapping[str, JsonValue]] = MappingProxyType(
     {
@@ -187,9 +187,6 @@ REASONING_REPLAY_INPUT: Final[list[JsonValue]] = [
     {"role": "user", "content": "And Germany?"},
 ]
 
-_PYTHON_ARESPONSES: Final = cast(Callable[..., Awaitable[object]], python_responses.aresponses)  # noqa: TID251  # the Python baseline under comparison
-_PUBLIC_ARESPONSES: Final = cast(Callable[..., Awaitable[object]], litellm.aresponses)
-
 
 @dataclass(frozen=True, slots=True)
 class Leg:
@@ -197,10 +194,12 @@ class Leg:
     request_headers: Mapping[str, str]
     response: Mapping[str, JsonValue]
     logged: Mapping[str, object]
+    hooks: tuple[str, ...]
+    hidden_params: Mapping[str, object]
     fell_back: bool
 
 
-ASPECTS: Final = ("dispatch", "request", "response", "logged")
+ASPECTS: Final = ("dispatch", "request", "response", "logged", "hooks")
 
 
 @dataclass(frozen=True, slots=True)
@@ -313,27 +312,6 @@ CASES: Final = (
 )
 
 
-@dataclass(slots=True)
-class FallbackProbe:
-    calls: int = 0
-
-
-@pytest.fixture
-def native_responses() -> Iterator[FallbackProbe]:
-    probe: Final = FallbackProbe()
-    python_aresponses: Final = dispatch._PYTHON_ARESPONSES  # pyright: ignore[reportPrivateUsage]  # the fallback under observation
-
-    async def python_fallback(*args: object, **kwargs: object) -> object:
-        probe.calls += 1
-        return await python_aresponses(*args, **kwargs)
-
-    with (
-        rebound(catalog, "RULES", (RouteRule(Route.RESPONSES, Rollout.RUST_OPT_IN), *catalog.RULES)),
-        rebound(dispatch, "_PYTHON_ARESPONSES", python_fallback),
-    ):
-        yield probe
-
-
 def _kwargs(case: Case, server: RecordingServer, recorder: RecordingLogger) -> dict[str, object]:
     return {"model": MODEL, "api_key": "sk-test", "api_base": server.base_url, "callbacks": [recorder], **case.kwargs}
 
@@ -341,6 +319,12 @@ def _kwargs(case: Case, server: RecordingServer, recorder: RecordingLogger) -> d
 def _response(result: object) -> Mapping[str, JsonValue]:
     assert isinstance(result, ResponsesAPIResponse)
     return _OBJECT.validate_python(result.model_dump(mode="json", exclude_none=True))
+
+
+def _hidden_params(result: object) -> Mapping[str, object]:
+    assert isinstance(result, ResponsesAPIResponse)
+    hidden: Final = _LOGGED.validate_python(result._hidden_params)  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType]  # the hidden params callers read
+    return MappingProxyType({name: hidden.get(name) for name in _COMPARED_HIDDEN_PARAMS})
 
 
 async def _leg(case: Case, server: RecordingServer, probe: FallbackProbe | None) -> Leg:
@@ -355,9 +339,9 @@ async def _isolated_leg(case: Case, server: RecordingServer, probe: FallbackProb
     kwargs: Final = _kwargs(case, server, recorder)
     fallbacks_before: Final = 0 if probe is None else probe.calls
     if probe is None:
-        result = await _PYTHON_ARESPONSES(**kwargs)
+        result = await PYTHON_ARESPONSES(**kwargs)
     else:
-        result = await _PUBLIC_ARESPONSES(**kwargs)
+        result = await PUBLIC_ARESPONSES(**kwargs)
     await drain_logging()
     success: Final = await recorder.wait_for_async("async_log_success_event")
     assert len(server.requests) == request_count + 1
@@ -370,6 +354,8 @@ async def _isolated_leg(case: Case, server: RecordingServer, probe: FallbackProb
         ),
         response=_response(result),
         logged=MappingProxyType({name: standard.get(name) for name in _COMPARED_LOG_FIELDS}),
+        hooks=recorder.names,
+        hidden_params=_hidden_params(result),
         fell_back=probe is not None and probe.calls > fallbacks_before,
     )
 
@@ -394,5 +380,7 @@ async def test_native_responses_match_python(
             assert (native.request_body, native.request_headers) == (python.request_body, python.request_headers)
         case "response":
             assert native.response == python.response
+        case "logged":
+            assert (native.logged, native.hidden_params) == (python.logged, python.hidden_params)
         case _:
-            assert native.logged == python.logged
+            assert native.hooks == python.hooks

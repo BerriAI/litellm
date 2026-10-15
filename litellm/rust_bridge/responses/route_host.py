@@ -32,6 +32,7 @@ def map_failure(error: Exception, request: Mapping[str, object]) -> Exception:
         provider,
         request,
         optional_str(request.get("api_base")) or optional_str(request.get("base_url")),
+        python_responses_shape=True,
     )
 
 
@@ -59,7 +60,7 @@ def _model_rules_decline_reason(request: Mapping[str, object]) -> str | None:
         model_info=request.get("model_info"),
     )
     if _repairs_tool_schemas(model, request.get("tools"), litellm_params):
-        return "native Responses does not implement tool schema repair"
+        return "native Responses does not implement tool schema validation and repair"
     if _carries_cache_control(request.get("input")) and _OPENAI_CONFIG._reads_prompt_cache_breakpoints(  # pyright: ignore[reportPrivateUsage]  # the same rules the Python route applies
         model=model, litellm_params=litellm_params, prompt_cache_options=request.get("prompt_cache_options")
     ):
@@ -73,7 +74,7 @@ def _repairs_tool_schemas(model: str, tools: object, litellm_params: GenericLite
     try:
         decoded: Final = _OPENAI_CONFIG._tools_with_object_parameters(model=model, tools=cast(list[object], tools))  # pyright: ignore[reportPrivateUsage, reportArgumentType]  # cast-ok: caller json
     except litellm.BadRequestError:
-        return False
+        return True
     return (
         _OPENAI_CONFIG._sanitized_tool_schemas_for_openai(model=model, tools=decoded, litellm_params=litellm_params)  # pyright: ignore[reportPrivateUsage]  # the same rules the Python route applies
         is not decoded

@@ -139,7 +139,12 @@ impl PythonBinding for ResponsesPythonHost {
     ) -> PyResult<Py<PyAny>> {
         let mut response = response;
         ids::encode_response(&mut response, &self.ids);
-        self.host.response(py, &response)
+        let response = self.host.response(py, &response)?;
+        response
+            .bind(py)
+            .getattr("_hidden_params")?
+            .set_item("custom_llm_provider", self.ids.provider.as_deref())?;
+        Ok(response)
     }
 
     fn encode_stream_head(
