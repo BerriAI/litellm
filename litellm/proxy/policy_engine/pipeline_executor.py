@@ -26,6 +26,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_or_create_metadata_bucket,
     independent_snapshot,
 )
+from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
 from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
@@ -634,7 +635,7 @@ class PipelineExecutor:
             return ("pass", response if isinstance(response, dict) else None, None, None)
 
         except Exception as e:
-            if CustomGuardrail._is_guardrail_intervention(e):
+            if CustomGuardrail._is_guardrail_intervention(e) or isinstance(e, UnappliableRequestRewrite):
                 error_msg: Final = _extract_error_message(e)
                 return ("fail", None, error_msg, e)
             else:
@@ -754,7 +755,7 @@ def _pipeline_action_for_outcome(step: PipelineStep, outcome: str) -> str:
 
     - skip -> next (stream_scope mismatch; do not apply on_pass/on_fail)
     - pass -> on_pass
-    - fail -> on_fail (content/policy intervention)
+    - fail -> on_fail (content/policy intervention, or a rewrite the endpoint cannot apply)
     - error -> on_error if set, else on_fail (backward compatible)
     """
     if outcome == "skip":
