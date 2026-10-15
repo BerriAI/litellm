@@ -405,6 +405,24 @@ def test_count_tokens_surfaces_peer_errors_and_rejects_non_text_system(gateway: 
         assert _count_requests(invalid_wire) == ()
 
 
+@pytest.mark.parametrize(
+    "tools",
+    (
+        [{"name": "noop", "input_schema": {"type": "object", "properties": {"query": "not-a-schema"}}}],
+        [{"name": "noop", "input_schema": "not-a-schema"}],
+    ),
+    ids=("malformed-property", "string-schema"),
+)
+def test_count_tokens_rejects_unconvertible_tools_without_request(gateway: Gateway, tools: JsonValue) -> None:
+    peer: Final = _GeminiPeer()
+    with wire_server(peer) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(gateway, scenario, wire.url)
+        response: Final = gateway.request("POST", "/v1/messages/count_tokens", _messages(model, None, tools))
+        assert response.status_code == 400, response.text
+        assert "tools" in response.text
+        assert _count_requests(wire) == ()
+
+
 def _count_wave(clients: Sequence[httpx.Client], body: Mapping[str, JsonValue]) -> tuple[tuple[int, JsonValue], ...]:
     def count(client: httpx.Client) -> tuple[int, JsonValue]:
         response: Final = client.post("/v1/messages/count_tokens", json=dict(body))

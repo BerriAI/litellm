@@ -3,12 +3,16 @@ from typing import Final
 import pytest
 from pydantic import JsonValue
 
-from litellm.llms.anthropic.pass_through.adapters.transformation import truncate_tool_name
+from litellm.llms.anthropic.pass_through.adapters.transformation import (
+    LiteLLMAnthropicMessagesAdapter,
+    truncate_tool_name,
+)
 from litellm.llms.vertex_ai.count_tokens.context import (
     VertexGeminiCountContext,
     VertexGeminiCountContextError,
     vertex_gemini_count_context,
 )
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
 _SCHEMA: Final[JsonValue] = {
     "type": "object",
@@ -147,3 +151,45 @@ def test_empty_context_is_omitted(system: JsonValue | None, tools: JsonValue | N
     assert isinstance(context, VertexGeminiCountContext)
     assert context.system_instruction is None
     assert context.tools is None
+
+
+@pytest.mark.parametrize(
+    "tool",
+    (
+        {"description": "Look up a value", "input_schema": _SCHEMA},
+        {"type": "bash_20250124", "name": "bash"},
+    ),
+    ids=("unnamed", "anthropic-hosted"),
+)
+def test_anthropic_tools_count_the_same_declarations_inference_sends(tool: dict[str, JsonValue]) -> None:
+    translated_tools, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_tools_to_openai([tool])  # pyright: ignore[reportArgumentType]  # raw Anthropic tool dict
+    inference_tools: Final = VertexGeminiConfig().map_function(
+        value=[dict(translated) for translated in translated_tools],
+        optional_params={},
+    )
+
+    context: Final = vertex_gemini_count_context(system=None, tools=[tool])
+
+    assert isinstance(context, VertexGeminiCountContext)
+    assert context.tools is not None
+    assert [tool_value["functionDeclarations"] for tool_value in context.tools] == [
+        inference_tool["function_declarations"] for inference_tool in inference_tools
+    ]
+
+
+@pytest.mark.parametrize(
+    "tools",
+    (
+        "lookup",
+        [1],
+        [{"name": "lookup", "input_schema": "not-a-schema"}],
+        [{"type": "function", "function": {"name": "lookup", "parameters": [1]}}],
+        [{"name": "lookup", "input_schema": {"type": "object", "properties": {"query": "not-a-schema"}}}],
+    ),
+    ids=("not-a-list", "non-object-tool", "string-schema", "list-parameters", "malformed-property"),
+)
+def test_invalid_tools_return_an_error_value(tools: JsonValue) -> None:
+    context: Final = vertex_gemini_count_context(system=None, tools=tools)
+
+    assert isinstance(context, VertexGeminiCountContextError)
+    assert "tools" in context.error_message
