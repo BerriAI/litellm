@@ -261,6 +261,15 @@ def test_an_audit_log_keeps_the_non_secret_fields_it_recorded(field):
 
 
 @pytest.mark.parametrize("field", ("before_value", "updated_values"))
+def test_an_audit_log_stores_a_list_of_changes_as_json_text_with_keys_masked(field):
+    sent = [{"id": "no_redis", "key": SECRET}, {"id": "detailed_debug"}]
+
+    log = _audit_log(**{field: json.dumps(sent)})
+
+    assert json.loads(getattr(log, field)) == [{"id": "no_redis", "key": SECRET_MASKED}, {"id": "detailed_debug"}]
+
+
+@pytest.mark.parametrize("field", ("before_value", "updated_values"))
 def test_an_audit_log_leaves_a_change_it_has_no_record_of_alone(field):
     assert getattr(_audit_log(**{field: None}), field) is None
 
