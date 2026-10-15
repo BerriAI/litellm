@@ -1,7 +1,14 @@
+import asyncio
+import threading
+import time
+from collections.abc import Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Final, Literal
 
 import pytest
 from pydantic import JsonValue
+
+import litellm
 
 from litellm.llms.anthropic.pass_through.adapters.transformation import (
     LiteLLMAnthropicMessagesAdapter,
@@ -14,6 +21,7 @@ from litellm.llms.vertex_ai.count_tokens.context import (
     vertex_gemini_count_context,
 )
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+from litellm.types.llms.vertex_ai import ContentType
 
 _SCHEMA: Final[JsonValue] = {
     "type": "object",
@@ -217,8 +225,8 @@ _ANTHROPIC_CONVERSATION: Final = (
 def test_anthropic_documents_images_and_tool_turns_become_gemini_parts(
     custom_llm_provider: Literal["vertex_ai", "gemini"],
 ) -> None:
-    contents: Final = gemini_count_contents(
-        _ANTHROPIC_CONVERSATION, "anthropic", "gemini-2.5-flash", custom_llm_provider
+    contents: Final = asyncio.run(
+        gemini_count_contents(_ANTHROPIC_CONVERSATION, "anthropic", "gemini-2.5-flash", custom_llm_provider)
     )
 
     assert contents == [
@@ -237,14 +245,74 @@ def test_anthropic_documents_images_and_tool_turns_become_gemini_parts(
 
 @pytest.mark.parametrize("custom_llm_provider", ("vertex_ai", "gemini"))
 def test_openai_messages_keep_their_chat_conversion(custom_llm_provider: Literal["vertex_ai", "gemini"]) -> None:
-    contents: Final = gemini_count_contents(
-        ({"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"}),
-        "openai",
-        "gemini-2.5-flash",
-        custom_llm_provider,
+    contents: Final = asyncio.run(
+        gemini_count_contents(
+            ({"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"}),
+            "openai",
+            "gemini-2.5-flash",
+            custom_llm_provider,
+        )
     )
 
     assert contents == [
         {"role": "user", "parts": [{"text": "hello"}]},
         {"role": "model", "parts": [{"text": "hi"}]},
     ]
+
+
+_SLOW_IMAGE_SECONDS: Final = 0.5
+
+
+class _SlowImageHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        time.sleep(_SLOW_IMAGE_SECONDS)
+        self.send_response(200)
+        self.send_header("Content-Type", "image/png")
+        self.send_header("Content-Length", "5")
+        self.end_headers()
+        _ = self.wfile.write(b"image")
+
+    def log_message(self, format: str, *args: object) -> None:
+        return None
+
+
+@pytest.fixture
+def slow_image_url(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["127.0.0.1"])
+    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), _SlowImageHandler)
+    thread: Final = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{server.server_port}/a.png"
+    server.shutdown()
+    server.server_close()
+
+
+async def _count_while_ticking(url: str, custom_llm_provider: Literal["vertex_ai", "gemini"]) -> tuple[list[ContentType], int]:
+    stop: Final = asyncio.Event()
+
+    async def ticks() -> int:
+        count = 0
+        while not stop.is_set():
+            await asyncio.sleep(0.02)
+            count += 1  # rebind-ok: loop counter
+        return count
+
+    ticker: Final = asyncio.create_task(ticks())
+    contents: Final = await gemini_count_contents(
+        ({"role": "user", "content": [{"type": "image", "source": {"type": "url", "url": url}}]},),
+        "anthropic",
+        "gemini-2.5-flash",
+        custom_llm_provider,
+    )
+    stop.set()
+    return contents, await ticker
+
+
+@pytest.mark.parametrize("custom_llm_provider", ("vertex_ai", "gemini"))
+def test_remote_media_is_fetched_without_blocking_the_event_loop(
+    slow_image_url: str, custom_llm_provider: Literal["vertex_ai", "gemini"]
+) -> None:
+    contents, ticks = asyncio.run(_count_while_ticking(slow_image_url, custom_llm_provider))
+
+    assert {"inline_data": {"data": "aW1hZ2U=", "mime_type": "image/png"}} in contents[0]["parts"]
+    assert ticks >= 10

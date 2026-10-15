@@ -521,7 +521,7 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
             "model": model_to_use,
             "contents": contents
             if contents is not None
-            else gemini_count_contents(messages or [], messages_format, model_to_use, "gemini"),
+            else await gemini_count_contents(messages or [], messages_format, model_to_use, "gemini"),
             "system_instruction": count_context.system_instruction,
             "tools": count_context.tools,
         }

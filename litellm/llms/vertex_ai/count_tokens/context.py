@@ -178,15 +178,21 @@ def _chat_messages(
             assert_never(messages_format)
 
 
-def gemini_count_contents(
+async def gemini_count_contents(
     messages: Sequence[Mapping[str, object]],
     messages_format: TokenCountMessagesFormat,
     model: str,
     custom_llm_provider: Literal["vertex_ai", "gemini"],
 ) -> list[ContentType]:
+    from litellm.litellm_core_utils.asyncify import asyncify
+    from litellm.litellm_core_utils.prompt_templates.image_handling import async_inline_remote_media
     from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
+    from litellm.llms.vertex_ai.gemini.transformation import should_inline_remote_media
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
     chat_messages: Final = _chat_messages(messages, messages_format, model, custom_llm_provider)
+    inlined_messages: Final = await async_inline_remote_media(
+        chat_messages, should_inline=should_inline_remote_media(custom_llm_provider)
+    )
     config: Final = GoogleAIStudioGeminiConfig() if custom_llm_provider == "gemini" else VertexGeminiConfig()
-    return config.transform_messages(messages=chat_messages, model=model, litellm_params={})
+    return await asyncify(config.transform_messages)(messages=inlined_messages, model=model, litellm_params={})

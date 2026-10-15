@@ -1374,7 +1374,7 @@ class VertexAITokenCounter(BaseTokenCounter):
             resolved_contents: Final = (
                 contents
                 if contents is not None
-                else gemini_count_contents(messages or [], messages_format, model_to_use, "vertex_ai")
+                else await gemini_count_contents(messages or [], messages_format, model_to_use, "vertex_ai")
             )
 
             count_tokens_params: Final = {
