@@ -16,6 +16,7 @@ from litellm.decisions.call import (
     SystemOneRequestFields,
     asend,
     prepare_call,
+    reject_images_next_to_input,
     send,
 )
 from litellm.types.decisions import DecisionsJSON, DecisionsResponse, OpenAIDecisionInput, OpenAIDecisionResponse
@@ -26,9 +27,11 @@ _SYSTEMONE_QUESTIONS_ADAPTER: Final[TypeAdapter[SystemOneQuestions | None]] = Ty
 _OPENAI_QUESTIONS_ADAPTER: Final[TypeAdapter[OpenAIDecisionQuestions | None]] = TypeAdapter(
     OpenAIDecisionQuestions | None
 )
+_SYSTEMONE_FIELDS: Final = frozenset({"state", "images", "assets"})
 
 
 def _request_fields(
+    model: str,
     decision_input: OpenAIDecisionInput | None,
     questions: OpenAIDecisionQuestions | SystemOneQuestions | None,
     audio: DecisionsAudioClips | None,
@@ -36,6 +39,7 @@ def _request_fields(
     kwargs: Mapping[str, object],
 ) -> RequestFields:
     if "state" not in kwargs:
+        reject_images_next_to_input(model=model, kwargs=kwargs)
         return OpenAIDecisionRequestFields(
             input=decision_input,
             questions=_OPENAI_QUESTIONS_ADAPTER.validate_python(questions),
@@ -50,6 +54,8 @@ def _request_fields(
     return SystemOneRequestFields(
         state=_STATE_ADAPTER.validate_python(kwargs["state"]),
         questions=_SYSTEMONE_QUESTIONS_ADAPTER.validate_python(questions),
+        images=kwargs.get("images"),
+        assets=kwargs.get("assets"),
         audio=audio,
         videos=videos,
     )
@@ -72,14 +78,14 @@ def _prepare_decisions_call(
 ) -> DecisionsCall:
     return prepare_call(
         model=model,
-        fields=_request_fields(decision_input, questions, audio, videos, kwargs),
+        fields=_request_fields(model, decision_input, questions, audio, videos, kwargs),
         safety_identifier=safety_identifier,
         api_key=api_key,
         api_base=api_base,
         timeout=timeout,
         custom_llm_provider=custom_llm_provider,
         extra_headers=extra_headers,
-        kwargs={key: value for key, value in kwargs.items() if key != "state"},
+        kwargs={key: value for key, value in kwargs.items() if key not in _SYSTEMONE_FIELDS},
     )
 
 

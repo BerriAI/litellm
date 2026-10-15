@@ -350,6 +350,7 @@ jobs:
               tests/unit/llms/v0
               tests/unit/llms/valkey
               tests/unit/llms/vercel_ai_gateway
+              tests/unit/llms/vllm
               tests/unit/llms/volcengine
               tests/unit/llms/voyage
               tests/unit/llms/wandb
@@ -416,6 +417,7 @@ jobs:
               tests/unit/rag
               tests/unit/realtime_api
               tests/unit/rerank_api
+              tests/unit/search
               tests/unit/vector_stores
               tests/unit/videos
             python-version: "3.12"

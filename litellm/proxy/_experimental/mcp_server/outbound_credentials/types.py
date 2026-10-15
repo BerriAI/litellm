@@ -341,14 +341,23 @@ class ClientSecretAuth(LiteLLMBaseModel):
 ClientAuth = Annotated[PrivateKeyJwtAuth | ClientSecretAuth, Field(discriminator="source")]
 
 
+class IdJagResourceClient(LiteLLMBaseModel):
+    """The identity the gateway presents to the resource AS on leg 2."""
+
+    model_config = ConfigDict(frozen=True)
+    client_id: str
+    client_auth: ClientAuth
+
+
 class IdJagConfig(HeaderCarrier):
     """draft-ietf-oauth-identity-assertion-authz-grant (Okta "AI agent token exchange").
 
     Two legs: leg 1 is an RFC 8693 token exchange at the IdP org AS (`org_token_endpoint`) that
     swaps the caller's identity token for an ID-JAG assertion; leg 2 is an RFC 7523 jwt-bearer at
     the upstream resource AS (`resource_token_endpoint`) that swaps the assertion for the access
-    token. The gateway authenticates to both endpoints as `client_id` via `client_auth`. Required
-    fields are enforced at construction so a half-configured server cannot reach the arm.
+    token. The gateway authenticates to the org AS as `client_id` via `client_auth`, and to the
+    resource AS as `resource_client`. Required fields are enforced at construction so a
+    half-configured server cannot reach the arm.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -357,6 +366,7 @@ class IdJagConfig(HeaderCarrier):
     resource_token_endpoint: str
     client_id: str
     client_auth: ClientAuth
+    resource_client: IdJagResourceClient
     subject_token_type: str = "urn:ietf:params:oauth:token-type:id_token"
     audience: str | None = None
     resource: str | None = None

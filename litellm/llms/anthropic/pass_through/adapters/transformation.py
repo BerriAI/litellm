@@ -206,6 +206,7 @@ from .streaming_iterator import AnthropicSSEStream, AnthropicStreamWrapper
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
+    from litellm.llms.anthropic.pass_through.safeguards import SafeguardsEvaluator
     from litellm.types.llms.anthropic import ContentBlockContentBlockDict
 
 ToolResultContent: TypeAlias = str | list[ToolMessageContentPart]
@@ -312,6 +313,7 @@ class AnthropicAdapter:
         polyfill_result: PolyfillResult | None = None,
         is_async: bool = True,
         litellm_logging_obj: "LiteLLMLoggingObject | None" = None,
+        safeguards_evaluator: "SafeguardsEvaluator | None" = None,
     ) -> AsyncIterator[bytes] | Iterator[bytes] | None:
         """
         Translate OpenAI streaming response to Anthropic format.
@@ -339,6 +341,7 @@ class AnthropicAdapter:
             compaction_block=compaction_block,
             iterations_usage=iterations_usage,
             litellm_logging_obj=litellm_logging_obj,
+            safeguards_evaluator=safeguards_evaluator,
         )
         # Return the SSE-wrapped version for proper event formatting.
         if is_async:
