@@ -131,21 +131,51 @@ def test_single_upstream_http_status_is_truthful(tag, status_code, expected):
 
 
 @pytest.mark.asyncio
-async def test_cancelled_fetch_is_a_classified_fault_not_a_healthy_empty_server():
-    """A cancelled per-server fetch must not masquerade as ok(tool_count=0): cancellation was already
-    suppressed before the outcome plumbing existed, so it stays suppressed, but as an internal fault
-    the outcome reporting can see."""
+@pytest.mark.parametrize("cancel_message", [None, "client disconnected"])
+async def test_cancelled_fetch_propagates_instead_of_masquerading_as_a_healthy_empty_server(cancel_message: str | None):
+    """A cancelled per-server fetch must not masquerade as ok(tool_count=0), and it is not an upstream
+    fault either: the caller cancelled it (a sibling server already answered, or the request went
+    away), so the cancellation propagates instead of being logged as a listing failure."""
     import asyncio
-    from unittest.mock import AsyncMock, MagicMock
+    from unittest.mock import MagicMock
 
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
 
     manager = MCPServerManager()
     client = MagicMock()
-    client.list_tools = AsyncMock(side_effect=asyncio.CancelledError())
+    started = asyncio.Event()
+
+    async def list_tools(raise_on_error: bool = False) -> list[object]:
+        started.set()
+        await asyncio.Event().wait()
+        return []
+
+    client.list_tools = list_tools
+    listing = asyncio.create_task(manager._fetch_tools_with_timeout(client, "cancelled_srv"))
+    await started.wait()
+    listing.cancel(cancel_message)
+
+    with pytest.raises(asyncio.CancelledError):
+        await listing
+
+
+@pytest.mark.asyncio
+async def test_client_side_cancelled_error_is_a_classified_fault_not_a_cancellation():
+    """The MCP client raises its own CancelledError when a session's teardown outlives its cleanup
+    budget while the listing task keeps running. That is one server's fault, so it classifies as an
+    internal listing failure instead of cancelling the aggregate listing around it."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.experimental_mcp_client.client import SESSION_CLEANUP_TIMEOUT_MESSAGE
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    manager = MCPServerManager()
+    client = MagicMock()
+    client.list_tools = AsyncMock(side_effect=asyncio.CancelledError(SESSION_CLEANUP_TIMEOUT_MESSAGE))
 
     with pytest.raises(MCPServerListError) as exc_info:
-        await manager._fetch_tools_with_timeout(client, "cancelled_srv")
+        await manager._fetch_tools_with_timeout(client, "slow_teardown_srv")
 
     assert exc_info.value.fault.tag == "internal"
 

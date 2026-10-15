@@ -44,6 +44,7 @@ from tests.integration._support.database_relay import (
 from tests.integration._support.runtime import configure_executor
 from tests.integration._support.sharding import ShardExecution, shard_errors
 from tests.integration._support.wire import Reply, wire_server
+from tests.integration.run import _without_provider_api_keys
 
 
 class ExitRecord(TypedDict):
@@ -86,6 +87,22 @@ def _nested_pytest_environment(environment: Mapping[str, str]) -> dict[str, str]
         )
     )
     return {name: value for name, value in environment.items() if name not in inherited_run_settings}
+
+
+def test_runner_environment_drops_inherited_provider_api_keys() -> None:
+    inherited: Final = {
+        "OPENAI_API_KEY": "ambient-openai",
+        "GEMINI_API_KEY": "ambient-gemini",
+        "OTHER_API_KEY": "ambient-other",
+        "LITELLM_MASTER_KEY": "sk-integration-master",
+        "OPENAI_BASE_URL": "http://127.0.0.1:8190",
+    }
+    filtered: Final = _without_provider_api_keys(inherited)
+    assert filtered == {
+        "LITELLM_MASTER_KEY": "sk-integration-master",
+        "OPENAI_BASE_URL": "http://127.0.0.1:8190",
+    }
+    assert inherited["OPENAI_API_KEY"] == "ambient-openai"
 
 
 def test_owned_readiness_rejects_a_healthy_listener_from_another_process(

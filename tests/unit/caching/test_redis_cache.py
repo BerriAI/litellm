@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import time
 import types
 from collections.abc import Iterator
@@ -978,7 +979,11 @@ async def test_breaker_metrics_track_state_and_failure_class(monkeypatch):
     from redis.exceptions import TimeoutError as RedisTimeoutError
 
     from litellm._service_logger import ServiceLogging
-    from litellm.caching.redis_cache import RedisCircuitBreaker, is_redis_timeout_failure
+    from litellm.caching.redis_cache import (
+        RedisCircuitBreaker,
+        is_redis_timeout_failure,
+        redis_breaker_state_counts,
+    )
 
     monkeypatch.setattr(litellm, "service_callback", ["prometheus_system"])
     service_logger: Final = ServiceLogging()
@@ -986,13 +991,15 @@ async def test_breaker_metrics_track_state_and_failure_class(monkeypatch):
     def sample(name, labels=None):
         return REGISTRY.get_sample_value(name, labels) or 0.0
 
-    timeout_before = sample("litellm_redis_circuit_breaker_failures_total", {"failure_class": "timeout"})
-    hard_before = sample("litellm_redis_circuit_breaker_failures_total", {"failure_class": "connectivity"})
-    opened_before = sample("litellm_redis_circuit_breaker_transitions_total", {"state": "open"})
-    open_gauge_before = sample("litellm_redis_circuit_breaker_state", {"state": "open"})
-    closed_gauge_before = sample("litellm_redis_circuit_breaker_state", {"state": "closed"})
+    gc.collect()
+    timeout_before: Final = sample("litellm_redis_circuit_breaker_failures_total", {"failure_class": "timeout"})
+    hard_before: Final = sample("litellm_redis_circuit_breaker_failures_total", {"failure_class": "connectivity"})
+    opened_before: Final = sample("litellm_redis_circuit_breaker_transitions_total", {"state": "open"})
+    state_counts_before: Final = redis_breaker_state_counts()
+    open_gauge_before: Final = state_counts_before.get(RedisCircuitBreaker.OPEN, 0)
+    closed_gauge_before: Final = state_counts_before.get(RedisCircuitBreaker.CLOSED, 0)
 
-    breaker = RedisCircuitBreaker(
+    breaker: Final = RedisCircuitBreaker(
         failure_threshold=2, recovery_timeout=60, timeout_min_duration=5.0, service_logger=service_logger
     )
     breaker.record_failure(is_timeout=is_redis_timeout_failure(RedisTimeoutError("t")))
@@ -1024,6 +1031,7 @@ def test_prometheus_services_logger_starts_from_the_breakers_already_built(monke
     assert early.is_open() is False
 
     monkeypatch.setattr(litellm, "service_callback", ["prometheus_system"])
+    gc.collect()
     ServiceLogging()
     assert REGISTRY.get_sample_value("litellm_redis_circuit_breaker_state", {"state": "closed"}) == (
         redis_breaker_state_counts()["closed"]

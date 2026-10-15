@@ -411,19 +411,20 @@ async def test_typesafe_answers_box_questions_it_cannot_take_as_refusals_under_d
     ]
 
 
-def test_a_malformed_provider_specific_header_is_ignored(respx_mock: respx.MockRouter) -> None:
+def test_a_malformed_provider_specific_header_answers_400_before_http(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(_TYPESAFE_URL).respond(json=_SYSTEMONE_RESPONSE)
 
-    response: Final = litellm.systemone(
-        model="typesafe/jev-1.14.0",
-        state=_STATE,
-        questions=_SYSTEMONE_QUESTIONS,
-        api_key="caller-key",
-        provider_specific_header={"custom_llm_provider": "typesafe", "extra_headers": "not a header map"},
-    )
+    with pytest.raises(litellm.BadRequestError, match="Invalid Decisions request") as caught:
+        litellm.systemone(
+            model="typesafe/jev-1.14.0",
+            state=_STATE,
+            questions=_SYSTEMONE_QUESTIONS,
+            api_key="caller-key",
+            provider_specific_header={"custom_llm_provider": "typesafe", "extra_headers": "not a header map"},
+        )
 
-    assert isinstance(response, DecisionsResponse)
-    assert not [name for name in route.calls.last.request.headers if name.startswith("typesafe-danger-zone-")]
+    assert caught.value.status_code == 400
+    assert not route.called
 
 
 @pytest.mark.asyncio
