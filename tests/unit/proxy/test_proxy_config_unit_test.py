@@ -1,4 +1,6 @@
 import os
+from pathlib import Path
+from typing import Final
 import traceback
 from unittest import mock
 import pytest
@@ -340,3 +342,16 @@ class TestYamlStorePromptsDbOverride:
         proxy_config = ProxyConfig()
 
         assert proxy_config.settings.source("store_prompts_in_spend_logs") == "unset"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disabled", [["prompt"], "prompts", ["prompts", "tools"]])
+async def test_load_config_rejects_unknown_mcp_disabled_capability(tmp_path: Path, disabled: object) -> None:
+    import yaml
+    from pydantic import ValidationError
+
+    config_path: Final = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump({"general_settings": {"mcp_disabled_capabilities": disabled}}))
+
+    with pytest.raises(ValidationError):
+        await ProxyConfig().load_config(router=None, config_file_path=str(config_path))

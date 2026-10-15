@@ -6927,6 +6927,12 @@ class ProxyConfig:
 
             TypeAdapter(MCPAdvertisedVersions).validate_python(general_settings["mcp_advertised_versions"])
 
+        disabled_mcp_capabilities: Final = typed_general_settings.get("mcp_disabled_capabilities")
+        if disabled_mcp_capabilities is not None:
+            from litellm.types.mcp import MCPDisabledCapabilities
+
+            TypeAdapter(MCPDisabledCapabilities).validate_python(disabled_mcp_capabilities)
+
         if os.getenv("NUM_WORKERS", "1") != "1" and redis_usage_cache is None:
             warn_login_counters_are_per_worker(os.getenv("NUM_WORKERS", "1"))
         if declared_proxy_ranges(general_settings) is None:
@@ -18814,6 +18820,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "always_include_stream_usage": "Boolean",
         "forward_client_headers_to_llm_api": "Boolean",
         "mcp_required_fields": "List",
+        "mcp_disabled_capabilities": "List",
         "cancel_on_disconnect": "Boolean",
         "disable_auto_add_proxy_admin_to_teams": "Boolean",
         "apply_user_budget_to_team_keys": "Boolean",

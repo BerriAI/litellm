@@ -8,6 +8,8 @@ they may send a stale `mcp-session-id` header. This test verifies that:
 """
 
 import asyncio
+import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1737,3 +1739,150 @@ async def test_handle_streamable_http_mcp_true_passthrough_with_token_skips_prob
 
     assert mock_handle_request.await_count == 1
     probe_client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "disabled,method,params,expected_preflight_calls,extra_request_headers,expected_modern_preflight_calls",
+    [
+        (("prompts", "resources"), "prompts/list", {}, 0, (), 0),
+        (("prompts", "resources"), "prompts/get", {"name": "x"}, 0, (), 0),
+        (("prompts", "resources"), "resources/list", {}, 0, (), 0),
+        (("prompts", "resources"), "resources/read", {"uri": "file:///x"}, 0, (), 0),
+        (("prompts", "resources"), "resources/templates/list", {}, 0, (), 0),
+        (("prompts", "resources"), "tools/list", {}, 1, (), 0),
+        (None, "prompts/list", {}, 1, (), 0),
+        (("prompts",), "resources/list", {}, 1, (), 0),
+        (
+            ("prompts", "resources"),
+            "prompts/get",
+            {"name": "x"},
+            0,
+            ((b"mcp-protocol-version", b"2026-07-28"), (b"mcp-method", b"prompts/get")),
+            0,
+        ),
+        (
+            ("prompts", "resources"),
+            "resources/read",
+            {"uri": "file:///x"},
+            0,
+            ((b"mcp-protocol-version", b"2026-07-28"), (b"mcp-method", b"resources/read")),
+            0,
+        ),
+        (
+            ("prompts", "resources"),
+            "tools/call",
+            {"name": "tp_server-add", "arguments": {}},
+            0,
+            ((b"mcp-protocol-version", b"2026-07-28"), (b"mcp-method", b"tools/call")),
+            1,
+        ),
+        (
+            None,
+            "prompts/get",
+            {"name": "x"},
+            0,
+            ((b"mcp-protocol-version", b"2026-07-28"), (b"mcp-method", b"prompts/get")),
+            1,
+        ),
+        (
+            ("prompts", "resources"),
+            "prompts/get",
+            {"name": "x", "arguments": {"pad": "a" * 5000}},
+            0,
+            ((b"mcp-protocol-version", b"2026-07-28"), (b"mcp-method", b"prompts/get")),
+            0,
+        ),
+        (None, "prompts/get", {"name": "x", "arguments": {"pad": "a" * 5000}}, 1, (), 0),
+    ],
+)
+async def test_streamable_http_skips_preflight_for_disabled_methods(  # test-quality-ok: no injectable preflight seam
+    disabled: tuple[str, ...] | None,
+    method: str,
+    params: dict[str, object],
+    expected_preflight_calls: int,
+    extra_request_headers: tuple[tuple[bytes, bytes], ...],
+    expected_modern_preflight_calls: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.server import (
+        handle_streamable_http_mcp,
+        session_manager_stateless,
+    )
+
+    monkeypatch.setitem(proxy_server.general_settings, "mcp_advertised_versions", ["2026-07-28"])
+    if disabled is None:
+        monkeypatch.delitem(proxy_server.general_settings, "mcp_disabled_capabilities", raising=False)
+    else:
+        monkeypatch.setitem(proxy_server.general_settings, "mcp_disabled_capabilities", list(disabled))
+
+    probe_client: Final = MagicMock()
+    probe_client.post = AsyncMock()
+    request_headers: Final = [
+        (b"authorization", b"Bearer upstream-token"),
+        *extra_request_headers,
+    ]
+    scope: Final = _passthrough_mode_scope(
+        "tp_server",
+        extra_headers=request_headers,
+    )
+    body: Final[bytes] = json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+    ).encode()
+    receive: Final = AsyncMock(return_value={"type": "http.request", "body": body, "more_body": False})
+    send: Final = AsyncMock()
+    user_auth: Final = UserAPIKeyAuth()
+    user_auth.user_id = None
+    tp_server: Final = _build_passthrough_mode_server("tp_server", MCPAuth.true_passthrough)
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(user_auth, None, ["tp_server"], None, None, None),
+        ),
+        patch("litellm.proxy._experimental.mcp_server.server.set_auth_context"),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._handle_stale_mcp_session",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._raise_preemptive_401_for_unauthenticated_servers",
+            new_callable=AsyncMock,
+        ) as mock_preemptive_401,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._check_passthrough_upstream_auth",
+            new_callable=AsyncMock,
+        ) as mock_passthrough_auth,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._preflight_modern_interaction",
+            new_callable=AsyncMock,
+            return_value=None,
+        ) as mock_modern_preflight,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.get_async_httpx_client",
+            return_value=probe_client,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.get_mcp_server_by_name",
+            return_value=tp_server,
+        ),
+        patch.object(
+            session_manager_stateless,
+            "handle_request",
+            new_callable=AsyncMock,
+        ) as mock_handle_request,
+        patch.object(session_manager_stateless, "_server_instances", {}),
+    ):
+        await handle_streamable_http_mcp(scope, receive, send)
+
+    assert mock_preemptive_401.await_count == expected_preflight_calls
+    assert mock_passthrough_auth.await_count == expected_preflight_calls
+    assert mock_modern_preflight.await_count == expected_modern_preflight_calls
+    assert mock_handle_request.await_count == 1

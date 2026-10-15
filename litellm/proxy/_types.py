@@ -62,6 +62,7 @@ from litellm.types.mcp import (
     MCPAuth,
     MCPAuthType,
     MCPCredentials,
+    MCPDisabledCapabilities,
     MCPTransport,
     MCPTransportType,
     MCPUpstreamProtocol,
@@ -2884,6 +2885,13 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="MCP revisions enabled by the gateway. Defaults to all completed legacy revisions. "
         "Modern protocol serving requires explicit opt-in. Apps/Tasks remain disabled.",
+    )
+    mcp_disabled_capabilities: MCPDisabledCapabilities | None = Field(
+        None,
+        description="MCP capabilities the gateway stops serving on every route, any of 'prompts' and 'resources'. "
+        "A disabled capability is left out of the initialize and server/discover responses, its list operations "
+        "return an empty list without contacting any upstream MCP server, and its get/read operations answer "
+        "METHOD_NOT_FOUND. Unset means prompts and resources stay advertised.",
     )
     mcp_allowed_clients: list[MCPAllowedClient] | None = Field(
         None,
