@@ -2,6 +2,7 @@ import asyncio
 import contextvars
 from collections.abc import Iterator
 from functools import partial
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final
 
 import httpx
@@ -193,12 +194,28 @@ class GenerateContentHelper:
         if litellm_logging_obj is None:
             raise ValueError("litellm_logging_obj is required, but got None")
 
+        # Record the configured location so a `global` model is not priced as
+        # us-central1 (+10%), matching the completion path.
+        from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+        explicit_vertex_location: Final = VertexBase.explicit_vertex_ai_location(
+            MappingProxyType(
+                {key: getattr(litellm_params, key, None) for key in ("vertex_location", "vertex_ai_location")}
+            )
+        )
+        vertex_location_params: Final = (
+            MappingProxyType({"vertex_location": explicit_vertex_location})
+            if explicit_vertex_location
+            else MappingProxyType({})
+        )
+
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
             model=model,
             optional_params=dict(generate_content_config_dict),
             litellm_params={
                 "litellm_call_id": litellm_call_id,
+                **vertex_location_params,
             },
             custom_llm_provider=custom_llm_provider,
         )
