@@ -125,7 +125,7 @@
       "url": "https://docs.aiand.com/api/chat-completions/",
       "endpoints": {
         "chat_completions": true,
-        "messages": false,
+        "messages": true,
         "responses": true,
         "embeddings": false,
         "image_generations": false,

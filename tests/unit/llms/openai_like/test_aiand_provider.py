@@ -1,4 +1,5 @@
 import json
+from typing import Final
 
 import httpx
 import pytest
@@ -7,6 +8,7 @@ import respx
 import litellm
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
 from litellm.utils import ProviderConfigManager
 
 AIAND_API_BASE = "https://api.aiand.com/v1"
@@ -80,3 +82,27 @@ def test_aiand_responses_provider():
     assert config is not None
     assert config.custom_llm_provider == "aiand"
     assert config.get_complete_url(api_base=None, litellm_params={}) == f"{AIAND_API_BASE}/responses"
+
+
+def _aiand_catalog() -> frozenset[str]:
+    return frozenset(name for name, info in litellm.model_cost.items() if info.get("litellm_provider") == "aiand")
+
+
+def test_aiand_wildcard_lists_its_priced_models():
+    catalog: Final = _aiand_catalog()
+
+    assert catalog
+    assert frozenset(get_known_models_from_wildcard("aiand/*")) == catalog
+
+
+def test_aiand_calls_are_billed_from_their_cost_rows():
+    catalog: Final = _aiand_catalog()
+    assert catalog
+
+    for model in sorted(catalog):
+        row: Final = litellm.model_cost[model]
+        prompt_cost, completion_cost = litellm.cost_per_token(model=model, prompt_tokens=1000, completion_tokens=500)
+
+        assert prompt_cost == pytest.approx(1000 * row["input_cost_per_token"])
+        assert completion_cost == pytest.approx(500 * row["output_cost_per_token"])
+        assert prompt_cost > 0 and completion_cost > 0
