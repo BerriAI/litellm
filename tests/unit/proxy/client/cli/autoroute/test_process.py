@@ -1,5 +1,7 @@
 import os
 import socket
+import subprocess
+import sys
 from typing import Optional
 from unittest.mock import patch
 
@@ -108,9 +110,20 @@ class TestIsRunning:
     def test_current_process_is_running(self):
         assert is_running(os.getpid()) is True
 
+    def test_checking_a_live_proxy_does_not_kill_it(self):
+        child = subprocess.Popen([sys.executable, "-I", "-c", "import time; time.sleep(120)"])
+        try:
+            assert is_running(child.pid) is True
+            with pytest.raises(subprocess.TimeoutExpired):
+                child.wait(timeout=1)
+        finally:
+            child.kill()
+            child.wait(timeout=30)
+
     def test_huge_unlikely_pid_is_not_running(self):
         assert is_running(2**30) is False
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="os.kill liveness path is POSIX-only")
     def test_permission_error_from_kill_is_treated_as_running(self, monkeypatch):
         def fake_kill(pid: int, sig: int) -> None:
             raise PermissionError("not permitted to signal this pid")

@@ -13,6 +13,7 @@ from typing import Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import PROMETHEUS_ADMITTED_SERIES_FILE_PREFIX
+from litellm.litellm_core_utils.process_liveness import pid_exists
 
 _LIVE_GAUGE_PID: Final = re.compile(r"gauge_live[a-z]*_(\d+)\.db$")
 
@@ -55,16 +56,6 @@ def mark_worker_exit(worker_pid: int) -> None:
         verbose_proxy_logger.warning("Failed to mark prometheus worker %s as dead: %s", worker_pid, e)
 
 
-def _is_running(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
 def mark_dead_workers(directory: str) -> tuple[int, ...]:
     """Drop the live-gauge files of workers that no longer exist and return their pids.
 
@@ -76,7 +67,7 @@ def mark_dead_workers(directory: str) -> tuple[int, ...]:
         for match in map(_LIVE_GAUGE_PID.search, glob.glob(os.path.join(directory, "gauge_live*_*.db")))
         if match is not None
     )
-    dead: Final = tuple(sorted(pid for pid in owners if pid != os.getpid() and not _is_running(pid)))
+    dead: Final = tuple(sorted(pid for pid in owners if pid != os.getpid() and not pid_exists(pid)))
     if not dead:
         return dead
     from prometheus_client import multiprocess
