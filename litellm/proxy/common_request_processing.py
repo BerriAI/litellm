@@ -2593,14 +2593,12 @@ class ProxyBaseLLMRequestProcessing:
         hold the attribute at all, and Google :generateContent carries
         ``_hidden_params`` but no synchronously-populated ``response_cost``. In both
         cases the cost is read back from the logging object instead, recomputing from
-        the same calculator only when it has not been stored yet. The recomputation prices
-        the same response the success handler logs, so a /v1/messages body served through
-        the chat bridge keeps the reasoning tokens its Anthropic shape cannot carry.
+        the same calculator only when it has not been stored yet.
         """
         stored_cost: Final = logging_obj.model_call_details.get("response_cost")
         if isinstance(stored_cost, (int, float)):
             return float(stored_cost)
-        recomputed_cost: Final = logging_obj.response_cost_calculator(result=logging_obj.billable_result(response))
+        recomputed_cost: Final = logging_obj.response_cost_calculator(result=response)
         return recomputed_cost if isinstance(recomputed_cost, (int, float)) else ""
 
     def _debug_log_request_payload(self) -> None:

@@ -1865,7 +1865,9 @@ class Logging(LiteLLMLoggingBaseClass):
             return 0.0
 
         transformed_result: Final = self._generate_content_result_as_model_response(result)
-        response_result: Final[object] = transformed_result if transformed_result is not None else result
+        response_result: Final[object] = (
+            transformed_result if transformed_result is not None else self.billable_result(result)
+        )
 
         priced_result: Final = (
             response_result.response
