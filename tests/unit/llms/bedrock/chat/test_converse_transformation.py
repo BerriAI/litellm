@@ -5947,6 +5947,67 @@ def test_cache_control_injection_tool_config_not_added_without_injection_point()
     assert all("cachePoint" not in tool for tool in tools)
 
 
+@pytest.mark.parametrize(
+    ("messages", "sent_cache_point"),
+    [
+        pytest.param(
+            [
+                {"role": "system", "content": "sys", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+                {"role": "user", "content": "What is the weather?"},
+            ],
+            {"type": "default", "ttl": "1h"},
+            id="one-hour-system",
+        ),
+        pytest.param(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "What is the weather?",
+                            "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                        }
+                    ],
+                }
+            ],
+            {"type": "default", "ttl": "1h"},
+            id="one-hour-message",
+        ),
+        pytest.param(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "What is the weather?",
+                            "cache_control": {"type": "ephemeral", "ttl": "5m"},
+                        }
+                    ],
+                }
+            ],
+            {"type": "default"},
+            id="five-minute-message",
+        ),
+    ],
+)
+def test_a_tool_config_cache_point_without_a_ttl_takes_one_hour_when_a_later_cache_point_does(
+    messages: list[AllMessageValues], sent_cache_point: dict[str, str]
+):
+    result: Final = AmazonConverseConfig()._transform_request(
+        model="us.anthropic.claude-opus-5-5",
+        messages=messages,
+        optional_params={
+            "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+            "cache_control_injection_points": [{"location": "tool_config"}],
+        },
+        litellm_params={},
+    )
+
+    assert result["toolConfig"]["tools"][-1] == {"cachePoint": sent_cache_point}
+
+
 def test_cache_control_injection_tool_config_honors_ttl_for_supported_model(monkeypatch):
     """
     Regression test: cache_control_injection_points with location=tool_config

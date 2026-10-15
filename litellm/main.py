@@ -5594,16 +5594,29 @@ def completion(
             "drop_params" in kwargs
             and normalize_drop_params(cast(object, kwargs["drop_params"])) is True  # cast-ok: untyped request kwargs
         )
+        request_tools: Final = cast(list[object] | None, tools)  # cast-ok: completion types tools as a bare List
+        converse_may_send_tools: Final = AmazonConverseConfig.may_send_tools(
+            tools=request_tools,
+            functions=cast(object, functions),  # cast-ok: completion types functions as a bare List
+            response_format=cast(object, response_format),  # cast-ok: completion types response_format as a bare dict
+            web_search_options=web_search_options,
+        )
         claude_cache: Final = (
             resolved_claude_prompt_cache(
                 claude_prompt_cache(
                     routed_messages,
-                    cast(list[object] | None, tools),  # cast-ok: completion types tools as a bare List
+                    request_tools,
                     non_default_params,
                     drop_params=claude_drop_params,
                     tool_history_as_text=isinstance(provider_config, AmazonConverseConfig)
-                    and AmazonConverseConfig.sends_tool_history_as_text(tools, non_default_params),
-                    one_mark_per_tool_result=isinstance(provider_config, AmazonConverseConfig),
+                    and AmazonConverseConfig.sends_tool_history_as_text(converse_may_send_tools),
+                    tool_config_cache_control=(
+                        AmazonConverseConfig.tool_config_cache_control(
+                            non_default_params.get("cache_control_injection_points")
+                        )
+                        if isinstance(provider_config, AmazonConverseConfig) and converse_may_send_tools
+                        else None
+                    ),
                 ),
                 model=model,
                 llm_provider=custom_llm_provider,

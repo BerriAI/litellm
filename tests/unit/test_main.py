@@ -759,6 +759,96 @@ def test_a_breakpoint_reaches_bedrock_mantle_claude_as_cache_control(respx_mock:
     ]
 
 
+_WEATHER_TOOL: Final = {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}
+
+
+def test_breakpoints_on_converse_tool_history_beside_a_json_schema_response_format_keep_to_four_under_drop_params(
+    respx_mock: respx.MockRouter,
+):
+    route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).respond(json=_CONVERSE_REPLY)
+
+    litellm.completion(
+        model="bedrock/converse/us.anthropic.claude-opus-5-5",
+        messages=[
+            {"role": "system", "content": [{"type": "text", "text": "sys", "prompt_cache_breakpoint": _BREAKPOINT}]},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": str(index), "prompt_cache_breakpoint": _BREAKPOINT} for index in range(3)
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{**_LOADED_FUNCTION_CALL, "prompt_cache_breakpoint": _BREAKPOINT}],
+            },
+            {**_WEATHER_RESULT, "prompt_cache_breakpoint": _BREAKPOINT},
+            {"role": "user", "content": "And tomorrow?"},
+        ],
+        response_format={"type": "json_schema", "json_schema": {"name": "forecast", "schema": {"type": "object"}}},
+        drop_params=True,
+        **_FAKE_AWS,
+    )
+
+    assert _converse_cache_points(json.loads(route.calls.last.request.content)) == ("message",) * 4
+
+
+def test_breakpoints_on_one_tool_results_parts_reach_claude_as_one_mark_on_the_result(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").respond(
+        json={
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-opus-5-5",
+            "content": [{"type": "text", "text": "18C"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+    )
+
+    litellm.completion(
+        model="anthropic/claude-opus-5-5",
+        messages=[
+            _USER_TURN,
+            {"role": "assistant", "content": None, "tool_calls": [_LOADED_FUNCTION_CALL]},
+            {
+                **_WEATHER_RESULT,
+                "content": [
+                    {"type": "text", "text": text, "prompt_cache_breakpoint": _BREAKPOINT} for text in ("18C", "sunny")
+                ],
+            },
+        ],
+        tools=[_WEATHER_TOOL],
+        api_key="fake",
+    )
+
+    assert json.loads(route.calls.last.request.content)["messages"][2]["content"] == [
+        {
+            "type": "tool_result",
+            "tool_use_id": "toolu_01weather",
+            "content": [{"type": "text", "text": "18C"}, {"type": "text", "text": "sunny"}],
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
+
+def test_a_tool_breakpoint_before_a_one_hour_tool_config_cache_point_reaches_converse_as_one_hour(
+    respx_mock: respx.MockRouter,
+):
+    route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).respond(json=_CONVERSE_REPLY)
+
+    litellm.completion(
+        model="bedrock/converse/us.anthropic.claude-opus-5-5",
+        messages=[_USER_TURN],
+        tools=[{**_WEATHER_TOOL, "prompt_cache_breakpoint": _BREAKPOINT}],
+        cache_control_injection_points=[{"location": "tool_config", "control": {"type": "ephemeral", "ttl": "1h"}}],
+        **_FAKE_AWS,
+    )
+
+    sent_tools: Final = json.loads(route.calls.last.request.content)["toolConfig"]["tools"]
+    assert [tool["cachePoint"] for tool in sent_tools if "cachePoint" in tool] == [{"type": "default", "ttl": "1h"}] * 2
+
+
 def test_completion_keeps_a_function_call_whose_id_only_looks_like_a_claude_server_tool(
     respx_mock: respx.MockRouter, openai_api_response
 ):

@@ -1,8 +1,8 @@
 """OpenAI's ``prompt_cache_breakpoint`` on a chat request bound for Claude, rewritten as Claude's ``cache_control``."""
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
-from itertools import chain
+from dataclasses import dataclass, replace
+from itertools import accumulate, chain
 from types import MappingProxyType
 from typing import Final, Literal, NoReturn, TypeAlias, cast  # noqa: TID251  # isinstance-checked hot-path JSON
 
@@ -18,7 +18,10 @@ _Mark: TypeAlias = Callable[[_Path, _Fields], _Fields]
 _Kind: TypeAlias = Literal["written", "explicit", "free"]
 _MESSAGE_BLOCK_KEYS: Final = ("content", "tool_calls")
 _TOOL_RESULT_ROLES: Final = ("tool", "function")
+_SYSTEM_ROLES: Final = ("system", "developer")
+_SYSTEM_MOVES_PAST_ROLES: Final = ("user", *_TOOL_RESULT_ROLES)
 _REQUEST: Final[_Path] = ("cache_control",)
+_TOOL_CONFIG: Final[_Path] = ("tool_config",)
 _CLAUDE_TTL_MARKS: Final = MappingProxyType(
     {
         "5m": ChatCompletionCachedContent(type="ephemeral", ttl="5m"),
@@ -46,6 +49,7 @@ class _Placed:
     path: _Path
     ttl: Literal["5m", "1h"]
     kind: _Kind
+    rank: tuple[int, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,27 +175,23 @@ def _joined_breakpoint(kept: object, replaced: Sequence[object]) -> object:
     return {**fields, "ttl": "1h"} if any(_block_mark(marker, "ttl") == "1h" for marker in replaced) else kept
 
 
-def _tool_result_hoisted(message: _Fields, one_mark_per_tool_result: bool) -> _Hoisted:
-    """Claude rejects a tool result marked both on the result and inside its content, so a ``cache_control`` the
-    client wrote at either level wins over every breakpoint at the other, and a breakpoint on the message replaces the
-    ones on its parts. A route that sends one mark per tool result gets its part breakpoints as one on the message,
-    or as none when the client marked a part."""
+def _tool_result_hoisted(message: _Fields) -> _Hoisted:
+    """Claude rejects a tool result marked both on the result and inside its content, or marked twice inside it, so
+    a ``cache_control`` the client wrote at either level wins over every breakpoint, and the result's breakpoints
+    become one on the message."""
     parts: Final = _blocks(message.get("content"))
     if parts is None:
         return _Hoisted(message, ())
     own: Final = message.get("prompt_cache_breakpoint")
-    client_marked_part: Final = any(_block_mark(part, "cache_control") is not None for part in parts)
-    if own is not None and client_marked_part:
-        return _Hoisted(_without_message_breakpoint(message), ())
     unmarked_parts: Final = [_without_breakpoint(part) for part in parts]
     if message.get("cache_control") is not None:
         return _Hoisted({**message, "content": unmarked_parts}, ())
     part_breakpoints: Final = tuple(
         marker for marker in (_block_mark(part, "prompt_cache_breakpoint") for part in parts) if marker is not None
     )
-    if own is None and client_marked_part and one_mark_per_tool_result:
-        return _Hoisted({**message, "content": unmarked_parts}, part_breakpoints)
-    if own is None and (client_marked_part or not one_mark_per_tool_result or not part_breakpoints):
+    if any(_block_mark(part, "cache_control") is not None for part in parts):
+        return _Hoisted({**_without_message_breakpoint(message), "content": unmarked_parts}, part_breakpoints)
+    if own is None and not part_breakpoints:
         return _Hoisted(message, ())
     kept: Final = part_breakpoints[0] if own is None else own
     replaced: Final = part_breakpoints[1:] if own is None else part_breakpoints
@@ -250,12 +250,12 @@ def _message_breakpoint_hoisted(message: _Fields) -> _Hoisted:
     )
 
 
-def _hoisted_message(message: object, one_mark_per_tool_result: bool) -> _Hoisted:
+def _hoisted_message(message: object) -> _Hoisted:
     fields: Final = _fields(message)
     if fields is None:
         return _Hoisted(message, ())
     return (
-        _tool_result_hoisted(fields, one_mark_per_tool_result)
+        _tool_result_hoisted(fields)
         if fields.get("role") in _TOOL_RESULT_ROLES
         else _message_breakpoint_hoisted(fields)
     )
@@ -362,27 +362,56 @@ def _translated(messages: Sequence[object], tools: Sequence[object]) -> frozense
     )
 
 
+def _role(message: object) -> object:
+    return (_fields(message) or {}).get("role")
+
+
 def _leading_system_count(messages: Sequence[object]) -> int:
-    return next(
-        (
-            index
-            for index, message in enumerate(messages)
-            if (_fields(message) or {}).get("role") not in ("system", "developer")
-        ),
-        len(messages),
-    )
+    return next((index for index, message in enumerate(messages) if _role(message) not in _SYSTEM_ROLES), len(messages))
 
 
 def _wire_position(path: _Path, leading_system_count: int) -> tuple[int, ...]:
-    """Where Claude reads a mark: tool definitions, then the leading system messages it hoists, then every other
-    message in place, with a message-level mark on the message's text, after its content parts and before its tool
-    calls."""
+    """Where Claude reads a mark: tool definitions, then the cachePoint a route appends after them, then the leading
+    system messages it hoists, then every other message in place, with a message-level mark on the message's text,
+    after its content parts and before its tool calls, and last the request-level mark."""
+    if path == _TOOL_CONFIG:
+        return (1,)
+    if path == _REQUEST:
+        return (4,)
     if path[0] == "tools":
         return (0, *(index for index in path if isinstance(index, int)))
     index: Final = int(path[1])
-    group: Final = 1 if index < leading_system_count else 2
+    group: Final = 2 if index < leading_system_count else 3
     block: Final = (1,) if len(path) == 2 else (0 if path[2] == "content" else 2, int(path[3]))
     return (group, index, *block)
+
+
+def _open_system_group(opened_at: tuple[int, ...], indexed: tuple[int, object]) -> tuple[int, ...]:
+    index, message = indexed
+    role: Final = _role(message)
+    if role in _SYSTEM_ROLES:
+        return opened_at or (index,)
+    return opened_at if role in _SYSTEM_MOVES_PAST_ROLES else ()
+
+
+def _system_groups(messages: Sequence[object], leading_system_count: int) -> Mapping[int, int]:
+    """The transforms move a system message after the conversation start behind the user, tool and function turns
+    that follow it, never past the next assistant turn, so each such message and those turns map to the message
+    that opens their group."""
+    opened: Final = tuple(
+        accumulate(
+            enumerate(messages[leading_system_count:], start=leading_system_count), _open_system_group, initial=()
+        )
+    )[1:]
+    return MappingProxyType(
+        {index: opened_at[0] for index, opened_at in enumerate(opened, start=leading_system_count) if opened_at}
+    )
+
+
+def _rank(path: _Path, leading_system_count: int, system_groups: Mapping[int, int]) -> tuple[int, ...]:
+    """Marks in one system group share a rank, since Claude may read them in any order."""
+    opened_at: Final = system_groups.get(int(path[1])) if path[0] == "messages" else None
+    return _wire_position(path, leading_system_count) if opened_at is None else (3, opened_at)
 
 
 def _tool_call_id(message: _Fields, index: int) -> object:
@@ -430,19 +459,21 @@ def _chosen(mark: _Placed, ttl: Literal["5m", "1h"]) -> bool:
     return mark.kind != "free" and mark.ttl == ttl
 
 
-def _last_chosen_hour(marks: Sequence[_Placed]) -> int:
-    return max((index for index, mark in enumerate(marks) if _chosen(mark, "1h")), default=-1)
+def _last_chosen_hour(marks: Sequence[_Placed]) -> tuple[int, ...]:
+    return max((mark.rank for mark in marks if _chosen(mark, "1h")), default=(-1,))
 
 
 def _loosened(marks: Sequence[_Placed], drop_params: bool) -> tuple[_Placed, ...]:
     """Claude rejects a 1h mark read after a 5m one."""
-    first_five: Final = next((index for index, mark in enumerate(marks) if _chosen(mark, "5m")), len(marks))
+    first_five: Final = min((mark.rank for mark in marks if _chosen(mark, "5m")), default=(5,))
     last_hour: Final = _last_chosen_hour(marks)
     return tuple(
-        _Placed(mark.path, "5m", "free")
-        if drop_params and mark.kind == "explicit" and (index > first_five if mark.ttl == "1h" else index < last_hour)
+        replace(mark, ttl="5m", kind="free")
+        if drop_params
+        and mark.kind == "explicit"
+        and (mark.rank >= first_five if mark.ttl == "1h" else mark.rank <= last_hour)
         else mark
-        for index, mark in enumerate(marks)
+        for mark in marks
     )
 
 
@@ -452,9 +483,26 @@ def _settled(marks: Sequence[_Placed], drop_params: bool) -> tuple[_Placed, ...]
     loosened: Final = _loosened(marks, drop_params)
     last_hour: Final = _last_chosen_hour(loosened)
     return tuple(
-        _Placed(mark.path, "1h", "free") if mark.kind == "free" and index < last_hour else mark
-        for index, mark in enumerate(loosened)
+        replace(mark, ttl="1h") if mark.kind == "free" and mark.rank <= last_hour else mark for mark in loosened
     )
+
+
+def _route_marks(
+    tool_config_cache_control: ChatCompletionCachedContent | None, request_mark: object
+) -> tuple[tuple[_Path, object, _Kind], ...]:
+    """The cachePoint a route appends after the tools takes 1h like a breakpoint when it sets no ttl. Neither it nor
+    the request-level mark is ever dropped."""
+    tool_config_kind: Final[_Kind] = (
+        "free" if tool_config_cache_control is None or tool_config_cache_control.get("ttl") is None else "written"
+    )
+    return (
+        *(() if tool_config_cache_control is None else ((_TOOL_CONFIG, tool_config_cache_control, tool_config_kind),)),
+        *(() if request_mark is None else ((_REQUEST, request_mark, "written"),)),
+    )
+
+
+def _droppable(mark: _Placed) -> bool:
+    return mark.kind != "written" and mark.path != _TOOL_CONFIG
 
 
 def claude_prompt_cache(
@@ -464,18 +512,18 @@ def claude_prompt_cache(
     *,
     drop_params: bool,
     tool_history_as_text: bool,
-    one_mark_per_tool_result: bool,
+    tool_config_cache_control: ChatCompletionCachedContent | None,
 ) -> ClaudePromptCache | UnsupportedPromptCacheParam:
     """``prompt_cache_breakpoint`` marks renamed to ``cache_control``. A mark Claude cannot honor is reported unless
     ``drop_params``, which keeps what Claude can use and, when the request ends up with more than Claude's four
-    breakpoints, drops the earliest translated ones. A request-level ``cache_control`` in ``params`` takes one of the
-    four, marks on tool history a ``tool_history_as_text`` route flattens take none, and a
-    ``one_mark_per_tool_result`` route gets a tool result's breakpoints as one. A request carrying no breakpoint is
-    returned as written."""
+    breakpoints, drops the earliest translated ones. A request-level ``cache_control`` in ``params`` and the
+    ``tool_config_cache_control`` cachePoint a route appends after the tools each take one of the four, and marks on
+    tool history a ``tool_history_as_text`` route flattens take none. A request carrying no breakpoint is returned as
+    written."""
     listed_tools: Final = tools or ()
     if not any(map(_message_carries_breakpoint, messages)) and not any(map(_tool_carries_breakpoint, listed_tools)):
         return ClaudePromptCache(tuple(messages), None if tools is None else tuple(tools))
-    hoists: Final = tuple(_hoisted_message(message, one_mark_per_tool_result) for message in messages)
+    hoists: Final = tuple(map(_hoisted_message, messages))
     hoisted_messages: Final = tuple(hoist.message for hoist in hoists)
     blocks: Final = tuple(block for _, block in _markable(*_marked_request(hoisted_messages, listed_tools, _unchanged)))
     problem: Final = next(
@@ -495,24 +543,28 @@ def claude_prompt_cache(
     renamed_messages, renamed_tools = _marked_request(hoisted_messages, listed_tools, _renamed)
     translated: Final = _translated(hoisted_messages, listed_tools)
     leading_system_count: Final = _leading_system_count(messages)
+    system_groups: Final = _system_groups(messages, leading_system_count)
     unsent_call_ids: Final = unanswered_tool_search_call_ids(messages)
-    block_marks: Final = sorted(
-        (
-            _Placed(path, _ttl(block.get("cache_control")), _kind(path, block.get("cache_control"), translated))
+    request_mark: Final = params.get("cache_control")
+    placements: Final[tuple[tuple[_Path, object, _Kind], ...]] = (
+        *(
+            (path, block.get("cache_control"), _kind(path, block.get("cache_control"), translated))
             for path, block in _markable(renamed_messages, renamed_tools)
             if block.get("cache_control") is not None
             and _on_wire(path, renamed_messages, renamed_tools, unsent_call_ids, tool_history_as_text)
         ),
-        key=lambda mark: _wire_position(mark.path, leading_system_count),
+        *_route_marks(tool_config_cache_control, request_mark),
     )
-    request_mark: Final = params.get("cache_control")
-    marks: Final = (
-        *block_marks,
-        *(() if request_mark is None else (_Placed(_REQUEST, _ttl(request_mark), "written"),)),
+    marks: Final = sorted(
+        (
+            _Placed(path, _ttl(cache_control), kind, _rank(path, leading_system_count, system_groups))
+            for path, cache_control, kind in placements
+        ),
+        key=lambda mark: _wire_position(mark.path, leading_system_count),
     )
     excess: Final = len(marks) - MAX_CACHE_CONTROL_BLOCKS
     dropped: Final[frozenset[_Path]] = (
-        frozenset(tuple(mark.path for mark in marks if mark.kind != "written")[:excess])
+        frozenset(tuple(mark.path for mark in marks if _droppable(mark))[:excess])
         if excess > 0 and drop_params
         else frozenset()
     )

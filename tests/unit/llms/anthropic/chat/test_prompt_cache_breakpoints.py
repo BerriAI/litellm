@@ -9,6 +9,7 @@ from litellm.llms.anthropic.chat.prompt_cache_breakpoints import (
     claude_prompt_cache,
     resolved_claude_prompt_cache,
 )
+from litellm.types.llms.openai import ChatCompletionCachedContent
 
 _EXPLICIT: Final = {"mode": "explicit"}
 _EPHEMERAL: Final = {"type": "ephemeral"}
@@ -21,7 +22,7 @@ def _cache(
     params: dict[str, object] | None = None,
     *,
     drop_params: bool = False,
-    one_mark_per_tool_result: bool = False,
+    tool_config_cache_control: ChatCompletionCachedContent | None = None,
 ) -> ClaudePromptCache | UnsupportedPromptCacheParam:
     return claude_prompt_cache(
         messages,
@@ -29,7 +30,7 @@ def _cache(
         params or {},
         drop_params=drop_params,
         tool_history_as_text=False,
-        one_mark_per_tool_result=one_mark_per_tool_result,
+        tool_config_cache_control=tool_config_cache_control,
     )
 
 
@@ -39,10 +40,10 @@ def _resolved(
     params: dict[str, object] | None = None,
     *,
     drop_params: bool = False,
-    one_mark_per_tool_result: bool = False,
+    tool_config_cache_control: ChatCompletionCachedContent | None = None,
 ) -> ClaudePromptCache:
     outcome: Final = _cache(
-        messages, tools, params, drop_params=drop_params, one_mark_per_tool_result=one_mark_per_tool_result
+        messages, tools, params, drop_params=drop_params, tool_config_cache_control=tool_config_cache_control
     )
     assert isinstance(outcome, ClaudePromptCache), outcome
     return outcome
@@ -502,7 +503,7 @@ def test_a_part_breakpoint_a_tool_results_own_breakpoint_replaces_is_still_repor
     assert outcome.value == {"mode": "explicit", "ttl": "30m"}
 
 
-def test_a_route_sending_one_mark_per_tool_result_counts_its_marked_parts_as_one_under_drop_params():
+def test_a_tool_results_marked_parts_count_as_one_mark_on_the_result_under_drop_params():
     messages: Final = [
         {"role": "system", "content": [_part("s", prompt_cache_breakpoint=_EXPLICIT)]},
         {"role": "user", "content": [_part("u1", prompt_cache_breakpoint=_EXPLICIT)]},
@@ -514,7 +515,7 @@ def test_a_route_sending_one_mark_per_tool_result_counts_its_marked_parts_as_one
         {"role": "user", "content": [_part("u2", prompt_cache_breakpoint=_EXPLICIT)]},
     ]
 
-    result: Final = _resolved(messages, drop_params=True, one_mark_per_tool_result=True)
+    result: Final = _resolved(messages, drop_params=True)
 
     assert list(result.messages) == [
         {"role": "system", "content": [_part("s", cache_control=_EPHEMERAL)]},
@@ -524,7 +525,7 @@ def test_a_route_sending_one_mark_per_tool_result_counts_its_marked_parts_as_one
     ]
 
 
-def test_a_route_sending_one_mark_per_tool_result_lets_a_client_marked_part_win_under_drop_params():
+def test_a_client_marked_part_of_a_tool_result_wins_over_its_breakpoints_under_drop_params():
     messages: Final = [
         {"role": "system", "content": [_part("s", prompt_cache_breakpoint=_EXPLICIT)]},
         {"role": "user", "content": [_part("u1", prompt_cache_breakpoint=_EXPLICIT)]},
@@ -536,7 +537,7 @@ def test_a_route_sending_one_mark_per_tool_result_lets_a_client_marked_part_win_
         {"role": "user", "content": [_part("u2", prompt_cache_breakpoint=_EXPLICIT)]},
     ]
 
-    result: Final = _resolved(messages, drop_params=True, one_mark_per_tool_result=True)
+    result: Final = _resolved(messages, drop_params=True)
 
     assert list(result.messages) == [
         {"role": "system", "content": [_part("s", cache_control=_EPHEMERAL)]},
@@ -546,7 +547,7 @@ def test_a_route_sending_one_mark_per_tool_result_lets_a_client_marked_part_win_
     ]
 
 
-def test_a_part_breakpoint_a_client_marked_part_replaces_on_a_one_mark_route_is_still_reported():
+def test_a_part_breakpoint_a_client_marked_part_replaces_is_still_reported():
     messages: Final = [
         {
             "role": "tool",
@@ -558,7 +559,7 @@ def test_a_part_breakpoint_a_client_marked_part_replaces_on_a_one_mark_route_is_
         }
     ]
 
-    outcome: Final = _cache(messages, one_mark_per_tool_result=True)
+    outcome: Final = _cache(messages)
 
     assert isinstance(outcome, UnsupportedPromptCacheParam)
     assert outcome.value == {"mode": "explicit", "ttl": "30m"}
@@ -576,3 +577,129 @@ def test_a_null_tool_level_breakpoint_leaves_the_function_breakpoint_in_force():
     result: Final = _resolved([{"role": "user", "content": "hi"}], tools)
 
     assert list(result.tools or ()) == [{"type": "function", "function": {"name": "t"}, "cache_control": _EPHEMERAL}]
+
+
+@pytest.mark.parametrize(
+    ("between", "ask", "drop_params", "sent_reminder", "sent_ask"),
+    [
+        pytest.param((), _EXPLICIT, False, _ONE_HOUR, _ONE_HOUR, id="free-mark-takes-one-hour"),
+        pytest.param((), _EXPLICIT, True, _ONE_HOUR, _ONE_HOUR, id="free-mark-takes-one-hour-under-drop-params"),
+        pytest.param(
+            ({"role": "user", "content": "more"}, {"role": "system", "content": "note"}),
+            _EXPLICIT,
+            False,
+            _ONE_HOUR,
+            _ONE_HOUR,
+            id="past-a-later-system-message",
+        ),
+        pytest.param(
+            ({"role": "user", "content": "more"}, {"role": "assistant", "content": "b"}),
+            _EXPLICIT,
+            False,
+            _ONE_HOUR,
+            _EPHEMERAL,
+            id="after-the-next-assistant-turn",
+        ),
+        pytest.param(
+            (),
+            {"mode": "explicit", "ttl": "5m"},
+            True,
+            _EPHEMERAL,
+            {"type": "ephemeral", "ttl": "5m"},
+            id="set-ttls-loosen-under-drop-params",
+        ),
+    ],
+)
+def test_marks_on_a_mid_conversation_system_message_and_the_turns_it_may_move_past_settle_together(
+    between: tuple[dict[str, object], ...],
+    ask: dict[str, object],
+    drop_params: bool,
+    sent_reminder: dict[str, object],
+    sent_ask: dict[str, object],
+):
+    messages: Final = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "q"},
+        {"role": "assistant", "content": "a"},
+        {"role": "system", "content": [_part("reminder", prompt_cache_breakpoint={"mode": "explicit", "ttl": "1h"})]},
+        *between,
+        {"role": "user", "content": [_part("ask", prompt_cache_breakpoint=ask)]},
+    ]
+
+    result: Final = _resolved(messages, drop_params=drop_params)
+
+    assert (result.messages[3], result.messages[-1]) == (
+        {"role": "system", "content": [_part("reminder", cache_control=sent_reminder)]},
+        {"role": "user", "content": [_part("ask", cache_control=sent_ask)]},
+    )
+
+
+def test_a_tool_config_cache_point_takes_one_of_claudes_four_and_is_never_dropped_under_drop_params():
+    messages: Final = [
+        {"role": "system", "content": [_part("s", prompt_cache_breakpoint=_EXPLICIT)]},
+        {"role": "user", "content": [_part(str(index), prompt_cache_breakpoint=_EXPLICIT) for index in range(3)]},
+    ]
+
+    result: Final = _resolved(
+        messages,
+        [{"type": "function", "function": {"name": "t"}}],
+        drop_params=True,
+        tool_config_cache_control=ChatCompletionCachedContent(type="ephemeral"),
+    )
+
+    assert list(result.messages) == [
+        {"role": "system", "content": [_part("s")]},
+        {"role": "user", "content": [_part(str(index), cache_control=_EPHEMERAL) for index in range(3)]},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("tool_config", "tool_marker", "ask_marker", "sent_tool", "sent_ask"),
+    [
+        pytest.param(
+            ChatCompletionCachedContent(type="ephemeral"),
+            None,
+            {"mode": "explicit", "ttl": "1h"},
+            {},
+            _ONE_HOUR,
+            id="free-keeps-a-later-hour",
+        ),
+        pytest.param(
+            ChatCompletionCachedContent(type="ephemeral", ttl="5m"),
+            None,
+            {"mode": "explicit", "ttl": "1h"},
+            {},
+            _EPHEMERAL,
+            id="five-minutes-loosens-a-later-hour",
+        ),
+        pytest.param(
+            ChatCompletionCachedContent(type="ephemeral", ttl="1h"),
+            _EXPLICIT,
+            None,
+            {"cache_control": _ONE_HOUR},
+            None,
+            id="one-hour-lifts-an-earlier-tool-mark",
+        ),
+    ],
+)
+def test_a_tool_config_cache_point_settles_after_the_tools_under_drop_params(
+    tool_config: ChatCompletionCachedContent,
+    tool_marker: dict[str, object] | None,
+    ask_marker: dict[str, object] | None,
+    sent_tool: dict[str, object],
+    sent_ask: dict[str, object] | None,
+):
+    tool: Final = {"type": "function", "function": {"name": "t"}}
+    ask: Final = _part("ask") if ask_marker is None else _part("ask", prompt_cache_breakpoint=ask_marker)
+
+    result: Final = _resolved(
+        [{"role": "user", "content": [ask]}],
+        [tool if tool_marker is None else {**tool, "prompt_cache_breakpoint": tool_marker}],
+        drop_params=True,
+        tool_config_cache_control=tool_config,
+    )
+
+    assert list(result.tools or ()) == [{**tool, **sent_tool}]
+    assert list(result.messages) == [
+        {"role": "user", "content": [_part("ask") if sent_ask is None else _part("ask", cache_control=sent_ask)]}
+    ]
