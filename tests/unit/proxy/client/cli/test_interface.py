@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final
 
 import click
@@ -10,10 +11,12 @@ from litellm.proxy.client.cli.interface import run_shell_line
 GATEWAY: Final = "https://gateway.example.com"
 
 
-def _shell(*lines: str) -> Result:
+def _shell(*lines: str, env: Mapping[str, str] | None = None) -> Result:
     """Type each line into a bare `lite` shell against the gateway, then quit"""
     typed: Final = "".join(f"{line}\n" for line in (*lines, "quit"))
-    return CliRunner().invoke(cli, ["--base-url", GATEWAY, "--api-key", "sk-shell"], input=typed, prog_name="lite")
+    return CliRunner(env=env).invoke(
+        cli, ["--base-url", GATEWAY, "--api-key", "sk-shell"], input=typed, prog_name="lite"
+    )
 
 
 @pytest.fixture
@@ -56,9 +59,10 @@ def test_every_spelling_of_a_group_subcommand_runs_it(lines, credentials_endpoin
 @pytest.mark.parametrize(
     "create_line",
     [
-        """create shell-made --info '{"custom_llm_provider": "openai"}' --values '{"api_key": "sk-placeholder"}'""",
-        """create shell-made --info {"custom_llm_provider":"openai"} --values {"api_key":"sk-placeholder"}""",
-        """create shell-made --info='{"custom_llm_provider": "openai"}' --values='{"api_key": "sk-placeholder"}'""",
+        """create shell-made --info '{"custom_llm_provider": "openai"}' --values '{"api_key": "YWJjZA==", "organization": "b3Jn"}'""",
+        """create shell-made --info {"custom_llm_provider":"openai"} --values {"api_key":"YWJjZA==","organization":"b3Jn"}""",
+        """create shell-made --info={"custom_llm_provider":"openai"} --values={"api_key":"YWJjZA==","organization":"b3Jn"}""",
+        """create shell-made --info='{"custom_llm_provider": "openai"}' --values='{"api_key": "YWJjZA==", "organization": "b3Jn"}'""",
     ],
 )
 def test_quoted_and_compact_json_arguments_reach_the_gateway_as_typed(requests_mock, create_line):
@@ -70,7 +74,7 @@ def test_quoted_and_compact_json_arguments_reach_the_gateway_as_typed(requests_m
     assert create.last_request.json() == {
         "credential_name": "shell-made",
         "credential_info": {"custom_llm_provider": "openai"},
-        "credential_values": {"api_key": "sk-placeholder"},
+        "credential_values": {"api_key": "YWJjZA==", "organization": "b3Jn"},
     }
 
 
@@ -123,8 +127,10 @@ def test_lite_with_its_own_options_inside_the_shell_runs_against_the_server_it_n
     assert credentials_endpoint.call_count == 0
 
 
-def test_a_lite_line_that_names_only_a_key_stays_on_the_shell_server(credentials_endpoint):
-    result: Final = _shell("lite --api-key sk-typed credentials list")
+def test_a_lite_line_that_names_only_a_key_stays_on_the_shell_server_over_litellm_proxy_url(credentials_endpoint):
+    result: Final = _shell(
+        "lite --api-key sk-typed credentials list", env={"LITELLM_PROXY_URL": "https://elsewhere.example.com"}
+    )
 
     assert "shared-openai" in result.output
     assert credentials_endpoint.last_request.headers["Authorization"] == "Bearer sk-typed"

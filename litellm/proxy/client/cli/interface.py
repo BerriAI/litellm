@@ -12,10 +12,8 @@ from litellm._logging import verbose_logger
 from .commands.auth import context_secret_vault
 
 ShellScope: TypeAlias = tuple[str, ...]
-QUOTED: Final = r"""(?<![^\s=])(?:"[^"]*"|'[^']*')"""
-QUOTED_SPAN: Final = re.compile(QUOTED)
-SHELL_WORD: Final = re.compile(rf"(?:{QUOTED}|\S)+")
-OPENING_QUOTE: Final = re.compile(r"""(?<![^\s=])["']""")
+SHELL_WORD: Final = re.compile(r"""(?P<prefix>[\w-]+=)?(?P<quoted>"[^"]*"|'[^']*')(?P<rest>\S*)|\S+""")
+OPENING_QUOTE: Final = re.compile(r"""(?:[\w-]+=)?["']""")
 
 
 def styled_prompt(scope: ShellScope = ()):
@@ -161,10 +159,14 @@ def _group_at(group: click.Group, path: ShellScope) -> click.Group | None:
 
 
 def split_shell_line(line: str) -> ShellScope:
-    """Split on spaces and unwrap quotes that open a word or follow `=`, keeping every other character as typed"""
-    if OPENING_QUOTE.search(QUOTED_SPAN.sub("_", line)):
+    """Split on spaces and unwrap a quote that opens a word or follows its leading `name=`, keeping the rest as typed"""
+    words: Final = tuple(SHELL_WORD.finditer(line))
+    if any(word["quoted"] is None and OPENING_QUOTE.match(word.group()) for word in words):
         raise ValueError("No closing quotation")
-    return tuple(QUOTED_SPAN.sub(lambda span: span.group()[1:-1], word.group()) for word in SHELL_WORD.finditer(line))
+    return tuple(
+        word.group() if word["quoted"] is None else f"{word['prefix'] or ''}{word['quoted'][1:-1]}{word['rest']}"
+        for word in words
+    )
 
 
 def resolve_command_path(words: ShellScope, scope: ShellScope, cli: click.Group) -> ShellScope:
@@ -190,10 +192,9 @@ def execute_command(path: ShellScope, ctx: click.Context, cli: click.Group) -> N
     try:
         if path[0].startswith("-"):
             cli.main(
-                list(path),
+                ["--base-url", ctx.obj["base_url"], *path],
                 prog_name="lite",
                 obj={"secret_vault": context_secret_vault(ctx)},
-                default_map={"base_url": ctx.obj["base_url"]},
                 standalone_mode=False,
             )
             return
