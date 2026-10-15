@@ -642,7 +642,6 @@ _ROUTES_WITH_TOOLS: Final = frozenset(
         "agenerate_content",
         "agenerate_content_stream",
         "acreate_interaction",
-        "_aresponses_websocket",
     }
 )
 _TOOL_FIELDS: Final = frozenset({"tools", "tool_choice", "parallel_tool_calls", "toolConfig", "tool_config"})

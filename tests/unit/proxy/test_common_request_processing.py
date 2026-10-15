@@ -211,7 +211,6 @@ _ToolRoute = Literal[
     "agenerate_content",
     "agenerate_content_stream",
     "acreate_interaction",
-    "_aresponses_websocket",
 ]
 
 class TestProxyBaseLLMRequestProcessing:
