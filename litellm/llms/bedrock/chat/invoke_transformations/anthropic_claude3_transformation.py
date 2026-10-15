@@ -114,7 +114,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         )
 
         AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
-            model=model, optional_params=mapped_params, custom_llm_provider="bedrock"
+            model=model, optional_params=mapped_params, custom_llm_provider="bedrock", drop_params=drop_params
         )
         translated_thinking: Final = mapped_params.get("thinking")
         if (

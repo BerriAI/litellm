@@ -1156,7 +1156,10 @@ class AmazonConverseConfig(BaseConfig):
                 else:
                     optional_params["thinking"] = value
                     AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
-                        model=model, optional_params=optional_params, custom_llm_provider="bedrock"
+                        model=model,
+                        optional_params=optional_params,
+                        custom_llm_provider="bedrock",
+                        drop_params=drop_params,
                     )
             elif param == "reasoning_effort" and isinstance(value, str) and drop_reasoning_effort_param:
                 verbose_logger.debug(

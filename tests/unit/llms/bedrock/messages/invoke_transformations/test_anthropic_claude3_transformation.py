@@ -2047,7 +2047,7 @@ def test_bedrock_clear_thinking_injects_adaptive_with_effort_for_adaptive_models
     }
 
     changed = cfg._ensure_thinking_for_clear_thinking_context_management(
-        anthropic_messages_request=request, model=model
+        anthropic_messages_request=request, model=model, drop_params=False
     )
 
     assert changed is True
@@ -2070,7 +2070,7 @@ def test_bedrock_clear_thinking_converts_legacy_enabled_budget_to_effort():
     }
 
     changed = cfg._ensure_thinking_for_clear_thinking_context_management(
-        anthropic_messages_request=request, model="us.anthropic.claude-opus-4-8"
+        anthropic_messages_request=request, model="us.anthropic.claude-opus-4-8", drop_params=False
     )
 
     assert changed is True
@@ -2098,7 +2098,7 @@ def test_bedrock_clear_thinking_keeps_enabled_for_non_adaptive_models():
     }
 
     changed = cfg._ensure_thinking_for_clear_thinking_context_management(
-        anthropic_messages_request=request, model="anthropic.claude-opus-4-5-v1:0"
+        anthropic_messages_request=request, model="anthropic.claude-opus-4-5-v1:0", drop_params=False
     )
 
     assert changed is True
@@ -2605,7 +2605,9 @@ def test_inject_adaptive_thinking_preserves_existing_effort():
     cfg = AmazonAnthropicClaudeMessagesConfig()
     request = {"output_config": {"effort": "max", "other": "keep"}}
 
-    cfg._inject_adaptive_thinking_for_clear_thinking(request, budget_tokens=24000, model="us.anthropic.claude-fable-5")
+    cfg._inject_adaptive_thinking_for_clear_thinking(
+        request, budget_tokens=24000, model="us.anthropic.claude-fable-5", drop_params=False
+    )
 
     assert request["thinking"] == {"type": "adaptive"}
     assert request["output_config"] == {"effort": "max", "other": "keep"}
@@ -2622,7 +2624,7 @@ def test_bedrock_clear_thinking_noops_when_thinking_already_adaptive():
     }
 
     changed = cfg._ensure_thinking_for_clear_thinking_context_management(
-        anthropic_messages_request=request, model="us.anthropic.claude-fable-5"
+        anthropic_messages_request=request, model="us.anthropic.claude-fable-5", drop_params=False
     )
 
     assert changed is False
@@ -2642,7 +2644,7 @@ def test_bedrock_clear_thinking_replaces_disabled_thinking_on_adaptive_model():
     }
 
     changed = cfg._ensure_thinking_for_clear_thinking_context_management(
-        anthropic_messages_request=request, model="us.anthropic.claude-fable-5"
+        anthropic_messages_request=request, model="us.anthropic.claude-fable-5", drop_params=False
     )
 
     assert changed is True
@@ -2662,7 +2664,7 @@ def test_bedrock_clear_thinking_leaves_enabled_thinking_on_non_adaptive_model():
     }
 
     changed = cfg._ensure_thinking_for_clear_thinking_context_management(
-        anthropic_messages_request=request, model="anthropic.claude-opus-4-5-v1:0"
+        anthropic_messages_request=request, model="anthropic.claude-opus-4-5-v1:0", drop_params=False
     )
 
     assert changed is False
@@ -3725,6 +3727,38 @@ def test_bedrock_messages_keeps_block_binding_with_display_updates(
     )
 
     assert result.get("thinking") == {"type": "adaptive", "display": "updates", "block_binding": BLOCK_BINDING}
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize(
+    ("model", "extra_params"),
+    (
+        ("eu.anthropic.claude-opus-5", {}),
+        ("us.anthropic.claude-opus-4-6", {"context_management": {"edits": [{"type": "clear_thinking_20251015"}]}}),
+    ),
+    ids=("legacy", "legacy_clear_thinking"),
+)
+@pytest.mark.parametrize(("drop_params", "expected_unknown_keys"), ((True, {}), (False, {"not_a_thinking_key": True})))
+def test_bedrock_messages_legacy_thinking_drops_unknown_keys_only_under_drop_params(
+    model: str, extra_params: dict[str, object], drop_params: bool, expected_unknown_keys: dict[str, object]
+) -> None:
+    from litellm.types.router import GenericLiteLLMParams
+
+    requested_thinking: Final = {
+        "type": "enabled",
+        "budget_tokens": 2048,
+        "block_binding": BLOCK_BINDING,
+        "not_a_thinking_key": True,
+    }
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": "Reply with OK"}],
+        anthropic_messages_optional_request_params={"max_tokens": 4096, "thinking": requested_thinking, **extra_params},
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+        headers={},
+    )
+
+    assert result.get("thinking") == {"type": "adaptive", "block_binding": BLOCK_BINDING, **expected_unknown_keys}
 
 
 @pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")

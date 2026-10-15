@@ -923,6 +923,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         model: str,
         optional_params: MutableMapping[str, object],  # mutable-ok: in-place out-param like the sibling helpers
         custom_llm_provider: str,
+        drop_params: bool,
     ) -> None:
         """Translate legacy ``thinking.type=enabled`` to adaptive for the
         adaptive-thinking models that reject it (4.7+ and the 5 families).
@@ -948,9 +949,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         existing_output_config: Final = optional_params.get("output_config")
         display: Final = thinking.get("display")
         supported_display: Final = {"display": display} if display in ("summarized", "omitted") else {}
-        carried_thinking_keys: Final = {
-            key: value for key, value in thinking.items() if key not in ("type", "budget_tokens", "display")
-        }
+        carried_thinking_keys: Final = carried_legacy_thinking_keys(
+            thinking, rebuilt_keys=frozenset(("type", "budget_tokens", "display")), drop_params=drop_params
+        )
         optional_params["thinking"] = {**carried_thinking_keys, "type": "adaptive", **supported_display}
         optional_params["output_config"] = {
             "effort": effort,
@@ -1617,6 +1618,22 @@ def is_anthropic_invalid_thinking_block_error(error_text: str) -> bool:
     if "signature" in lower and ("invalid" in lower or "valid string" in lower):
         return True
     return "must contain thinking" in lower
+
+
+_ANTHROPIC_THINKING_PARAM_KEYS: Final = (
+    AnthropicThinkingParam.__required_keys__ | AnthropicThinkingParam.__optional_keys__
+)
+
+
+def carried_legacy_thinking_keys(
+    thinking: Mapping[object, object], rebuilt_keys: frozenset[str], drop_params: bool
+) -> Mapping[object, object]:
+    drops_unknown_keys: Final = drop_params or litellm.drop_params is True
+    return {
+        key: value
+        for key, value in thinking.items()
+        if key not in rebuilt_keys and (key in _ANTHROPIC_THINKING_PARAM_KEYS or not drops_unknown_keys)
+    }
 
 
 def is_anthropic_thinking_binding_mismatch_error(error_text: str) -> bool:

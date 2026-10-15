@@ -392,7 +392,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         mapped_params: Final = super().map_openai_params(non_default_params, optional_params, model, drop_params)
         if "claude" in model:
             AnthropicConfig.translate_legacy_thinking_for_adaptive_model(
-                model=model, optional_params=mapped_params, custom_llm_provider="databricks"
+                model=model, optional_params=mapped_params, custom_llm_provider="databricks", drop_params=drop_params
             )
         if "tools" in mapped_params:
             mapped_params["tools"] = self._map_openai_to_dbrx_tool(

@@ -4254,13 +4254,17 @@ def test_shared_legacy_thinking_translation_preserves_supported_display(
         model="claude-opus-5",
         optional_params=optional_params,
         custom_llm_provider="azure_ai",
+        drop_params=False,
     )
 
     assert optional_params["thinking"] == expected_thinking
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
-def test_shared_legacy_thinking_translation_carries_block_binding() -> None:
+@pytest.mark.parametrize(("drop_params", "expected_unknown_keys"), ((True, {}), (False, {"not_a_thinking_key": True})))
+def test_shared_legacy_thinking_translation_carries_block_binding(
+    drop_params: bool, expected_unknown_keys: dict[str, object]
+) -> None:
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
     optional_params: Final = {
@@ -4268,6 +4272,7 @@ def test_shared_legacy_thinking_translation_carries_block_binding() -> None:
             "type": "enabled",
             "budget_tokens": 2048,
             "block_binding": {"prefix_mismatch_behavior": "error"},
+            "not_a_thinking_key": True,
         },
     }
 
@@ -4275,11 +4280,13 @@ def test_shared_legacy_thinking_translation_carries_block_binding() -> None:
         model="claude-opus-5",
         optional_params=optional_params,
         custom_llm_provider="azure_ai",
+        drop_params=drop_params,
     )
 
     assert optional_params["thinking"] == {
         "type": "adaptive",
         "block_binding": {"prefix_mismatch_behavior": "error"},
+        **expected_unknown_keys,
     }
 
 
