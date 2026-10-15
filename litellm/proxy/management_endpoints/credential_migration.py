@@ -616,7 +616,7 @@ def _top_level_param_leaves(params: Mapping[str, object]) -> Iterator[tuple[str,
                 yield nested, True
 
 
-def _iter_keyed_strings(obj: object):
+def _iter_keyed_strings(obj: object) -> Iterator[tuple[str | None, str]]:
     """Yield every (dict key, string leaf) pair in a nested structure, keyless for list items.
 
     Iterative like ``_iter_encrypted_strings``: the code-quality recursive-function
@@ -748,9 +748,8 @@ async def _scan_one_table(
                     report.preserved += 1
         for col in scalar_columns:
             v = getattr(row, col, None)
-            if isinstance(v, str):
-                if _classify_into_report(report, v) == "undecryptable":
-                    report.preserved += 1
+            if isinstance(v, str) and _classify_into_report(report, v) == "undecryptable":
+                report.preserved += 1
     return report
 
 

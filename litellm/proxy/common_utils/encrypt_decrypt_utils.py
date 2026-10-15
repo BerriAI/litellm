@@ -2,7 +2,13 @@ import base64
 import hashlib
 import os
 from collections.abc import Iterable, Mapping
-from typing import TYPE_CHECKING, Final, Literal, TypeGuard, cast
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    Literal,
+    TypeGuard,  # noqa: TID251  # every return path narrows by isinstance
+    cast,  # noqa: TID251  # casts here are checked by TypeAdapter at the boundary
+)
 
 from pydantic import TypeAdapter, ValidationError
 

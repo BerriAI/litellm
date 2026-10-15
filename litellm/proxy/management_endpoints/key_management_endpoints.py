@@ -264,7 +264,7 @@ def _restore_preserved_model_params(
             **cast("dict[str, object]", parsed),  # cast-ok: narrowed to dict above
             **preserved_params,
         }
-        setattr(row, "litellm_params", merged)
+        row.litellm_params = merged  # rebind-ok: the row is the update payload being built
 
 
 class _KeyUpdateResult(TypedDict):
