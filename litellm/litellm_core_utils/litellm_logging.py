@@ -572,6 +572,7 @@ class Logging(LiteLLMLoggingBaseClass):
     stream_options = None
     litellm_request_debug: bool = False
     streamed_anthropic_message_id: str | None = None
+    bridged_model_response: ModelResponse | None = None
     classifier_input: Mapping[str, JsonValue] | None = None
     baseline_cache_context: "BaselineCacheContext | None" = None
     baseline_observation: "CapturedBaselineObservation | None" = None
@@ -1864,7 +1865,9 @@ class Logging(LiteLLMLoggingBaseClass):
             return 0.0
 
         transformed_result: Final = self._generate_content_result_as_model_response(result)
-        response_result: Final[object] = transformed_result if transformed_result is not None else result
+        response_result: Final[object] = (
+            transformed_result if transformed_result is not None else self.billable_result(result)
+        )
 
         priced_result: Final = (
             response_result.response
@@ -4243,6 +4246,22 @@ class Logging(LiteLLMLoggingBaseClass):
     def record_streamed_anthropic_message_id(self, message_id: str) -> None:
         self.streamed_anthropic_message_id = message_id
 
+    def record_bridged_model_response(self, response: ModelResponse) -> None:
+        """The chat completion a /v1/messages response was translated from.
+
+        The Anthropic shape served to the caller has no field for reasoning tokens, so the spend
+        row is built from this response rather than re-parsed from the served body."""
+        self.bridged_model_response = response
+
+    def billable_result(self, result: object) -> object:
+        """The response the cost calculator prices: a /v1/messages body served through the chat
+        bridge is replaced by the ModelResponse its spend row is built from, anything else is
+        priced as is."""
+        served: Final[object] = result
+        if self.bridged_model_response is None or not isinstance(result, dict):
+            return result
+        return self._anthropic_messages_logged_response(result=served)
+
     def _anthropic_messages_logged_response(self, result: object) -> ModelResponse:
         """
         The ModelResponse a /v1/messages spend_logs row is built from.
@@ -4284,6 +4303,9 @@ class Logging(LiteLLMLoggingBaseClass):
             return self._translate_responses_api_response_to_model_response(result)
 
         provider_response_id: Final = _provider_response_id(result)
+        bridged: Final = self.bridged_model_response
+        if bridged is not None and isinstance(result, dict):
+            return bridged if provider_response_id is None else bridged.model_copy(update={"id": provider_response_id})
         httpx_response: Final = self.model_call_details.get("httpx_response", None)
         if httpx_response and isinstance(httpx_response, httpx.Response):
             result = litellm.AnthropicConfig().transform_response(
