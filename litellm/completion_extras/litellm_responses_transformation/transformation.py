@@ -535,40 +535,7 @@ def _append_reasoning_if_present(
     return True, merged_content
 
 
-def _tool_call_dict_from_output_item_candidate(
-    item: object,
-    index: int,
-    apply_patch_type: type | None,
-) -> Mapping[str, object] | None:
-    """Convert typed or raw tool call items into chat completion tool call mapping."""
-    from openai.types.responses import ResponseFunctionToolCall
 
-    if isinstance(item, ResponseFunctionToolCall):
-        from litellm.responses.litellm_completion_transformation.transformation import (
-            LiteLLMCompletionResponsesConfig,
-        )
-
-        return LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call(
-            tool_call_item=item,
-            index=index,
-        )
-
-    if apply_patch_type is not None and isinstance(item, apply_patch_type):
-        from litellm.responses.litellm_completion_transformation.transformation import (
-            LiteLLMCompletionResponsesConfig,
-        )
-
-        return LiteLLMCompletionResponsesConfig.convert_apply_patch_tool_call_to_chat_completion_tool_call(
-            tool_call_item=item,
-            index=index,
-        )
-
-    if isinstance(item, (dict, BaseModel)):
-        raw_item: Final = item if isinstance(item, dict) else item.model_dump()
-        if raw_item.get("type") in ("function_call", "custom_tool_call"):
-            return tool_call_dict_from_output_item(raw_item, index, include_namespace=True)
-
-    return None
 
 
 def _responses_event_type(chunk: Mapping[str, object]) -> object:
@@ -1219,7 +1186,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         Returns:
             List of Choices objects
         """
-        from openai.types.responses import ResponseOutputMessage
+        from openai.types.responses import (
+            ResponseFunctionToolCall,
+            ResponseOutputMessage,
+        )
 
         try:
             from openai.types.responses.response_output_item import (
@@ -1247,15 +1217,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             if is_reasoning:
                 continue
 
-            tool_call_dict = _tool_call_dict_from_output_item_candidate(
-                item, tool_call_index, ResponseApplyPatchToolCall
-            )
-            if tool_call_dict is not None:
-                accumulated_tool_calls.append(tool_call_dict)
-                tool_call_index += 1
-                continue
-
-            if isinstance(item, ResponseOutputMessage):
+            elif isinstance(item, ResponseOutputMessage):
                 for content in item.content:
                     response_text = getattr(content, "text", "")
                     # Extract annotations from content if present
@@ -1283,11 +1245,53 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     pending_reasoning_items.clear()  # flush
                     index += 1
 
-            elif isinstance(item, (dict, BaseModel)) and handle_raw_dict_callback is not None:
-                raw_item: Final = item if isinstance(item, dict) else item.model_dump()
-                choice, index = handle_raw_dict_callback(item=raw_item, index=index)
-                if choice is not None:
-                    choices.append(choice)
+            elif isinstance(item, ResponseFunctionToolCall):
+                from litellm.responses.litellm_completion_transformation.transformation import (
+                    LiteLLMCompletionResponsesConfig,
+                )
+
+                tool_call_dict = (
+                    LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call(
+                        tool_call_item=item,
+                        index=tool_call_index,
+                    )
+                )
+                accumulated_tool_calls.append(tool_call_dict)
+                tool_call_index += 1
+
+            elif ResponseApplyPatchToolCall is not None and isinstance(item, ResponseApplyPatchToolCall):
+                from litellm.responses.litellm_completion_transformation.transformation import (
+                    LiteLLMCompletionResponsesConfig,
+                )
+
+                tool_call_dict = (
+                    LiteLLMCompletionResponsesConfig.convert_apply_patch_tool_call_to_chat_completion_tool_call(
+                        tool_call_item=item,
+                        index=tool_call_index,
+                    )
+                )
+                accumulated_tool_calls.append(tool_call_dict)
+                tool_call_index += 1
+
+            elif isinstance(item, (dict, BaseModel)):
+                # Raw dict items (e.g., from GPT-5 Codex) and pydantic items matching no
+                # openai SDK class above: typed ResponseCustomToolCall and litellm's own
+                # GenericResponseOutputItem from the completion bridge both land here
+                raw_item = item if isinstance(item, dict) else item.model_dump()
+                if raw_item.get("type") in ("function_call", "custom_tool_call"):
+                    # Tool calls accumulate into the single trailing tool_calls choice
+                    # like the typed branches above; a choice per call would hide every
+                    # call after choices[0] from chat clients
+                    accumulated_tool_calls.append(
+                        tool_call_dict_from_output_item(raw_item, tool_call_index, include_namespace=True)
+                    )
+                    tool_call_index += 1
+                elif handle_raw_dict_callback is not None:
+                    choice, index = handle_raw_dict_callback(item=raw_item, index=index)
+                    if choice is not None:
+                        choices.append(choice)
+            else:
+                pass  # don't fail request if item in list is not supported
 
         tool_search_items: Final = _tool_search_items_from_output_items(output_items)
         if not choices and not accumulated_tool_calls:
