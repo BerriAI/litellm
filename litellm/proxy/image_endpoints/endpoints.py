@@ -145,9 +145,12 @@ async def image_generation(
             user_api_key_dict=user_api_key_dict, data=data, call_type="image_generation"
         )
 
-        messages: Final = data.get("messages")
-        if isinstance(messages, list) and messages:
-            data["prompt"] = get_str_from_messages(messages)
+        # Guardrails may redact data["prompt"] directly. Only rebuild from messages if prompt wasn't modified.
+        prompt_after_hook: Final = data.get("prompt")
+        if prompt_after_hook == prompt_value:
+            messages: Final = data.get("messages")
+            if isinstance(messages, list) and messages:
+                data["prompt"] = get_str_from_messages(messages)
         data.pop("messages", None)
 
         ## ROUTE TO CORRECT ENDPOINT ##
