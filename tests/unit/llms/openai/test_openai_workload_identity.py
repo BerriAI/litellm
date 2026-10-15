@@ -13,6 +13,7 @@ from openai import DEFAULT_MAX_RETRIES as OPENAI_SDK_DEFAULT_MAX_RETRIES
 from openai import APIStatusError, AsyncOpenAI, OpenAI
 
 import litellm
+from litellm.containers import list_container_files
 from litellm.llms.litellm_proxy.responses.transformation import LiteLLMProxyResponsesAPIConfig
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.openai.common_utils import BaseOpenAILLM, OpenAIError
@@ -1004,6 +1005,7 @@ BATCHES_URL: Final = "https://api.openai.com/v1/batches"
 FINE_TUNING_JOBS_URL: Final = "https://api.openai.com/v1/fine_tuning/jobs"
 ASSISTANTS_URL: Final = "https://api.openai.com/v1/assistants"
 THREADS_URL: Final = "https://api.openai.com/v1/threads"
+CONTAINERS_URL: Final = "https://api.openai.com/v1/containers"
 IMAGE_BODY: Final = {"created": 1, "data": [{"b64_json": "aGk="}]}
 MODERATION_BODY: Final = {
     "id": "modr-1",
@@ -1553,6 +1555,18 @@ class TestDeploymentNonChatSurfaces:
 
         assert bearer_of(assistants_route) == "Bearer aassistant-bearer"
         assert bearer_of(threads_route) == "Bearer aassistant-bearer"
+
+    @respx.mock
+    def test_container_file_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
+        mock_token_exchange("container-files-bearer")
+        route: Final = respx.get(f"{CONTAINERS_URL}/cntr_1/files").mock(
+            return_value=httpx.Response(200, json={"object": "list", "data": [], "has_more": False})
+        )
+
+        response: Final = list_container_files(container_id="cntr_1", custom_llm_provider="openai", **deployment_wif)
+
+        assert response.has_more is False
+        assert bearer_of(route) == "Bearer container-files-bearer"
 
     @respx.mock
     def test_repeated_moderation_calls_exchange_the_token_once(self, deployment_wif: dict[str, str]) -> None:

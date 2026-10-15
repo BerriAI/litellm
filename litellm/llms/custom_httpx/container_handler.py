@@ -235,6 +235,7 @@ def _request_headers(
     return container_provider_config.validate_environment(
         headers=extra_headers or {},
         api_key=litellm_params.get("api_key", None),
+        litellm_params=litellm_params,
     )
 
 
