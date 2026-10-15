@@ -2463,8 +2463,11 @@ def _build_responses_websocket_request_defaults(kwargs: Mapping[str, object]) ->
     )
 
 
-def _is_openai_deployment_on_another_providers_host(custom_llm_provider: str, api_base: str | None) -> bool:
-    return custom_llm_provider == "openai" and api_base is not None and is_openai_compatible_endpoint(api_base)
+def _websocket_custom_llm_provider(custom_llm_provider: str | None, api_base: str | None) -> str | None:
+    is_openai_on_known_provider_host: Final = (
+        custom_llm_provider == "openai" and api_base is not None and is_openai_compatible_endpoint(api_base)
+    )
+    return None if is_openai_on_known_provider_host else custom_llm_provider
 
 
 @client
@@ -2497,7 +2500,7 @@ async def _aresponses_websocket(
         dynamic_api_base,
     ) = litellm.get_llm_provider(
         model=model,
-        custom_llm_provider=litellm_params.custom_llm_provider,
+        custom_llm_provider=_websocket_custom_llm_provider(litellm_params.custom_llm_provider, api_base),
         api_base=api_base,
         api_key=api_key,
         litellm_params=litellm_params,
@@ -2522,7 +2525,6 @@ async def _aresponses_websocket(
     responses_api_provider_config: Final = (
         None
         if _custom_llm_provider is None
-        or _is_openai_deployment_on_another_providers_host(_custom_llm_provider, resolved_api_base)
         else ProviderConfigManager.get_provider_responses_api_config(
             model=resolved_model,
             provider=litellm.LlmProviders(_custom_llm_provider),
