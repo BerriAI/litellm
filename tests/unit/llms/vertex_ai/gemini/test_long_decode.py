@@ -107,6 +107,14 @@ def _recording_paths(hops: Sequence[httpx.Response], paths: list[str]) -> Callab
     return handler
 
 
+def _logging_raw_responses_to(logged: list[object]) -> Callable[[Mapping[str, object]], None]:
+    def log_raw_response(details: Mapping[str, object]) -> None:
+        if details.get("log_event_type") == "post_api_call":
+            logged.append(details["original_response"])
+
+    return log_raw_response
+
+
 def _sse(*chunks: Mapping[str, object]) -> httpx.Response:
     return httpx.Response(
         200,
@@ -568,17 +576,12 @@ async def test_unary_long_decode_logs_one_raw_response_object_with_the_whole_ans
     sent: Final[list[dict[str, object]]] = []
     logged: Final[list[object]] = []
     hops: Final = (httpx.Response(200, json=HOP_1), httpx.Response(200, json=HOP_2_TRUNCATED))
-
-    def log_raw_response(details: Mapping[str, object]) -> None:
-        if details.get("log_event_type") == "post_api_call":
-            logged.append(details["original_response"])
-
     kwargs: Final = {
         "model": MODEL,
         "messages": list(MESSAGES),
         "max_tokens": 50,
         "api_key": "fake-gemini-key",
-        "logger_fn": log_raw_response,
+        "logger_fn": _logging_raw_responses_to(logged),
     }
 
     if is_async:
@@ -599,6 +602,32 @@ async def test_unary_long_decode_logs_one_raw_response_object_with_the_whole_ans
     assert candidate["continuationToken"] == "dG9rLTI="
     assert "dG9rLTE=" not in raw
     assert body["usageMetadata"]["candidatesTokenCount"] == 50
+
+
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_unary_answer_in_one_request_logs_googles_body_unchanged(is_async: bool):
+    sent: Final[list[dict[str, object]]] = []
+    logged: Final[list[object]] = []
+    googles_body: Final = json.dumps(HOP_2, indent=2)
+    hops: Final = (httpx.Response(200, content=googles_body.encode(), headers={"content-type": "application/json"}),)
+    kwargs: Final = {
+        "model": MODEL,
+        "messages": list(MESSAGES),
+        "max_tokens": 50,
+        "api_key": "fake-gemini-key",
+        "logger_fn": _logging_raw_responses_to(logged),
+    }
+
+    if is_async:
+        await litellm.acompletion(**kwargs, client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay(hops, sent))))
+    else:
+        litellm.completion(
+            **kwargs, client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_replay(hops, sent))))
+        )
+
+    assert len(sent) == 1
+    assert logged == [googles_body]
 
 
 @pytest.mark.parametrize("is_async", [True, False])
