@@ -226,7 +226,9 @@ def _is_text_block(element: object) -> bool:
     A text block is embedded as text, verbatim: no media prefix detection
     runs on it, no matter that its text starts with data:, gs:// or files/.
     """
-    return isinstance(element, Mapping) and element.get("type") == "text"
+    return (
+        isinstance(element, Mapping) and cast(Mapping[str, object], element).get("type") == "text"
+    )  # cast-ok: isinstance leaves the Mapping key/value types unknown
 
 
 def _parse_text_block(element: object, drop_params: bool) -> _EmbeddingTextBlock:
@@ -590,19 +592,37 @@ def _plain_text(element: GeminiEmbeddingElement) -> str | None:
 def _text_substituted_input(input: GeminiEmbeddingInput) -> GeminiEmbeddingInput:
     """Input with typed text blocks replaced by their text, so token counting sees plain strings.
 
-    Inputs without text blocks keep their shape and contents unchanged.
+    Inputs without text blocks keep their shape and contents unchanged. The
+    walk is iterative on purpose (an explicit stack instead of a recursive
+    helper) to stay within the repo's recursive-function policy.
     """
-
-    def _substitute(element: object) -> object:
-        if isinstance(element, list):
-            return [_substitute(sub) for sub in element]
-        if _is_text_block(element):
-            return _parse_text_block(element, drop_params=True).text
-        return element
-
     if not isinstance(input, list):
         return input
-    return [_substitute(element) for element in input]
+
+    result: list[object] = []
+    stack: list[tuple[list[object], list[object]]] = [
+        (list(cast(list[object], input)), result)
+    ]  # cast-ok: read-only widening; the walker never writes into input
+    while stack:
+        source, sink = stack[-1]
+        if not source:
+            stack.pop()
+            if stack:
+                sink_parent: list[object] = stack[-1][1]
+                sink_parent.append(sink)
+            continue
+        item: object = source.pop(0)
+        if isinstance(item, list):
+            stack.append(
+                (list(cast(list[object], item)), [])
+            )  # cast-ok: isinstance leaves the list element type unknown
+        elif _is_text_block(item):
+            sink.append(_parse_text_block(item, drop_params=True).text)
+        else:
+            sink.append(item)
+    # Shape-preserving substitution: a valid GeminiEmbeddingInput with its text
+    # blocks read as their text is still a valid GeminiEmbeddingInput.
+    return cast(GeminiEmbeddingInput, result)
 
 
 def _tokens_for_modality(details: Sequence[PromptTokensDetails], modality: str) -> int:
