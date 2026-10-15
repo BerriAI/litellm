@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -496,6 +496,7 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
         tools: list[dict[str, object]] | None = None,
         system: object | None = None,
         messages_format: TokenCountMessagesFormat = "openai",
+        output_format: JsonValue = None,
     ) -> TokenCountResponse | None:
         import copy
 

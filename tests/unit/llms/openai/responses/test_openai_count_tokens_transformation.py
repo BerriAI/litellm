@@ -546,11 +546,16 @@ def test_anthropic_messages_convert_exactly_as_v1_messages_inference_converts_th
         model="gpt-4o", messages=ANTHROPIC_AGENT_TURN, system=system, tools=ANTHROPIC_TOOLS
     )
 
-    assert counted == (tuple(inference["input"]), inference.get("instructions"), tuple(inference["tools"]))
+    assert counted == (
+        tuple(inference["input"]),
+        inference.get("instructions"),
+        tuple(inference["tools"]),
+        inference.get("text"),
+    )
 
 
 def test_anthropic_messages_keep_every_block_the_chat_converter_drops() -> None:
-    input_items, _, _ = OpenAICountTokensConfig.anthropic_messages_to_responses_input(
+    input_items, _, _, _ = OpenAICountTokensConfig.anthropic_messages_to_responses_input(
         model="gpt-4o", messages=ANTHROPIC_AGENT_TURN, system=None, tools=None
     )
 
@@ -565,7 +570,7 @@ def test_anthropic_messages_keep_every_block_the_chat_converter_drops() -> None:
                     "filename": "contract.pdf",
                     "file_data": f"data:application/pdf;base64,{PDF_BASE64}",
                 },
-                {"type": "input_image", "image_url": f"data:image/png;base64,{PNG_BASE64}"},
+                {"type": "input_image", "image_url": f"data:image/png;base64,{PNG_BASE64}", "detail": "auto"},
             ],
         },
         {"type": "function_call", "call_id": "toolu_01", "name": "lookup_clause", "arguments": '{"id": "14"}'},
@@ -579,7 +584,7 @@ def test_anthropic_messages_keep_every_block_the_chat_converter_drops() -> None:
 
 
 def test_anthropic_list_system_becomes_joined_instruction_text() -> None:
-    _, instructions, _ = OpenAICountTokensConfig.anthropic_messages_to_responses_input(
+    _, instructions, _, _ = OpenAICountTokensConfig.anthropic_messages_to_responses_input(
         model="gpt-4o",
         messages=[{"role": "user", "content": "hi"}],
         system=[{"type": "text", "text": "First rule."}, {"type": "text", "text": "Second rule."}],

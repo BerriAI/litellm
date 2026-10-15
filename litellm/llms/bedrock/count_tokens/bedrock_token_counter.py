@@ -108,6 +108,7 @@ class BedrockTokenCounter(BaseTokenCounter):
         tools: Sequence[Mapping[str, object]] | None = None,
         system: object | None = None,
         messages_format: TokenCountMessagesFormat = "anthropic",
+        output_format: JsonValue = None,
     ) -> TokenCountResponse | None:
         if not messages:
             return None

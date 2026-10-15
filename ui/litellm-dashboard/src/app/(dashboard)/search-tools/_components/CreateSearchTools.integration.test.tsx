@@ -54,6 +54,7 @@ describe("CreateSearchTools submit payload", () => {
     fireEvent.change(screen.getByLabelText(/Search Tool Name/), { target: { value: "my-search" } });
     await pickProvider(user, "Perplexity AI");
     fireEvent.change(screen.getByLabelText(/API Key/), { target: { value: "sk-secret" } });
+    fireEvent.change(screen.getByLabelText(/Cost per Query/), { target: { value: "0.05" } });
     fireEvent.change(screen.getByLabelText(/Description/), { target: { value: "finds things" } });
     await user.click(screen.getByRole("button", { name: "Add Search Tool" }));
 
@@ -65,12 +66,43 @@ describe("CreateSearchTools submit payload", () => {
       litellm_params: {
         search_provider: "perplexity",
         api_key: "sk-secret",
+        input_cost_per_query: 0.05,
       },
       search_tool_info: { description: "finds things" },
     });
     expect(JSON.stringify(payload)).toBe(
-      '{"search_tool_name":"my-search","litellm_params":{"search_provider":"perplexity","api_key":"sk-secret"},"search_tool_info":{"description":"finds things"}}',
+      '{"search_tool_name":"my-search","litellm_params":{"search_provider":"perplexity","api_key":"sk-secret","input_cost_per_query":0.05},"search_tool_info":{"description":"finds things"}}',
     );
+  });
+
+  it("sends a zero cost per query as 0, not as an omitted field", async () => {
+    const user = userEvent.setup();
+    renderModal();
+    await screen.findByLabelText(/Search Tool Name/);
+
+    fireEvent.change(screen.getByLabelText(/Search Tool Name/), { target: { value: "free-search" } });
+    await pickProvider(user, "Tavily Search");
+    fireEvent.change(screen.getByLabelText(/Cost per Query/), { target: { value: "0" } });
+    await user.click(screen.getByRole("button", { name: "Add Search Tool" }));
+
+    await waitFor(() => expect(networking.createSearchTool).toHaveBeenCalledTimes(1));
+    expect(JSON.stringify(vi.mocked(networking.createSearchTool).mock.calls[0][1])).toBe(
+      '{"search_tool_name":"free-search","litellm_params":{"search_provider":"tavily","input_cost_per_query":0}}',
+    );
+  });
+
+  it("rejects a negative cost per query before anything is sent", async () => {
+    const user = userEvent.setup();
+    renderModal();
+    await screen.findByLabelText(/Search Tool Name/);
+
+    fireEvent.change(screen.getByLabelText(/Search Tool Name/), { target: { value: "neg-search" } });
+    await pickProvider(user, "Tavily Search");
+    fireEvent.change(screen.getByLabelText(/Cost per Query/), { target: { value: "-1" } });
+    await user.click(screen.getByRole("button", { name: "Add Search Tool" }));
+
+    expect(await screen.findByText("Cost per query cannot be negative")).toBeInTheDocument();
+    expect(networking.createSearchTool).not.toHaveBeenCalled();
   });
 
   it("omits untouched optional fields from the wire body instead of sending empty strings", async () => {

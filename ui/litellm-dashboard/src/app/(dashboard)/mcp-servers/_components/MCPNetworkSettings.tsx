@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { toast } from "@/lib/toast";
 import {
@@ -159,6 +160,22 @@ const AllowedClientDialog: React.FC<AllowedClientDialogProps> = ({ draft, onChan
   );
 };
 
+type DisableableCapability = "prompts" | "resources";
+
+const CAPABILITY_TOGGLES: { capability: DisableableCapability; label: string; description: string }[] = [
+  { capability: "prompts", label: "Prompts", description: "Advertise prompts and answer prompts/list and prompts/get" },
+  {
+    capability: "resources",
+    label: "Resources",
+    description: "Advertise resources and answer resources/list, resources/templates/list and resources/read",
+  },
+];
+
+const parseDisabledCapabilities = (value: unknown): DisableableCapability[] =>
+  Array.isArray(value)
+    ? value.filter((name): name is DisableableCapability => name === "prompts" || name === "resources")
+    : [];
+
 const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -168,9 +185,12 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
   const [storedRanges, setStoredRanges] = useState<string[] | null>(null);
   const [storedClients, setStoredClients] = useState<StoredAllowlist>(ABSENT);
   const [storedClientIdHeader, setStoredClientIdHeader] = useState<string | null>(null);
+  const [disabledCapabilities, setDisabledCapabilities] = useState<DisableableCapability[]>([]);
+  const [storedDisabledCapabilities, setStoredDisabledCapabilities] = useState<DisableableCapability[] | null>(null);
   const [currentIp, setCurrentIp] = useState<string | null>(null);
   const [rangeDraft, setRangeDraft] = useState("");
   const [clientDraft, setClientDraft] = useState<ClientDraft | null>(null);
+  const capabilityToggleId = useId();
 
   useEffect(() => {
     loadSettings();
@@ -195,6 +215,11 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
         if (field.field_name === "mcp_client_id_header" && typeof field.field_value === "string") {
           setClientIdHeader(field.field_value);
           setStoredClientIdHeader(field.field_value);
+        }
+        if (field.field_name === "mcp_disabled_capabilities") {
+          const stored = parseDisabledCapabilities(field.field_value);
+          setDisabledCapabilities(stored);
+          setStoredDisabledCapabilities(stored.length > 0 ? stored : null);
         }
       }
     } catch (error) {
@@ -247,14 +272,34 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
     setStoredClientIdHeader(null);
   };
 
+  const persistDisabledCapabilities = async (token: string) => {
+    if (unchangedSinceLoad(disabledCapabilities, storedDisabledCapabilities)) return;
+    if (disabledCapabilities.length > 0) {
+      await updateConfigFieldSetting(token, "mcp_disabled_capabilities", disabledCapabilities);
+      setStoredDisabledCapabilities(disabledCapabilities);
+      return;
+    }
+    await deleteConfigFieldSetting(token, "mcp_disabled_capabilities");
+    setStoredDisabledCapabilities(null);
+  };
+
+  const setCapabilityServed = (capability: DisableableCapability, served: boolean) => {
+    setDisabledCapabilities(
+      served
+        ? disabledCapabilities.filter((name) => name !== capability)
+        : [...disabledCapabilities.filter((name) => name !== capability), capability],
+    );
+  };
+
   const handleSave = async () => {
     if (!accessToken) return;
     setSaving(true);
     const [rangeResult] = await Promise.allSettled([persistRanges(accessToken)]);
     const [clientResult] = await Promise.allSettled([persistAllowedClients(accessToken)]);
     const [headerResult] = await Promise.allSettled([persistClientIdHeader(accessToken)]);
+    const [capabilityResult] = await Promise.allSettled([persistDisabledCapabilities(accessToken)]);
     setSaving(false);
-    const failures = [rangeResult, clientResult, headerResult].filter(
+    const failures = [rangeResult, clientResult, headerResult, capabilityResult].filter(
       (result): result is PromiseRejectedResult => result.status === "rejected",
     );
     if (failures.length === 0) {
@@ -450,6 +495,34 @@ const MCPNetworkSettings: React.FC<MCPNetworkSettingsProps> = ({ accessToken }) 
           themselves, so it is a policy control rather than a security boundary. Without it, callers that do not carry
           the JWT claim are rejected while the allowlist is set.
         </p>
+      </Card>
+
+      <div>
+        <p className="text-lg font-semibold">Served Capabilities</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Turn off prompts or resources when none of your MCP servers offer them. A capability that is turned off is
+          left out of the initialize response, its list calls return an empty list without contacting any upstream
+          server, and its get or read calls are rejected.
+        </p>
+      </div>
+
+      <Card className="space-y-4 p-6">
+        {CAPABILITY_TOGGLES.map(({ capability, label, description }) => (
+          <div key={capability} className="flex items-center justify-between gap-4">
+            <div>
+              <Label htmlFor={`${capabilityToggleId}-${capability}`} className="text-sm font-medium">
+                {label}
+              </Label>
+              <p className="text-xs text-muted-foreground">{description}</p>
+            </div>
+            <Switch
+              id={`${capabilityToggleId}-${capability}`}
+              size="sm"
+              checked={!disabledCapabilities.includes(capability)}
+              onCheckedChange={(served) => setCapabilityServed(capability, served)}
+            />
+          </div>
+        ))}
       </Card>
 
       <div className="flex justify-end">

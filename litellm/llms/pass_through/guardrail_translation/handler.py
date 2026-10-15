@@ -7,7 +7,7 @@ to extract specific fields for guardrail processing.
 """
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, Optional
+from typing import TYPE_CHECKING, Final, Optional, Protocol, runtime_checkable
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import without_server_streaming_classification
@@ -196,6 +196,21 @@ class PassThroughEndpointHandler(BaseTranslation):
         return response
 
 
+@runtime_checkable
+class _EventStreamContentTypeDetector(Protocol):
+    def is_event_stream_content_type(self, content_type: str) -> bool: ...
+
+
+@runtime_checkable
+class _EventStreamMediaTypeProvider(Protocol):
+    def event_stream_media_type(self) -> str: ...
+
+
+@runtime_checkable
+class _EventStreamEndpointChecker(Protocol):
+    def event_stream_endpoint_is_de_anonymizable(self, endpoint: str) -> bool: ...
+
+
 _PROVIDER_HANDLERS: dict[str, type[BaseTranslation]] = {}
 
 
@@ -223,7 +238,7 @@ class LlmPassthroughRouteHandler(BaseTranslation):
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
-    ) -> Any:
+    ) -> object:
         provider: Final = data.get("custom_llm_provider")
         handler_cls: Final = _get_provider_handlers().get(provider or "")
         if handler_cls is None:
@@ -265,18 +280,16 @@ class LlmPassthroughRouteHandler(BaseTranslation):
     @staticmethod
     def is_event_stream_response(provider: str | None, content_type: str) -> bool:
         handler_cls: Final = _get_provider_handlers().get(provider or "")
-        detector: Final = getattr(handler_cls, "is_event_stream_content_type", None)
-        if detector is None:
+        if not isinstance(handler_cls, _EventStreamContentTypeDetector):
             return False
-        return detector(content_type)
+        return handler_cls.is_event_stream_content_type(content_type)
 
     @staticmethod
     def event_stream_media_type(provider: str | None) -> str | None:
         handler_cls: Final = _get_provider_handlers().get(provider or "")
-        getter: Final = getattr(handler_cls, "event_stream_media_type", None)
-        if getter is None:
+        if not isinstance(handler_cls, _EventStreamMediaTypeProvider):
             return None
-        return getter()
+        return handler_cls.event_stream_media_type()
 
     @staticmethod
     def _resolve_event_stream_de_anonymizer(provider: str | None):
@@ -286,10 +299,9 @@ class LlmPassthroughRouteHandler(BaseTranslation):
     @staticmethod
     def supports_event_stream_de_anonymization(provider: str | None, endpoint: str | None) -> bool:
         handler_cls: Final = _get_provider_handlers().get(provider or "")
-        endpoint_check: Final = getattr(handler_cls, "event_stream_endpoint_is_de_anonymizable", None)
-        if endpoint_check is None:
+        if not isinstance(handler_cls, _EventStreamEndpointChecker):
             return False
-        return endpoint_check(endpoint or "")
+        return handler_cls.event_stream_endpoint_is_de_anonymizable(endpoint or "")
 
     @staticmethod
     async def de_anonymize_event_stream(
