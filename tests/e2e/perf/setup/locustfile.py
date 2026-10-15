@@ -84,6 +84,32 @@ def delta_of_event(endpoint: Endpoint, payload: dict[str, object]) -> str:
     return ""
 
 
+_RESPONSES_TOKEN_EVENTS: Final = frozenset(
+    {
+        "response.output_text.delta",
+        "response.refusal.delta",
+        "response.reasoning_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.function_call_arguments.delta",
+    }
+)
+
+
+def token_in_event(endpoint: Endpoint, payload: dict[str, object]) -> bool:
+    """Whether one SSE event carries a generated token of any kind: visible text, reasoning or tool-call arguments.
+    The first such event is the stream's first token. `delta_of_event` stays visible text only because the body
+    check compares it with the text the mock generated, and a tool-call reply has none."""
+    if delta_of_event(endpoint, payload):
+        return True
+    if endpoint == "chat_completions":
+        choices: Final = _as_list(payload.get("choices"))
+        delta: Final = _as_dict(_as_dict(choices[0]).get("delta")) if choices else {}
+        return any(delta.get(key) for key in ("reasoning_content", "reasoning", "tool_calls", "function_call"))
+    if endpoint == "responses":
+        return payload.get("type") in _RESPONSES_TOKEN_EVENTS
+    return payload.get("type") == "content_block_delta"
+
+
 def _events(buffer: bytes) -> tuple[list[dict[str, object]], bytes]:
     """Complete SSE events in `buffer` as their JSON data, plus the unfinished tail."""
     events: list[dict[str, object]] = []
@@ -221,11 +247,9 @@ class PlanUser(FastHttpUser):
                         buffer += line
                         events, buffer = _events(buffer)
                         for event in events:
-                            delta = delta_of_event(item.endpoint, event)
-                            if delta:
-                                if first_token_s is None:
-                                    first_token_s = now
-                                text += delta
+                            if first_token_s is None and token_in_event(item.endpoint, event):
+                                first_token_s = now
+                            text += delta_of_event(item.endpoint, event)
                 else:
                     body_text = context.text or ""
                     first_byte_s = time.perf_counter() - started
