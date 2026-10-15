@@ -10648,7 +10648,7 @@ class Router:
         opts into the Responses API. A ``chat`` pin never marks a row, so the outcome does not depend
         on which deployment registers first."""
         deployment_mode: Final = shared_model_info.get("mode")
-        if deployment_mode not in ROUTABLE_MODES:
+        if not isinstance(deployment_mode, str) or deployment_mode not in ROUTABLE_MODES:
             return shared_model_info
         if deployment_mode == "responses" and backend_key.split("/", 1)[0] in RESPONSES_ONLY_PROVIDERS:
             return shared_model_info
