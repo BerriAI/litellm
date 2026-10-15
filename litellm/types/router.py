@@ -734,6 +734,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     output_cost_per_token: float | None
     cost_per_second: ReadOnly[float | None]
     input_cost_per_second: float | None
+    input_cost_per_text_message: ReadOnly[float | None]
     output_cost_per_second: float | None
     output_cost_per_second_480p: ReadOnly[float | None]
     output_cost_per_second_720p: ReadOnly[float | None]
@@ -963,6 +964,7 @@ class SearchToolLiteLLMParams(TypedDict, total=False):
     api_base: str | None
     timeout: float | str | httpx.Timeout | None
     max_retries: int | None
+    input_cost_per_query: ReadOnly[float | None]
 
 
 class SearchToolInfoTypedDict(TypedDict, total=False):

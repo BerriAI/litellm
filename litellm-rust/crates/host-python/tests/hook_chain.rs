@@ -519,12 +519,10 @@ impl litellm_host_python::ExecutionBody for Preparing {
 }
 
 fn lifecycle(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
-    let source = std::ffi::CString::new(concat!(
-        include_str!("../../../../litellm/rust_bridge/lifecycle.py"),
-        "\n_drive = drive\n\n\nasync def drive(execution):\n    return await _drive(execution, Stream)\n",
-    ))
-    .unwrap();
-    PyModule::from_code(py, &source, c"lifecycle.py", c"hook_chain_test_lifecycle")
+    let source =
+        std::ffi::CString::new(include_str!("../../../../litellm/rust_bridge/execution.py"))
+            .unwrap();
+    PyModule::from_code(py, &source, c"execution.py", c"hook_chain_test_lifecycle")
 }
 
 #[rstest]
@@ -560,9 +558,16 @@ second = Hooks('b', invoke)
             },
             lifecycle,
         );
-        locals
-            .set_item("call", execution.into_coroutine(py).unwrap())
+        let module = lifecycle(py).unwrap();
+        let call = module
+            .getattr("drive")
+            .unwrap()
+            .call1((
+                Py::new(py, execution).unwrap(),
+                module.getattr("AsyncStream").unwrap(),
+            ))
             .unwrap();
+        locals.set_item("call", call).unwrap();
         py.run(
             c"
 async def exercise():

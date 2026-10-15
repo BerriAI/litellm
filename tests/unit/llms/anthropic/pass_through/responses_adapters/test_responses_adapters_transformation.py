@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.llms.anthropic.pass_through.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
     AnthropicMessagesRequest,
@@ -897,6 +898,21 @@ class TestTranslateToolsToResponsesAPI:
         """Empty tools list returns empty list."""
         assert _ADAPTER.translate_tools_to_responses_api([]) == []
 
+    def test_cache_control_cleanup_leaves_caller_schema_untouched(self):
+        tools: List[AllAnthropicToolsValues] = [
+            {
+                "name": "tag",
+                "input_schema": {"type": "object", "properties": {"cache_control": {"type": "string"}}},
+            }
+        ]
+
+        translated: Final = _ADAPTER.translate_tools_to_responses_api(tools)
+        OpenAIResponsesAPIConfig().remove_cache_control_flag_from_input_and_tools(
+            model="gpt-5.5", input="hi", tools=translated
+        )
+
+        assert tools[0]["input_schema"] == {"type": "object", "properties": {"cache_control": {"type": "string"}}}
+
 
 # ---------------------------------------------------------------------------
 # translate_tool_choice_to_responses_api
@@ -1570,7 +1586,7 @@ class TestTranslateResponse:
     def test_thinking_blocks_are_dropped_when_replayed_to_anthropic(self, summaries, encrypted_content):
         """Replaying this turn to an Anthropic model must not send a signature it cannot verify."""
         from litellm.litellm_core_utils.prompt_templates.factory import (
-            _drop_unsignable_thinking_blocks,
+            _replayable_thinking_blocks,
         )
 
         response = _make_mock_response(
@@ -1578,7 +1594,7 @@ class TestTranslateResponse:
         )
         result: Any = _ADAPTER.translate_response(response)
         assert len(result["content"]) == 1
-        assert _drop_unsignable_thinking_blocks(result["content"]) == []
+        assert _replayable_thinking_blocks(result["content"]) == []
 
     def test_usage_mapped_correctly(self):
         """Input/output tokens from ResponseAPIUsage are mapped to AnthropicUsage."""
