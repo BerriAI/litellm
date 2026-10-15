@@ -6,6 +6,7 @@ from typing import Final
 import pytest
 from e2e_config import unique_marker
 from e2e_http import Success, UnknownApiError
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from guardrails_client import GuardrailsClient, poll_until_blocked
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
@@ -40,6 +41,15 @@ class TestKeyAttachedGuardrailOnImageEdits:
     @pytest.mark.covers(
         "guardrail.litellm_content_filter.pre_call.blocks_image_edit",
         exercised_on=["images_edits"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            route=Route.IMAGES,
+            providers=(Provider.GEMINI, Provider.OPENAI,),
+            models=(CHAT_MODEL, IMAGE_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_key_attached_content_filter_blocks_banned_image_edit_prompt(
         self, client: GuardrailsClient, resources: ResourceManager

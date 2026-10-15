@@ -175,7 +175,7 @@ def log_db_metrics(func):
     return wrapper
 
 
-def _is_exception_related_to_db(e: Exception) -> bool:
+def is_exception_related_to_db(e: Exception) -> bool:
     """
     Returns True if the exception is related to the DB
     """
@@ -184,6 +184,9 @@ def _is_exception_related_to_db(e: Exception) -> bool:
     from prisma.errors import PrismaError
 
     return isinstance(e, (PrismaError, httpx.TransportError))
+
+
+_is_exception_related_to_db: Final = is_exception_related_to_db
 
 
 async def _handle_logging_db_exception(
@@ -198,7 +201,7 @@ async def _handle_logging_db_exception(
     from litellm.proxy.proxy_server import proxy_logging_obj
 
     # don't log this as a DB Service Failure, if the DB did not raise an exception
-    if _is_exception_related_to_db(e) is not True:
+    if is_exception_related_to_db(e) is not True:
         return False
 
     try:

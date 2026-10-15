@@ -4,7 +4,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Json, TypeAdapter
+from pydantic import Json, TypeAdapter
 
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth, user_api_key_has_admin_view
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -18,6 +18,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _query_raw_rows,  # pyright: ignore[reportPrivateUsage]  # existing typed spend-query adapter; rows validated below
 )
 from litellm.types.integrations.anthropic_cache_control_hook import GATEWAY_INJECTED_CACHE_METADATA_KEY
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.management_endpoints.prompt_caching_requests import (
     PromptCachingRequest,
     PromptCachingRequestCursor,
@@ -86,7 +87,7 @@ def prompt_caching_requests_sql(filter: PromptCachingRequestFilter) -> str:
     """
 
 
-class _PromptCachingRow(BaseModel):
+class _PromptCachingRow(LiteLLMBaseModel):
     request_id: str
     start_time: datetime
     end_time: datetime
