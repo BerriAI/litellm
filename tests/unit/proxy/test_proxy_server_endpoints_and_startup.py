@@ -2710,7 +2710,7 @@ async def test_apply_search_filter_honours_exact_model_name_in_db_query():
         proxy_config=proxy_config,
     )
     where = prisma_client.db.litellm_proxymodeltable.count.call_args.kwargs["where"]
-    assert where["model_name"] == {"contains": "sonnet", "mode": "insensitive"}
+    assert where == {"model_name": {"contains": "sonnet", "mode": "insensitive"}}
 
 
 @pytest.mark.asyncio
