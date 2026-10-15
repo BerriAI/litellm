@@ -247,9 +247,7 @@ def test_get_key_models_does_not_mutate_input():
         ),
     ],
 )
-def test_get_complete_model_list_order(
-    key_models, team_models, proxy_model_list, model_list, expected
-):
+def test_get_complete_model_list_order(key_models, team_models, proxy_model_list, model_list, expected):
     """
     Test that get_complete_model_list preserves order
     """
@@ -402,9 +400,7 @@ def test_wildcard_credential_hydration_preserves_deployment_params(
         captured_params["api_key"] = litellm_params.api_key
         captured_params["api_version"] = litellm_params.api_version
         captured_params["credential_name"] = litellm_params.litellm_credential_name
-        captured_params["has_unexpected_field"] = hasattr(
-            litellm_params, "unexpected_field"
-        )
+        captured_params["has_unexpected_field"] = hasattr(litellm_params, "unexpected_field")
         return ["gpt-4o"]
 
     monkeypatch.setattr(model_checks, "get_provider_models", fake_get_provider_models)
@@ -449,9 +445,7 @@ def test_wildcard_custom_prefix_does_not_stack_provider_prefix(monkeypatch):
 
     result = get_known_models_from_wildcard(
         wildcard_model="ollama_server1/*",
-        litellm_params=LiteLLM_Params(
-            model="ollama_chat/*", custom_llm_provider="ollama_chat"
-        ),
+        litellm_params=LiteLLM_Params(model="ollama_chat/*", custom_llm_provider="ollama_chat"),
     )
 
     assert result == ["ollama_server1/gemma3:1b", "ollama_server1/llama3:8b"]
@@ -478,42 +472,96 @@ def test_wildcard_custom_prefix_keeps_org_segment_for_non_provider_first_segment
 
     result = get_known_models_from_wildcard(
         wildcard_model="my_hf/*",
-        litellm_params=LiteLLM_Params(
-            model="huggingface/*", custom_llm_provider="huggingface"
-        ),
+        litellm_params=LiteLLM_Params(model="huggingface/*", custom_llm_provider="huggingface"),
     )
 
     assert result == ["my_hf/meta-llama/Llama-3-8B"]
 
 
-def test_partial_prefix_wildcard_expands_against_stripped_provider_ids(monkeypatch):
+def test_cloudflare_partial_wildcard_matches_provider_stripped_cost_map_ids(
+    monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
+) -> None:
     import litellm
-    from litellm.proxy.auth import model_checks
     from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
     from litellm.types.router import LiteLLM_Params
 
-    provider_ids: Final = list(litellm.models_by_provider["databricks"])
-    monkeypatch.setattr(
-        model_checks,
-        "get_provider_models",
-        lambda provider, litellm_params=None: provider_ids,
+    wildcard: Final = "cloudflare/@cf/*"
+    monkeypatch.setattr(litellm, "check_provider_endpoint", False)
+
+    result: Final = tuple(
+        get_known_models_from_wildcard(
+            wildcard_model=wildcard,
+            litellm_params=LiteLLM_Params(model=wildcard),
+        )
+    )
+
+    assert result
+    assert all(model_id.startswith("cloudflare/@cf/") for model_id in result)
+    assert all(model_id in litellm.model_cost for model_id in result)
+    assert all(model_id.count("@cf/") == 1 for model_id in result)
+
+
+def test_gemini_partial_wildcard_deduplicates_cost_map_ids(
+    monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
+) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", False)
+    wildcard: Final = "gemini/gemini-2.5*"
+
+    result: Final = get_known_models_from_wildcard(
+        wildcard_model=wildcard,
+        litellm_params=LiteLLM_Params(model=wildcard),
+    )
+
+    assert len(result) == len(set(result))
+    assert result.count("gemini/gemini-2.5-flash") == 1
+
+
+def test_gemini_model_info_partial_wildcard_has_unique_model_names(
+    monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
+) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", False)
+    wildcard: Final = "gemini/gemini-2.5*"
+
+    expanded: Final = tuple(
+        expand_wildcard_deployments_for_model_info(
+            [{"model_name": wildcard, "litellm_params": {"model": wildcard}}]
+        )
+    )
+    model_names: Final = tuple(str(deployment["model_name"]) for deployment in expanded)
+
+    assert model_names
+    assert len(model_names) == len(set(model_names))
+
+
+def test_static_databricks_partial_wildcard_splices_cost_map_ids(
+    monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
+) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", False)
+    wildcard: Final = "databricks/system.ai.*"
+    provider_ids: Final = tuple(litellm.models_by_provider["databricks"])
+    expected_ids: Final = frozenset(
+        f"databricks/system.ai.{model_id.partition('/')[-1]}" for model_id in provider_ids
     )
 
     result: Final = get_known_models_from_wildcard(
-        wildcard_model="databricks/system.ai.*",
-        litellm_params=LiteLLM_Params(
-            model="databricks/system.ai.*",
-            api_key="x",
-            api_base="https://example.invalid",
-        ),
+        wildcard_model=wildcard,
+        litellm_params=LiteLLM_Params(model=wildcard, api_key="x", api_base="https://example.invalid"),
     )
 
-    expected: Final = [f"databricks/system.ai.{model_id.partition('/')[-1]}" for model_id in provider_ids]
-    assert result == expected
-    assert all(
-        model_id.startswith("databricks/system.ai.") and "/" not in model_id.removeprefix("databricks/system.ai.")
-        for model_id in result
-    )
+    assert result
+    assert frozenset(result) == expected_ids
+    assert all(model_id.startswith("databricks/system.ai.") for model_id in result)
 
 
 def test_wildcard_credential_hydration_preserves_missing_credential_name(
@@ -958,9 +1006,7 @@ def test_add_known_models_refreshes_models_by_provider_for_wildcard_expansion():
     assert fake_model not in litellm.models_by_provider["vertex_ai"]
     try:
         litellm.add_known_models(
-            model_cost_map={
-                fake_model: {"litellm_provider": "vertex_ai-language-models", "mode": "chat"}
-            }
+            model_cost_map={fake_model: {"litellm_provider": "vertex_ai-language-models", "mode": "chat"}}
         )
         assert fake_model in litellm.models_by_provider["vertex_ai"]
         assert litellm.models_by_provider is captured_reference
