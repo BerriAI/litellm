@@ -95,27 +95,40 @@ def encoded_item_ids(request: NativeCall) -> bool:
     return any(_encoded_item(item) for item in mappings if item is not None)
 
 
-def _custom_loggers() -> tuple[CustomLogger, ...]:
+def _custom_loggers(callbacks: Iterable[object]) -> tuple[CustomLogger, ...]:
     from litellm.litellm_core_utils.litellm_logging import get_custom_logger_compatible_class
 
     resolved: Final = (
         get_custom_logger_compatible_class(callback) if isinstance(callback, str) else callback
-        for callback in litellm.callbacks
+        for callback in callbacks
     )
     return tuple(callback for callback in resolved if isinstance(callback, CustomLogger))
 
 
-def _overridden(method: str) -> bool:
+def _overridden(method: str, callbacks: Iterable[object]) -> bool:
     base: Final = getattr(CustomLogger, method)
-    return any(getattr(type(callback), method, base) is not base for callback in _custom_loggers())
+    return any(getattr(type(callback), method, base) is not base for callback in _custom_loggers(callbacks))
+
+
+def _request_success_callbacks(request: NativeCall) -> tuple[object, ...]:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    supplied: Final = optional_sequence(request.resolved.get("success_callback")) or ()
+    logging_obj: Final = request.resolved.get("litellm_logging_obj")
+    dynamic: Final = (
+        optional_sequence(logging_obj.dynamic_success_callbacks)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging annotates the list with a bare Callable
+        if isinstance(logging_obj, Logging)
+        else None
+    )
+    return (*supplied, *(dynamic or ()))
 
 
 def pre_request_hook(_request: NativeCall) -> bool:
-    return _overridden("async_pre_request_hook")
+    return _overridden("async_pre_request_hook", litellm.callbacks)
 
 
-def agentic_loop_hook(_request: NativeCall) -> bool:
-    return _overridden("async_should_run_agentic_loop")
+def agentic_loop_hook(request: NativeCall) -> bool:
+    return _overridden("async_should_run_agentic_loop", (*litellm.callbacks, *_request_success_callbacks(request)))
 
 
 def websearch_interception(_request: NativeCall) -> bool:

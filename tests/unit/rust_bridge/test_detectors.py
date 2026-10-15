@@ -1,4 +1,5 @@
 from collections.abc import Callable, Mapping
+from datetime import datetime
 from typing import Final
 
 import httpx
@@ -7,6 +8,7 @@ import pytest
 import litellm
 from litellm.caching.caching import Cache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.rust_bridge import detectors
 from litellm.rust_bridge.public_call import NativeCall
@@ -106,6 +108,40 @@ def test_callback_detectors_need_an_override(
 ) -> None:
     monkeypatch.setattr(litellm, "callbacks", callbacks)
     assert detector(call()) is expected
+
+
+def _logging_with(callback: CustomLogger) -> Logging:
+    logging_obj: Final = Logging(
+        model="claude-sonnet-4-5",
+        messages=[],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id="call-1",
+        function_id="function-1",
+    )
+    logging_obj.add_dynamic_callback(callback)
+    return logging_obj
+
+
+@pytest.mark.parametrize(
+    ("detector", "kwargs", "expected"),
+    (
+        (detectors.agentic_loop_hook, {"success_callback": [_Agentic()]}, True),
+        (detectors.agentic_loop_hook, {"litellm_logging_obj": _logging_with(_Agentic())}, True),
+        (detectors.agentic_loop_hook, {"success_callback": [_Logger()]}, False),
+        (detectors.pre_request_hook, {"success_callback": [_Rewrite()]}, False),
+    ),
+    ids=("success-callback", "logging-object", "plain-logger", "pre-request-reads-globals-only"),
+)
+def test_callback_detectors_read_the_request_callbacks_the_handler_reads(
+    monkeypatch: pytest.MonkeyPatch,
+    detector: Callable[[NativeCall], bool],
+    kwargs: Mapping[str, object],
+    expected: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    assert detector(call(**kwargs)) is expected
 
 
 def test_websearch_interception_needs_the_interception_logger(monkeypatch: pytest.MonkeyPatch) -> None:
