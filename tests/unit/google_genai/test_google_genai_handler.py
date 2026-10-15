@@ -357,6 +357,7 @@ async def test_generate_content_adapter_returns_provider_400_without_retrying(
     ("status_code", "expected_error"),
     [
         pytest.param(401, litellm.AuthenticationError, id="401"),
+        pytest.param(404, litellm.NotFoundError, id="404"),
         pytest.param(503, litellm.ServiceUnavailableError, id="503"),
     ],
 )
@@ -380,3 +381,68 @@ async def test_generate_content_adapter_keeps_provider_error_status(
         )
 
     assert getattr(raised.value, "status_code", None) == status_code
+
+
+@pytest.mark.asyncio
+async def test_generate_content_adapter_sends_content_policy_rejection_to_content_policy_fallbacks(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    rejected_route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            400,
+            json={
+                "error": {
+                    "message": "Your request was rejected as a result of our safety system.",
+                    "type": "invalid_request_error",
+                    "code": "content_policy_violation",
+                }
+            },
+        )
+    )
+    fallback_route: Final = respx_mock.post("https://content-policy-fallback.example/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-content-policy-fallback",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-5.4-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Hi from the fallback"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7},
+            },
+        )
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "adapter-model",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "sk-generate-content-adapter-policy"},
+            },
+            {
+                "model_name": "content-policy-fallback",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-mini",
+                    "api_key": "sk-generate-content-adapter-policy",
+                    "api_base": "https://content-policy-fallback.example/v1",
+                },
+            },
+        ],
+        content_policy_fallbacks=[{"adapter-model": ["content-policy-fallback"]}],
+        num_retries=2,
+    )
+
+    response: Final = await router.agenerate_content(
+        model="adapter-model", contents=_REJECTED_ADAPTER_REQUEST["contents"]
+    )
+
+    assert response["candidates"][0]["content"]["parts"][0]["text"] == "Hi from the fallback"
+    assert rejected_route.call_count == 1
+    assert fallback_route.call_count == 1
