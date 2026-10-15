@@ -24,6 +24,11 @@ model_list:
       model: anthropic/claude-opus-5-5
       api_base: http://127.0.0.1:8191
       api_key: synthetic-anthropic-key
+  - model_name: anthropic/claude-fable-5-1
+    litellm_params:
+      model: anthropic/claude-fable-5-1
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-anthropic-key
   - model_name: anthropic/claude-sonnet-4-6
     litellm_params:
       model: anthropic/claude-sonnet-4-6
@@ -74,6 +79,11 @@ model_list:
       model: azure_ai/claude-opus-5-5
       api_base: http://127.0.0.1:8191
       api_key: synthetic-azure-ai-key
+  - model_name: azure_ai/claude-fable-5-1
+    litellm_params:
+      model: azure_ai/claude-fable-5-1
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-azure-ai-key
   - model_name: bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0
     litellm_params:
       model: bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0
@@ -107,6 +117,12 @@ model_list:
   - model_name: bedrock/converse/us.anthropic.claude-opus-5-5
     litellm_params:
       model: bedrock/converse/us.anthropic.claude-opus-5-5
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-key
+      aws_region_name: us-east-1
+  - model_name: bedrock/converse/us.anthropic.claude-fable-5-1
+    litellm_params:
+      model: bedrock/converse/us.anthropic.claude-fable-5-1
       api_base: http://127.0.0.1:8191
       api_key: synthetic-bedrock-key
       aws_region_name: us-east-1
@@ -223,6 +239,12 @@ model_list:
       api_base: http://127.0.0.1:8191
       api_key: synthetic-bedrock-key
       aws_region_name: us-east-1
+  - model_name: bedrock/invoke/us.anthropic.claude-fable-5-1
+    litellm_params:
+      model: bedrock/invoke/us.anthropic.claude-fable-5-1
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-key
+      aws_region_name: us-east-1
   - model_name: vertex_ai/claude-haiku-4-5@20251001
     litellm_params:
       model: vertex_ai/claude-haiku-4-5@20251001
@@ -261,6 +283,13 @@ model_list:
   - model_name: vertex_ai/claude-opus-5-5@default
     litellm_params:
       model: vertex_ai/claude-opus-5-5@default
+      api_base: http://127.0.0.1:8191
+      vertex_project: synthetic-vertex-project
+      vertex_location: global
+      vertex_credentials: '{"type": "external_account", "audience": "synthetic-vertex-audience", "subject_token_type": "urn:ietf:params:oauth:token-type:jwt", "token_url": "http://127.0.0.1:8190/_oauth/token", "credential_source": {"url": "http://127.0.0.1:8190/health"}}'
+  - model_name: vertex_ai/claude-fable-5-1@default
+    litellm_params:
+      model: vertex_ai/claude-fable-5-1@default
       api_base: http://127.0.0.1:8191
       vertex_project: synthetic-vertex-project
       vertex_location: global
