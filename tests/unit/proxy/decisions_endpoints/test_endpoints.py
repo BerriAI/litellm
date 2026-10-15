@@ -422,6 +422,32 @@ def test_proxy_decisions_without_model_uses_the_proxy_default_model(
     assert json.loads(upstream.calls[0].request.content)["model"] == "pplx-decider-v1-27b"
 
 
+
+def test_a_request_body_cannot_turn_on_box_questions_for_a_proxy_without_a_router(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", None)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_model", "openai/gpt-6-luna")
+    upstream: Final = respx_mock.post("https://fake-openai.example/v1/decisions").respond(json={})
+
+    response: Final = client.post(
+        "/v1/decisions",
+        json={
+            "model": "openai/gpt-6-luna",
+            "input": "A phone screen with a diagonal crack.",
+            "questions": [{"type": "box", "name": "crack", "instructions": "Where is the crack?"}],
+            "model_info": {"supports_box_questions": True},
+        },
+    )
+
+    assert response.status_code == 400, response.text
+    assert "['box questions']" in response.json()["error"]["message"]
+    assert not upstream.called
+
+
 _OPENAI_FORMAT_REQUEST: Final[Mapping[str, object]] = {
     "model": "decider",
     "input": [

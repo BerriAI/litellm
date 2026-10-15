@@ -33,6 +33,7 @@ from litellm.types.decisions import (
     OpenAIDecisionResponse,
     ScoreAnswer,
 )
+from litellm.types.router import ModelInfo
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
@@ -3234,6 +3235,63 @@ async def test_a_deployment_that_turns_box_questions_off_is_refused_even_when_th
         )
 
     assert not route.called
+
+
+
+@pytest.mark.asyncio
+async def test_a_typesafe_deployment_that_advertises_box_questions_still_needs_the_images_header(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"\['box questions'\]"):
+        await litellm.adecisions(
+            model="typesafe/jev-1.14.0",
+            input="review",
+            questions=[_CRACK_BOX_QUESTION],
+            api_key="deployment-key",
+            model_info={"supports_box_questions": True},
+        )
+
+    assert not route.called
+
+
+@pytest.mark.asyncio
+async def test_a_deployment_flag_that_is_not_a_boolean_leaves_the_cost_map_in_charge(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"\['box questions'\]"):
+        await litellm.adecisions(
+            model="openai/gpt-6-luna",
+            input="review",
+            questions=[_CRACK_BOX_QUESTION],
+            api_key="deployment-key",
+            model_info={"supports_box_questions": "true"},
+        )
+
+    assert not route.called
+
+
+@pytest.mark.asyncio
+async def test_a_model_info_object_instead_of_a_dict_still_reaches_the_provider(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+
+    response: Final = await litellm.adecisions(
+        model="openai/gpt-6-luna",
+        input="review",
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        api_key="deployment-key",
+        model_info=ModelInfo(id="deployment-1"),
+    )
+
+    assert route.called
+    assert response.answers[0].model_dump(mode="json")["name"] == "is_defect"
 
 
 def test_dropping_every_question_answers_400_before_http(respx_mock: respx.MockRouter) -> None:

@@ -5,7 +5,7 @@ from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, StrictBool, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 import litellm
@@ -91,7 +91,6 @@ _ASSET_ENTRY_ADAPTER: Final[TypeAdapter[tuple[DecisionsAssetReference, Decisions
     tuple[DecisionsAssetReference, DecisionsAsset]
 )
 _ASSET_ENTRIES_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
-_MODEL_INFO_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 
 def _valid_image(image: object) -> DecisionsImage | None:
@@ -364,9 +363,17 @@ def _without_malformed_images(
     return well_formed
 
 
+class _DeploymentBoxQuestions(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    supports_box_questions: StrictBool | None = None
+
+
 def _deployment_supports_box_questions(kwargs: Mapping[str, object]) -> bool | None:
-    flag: Final = _MODEL_INFO_ADAPTER.validate_python(kwargs.get("model_info") or {}).get("supports_box_questions")
-    return flag if isinstance(flag, bool) else None
+    try:
+        return _DeploymentBoxQuestions.model_validate(kwargs.get("model_info") or {}).supports_box_questions
+    except ValidationError:
+        return None
 
 
 def _provider_ir_request(
