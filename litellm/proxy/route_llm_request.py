@@ -613,7 +613,7 @@ async def route_request(
     return await _retry_once_after_model_read_through(
         data,
         llm_router,
-        lambda router: _route_request_single_attempt(
+        lambda router: _route_request_single_attempt(  # pyright: ignore[reportUnknownLambdaType]  # the router methods it returns are untyped
             data=data,
             llm_router=router,
             user_model=user_model,
