@@ -1,18 +1,18 @@
 from datetime import datetime
 from typing import Any, Final, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import ConfigDict, model_validator
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.models.verification_token import LiteLLM_VerificationToken
-from litellm.proxy._types import (
+from litellm.types.llms.base import LiteLLMBaseModel, LiteLLMPydanticObjectBase
+from litellm.types.proxy.management_endpoints.internal_user_endpoints import InsensitiveContains
+from litellm.types.proxy.management_endpoints.key_requests import (
     GenerateKeyRequest,
-    LiteLLM_ObjectPermissionBase,
     RegenerateKeyRequest,
     UpdateKeyRequest,
 )
-from litellm.types.llms.base import LiteLLMPydanticObjectBase
-from litellm.types.proxy.management_endpoints.internal_user_endpoints import InsensitiveContains
+from litellm.types.proxy.management_endpoints.request_base import LiteLLM_ObjectPermissionBase
 
 
 class KeyTokenWhere(TypedDict):
@@ -29,7 +29,7 @@ class KeySearchWhere(TypedDict):
     OR: ReadOnly[tuple[KeyTokenWhere, KeyAliasContainsWhere]]
 
 
-class BulkUpdateKeyRequestItem(BaseModel):
+class BulkUpdateKeyRequestItem(LiteLLMBaseModel):
     """One /key/bulk_update item; only the fields it carries are written."""
 
     key: str  # Key identifier (token)
@@ -40,20 +40,20 @@ class BulkUpdateKeyRequestItem(BaseModel):
     object_permission: LiteLLM_ObjectPermissionBase | None = None
 
 
-class BulkUpdateKeyRequest(BaseModel):
+class BulkUpdateKeyRequest(LiteLLMBaseModel):
     """Request for bulk key updates"""
 
     keys: list[BulkUpdateKeyRequestItem]
 
 
-class SuccessfulKeyUpdate(BaseModel):
+class SuccessfulKeyUpdate(LiteLLMBaseModel):
     """Successfully updated key with its updated information"""
 
     key: str
     key_info: dict[str, Any]
 
 
-class FailedKeyUpdate(BaseModel):
+class FailedKeyUpdate(LiteLLMBaseModel):
     """Failed key update with reason"""
 
     key: str
@@ -61,7 +61,7 @@ class FailedKeyUpdate(BaseModel):
     failed_reason: str
 
 
-class BulkUpdateKeyResponse(BaseModel):
+class BulkUpdateKeyResponse(LiteLLMBaseModel):
     """Response for bulk key update operations"""
 
     total_requested: int
@@ -69,7 +69,7 @@ class BulkUpdateKeyResponse(BaseModel):
     failed_updates: list[FailedKeyUpdate]
 
 
-class KeyUpdateFields(BaseModel):
+class KeyUpdateFields(LiteLLMBaseModel):
     """Allowlist of bulk-broadcastable fields for /team/key/bulk_update; `extra="forbid"` blocks RBAC/ownership/scope mutations even by team admins."""
 
     model_config = ConfigDict(extra="forbid", protected_namespaces=())
@@ -116,7 +116,7 @@ class KeyUpdateFields(BaseModel):
         return self
 
 
-class BulkUpdateTeamKeysRequest(BaseModel):
+class BulkUpdateTeamKeysRequest(LiteLLMBaseModel):
     """Apply one update payload to many keys inside a team; provide either `key_ids` or `all_keys_in_team=True`."""
 
     team_id: str

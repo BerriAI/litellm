@@ -1,4 +1,7 @@
-from litellm.integrations.SlackAlerting.budget_alert_types import SoftBudgetAlert
+from litellm.integrations.SlackAlerting.budget_alert_types import (
+    SoftBudgetAlert,
+    TokenBudgetAlert,
+)
 from litellm.proxy._types import CallInfo, Litellm_EntityType
 
 
@@ -64,3 +67,31 @@ class TestSoftBudgetAlert:
 
         result = alert.get_id(user_info)
         assert result == "default_id"
+
+
+class TestTokenBudgetAlert:
+    def test_get_id_dedupes_team_member_alerts_per_member_and_team(self):
+        alert = TokenBudgetAlert()
+        team_a = CallInfo(
+            spend=8.0, max_budget=10.0, user_id="member_1", team_id="team_a", event_group=Litellm_EntityType.TEAM_MEMBER
+        )
+        team_b = CallInfo(
+            spend=8.0, max_budget=10.0, user_id="member_1", team_id="team_b", event_group=Litellm_EntityType.TEAM_MEMBER
+        )
+
+        assert alert.get_id(team_a) == "team_member:member_1:team_a"
+        assert alert.get_id(team_b) == "team_member:member_1:team_b"
+
+    def test_get_id_uses_token_for_key_alerts(self):
+        alert = TokenBudgetAlert()
+        user_info = CallInfo(
+            spend=8.0,
+            max_budget=10.0,
+            token="hashed_key",
+            user_id="member_1",
+            team_id="team_a",
+            event_group=Litellm_EntityType.KEY,
+        )
+
+        assert alert.get_id(user_info) == "hashed_key"
+        assert alert.get_event_message() == "Key Budget: "

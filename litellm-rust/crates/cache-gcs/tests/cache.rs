@@ -56,6 +56,7 @@ async fn set_writes_encoded_object_and_headers(#[future(awt)] server: MockServer
 )]
 #[case::missing("missing", ResponseTemplate::new(404), Ok(None))]
 #[case::server_error("server-error", ResponseTemplate::new(500), Err(Error::Unavailable))]
+#[case::unauthorized("unauthorized", ResponseTemplate::new(401), Err(Error::Unavailable))]
 #[case::invalid(
     "invalid",
     ResponseTemplate::new(200).set_body_string("not json"),
@@ -96,7 +97,7 @@ async fn cache_exposes_its_configuration(#[future(awt)] server: MockServer) {
             path_service_account: Some("/secrets/sa.json".into()),
             ..support::config(&server, Some("folder"))
         },
-        reqwest::Client::new(),
+        litellm_http::Client::plain_for_test(),
         litellm_cache::JsonCodec::<Value>::new(),
     );
     assert_eq!(cache.bucket_name(), "bucket");

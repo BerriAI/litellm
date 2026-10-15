@@ -144,16 +144,22 @@ def test_service_span_data_from_payload():
     class _Payload:
         service = _Service()
         call_type = "async_set_cache"
+        caller = "async_set_cache <- async_add_cache"
+        target = "llm_response"
         error = None
 
     data = ServiceSpanData.from_payload(_Payload())
     assert data.service_name == "redis"
     assert data.call_type == "async_set_cache"
+    assert data.caller == "async_set_cache <- async_add_cache"
+    assert data.target == "llm_response"
     assert data.error is None
 
     class _FailPayload:
         service = _Service()
         call_type = "async_set_cache"
+        caller = None
+        target = None
         error = "boom"
 
     failed = ServiceSpanData.from_payload(_FailPayload())
@@ -445,10 +451,11 @@ def test_legacy_mapper_all_request_params():
 def test_legacy_mapper_covers_service_with_v1_bare_keys():
     """Service spans dual-emit V1's bare ``service``/``call_type``/``error`` keys."""
     attrs = LegacyMapper().map(
-        ServiceSpanData("redis", call_type="set", event_metadata={"k": "v"}),
+        ServiceSpanData("redis", call_type="set", caller="set <- add", event_metadata={"k": "v"}),
     )
     assert attrs["service"] == "redis"
     assert attrs["call_type"] == "set"
+    assert attrs["caller"] == "set <- add"
     assert attrs["k"] == "v"  # event_metadata is stamped bare (V1 behavior)
 
 
@@ -1425,7 +1432,7 @@ def test_sanitize_event_metadata_drops_objects_dumps_and_secrets():
     clean = sanitize_event_metadata(
         {
             "table_name": "combined_view",  # safe primitive -> kept
-            "count": 3,  # primitive -> kept (stringified)
+            "count": 3,  # primitive -> kept, still an int
             "function_kwargs": {"prisma_client": object()},  # denylisted key
             "function_args": (1, 2),  # denylisted key
             "user_api_key_auth": "blob",  # 'auth' substring -> dropped
@@ -1436,7 +1443,8 @@ def test_sanitize_event_metadata_drops_objects_dumps_and_secrets():
             "nested": {"x": 1},  # non-primitive value -> dropped
         }
     )
-    assert clean == {"table_name": "combined_view", "count": "3"}
+    assert clean == {"table_name": "combined_view", "count": 3}
+    assert isinstance(clean["count"], int)
 
 
 def test_sanitize_event_metadata_caps_value_length_and_handles_none():

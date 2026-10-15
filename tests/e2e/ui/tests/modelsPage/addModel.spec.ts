@@ -362,7 +362,7 @@ test.describe("Add Model", () => {
     await expect(page.getByText(/Connection to .* failed/)).toBeVisible({ timeout: 30_000 });
   });
 
-  test("Add specific model and verify it appears in All Models", async ({ page }) => {
+  test("Add specific model and verify it appears in Deployed Models", async ({ page }) => {
     await navigateToPage(page, Page.Models);
     await page.getByRole("tab", { name: "Add Model" }).click();
 
@@ -389,8 +389,8 @@ test.describe("Add Model", () => {
     // Wait for success notification
     await expect(page.getByText("created successfully")).toBeVisible({ timeout: 15_000 });
 
-    // Navigate to All Models tab
-    await page.getByRole("tab", { name: "All Models" }).click();
+    // Navigate to Deployed Models tab
+    await page.getByRole("tab", { name: "Deployed Models" }).click();
     await page.waitForLoadState("networkidle");
 
     // Search for the model we just added
@@ -469,7 +469,7 @@ test.describe("Add Model", () => {
       });
 
       // The Models table renders team-scoped models with the team id in the row.
-      await page.getByRole("tab", { name: "All Models" }).click();
+      await page.getByRole("tab", { name: "Deployed Models" }).click();
       await page.waitForLoadState("networkidle");
 
       await page.getByPlaceholder("Search model names").fill("cohere");
@@ -488,7 +488,7 @@ test.describe("Add Model", () => {
     }
   });
 
-  test("Add wildcard route and verify it appears in All Models", async ({ page }) => {
+  test("Add wildcard route and verify it appears in Deployed Models", async ({ page }) => {
     await navigateToPage(page, Page.Models);
     await page.getByRole("tab", { name: "Add Model" }).click();
 
@@ -513,8 +513,8 @@ test.describe("Add Model", () => {
     // Wait for success notification
     await expect(page.getByText("created successfully")).toBeVisible({ timeout: 15_000 });
 
-    // Navigate to All Models tab
-    await page.getByRole("tab", { name: "All Models" }).click();
+    // Navigate to Deployed Models tab
+    await page.getByRole("tab", { name: "Deployed Models" }).click();
     await page.waitForLoadState("networkidle");
 
     // Search for the wildcard model

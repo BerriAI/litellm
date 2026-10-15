@@ -2,8 +2,9 @@ from collections.abc import Sequence
 from enum import Enum
 from typing import Any, Final, Literal, Optional, Union
 
-from pydantic import BaseModel
 from typing_extensions import ReadOnly, TypedDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
 class LiteLLMCacheType(str, Enum):
@@ -114,7 +115,7 @@ DynamicCacheControl = TypedDict(
 )
 
 
-class CachePingResponse(BaseModel):
+class CachePingResponse(LiteLLMBaseModel):
     status: str
     cache_type: str
     ping_response: bool | None = None
@@ -125,7 +126,7 @@ class CachePingResponse(BaseModel):
     health_check_cache_params: dict | None = None
 
 
-class HealthCheckCacheParams(BaseModel):
+class HealthCheckCacheParams(LiteLLMBaseModel):
     """
     Cache Params returned on /cache/ping call
     """
@@ -138,6 +139,8 @@ class HealthCheckCacheParams(BaseModel):
 
 
 EMBEDDING_CACHE_FORMAT_VERSION: Final = 2
+
+CACHED_STREAM_EVENTS_KEY: Final = "litellm_cached_anthropic_sse_events"
 
 
 class CachedEmbedding(TypedDict):

@@ -73,6 +73,12 @@ type TeamResponse struct {
 	ModelRPMLimit            map[string]interface{} `json:"model_rpm_limit,omitempty"`
 	ModelTPMLimit            map[string]interface{} `json:"model_tpm_limit,omitempty"`
 	AllowedPassthroughRoutes []string               `json:"allowed_passthrough_routes,omitempty"`
+	TeamMemberBudgetTable    *TeamMemberBudgetTable `json:"team_member_budget_table,omitempty"`
+}
+
+// TeamMemberBudgetTable is the team's default member budget row, the only place /team/info returns team_member_model_max_budget.
+type TeamMemberBudgetTable struct {
+	ModelMaxBudget map[string]interface{} `json:"model_max_budget,omitempty"`
 }
 
 // OrganizationResponse represents a response from the API containing organization information.
@@ -131,6 +137,7 @@ type ModelInfo struct {
 type Key struct {
 	Key                      string                 `json:"key,omitempty"`
 	TokenID                  string                 `json:"token_id,omitempty"`
+	KeyType                  string                 `json:"key_type,omitempty"`
 	Models                   []string               `json:"models"`
 	Spend                    float64                `json:"spend,omitempty"`
 	MaxBudget                *float64               `json:"max_budget,omitempty"`

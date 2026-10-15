@@ -168,7 +168,7 @@ class PromptGuardGuardrail(CustomGuardrail):
                     "Content-Type": "application/json",
                 },
                 json=payload,
-                timeout=10.0,
+                timeout=self.timeout if self.timeout is not None else 10.0,
             )
             response.raise_for_status()
             view: Final[PromptGuardHTTPView] = {"guard_response": response.json()}

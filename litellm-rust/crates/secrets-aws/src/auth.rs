@@ -2,9 +2,8 @@ use std::sync::Arc;
 
 use aws_credential_types::provider::{ProvideCredentials, error::CredentialsError, future};
 use litellm_auth_aws::{
-    AwsAuthConfig,
+    AwsAuthConfig, AwsAuthService,
     constants::{AWS_DEFAULT_REGION, AWS_REGION, AWS_REGION_NAME},
-    resolve_credentials,
 };
 use litellm_core_utils::settings::Lookup;
 use litellm_secrets_types::{AwsOperationContext, KeyManagementSettings};
@@ -13,6 +12,7 @@ use crate::Error;
 
 #[derive(Clone)]
 pub(crate) struct Credentials {
+    auth: AwsAuthService,
     config: AwsAuthConfig,
     environment: Arc<dyn Lookup + Send + Sync>,
 }
@@ -22,15 +22,22 @@ impl Credentials {
         settings: &KeyManagementSettings,
         environment: Arc<dyn Lookup + Send + Sync>,
     ) -> Self {
-        Self::with_context(settings, environment, &AwsOperationContext::default())
+        Self::with_context(
+            AwsAuthService::default(),
+            settings,
+            environment,
+            &AwsOperationContext::default(),
+        )
     }
 
     pub(crate) fn with_context(
+        auth: AwsAuthService,
         settings: &KeyManagementSettings,
         environment: Arc<dyn Lookup + Send + Sync>,
         context: &AwsOperationContext,
     ) -> Self {
         Self {
+            auth,
             config: AwsAuthConfig {
                 access_key_id: context
                     .access_key_id
@@ -69,7 +76,8 @@ impl ProvideCredentials for Credentials {
         Self: 'a,
     {
         future::ProvideCredentials::new(async {
-            resolve_credentials(self.config.clone(), &|name| self.environment.get(name))
+            self.auth
+                .resolve_credentials(self.config.clone(), &|name| self.environment.get(name))
                 .await
                 .map_err(|_| {
                     CredentialsError::provider_error("secret manager authentication failed")

@@ -6,7 +6,7 @@ async fn rejected_write_token_is_reauthenticated_once() {
     let server = MockServer::start().await;
     mount_auth(&server, 2).await;
     Mock::given(path("/policies/acct/policy/root"))
-        .respond_with(ResponseTemplate::new(409))
+        .respond_with(ResponseTemplate::new(201))
         .expect(1)
         .mount(&server)
         .await;
@@ -45,7 +45,6 @@ async fn rejected_write_token_is_reauthenticated_once() {
 
 #[rstest]
 #[case::created(201)]
-#[case::already_exists(409)]
 #[case::unprocessable(422)]
 #[case::server_error(500)]
 #[tokio::test]
@@ -83,11 +82,79 @@ async fn writes_tolerate_policy_status_and_cache_value(#[case] policy_status: u1
 
 #[rstest]
 #[tokio::test]
+async fn policy_load_conflict_is_retried_before_the_value_write() {
+    let server = MockServer::start().await;
+    mount_auth(&server, 1).await;
+    let policy_loads = Arc::new(AtomicUsize::new(0));
+    let policy_loads_for_response = Arc::clone(&policy_loads);
+    Mock::given(path("/policies/acct/policy/root"))
+        .respond_with(move |_: &Request| {
+            if policy_loads_for_response.fetch_add(1, Ordering::SeqCst) < 2 {
+                ResponseTemplate::new(409)
+            } else {
+                ResponseTemplate::new(201)
+            }
+        })
+        .expect(3)
+        .mount(&server)
+        .await;
+    let policy_loads_at_value_write = Arc::clone(&policy_loads);
+    Mock::given(method("POST"))
+        .and(path("/secrets/acct/variable/key"))
+        .respond_with(move |_: &Request| {
+            if policy_loads_at_value_write.load(Ordering::SeqCst) == 3 {
+                ResponseTemplate::new(201)
+            } else {
+                ResponseTemplate::new(404)
+            }
+        })
+        .expect(1)
+        .mount(&server)
+        .await;
+    let manager = manager(&server, Duration::from_secs(60));
+
+    manager
+        .async_write_secret("key", &SecretValue::new("v"), None)
+        .await
+        .unwrap();
+}
+
+#[rstest]
+#[tokio::test]
+async fn concurrent_writes_load_policy_one_at_a_time() {
+    let server = MockServer::start().await;
+    mount_auth(&server, 1).await;
+    Mock::given(path("/policies/acct/policy/root"))
+        .respond_with(ResponseTemplate::new(201).set_delay(Duration::from_millis(100)))
+        .expect(4)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(201))
+        .mount(&server)
+        .await;
+    let manager = manager(&server, Duration::from_secs(60));
+    let started = std::time::Instant::now();
+
+    let value = SecretValue::new("v");
+    let results = tokio::join!(
+        manager.async_write_secret("key-0", &value, None),
+        manager.async_write_secret("key-1", &value, None),
+        manager.async_write_secret("key-2", &value, None),
+        manager.async_write_secret("key-3", &value, None),
+    );
+
+    assert!(results.0.is_ok() && results.1.is_ok() && results.2.is_ok() && results.3.is_ok());
+    assert!(started.elapsed() >= Duration::from_millis(400));
+}
+
+#[rstest]
+#[tokio::test]
 async fn failed_value_write_is_not_cached() {
     let server = MockServer::start().await;
     mount_auth(&server, 1).await;
     Mock::given(path("/policies/acct/policy/root"))
-        .respond_with(ResponseTemplate::new(409))
+        .respond_with(ResponseTemplate::new(201))
         .mount(&server)
         .await;
     Mock::given(path("/secrets/acct/variable/key"))
@@ -166,7 +233,7 @@ async fn writes_match_python_parity_fixture(parity_fixture: ParityFixture) {
         .mount(&server)
         .await;
     let manager = CyberArkSecretManager::with_client(
-        reqwest::Client::new(),
+        litellm_http::Client::plain_for_test(),
         server.uri().parse().unwrap(),
         parity_fixture.account,
         parity_fixture.username,
@@ -230,7 +297,7 @@ async fn live_conjur_round_trip() {
             .as_nanos()
     );
     let manager = CyberArkSecretManager::with_client(
-        reqwest::Client::new(),
+        litellm_http::Client::plain_for_test(),
         endpoint.clone(),
         account.clone(),
         username.clone(),
@@ -245,7 +312,7 @@ async fn live_conjur_round_trip() {
             .await
             .unwrap();
         let verifier = CyberArkSecretManager::with_client(
-            reqwest::Client::new(),
+            litellm_http::Client::plain_for_test(),
             endpoint.clone(),
             account.clone(),
             username.clone(),

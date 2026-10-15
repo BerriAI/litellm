@@ -58,6 +58,10 @@ const eslintConfig = [
               message:
                 "@tremor/react is being phased out; build new UI with shadcn/ui primitives instead of adding tremor imports.",
             },
+            {
+              group: ["zod/*"],
+              message: 'Import Zod from "zod"; the dashboard uses Zod 4 only.',
+            },
           ],
         },
       ],
@@ -65,6 +69,7 @@ const eslintConfig = [
   },
   {
     files: ["src/**/*.tsx"],
+    ignores: ["src/components/ui/**"],
     rules: {
       "local/filename-pascal-case": "error",
     },
@@ -94,6 +99,11 @@ const eslintConfig = [
       "tests/**/*.{ts,tsx}",
     ],
     rules: { "local/no-ad-hoc-z-index": ["error", { allowPopupLayer: true }] },
+  },
+  {
+    files: ["src/components/lens/**/*.tsx"],
+    ignores: ["src/**/*.test.tsx"],
+    rules: { "local/no-arbitrary-design-value": "error" },
   },
   {
     files: ["tests/eslint-rules/**/*.{ts,tsx}"],

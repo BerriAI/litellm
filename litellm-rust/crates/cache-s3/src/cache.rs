@@ -42,7 +42,12 @@ pub struct S3Cache<C: CacheCodec> {
 }
 
 impl<C: CacheCodec> S3Cache<C> {
-    pub fn new(config: S3CacheConfig, http: reqwest::Client, codec: C, runtime: Handle) -> Self {
+    pub fn new(
+        config: S3CacheConfig,
+        http: litellm_http::Client,
+        codec: C,
+        runtime: Handle,
+    ) -> Self {
         let endpoint_url: Option<String> = config.endpoint.map(|endpoint| endpoint.url);
         let base = aws_sdk_s3::Config::builder()
             .behavior_version(BehaviorVersion::latest())

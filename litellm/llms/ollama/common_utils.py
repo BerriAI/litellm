@@ -1,6 +1,6 @@
 import base64
 import io
-from typing import Any, Final
+from typing import Final
 
 import httpx
 
@@ -31,7 +31,7 @@ def _reencode_as_jpeg(raw_image: bytes, original: str) -> str:
     return base64.b64encode(jpeg_image.getvalue()).decode("utf-8")
 
 
-def _convert_image(image: str) -> str:
+def convert_image(image: str) -> str:
     payload: Final = image.split(",")[-1] if image.startswith("data:") else image
     try:
         raw_image: Final = base64.b64decode(payload)
@@ -41,6 +41,8 @@ def _convert_image(image: str) -> str:
         return payload
     return _reencode_as_jpeg(raw_image, original=image)
 
+
+_convert_image = convert_image
 
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 
@@ -172,7 +174,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
         model: str,
         api_base: str | None = None,
         api_key: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         from litellm import module_level_client
 
         model = self._strip_ollama_model_prefix(model)
@@ -221,7 +223,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
         model: str,
         api_base: str | None = None,
         api_key: str | None = None,
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, object] | None:
         if self._is_static_ollama_model(model):
             return None
         return self.get_runtime_model_info(model=model, api_base=api_base, api_key=api_key)

@@ -50,7 +50,7 @@ class ArgillaLogger(CustomBatchLogger):
         if litellm.argilla_transformation_object is None:
             raise Exception("'litellm.argilla_transformation_object' is required, to log your payload to Argilla.")
         self.validate_argilla_transformation_object(litellm.argilla_transformation_object)
-        self.argilla_transformation_object = litellm.argilla_transformation_object
+        self.argilla_transformation_object: Mapping[str, str] = litellm.argilla_transformation_object
         self.default_credentials = self.get_credentials_from_env(
             argilla_api_key=argilla_api_key,
             argilla_dataset_name=argilla_dataset_name,
