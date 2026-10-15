@@ -3113,8 +3113,26 @@ def _build_aggregate_protected_resource_response(request: Request) -> dict:
     return {
         "authorization_servers": [f"{request_base_url}/mcp"],
         "resource": f"{request_base_url}/mcp",
-        "scopes_supported": [],
+        "scopes_supported": _aggregate_header_scopes(request),
     }
+
+
+def _aggregate_header_scopes(request: Request) -> tuple[str, ...]:
+    """Gateway server-scope tokens for the ``x-mcp-servers`` header a client sends with its
+    discovery request, so a client that skips the 401 challenge (Claude Code re-authenticating
+    a server it already knows needs auth) still carries the selection to ``/authorize`` through
+    ``scopes_supported``. Empty when the header is absent or any entry does not resolve."""
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (  # noqa: PLC0415  # proxy import cycle
+        MCPRequestHandler,
+        gateway_dcr_challenge_scope,
+    )
+
+    header: Final = request.headers.get(MCPRequestHandler.LITELLM_MCP_SERVERS_HEADER_NAME)
+    if not header:
+        return ()
+    names: Final = tuple(dict.fromkeys(entry.strip() for entry in header.split(",") if entry.strip()))
+    scope: Final = gateway_dcr_challenge_scope("/mcp", names, IPAddressUtils.get_mcp_client_ip(request))
+    return tuple(scope.split()) if scope else ()
 
 
 def _build_aggregate_authorization_server_response(
