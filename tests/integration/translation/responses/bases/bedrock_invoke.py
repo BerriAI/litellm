@@ -563,12 +563,7 @@ CLAUDE_FABLE_5_1_TEST_CASE: Final = TranslationTestCase(
         "id": "msg_bdrk_kct3wlyhliymwyvqmjn6uy72qpg4hekwep4upsfqdec3b7wqf5vq",
         "type": "message",
         "role": "assistant",
-        "content": [
-            {
-                "type": "text",
-                "text": "Hello.",
-            },
-        ],
+        "content": [{"type": "text", "text": "Hello."}],
         "container": None,
         "stop_reason": "end_turn",
         "stop_sequence": None,
@@ -577,14 +572,9 @@ CLAUDE_FABLE_5_1_TEST_CASE: Final = TranslationTestCase(
             "input_tokens": 23,
             "cache_creation_input_tokens": 0,
             "cache_read_input_tokens": 0,
-            "cache_creation": {
-                "ephemeral_5m_input_tokens": 0,
-                "ephemeral_1h_input_tokens": 0,
-            },
+            "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
             "output_tokens": 6,
-            "output_tokens_details": {
-                "thinking_tokens": 0,
-            },
+            "output_tokens_details": {"thinking_tokens": 0},
             "service_tier": "standard",
         },
     },
