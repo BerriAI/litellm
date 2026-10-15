@@ -7,9 +7,6 @@ import pytest
 
 from litellm.rust_bridge import catalog, configuration
 from litellm.rust_bridge.catalog import (
-    Context,
-    LoggerContext,
-    LoggerRule,
     Route,
     RouteContext,
     RouteRule,
@@ -63,13 +60,6 @@ def test_missing_rule_stays_on_python_even_when_rust_is_enabled(monkeypatch: pyt
     assert catalog.decision(RouteContext(route), rules=()) is Decision.PYTHON
 
 
-def test_logger_rollout_obeys_the_global_switch() -> None:
-    assert catalog.rollout(LoggerContext()) is Rollout.RUST_OPT_IN
-    assert catalog.decision(LoggerContext()) is Decision.PYTHON
-    configuration.rust(True)
-    assert catalog.decision(LoggerContext()) is Decision.RUST_WITH_FALLBACK
-
-
 @pytest.mark.parametrize(
     ("context", "expected"),
     (
@@ -115,12 +105,10 @@ def test_ocr_has_no_python_path_to_opt_out_to(
         (RouteContext(Route.OCR, provider="local"), Decision.RUST_REQUIRED),
         (RouteContext(Route.OCR, provider="other"), Decision.PYTHON),
         (RouteContext(Route.MESSAGES, provider="local"), Decision.PYTHON),
-        (LoggerContext(), Decision.RUST_REQUIRED),
     ),
 )
-def test_mixed_rules_select_only_the_matching_domain(context: Context, expected: Decision) -> None:
+def test_rules_select_only_the_matching_route(context: RouteContext, expected: Decision) -> None:
     rules: Final[Rules] = (
-        LoggerRule(Rollout.RUST_REQUIRED),
         RouteRule(Route.OCR, Rollout.RUST_REQUIRED, providers=frozenset({"local"})),
         RouteRule(Route.OCR, Rollout.PYTHON_ONLY),
     )
@@ -128,7 +116,6 @@ def test_mixed_rules_select_only_the_matching_domain(context: Context, expected:
     assert catalog.decision(context, rules) is expected
 
 
-@pytest.mark.parametrize("context", (RouteContext(Route.OCR), LoggerContext()))
 @pytest.mark.parametrize(
     ("rollout", "process", "environment", "expected"),
     (
@@ -142,9 +129,8 @@ def test_mixed_rules_select_only_the_matching_domain(context: Context, expected:
         (Rollout.RUST_OPT_OUT, True, "0", Decision.PYTHON),
     ),
 )
-def test_all_domains_share_rollout_switches_and_first_match(
+def test_rollout_switches_and_first_match(
     monkeypatch: pytest.MonkeyPatch,
-    context: Context,
     rollout: Rollout,
     process: bool | None,
     environment: str | None,
@@ -155,19 +141,17 @@ def test_all_domains_share_rollout_switches_and_first_match(
         monkeypatch.setenv("LITELLM_RUST", environment)
     rules: Final[Rules] = (
         RouteRule(Route.OCR, rollout),
-        LoggerRule(rollout),
         RouteRule(Route.OCR, Rollout.RUST_REQUIRED),
     )
 
-    assert catalog.decision(context, rules) is expected
-    assert catalog.decision(context, ()) is Decision.PYTHON
+    assert catalog.decision(RouteContext(Route.OCR), rules) is expected
+    assert catalog.decision(RouteContext(Route.OCR), ()) is Decision.PYTHON
 
 
-@pytest.mark.parametrize("context", (RouteContext(Route.OCR),))
-def test_empty_constraints_match_nothing(context: Context) -> None:
+def test_empty_constraints_match_nothing() -> None:
     rules: Final[Rules] = (
         RouteRule(Route.OCR, Rollout.RUST_REQUIRED, providers=frozenset()),
         RouteRule(Route.OCR, Rollout.RUST_REQUIRED, models=frozenset()),
     )
 
-    assert catalog.decision(context, rules) is Decision.PYTHON
+    assert catalog.decision(RouteContext(Route.OCR), rules) is Decision.PYTHON
