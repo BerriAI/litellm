@@ -8,29 +8,17 @@ from __future__ import annotations
 from typing import Final
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import Response
 
 from mock_common import (
-    KNOBS_HEADER,
-    Decision,
     RequestLog,
     json_reply,
-    knobs_from_header,
     mount_control,
     parse_json,
     stream_reply,
 )
 
 EVENT_STREAM: Final = "application/vnd.amazon.eventstream"
-
-
-def bedrock_error(decision: Decision) -> JSONResponse:
-    kind: Final = "ThrottlingException" if decision.status == 429 else "InternalServerException"
-    return JSONResponse(
-        status_code=decision.status,
-        content={"message": f"mock failure for {decision.seed} (status {decision.status})"},
-        headers={**decision.headers, "x-amzn-ErrorType": kind},
-    )
 
 
 def build_app() -> FastAPI:
@@ -41,14 +29,10 @@ def build_app() -> FastAPI:
     async def handle(model_id: str, request: Request, route: str, stream: bool) -> Response:
         body: Final = parse_json(await request.body())
         decision: Final = log.decide(
-            model=model_id,
-            knobs=knobs_from_header(request.headers.get(KNOBS_HEADER)),
             route=route,
             stream=stream,
             body=body,
         )
-        if decision.fail:
-            return bedrock_error(decision)
         return stream_reply(decision, EVENT_STREAM) if stream else await json_reply(decision)
 
     async def converse(model_id: str, request: Request) -> Response:

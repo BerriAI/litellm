@@ -21,11 +21,13 @@ from setup.observe import (
     read_mock_requests,
     render,
     reset_mock,
+    set_mock_latency,
 )
 from setup.performance_test_case import PerformanceTestCase
 from setup.plan import build_plan
 from setup.datastore import read_db_counters, read_redis_counters
-from setup.provision import build_setup, guardrail_url, mock_url
+from setup.podcpu import gateway_cpu_sampler
+from setup.provision import MOCK_PROVIDERS, build_setup, guardrail_url, mock_url
 from setup.run import run_plan
 from proxy_client import ProxyClient
 
@@ -48,16 +50,19 @@ def _spend_logged_share(proxy: ProxyClient, call_ids: tuple[str, ...]) -> float 
 @pytest.mark.parametrize("case", CASES, ids=[case.name for case in CASES])
 def test_perf_case(case: PerformanceTestCase, proxy: ProxyClient, idp: Keycloak, resources: ResourceManager) -> None:
     plan: Final = build_plan(case)
-    mock_urls: Final = {provider: mock_url(provider) for provider in ("openai", "anthropic", "bedrock")}
+    mock_urls: Final = {provider: mock_url(provider) for provider in MOCK_PROVIDERS}
     for url in (*mock_urls.values(), guardrail_url()):
         _ = reset_mock(url)
+    for url in mock_urls.values():
+        _ = set_mock_latency(url, case.mock_latency)
     setup_started: Final = time.monotonic()
     setup: Final = build_setup(case, proxy=proxy, idp=idp, resources=resources)
     rss_before: Final = read_rss_everywhere(proxy)
     db_before: Final = read_db_counters()
     redis_before: Final = read_redis_counters()
     run_started: Final = time.monotonic()
-    outcome: Final = run_plan(case, plan, setup)
+    with gateway_cpu_sampler() as cpu:
+        outcome: Final = run_plan(case, plan, setup)
     run_finished: Final = time.monotonic()
     rss_after: Final = read_rss_everywhere(proxy)
     rss_read: Final = time.monotonic()
@@ -86,6 +91,7 @@ def test_perf_case(case: PerformanceTestCase, proxy: ProxyClient, idp: Keycloak,
         db_after=db_after,
         redis_before=redis_before,
         redis_after=redis_after,
+        gateway_cpu_seconds=cpu.seconds,
     )
     rows, exceeded_limits = evaluate(case, observation)
     print(render(case, observation, rows))

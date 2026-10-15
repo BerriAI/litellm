@@ -1,9 +1,8 @@
 # Gateway config for the perf cases (tests/e2e/perf/test_perf_cases.py), the local twin of the
 # proxy_config block in project-releaser's .buildkite/e2e-perf-gateway-values.yaml: the same model
 # groups over the mock providers, the same two guardrails, so a laptop run and the lane read the same
-# config. Each deployment's mock knobs travel in x-mock-knobs (f flake percent of first attempts, s flake
-# status, p the speed the captured provider timings replay at, in percent). Teams, users and keys are
-# created by the case at run time.
+# config. One deployment per mock provider pod; how long the mocks wait before answering is set by the
+# case at setup (mock_latency), not here. Teams, users and keys are created by the case at run time.
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   database_url: os.environ/DATABASE_URL
@@ -45,15 +44,11 @@ model_list:
       model: openai/gpt-6-luna
       api_base: os.environ/E2E_PERF_MOCK_OPENAI_URL
       api_key: perf-mock-not-checked
-      extra_headers:
-        x-mock-knobs: f0-s500-p25
   - model_name: claude-sonnet-5
     litellm_params:
       model: anthropic/claude-sonnet-5
       api_base: os.environ/E2E_PERF_MOCK_ANTHROPIC_URL
       api_key: perf-mock-not-checked
-      extra_headers:
-        x-mock-knobs: f0-s500-p2
   - model_name: claude-sonnet-5-bedrock
     litellm_params:
       model: bedrock/anthropic.claude-sonnet-5
@@ -61,8 +56,6 @@ model_list:
       aws_region_name: us-east-1
       aws_access_key_id: perf-mock-not-checked
       aws_secret_access_key: perf-mock-not-checked
-      extra_headers:
-        x-mock-knobs: f0-s500-p2
 guardrails:
   - guardrail_name: perf-pre
     litellm_params:

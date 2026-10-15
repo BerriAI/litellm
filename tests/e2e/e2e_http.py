@@ -481,15 +481,18 @@ def get_external[R: BaseModel](
     response_type: type[R],
     headers: BaseModel | None = None,
     timeout: float = 30.0,
+    ca_bundle: str | None = None,
 ) -> Result[R]:
     """GET an absolute URL outside the proxy (e.g. a public /.well-known document).
     Unlike the transport wrappers there is no proxy base url and no proxy auth; the
-    response still gets the same tagged-union classification as every other call."""
+    response still gets the same tagged-union classification as every other call.
+    `ca_bundle` is a PEM path for a server the default trust store does not cover."""
     try:
         resp = requests.get(
             url,
             headers={"Accept": "application/json", **(_headers(headers) if headers is not None else {})},
             timeout=timeout,
+            verify=ca_bundle if ca_bundle is not None else True,
         )
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))

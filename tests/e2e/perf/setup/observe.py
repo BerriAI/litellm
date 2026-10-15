@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from setup.datastore import DbCounters, RedisCounters
 from setup.mocks.replay import Capture, Provider, library
-from setup.performance_test_case import Limit, Metric, PerformanceTestCase
+from setup.performance_test_case import Limit, Metric, MockLatency, PerformanceTestCase
 from setup.wire import WireRecord
 
 
@@ -25,7 +25,6 @@ class MockRequestSeen(BaseModel):
     route: str
     stream: bool
     shape: str
-    failed: bool
     delay_s: float
 
 
@@ -47,6 +46,11 @@ class Cleared(BaseModel):
     cleared: int
 
 
+class LatencyBody(BaseModel):
+    seconds: float
+    jitter_seconds: float
+
+
 def read_mock_requests(url: str) -> list[MockRequestSeen]:
     return unwrap(get_external(f"{url}/mock/requests", response_type=MockRequestsSeen, timeout=60.0)).requests
 
@@ -57,6 +61,11 @@ def read_guardrail_calls(url: str) -> list[GuardrailCallSeen]:
 
 def reset_mock(url: str) -> int:
     return unwrap(post_external(f"{url}/mock/reset", json=NoBody(), response_type=Cleared)).cleared
+
+
+def set_mock_latency(url: str, latency: MockLatency) -> LatencyBody:
+    body: Final = LatencyBody(seconds=latency.seconds, jitter_seconds=latency.jitter_seconds)
+    return unwrap(post_external(f"{url}/mock/latency", json=body, response_type=LatencyBody))
 
 
 def percentile(values: Iterable[float], p: int) -> float | None:
@@ -94,6 +103,7 @@ class Observation:
     db_after: DbCounters | None = None
     redis_before: RedisCounters | None = None
     redis_after: RedisCounters | None = None
+    gateway_cpu_seconds: float | None = None
 
     def per_request(self, before: int | None, after: int | None) -> float | None:
         if before is None or after is None or not self.records:
@@ -111,7 +121,7 @@ class Observation:
 
     @property
     def _delay_by_marker(self) -> dict[str, float]:
-        return {seen.marker: seen.delay_s for seen in self.mock_requests if seen.marker is not None and not seen.failed}
+        return {seen.marker: seen.delay_s for seen in self.mock_requests if seen.marker is not None}
 
     def _clean(self, *, stream: bool) -> list[tuple[WireRecord, float]]:
         """Served requests of one kind that were answered on the first attempt, with the mock's delay."""
@@ -147,9 +157,7 @@ class Observation:
     def bodies_off_capture(self) -> int:
         """Served requests whose text is not the captured reply the mock replayed for them (plus the post-call
         rewrite for requests in the intervene slice), a translation or streaming fault somewhere in the gateway."""
-        seen_by_marker: Final = {
-            seen.marker: seen for seen in self.mock_requests if seen.marker is not None and not seen.failed
-        }
+        seen_by_marker: Final = {seen.marker: seen for seen in self.mock_requests if seen.marker is not None}
         return sum(
             1
             for record in self.served
@@ -194,6 +202,9 @@ def observe(metric: Metric, percentile_rank: int | None, observation: Observatio
     if metric == "redis_calls_per_request":
         redis_before, redis_after = observation.redis_before, observation.redis_after
         return observation.per_request(redis_before and redis_before.commands, redis_after and redis_after.commands)
+    if metric == "cpu_seconds_per_request":
+        cpu: Final = observation.gateway_cpu_seconds
+        return None if cpu is None or not observation.records else cpu / len(observation.records)
     return worst_worker_growth_mb(observation.rss_before, observation.rss_after)
 
 
@@ -221,6 +232,7 @@ REPORTED: Final[tuple[tuple[Metric, int | None], ...]] = (
     ("memory_growth_megabytes", None),
     ("postgres_calls_per_request", None),
     ("redis_calls_per_request", None),
+    ("cpu_seconds_per_request", None),
 )
 
 

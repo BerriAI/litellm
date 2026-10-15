@@ -2,14 +2,13 @@
 
 Every reply is a real provider response captured once (see `replay.py`), chosen by route, stream mode and
 the size of the request just received, so the gateway parses the provider's own usage, stop reasons, tool
-calls and stream framing, on the provider's own clock. A deployment's knobs travel in the `x-mock-knobs`
-header the gateway forwards from the deployment's `extra_headers`, so the model id stays a real one
-(`gpt-6-luna`, `anthropic.claude-sonnet-5`) and every name-based branch in the gateway runs, while one mock
-pod per provider serves any number of deployments: `f30-s529-p25` reads as the first attempt of 30% of
-requests fails with status 529, and the captured timings play at 25% (four times faster than the provider
-did). The flake decision and the replaced ids are pure functions of the request marker
-(`perfreq-000123-n`, put in the prompt by the plan generator), so the test can join what each provider
-received against what each client saw.
+calls and stream framing, on the provider's own clock. The model id stays a real one (`gpt-6-luna`,
+`anthropic.claude-sonnet-5`) so every name-based branch in the gateway runs, and one mock pod per provider
+serves any number of deployments. How long a mock waits before answering is the one setting a case
+controls, `POST /mock/latency {"seconds": 1.0, "jitter_seconds": 0.25}`, set by the test's setup directly
+on the pod, never through the gateway; the captured provider timings are not replayed. The wait and the
+replaced ids are pure functions of the request marker (`perfreq-000123-n`, put in the prompt by the plan
+generator), so the test can join what each provider received against what each client saw.
 """
 
 from __future__ import annotations
@@ -24,37 +23,13 @@ from typing import Final, Literal, cast
 
 from fastapi import FastAPI
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
-from replay import Capture, Provider, body_bytes, first_byte_s, paced, pick
+from replay import Capture, Provider, body_bytes, paced, pick
 
 MARKER: Final = re.compile(r"perfreq-\d{6}-[nib]")
-_KNOBS: Final = re.compile(r"^(?:[fsp]\d+)(?:-[fsp]\d+)*$")
 DELAY_HEADER: Final = "x-mock-delay-s"
-KNOBS_HEADER: Final = "x-mock-knobs"
 Flag = Literal["n", "i", "b"]
-
-
-@dataclass(frozen=True, slots=True)
-class Knobs:
-    flake_percent: int = 0
-    flake_status: int = 500
-    speed_percent: int = 100
-
-    @property
-    def scale(self) -> float:
-        return self.speed_percent / 100
-
-
-def knobs_from_header(value: str | None) -> Knobs:
-    if value is None or _KNOBS.match(value) is None:
-        return Knobs()
-    values: Final = {segment[0]: int(segment[1:]) for segment in value.split("-")}
-    return Knobs(
-        flake_percent=values.get("f", 0),
-        flake_status=values.get("s", 500),
-        speed_percent=values.get("p", 100),
-    )
 
 
 def unit(seed: str) -> float:
@@ -120,7 +95,6 @@ class MockRequest(BaseModel):
     route: str
     stream: bool
     shape: str
-    failed: bool
     delay_s: float
 
 
@@ -136,28 +110,31 @@ class ResetResponse(BaseModel):
     cleared: int
 
 
+class Latency(BaseModel):
+    """Seconds a mock waits before its first byte: `seconds` plus or minus up to `jitter_seconds`, drawn
+    from the request marker so the same request always waits the same."""
+
+    model_config = ConfigDict(frozen=True)
+
+    seconds: float = Field(default=0.0, ge=0.0)
+    jitter_seconds: float = Field(default=0.0, ge=0.0)
+
+    def for_seed(self, seed: str) -> float:
+        return max(0.0, self.seconds + self.jitter_seconds * (2 * unit(f"{seed}:latency") - 1))
+
+
 @dataclass(frozen=True, slots=True)
 class Decision:
-    """What this mock does with one request: whether it fails, which capture it replays and how fast."""
+    """What this mock does with one request: which capture it replays and after how long."""
 
     marker: str | None
-    knobs: Knobs
     capture: Capture
-    provider_first_byte_s: float
-    fail: bool
+    delay_s: float
+    """Seconds before the first byte, what `gateway_added_seconds` subtracts from the client's time."""
 
     @property
     def seed(self) -> str:
         return self.marker or "unmarked"
-
-    @property
-    def status(self) -> int:
-        return self.knobs.flake_status if self.fail else 200
-
-    @property
-    def delay_s(self) -> float:
-        """Seconds before the first byte, what `gateway_added_seconds` subtracts from the client's time."""
-        return 0.0 if self.fail else self.provider_first_byte_s * self.knobs.scale
 
     @property
     def headers(self) -> dict[str, str]:
@@ -170,27 +147,24 @@ class RequestLog:
     def __init__(self, provider: Provider, capacity: int = 100_000) -> None:
         self._provider: Final = provider
         self._entries: deque[MockRequest] = deque(maxlen=capacity)
-        self._attempts: dict[tuple[str, str], int] = {}
+        self._latency = Latency()
 
-    def decide(self, *, model: str, knobs: Knobs, route: str, stream: bool, body: object) -> Decision:
+    @property
+    def latency(self) -> Latency:
+        return self._latency
+
+    def set_latency(self, latency: Latency) -> Latency:
+        self._latency = latency
+        return self._latency
+
+    def decide(self, *, route: str, stream: bool, body: object) -> Decision:
         prompt_text: Final = " ".join(collect_text(body))
         marker: Final = marker_in(prompt_text)
         prompt_tokens: Final = token_count(prompt_text)
-        attempt_key: Final = (marker or "unmarked", model)
-        attempt: Final = self._attempts.get(attempt_key, 0) + 1
-        self._attempts[attempt_key] = attempt
-        fail: Final = (
-            marker is not None
-            and attempt == 1
-            and knobs.flake_percent > 0
-            and int(unit(f"{marker}:flake") * 100) < knobs.flake_percent
-        )
         decision: Final = Decision(
             marker=marker,
-            knobs=knobs,
             capture=pick(self._provider, route, stream, prompt_tokens),
-            provider_first_byte_s=first_byte_s(self._provider, route, stream, prompt_tokens),
-            fail=fail,
+            delay_s=self._latency.for_seed(marker or "unmarked"),
         )
         self._entries.append(
             MockRequest(
@@ -199,7 +173,6 @@ class RequestLog:
                 route=route,
                 stream=stream,
                 shape=decision.capture.shape,
-                failed=fail,
                 delay_s=decision.delay_s,
             )
         )
@@ -211,12 +184,11 @@ class RequestLog:
     def reset(self) -> int:
         count: Final = len(self._entries)
         self._entries.clear()
-        self._attempts.clear()
         return count
 
 
 async def json_reply(decision: Decision) -> Response:
-    """The captured body after the captured time to first byte, ids swapped for this request's."""
+    """The captured body after the case's latency, ids swapped for this request's."""
     if decision.delay_s > 0:
         await asyncio.sleep(decision.delay_s)
     return Response(
@@ -227,9 +199,9 @@ async def json_reply(decision: Decision) -> Response:
 
 
 def stream_reply(decision: Decision, media_type: str) -> Response:
-    """The captured chunks on the captured clock, ids swapped for this request's."""
+    """The captured chunks back to back after the case's latency, ids swapped for this request's."""
     return StreamingResponse(
-        paced(decision.capture, decision.seed, decision.knobs.scale, decision.delay_s),
+        paced(decision.capture, decision.seed, 0.0, decision.delay_s),
         media_type=media_type,
         headers=decision.headers,
     )
@@ -250,6 +222,10 @@ def mount_control(app: FastAPI, log: RequestLog) -> None:
     async def reset() -> ResetResponse:
         return ResetResponse(cleared=log.reset())
 
+    async def latency(request: Latency) -> Latency:
+        return log.set_latency(request)
+
     app.add_api_route("/health", health, methods=["GET"])
     app.add_api_route("/mock/requests", requests_seen, methods=["GET"])
     app.add_api_route("/mock/reset", reset, methods=["POST"])
+    app.add_api_route("/mock/latency", latency, methods=["POST"])

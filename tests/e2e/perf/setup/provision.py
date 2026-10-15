@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Final, Literal
+from typing import Final
 
 from e2e_config import unique_marker
 from e2e_http import NoBody, unwrap
@@ -18,11 +18,11 @@ from lifecycle import ResourceManager
 from models import KeyGenerateBody, TeamNewBody, UserNewBody, UserNewResponse
 from proxy_client import ProxyClient
 from pydantic import BaseModel, ConfigDict
-from setup.performance_test_case import PerformanceTestCase
+from setup.performance_test_case import MockProvider, PerformanceTestCase
 from setup.plan import Caller
 from setup.wire import TokenSource
 
-MockProvider = Literal["openai", "anthropic", "bedrock"]
+MOCK_PROVIDERS: Final[tuple[MockProvider, ...]] = ("openai", "anthropic", "bedrock")
 
 MOCK_URL_ENV: Final[dict[MockProvider, str]] = {
     "openai": "E2E_PERF_MOCK_OPENAI_URL",

@@ -10,6 +10,7 @@ from typing import Final
 
 from setup.performance_test_case import (
     Limit,
+    MockLatency,
     PerformanceTestCase,
     RequestShape,
     Team,
@@ -29,6 +30,7 @@ CASE: Final = PerformanceTestCase(
         VirtualKey("key-plain"),
     ),
     model_groups=("gpt-6-luna", "claude-sonnet-5", "claude-sonnet-5-bedrock"),
+    mock_latency=MockLatency(seconds=1.0, jitter_seconds=0.25),
     guardrails=(),
     traffic=Traffic(
         seed=11,
@@ -48,5 +50,6 @@ CASE: Final = PerformanceTestCase(
         Limit("time_to_first_token_seconds", percentile=50, max=1.0),
         Limit("time_to_first_token_seconds", percentile=99, max=2.0),
         Limit("memory_growth_megabytes", max=300),
+        Limit("cpu_seconds_per_request", max=0.25),
     ),
 )

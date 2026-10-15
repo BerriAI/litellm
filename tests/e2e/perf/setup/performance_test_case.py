@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Final, Literal
 
 Endpoint = Literal["chat_completions", "responses", "messages"]
+MockProvider = Literal["openai", "anthropic", "bedrock"]
 GuardrailMode = Literal["pre_call", "post_call"]
 Metric = Literal[
     "unexpected_status_count",
@@ -21,6 +22,7 @@ Metric = Literal[
     "time_to_first_token_seconds",
     "memory_growth_megabytes",
     "postgres_calls_per_request",
+    "cpu_seconds_per_request",
     "redis_calls_per_request",
 ]
 
@@ -121,9 +123,20 @@ class Limit:
 
 
 @dataclass(frozen=True, slots=True)
+class MockLatency:
+    """Seconds a mock provider waits before its first byte, plus or minus up to `jitter_seconds` per request
+    (drawn from the request marker, so a rerun waits the same). Zero means the mocks answer at once."""
+
+    seconds: float = 0.0
+    jitter_seconds: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
 class PerformanceTestCase:
     """`model_groups` and `guardrails` name what the gateway config deploys (setup checks they are
-    there); everything else the test creates or sends."""
+    there); everything else the test creates or sends. `mock_latency` is how long every mock provider waits
+    before answering, set on the mock pods at setup, so the provider side of each request is a known
+    constant and the rest of the client's time is the gateway's."""
 
     name: str
     teams: tuple[Team, ...]
@@ -133,6 +146,7 @@ class PerformanceTestCase:
     guardrails: tuple[Guardrail, ...]
     traffic: Traffic
     limits: tuple[Limit, ...]
+    mock_latency: MockLatency = field(default_factory=lambda: MockLatency())
 
     def team(self, name: str) -> Team:
         return next(team for team in self.teams if team.name == name)
@@ -173,3 +187,6 @@ class PerformanceTestCase:
         assert self.traffic.intervene_share + self.traffic.block_share <= 1, f"{self.name}: guardrail shares exceed 1"
         assert self.traffic.total_requests > 0 and self.traffic.rps > 0, f"{self.name}: empty traffic"
         assert self.model_groups, f"{self.name}: no model groups"
+        assert 0 <= self.mock_latency.jitter_seconds <= self.mock_latency.seconds or self.mock_latency.seconds == 0, (
+            f"{self.name}: mock latency jitter {self.mock_latency.jitter_seconds} s exceeds {self.mock_latency.seconds} s"
+        )

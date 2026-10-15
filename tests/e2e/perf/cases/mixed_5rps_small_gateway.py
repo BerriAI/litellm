@@ -13,6 +13,7 @@ from setup.performance_test_case import (
     SHORT,
     Guardrail,
     Limit,
+    MockLatency,
     PerformanceTestCase,
     Team,
     Traffic,
@@ -46,6 +47,7 @@ CASE: Final = PerformanceTestCase(
         VirtualKey("key-plain"),
     ),
     model_groups=("gpt-6-luna", "claude-sonnet-5", "claude-sonnet-5-bedrock"),
+    mock_latency=MockLatency(seconds=1.0, jitter_seconds=0.25),
     guardrails=(Guardrail("perf-pre", mode="pre_call"), Guardrail("perf-post", mode="post_call")),
     traffic=Traffic(
         seed=7,
@@ -65,6 +67,7 @@ CASE: Final = PerformanceTestCase(
         Limit("time_to_first_token_seconds", percentile=50, max=2.0),
         Limit("time_to_first_token_seconds", percentile=99, max=4.0),
         Limit("memory_growth_megabytes", max=300),
+        Limit("cpu_seconds_per_request", max=2.0),
         Limit("postgres_calls_per_request", max=1.5),
         Limit("redis_calls_per_request", max=25.0),
     ),
