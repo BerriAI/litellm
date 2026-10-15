@@ -454,9 +454,27 @@ class TestResolveConfigFromDeployment:
         subset: Final = {key: value for key, value in deployment_wif.items() if key != missing_key}
         with pytest.raises(OpenAIError) as error:
             resolve_openai_workload_identity_config(api_key=None, api_base=None, litellm_params=subset)
-        assert error.value.status_code == 500
+        assert error.value.status_code == 401
         assert f"missing {missing_key}." in error.value.message
         assert all(key not in error.value.message.split(".")[0] for key in subset)
+
+    @respx.mock
+    @pytest.mark.parametrize(
+        "call",
+        [
+            partial(litellm.completion, model="openai/gpt-4o-mini", messages=[{"role": "user", "content": "hi"}]),
+            partial(litellm.image_generation, model="openai/gpt-image-2", prompt="a cat"),
+        ],
+        ids=["chat", "image"],
+    )
+    def test_partial_deployment_identity_surfaces_as_an_auth_error_naming_the_gap(
+        self, deployment_wif: dict[str, str], call: Callable[..., object]
+    ) -> None:
+        subset: Final = {key: value for key, value in deployment_wif.items() if key != "openai_service_account_id"}
+        with pytest.raises(litellm.AuthenticationError) as error:
+            call(**subset)
+        assert error.value.status_code == 401
+        assert "missing openai_service_account_id." in error.value.message
 
     def test_partial_litellm_params_fall_back_to_the_process_key(
         self, deployment_wif: dict[str, str], monkeypatch: pytest.MonkeyPatch
@@ -1718,6 +1736,21 @@ class TestCountTokensFromDeployment:
         await self.count(deployment_wif)
 
         assert bearer_of(route) == "Bearer sk-from-env"
+        assert exchange.call_count == 0
+
+    @respx.mock
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("module_key", ["api_key", "openai_key"])
+    async def test_module_level_key_beats_deployment_identity_without_an_exchange(
+        self, deployment_wif: dict[str, str], monkeypatch: pytest.MonkeyPatch, module_key: str
+    ) -> None:
+        monkeypatch.setattr(litellm, module_key, "sk-module-level")
+        exchange: Final = mock_token_exchange()
+        route: Final = respx.post(INPUT_TOKENS_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 7}))
+
+        await self.count(deployment_wif)
+
+        assert bearer_of(route) == "Bearer sk-module-level"
         assert exchange.call_count == 0
 
     @respx.mock

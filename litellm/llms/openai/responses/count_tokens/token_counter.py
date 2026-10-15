@@ -2,7 +2,6 @@
 OpenAI Token Counter implementation using the Responses API /input_tokens endpoint.
 """
 
-import os
 from typing import Any, Final
 
 from litellm._logging import verbose_logger
@@ -14,7 +13,7 @@ from litellm.llms.openai.responses.count_tokens.handler import (
 from litellm.llms.openai.responses.count_tokens.transformation import (
     OpenAICountTokensConfig,
 )
-from litellm.llms.openai.workload_identity import resolve_openai_bearer_token_async
+from litellm.llms.openai.workload_identity import openai_static_api_key, resolve_openai_bearer_token_async
 from litellm.types.utils import LlmProviders, TokenCountResponse
 
 # Global handler instance - reuse across all token counting requests
@@ -63,7 +62,7 @@ class OpenAITokenCounter(BaseTokenCounter):
 
         try:
             api_key: Final = await resolve_openai_bearer_token_async(
-                static_api_key=litellm_params.get("api_key") or os.getenv("OPENAI_API_KEY"),
+                static_api_key=openai_static_api_key(litellm_params.get("api_key")),
                 api_base=api_base,
                 litellm_params=litellm_params,
             )

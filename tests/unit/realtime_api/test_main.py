@@ -1159,3 +1159,20 @@ async def test_openai_realtime_http_routes_send_the_federated_bearer_for_a_keyle
         **federated_deployment,
     )
     assert gateway.authorization == "Bearer federated-bearer"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_openai_realtime_health_check_sends_the_federated_bearer_for_a_keyless_deployment(
+    federated_deployment: dict[str, str],
+) -> None:
+    _mock_token_exchange()
+    connect: Final = _CapturingConnect()
+    with patch("websockets.connect", connect):
+        assert await realtime_main.realtime_health_check(
+            model="gpt-realtime",
+            custom_llm_provider="openai",
+            api_key=None,
+            model_params={"model": "openai/gpt-realtime", **federated_deployment},
+        )
+    assert connect.kwargs["additional_headers"] == {"Authorization": "Bearer federated-bearer"}

@@ -791,9 +791,18 @@ async def realtime_health_check(
         str | None, api_version or resolved_params.get("api_version")
     )
     url: str | None = None
+    health_check_api_key: Final = (
+        await resolve_openai_bearer_token_async(
+            static_api_key=openai_static_api_key(resolved_api_key),
+            api_base=resolved_api_base,
+            litellm_params=resolved_params,
+        )
+        if custom_llm_provider == LlmProviders.OPENAI.value
+        else resolved_api_key
+    )
     auth_headers: Final = _realtime_health_check_auth_headers(
         custom_llm_provider=custom_llm_provider,
-        api_key=resolved_api_key,
+        api_key=health_check_api_key,
         model_params=resolved_params,
     )
     if custom_llm_provider == "azure":

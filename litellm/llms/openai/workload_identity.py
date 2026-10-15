@@ -78,7 +78,7 @@ def resolve_openai_workload_identity_config(
     )
     if identity_provider_id is None or service_account_id is None or token_file is None:
         if _carries_deployment_identity(litellm_params):
-            raise OpenAIError(status_code=500, message=_incomplete_identity_message(litellm_params))
+            raise OpenAIError(status_code=401, message=_incomplete_identity_message(litellm_params))
         return None
     return OpenAIWorkloadIdentityConfig(
         identity_provider_id=identity_provider_id,
