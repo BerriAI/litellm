@@ -21,6 +21,7 @@ from integration._support.client import Gateway, eventually
 from integration._support.process import OwnedProxy, owned_proxy, owned_proxy_process
 from integration._support.timing import assert_not_delayed_by, timed
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from openai import AsyncOpenAI, OpenAI
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 from opentelemetry.proto.trace.v1.trace_pb2 import Span, Status
@@ -595,8 +596,7 @@ def test_langtrace_two_workers_deliver_every_burst_span_exactly_once(gateway: Ga
 
 def test_langtrace_sink_outage_mid_burst_recovers_on_the_same_port(gateway: Gateway, tmp_path: Path) -> None:
     key: Final = "synthetic-langtrace-key-" + uuid.uuid4().hex
-    with wire_server(_accepted) as probe:
-        port: Final = int(probe.url.rsplit(":", 1)[1])
+    port: Final = allocate_port()
     host: Final = f"http://127.0.0.1:{port}"
     with wire_server(_upstream) as provider:
         overrides: Final = {"LANGTRACE_API_KEY": key, "LANGTRACE_API_HOST": host, "OTEL_BSP_SCHEDULE_DELAY": "300"}

@@ -8,6 +8,7 @@ from typing import Final
 import pytest
 from integration._support.client import Gateway
 from integration._support.idle_gateway import idle_gateway
+from integration._support.ports import allocate_port
 from integration._support.process import graceful_stop_seconds
 from integration.providers._idle_upstream_support import (
     DROP_AFTER_SECONDS,
@@ -108,7 +109,9 @@ def test_upstream_restarted_on_the_same_port_with_connections_pooled_serves_a_bu
         before_restart: Final = stack.enter_context(ExitStack())
         first: Final = MappingProxyType(
             {
-                row.name: before_restart.enter_context(idle_gateway(answer, drop_after=DROP_AFTER_SECONDS))
+                row.name: before_restart.enter_context(
+                    idle_gateway(answer, drop_after=DROP_AFTER_SECONDS, port=allocate_port())
+                )
                 for row in RESTART_ROWS
             }
         )

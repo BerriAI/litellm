@@ -1,6 +1,5 @@
 import asyncio
 import json
-import socket
 import threading
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
@@ -27,6 +26,7 @@ from integration._support.client import (
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
+from integration._support.ports import allocate_port
 from integration.streaming.faked_responses_case import (
     ANTHROPIC_TOOLS,
     API_KEY,
@@ -39,7 +39,7 @@ from integration.streaming.faked_responses_case import (
     message_item,
     response_body,
 )
-from pydantic import JsonValue, TypeAdapter
+from pydantic import JsonValue
 
 pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 
@@ -68,9 +68,6 @@ class _Served:
     call_id: str
 
 
-_ADDRESS: Final = TypeAdapter(tuple[str, int])
-
-
 @dataclass(frozen=True, slots=True)
 class _Rig:
     port: int
@@ -79,12 +76,6 @@ class _Rig:
     @property
     def gateway(self) -> Gateway:
         return self.proxy.gateway
-
-
-def _free_port() -> int:
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        return _ADDRESS.validate_python(reserve.getsockname())[1]
 
 
 def _deployment(name: str, model: str, port: int) -> dict[str, JsonValue]:
@@ -117,7 +108,7 @@ def _config(port: int, directory: Path) -> Path:
 @pytest.fixture(scope="module")
 def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
     directory: Final = tmp_path_factory.mktemp("faked-stream-chaos")
-    port: Final = _free_port()
+    port: Final = allocate_port()
     with (
         gateway_from_environment() as shared,
         owned_proxy_process(shared, directory, {}, config=_config(port, directory), workers=2) as owned,

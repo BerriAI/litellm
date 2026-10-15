@@ -46,6 +46,7 @@ from integration._support.database import read_rows, scratch_database
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from integration._support.upstream import delete_scenario, register_scenario
 from integration._support.wire import Reply, Request, wire_server
+from integration._support.ports import allocate_port
 from integration.cost_calculation.cost_tracking_case import JsonResponse, RoutedResponse, SseResponse, StoredResponse
 from pydantic import JsonValue
 
@@ -1214,10 +1215,10 @@ def test_order_one_outage_mid_burst_hops_stripped_and_recovers_after_restart(gat
         order_two: Final = deployment(
             scenario, name, scenario_api_base(scenario, two_scenario, healthy_json()), order=2
         )
-        with wire_server(peer_reply) as peer:
+        port: Final = allocate_port()
+        with wire_server(peer_reply, port=port) as peer:
             order_one: Final = deployment(scenario, name, peer.url, order=1)
             target: Final = Target(name, frozenset({order_one, order_two}))
-            port: Final = int(peer.url.rsplit(":", 1)[-1])
             warm: Final = marker()
             assert served_by_order_one(responses_answer(gateway, HTTPX, target, history(warm)), order_one), warm
             assert [json.loads(request.body)["input"] for request in peer.drain()] == [history(warm)]

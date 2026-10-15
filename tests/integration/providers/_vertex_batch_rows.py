@@ -1,5 +1,4 @@
 import json
-import socket
 import threading
 from collections.abc import Callable
 from email.message import Message
@@ -130,12 +129,6 @@ def stored_custom_ids(request: Request) -> tuple[str, ...]:
     return tuple(
         json.loads(line)["request"]["labels"]["litellm_custom_id"] for line in request.body.decode().split("\n") if line
     )
-
-
-def closed_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.bind(("127.0.0.1", 0))
-        return int(probe.getsockname()[1])
 
 
 def multipart_file(request: Request) -> bytes:

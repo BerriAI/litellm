@@ -15,6 +15,7 @@ import pytest
 from integration._support.client import Gateway, eventually
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Wire, wire_server
+from integration._support.ports import allocate_port
 from integration.authorization._responses_compact import (
     ALIASES,
     OTHER_TEAM_DETAIL,
@@ -158,9 +159,9 @@ def _settled(target: _Target) -> bool:
 def test_upstream_outage_mid_burst_keeps_refusals_and_lands_each_owner_compact_once(gateway: Gateway) -> None:
     upstream: Final = CompactUpstream()
     created: Final = marker("mint")
+    port: Final = allocate_port()
     with gateway.scenario() as scenario:
-        with wire_server(upstream.respond) as first:
-            port: Final = urlsplit(first.url).port
+        with wire_server(upstream.respond, port=port) as first:
             actors: Final = tenants(scenario, first)
             target: Final = _Target(gateway, actors, mint(gateway, actors.owner, actors.model, created), vendor_id())
             upstreamed(first)
@@ -168,7 +169,6 @@ def test_upstream_outage_mid_burst_keeps_refusals_and_lands_each_owner_compact_o
             before_received: Final = upstreamed(first)
         during: Final = _send_all(target, _calls("during", 16))
         alive: Final = gateway.request("GET", "/health/liveliness")
-        assert port is not None
         with wire_server(upstream.respond, port=port) as second:
             eventually(lambda: _settled(target), lambda settled: settled, seconds=60)
             after: Final = _send_all(target, _calls("after", 16))

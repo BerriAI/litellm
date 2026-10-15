@@ -15,6 +15,7 @@ from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows
 from integration._support.process import WorkerHealthcheck, graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
+from integration._support.ports import allocate_port
 from pydantic import JsonValue
 
 _GENERATE_CONTENT: Final[dict[str, JsonValue]] = {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}
@@ -120,8 +121,8 @@ async def _fire_burst(
 async def test_passthrough_upstream_outage_mid_burst_still_logs_errors_once(gateway: Gateway, tmp_path: Path) -> None:
     config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     path: Final = tmp_path / "chaos-outage.yaml"
-    with wire_server(_chaos_reply) as wire:
-        port: Final = int(wire.url.rsplit(":", 1)[1])
+    port: Final = allocate_port()
+    with wire_server(_chaos_reply, port=port) as wire:
         config["environment_variables"] = {"GEMINI_API_BASE": wire.url, "GEMINI_API_KEY": "scripted"}
         path.write_text(yaml.safe_dump(config))
         with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:

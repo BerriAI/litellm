@@ -1,6 +1,5 @@
 import asyncio
 import re
-import socket
 import threading
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
@@ -35,6 +34,7 @@ from integration._support.responses_stream import (
     rate_limited_stream,
 )
 from integration._support.wire import Reply, Request, wire_server
+from integration._support.ports import allocate_port
 from pydantic import JsonValue
 
 pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
@@ -94,12 +94,6 @@ class _Rig:
         return self.proxy.gateway
 
 
-def _free_port() -> int:
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        return reserve.getsockname()[1]
-
-
 def _config(port: int, directory: Path) -> Path:
     stock: Final = JSON_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
     router_settings: Final = object_value(stock.get("router_settings") or {})
@@ -128,7 +122,7 @@ def _config(port: int, directory: Path) -> Path:
 @pytest.fixture(scope="module")
 def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
     directory: Final = tmp_path_factory.mktemp("bridged-stream-chaos")
-    port: Final = _free_port()
+    port: Final = allocate_port()
     with (
         gateway_from_environment() as shared,
         owned_proxy_process(shared, directory, {}, config=_config(port, directory), workers=2) as owned,
@@ -382,7 +376,7 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_answering_the_bridged
 async def test_proxy_sigterm_mid_burst_drains_the_spend_log_queue_and_the_restarted_proxy_serves(
     gateway: Gateway, tmp_path: Path
 ) -> None:
-    port: Final = _free_port()
+    port: Final = allocate_port()
     config: Final = _config(port, tmp_path)
     calls: Final = _calls(20, _CHAT_KINDS)
     held: Final = _Held(threading.Event(), SimpleQueue())

@@ -1,5 +1,4 @@
 import asyncio
-import socket
 import threading
 import time
 from collections.abc import Generator
@@ -7,23 +6,16 @@ from contextlib import contextmanager
 from typing import Final
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from pydantic import TypeAdapter
 
 from tests.integration._support.async_server import LoopbackServer, close_writer
+from tests.integration._support.ports import allocate_port
 
-PORT: Final = TypeAdapter(int)
 OUTAGE_SECONDS: Final = 10.0
-
-
-def _free_port() -> int:
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        return PORT.validate_python(reserve.getsockname()[1])
 
 
 class DatabaseRelay:
     def __init__(self, upstream_host: str, upstream_port: int, trigger: bytes) -> None:
-        self.port: Final = _free_port()
+        self.port: Final = allocate_port()
         self._upstream_host: Final = upstream_host
         self._upstream_port: Final = upstream_port
         self._trigger: Final = trigger
@@ -83,7 +75,7 @@ class DatabaseRelay:
 
 class HeldStatementRelay:
     def __init__(self, upstream_host: str, upstream_port: int, trigger: bytes) -> None:
-        self.port: Final = _free_port()
+        self.port: Final = allocate_port()
         self._upstream_host: Final = upstream_host
         self._upstream_port: Final = upstream_port
         self._trigger: Final = trigger
@@ -144,7 +136,7 @@ class TriggerScanner:
 
 class DroppedConnectionRelay:
     def __init__(self, upstream_host: str, upstream_port: int, trigger: bytes) -> None:
-        self.port: Final = _free_port()
+        self.port: Final = allocate_port()
         self._upstream_host: Final = upstream_host
         self._upstream_port: Final = upstream_port
         self._trigger: Final = trigger
@@ -231,7 +223,7 @@ class FrontendStatementScanner:
 
 class StatementCountingRelay:
     def __init__(self, upstream_host: str, upstream_port: int) -> None:
-        self.port: Final = _free_port()
+        self.port: Final = allocate_port()
         self._upstream_host: Final = upstream_host
         self._upstream_port: Final = upstream_port
         self._loop: Final = asyncio.new_event_loop()

@@ -8,7 +8,6 @@ from pathlib import Path
 from queue import SimpleQueue
 from types import MappingProxyType
 from typing import Final, TypeAlias
-from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -25,6 +24,7 @@ from integration._support.client import (
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from integration._support.openai_wire import answering_model_discovery, chat_reply
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from integration.providers._cache_control_marks_support import (
     ANTHROPIC_MODEL,
     ASK,
@@ -236,13 +236,6 @@ def _health(gateway: Gateway, model: str) -> Mapping[str, JsonValue]:
     return _JSON_OBJECT.validate_json(response.text)
 
 
-def _free_port() -> int:
-    with wire_server(anthropic_peer) as probe:
-        port: Final = urlsplit(probe.url).port
-    assert port is not None, probe.url
-    return port
-
-
 def _deployment(scenario: Scenario, api_base: str) -> str:
     return scenario.model(model=f"anthropic/{ANTHROPIC_MODEL}", api_base=api_base, api_key=PROVIDER_KEY)
 
@@ -262,7 +255,7 @@ async def test_mixed_burst_carries_the_system_mark_once_per_call(gateway: Gatewa
 async def test_peer_outage_fails_cleanly_and_the_restarted_peer_receives_the_marks(
     gateway: Gateway, spend: pcb.SpendLogs
 ) -> None:
-    port: Final = _free_port()
+    port: Final = allocate_port()
     while_down: Final = _calls(12)
     after: Final = _calls(12)
     with gateway.scenario() as scenario:

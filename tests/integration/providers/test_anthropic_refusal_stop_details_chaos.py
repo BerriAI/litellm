@@ -33,6 +33,7 @@ from integration._support.client import Gateway, eventually, held
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from integration._support.timing import assert_not_delayed_by
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 
 pytestmark: Final = [
     pytest.mark.timeout(2 * graceful_stop_seconds() + 120),
@@ -180,12 +181,6 @@ def _open_upstream_connections(pid: int, upstream: str) -> int:
     )
 
 
-def _port(wire: Wire) -> int:
-    port: Final = urlsplit(wire.url).port
-    assert port is not None, wire.url
-    return port
-
-
 def _accept(_request: Request) -> Reply:
     return Reply()
 
@@ -200,8 +195,9 @@ async def _timed_chat(gateway: Gateway) -> float:
 async def test_sink_outage_mid_burst_delivers_every_refusal_event_once(gateway: Gateway, tmp_path: Path) -> None:
     calls: Final = _calls(30)
     markers: Final = frozenset(call.marker for call in calls)
+    sink_port: Final = allocate_port()
     with wire_server(respond) as upstream, ExitStack() as first_sink:
-        sink: Final = first_sink.enter_context(wire_server(_accept))
+        sink: Final = first_sink.enter_context(wire_server(_accept, port=sink_port))
         first: Final = Ledger(sink)
         config: Final = _chaos_config(tmp_path, upstream, sink.url, retries=6)
         with owned_proxy_process(gateway, tmp_path, {}, config=config, workers=2) as owned:
@@ -213,7 +209,7 @@ async def test_sink_outage_mid_burst_delivers_every_refusal_event_once(gateway: 
             first.events()
             first_sink.close()
             served_during: Final = await _burst(owned.gateway, calls[10:20])
-            with wire_server(_accept, port=_port(sink)) as restarted:
+            with wire_server(_accept, port=sink_port) as restarted:
                 second: Final = Ledger(restarted)
                 served_after: Final = await _burst(owned.gateway, calls[20:])
                 for item in (*served_first, *served_during, *served_after):

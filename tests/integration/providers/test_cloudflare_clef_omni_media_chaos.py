@@ -1,7 +1,6 @@
 import asyncio
 import json
 import re
-import socket
 import threading
 import uuid
 from dataclasses import dataclass
@@ -19,6 +18,7 @@ from integration._support.client import Gateway, eventually, object_value, strin
 from integration._support.database import read_rows
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from pydantic import JsonValue, TypeAdapter
 
 _API_KEY: Final = "synthetic-cloudflare-key"
@@ -163,12 +163,6 @@ def _assert_each_billed_once(
         assert by_call[item.call_id]["status"] == "success", (item.call_id, by_call[item.call_id])
 
 
-def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.bind(("127.0.0.1", 0))
-        return int(probe.getsockname()[1])
-
-
 def _assert_failed_cleanly(served: _Served) -> None:
     assert served.status >= 500, (served.status, served.text)
     assert "answers" not in served.text, served.text
@@ -180,7 +174,7 @@ def _assert_failed_cleanly(served: _Served) -> None:
 async def test_an_upstream_dropping_connections_mid_burst_then_stopped_and_restarted_lands_each_success_once(
     gateway: Gateway,
 ) -> None:
-    port: Final = _free_port()
+    port: Final = allocate_port()
     first_wave: Final = _markers(12)
     dropped: Final = frozenset(marker for index, marker in enumerate(first_wave) if index % 2 == 1)
     while_down: Final = _markers(6)

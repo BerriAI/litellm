@@ -1,6 +1,5 @@
 import asyncio
 import json
-import socket
 import threading
 import uuid
 from collections.abc import Callable, Iterator, Mapping
@@ -18,6 +17,7 @@ import pytest
 from anthropic.types import MessageParam
 from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from integration.providers._count_tokens_system_lift import (
     ANTHROPIC_VERSION,
     ASSISTANT,
@@ -131,12 +131,6 @@ def _listening(deployment: _Deployment, count: Callable[[Request], Reply] = _cou
     return wire_server(_peer(deployment.provider, count), port=deployment.port)
 
 
-def _reserved_port() -> int:
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        return _CLIENT_ADDRESS.validate_python(reserve.getsockname())[1]
-
-
 def _cmdline(process: psutil.Process) -> tuple[str, ...]:
     try:
         return _ARGUMENTS.validate_python(process.cmdline())
@@ -211,7 +205,7 @@ def _settled_on_every_worker(gateway: Gateway, body: Mapping[str, JsonValue]) ->
 
 
 def _deploy(gateway: Gateway, scenario: Scenario, provider: _Provider) -> _Deployment:
-    port: Final = _reserved_port()
+    port: Final = allocate_port()
     model: Final = scenario.model(
         model_info=None, model=f"{provider.prefix}/{_MODEL}", api_base=f"http://127.0.0.1:{port}", api_key=_API_KEY
     )
