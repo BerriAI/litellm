@@ -50,11 +50,12 @@ from litellm.llms.anthropic.chat.transformation import (
     DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
     REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT,
     AnthropicConfig,
+    tools_without_unsupported_tool_search,
 )
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.tool_result_images import place_tool_result_images
-from litellm.llms.bedrock.common_utils import bedrock_model_supports_regex_lookaround
+from litellm.llms.bedrock.common_utils import bedrock_model_supports_regex_lookaround, bedrock_supports_tool_search
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
     bedrock_request_metadata_is_owned,
@@ -144,6 +145,8 @@ UNSUPPORTED_BEDROCK_CONVERSE_BETA_PATTERNS: Final = [
 
 
 _TOOLS_AS_SENT: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+_TOOLS_AS_RECEIVED: Final = TypeAdapter(list[object])
+CLAUDE_ON_BEDROCK_INVOKE_REMEDY: Final = " This model runs tool search on Bedrock through `bedrock/invoke/<model>`."
 _DEPLOYMENT_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
@@ -1094,7 +1097,18 @@ class AmazonConverseConfig(BaseConfig):
                     optional_params["topP" if param == "top_p" else param] = value
             if param == "tools" and isinstance(value, list):
                 self._apply_tool_call_transformation(
-                    tools=cast(list[OpenAIChatCompletionToolParam], value),
+                    tools=cast(
+                        list[OpenAIChatCompletionToolParam],
+                        list(
+                            tools_without_unsupported_tool_search(
+                                tools=_TOOLS_AS_RECEIVED.validate_python(value),
+                                model=model,
+                                route="bedrock",
+                                drop_params=drop_params,
+                                remedy=CLAUDE_ON_BEDROCK_INVOKE_REMEDY if bedrock_supports_tool_search(model) else "",
+                            )
+                        ),
+                    ),
                     model=model,
                     non_default_params=non_default_params,
                     optional_params=optional_params,

@@ -4121,6 +4121,18 @@ async def test_truncated_jsonrpc_response_with_nested_method_skips_lock(
     )
     mcp_server._stateful_session_owners[session_id] = mcp_server._owner_fingerprint_for(owner_auth)
 
+    class _RecordingLock(asyncio.Lock):
+        def __init__(self) -> None:
+            super().__init__()
+            self.contended = asyncio.Event()
+
+        async def acquire(self) -> bool:
+            if self.locked():
+                self.contended.set()
+            return await super().acquire()
+
+    session_lock: Final = _RecordingLock()
+    mcp_server._stateful_session_locks[session_id] = session_lock
     gate = asyncio.Event()
     request_in_handle = asyncio.Event()
     response_handled = asyncio.Event()
@@ -4186,12 +4198,19 @@ async def test_truncated_jsonrpc_response_with_nested_method_skips_lock(
             ),
         ):
             req_task = asyncio.create_task(call(request_body))
-            await asyncio.wait_for(request_in_handle.wait(), timeout=1.0)
+            await request_in_handle.wait()
 
             resp_task = asyncio.create_task(call(response_body))
-            # Under a flat substring heuristic the response would acquire the
-            # lock held by req_task and this wait would time out (deadlock).
-            await asyncio.wait_for(response_handled.wait(), timeout=1.0)
+            response_handled_task: Final = asyncio.create_task(response_handled.wait())
+            contended_task: Final = asyncio.create_task(session_lock.contended.wait())
+            _, pending = await asyncio.wait(
+                (response_handled_task, contended_task),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for event_task in pending:
+                event_task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            assert response_handled.is_set(), "response POST contended for the request's session lock"
 
             await resp_task
             assert not req_task.done()
@@ -4207,6 +4226,7 @@ async def test_truncated_jsonrpc_response_with_nested_method_skips_lock(
     finally:
         gate.set()
         mcp_server._stateful_session_auth_contexts.pop(session_id, None)
+        mcp_server._stateful_session_auth_context_last_seen.pop(session_id, None)
         mcp_server._stateful_session_owners.pop(session_id, None)
         mcp_server._stateful_session_locks.pop(session_id, None)
         mcp_server._stateful_session_active_request_counts.pop(session_id, None)

@@ -814,6 +814,7 @@ def validate_model_cost_values(model_data, exceptions=None):
         "output_cost_per_pixel",
         "cost_per_second",
         "input_cost_per_second",
+        "input_cost_per_text_message",
         "output_cost_per_second",
         "output_cost_per_second_480p",
         "output_cost_per_second_720p",
@@ -1020,6 +1021,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_request": {"type": "number"},
                 "cost_per_second": {"type": "number"},
                 "input_cost_per_second": {"type": "number"},
+                "input_cost_per_text_message": {"type": "number"},
                 "input_cost_per_token": {"type": "number"},
                 "input_cost_per_token_above_128k_tokens": {"type": "number"},
                 "input_cost_per_audio_token_batches": {"type": "number"},
@@ -1133,6 +1135,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_tool_choice": {"type": "boolean"},
                 "supports_tool_search": {"type": "boolean"},
                 "supports_video_input": {"type": "boolean"},
+                "supports_box_questions": {"type": "boolean"},
                 "supports_vision": {"type": "boolean"},
                 "supports_web_search": {"type": "boolean"},
                 "supports_bedrock_runtime_chat_completions_tools_with_reasoning": {"type": "boolean"},
@@ -7005,6 +7008,32 @@ def test_get_model_info_gemini(monkeypatch):
         ):
             assert info.get("tpm") is not None, f"{model} does not have tpm"
             assert info.get("rpm") is not None, f"{model} does not have rpm"
+
+
+@pytest.mark.parametrize(
+    "model, litellm_params, expects_native_config",
+    [
+        ("gemini-2.5-flash", None, True),
+        ("xai/grok-4.6", None, False),
+        ("claude-haiku-4-5@20251001", None, False),
+        ("openai/gpt-oss-120b-maas", None, False),
+        ("gemma/gemma-3-12b-it", None, False),
+        ("agent_engine/1234567890", None, False),
+        ("openai/tuned-endpoint", {"base_model": "gemini-2.5-flash"}, True),
+    ],
+)
+def test_vertex_generate_content_config_follows_model_route(
+    model: str, litellm_params: dict[str, str] | None, expects_native_config: bool
+):
+    from litellm.llms.vertex_ai.google_genai.transformation import VertexAIGoogleGenAIConfig
+
+    config: Final = ProviderConfigManager.get_provider_google_genai_generate_content_config(
+        model=model, provider=litellm.LlmProviders.VERTEX_AI, litellm_params=litellm_params
+    )
+    if expects_native_config:
+        assert isinstance(config, VertexAIGoogleGenAIConfig)
+    else:
+        assert config is None
 
 
 @pytest.mark.parametrize(

@@ -6,13 +6,13 @@ import json
 import mimetypes
 import re
 import xml.etree.ElementTree as ET
-from collections.abc import Container, Iterator, Mapping, Sequence
+from collections.abc import Container, Iterable, Iterator, Mapping, Sequence
 from enum import Enum
 from types import MappingProxyType
 from typing import Any, Final, TypeAlias, TypedDict, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue
 
 import litellm
 import litellm.types
@@ -1440,6 +1440,45 @@ def convert_to_gemini_tool_call_invoke(
         raise Exception(f"Unable to convert openai tool calls={message} to gemini tool calls. Received error={e}")
 
 
+def _json_children(node: JsonValue) -> Iterable[JsonValue]:
+    if isinstance(node, dict):
+        return node.values()
+    if isinstance(node, list):
+        return (child for child in node if not isinstance(child, list))
+    return ()
+
+
+def _next_json_level(level: tuple[JsonValue, ...], _: None) -> tuple[JsonValue, ...]:
+    return tuple(itertools.chain.from_iterable(_json_children(node) for node in level))
+
+
+def _is_part_reference(node: JsonValue) -> bool:
+    if not isinstance(node, dict):
+        return False
+    ref: Final[JsonValue] = node.get("$ref")
+    return isinstance(ref, str) and ref != ""
+
+
+_REF_CHAR_ESCAPE: Final = re.compile(r"\\u00(?:24|72|65|66)")
+
+
+def _may_spell_ref_key(raw_json: str) -> bool:
+    """JSON text can only spell the key $ref literally or by \\u-escaping one of its four characters"""
+    return '"$ref"' in raw_json or _REF_CHAR_ESCAPE.search(raw_json) is not None
+
+
+def _contains_part_reference(payload: JsonValue) -> bool:
+    """Gemini reads a {"$ref": "<non-empty string>"} object in a function_response as a pointer to one of its parts,
+    unless it sits under a list nested directly in a list
+
+    Google does not document this. It was observed on the Gemini API and Vertex AI on 2026-10-15, see issue #38223
+    """
+    levels: Final = itertools.takewhile(
+        bool, itertools.accumulate(itertools.repeat(None), _next_json_level, initial=(payload,))
+    )
+    return any(_is_part_reference(node) for node in itertools.chain.from_iterable(levels))
+
+
 def convert_to_gemini_tool_call_result(
     message: ChatCompletionToolMessage | ChatCompletionFunctionMessage,
     last_message_with_tool_calls: dict | None,
@@ -1584,8 +1623,8 @@ def convert_to_gemini_tool_call_result(
     try:
         if content_str.strip().startswith("{") or content_str.strip().startswith("["):
             # Try to parse as JSON (for Computer Use structured responses)
-            parsed: Final = json.loads(content_str)
-            if isinstance(parsed, dict):
+            parsed: Final[JsonValue] = json.loads(content_str)
+            if isinstance(parsed, dict) and not (_may_spell_ref_key(content_str) and _contains_part_reference(parsed)):
                 response_data = parsed  # Use the parsed JSON directly
             else:
                 response_data = {"content": content_str}
@@ -2479,7 +2518,22 @@ def sanitize_messages_for_tool_calling(
 def _replayable_thinking_blocks(
     thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
 ) -> list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock]:
-    return [_with_native_redacted_data(block) for block in thinking_blocks if not is_unsignable_thinking_block(block)]
+    return [
+        _without_stream_index(_with_native_redacted_data(block))
+        for block in thinking_blocks
+        if not is_unsignable_thinking_block(block)
+    ]
+
+
+def _without_stream_index(
+    block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
+) -> ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock:
+    if "index" not in block:
+        return block
+    return cast(  # cast-ok: dropping one key keeps the block's TypedDict shape
+        ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
+        {key: value for key, value in block.items() if key != "index"},
+    )
 
 
 def _with_native_redacted_data(

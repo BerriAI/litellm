@@ -1,8 +1,21 @@
 from typing import Final
 
+from integration._support.client import object_value
 from integration.translation.case import TranslationTestCase
-from integration.translation.chat_completions.templates import CHAT_COMPLETIONS_REQUEST, CHAT_COMPLETIONS_RESPONSE
-from integration.translation.templates.azure import AZURE_RESPONSES_BRIDGE_REQUEST, AZURE_RESPONSES_RESPONSE
+from integration.translation.chat_completions.templates import (
+    CHAT_COMPLETIONS_REQUEST,
+    CHAT_COMPLETIONS_RESPONSE,
+    CODING_AGENT_REQUEST,
+    CODING_AGENT_RESPONSE,
+)
+from integration.translation.templates.azure import (
+    AZURE_RESPONSES_BRIDGE_REQUEST,
+    AZURE_RESPONSES_RESPONSE,
+)
+from integration.translation.templates.openai import (
+    OPENAI_RESPONSES_AGENT_REQUEST,
+    OPENAI_RESPONSES_AGENT_RESPONSE,
+)
 from pydantic import JsonValue
 
 GPT_5_4_TEST_CASE: Final = TranslationTestCase(
@@ -882,6 +895,174 @@ GPT_6_ASTRA_TEST_CASE: Final = TranslationTestCase(
         "presence_penalty": 0.0,
         "service_tier": "default",
         "tool_usage": AZURE_RESPONSES_RESPONSE["tool_usage"],
+    },
+)
+
+
+GPT_5_4_MINI_TEST_CASE: Final = TranslationTestCase(
+    scenario="agent_tools",
+    litellm_endpoint="/v1/chat/completions",
+    litellm_request={**CODING_AGENT_REQUEST, "model": "azure/gpt-5.4-mini"},
+    expected_provider_endpoint="/openai/responses?api-version=2025-04-01-preview",
+    expected_provider_headers={"content-type": "application/json", "api-key": "synthetic-agent-key"},
+    expected_provider_request={**OPENAI_RESPONSES_AGENT_REQUEST, "model": "gpt-5.4-mini"},
+    mock_provider_response={
+        **OPENAI_RESPONSES_AGENT_RESPONSE,
+        "id": "resp_0f005e55e6e18746006ad04ac8e4548196b106305915e785b5",
+        "created_at": 1792035528,
+        "status": "completed",
+        "completed_at": 1792035532,
+        "content_filters": [
+            {
+                "blocked": False,
+                "source_type": "prompt",
+                "content_filter_raw": [],
+                "content_filter_results": {
+                    "hate": {"filtered": False, "severity": "safe"},
+                    "sexual": {"filtered": False, "severity": "safe"},
+                    "violence": {"filtered": False, "severity": "safe"},
+                    "self_harm": {"filtered": False, "severity": "safe"},
+                    "jailbreak": {"detected": False, "filtered": False},
+                },
+                "content_filter_offsets": {"start_offset": 0, "end_offset": 972, "check_offset": 0},
+            },
+            {
+                "blocked": False,
+                "source_type": "completion",
+                "content_filter_raw": [],
+                "content_filter_results": {
+                    "protected_material_code": {"detected": False, "filtered": False},
+                    "protected_material_text": {"detected": False, "filtered": False},
+                    "hate": {"filtered": False, "severity": "safe"},
+                    "sexual": {"filtered": False, "severity": "safe"},
+                    "violence": {"filtered": False, "severity": "safe"},
+                    "self_harm": {"filtered": False, "severity": "safe"},
+                },
+                "content_filter_offsets": {"start_offset": 0, "end_offset": 253, "check_offset": 0},
+            },
+        ],
+        "model": "gpt-5.4-mini",
+        "output": [
+            {
+                "id": "msg_0f005e55e6e18746006ad04acc3984819690df06110511aa15",
+                "type": "message",
+                "status": "completed",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "annotations": [],
+                        "logprobs": [],
+                        "text": "I’ll search for callers and run the targeted test before patching.",
+                    }
+                ],
+                "phase": "commentary",
+                "role": "assistant",
+            },
+            {
+                "id": "fc_0f005e55e6e18746006ad04acc713c8196b5484f104d908067",
+                "type": "function_call",
+                "status": "completed",
+                "arguments": '{"query":"retries_remaining("}',
+                "call_id": "call_d8z67veoQLDjeKe3peLFNYvC",
+                "name": "search_code",
+            },
+            {
+                "id": "fc_0f005e55e6e18746006ad04acc72c081969ee09d2b44b50a84",
+                "type": "function_call",
+                "status": "completed",
+                "arguments": '{"path":"tests/test_retry.py"}',
+                "call_id": "call_yL8qxv5wZi6Eoesr69xs2UBd",
+                "name": "run_tests",
+            },
+        ],
+        "prompt_cache_retention": "in_memory",
+        "reasoning": {**object_value(OPENAI_RESPONSES_AGENT_RESPONSE["reasoning"]), "context": "current_turn"},
+        "service_tier": "default",
+        "usage": {
+            "input_tokens": 448,
+            "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+            "output_tokens": 75,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": 523,
+        },
+    },
+    expected_litellm_response={
+        **CODING_AGENT_RESPONSE,
+        "id": "resp_0f005e55e6e18746006ad04ac8e4548196b106305915e785b5",
+        "model": "azure/gpt-5.4-mini",
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {
+                    "content": "I’ll search for callers and run the targeted test before patching.",
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {"arguments": '{"query":"retries_remaining("}', "name": "search_code"},
+                            "id": "call_d8z67veoQLDjeKe3peLFNYvC",
+                            "type": "function",
+                        },
+                        {
+                            "index": 1,
+                            "function": {"arguments": '{"path":"tests/test_retry.py"}', "name": "run_tests"},
+                            "id": "call_yL8qxv5wZi6Eoesr69xs2UBd",
+                            "type": "function",
+                        },
+                    ],
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 75,
+            "prompt_tokens": 448,
+            "total_tokens": 523,
+            "completion_tokens_details": {"reasoning_tokens": 0},
+            "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "cache_creation_tokens": 0},
+        },
+        "content_filters": [
+            {
+                "blocked": False,
+                "source_type": "prompt",
+                "content_filter_raw": [],
+                "content_filter_results": {
+                    "hate": {"filtered": False, "severity": "safe"},
+                    "sexual": {"filtered": False, "severity": "safe"},
+                    "violence": {"filtered": False, "severity": "safe"},
+                    "self_harm": {"filtered": False, "severity": "safe"},
+                    "jailbreak": {"detected": False, "filtered": False},
+                },
+                "content_filter_offsets": {"start_offset": 0, "end_offset": 972, "check_offset": 0},
+            },
+            {
+                "blocked": False,
+                "source_type": "completion",
+                "content_filter_raw": [],
+                "content_filter_results": {
+                    "protected_material_code": {"detected": False, "filtered": False},
+                    "protected_material_text": {"detected": False, "filtered": False},
+                    "hate": {"filtered": False, "severity": "safe"},
+                    "sexual": {"filtered": False, "severity": "safe"},
+                    "violence": {"filtered": False, "severity": "safe"},
+                    "self_harm": {"filtered": False, "severity": "safe"},
+                },
+                "content_filter_offsets": {"start_offset": 0, "end_offset": 253, "check_offset": 0},
+            },
+        ],
+        "frequency_penalty": 0.0,
+        "presence_penalty": 0.0,
+        "service_tier": "default",
+        "tool_usage": {
+            "image_gen": {
+                "input_tokens": 0,
+                "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                "output_tokens": 0,
+                "output_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                "total_tokens": 0,
+            },
+            "web_search": {"num_requests": 0},
+        },
     },
 )
 
