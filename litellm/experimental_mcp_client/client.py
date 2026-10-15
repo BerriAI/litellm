@@ -38,6 +38,9 @@ _TransportContext: TypeAlias = AbstractAsyncContextManager[_TransportStreams]
 _SessionCallbackName: TypeAlias = Literal["sampling_callback", "elicitation_callback", "logging_callback"]
 
 
+SESSION_CLEANUP_TIMEOUT_MESSAGE: Final = "MCP session cleanup timed out"
+
+
 class _SessionCallbackMap(TypedDict):
     sampling_callback: ReadOnly[SamplingFnT | None]
     elicitation_callback: ReadOnly[ElicitationFnT | None]
@@ -815,7 +818,7 @@ class MCPClient:
             raise (
                 in_flight_error
                 if in_flight_error is not None
-                else asyncio.CancelledError("MCP session cleanup timed out")
+                else asyncio.CancelledError(SESSION_CLEANUP_TIMEOUT_MESSAGE)
             )
         return result
 
