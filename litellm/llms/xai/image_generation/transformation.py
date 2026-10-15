@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, TypeAlias
 
 import httpx
 
@@ -7,18 +7,21 @@ from litellm.exceptions import AuthenticationError
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
-from litellm.llms.xai.common_utils import XAIModelInfo
+from litellm.llms.xai.common_utils import XAIModelInfo, xai_image_response
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIImageGenerationOptionalParams,
 )
-from litellm.types.utils import ImageObject, ImageResponse
+from litellm.types.utils import ImageResponse
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
+_Params: TypeAlias = dict[str, object]
+_Headers: TypeAlias = dict[str, object]
+_SupportedParams: TypeAlias = list[OpenAIImageGenerationOptionalParams]
 
 _SIZE_TO_ASPECT_RATIO: Final = {
     "1024x1024": "1:1",
@@ -35,18 +38,16 @@ _XAI_NATIVE_PARAMS: Final = frozenset({"aspect_ratio", "n"})
 
 
 class XAIImageGenerationConfig(BaseImageGenerationConfig):
-    def get_supported_openai_params(
-        self, model: str
-    ) -> list[OpenAIImageGenerationOptionalParams]:  # mutable-ok: provider JSON body and base-class dict signature
+    def get_supported_openai_params(self, model: str) -> _SupportedParams:
         return ["n", "response_format", "size", "user"]
 
     def map_openai_params(
         self,
-        non_default_params: dict[str, object],  # mutable-ok: provider JSON body and base-class dict signature
-        optional_params: dict[str, object],  # mutable-ok: provider JSON body and base-class dict signature
+        non_default_params: _Params,
+        optional_params: _Params,
         model: str,
         drop_params: bool,
-    ) -> dict:  # mutable-ok: provider JSON body and base-class dict signature
+    ) -> _Params:
         supported_params: Final = frozenset(self.get_supported_openai_params(model))
         allowed: Final = supported_params | _XAI_NATIVE_PARAMS
         unknown: Final = tuple(key for key in non_default_params if key not in optional_params and key not in allowed)
@@ -73,8 +74,8 @@ class XAIImageGenerationConfig(BaseImageGenerationConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict[str, object],  # mutable-ok: provider JSON body and base-class dict signature
-        litellm_params: dict[str, object],  # mutable-ok: provider JSON body and base-class dict signature
+        optional_params: _Params,
+        litellm_params: _Params,
         stream: bool | None = None,
     ) -> str:
         from litellm.llms.xai.oauth import XAIOAuthAuthenticator, should_use_xai_oauth
@@ -89,16 +90,7 @@ class XAIImageGenerationConfig(BaseImageGenerationConfig):
             return f"{base}/images/generations"
         return f"{base}/v1/images/generations"
 
-    def validate_environment(
-        self,
-        headers: dict,  # mutable-ok: provider JSON body and base-class dict signature
-        model: str,
-        messages: list[AllMessageValues],  # mutable-ok: provider JSON body and base-class dict signature
-        optional_params: dict[str, object],  # mutable-ok: provider JSON body and base-class dict signature
-        litellm_params: dict[str, object],  # mutable-ok: provider JSON body and base-class dict signature
-        api_key: str | None = None,
-        api_base: str | None = None,
-    ) -> dict:  # mutable-ok: provider JSON body and base-class dict signature
+    def _bearer_token(self, model: str, api_key: str | None, litellm_params: _Params) -> str:
         from litellm.llms.xai.oauth import (
             XAIOAuthAuthenticator,
             XAIOAuthError,
@@ -106,39 +98,47 @@ class XAIImageGenerationConfig(BaseImageGenerationConfig):
         )
 
         dynamic_api_key: Final = XAIModelInfo.get_api_key(api_key)
-        if should_use_xai_oauth(litellm_params) and not dynamic_api_key:
-            try:
-                headers["Authorization"] = f"Bearer {XAIOAuthAuthenticator().get_access_token()}"
-            except XAIOAuthError as exc:
-                raise AuthenticationError(
-                    model=model,
-                    llm_provider="xai",
-                    message=str(exc),
-                ) from exc
-        else:
-            if not dynamic_api_key:
-                raise AuthenticationError(
-                    model=model,
-                    llm_provider="xai",
-                    message=(
-                        "Missing xAI credentials for image generation. "
-                        "Pass api_key / XAI_API_KEY, or set use_xai_oauth=True."
-                    ),
-                )
-            headers["Authorization"] = f"Bearer {dynamic_api_key}"
+        if dynamic_api_key:
+            return dynamic_api_key
+        if not should_use_xai_oauth(litellm_params):
+            raise AuthenticationError(
+                model=model,
+                llm_provider="xai",
+                message=(
+                    "Missing xAI credentials for image generation. "
+                    "Pass api_key / XAI_API_KEY, or set use_xai_oauth=True."
+                ),
+            )
+        try:
+            return XAIOAuthAuthenticator().get_access_token()
+        except XAIOAuthError as exc:
+            raise AuthenticationError(model=model, llm_provider="xai", message=str(exc)) from exc
 
-        if "content-type" not in headers and "Content-Type" not in headers:
-            headers["Content-Type"] = "application/json"
-        return headers
+    def validate_environment(
+        self,
+        headers: _Headers,
+        model: str,
+        messages: list[AllMessageValues],  # mutable-ok: base-class signature
+        optional_params: _Params,
+        litellm_params: _Params,
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> _Headers:
+        has_content_type: Final = "content-type" in headers or "Content-Type" in headers
+        return {
+            **headers,
+            "Authorization": f"Bearer {self._bearer_token(model, api_key, litellm_params)}",
+            **({} if has_content_type else {"Content-Type": "application/json"}),
+        }
 
     def transform_image_generation_request(
         self,
         model: str,
         prompt: str,
-        optional_params: dict[str, object],  # mutable-ok: provider JSON body and base-class dict signature
-        litellm_params: dict[str, object],  # mutable-ok: provider JSON body and base-class dict signature
-        headers: dict,  # mutable-ok: provider JSON body and base-class dict signature
-    ) -> dict:  # mutable-ok: provider JSON body and base-class dict signature
+        optional_params: _Params,
+        litellm_params: _Params,
+        headers: _Headers,
+    ) -> _Params:
         n: Final = optional_params.get("n")
         requested_ratio: Final = optional_params.get("aspect_ratio")
         aspect: Final = {"aspect_ratio": requested_ratio} if requested_ratio is not None else None  # fmt: skip
@@ -156,42 +156,13 @@ class XAIImageGenerationConfig(BaseImageGenerationConfig):
         raw_response: httpx.Response,
         model_response: ImageResponse,
         logging_obj: "LiteLLMLoggingObj",
-        request_data: dict[str, object],  # mutable-ok: provider JSON body and base-class dict signature
-        optional_params: dict[str, object],  # mutable-ok: provider JSON body and base-class dict signature
-        litellm_params: dict[str, object],  # mutable-ok: provider JSON body and base-class dict signature
-        encoding: "tiktoken.Encoding | None",
+        request_data: _Params,
+        optional_params: _Params,
+        litellm_params: _Params,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
-        try:
-            response_data: Final = raw_response.json()
-        except Exception:  # noqa: BLE001  # any body-parse failure becomes a provider error carrying the raw payload
-            raise self.get_error_class(
-                error_message=raw_response.text,
-                status_code=raw_response.status_code,
-                headers=raw_response.headers,
-            )
-
-        logging_obj.post_call(
-            input=request_data.get("prompt", ""),
-            api_key=api_key,
-            additional_args={"complete_input_dict": request_data},
-            original_response=response_data,
-        )
-
-        images: Final = tuple(
-            ImageObject(
-                url=item.get("url"),
-                b64_json=item.get("b64_json") or item.get("b64"),
-            )
-            for item in response_data.get("data") or ()
-            if isinstance(item, dict)
-        )
-        if not images:
-            raise self.get_error_class(
-                error_message=f"xAI image generation returned no image data: {response_data}",
-                status_code=raw_response.status_code,
-                headers=raw_response.headers,
-            )
-        model_response.data = list(images)
+        images: Final = xai_image_response(raw_response, "image generation")
+        model_response.data = list(images)  # rebind-ok: the base contract fills the caller's ImageResponse
         return model_response

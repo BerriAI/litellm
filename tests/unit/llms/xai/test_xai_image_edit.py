@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
@@ -309,11 +310,11 @@ def test_transform_rejects_unsupported_image_type():
 def test_transform_response_raises_provider_error_without_images(raw):
     from litellm.llms.xai.image_edit.transformation import XAIImageEditConfig
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(BaseLLMException) as exc_info:
         XAIImageEditConfig().transform_image_edit_response(
             model="grok-imagine-image",
             raw_response=raw,
             logging_obj=MagicMock(),
         )
 
-    assert getattr(exc_info.value, "status_code", None) == raw.status_code
+    assert exc_info.value.status_code == raw.status_code

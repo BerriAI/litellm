@@ -6,14 +6,48 @@ from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import ProviderSpecificModelInfo
+from litellm.types.utils import ImageObject, ProviderSpecificModelInfo
 
 USD_TICKS_PER_DOLLAR: Final = 10_000_000_000
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_VALUES: Final = TypeAdapter(Iterable[object], config=ConfigDict(hide_input_in_errors=True))
 _MODEL_ID: Final = TypeAdapter(str, config=ConfigDict(strict=True, hide_input_in_errors=True))
+
+
+def _optional_str(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _image_object(entry: object) -> ImageObject | None:
+    if not isinstance(entry, Mapping):
+        return None
+    item: Final = _JSON_OBJECT.validate_python(entry)
+    return ImageObject(
+        url=_optional_str(item.get("url")),
+        b64_json=_optional_str(item.get("b64_json")) or _optional_str(item.get("b64")),
+    )
+
+
+def xai_image_response(raw_response: httpx.Response, operation: str) -> tuple[ImageObject, ...]:
+    try:
+        payload: Final = _JSON_OBJECT.validate_python(raw_response.json())
+    except ValueError as exc:
+        raise BaseLLMException(
+            status_code=raw_response.status_code, message=raw_response.text, headers=raw_response.headers
+        ) from exc
+    data: Final = payload.get("data")
+    entries: Final = _JSON_VALUES.validate_python(data) if isinstance(data, list) else ()
+    images: Final = tuple(image for image in map(_image_object, entries) if image is not None)
+    if not images:
+        raise BaseLLMException(
+            status_code=raw_response.status_code,
+            message=f"xAI {operation} returned no image data: {payload}",
+            headers=raw_response.headers,
+        )
+    return images
 
 
 def xai_reported_cost_in_usd(cost_in_usd_ticks: object) -> float | None:
@@ -104,9 +138,4 @@ class XAIModelInfo(BaseLLMModelInfo):
 
         models: Final = _JSON_VALUES.validate_python(_JSON_OBJECT.validate_python(response.json())["data"])
 
-        litellm_model_names: Final = []
-        for model in models:
-            stripped_model_name = _MODEL_ID.validate_python(_JSON_OBJECT.validate_python(model)["id"])
-            litellm_model_name = "xai/" + stripped_model_name
-            litellm_model_names.append(litellm_model_name)
-        return litellm_model_names
+        return ["xai/" + _MODEL_ID.validate_python(_JSON_OBJECT.validate_python(model)["id"]) for model in models]

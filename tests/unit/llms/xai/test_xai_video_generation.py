@@ -279,6 +279,26 @@ def test_sync_video_status_through_the_http_handler():
     assert client.get.call_args.kwargs["url"] == "https://api.x.ai/v1/videos/req-123"
 
 
+def test_sync_video_content_downloads_the_cdn_file_with_the_handler_client():
+    client = MagicMock(spec=HTTPHandler)
+    client.get.return_value = httpx.Response(
+        200,
+        headers={"content-type": "application/json"},
+        json={"status": "done", "video": {"url": "https://vidgen.x.ai/x.mp4"}},
+        request=httpx.Request("GET", "https://api.x.ai/v1/videos/req-123"),
+    )
+    cdn_response = httpx.Response(200, content=b"mp4-bytes", request=httpx.Request("GET", "https://vidgen.x.ai/x.mp4"))
+
+    with patch("litellm.llms.xai.videos.transformation.safe_get", return_value=cdn_response) as safe_get:
+        body = litellm.video_content(
+            video_id="req-123", model="xai/grok-imagine-video", api_key="test-key", client=client
+        )
+
+    assert body == b"mp4-bytes"
+    assert client.get.call_args.kwargs["url"] == "https://api.x.ai/v1/videos/req-123"
+    safe_get.assert_called_once_with(client, "https://vidgen.x.ai/x.mp4")
+
+
 def test_validate_environment_requires_credentials():
     with pytest.raises(Exception, match="Missing xAI credentials"):
         XAIVideoConfig().validate_environment(
