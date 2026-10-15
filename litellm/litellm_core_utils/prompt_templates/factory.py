@@ -6,14 +6,13 @@ import json
 import mimetypes
 import re
 import xml.etree.ElementTree as ET
-from collections.abc import Container, Iterator, Mapping, Sequence
+from collections.abc import Container, Iterable, Iterator, Mapping, Sequence
 from enum import Enum
-from itertools import chain
 from types import MappingProxyType
 from typing import Any, Final, TypeAlias, TypedDict, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue
 
 import litellm
 import litellm.types
@@ -1441,20 +1440,21 @@ def convert_to_gemini_tool_call_invoke(
         raise Exception(f"Unable to convert openai tool calls={message} to gemini tool calls. Received error={e}")
 
 
-def _contains_json_schema_ref(payload: object) -> bool:
-    """
-    Gemini interprets {"$ref": ...} objects anywhere inside function_response.response
-    as references to named parts in function_response.parts and rejects the request when
-    no matching part exists. Tool results carrying JSON Schema data must therefore not be
-    sent structurally. https://github.com/BerriAI/litellm/issues/38223
-    """
-    level: tuple[object, ...] = (payload,)
+def _json_children(node: JsonValue) -> Iterable[JsonValue]:
+    if isinstance(node, dict):
+        return node.values()
+    if isinstance(node, list):
+        return node
+    return ()
+
+
+def _contains_json_schema_ref(payload: JsonValue) -> bool:
+    """Gemini reads any {"$ref": ...} object in a function_response as a pointer to one of its parts"""
+    level: tuple[JsonValue, ...] = (payload,)  # rebind-ok: recursion is banned here, so the walk rebinds per level
     while level:
-        if any(isinstance(x, dict) and "$ref" in x for x in level):
+        if any(isinstance(node, dict) and "$ref" in node for node in level):
             return True
-        level = tuple(
-            chain.from_iterable(v.values() if isinstance(v, dict) else v for v in level if isinstance(v, (dict, list)))
-        )
+        level = tuple(itertools.chain.from_iterable(_json_children(node) for node in level))
     return False
 
 
@@ -1602,7 +1602,7 @@ def convert_to_gemini_tool_call_result(
     try:
         if content_str.strip().startswith("{") or content_str.strip().startswith("["):
             # Try to parse as JSON (for Computer Use structured responses)
-            parsed: Final = json.loads(content_str)
+            parsed: Final[JsonValue] = json.loads(content_str)
             if isinstance(parsed, dict) and not _contains_json_schema_ref(parsed):
                 response_data = parsed  # Use the parsed JSON directly
             else:

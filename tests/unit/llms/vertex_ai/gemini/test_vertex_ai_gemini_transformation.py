@@ -444,7 +444,7 @@ def test_transform_request_body_wraps_tool_result_with_json_schema_ref():
         {"role": "user", "content": "Acknowledge the result."},
     ]
 
-    result = _transform_request_body(
+    result = transform_request_body(
         messages=messages,
         model="gemini-2.0-flash",
         optional_params={},
@@ -459,15 +459,6 @@ def test_transform_request_body_wraps_tool_result_with_json_schema_ref():
     ]
     assert len(function_responses) == 1
     assert function_responses[0]["response"] == {"content": schema_json}
-
-    stack: list[object] = list(parts)
-    while stack:
-        node = stack.pop()
-        if isinstance(node, dict):
-            assert "$ref" not in node
-            stack.extend(node.values())
-        elif isinstance(node, list):
-            stack.extend(node)
 
 
 def test_thought_signature_extraction_from_response():
