@@ -14,6 +14,7 @@ from litellm.router_utils.reasoning_effort_capability import (
     nearest_declared_reasoning_effort,
     resolve_deployment_reasoning_effort,
     resolve_supported_reasoning_efforts,
+    thinking_budget_effort,
 )
 
 
@@ -647,3 +648,19 @@ class TestAzureGpt6SolAndLunaAdvertiseTheOpenAiLevels:
         assert resolve_supported_reasoning_efforts(
             azure_info, deployment_is_mapped=True
         ) == resolve_supported_reasoning_efforts(openai_info, deployment_is_mapped=True)
+
+
+class TestThinkingBudgetEffort:
+    @pytest.mark.parametrize(
+        "model, custom_llm_provider, expected",
+        [
+            ("my-kimi", "hosted_vllm", "medium"),
+            ("FW-Kimi-K3", "azure_ai", "medium"),
+            ("claude-opus-5-5", "anthropic", "medium"),
+            ("claude-sonnet-4-6", "anthropic", None),
+        ],
+    )
+    def test_only_a_provider_that_would_send_an_effort_gets_one(self, model, custom_llm_provider, expected):
+        thinking: Final = {"type": "enabled", "budget_tokens": 2048}
+
+        assert thinking_budget_effort(thinking, model=model, custom_llm_provider=custom_llm_provider) == expected

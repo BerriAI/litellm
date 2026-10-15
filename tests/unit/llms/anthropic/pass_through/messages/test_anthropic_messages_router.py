@@ -655,3 +655,32 @@ async def test_native_messages_drop_an_undeclared_effort_under_drop_params(respx
 
     assert await _native_output_config_sent(respx_mock, "turbo", declared, drop_params=True) is None
     assert await _native_output_config_sent(respx_mock, "turbo", declared) == {"effort": "turbo"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model_info, expected_effort",
+    [({"reasoning_effort_levels": ["low", "high"]}, "high"), (None, "medium")],
+)
+async def test_native_messages_round_a_thinking_budget_on_an_adaptive_claude_deployment(
+    respx_mock, model_info: Mapping[str, object] | None, expected_effort: str
+):
+    route: Final = respx_mock.post(url__regex=_ANTHROPIC_URL).mock(
+        return_value=httpx.Response(200, json=_anthropic_body("claude-opus-5-5"))
+    )
+    deployment: Final = {
+        "model_name": _ALIAS,
+        "litellm_params": {"model": "anthropic/claude-opus-5-5", "api_key": "fake-key"},
+        **({"model_info": model_info} if model_info is not None else {}),
+    }
+
+    await Router(model_list=[deployment]).aanthropic_messages(
+        messages=[{"role": "user", "content": _PROMPT}],
+        model=_ALIAS,
+        max_tokens=4096,
+        thinking={"type": "enabled", "budget_tokens": 2048, "display": "summarized"},
+    )
+
+    sent: Final = json.loads(route.calls.last.request.read())
+    assert sent["output_config"] == {"effort": expected_effort}
+    assert sent["thinking"] == {"type": "adaptive", "display": "summarized"}

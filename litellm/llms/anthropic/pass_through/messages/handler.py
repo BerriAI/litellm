@@ -27,8 +27,10 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.router_utils.reasoning_effort_capability import (
+    deployment_rounds_reasoning_effort,
     model_group_from_metadata,
     resolve_deployment_reasoning_effort,
+    with_adaptive_thinking_as_effort,
 )
 from litellm.types.llms.anthropic import AllAnthropicToolsValues
 from litellm.types.llms.anthropic_messages.anthropic_request import AnthropicMetadata
@@ -140,18 +142,24 @@ def _with_deployment_output_effort(
     kwargs: Mapping[str, object],
     drop_params: bool,
 ) -> Mapping[str, object]:
-    output_config: Final = as_str_mapping(params.get("output_config"))
+    deployment_model_info: Final = kwargs.get("model_info")
+    translated: Final = (
+        with_adaptive_thinking_as_effort(params, model=model, custom_llm_provider=custom_llm_provider)
+        if deployment_rounds_reasoning_effort(deployment_model_info)
+        else params
+    )
+    output_config: Final = as_str_mapping(translated.get("output_config"))
     if output_config is None:
-        return params
+        return translated
     resolved: Final = resolve_deployment_reasoning_effort(
         output_config,
         model=model,
         custom_llm_provider=custom_llm_provider,
-        deployment_model_info=kwargs.get("model_info"),
+        deployment_model_info=deployment_model_info,
         model_group=model_group_from_metadata(kwargs.get("litellm_metadata"), kwargs.get("metadata")),
         drop_params=drop_params,
     ).value
-    rest: Final = {key: value for key, value in params.items() if key != "output_config"}
+    rest: Final = {key: value for key, value in translated.items() if key != "output_config"}
     return rest if resolved is None else {**rest, "output_config": resolved}
 
 

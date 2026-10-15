@@ -104,7 +104,6 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response as get_content_from_model_response,  # noqa: PLC0414  # public re-export
 )
 from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
-from litellm.litellm_core_utils.reasoning_effort_utils import reasoning_effort_from_thinking
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
@@ -130,9 +129,11 @@ from litellm.llms.vertex_ai.common_utils import (
 )
 from litellm.realtime_api.main import realtime_health_check
 from litellm.router_utils.reasoning_effort_capability import (
+    deployment_rounds_reasoning_effort,
     model_group_from_metadata,
     reasoning_effort_needs_allowing,
     resolve_deployment_reasoning_effort,
+    thinking_budget_effort,
 )
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.types.completion import (
@@ -5487,10 +5488,18 @@ def completion(
             api_base=api_base,
         )
         routing_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
+        thinking_effort: Final = (
+            thinking_budget_effort(thinking, model=model, custom_llm_provider=custom_llm_provider)
+            if reasoning_effort is None
+            and thinking is not None
+            and (
+                custom_llm_provider == "hosted_vllm"
+                or deployment_rounds_reasoning_effort(routing_kwargs.get("model_info"))
+            )
+            else None
+        )
         deployment_reasoning_effort: Final = resolve_deployment_reasoning_effort(
-            reasoning_effort
-            if reasoning_effort is not None or custom_llm_provider != "hosted_vllm"
-            else reasoning_effort_from_thinking(thinking),
+            reasoning_effort if reasoning_effort is not None else thinking_effort,
             model=model,
             custom_llm_provider=custom_llm_provider,
             deployment_model_info=routing_kwargs.get("model_info"),
@@ -5635,7 +5644,7 @@ def completion(
             "messages": messages,
             "reasoning_effort": resolved_reasoning_effort,
             "verbosity": verbosity,
-            "thinking": thinking,
+            "thinking": thinking if thinking_effort is None else None,
             "web_search_options": web_search_options,
             "include_server_side_tool_invocations": (
                 include_server_side_tool_invocations

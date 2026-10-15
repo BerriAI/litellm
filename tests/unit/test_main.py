@@ -8471,9 +8471,9 @@ def test_an_undeclared_sibling_of_a_declaring_deployment_gets_the_request_untouc
     assert json.loads(route.calls.last.request.content)["reasoning_effort"] == "medium"
 
 
-def test_an_anthropic_deployment_declaring_its_levels_sends_the_rounded_tier_in_its_own_shape(
-    respx_mock: respx.MockRouter,
-) -> None:
+def _anthropic_chat_body_sent(
+    respx_mock: respx.MockRouter, model_info: Mapping[str, object] | None, **params: object
+) -> Mapping[str, object]:
     route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
         return_value=httpx.Response(
             200,
@@ -8488,18 +8488,61 @@ def test_an_anthropic_deployment_declaring_its_levels_sends_the_rounded_tier_in_
             },
         )
     )
+    completion(model="anthropic/claude-opus-5-5", messages=_HELLO, model_info=model_info, max_tokens=4096, **params)
+    return json.loads(route.calls.last.request.content)
 
-    def body_for(reasoning_effort: str, model_info: Mapping[str, object] | None) -> Mapping[str, object]:
-        completion(
-            model="anthropic/claude-opus-5-5", messages=_HELLO, reasoning_effort=reasoning_effort, model_info=model_info
-        )
-        return json.loads(route.calls.last.request.content)
 
-    rounded: Final = body_for("medium", {"id": "opus-1", "reasoning_effort_levels": ["low", "high"]})
-    asked_for_high: Final = body_for("high", None)
+_OPUS_DECLARING_LOW_AND_HIGH: Final = {"id": "opus-1", "reasoning_effort_levels": ["low", "high"]}
+
+
+def test_an_anthropic_deployment_declaring_its_levels_sends_the_rounded_tier_in_its_own_shape(
+    respx_mock: respx.MockRouter,
+) -> None:
+    rounded: Final = _anthropic_chat_body_sent(respx_mock, _OPUS_DECLARING_LOW_AND_HIGH, reasoning_effort="medium")
+    asked_for_high: Final = _anthropic_chat_body_sent(respx_mock, None, reasoning_effort="high")
 
     assert "reasoning_effort" not in rounded
     assert rounded == asked_for_high
+
+
+def test_a_thinking_budget_on_a_declaring_adaptive_claude_deployment_sends_the_rounded_tier(
+    respx_mock: respx.MockRouter,
+) -> None:
+    budget: Final = {"type": "enabled", "budget_tokens": 2048}
+
+    rounded: Final = _anthropic_chat_body_sent(respx_mock, _OPUS_DECLARING_LOW_AND_HIGH, thinking=budget)
+    undeclared: Final = _anthropic_chat_body_sent(respx_mock, None, thinking=budget)
+
+    assert rounded == _anthropic_chat_body_sent(respx_mock, None, reasoning_effort="high")
+    assert undeclared["output_config"] == {"effort": "medium"}
+
+
+@pytest.mark.parametrize("model", ["azure_ai/my-kimi", "hosted_vllm/my-kimi"])
+def test_a_thinking_budget_reaches_a_declaring_deployment_as_its_rounded_effort(
+    respx_mock: respx.MockRouter, model: str
+) -> None:
+    sent: Final = _chat_body_sent(
+        respx_mock, model, None, _KIMI_DEPLOYMENT, thinking={"type": "enabled", "budget_tokens": 2048}
+    )
+
+    assert sent["reasoning_effort"] == "high"
+    assert "thinking" not in sent
+
+
+@pytest.mark.parametrize("declared", [["none"], []])
+def test_drop_params_drops_a_thinking_budget_whose_effort_the_deployment_does_not_declare(
+    respx_mock: respx.MockRouter, declared: list[str]
+) -> None:
+    sent: Final = _chat_body_sent(
+        respx_mock,
+        "hosted_vllm/my-kimi",
+        None,
+        {"reasoning_effort_levels": declared},
+        thinking={"type": "enabled", "budget_tokens": 2048},
+        drop_params=True,
+    )
+
+    assert "reasoning_effort" not in sent
 
 
 def test_a_routed_remap_is_logged_with_the_deployment_id_and_model_group(

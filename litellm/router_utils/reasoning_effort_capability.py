@@ -38,6 +38,8 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
+from litellm.litellm_core_utils.reasoning_effort_utils import reasoning_effort_from_thinking
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.types.llms.openai import REASONING_EFFORT
 
 ReasoningEffortRounding: TypeAlias = Literal["up", "down"]
@@ -146,6 +148,7 @@ _DEFAULT_EFFORT: Final = "default"
 _EFFORT_KEY: Final = "effort"
 _LOGGABLE_REQUESTED_LEVELS: Final = frozenset((*REASONING_EFFORT_ADVERTISEMENT_ORDER, _DEFAULT_EFFORT))
 _UNRECOGNIZED_LEVEL: Final = "unrecognized"
+_PROVIDERS_SENDING_THINKING_AS_EFFORT: Final = frozenset(("hosted_vllm",))
 
 
 def deployment_reasoning_effort_levels(deployment_model_info: object) -> tuple[str, ...] | None:
@@ -160,6 +163,32 @@ def deployment_reasoning_effort_levels(deployment_model_info: object) -> tuple[s
 def deployment_rounds_reasoning_effort(deployment_model_info: object) -> bool:
     declared: Final = deployment_reasoning_effort_levels(deployment_model_info)
     return declared is not None and any(level in _STRENGTH_RANK for level in declared)
+
+
+def with_adaptive_thinking_as_effort(
+    params: Mapping[str, object], *, model: str, custom_llm_provider: str
+) -> Mapping[str, object]:
+    translated: Final = dict(params)
+    AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
+        model=model, optional_params=translated, custom_llm_provider=custom_llm_provider
+    )
+    return translated
+
+
+def thinking_budget_effort(thinking: object, *, model: str, custom_llm_provider: str) -> str | None:
+    adaptive_config: Final = as_str_mapping(
+        with_adaptive_thinking_as_effort(
+            {"thinking": thinking}, model=model, custom_llm_provider=custom_llm_provider
+        ).get("output_config")
+    )
+    if adaptive_config is not None:
+        adaptive_effort: Final = adaptive_config.get(_EFFORT_KEY)
+        return adaptive_effort if isinstance(adaptive_effort, str) else None
+    if custom_llm_provider not in _PROVIDERS_SENDING_THINKING_AS_EFFORT and "thinking" in (
+        get_supported_openai_params(model=model, custom_llm_provider=custom_llm_provider) or ()
+    ):
+        return None
+    return reasoning_effort_from_thinking(thinking)
 
 
 def _rounding(value: object) -> ReasoningEffortRounding | None:
