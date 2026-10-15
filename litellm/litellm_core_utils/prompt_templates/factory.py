@@ -1881,8 +1881,11 @@ def server_tool_answers_replaced_by_their_result(messages: Sequence[object]) -> 
 def tool_call_ids_answered_by_client(
     messages: Sequence[object], supports_mid_conversation_system: bool = True
 ) -> frozenset[str]:
-    sent: Final = _as_the_request_builder_sends_them(messages, supports_mid_conversation_system)
-    return _tool_call_ids_in_tool_messages(sent) - server_tool_answers_replaced_by_their_result(sent)
+    return tool_call_ids_answered_in(_as_the_request_builder_sends_them(messages, supports_mid_conversation_system))
+
+
+def tool_call_ids_answered_in(messages: Sequence[object]) -> frozenset[str]:
+    return _tool_call_ids_in_tool_messages(messages) - server_tool_answers_replaced_by_their_result(messages)
 
 
 def _as_the_request_builder_sends_them(

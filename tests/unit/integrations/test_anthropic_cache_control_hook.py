@@ -30,7 +30,8 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantToolCall
-from litellm.types.utils import ChatCompletionMessageToolCall, Message
+from litellm.types.utils import ChatCompletionMessageToolCall, LlmProviders, Message
+from litellm.utils import ProviderConfigManager
 
 
 @pytest.fixture(autouse=True)
@@ -1349,6 +1350,119 @@ def test_cache_control_hook_fills_the_mark_budget_when_the_client_answers_one_of
     )
 
     assert _wire_cache_marks(processed, wire_model) == 4
+
+
+def _marks_in(value: object) -> int:
+    if isinstance(value, Mapping):
+        mapping: Final = cast(Mapping[str, object], value)
+        own_mark: Final = int("cache_control" in mapping or "cachePoint" in mapping)
+        return own_mark + sum(_marks_in(item) for item in mapping.values())
+    if isinstance(value, list):
+        return sum(_marks_in(item) for item in cast(list[object], value))
+    return 0
+
+
+def _marks_the_route_sends(model: str, custom_llm_provider: str | None, messages: list[AllMessageValues]) -> int:
+    served_model, provider, _, _ = litellm.get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+    route_config: Final = ProviderConfigManager.get_provider_chat_config(
+        model=served_model, provider=LlmProviders(provider)
+    )
+    assert route_config is not None
+    weather_tool: Final = {
+        "type": "function",
+        "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+    }
+    return _marks_in(
+        route_config.transform_request(
+            model=served_model,
+            messages=copy.deepcopy(messages),
+            optional_params={"max_tokens": 64, "tools": [weather_tool]},
+            litellm_params={},
+            headers={},
+        )
+    )
+
+
+_SECOND_SEARCH_CALL: Final = {**_SEARCH_CALL, "id": "srvtoolu_02Search"}
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider"),
+    [
+        ("anthropic/claude-sonnet-4-6", None),
+        ("bedrock/invoke/us.anthropic.claude-opus-5-5", None),
+        ("vertex_ai/claude-opus-5-5@default", None),
+        ("databricks/databricks-claude-sonnet-4-6", None),
+        pytest.param("databricks-claude-sonnet-4-6", "databricks", id="provider-passed-beside-a-bare-model"),
+        ("openrouter/anthropic/claude-sonnet-4.6", None),
+        ("bedrock/converse/us.anthropic.claude-sonnet-4-6", None),
+    ],
+)
+@pytest.mark.parametrize(
+    ("tool_calls", "follow_ups"),
+    [
+        pytest.param(
+            (_SEARCH_CALL, _SECOND_SEARCH_CALL),
+            (_SEARCH_ANSWER, {**_SEARCH_ANSWER, "tool_call_id": "srvtoolu_02Search"}, _SYSTEM_NOTE),
+            id="both-search-calls-answered-before-a-system-message",
+        ),
+        pytest.param(
+            (_SEARCH_CALL, _WEATHER_CALL), (_SEARCH_ANSWER,), id="function-call-left-for-modify-params-to-answer"
+        ),
+    ],
+)
+def test_cache_control_hook_fills_the_mark_budget_every_claude_route_sends_after_marked_search_calls(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    custom_llm_provider: str | None,
+    tool_calls: tuple[dict[str, object], ...],
+    follow_ups: tuple[dict[str, object], ...],
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+    marked_text: Final = {"type": "text", "text": "Context: a trip.", "cache_control": {"type": "ephemeral"}}
+    kept_searches: Final = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": list(tool_calls),
+        "provider_specific_fields": {
+            "tool_results": [
+                {
+                    "type": "tool_search_tool_result",
+                    "tool_use_id": tool_call["id"],
+                    "content": {"type": "tool_search_tool_search_result", "tool_references": []},
+                }
+                for tool_call in tool_calls
+                if str(tool_call["id"]).startswith("srvtoolu_")
+            ]
+        },
+    }
+    messages: Final = cast(
+        list[AllMessageValues],
+        [
+            {"role": "system", "content": "You are a weather assistant."},
+            {"role": "user", "content": [marked_text, {**marked_text, "text": "Find a weather tool."}]},
+            kept_searches,
+            *follow_ups,
+        ],
+    )
+    params: Final[dict[str, object]] = {
+        "cache_control_injection_points": [
+            {"location": "message", "role": "system"},
+            {"location": "message", "index": -1},
+        ]
+    }
+    AnthropicCacheControlHook.maybe_seed_default_injection_points(params, messages, model, custom_llm_provider)
+
+    _, processed, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+        model=model,
+        messages=messages,
+        non_default_params=params,
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+
+    assert _marks_the_route_sends(model, custom_llm_provider, processed) == 4
 
 
 @pytest.mark.parametrize("tool_call_type", ["function", "custom", None])

@@ -27,7 +27,10 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     cache_control_as_prompt_cache_breakpoint,
     with_prompt_cache_breakpoint,
 )
-from litellm.litellm_core_utils.prompt_templates.factory import tool_call_ids_answered_by_client
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    tool_call_ids_answered_by_client,
+    tool_call_ids_answered_in,
+)
 from litellm.llms.anthropic.common_utils import (
     is_claude_code_one_shot_subagent_request,
     supports_anthropic_cache_control,
@@ -242,16 +245,40 @@ def _tool_call_carries_cache_breakpoint(tool_call: object, message: object, answ
 def _tool_call_ids_answered_by_client_when_a_server_tool_call_is_marked(
     messages: Sequence[object], model: str | None = None, custom_llm_provider: str | None = None
 ) -> frozenset[str]:
-    tool_calls: Final = itertools.chain.from_iterable(
-        _as_object_list(_attribute_or_key(message, "tool_calls")) or () for message in messages
-    )
-    if not any(_is_marked_server_tool_call(tool_call) for tool_call in tool_calls):
+    if not _marks_a_server_tool_call(messages):
         return frozenset()
+    if model is not None and not _builds_anthropic_messages(model, custom_llm_provider):
+        return tool_call_ids_answered_in(messages)
     return tool_call_ids_answered_by_client(messages, _keeps_mid_conversation_system(model, custom_llm_provider))
 
 
-def _custom_llm_provider(non_default_params: Mapping[str, object]) -> str | None:
-    provider: Final = non_default_params.get("custom_llm_provider")
+def _marks_a_server_tool_call(messages: Sequence[object]) -> bool:
+    tool_calls: Final = itertools.chain.from_iterable(
+        _as_object_list(_attribute_or_key(message, "tool_calls")) or () for message in messages
+    )
+    return any(_is_marked_server_tool_call(tool_call) for tool_call in tool_calls)
+
+
+def _builds_anthropic_messages(model: str, custom_llm_provider: str | None) -> bool:
+    from litellm.exceptions import BadRequestError
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+    from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+    from litellm.types.utils import LlmProviders
+    from litellm.utils import ProviderConfigManager
+
+    try:
+        served_model, provider, _, _ = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+        chat_config: Final = ProviderConfigManager.get_provider_chat_config(
+            model=served_model, provider=LlmProviders(provider)
+        )
+    except (BadRequestError, ValueError):
+        return True
+    return isinstance(chat_config, AnthropicConfig) and not isinstance(chat_config, OpenAIGPTConfig)
+
+
+def _custom_llm_provider(non_default_params: Mapping[str, object], point: Mapping[str, object]) -> str | None:
+    provider: Final = non_default_params.get("custom_llm_provider") or point.get(CUSTOM_LLM_PROVIDER_STAMP)
     return provider if isinstance(provider, str) else None
 
 
@@ -309,6 +336,7 @@ def _may_carry_prompt_cache_breakpoint(message: Mapping[str, object]) -> bool:
 CARRY_UNMATCHED_MESSAGE_POINTS: Final = "_litellm_carry_unmatched_cache_control_points"
 
 EXTERNAL_BREAKPOINTS_STAMP: Final = "_litellm_external_breakpoints"
+CUSTOM_LLM_PROVIDER_STAMP: Final = "_litellm_custom_llm_provider"
 
 
 class AnthropicCacheControlHook(CustomPromptManagement):
@@ -382,7 +410,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         )
         remaining_points: Final = tuple(point for point in injection_points if point.get("location") != "message")
 
-        custom_llm_provider: Final = _custom_llm_provider(non_default_params)
+        custom_llm_provider: Final = _custom_llm_provider(non_default_params, injection_points[0])
         stamped_dialect: Final = injection_points[0].get("_litellm_openai_dialect")
         openai_dialect: Final = (
             stamped_dialect
@@ -1080,7 +1108,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             tools_keeping_marks: Final = tuple(
                 tool for tool in tools or () if not _chat_transform_drops_tool_cache_control(tool)
             )
-            non_default_params["cache_control_injection_points"] = AnthropicCacheControlHook._stamped_for_prompt_hook(
+            stamped: Final = AnthropicCacheControlHook._stamped_for_prompt_hook(
                 configured,
                 AnthropicCacheControlHook.count_external_cache_breakpoints(
                     tools_keeping_marks, non_default_params.get("cache_control"), non_default_params
@@ -1089,6 +1117,11 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 custom_llm_provider,
                 api_base,
                 non_default_params.get("prompt_cache_options"),
+            )
+            non_default_params["cache_control_injection_points"] = (
+                AnthropicCacheControlHook._stamped(stamped, CUSTOM_LLM_PROVIDER_STAMP, custom_llm_provider)
+                if custom_llm_provider is not None and _marks_a_server_tool_call(messages)
+                else stamped
             )
             return
         points: Final = AnthropicCacheControlHook.get_default_injection_points(
