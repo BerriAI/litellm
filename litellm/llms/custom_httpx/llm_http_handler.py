@@ -5634,7 +5634,7 @@ class BaseLLMHTTPHandler:
         fingerprint: str,
         stream: bool = False,
         callback: Optional["CustomLogger"] = None,
-    ) -> AnthropicMessagesResponse | AsyncIterator[object]:
+    ) -> AnthropicMessagesResponse | Iterator[bytes] | AsyncIterator[object]:
         from litellm.anthropic_interface import messages as anthropic_messages
 
         patch: Final = plan.request_patch or AgenticLoopRequestPatch()
@@ -5673,7 +5673,9 @@ class BaseLLMHTTPHandler:
         kwargs_for_followup["max_agentic_loops"] = max_loops
         kwargs_for_followup["_agentic_loop_fingerprints"] = fingerprints + [fingerprint]
 
-        response: AnthropicMessagesResponse | AsyncIterator[object] = await anthropic_messages.acreate(
+        response: (
+            AnthropicMessagesResponse | Iterator[bytes] | AsyncIterator[object]
+        ) = await anthropic_messages.acreate(
             **{
                 "max_tokens": max_tokens,
                 "messages": patch.messages,
