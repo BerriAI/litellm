@@ -1,7 +1,7 @@
 from typing import Final
 
 from integration.translation.case import TranslationTestCase
-from integration.translation.messages.templates import MESSAGES_REQUEST
+from integration.translation.messages.templates import MESSAGES_BRIDGE_RESPONSE, MESSAGES_REQUEST
 from integration.translation.templates.vertex_ai import (
     VERTEX_AI_ANTHROPIC_MESSAGES_REQUEST,
     VERTEX_AI_ANTHROPIC_MESSAGES_RESPONSE,
@@ -741,11 +741,9 @@ GEMINI_3_8_FLASH_TEST_CASE: Final = TranslationTestCase(
         "responseId": "ySjQarHoLb2apucPwee_YQ",
     },
     expected_litellm_response={
+        **MESSAGES_BRIDGE_RESPONSE,
         "id": "ySjQarHoLb2apucPwee_YQ",
-        "type": "message",
-        "role": "assistant",
         "model": "vertex_ai/gemini-3.8-flash",
-        "stop_sequence": None,
         "usage": {"input_tokens": 242, "output_tokens": 314},
         "content": [
             {
@@ -784,8 +782,6 @@ GEMINI_3_8_FLASH_TEST_CASE: Final = TranslationTestCase(
                 "provider_specific_fields": {"signature": GEMINI_3_8_FLASH_MESSAGES_THOUGHT_SIGNATURE_0},
             },
         ],
-        "stop_reason": "tool_use",
-        "stop_details": None,
     },
 )
 
@@ -873,11 +869,9 @@ GEMINI_3_1_PRO_PREVIEW_TEST_CASE: Final = TranslationTestCase(
         "responseId": "xCjQasWfKcyL9LsPx7HAqQ8",
     },
     expected_litellm_response={
+        **MESSAGES_BRIDGE_RESPONSE,
         "id": "xCjQasWfKcyL9LsPx7HAqQ8",
-        "type": "message",
-        "role": "assistant",
         "model": "vertex_ai/gemini-3.1-pro-preview",
-        "stop_sequence": None,
         "usage": {"input_tokens": 242, "output_tokens": 257},
         "content": [
             {
@@ -918,8 +912,6 @@ GEMINI_3_1_PRO_PREVIEW_TEST_CASE: Final = TranslationTestCase(
                 "provider_specific_fields": {"signature": GEMINI_3_1_PRO_PREVIEW_MESSAGES_THOUGHT_SIGNATURE_0},
             },
         ],
-        "stop_reason": "tool_use",
-        "stop_details": None,
     },
 )
 
@@ -1001,11 +993,9 @@ GEMINI_4_ARGON_TEST_CASE: Final = TranslationTestCase(
         "responseId": "0CjQauKQPNyFpucPldSPiAY",
     },
     expected_litellm_response={
+        **MESSAGES_BRIDGE_RESPONSE,
         "id": "0CjQauKQPNyFpucPldSPiAY",
-        "type": "message",
-        "role": "assistant",
         "model": "vertex_ai/gemini-4-argon",
-        "stop_sequence": None,
         "usage": {"input_tokens": 412, "output_tokens": 192},
         "content": [
             {
@@ -1040,7 +1030,5 @@ GEMINI_4_ARGON_TEST_CASE: Final = TranslationTestCase(
                 "provider_specific_fields": {"signature": GEMINI_4_ARGON_MESSAGES_THOUGHT_SIGNATURE_0},
             },
         ],
-        "stop_reason": "tool_use",
-        "stop_details": None,
     },
 )

@@ -1,7 +1,7 @@
 from typing import Final
 
 from integration.translation.case import TranslationTestCase
-from integration.translation.messages.templates import MESSAGES_REQUEST
+from integration.translation.messages.templates import MESSAGES_BRIDGE_RESPONSE, MESSAGES_REQUEST
 from integration.translation.templates.openai import OPENAI_RESPONSES_REQUEST_FROM_MESSAGES, OPENAI_RESPONSES_RESPONSE
 
 GPT_5_4_TEST_CASE: Final = TranslationTestCase(
@@ -391,11 +391,9 @@ GPT_6_LUNA_TEST_CASE: Final = TranslationTestCase(
         },
     },
     expected_litellm_response={
+        **MESSAGES_BRIDGE_RESPONSE,
         "id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDo0ZmY4OWU3OTgyMGFkZDVjMmM1ZmZlM2MyODk4ZDNkOGEzZDczY2IxY2ExN2JmZGMxYTRmNTRlZmFlNzhkMTIzO3Jlc3BvbnNlX2lkOnJlc3BfMDNlYzQ5MWM1Y2FhZTAyOTAwNmFkMDIzOWMwODM0ODdkMDk5YTIxZDYwYmU2YjVmZGU=",
-        "type": "message",
-        "role": "assistant",
         "model": "openai/gpt-6-luna",
-        "stop_sequence": None,
         "usage": {"input_tokens": 309, "output_tokens": 214},
         "content": [
             {
@@ -414,8 +412,6 @@ GPT_6_LUNA_TEST_CASE: Final = TranslationTestCase(
                 "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 120},
             },
         ],
-        "stop_reason": "tool_use",
-        "stop_details": None,
     },
 )
 
@@ -518,11 +514,9 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
         },
     },
     expected_litellm_response={
+        **MESSAGES_BRIDGE_RESPONSE,
         "id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDphMTYxN2NmYzNlODRjNzYxNDdjNTgxMmFhMjIwNGU0MDczOTM0M2YyMTg4YzQxNzIxMzRlOTc1ZTQ0YzQ3MjgyO3Jlc3BvbnNlX2lkOnJlc3BfMGFmNjdjYjc4YmVhZDJjNjAwNmFkMDIzYTcyNzM0ODdkMGIxNzY4Yjc3ZjY5NTZiNzM=",
-        "type": "message",
-        "role": "assistant",
         "model": "openai/gpt-6.1-sol",
-        "stop_sequence": None,
         "usage": {"input_tokens": 309, "output_tokens": 140},
         "content": [
             {
@@ -541,8 +535,6 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
                 "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 200},
             },
         ],
-        "stop_reason": "tool_use",
-        "stop_details": None,
     },
 )
 
@@ -645,11 +637,9 @@ GPT_6_ASTRA_TEST_CASE: Final = TranslationTestCase(
         },
     },
     expected_litellm_response={
+        **MESSAGES_BRIDGE_RESPONSE,
         "id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDphODRkZDk3MTcwNzk0ZDlhYzQ5ODhlZWMzOTJmN2Q5YjQwN2MyNDY1YmJhZTA4MGE1ZGYzMThlOTViOTA2NzlkO3Jlc3BvbnNlX2lkOnJlc3BfMDk2NGE0MWY1ODE1M2FjNTAwNmFkMDIzOGY5YmMwODdkMGE5ZTc5ZmRhMzc1YmVlM2M=",
-        "type": "message",
-        "role": "assistant",
         "model": "openai/gpt-6-astra",
-        "stop_sequence": None,
         "usage": {"input_tokens": 309, "output_tokens": 152},
         "content": [
             {
@@ -668,8 +658,6 @@ GPT_6_ASTRA_TEST_CASE: Final = TranslationTestCase(
                 "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 200},
             },
         ],
-        "stop_reason": "tool_use",
-        "stop_details": None,
     },
 )
 
@@ -773,11 +761,9 @@ GPT_5_6_TERRA_TEST_CASE: Final = TranslationTestCase(
         },
     },
     expected_litellm_response={
+        **MESSAGES_BRIDGE_RESPONSE,
         "id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDo0Mjg5MWEzMzRjNTlhMjhlMjQ2MjQ0YTQ4YTJjOGVlMTM5NGYyZGNhZWMxYmVjZDhmZDk2N2NmNjYxNWNmZDM5O3Jlc3BvbnNlX2lkOnJlc3BfMDg1MjZjY2FiOWFhNjUzZTAwNmFkMDIzODg0YTFjODdkMDlhMjNmNmQ1YzYxZDY1ZDM=",
-        "type": "message",
-        "role": "assistant",
         "model": "openai/gpt-5.6-terra",
-        "stop_sequence": None,
         "usage": {"input_tokens": 309, "output_tokens": 107},
         "content": [
             {
@@ -796,7 +782,5 @@ GPT_5_6_TERRA_TEST_CASE: Final = TranslationTestCase(
                 "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 200},
             },
         ],
-        "stop_reason": "tool_use",
-        "stop_details": None,
     },
 )

@@ -2,7 +2,7 @@ from typing import Final
 from unittest.mock import ANY
 
 from integration.translation.case import TranslationTestCase
-from integration.translation.responses.templates import RESPONSES_REQUEST
+from integration.translation.responses.templates import RESPONSES_NATIVE_RESPONSE, RESPONSES_REQUEST
 from integration.translation.templates.azure import AZURE_RESPONSES_REQUEST, AZURE_RESPONSES_RESPONSE
 from pydantic import JsonValue
 
@@ -779,14 +779,10 @@ GPT_6_LUNA_TEST_CASE: Final = TranslationTestCase(
         },
     },
     expected_litellm_response={
+        **RESPONSES_NATIVE_RESPONSE,
         "id": ANY,
         "created_at": 1792025532,
-        "error": None,
-        "incomplete_details": None,
-        "instructions": RESPONSES_REQUEST["instructions"],
-        "metadata": {},
         "model": "azure/gpt-6-luna",
-        "object": "response",
         "output": [
             {
                 "id": "rs_0c7fa1cbc998fdea006ad023bdb5288197913fbdc89efaee0f",
@@ -825,7 +821,6 @@ GPT_6_LUNA_TEST_CASE: Final = TranslationTestCase(
         ],
         "parallel_tool_calls": True,
         "temperature": 1.0,
-        "tool_choice": "auto",
         "tools": [
             {
                 "name": "search_files",
@@ -864,10 +859,7 @@ GPT_6_LUNA_TEST_CASE: Final = TranslationTestCase(
             },
         ],
         "top_p": 0.98,
-        "max_output_tokens": 1024,
-        "previous_response_id": None,
         "reasoning": {"context": "all_turns", "effort": "high", "mode": "standard", "summary": None},
-        "status": "completed",
         "text": {"format": {"type": "text"}, "verbosity": "medium"},
         "truncation": "disabled",
         "usage": {
@@ -886,7 +878,6 @@ GPT_6_LUNA_TEST_CASE: Final = TranslationTestCase(
             "total_tokens": 422,
             "cost": None,
         },
-        "user": None,
         "store": True,
         "background": False,
         "completed_at": 1792025535,
@@ -1051,14 +1042,10 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
         },
     },
     expected_litellm_response={
+        **RESPONSES_NATIVE_RESPONSE,
         "id": ANY,
         "created_at": 1792025524,
-        "error": None,
-        "incomplete_details": None,
-        "instructions": RESPONSES_REQUEST["instructions"],
-        "metadata": {},
         "model": "azure/gpt-6.1-sol",
-        "object": "response",
         "output": [
             {
                 "id": "rs_0895a553a79167f3006ad023b5d6348197ac3ab4cda17f113c",
@@ -1097,7 +1084,6 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
         ],
         "parallel_tool_calls": True,
         "temperature": 1.0,
-        "tool_choice": "auto",
         "tools": [
             {
                 "name": "search_files",
@@ -1136,10 +1122,7 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
             },
         ],
         "top_p": 0.98,
-        "max_output_tokens": 1024,
-        "previous_response_id": None,
         "reasoning": {"context": "all_turns", "effort": "high", "mode": "standard", "summary": None},
-        "status": "completed",
         "text": {"format": {"type": "text"}, "verbosity": "medium"},
         "truncation": "disabled",
         "usage": {
@@ -1158,7 +1141,6 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
             "total_tokens": 449,
             "cost": None,
         },
-        "user": None,
         "store": True,
         "background": False,
         "completed_at": 1792025527,
@@ -1324,14 +1306,10 @@ GPT_6_ASTRA_TEST_CASE: Final = TranslationTestCase(
         },
     },
     expected_litellm_response={
+        **RESPONSES_NATIVE_RESPONSE,
         "id": ANY,
         "created_at": 1792025543,
-        "error": None,
-        "incomplete_details": None,
-        "instructions": RESPONSES_REQUEST["instructions"],
-        "metadata": {},
         "model": "azure/gpt-6-astra",
-        "object": "response",
         "output": [
             {
                 "id": "rs_09fa191d4c7fb192006ad023c898e88195a30e3b694f965fb6",
@@ -1370,7 +1348,6 @@ GPT_6_ASTRA_TEST_CASE: Final = TranslationTestCase(
         ],
         "parallel_tool_calls": True,
         "temperature": 1.0,
-        "tool_choice": "auto",
         "tools": [
             {
                 "name": "search_files",
@@ -1409,10 +1386,7 @@ GPT_6_ASTRA_TEST_CASE: Final = TranslationTestCase(
             },
         ],
         "top_p": 0.98,
-        "max_output_tokens": 1024,
-        "previous_response_id": None,
         "reasoning": {"context": "all_turns", "effort": "high", "mode": "standard", "summary": None},
-        "status": "completed",
         "text": {"format": {"type": "text"}, "verbosity": "medium"},
         "truncation": "disabled",
         "usage": {
@@ -1431,7 +1405,6 @@ GPT_6_ASTRA_TEST_CASE: Final = TranslationTestCase(
             "total_tokens": 461,
             "cost": None,
         },
-        "user": None,
         "store": True,
         "background": False,
         "completed_at": 1792025547,
@@ -1592,14 +1565,10 @@ GPT_5_6_TERRA_TEST_CASE: Final = TranslationTestCase(
         },
     },
     expected_litellm_response={
+        **RESPONSES_NATIVE_RESPONSE,
         "id": ANY,
         "created_at": 1792025553,
-        "error": None,
-        "incomplete_details": None,
-        "instructions": RESPONSES_REQUEST["instructions"],
-        "metadata": {},
         "model": "azure/gpt-5.6-terra",
-        "object": "response",
         "output": [
             {
                 "id": "rs_0e1796d6e4004e2f006ad023d1f5ac81939dc5121afcbd9967",
@@ -1638,7 +1607,6 @@ GPT_5_6_TERRA_TEST_CASE: Final = TranslationTestCase(
         ],
         "parallel_tool_calls": True,
         "temperature": 1.0,
-        "tool_choice": "auto",
         "tools": [
             {
                 "name": "search_files",
@@ -1677,10 +1645,7 @@ GPT_5_6_TERRA_TEST_CASE: Final = TranslationTestCase(
             },
         ],
         "top_p": 0.98,
-        "max_output_tokens": 1024,
-        "previous_response_id": None,
         "reasoning": {"context": "all_turns", "effort": "high", "mode": "standard", "summary": None},
-        "status": "completed",
         "text": {"format": {"type": "text"}, "verbosity": "medium"},
         "truncation": "disabled",
         "usage": {
@@ -1699,7 +1664,6 @@ GPT_5_6_TERRA_TEST_CASE: Final = TranslationTestCase(
             "total_tokens": 404,
             "cost": None,
         },
-        "user": None,
         "store": True,
         "background": False,
         "completed_at": 1792025554,

@@ -1,7 +1,7 @@
 from typing import Final
 
 from integration.translation.case import TranslationTestCase
-from integration.translation.messages.templates import MESSAGES_REQUEST
+from integration.translation.messages.templates import MESSAGES_BRIDGE_RESPONSE, MESSAGES_REQUEST
 from integration.translation.templates.openai import OPENAI_RESPONSES_REQUEST_FROM_MESSAGES, OPENAI_RESPONSES_RESPONSE
 
 GPT_5_6_SOL_TEST_CASE: Final = TranslationTestCase(
@@ -198,11 +198,9 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
         },
     },
     expected_litellm_response={
+        **MESSAGES_BRIDGE_RESPONSE,
         "id": "resp_bGl0ZWxsbTpjdXN0b21fbGxtX3Byb3ZpZGVyOm9wZW5haTttb2RlbF9pZDo3ZGE3NDY3Njc3N2IyZjVkYmQ3MDI1MTI1ZjEzMDdlYWQ0MjM3YTgzN2QxZTJmZDhkY2FkNjhlODM4ODU1Zjg2O3Jlc3BvbnNlX2lkOnJlc3BfMGFmNjdjYjc4YmVhZDJjNjAwNmFkMDIzYTcyNzM0ODdkMGIxNzY4Yjc3ZjY5NTZiNzM=",
-        "type": "message",
-        "role": "assistant",
         "model": "openai/responses/gpt-6.1-sol",
-        "stop_sequence": None,
         "usage": {"input_tokens": 309, "output_tokens": 140},
         "content": [
             {
@@ -221,7 +219,5 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
                 "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 200},
             },
         ],
-        "stop_reason": "tool_use",
-        "stop_details": None,
     },
 )

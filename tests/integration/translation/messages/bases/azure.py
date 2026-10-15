@@ -1,7 +1,7 @@
 from typing import Final
 
 from integration.translation.case import TranslationTestCase
-from integration.translation.messages.templates import MESSAGES_REQUEST
+from integration.translation.messages.templates import MESSAGES_BRIDGE_RESPONSE, MESSAGES_REQUEST
 from integration.translation.templates.azure import AZURE_RESPONSES_BRIDGE_REQUEST, AZURE_RESPONSES_RESPONSE
 from pydantic import JsonValue
 
@@ -406,11 +406,9 @@ GPT_6_LUNA_TEST_CASE: Final = TranslationTestCase(
         },
     },
     expected_litellm_response={
+        **MESSAGES_BRIDGE_RESPONSE,
         "id": "resp_0534b0c3898d6d1b006ad023ba700c8195b63f1819ab327ab3",
-        "type": "message",
-        "role": "assistant",
         "model": "azure/gpt-6-luna",
-        "stop_sequence": None,
         "usage": {"input_tokens": 309, "output_tokens": 114},
         "content": [
             {
@@ -426,8 +424,6 @@ GPT_6_LUNA_TEST_CASE: Final = TranslationTestCase(
                 "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 120},
             },
         ],
-        "stop_reason": "tool_use",
-        "stop_details": None,
     },
 )
 
@@ -544,11 +540,9 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
         },
     },
     expected_litellm_response={
+        **MESSAGES_BRIDGE_RESPONSE,
         "id": "resp_0a4a896afe94ce65006ad023b047248193999d7c3a0c4fec39",
-        "type": "message",
-        "role": "assistant",
         "model": "azure/gpt-6.1-sol",
-        "stop_sequence": None,
         "usage": {"input_tokens": 309, "output_tokens": 137},
         "content": [
             {
@@ -565,8 +559,6 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
                 "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 200},
             },
         ],
-        "stop_reason": "tool_use",
-        "stop_details": None,
     },
 )
 
@@ -670,11 +662,9 @@ GPT_6_ASTRA_TEST_CASE: Final = TranslationTestCase(
         },
     },
     expected_litellm_response={
+        **MESSAGES_BRIDGE_RESPONSE,
         "id": "resp_019af305501e4822006ad023c3a50881958c4cf40623699cf8",
-        "type": "message",
-        "role": "assistant",
         "model": "azure/gpt-6-astra",
-        "stop_sequence": None,
         "usage": {"input_tokens": 309, "output_tokens": 138},
         "content": [
             {
@@ -691,8 +681,6 @@ GPT_6_ASTRA_TEST_CASE: Final = TranslationTestCase(
                 "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 200},
             },
         ],
-        "stop_reason": "tool_use",
-        "stop_details": None,
     },
 )
 
@@ -807,11 +795,9 @@ GPT_5_6_TERRA_TEST_CASE: Final = TranslationTestCase(
         },
     },
     expected_litellm_response={
+        **MESSAGES_BRIDGE_RESPONSE,
         "id": "resp_0d178c5d2401a624006ad023cf1c588194ab41d5803ed29401",
-        "type": "message",
-        "role": "assistant",
         "model": "azure/gpt-5.6-terra",
-        "stop_sequence": None,
         "usage": {"input_tokens": 309, "output_tokens": 92},
         "content": [
             {
@@ -828,7 +814,5 @@ GPT_5_6_TERRA_TEST_CASE: Final = TranslationTestCase(
                 "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 200},
             },
         ],
-        "stop_reason": "tool_use",
-        "stop_details": None,
     },
 )

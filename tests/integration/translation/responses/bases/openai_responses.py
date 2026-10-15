@@ -2,7 +2,7 @@ from typing import Final
 from unittest.mock import ANY
 
 from integration.translation.case import TranslationTestCase
-from integration.translation.responses.templates import RESPONSES_REQUEST
+from integration.translation.responses.templates import RESPONSES_NATIVE_RESPONSE, RESPONSES_REQUEST
 from integration.translation.templates.openai import OPENAI_RESPONSES_REQUEST, OPENAI_RESPONSES_RESPONSE
 
 GPT_5_6_SOL_TEST_CASE: Final = TranslationTestCase(
@@ -175,18 +175,10 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
         "model": "gpt-6.1-sol",
     },
     expected_litellm_response={
+        **RESPONSES_NATIVE_RESPONSE,
         "id": ANY,
         "created_at": 1792025514,
-        "error": None,
-        "incomplete_details": None,
-        "instructions": "You help maintain a synthetic Python project. Read the relevant files before "
-        "suggesting a fix. Explain which file you need next, then call a read-only tool. "
-        "Never change files. Use the responses client for this project review. Consider "
-        "zero, negative and non-integer quantities before choosing the next file to "
-        "inspect.",
-        "metadata": {},
         "model": "openai/responses/gpt-6.1-sol",
-        "object": "response",
         "output": [
             {
                 "id": "rs_0207c20ae125feee006ad023abed4087d09d32a32ad2d3182c",
@@ -223,7 +215,6 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
         ],
         "parallel_tool_calls": True,
         "temperature": 1.0,
-        "tool_choice": "auto",
         "tools": [
             {
                 "name": "search_files",
@@ -262,10 +253,7 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
             },
         ],
         "top_p": 0.98,
-        "max_output_tokens": 1024,
-        "previous_response_id": None,
         "reasoning": {"context": "all_turns", "effort": "high", "mode": "standard", "summary": None},
-        "status": "completed",
         "text": {"format": {"type": "text"}, "verbosity": "medium"},
         "truncation": "disabled",
         "usage": {
@@ -284,7 +272,6 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
             "total_tokens": 427,
             "cost": None,
         },
-        "user": None,
         "store": True,
         "access_programs": None,
         "background": False,
