@@ -1,3 +1,5 @@
+SET LOCAL lock_timeout = '10s';
+
 ALTER TABLE "LiteLLM_BudgetTable" ADD COLUMN "model_throttling" JSONB;
 ALTER TABLE "LiteLLM_VerificationToken" ADD COLUMN "model_throttling" JSONB;
 ALTER TABLE "LiteLLM_UserTable" ADD COLUMN "model_throttling" JSONB;
