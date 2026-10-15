@@ -3,7 +3,7 @@ import copy
 import json
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
-from typing import Final
+from typing import Final, cast
 
 import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -141,8 +141,14 @@ class _Tx:
         self._fail_locks = fail_locks
         self.locks: list[str] = []
         self.roster_reads: list[str] = []
+        self.user_locks: list[dict[str, list[str]]] = []
 
     async def query_raw(self, sql: str, *args: object) -> list[dict[str, object]]:
+        if 'ORDER BY user_id COLLATE "C" FOR UPDATE' in sql:
+            user_ids = [str(user_id) for user_id in cast(Sequence[object], args[0])]
+            rows = self.litellm_usertable.rows
+            self.user_locks.append({user_id: list(rows[user_id].teams) for user_id in user_ids if user_id in rows})
+            return [{"user_id": user_id} for user_id in user_ids if user_id in rows]
         team_id = str(args[0])
         if "pg_advisory_xact_lock" in sql:
             if team_id in self._fail_locks:
@@ -179,6 +185,7 @@ class _FakePrisma:
         self._fail_commit = fail_commit
         self.locks: list[str] = []
         self.roster_reads: list[str] = []
+        self.user_locks: list[dict[str, list[str]]] = []
 
     @asynccontextmanager
     async def tx(self, *, timeout: object = None):
@@ -193,6 +200,7 @@ class _FakePrisma:
             raise
         self.locks.extend(tx.locks)
         self.roster_reads.extend(tx.roster_reads)
+        self.user_locks.extend(tx.user_locks)
 
 
 def _team(team_id: str, *members: str, org: str | None = None) -> LiteLLM_TeamTable:
@@ -391,6 +399,20 @@ async def test_bulk_delete_takes_every_team_lock_before_writing_a_user_row():
 
     assert results[0].success is True
     assert teams_when_locked == {"t1": ["t1", "t2"], "t2": ["t1", "t2"]}
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_locks_every_user_row_in_id_order_before_rewriting_any_team():
+    prisma = _FakePrisma(
+        users=[_user("u2", "t1"), _user("u10", "t2"), _user("u1", "t1", "t2")],
+        teams=[_team("t1", "u1", "u2"), _team("t2", "u1", "u10")],
+    )
+
+    results = await _delete(prisma, ["u2", "u10", "u1"])
+
+    assert all(result.success for result in results)
+    assert prisma.user_locks == [{"u1": ["t1", "t2"], "u10": ["t2"], "u2": ["t1"]}]
+    assert list(prisma.user_locks[0]) == ["u1", "u10", "u2"]
 
 
 @pytest.mark.asyncio

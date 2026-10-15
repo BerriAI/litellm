@@ -177,6 +177,7 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
 )
 from litellm.proxy.management_helpers.access_group_team_sync import (
     TEAM_ADVISORY_LOCK_SQL,
+    USER_ROWS_LOCK_SQL,
     AccessGroupSyncTx,
     invalidate_access_group_caches,
     reconcile_team_access_group_membership,
@@ -413,8 +414,16 @@ class _TeamDeleteTx(AccessGroupSyncTx, Protocol):
     def litellm_teammembership(self) -> "TableActions[prisma_models.LiteLLM_TeamMembership]": ...
 
 
-_STRIP_DELETED_TEAM_FROM_USERS_SQL: Final = """
-UPDATE "LiteLLM_UserTable" SET teams = array_remove(teams, $1) WHERE $1 = ANY(teams)
+_STRIP_DELETED_TEAMS_FROM_USERS_SQL: Final = """
+UPDATE "LiteLLM_UserTable"
+SET teams = ARRAY(
+    SELECT kept.team_id FROM unnest(teams) WITH ORDINALITY AS kept(team_id, position)
+    WHERE kept.team_id <> ALL($1::text[])
+    ORDER BY kept.position
+)
+WHERE user_id IN (
+    SELECT user_id FROM "LiteLLM_UserTable" WHERE teams && $1::text[] ORDER BY user_id COLLATE "C" FOR UPDATE
+)
 """
 
 _INCLUDE_MODEL_TABLE: Final = MappingProxyType({"litellm_model_table": True})
@@ -3131,6 +3140,15 @@ async def _update_team_members_list(
     )
 
 
+async def _lock_requested_member_rows(tx: "Prisma", members: Sequence[Member]) -> None:
+    emails_only: Final = tuple(m.user_email for m in members if m.user_id is None and m.user_email is not None)
+    matched: Final = (
+        await tx.litellm_usertable.find_many(where={"user_email": {"in": list(emails_only)}}) if emails_only else ()
+    )
+    named: Final = (m.user_id for m in members if m.user_id is not None)
+    await tx.query_raw(USER_ROWS_LOCK_SQL, sorted({*named, *(row.user_id for row in matched)}))
+
+
 async def _add_team_members_to_team(
     data: TeamMemberAddRequest,
     complete_team_data: LiteLLM_TeamTable,
@@ -3147,6 +3165,9 @@ async def _add_team_members_to_team(
     lock around its own sweep-and-delete, so the two can never interleave; whichever
     acquires the lock first runs to completion before the other's re-read can proceed.
 
+    Every existing user row the request names is locked through ``USER_ROWS_LOCK_SQL`` before
+    the first member write, so a list of members never waits on a SCIM group push in a cycle.
+
     The user and membership writes run on this transaction too, not on a second
     connection from the pool: a lock waiter that needs a connection it hasn't got yet is
     a waiter that can deadlock the pool, since enough concurrent adds for one team would
@@ -3160,6 +3181,7 @@ async def _add_team_members_to_team(
         if locked_members is None:
             raise HTTPException(status_code=404, detail=gone_detail)
         complete_team_data.members_with_roles = locked_members
+        await _lock_requested_member_rows(tx, (data.member,) if isinstance(data.member, Member) else data.member)
 
         updated_users, updated_team_memberships = await _process_team_members(
             data=data,
@@ -4687,11 +4709,12 @@ async def _sweep_deleted_team_references(team_ids: Sequence[str], prisma_client:
     rows that already drifted, which is the state this was reported against, so the sweep still has
     to run on delete.
 
-    `array_remove` rather than read-filter-write: rewriting the whole array from a snapshot read
-    outside a transaction drops any team a concurrent `/team/member_add` appended in between.
+    One statement filters the array in place rather than read-filter-write: rewriting the whole
+    array from a snapshot read outside a transaction drops any team a concurrent `/team/member_add`
+    appended in between. It locks the user rows in the order `USER_ROWS_LOCK_SQL` takes them, so it
+    never waits on a SCIM group push in a cycle.
     """
-    for team_id in team_ids:
-        _ = await prisma_client.db.execute_raw(_STRIP_DELETED_TEAM_FROM_USERS_SQL, team_id)
+    _ = await prisma_client.db.execute_raw(_STRIP_DELETED_TEAMS_FROM_USERS_SQL, list(team_ids))
 
     _ = await _team_membership_db(prisma_client).delete_many(where=_TeamIdInFilter(team_id={"in": tuple(team_ids)}))
 
@@ -4699,8 +4722,7 @@ async def _sweep_deleted_team_references(team_ids: Sequence[str], prisma_client:
 async def _sweep_deleted_team_references_tx(team_ids: Sequence[str], tx: _TeamDeleteTx) -> None:
     """Same sweep as `_sweep_deleted_team_references`, run on the transaction that holds
     every id's advisory lock and deletes the team rows, so it commits or rolls back with them."""
-    for team_id in team_ids:
-        _ = await tx.execute_raw(_STRIP_DELETED_TEAM_FROM_USERS_SQL, team_id)
+    _ = await tx.execute_raw(_STRIP_DELETED_TEAMS_FROM_USERS_SQL, list(team_ids))
 
     membership_filter: Final[_TeamIdInFilter] = {"team_id": {"in": tuple(team_ids)}}
     _ = await tx.litellm_teammembership.delete_many(where=membership_filter)

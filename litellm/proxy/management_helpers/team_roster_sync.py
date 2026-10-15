@@ -35,7 +35,7 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     _emit_team_members_metric,  # pyright: ignore[reportPrivateUsage]  # same gauge /team/member_add moves
     _schedule_team_membership_audit_log,  # pyright: ignore[reportPrivateUsage]  # same audit row /team/member_add writes
 )
-from litellm.proxy.management_helpers.access_group_team_sync import TEAM_ADVISORY_LOCK_SQL
+from litellm.proxy.management_helpers.access_group_team_sync import TEAM_ADVISORY_LOCK_SQL, USER_ROWS_LOCK_SQL
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.chunked_in import delete_many_in, find_many_in, update_many_in
 
@@ -49,9 +49,6 @@ _SYNC_TX_TIMEOUT: Final = timedelta(seconds=60)
 _DETACH_TEAM_SQL: Final = (
     "UPDATE \"LiteLLM_UserTable\" SET teams = array_remove(teams, $1), updated_at = (NOW() AT TIME ZONE 'UTC')"
     " WHERE user_id = ANY($2::text[])"
-)
-_LOCK_MEMBER_ROWS_SQL: Final = (
-    'SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = ANY($1::text[]) ORDER BY user_id COLLATE "C" FOR UPDATE'
 )
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 
@@ -316,9 +313,7 @@ async def sync_team_roster(
     has no row, and nothing was written. A delta naming nobody changes nothing, so it
     reads the team from the writer without the lock or a transaction, and a plan already
     matching the roster writes nothing and leaves every cache entry in place. Every user
-    row the plan touches is locked in byte order of its id before the first write, the
-    order the spend writer updates them in, so neither another push nor the spend writer
-    ever waits on this one in the opposite order.
+    row the plan touches is locked through ``USER_ROWS_LOCK_SQL`` before the first write.
     """
     if _changes_nothing(plan):
         return await _unchanged_roster(prisma_client, team_id)
@@ -333,7 +328,7 @@ async def sync_team_roster(
         to_add, to_remove = _planned_changes(plan, roster_ids)
         if not to_add and not to_remove:
             return RosterSync(team=team, added=frozenset(), removed=frozenset())
-        await tx.query_raw(_LOCK_MEMBER_ROWS_SQL, sorted(to_add | to_remove))
+        await tx.query_raw(USER_ROWS_LOCK_SQL, sorted(to_add | to_remove))
         added: Final = await _add_members(tx, team, sorted(to_add), user_api_key_dict, litellm_proxy_admin_name)
         if isinstance(added, MembersMissing):
             return added

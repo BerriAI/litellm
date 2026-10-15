@@ -34,6 +34,12 @@ from litellm.types.llms.base import LiteLLMBaseModel
 # other and against this mirror, rather than defining a second, divergent lock on the same key.
 TEAM_ADVISORY_LOCK_SQL: Final = "SELECT pg_advisory_xact_lock(hashtext($1)) IS NULL AS locked"
 
+# Every transaction that writes several user rows locks them through this first, so all of
+# them take user row locks in one shared order and none can wait on another in a cycle.
+USER_ROWS_LOCK_SQL: Final = (
+    'SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = ANY($1::text[]) ORDER BY user_id COLLATE "C" FOR UPDATE'
+)
+
 _READ_TEAM_SQL: Final = 'SELECT access_group_ids FROM "LiteLLM_TeamTable" WHERE team_id = $1'
 
 # The groups the team is on either side of the reconcile, so the cache step is driven by

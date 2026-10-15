@@ -49,7 +49,7 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     SUPPORTED_TEAM_ADMIN_PERMISSIONS,
 )
 from litellm.proxy.management_endpoints.team_endpoints import (
-    _STRIP_DELETED_TEAM_FROM_USERS_SQL,
+    _STRIP_DELETED_TEAMS_FROM_USERS_SQL,
     GetTeamMemberPermissionsResponse,
     UpdateTeamMemberPermissionsRequest,
     _build_team_list_where_conditions,
@@ -2047,9 +2047,10 @@ async def test_add_team_members_reconciles_against_freshly_locked_row():
     assert tx.query_raw.call_args_list[0].args == (TEAM_ADVISORY_LOCK_SQL, "test-team-lock"), (
         "expected the team's advisory lock to be acquired before the members_with_roles read"
     )
-    assert not any("FOR UPDATE" in str(call.args[0]) for call in tx.query_raw.call_args_list), (
-        "a row lock here can deadlock with the access-group endpoints; only the advisory lock is safe"
-    )
+    assert not any(
+        "FOR UPDATE" in str(call.args[0]) and "LiteLLM_TeamTable" in str(call.args[0])
+        for call in tx.query_raw.call_args_list
+    ), "a team row lock here can deadlock with the access-group endpoints; only the advisory lock is safe"
 
     assert [m.user_id for m in updated_team.members_with_roles] == ["zed", "alice", "bob"]
 
@@ -2116,6 +2117,61 @@ async def test_add_team_members_runs_member_writes_on_the_lock_holding_transacti
 
     assert [user.user_id for user in updated_users] == ["bob"]
     assert [tm.budget_id for tm in updated_team_memberships] == ["budget-pool"]
+
+
+@pytest.mark.asyncio
+async def test_add_team_members_locks_every_named_user_row_in_id_order_before_the_first_member_write():
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _add_team_members_to_team,
+    )
+
+    events: list[object] = []
+    email_match = MagicMock()
+    email_match.user_id = "alice-id"
+
+    async def query_raw(sql: str, *args: object) -> list[dict[str, object]]:
+        if "FOR UPDATE" in sql:
+            events.append(("locked", list(cast(list[str], args[0]))))
+            return []
+        return [{"members_with_roles": []}]
+
+    async def write_members(**_: object) -> tuple[list[object], list[object]]:
+        events.append("member writes")
+        return [], []
+
+    tx = MagicMock()
+    tx.query_raw = AsyncMock(side_effect=query_raw)
+    tx.litellm_usertable.find_many = AsyncMock(return_value=[email_match])
+    tx.litellm_teamtable.update = AsyncMock(
+        return_value=LiteLLM_TeamTable(team_id="team-order", members_with_roles=[])
+    )
+    tx_cm = MagicMock()
+    tx_cm.__aenter__ = AsyncMock(return_value=tx)
+    tx_cm.__aexit__ = AsyncMock(return_value=None)
+    prisma_client = MagicMock()
+    prisma_client.tx = MagicMock(return_value=tx_cm)
+
+    with patch(
+        "litellm.proxy.management_endpoints.team_endpoints._process_team_members",
+        new=AsyncMock(side_effect=write_members),
+    ):
+        await _add_team_members_to_team(
+            data=TeamMemberAddRequest(
+                team_id="team-order",
+                member=[
+                    Member(user_id="u2", role="user"),
+                    Member(user_email="alice@example.com", role="user"),
+                    Member(user_id="u10", role="user"),
+                    Member(user_id="u1", role="user"),
+                ],
+            ),
+            complete_team_data=LiteLLM_TeamTable(team_id="team-order", members_with_roles=[]),
+            prisma_client=cast(object, prisma_client),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            litellm_proxy_admin_name="admin",
+        )
+
+    assert events == [("locked", ["alice-id", "u1", "u10", "u2"]), "member writes"]
 
 
 @pytest.mark.asyncio
@@ -9120,12 +9176,9 @@ async def test_delete_team_sweeps_references_outside_members_with_roles(
         litellm_changed_by="admin-user",
     )
 
-    # array_remove strips just the deleted id in one statement; a read-filter-write of the whole
-    # array would drop any team a concurrent /team/member_add appended between read and write
-    assert "array_remove" in _STRIP_DELETED_TEAM_FROM_USERS_SQL
     assert mock_execute_raw.await_args_list == [
-        call(_STRIP_DELETED_TEAM_FROM_USERS_SQL, "team-doomed"),
-        call(_STRIP_DELETED_TEAM_FROM_USERS_SQL, "team-doomed"),
+        call(_STRIP_DELETED_TEAMS_FROM_USERS_SQL, ["team-doomed"]),
+        call(_STRIP_DELETED_TEAMS_FROM_USERS_SQL, ["team-doomed"]),
     ], (
         "the unlocked sweep must run once to catch pre-existing drift, and the locked sweep "
         "(alongside the delete, under the same advisory lock member_add takes) must run again "

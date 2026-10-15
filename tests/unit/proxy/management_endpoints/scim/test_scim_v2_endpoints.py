@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import time
@@ -5,7 +6,7 @@ from collections.abc import Callable, Mapping, Sequence
 from itertools import chain
 from types import MappingProxyType
 from typing import Final, assert_never
-from unittest.mock import AsyncMock, MagicMock, call
+from unittest.mock import ANY, AsyncMock, MagicMock, call
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -56,6 +57,7 @@ from litellm.proxy.management_endpoints.scim.scim_v2 import (
     update_user,
     user_api_key_auth,
 )
+from litellm.proxy.management_helpers.bulk_user_creation import BULK_NEW_USER_CONCURRENCY
 from litellm.proxy.management_helpers.team_roster_sync import (
     MembersMissing,
     RosterDelta,
@@ -2847,7 +2849,7 @@ def _scim_admin_prisma(mocker, *, user_teams):
     prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=user)
     prisma.db.litellm_usertable.find_many = AsyncMock(side_effect=_users_find_many)
     prisma.db.litellm_usertable.update = AsyncMock(return_value=user)
-    prisma.db.litellm_usertable.update_many = AsyncMock(return_value=1)
+    prisma.db.execute_raw = AsyncMock(return_value=1)
     prisma.db.litellm_teamtable = mocker.MagicMock()
     prisma.db.litellm_teamtable.find_unique = AsyncMock(side_effect=_team_find_unique)
     prisma.db.litellm_teamtable.find_many = AsyncMock(side_effect=_teams_find_many)
@@ -2870,9 +2872,7 @@ async def test_recompute_scim_member_roles_demotes_when_not_in_admin_group(mocke
 
     await _recompute_scim_member_roles(prisma, ["member-1"])
 
-    prisma.db.litellm_usertable.update_many.assert_awaited_once_with(
-        where={"user_id": {"in": ["member-1"]}}, data={"user_role": LitellmUserRoles.INTERNAL_USER_VIEW_ONLY}
-    )
+    prisma.db.execute_raw.assert_awaited_once_with(ANY, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, ["member-1"])
 
 
 @pytest.mark.asyncio
@@ -2891,9 +2891,7 @@ async def test_recompute_scim_member_roles_grants_when_in_admin_group(mocker, mo
 
     await _recompute_scim_member_roles(prisma, ["member-1"])
 
-    prisma.db.litellm_usertable.update_many.assert_awaited_once_with(
-        where={"user_id": {"in": ["member-1"]}}, data={"user_role": LitellmUserRoles.PROXY_ADMIN}
-    )
+    prisma.db.execute_raw.assert_awaited_once_with(ANY, LitellmUserRoles.PROXY_ADMIN, ["member-1"])
 
 
 @pytest.mark.asyncio
@@ -2911,7 +2909,7 @@ async def test_recompute_scim_member_roles_noop_when_admin_group_unset(mocker, m
 
     await _recompute_scim_member_roles(prisma, ["member-1"])
 
-    prisma.db.litellm_usertable.update_many.assert_not_called()
+    prisma.db.execute_raw.assert_not_called()
     prisma.db.litellm_usertable.update.assert_not_called()
 
 
@@ -4162,6 +4160,43 @@ async def test_process_group_patch_operations_ignores_nested_group_members(mocke
 
     create_user_mock.assert_not_called()
     assert final_members == {"incumbent", "real-user"}
+
+
+@pytest.mark.asyncio
+async def test_unprovisioned_group_members_are_created_concurrently_up_to_the_bulk_limit(
+    mocker, scim_upsert_user_enabled
+):
+    in_flight = 0
+    peak = 0
+
+    async def create_user(user_id: str, created_via: str = "scim_group") -> NewUserResponse:
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await asyncio.sleep(0.01)
+        in_flight -= 1
+        return NewUserResponse(user_id=user_id, key="")
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._create_user_if_not_exists",
+        AsyncMock(side_effect=create_user),
+    )
+    newcomers = [f"newcomer-{index:02d}" for index in range(3 * BULK_NEW_USER_CONCURRENCY)]
+    patch_ops = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[
+            SCIMPatchOperation(op="add", path="members", value=[{"value": user_id} for user_id in newcomers])
+        ],
+    )
+
+    _, final_members, _ = await _process_group_patch_operations(
+        patch_ops=patch_ops,
+        existing_team=LiteLLM_TeamTable(team_id="group", team_alias="Group", members=[], members_with_roles=[]),
+        prisma_client=_member_resolution_prisma(mocker, users=set(), teams=set()),
+    )
+
+    assert final_members == set(newcomers)
+    assert peak == BULK_NEW_USER_CONCURRENCY
 
 
 @pytest.mark.asyncio

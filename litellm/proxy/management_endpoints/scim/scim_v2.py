@@ -66,6 +66,10 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     team_member_add,
     team_member_delete,
 )
+from litellm.proxy.management_helpers.bulk_user_creation import (
+    BULK_NEW_USER_CONCURRENCY,
+    _bounded,  # pyright: ignore[reportPrivateUsage]  # the bounded gather /user/bulk_new runs its row writes through
+)
 from litellm.proxy.management_helpers.team_roster_sync import (
     MembersMissing,
     RosterDelta,
@@ -81,7 +85,7 @@ from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     handle_exception_on_proxy,
     premium_user_check,
 )
-from litellm.repositories.chunked_in import find_many_in, update_many_in
+from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.table_repositories import (
     InvitationLinkRepository,
     OrganizationMembershipRepository,
@@ -97,6 +101,14 @@ from litellm.types.proxy.management_endpoints.scim_v2 import *
 
 if TYPE_CHECKING:
     from prisma.models import LiteLLM_VerificationToken as PrismaVerificationToken
+
+
+_SET_USER_ROLE_SQL: Final = """
+UPDATE "LiteLLM_UserTable" SET user_role = $1, updated_at = (NOW() AT TIME ZONE 'UTC')
+WHERE user_id IN (
+    SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = ANY($2::text[]) ORDER BY user_id COLLATE "C" FOR UPDATE
+)
+"""
 
 
 class _UserTableClient(Protocol):
@@ -485,7 +497,9 @@ async def _recompute_scim_member_roles(prisma_client: PrismaClient, user_ids: It
     Recompute and persist each user's global proxy role from their resulting team
     membership. No-op unless scim_admin_group is configured, so a SCIM group write
     that drops a member from the admin group demotes them just like the user
-    endpoints do, and the role is left untouched when the feature is off.
+    endpoints do, and the role is left untouched when the feature is off. Each role is
+    one statement that locks its rows in the order ``USER_ROWS_LOCK_SQL`` takes them, so
+    it never waits on another group's push in a cycle.
     """
     admin_group: Final = await _get_scim_admin_group()
     if admin_group is None:
@@ -512,12 +526,8 @@ async def _recompute_scim_member_roles(prisma_client: PrismaClient, user_ids: It
         for row in rows
     )
     for role in dict.fromkeys(role for _, role in resolved):
-        await update_many_in(
-            users,
-            "user_id",
-            tuple(user_id for user_id, user_role in resolved if user_role == role),
-            data={"user_role": role},
-            atomicity="per_chunk_ok",
+        await prisma_client.db.execute_raw(
+            _SET_USER_ROLE_SQL, role, sorted(user_id for user_id, user_role in resolved if user_role == role)
         )
 
 
@@ -1042,16 +1052,17 @@ async def _resolve_group_member_ids(
             user_id,
         )
 
-    creations: Final = tuple(
-        [
-            (
-                user_id,
-                await _ensure_group_member_user(user_id=user_id, created_via=created_via, prisma_client=prisma_client),
-            )
+    creations: Final = await _bounded(
+        BULK_NEW_USER_CONCURRENCY,
+        tuple(
+            _ensure_group_member_user(user_id=user_id, created_via=created_via, prisma_client=prisma_client)
             for user_id in unique_unknown_ids
-        ]
+        ),
     )
-    created_users: Final = tuple(created for _, created in creations if created is not None)
+    failure: Final = next((outcome for outcome in creations if isinstance(outcome, BaseException)), None)
+    if failure is not None:
+        raise failure
+    created_users: Final = tuple(created for created in creations if isinstance(created, NewUserResponse))
 
     return GroupMemberExtractionResult(
         existing_member_ids=partition.resolved_ids,
