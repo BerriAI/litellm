@@ -1,7 +1,8 @@
 use litellm_auth::CredentialPlacement;
 use litellm_llms_types::{
     formats::messages::{
-        ContextEdit, ContextManagement, Message, MessagesOptionalParams, MessagesRequest, Speed,
+        ContentBlockType, ContextEdit, ContextManagement, Message, MessagesOptionalParams,
+        MessagesRequest, Speed, ThinkingConfig, ThinkingDisplay,
     },
     providers::anthropic::{AnthropicBeta, BetaProvider, BetaSet, DEFAULT_HEADERS},
     recognized::Recognized,
@@ -170,6 +171,9 @@ fn feature_betas(request: &MessagesRequest) -> BetaSet {
         messages_carry_output_config(&request.messages)
             .then_some(AnthropicBeta::PerTurnControl20260701),
         has_advisor_tool(tools).then_some(AnthropicBeta::AdvisorTool20260301),
+        displays_thinking_updates(params).then_some(AnthropicBeta::ThinkingDisplayUpdates20260818),
+        changes_tools_mid_conversation(&request.messages)
+            .then_some(AnthropicBeta::MidConversationToolChanges20260701),
         is_tool_search_used(tools).then_some(AnthropicBeta::AdvancedToolUse20251120),
     ]
     .into_iter()
@@ -204,6 +208,32 @@ fn uses_structured_output(params: &MessagesOptionalParams) -> bool {
             .as_ref()
             .and_then(Recognized::known)
             .is_some_and(|config| config.format.is_some())
+}
+
+fn displays_thinking_updates(params: &MessagesOptionalParams) -> bool {
+    let display = match params.thinking.as_ref().and_then(Recognized::known) {
+        Some(ThinkingConfig::Enabled(thinking)) => thinking.display.as_ref(),
+        Some(ThinkingConfig::Adaptive(thinking)) => thinking.display.as_ref(),
+        Some(ThinkingConfig::Disabled(_)) | None => None,
+    };
+    display.and_then(Recognized::known) == Some(&ThinkingDisplay::Updates)
+}
+
+fn changes_tools_mid_conversation(messages: &[Message]) -> bool {
+    messages
+        .iter()
+        .filter(|message| message.role == "system")
+        .flat_map(Message::blocks)
+        .any(|block| {
+            matches!(
+                &block.block_type,
+                Some(ContentBlockType::Other(kind)) if kind == "tool_addition" || kind == "tool_removal"
+            ) && block
+                .extra
+                .get("tool")
+                .and_then(|tool| tool.get("type"))
+                .is_some_and(|kind| kind == "tool_reference")
+        })
 }
 
 fn messages_carry_output_config(messages: &[Message]) -> bool {
@@ -1025,6 +1055,34 @@ mod tests {
         json!({"messages": [{"role": "user", "content": "hi", "output_config": null}]}),
         &["per-turn-control-2026-07-01"]
     )]
+    #[case::adaptive_thinking_display_updates(
+        json!({"thinking": {"type": "adaptive", "display": "updates"}}),
+        &["thinking-display-updates-2026-08-18"]
+    )]
+    #[case::enabled_thinking_display_updates(
+        json!({"thinking": {"type": "enabled", "budget_tokens": 1024, "display": "updates"}}),
+        &["thinking-display-updates-2026-08-18"]
+    )]
+    #[case::summarized_thinking_display(json!({"thinking": {"type": "adaptive", "display": "summarized"}}), &[])]
+    #[case::adaptive_thinking_without_display(json!({"thinking": {"type": "adaptive"}}), &[])]
+    #[case::disabled_thinking(json!({"thinking": {"type": "disabled"}}), &[])]
+    #[case::system_tool_addition(
+        json!({"messages": [{"role": "system", "content": [{"type": "tool_addition", "tool": {"type": "tool_reference", "name": "bash"}}]}]}),
+        &["mid-conversation-tool-changes-2026-07-01"]
+    )]
+    #[case::system_tool_removal(
+        json!({"messages": [{"role": "system", "content": [{"type": "tool_removal", "tool": {"type": "tool_reference", "name": "bash"}}]}]}),
+        &["mid-conversation-tool-changes-2026-07-01"]
+    )]
+    #[case::tool_addition_outside_a_system_message(
+        json!({"messages": [{"role": "user", "content": [{"type": "tool_addition", "tool": {"type": "tool_reference", "name": "bash"}}]}]}),
+        &[]
+    )]
+    #[case::tool_addition_without_a_tool_reference(
+        json!({"messages": [{"role": "system", "content": [{"type": "tool_addition", "tool": {"type": "custom", "name": "bash"}}]}]}),
+        &[]
+    )]
+    #[case::system_text_block(json!({"messages": [{"role": "system", "content": [{"type": "text", "text": "hi"}]}]}), &[])]
     fn feature_betas_follow_the_request(#[case] fields: Value, #[case] expected: &[&str]) {
         assert_eq!(feature_betas(&request(fields)), betas(expected));
     }

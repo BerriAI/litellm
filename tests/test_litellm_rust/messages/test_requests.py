@@ -3,6 +3,10 @@ from typing import Final
 import pytest
 
 import litellm
+from litellm.types.llms.anthropic import (
+    ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
+    ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
+)
 from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_RESPONSE, call
 from tests.test_litellm_rust.support.recording_server import RecordingServer
 from tests.test_litellm_rust.support.routing import assert_served_natively
@@ -146,3 +150,26 @@ async def test_optional_positional_body_parameters_reach_the_wire(server: Record
     assert response["id"] == MESSAGES_RESPONSE["id"]
     body, _ = sent(server)
     assert (body["metadata"], body["system"], body["temperature"]) == (args[3], args[6], args[7])
+
+
+def betas(headers: dict[str, str]) -> frozenset[str]:
+    value: Final = next((value for name, value in headers.items() if name.lower() == "anthropic-beta"), "")
+    return frozenset(beta.strip() for beta in value.split(",") if beta.strip())
+
+
+@pytest.mark.asyncio
+async def test_thinking_display_updates_sends_its_beta(server: RecordingServer) -> None:
+    await call(server, thinking={"type": "adaptive", "display": "updates"})
+
+    _, headers = sent(server)
+    assert ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER in betas(headers)
+
+
+@pytest.mark.asyncio
+async def test_mid_conversation_tool_changes_send_their_beta(server: RecordingServer) -> None:
+    tool_change: Final = {"type": "tool_addition", "tool": {"type": "tool_reference", "name": "bash"}}
+
+    await call(server, messages=[*MESSAGES, {"role": "system", "content": [tool_change]}])
+
+    _, headers = sent(server)
+    assert ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER in betas(headers)
