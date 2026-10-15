@@ -5,7 +5,7 @@ from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding sele
 from litellm.responses import main
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.rust_bridge.catalog import Route, RouteContext
-from litellm.rust_bridge.dispatch import PublicDispatch
+from litellm.rust_bridge.dispatch import PublicDispatch, typed_as
 from litellm.rust_bridge.public_call import (
     NativeCall,
     bind,
@@ -81,6 +81,7 @@ _ADISPATCH: Final = PublicDispatch(
 )
 
 
+@typed_as(main.responses)  # noqa: TID251  # dispatch boundary owns this Python fallback
 def responses(
     *args: object,
     **kwargs: object,  # kwargs-ok: preserve the public Responses call shape
@@ -95,6 +96,7 @@ def responses(
     )
 
 
+@typed_as(main.aresponses)  # noqa: TID251  # dispatch boundary owns this Python fallback
 async def aresponses(*args: object, **kwargs: object) -> ResponsesResult:  # kwargs-ok: preserve the public call shape
     python: Final = _PYTHON_ARESPONSES
     return await _ADISPATCH.arun(

@@ -15,7 +15,7 @@ import itertools
 import json
 import logging
 import secrets
-from collections.abc import AsyncIterable, AsyncIterator, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Coroutine, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType, ModuleType
 from typing import TYPE_CHECKING, Any, Final, Protocol
@@ -653,7 +653,12 @@ class ModelEndpoint:
                     **stream_options,
                 }
             return await litellm.acompletion(**kwargs)
-        return await litellm.aresponses(**kwargs)
+        from functools import partial
+
+        from litellm.responses.dispatch import ResponsesResult
+
+        aresponses_call: Final[partial[Coroutine[object, object, ResponsesResult]]] = partial(litellm.aresponses)
+        return await aresponses_call(**kwargs)
 
     async def _call_sdk(self, route: str, body: Mapping[str, object]) -> Response:
         kwargs = self._sdk_kwargs(body)

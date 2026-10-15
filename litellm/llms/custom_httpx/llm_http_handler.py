@@ -5737,7 +5737,10 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response: ResponsesAPIResponse | BaseResponsesAPIStreamingIterator = await litellm.aresponses(
+            aresponses_call: Final[
+                partial[Coroutine[object, object, ResponsesAPIResponse | BaseResponsesAPIStreamingIterator]]
+            ] = partial(litellm.aresponses)
+            response: ResponsesAPIResponse | BaseResponsesAPIStreamingIterator = await aresponses_call(
                 model=patch.model or model,
                 input=patch.messages,  # pyright: ignore[reportArgumentType]  # pre-existing mismatch surfaced by the Router import; patch messages are valid response input at runtime
                 **optional_params,

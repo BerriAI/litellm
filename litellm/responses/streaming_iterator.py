@@ -2889,7 +2889,12 @@ class ManagedResponsesWebSocketHandler:
         event dict, or ``None``.
         """
         terminal_event: _MutableJsonObject | None = None
-        stream_response: Final = await litellm.aresponses(model=model, **call_kwargs)
+        from functools import partial
+
+        aresponses_call: Final[
+            partial[Coroutine[object, object, ResponsesAPIResponse | BaseResponsesAPIStreamingIterator]]
+        ] = partial(litellm.aresponses)
+        stream_response: Final = await aresponses_call(model=model, **call_kwargs)
         async for chunk in cast(AsyncIterable[object], stream_response):  # cast-ok: aresponses returns an async stream
             if chunk is None:
                 continue
