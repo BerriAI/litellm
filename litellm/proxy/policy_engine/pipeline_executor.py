@@ -411,7 +411,7 @@ class PipelineExecutor:
 
             duration = time.perf_counter() - start_time
 
-            action = _pipeline_action_for_outcome(step, outcome)
+            action = _pipeline_action_for_step(step, outcome, original_exception)
 
             step_result = PipelineStepResult(
                 guardrail_name=step.guardrail,
@@ -635,7 +635,7 @@ class PipelineExecutor:
             return ("pass", response if isinstance(response, dict) else None, None, None)
 
         except Exception as e:
-            if CustomGuardrail._is_guardrail_intervention(e) or isinstance(e, UnappliableRequestRewrite):
+            if CustomGuardrail._is_guardrail_intervention(e):
                 error_msg: Final = _extract_error_message(e)
                 return ("fail", None, error_msg, e)
             else:
@@ -749,13 +749,24 @@ def _carry_working_guardrail_information(
     _append_guardrail_information(request_data=request_data, entries=[e for e in recorded if e not in existing])
 
 
+def _pipeline_action_for_step(step: PipelineStep, outcome: str, original_exception: Exception | None) -> str:
+    """
+    The action a step takes: block when its guardrail returned a rewrite the endpoint
+    cannot apply, whatever on_fail and on_error say, else the action configured for
+    the outcome.
+    """
+    if isinstance(original_exception, UnappliableRequestRewrite):
+        return "block"
+    return _pipeline_action_for_outcome(step, outcome)
+
+
 def _pipeline_action_for_outcome(step: PipelineStep, outcome: str) -> str:
     """
     Map pipeline step outcome to the configured action.
 
     - skip -> next (stream_scope mismatch; do not apply on_pass/on_fail)
     - pass -> on_pass
-    - fail -> on_fail (content/policy intervention, or a rewrite the endpoint cannot apply)
+    - fail -> on_fail (content/policy intervention)
     - error -> on_error if set, else on_fail (backward compatible)
     """
     if outcome == "skip":

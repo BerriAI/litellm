@@ -28,7 +28,12 @@ from tests.integration._support.wire import Reply, Request, Wire, wire_server
 
 _MODEL_ID: Final = "anthropic.claude-sonnet-5-v1:0"
 _MODEL: Final = "converse-guarded"
-_PIPELINED_MODEL: Final = "converse-pipelined"
+_PIPELINED_ACTIONS: Final = {
+    "converse-pipelined-error-allow": {"on_fail": "block", "on_error": "allow"},
+    "converse-pipelined-fail-next": {"on_fail": "next", "on_error": "block"},
+    "converse-pipelined-fail-allow": {"on_fail": "allow", "on_error": "block"},
+    "converse-pipelined-allow-all": {"on_fail": "allow", "on_error": "allow"},
+}
 _CARD: Final = "4111 1111 1111 1111"
 _CARD_PATTERN: Final = re.compile(r"\b(?:\d{4} ){3}\d{4}\b")
 _MASK: Final = "****"
@@ -520,27 +525,23 @@ def _config(directory: Path, guardrails: tuple[dict[str, JsonValue], ...], bedro
                     "aws_region_name": "us-east-1",
                 },
             }
-            for model_name in (_MODEL, _PIPELINED_MODEL)
+            for model_name in (_MODEL, *_PIPELINED_ACTIONS)
         ),
     ]
     configuration["guardrails"] = list(guardrails)
     configuration["policies"] = {
-        "converse-pipeline": {
+        model_name: {
             "guardrails": {"add": [_generic(_Vendor.DROPS_A_ROW)]},
             "pipeline": {
                 "mode": "pre_call",
-                "steps": [
-                    {
-                        "guardrail": _generic(_Vendor.DROPS_A_ROW),
-                        "on_pass": "next",
-                        "on_fail": "block",
-                        "on_error": "allow",
-                    }
-                ],
+                "steps": [{"guardrail": _generic(_Vendor.DROPS_A_ROW), "on_pass": "next", **actions}],
             },
         }
+        for model_name, actions in _PIPELINED_ACTIONS.items()
     }
-    configuration["policy_attachments"] = [{"policy": "converse-pipeline", "models": [_PIPELINED_MODEL]}]
+    configuration["policy_attachments"] = [
+        {"policy": model_name, "models": [model_name]} for model_name in _PIPELINED_ACTIONS
+    ]
     path: Final = directory / "converse-guardrails.yaml"
     path.write_text(yaml.safe_dump(configuration))
     return path
@@ -969,9 +970,10 @@ def test_missing_structured_row_is_refused_before_bedrock(rig: _Rig) -> None:
     assert _UNAPPLIABLE in _refused(rig, _converse(rig, _generic(_Vendor.DROPS_A_ROW), body))
 
 
-def test_pipeline_step_allowing_errors_still_refuses_a_rewrite_it_cannot_apply(rig: _Rig) -> None:
+@pytest.mark.parametrize("model_name", tuple(_PIPELINED_ACTIONS))
+def test_pipeline_step_refuses_a_rewrite_it_cannot_apply_whatever_its_actions(rig: _Rig, model_name: str) -> None:
     body: Final = {"messages": [_user({"text": "Hello."}), _assistant({"text": "Hi."}), _user({"text": f"{_CARD}"})]}
-    response: Final = rig.gateway.request("POST", f"/bedrock/model/{_PIPELINED_MODEL}/converse", body)
+    response: Final = rig.gateway.request("POST", f"/bedrock/model/{model_name}/converse", body)
     assert _UNAPPLIABLE in _refused(rig, response)
 
 

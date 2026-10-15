@@ -816,15 +816,23 @@ async def test_on_error_next_fallback_on_api_outage_on_fail_blocks_content(monke
 
 
 @pytest.mark.asyncio
-async def test_unappliable_rewrite_follows_on_fail_not_on_error_allow(monkeypatch):
+@pytest.mark.parametrize(
+    "on_fail, on_error",
+    [("block", "allow"), ("next", "block"), ("allow", "block"), ("allow", "allow"), ("next", "next"), ("next", None)],
+)
+async def test_unappliable_rewrite_blocks_whatever_on_fail_and_on_error_say(monkeypatch, on_fail, on_error):
     """
-    A rewrite the endpoint cannot apply uses on_fail, so on_error: allow does not send the original request on.
+    A rewrite the endpoint cannot apply blocks the pipeline, so no on_fail or on_error action sends the original request on.
     """
     rewriter = UnappliableRewriteGuardrail("rewriter")
-    monkeypatch.setattr(litellm, "callbacks", [rewriter])
+    later = AlwaysPassGuardrail("later-step")
+    monkeypatch.setattr(litellm, "callbacks", [rewriter, later])
 
     result = await PipelineExecutor.execute_steps(
-        steps=[PipelineStep(guardrail="rewriter", on_pass="allow", on_fail="block", on_error="allow")],
+        steps=[
+            PipelineStep(guardrail="rewriter", on_pass="next", on_fail=on_fail, on_error=on_error),
+            PipelineStep(guardrail="later-step", on_pass="allow", on_fail="block"),
+        ],
         mode="pre_call",
         data={"messages": [{"role": "user", "content": "card 4111 1111 1111 1111"}]},
         user_api_key_dict=MagicMock(),
@@ -833,8 +841,9 @@ async def test_unappliable_rewrite_follows_on_fail_not_on_error_allow(monkeypatc
     )
 
     assert rewriter.calls == 1
+    assert later.calls == 0
     assert result.terminal_action == "block"
-    assert result.step_results[0].outcome == "fail"
+    assert result.step_results[0].action_taken == "block"
     assert isinstance(result.original_exception, UnappliableRequestRewrite)
 
 
