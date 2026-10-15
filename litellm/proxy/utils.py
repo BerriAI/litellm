@@ -263,7 +263,12 @@ from litellm.repositories.verification_token_repository import (
 from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.slack_alerting import DEFAULT_ALERT_TYPES
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import (
+    ResponseCompletedEvent,
+    ResponseFailedEvent,
+    ResponseIncompleteEvent,
+    ResponsesAPIResponse,
+)
 from litellm.types.mcp import (
     MCPDuringCallResponseObject,
     MCPPreCallRequestObject,
@@ -4333,6 +4338,16 @@ class ProxyLogging:
         logging_obj: Final = request_data.get("litellm_logging_obj")
         if not isinstance(logging_obj, Logging):
             return
+        terminal_event: Final = next(
+            (
+                chunk
+                for chunk in reversed(served_chunks)
+                if isinstance(chunk, (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent))
+            ),
+            None,
+        )
+        if terminal_event is not None:
+            logging_obj.record_served_responses_terminal_event(terminal_event)
         texts: Final = await offload_token_count(served_stream_output_texts)(served_chunks)
         record_served_output_texts(logging_obj.model_call_details, texts)
 

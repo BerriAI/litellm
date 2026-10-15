@@ -3409,6 +3409,65 @@ async def test_record_served_stream_output_lets_the_event_loop_run_while_assembl
     assert turns_during > 0
 
 
+@pytest.mark.asyncio
+async def test_record_served_stream_output_preserves_a_responses_terminal_event_for_logging():
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.types.llms.openai import ResponseCompletedEvent, ResponsesAPIResponse
+
+    logging_obj: Final = Logging(
+        model="openai/gpt-4o-mini",
+        messages=[],
+        stream=True,
+        call_type="aresponses",
+        start_time=datetime.now(),
+        litellm_call_id="served-responses-event",
+        function_id="served-responses-event",
+    )
+    original_event: Final = ResponseCompletedEvent(
+        type="response.completed",
+        response=ResponsesAPIResponse(
+            id="resp-original",
+            created_at=1,
+            object="response",
+            status="completed",
+            model="gpt-4o-mini",
+            output=[],
+        ),
+    )
+    served_event: Final = ResponseCompletedEvent(
+        type="response.completed",
+        response=ResponsesAPIResponse(
+            id="resp-served",
+            created_at=1,
+            object="response",
+            status="completed",
+            model="gpt-4o-mini",
+            output=[],
+        ),
+    )
+
+    await ProxyLogging._record_served_stream_output(
+        {"litellm_logging_obj": logging_obj},
+        [served_event],
+    )
+    logging_obj.update_environment_variables(
+        model="openai/gpt-4o-mini",
+        user=None,
+        optional_params={},
+        litellm_params={"metadata": {}, "aresponses": True},
+        custom_llm_provider="openai",
+    )
+    now: Final = datetime.now()
+    await logging_obj.async_success_handler(
+        result=original_event,
+        start_time=now,
+        end_time=now,
+    )
+
+    assert logging_obj.model_call_details["async_complete_streaming_response"] is served_event.response
+
+
 class _RedisDown:
     async def async_delete_cache(self, key: str) -> None:
         raise ConnectionError("redis is down")

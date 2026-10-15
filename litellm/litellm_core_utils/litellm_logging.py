@@ -690,6 +690,9 @@ class Logging(LiteLLMLoggingBaseClass):
         self.function_id = function_id
         self.streaming_chunks: list[object] = []
         self.sync_streaming_chunks: list[object] = []
+        self._served_responses_terminal_event: (
+            ResponseCompletedEvent | ResponseIncompleteEvent | ResponseFailedEvent | None
+        ) = None
         self.log_raw_request_response = log_raw_request_response
         self.raw_request_only = raw_request_only
 
@@ -2826,8 +2829,9 @@ class Logging(LiteLLMLoggingBaseClass):
         logging (including any nested calls its callbacks trigger) is fully done."""
         try:
             with post_response_phase():
+                logging_result: Final = self._served_stream_logging_result(result)
                 return self._success_handler_body(
-                    result=result, start_time=start_time, end_time=end_time, cache_hit=cache_hit, **kwargs
+                    result=logging_result, start_time=start_time, end_time=end_time, cache_hit=cache_hit, **kwargs
                 )
         finally:
             self._restore_correlation_context()
@@ -3267,8 +3271,9 @@ class Logging(LiteLLMLoggingBaseClass):
         logging (including any nested calls its callbacks trigger) is fully done."""
         try:
             with post_response_phase():
+                logging_result: Final = self._served_stream_logging_result(result)
                 return await self._async_success_handler_body(
-                    result=result, start_time=start_time, end_time=end_time, cache_hit=cache_hit, **kwargs
+                    result=logging_result, start_time=start_time, end_time=end_time, cache_hit=cache_hit, **kwargs
                 )
         finally:
             self._restore_correlation_context()
@@ -4242,6 +4247,16 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def record_streamed_anthropic_message_id(self, message_id: str) -> None:
         self.streamed_anthropic_message_id = message_id
+
+    def record_served_responses_terminal_event(
+        self,
+        event: ResponseCompletedEvent | ResponseIncompleteEvent | ResponseFailedEvent,
+    ) -> None:
+        self._served_responses_terminal_event = event
+
+    def _served_stream_logging_result(self, result: object) -> object:
+        served_event: Final = self._served_responses_terminal_event
+        return served_event if served_event is not None else result
 
     def _anthropic_messages_logged_response(self, result: object) -> ModelResponse:
         """
