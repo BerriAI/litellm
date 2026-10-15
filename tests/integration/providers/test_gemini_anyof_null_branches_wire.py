@@ -69,6 +69,20 @@ _UNIONS: Final[tuple[tuple[str, JsonValue, JsonValue], ...]] = (
     ("object-anyof", {"anyOf": _STRING}, {"anyOf": _STRING}),
     ("null-anyof", {"anyOf": None}, {"anyOf": None}),
     ("five-hundred-nulls-then-string", {"anyOf": [*([_NULL] * 500), _STRING]}, _NULLABLE_STRING),
+    ("string-null-type-array", {"type": ["string", "null"]}, _NULLABLE_STRING),
+    (
+        "null-inside-a-union-branch",
+        {"anyOf": [{"type": "object", "properties": {"x": {"anyOf": [_INTEGER, _NULL]}}}, _NULL]},
+        {
+            "anyOf": [
+                {
+                    "type": "object",
+                    "properties": {"x": {"anyOf": [{"type": "integer", "nullable": True}]}},
+                    "nullable": True,
+                }
+            ]
+        },
+    ),
 )
 _FANOUT_UNIONS: Final = tuple(case for case in _UNIONS if case[0] in {"null-null-string", "null-only", "object-anyof"})
 

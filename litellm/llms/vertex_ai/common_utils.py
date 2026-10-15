@@ -738,13 +738,13 @@ def build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     # refs recursively and correctly detects/skips circular references.
     unpack_defs(parameters, defs)
 
+    _convert_schema_types(parameters)
+
     # 5. Nullable fields:
     #     * https://github.com/pydantic/pydantic/issues/1270
     #     * https://stackoverflow.com/a/58841311
     #     * https://github.com/pydantic/pydantic/discussions/4872
     convert_anyof_null_to_nullable(parameters)
-
-    _convert_schema_types(parameters)
 
     # Handle empty strings in enum values - Gemini doesn't accept empty strings in enums
     _fix_enum_empty_strings(parameters)
@@ -943,6 +943,7 @@ def convert_anyof_null_to_nullable(schema, depth=0):
                 # process_items() converts it to {"type": "object"}, which Vertex
                 # requires whenever type == "array" (even inside anyOf).
                 atype["nullable"] = True
+            convert_anyof_null_to_nullable(atype, depth=depth + 1)
 
     properties: Final = schema.get("properties", None)
     if properties is not None:

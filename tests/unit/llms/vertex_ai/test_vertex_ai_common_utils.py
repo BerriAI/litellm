@@ -13,6 +13,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
 from litellm.llms.vertex_ai.common_utils import (
     VertexAITokenCounter,
+    build_vertex_schema,
     convert_anyof_null_to_nullable,
     convert_vertex_datetime_to_openai_datetime,
     get_vertex_location_from_url,
@@ -240,6 +241,52 @@ def test_anyof_conversion_forwards_a_non_object_branch_for_the_provider_to_judge
 
     assert schema == {"type": "object", "properties": {"example": {"anyOf": expected}}}
 
+
+
+@pytest.mark.parametrize(
+    ("field", "expected"),
+    [
+        ({"type": ["integer", "null"]}, {"anyOf": [{"type": "integer", "nullable": True}]}),
+        (
+            {
+                "anyOf": [
+                    {"type": "object", "properties": {"x": {"anyOf": [{"type": "integer"}, {"type": "null"}]}}},
+                    {"type": "null"},
+                ]
+            },
+            {
+                "anyOf": [
+                    {
+                        "type": "object",
+                        "properties": {"x": {"anyOf": [{"type": "integer", "nullable": True}]}},
+                        "nullable": True,
+                    }
+                ]
+            },
+        ),
+        (
+            {"type": ["object", "null"], "properties": {"x": {"type": ["string", "null"]}}},
+            {
+                "anyOf": [
+                    {
+                        "type": "object",
+                        "properties": {"x": {"anyOf": [{"type": "string", "nullable": True}]}},
+                        "nullable": True,
+                    }
+                ]
+            },
+        ),
+        (
+            {"type": "array", "items": {"type": ["number", "null"]}},
+            {"type": "array", "items": {"anyOf": [{"type": "number", "nullable": True}]}},
+        ),
+    ],
+    ids=["type-array", "null-inside-a-union-branch", "nullable-object-with-nullable-property", "nullable-items"],
+)
+def test_vertex_schema_folds_every_null_branch_into_nullable(field: JsonValue, expected: JsonValue):
+    schema: Final = build_vertex_schema({"type": "object", "properties": {"value": field}})
+
+    assert schema["properties"]["value"] == expected
 
 def test_anyof_with_excessive_nesting():
     """Test conversion with excessive nesting > max levels +1 deep."""
