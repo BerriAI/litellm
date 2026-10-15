@@ -415,6 +415,48 @@ def test_bedrock_empty_text_block_is_removed_from_converse_request() -> None:
     assert request["messages"] == [{"role": "user", "content": [{"text": "Hey, how's it going?"}]}]
 
 
+class _DeepCopyCountingStr(str):
+    deep_copies = 0
+
+    def __deepcopy__(self, memo: dict) -> "_DeepCopyCountingStr":
+        type(self).deep_copies += 1
+        return self
+
+
+def test_bedrock_converse_request_copies_params_once() -> None:
+    description: Final = _DeepCopyCountingStr("City to look up")
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string", "description": description}},
+                    "required": ["city"],
+                },
+            },
+        }
+    ]
+    snapshot: Final = copy.deepcopy(tools)
+    _DeepCopyCountingStr.deep_copies = 0
+
+    request: Final = AmazonConverseConfig()._transform_request(
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": "Weather in Paris?"}],
+        optional_params={"maxTokens": 10, "tools": tools},
+        litellm_params={},
+        headers={},
+    )
+
+    # one copy, by the tool converter that edits the schema; none for the params as a whole
+    assert _DeepCopyCountingStr.deep_copies == 1
+    tool_spec: Final = request["toolConfig"]["tools"][0]["toolSpec"]
+    assert tool_spec["name"] == "get_weather"
+    assert tool_spec["inputSchema"]["json"]["properties"]["city"]["description"] == "City to look up"
+    assert tools == snapshot
+
+
 @pytest.mark.asyncio
 async def test_bedrock_max_completion_tokens_become_converse_max_tokens() -> None:
     requests: Final[list[httpx.Request]] = []
