@@ -201,7 +201,6 @@ def test_migrate_deploy_is_not_bounded_by_the_per_command_timeout(
 ) -> None:
     """A fresh database replays every migration, which takes longer than any bookkeeping command."""
     _, log_path = toolchain_env
-    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:9/x")
     monkeypatch.setenv(PRISMA_COMMAND_TIMEOUT_ENV_VAR, "1")
     monkeypatch.setenv("FAKE_PRISMA_FIRST_DEPLOY_SLEEP", "3")
 
@@ -214,7 +213,6 @@ def test_migrate_deploy_stops_at_its_own_timeout(
 ) -> None:
     """The deploy budget still bounds a deploy that hangs, so boot cannot wait forever."""
     _, log_path = toolchain_env
-    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:9/x")
     monkeypatch.setenv(PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR, str(COMMAND_TIMEOUT_SECONDS))
     monkeypatch.setenv("FAKE_PRISMA_FIRST_DEPLOY_SLEEP", str(HUNG_DEPLOY_SECONDS))
     monkeypatch.setenv("FAKE_PRISMA_LATER_DEPLOY_STDERR", "Error: P3018 permission denied for schema public")
@@ -235,7 +233,6 @@ def test_a_timed_out_migrate_deploy_takes_its_process_tree_with_it(
     """The real CLI forks Node and a schema engine; a timeout must not leave them running."""
     _, log_path = toolchain_env
     pidfile = tmp_path / "grandchild.pid"
-    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:9/x")
     monkeypatch.setenv(PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR, str(COMMAND_TIMEOUT_SECONDS))
     monkeypatch.setenv("FAKE_PRISMA_FIRST_DEPLOY_SLEEP", "60")
     monkeypatch.setenv("FAKE_PRISMA_LATER_DEPLOY_STDERR", "Error: P3018 permission denied for schema public")
