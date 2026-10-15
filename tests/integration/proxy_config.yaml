@@ -142,6 +142,11 @@ model_list:
       model: openai/gpt-6-luna
       api_base: http://127.0.0.1:8191
       api_key: synthetic-openai-key
+  - model_name: openai/gpt-6-astra
+    litellm_params:
+      model: openai/gpt-6-astra
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-openai-key
   - model_name: openai/gpt-6.1-sol
     litellm_params:
       model: openai/gpt-6.1-sol
@@ -178,6 +183,12 @@ model_list:
   - model_name: azure/gpt-6-luna
     litellm_params:
       model: azure/gpt-6-luna
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-azure-key
+      api_version: "2025-04-01-preview"
+  - model_name: azure/gpt-6-astra
+    litellm_params:
+      model: azure/gpt-6-astra
       api_base: http://127.0.0.1:8191
       api_key: synthetic-azure-key
       api_version: "2025-04-01-preview"
