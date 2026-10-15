@@ -35,6 +35,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
         tools: list[dict[str, JsonValue]] | None = None,
         system: JsonValue = None,
         messages_format: TokenCountMessagesFormat = "anthropic",
+        output_format: JsonValue = None,
     ) -> TokenCountResponse | None:
         """
         Count tokens using Anthropic's CountTokens API.

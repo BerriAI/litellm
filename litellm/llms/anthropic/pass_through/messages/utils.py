@@ -1,10 +1,11 @@
 from collections.abc import Iterable, Mapping, Sequence
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Final, cast, get_type_hints
+from typing import TYPE_CHECKING, Final, cast, get_type_hints
 
 from pydantic import JsonValue
 
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.anthropic.common_utils import (
     flatten_unencrypted_web_search_results_in_anthropic_messages,
     sanitize_tool_use_ids_in_anthropic_messages,
@@ -30,7 +31,7 @@ INCOMPLETE_STREAM_ERROR_MESSAGE: Final = (
 )
 
 
-def get_safeguard_refusal_stop_details(response: object) -> Mapping[str, Any] | None:
+def get_safeguard_refusal_stop_details(response: object) -> Mapping[str, object] | None:
     """
     Return the ``stop_details`` of an Anthropic Messages response refused by a
     safeguard (``stop_reason: "refusal"`` carrying ``stop_details``:
@@ -128,6 +129,13 @@ def anthropic_system_to_openai_message(system: object) -> ChatCompletionSystemMe
     return ChatCompletionSystemMessage(role="system", content=system)
 
 
+def normalize_native_messages(messages: Sequence[object]) -> list[dict[str, object]]:
+    """Apply the block rewrites every /v1/messages request gets before it reaches a provider."""
+    return flatten_unencrypted_web_search_results_in_anthropic_messages(
+        sanitize_tool_use_ids_in_anthropic_messages(strip_empty_content_blocks_from_anthropic_messages(messages))
+    )
+
+
 def prepare_native_messages(
     messages: list[dict[str, JsonValue]],
     system: str | list[dict[str, JsonValue]] | None,
@@ -139,13 +147,7 @@ def prepare_native_messages(
     api_base: str | None = None,
     presanitized: bool = False,
 ) -> tuple[list[dict[str, JsonValue]], str | list[dict[str, JsonValue]] | None]:
-    normalized: Final = (
-        messages
-        if presanitized
-        else flatten_unencrypted_web_search_results_in_anthropic_messages(
-            sanitize_tool_use_ids_in_anthropic_messages(strip_empty_content_blocks_from_anthropic_messages(messages))
-        )
-    )
+    normalized: Final = messages if presanitized else normalize_native_messages(messages)
     return cast(  # cast-ok: legacy normalizers and injection preserve the JSON message and system shapes
         tuple[list[dict[str, JsonValue]], str | list[dict[str, JsonValue]] | None],
         AnthropicCacheControlHook.maybe_inject_cache_control(
@@ -175,7 +177,7 @@ def anthropic_messages_optional_param_keys() -> frozenset[str]:
 class AnthropicMessagesRequestUtils:
     @staticmethod
     def get_requested_anthropic_messages_optional_param(
-        params: dict[str, Any],
+        params: Mapping[str, object],
         *,
         model: str | None = None,
         drop_params: bool = False,
@@ -222,10 +224,15 @@ class AnthropicMessagesRequestUtils:
                     )
         if is_reasoning_auto_summary_enabled():
             thinking_param: Final = filtered_params.get("thinking")
-            if isinstance(thinking_param, dict) and thinking_param.get("type") != "disabled":
+            thinking_mapping: Final = as_str_mapping(thinking_param)
+            if (
+                isinstance(thinking_param, dict)
+                and thinking_mapping is not None
+                and thinking_mapping.get("type") != "disabled"
+            ):
                 return cast(
                     AnthropicMessagesRequestOptionalParams,
-                    {**filtered_params, "thinking": {**thinking_param, "display": "summarized"}},
+                    {**filtered_params, "thinking": {**thinking_mapping, "display": "summarized"}},
                 )
         return cast(AnthropicMessagesRequestOptionalParams, filtered_params)
 
