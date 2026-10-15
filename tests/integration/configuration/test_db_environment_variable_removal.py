@@ -66,6 +66,8 @@ PROBES_PER_READ: Final = 12
 WORKERS: Final = 2
 CONFIG_CACHE_TTL_SECONDS: Final = 1
 SAVE_HOLD_SECONDS: Final = 2 * CONFIG_CACHE_TTL_SECONDS + 60
+LONG_CONFIG_CACHE_TTL_SECONDS: Final = 20
+LONG_SAVE_HOLD_SECONDS: Final = 2 * LONG_CONFIG_CACHE_TTL_SECONDS + 60
 HOLD_END_MARGIN_SECONDS: Final = 2
 STALE_REPLICA_SECONDS: Final = 15
 HELD_READ_SECONDS: Final = 8
@@ -122,6 +124,20 @@ DECRYPTABLE_KEY: Final = "LIT9489_DECRYPTABLE"
 UNAPPLIED_KEYS: Final = (MCP_STDIO_ENABLED_ENV_VAR, EQUALS_KEY)
 UNTOUCHED: Final[Mapping[str, str | None]] = MappingProxyType(
     {YAML_LITERAL: YAML_LITERAL_VALUE, YAML_REFERENCE: YAML_SOURCE_VALUE, PROCESS_ONLY: PROCESS_ONLY_VALUE}
+)
+NUL_SECRET: Final = "lit9489\u0000secret"
+OWN_SSO_ENVIRONMENT: Final[Mapping[str, str]] = MappingProxyType(
+    {"GENERIC_CLIENT_ID": "lit9489-own-client-id", "GENERIC_CLIENT_SECRET": "lit9489-own-client-secret"}
+)
+STARTUP_LOGO: Final = f"{LOGO_URL}?startup"
+STARTUP_ENVIRONMENT: Final[Mapping[str, str]] = MappingProxyType(
+    {"UI_LOGO_PATH": STARTUP_LOGO, "LITELLM_SALT_KEY": SALT_KEY, **OWN_SSO_ENVIRONMENT}
+)
+CLEARED_TO_OWN_SSO_ENVIRONMENT: Final[Mapping[str, str | None]] = MappingProxyType(
+    {**CLEARED_SSO_ENVIRONMENT, **OWN_SSO_ENVIRONMENT}
+)
+NON_OBJECT_ROWS: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"list": NOT_AN_OBJECT, "json_string": json.dumps({DB_ONLY: "from-a-json-string"}), "number": 7}
 )
 REQUEST_BODY: Final = TypeAdapter(dict[str, JsonValue])
 ENVIRONMENT_ROW: Final = TypeAdapter(dict[str, JsonValue])
@@ -225,13 +241,13 @@ def _pod(
 
 
 @contextmanager
-def _two_pods(directory: Path) -> Generator[Pods]:
+def _two_pods(directory: Path, environment: Mapping[str, str] = MappingProxyType({})) -> Generator[Pods]:
     with (
         gateway_from_environment() as gateway,
         wire_server(_anthropic_message) as provider,
         scratch_database() as database_url,
-        _pod(gateway, directory / "writer", provider, database_url) as writer,
-        _pod(gateway, directory / "reader", provider, database_url) as reader,
+        _pod(gateway, directory / "writer", provider, database_url, environment=environment) as writer,
+        _pod(gateway, directory / "reader", provider, database_url, environment=environment) as reader,
     ):
         yield Pods(writer, reader, provider, database_url)
 
@@ -246,6 +262,36 @@ def pods(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Pods]:
 def held_pods(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Pods]:
     with _two_pods(tmp_path_factory.mktemp("db-env-removal-held")) as two_pods:
         yield two_pods
+
+
+@pytest.fixture(scope="module")
+def startup_pods(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Pods]:
+    with _two_pods(tmp_path_factory.mktemp("db-env-removal-startup"), STARTUP_ENVIRONMENT) as two_pods:
+        yield two_pods
+
+
+@dataclass(frozen=True, slots=True)
+class SaltedPod:
+    proxy: OwnedProxy
+    provider: Wire
+    database_url: str
+
+
+@pytest.fixture(scope="module")
+def salted_pod(tmp_path_factory: pytest.TempPathFactory) -> Iterator[SaltedPod]:
+    with (
+        gateway_from_environment() as gateway,
+        wire_server(_anthropic_message) as provider,
+        scratch_database() as database_url,
+        _pod(
+            gateway,
+            tmp_path_factory.mktemp("db-env-removal-salted"),
+            provider,
+            database_url,
+            environment={"LITELLM_SALT_KEY": SALT_KEY},
+        ) as proxy,
+    ):
+        yield SaltedPod(proxy, provider, database_url)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1119,13 +1165,17 @@ def test_sso_save_reaches_a_pod_that_leaves_sso_settings_out(sso_pods: SsoPods) 
     assert _sso_client_id(sso_pods.excluded) == saved_id
 
 
-def test_sso_key_removed_from_the_row_with_no_stored_sso_value_is_unset(pods: Pods) -> None:
-    row_only: Final = f"lit9489-row-only-{uuid.uuid4().hex}"
-    _set_through_the_api(pods.writer, {"GENERIC_CLIENT_ID": row_only})
-    _settled_on_both(pods, {"GENERIC_CLIENT_ID": row_only})
+def test_sso_key_removed_from_the_row_with_no_stored_sso_value_is_unset_once_the_sso_table_wait_ends(
+    pods: Pods,
+) -> None:
+    row_only: Final = {"GENERIC_CLIENT_ID": f"lit9489-row-only-{uuid.uuid4().hex}"}
+    _set_through_the_api(pods.writer, row_only)
+    _settled_on_both(pods, row_only)
 
-    _remove_from_row(pods.database_url, ("GENERIC_CLIENT_ID",))
+    wait_ends: Final = time.monotonic() + SAVE_HOLD_SECONDS - HOLD_END_MARGIN_SECONDS
+    _remove_from_row(pods.database_url, tuple(row_only))
 
+    assert _misses(tuple(_samples_on_both_until(pods, tuple(row_only), wait_ends)), row_only)[:1] == ()
     _settled_on_both(pods, {"GENERIC_CLIENT_ID": None})
 
 
@@ -1209,10 +1259,18 @@ class PinnedSave:
     started_at: float
 
 
-def _pinned_save(
-    proxy: OwnedProxy, route: str, body: Mapping[str, JsonValue], saved: Mapping[str, str | None]
-) -> PinnedSave:
-    names: Final = {"names": ",".join(saved)}
+@dataclass(frozen=True, slots=True)
+class PinnedRequest:
+    before: WorkerEnvironment
+    started_at: float
+    response: httpx.Response
+    after: WorkerEnvironment
+
+
+def _pinned_request(
+    proxy: OwnedProxy, route: str, body: Mapping[str, JsonValue], names: tuple[str, ...]
+) -> PinnedRequest:
+    probe: Final = {"names": ",".join(names)}
     with httpx.Client(
         base_url=_origin(proxy.gateway),
         headers={"Authorization": f"Bearer {proxy.gateway.key}"},
@@ -1220,18 +1278,31 @@ def _pinned_save(
         timeout=30,
         trust_env=False,
     ) as pinned:
-        before: Final = WorkerEnvironment.model_validate_json(pinned.get(PROBE_ROUTE, params=names).content)
+        before: Final = WorkerEnvironment.model_validate_json(pinned.get(PROBE_ROUTE, params=probe).content)
         started_at: Final = time.monotonic()
         response: Final = pinned.patch(route, json=dict(body))
-        after: Final = WorkerEnvironment.model_validate_json(pinned.get(PROBE_ROUTE, params=names).content)
-    assert response.status_code == 200, response.text
-    assert (after.pid, dict(after.environment)) == (before.pid, dict(saved)), (before, after)
-    return PinnedSave(after.pid, started_at)
+        after: Final = WorkerEnvironment.model_validate_json(pinned.get(PROBE_ROUTE, params=probe).content)
+    return PinnedRequest(before, started_at, response, after)
+
+
+def _pinned_save(
+    proxy: OwnedProxy, route: str, body: Mapping[str, JsonValue], saved: Mapping[str, str | None]
+) -> PinnedSave:
+    pinned: Final = _pinned_request(proxy, route, body, tuple(saved))
+    assert pinned.response.status_code == 200, pinned.response.text
+    assert (pinned.after.pid, dict(pinned.after.environment)) == (pinned.before.pid, dict(saved)), pinned
+    return PinnedSave(pinned.after.pid, pinned.started_at)
 
 
 def _samples_until(proxy: OwnedProxy, names: tuple[str, ...], until: float) -> Iterator[WorkerEnvironment]:
     while time.monotonic() < until:
         yield _worker_environment(proxy, names)
+
+
+def _samples_on_both_until(pods: Pods, names: tuple[str, ...], until: float) -> Iterator[WorkerEnvironment]:
+    while time.monotonic() < until:
+        yield _worker_environment(pods.writer, names)
+        yield _worker_environment(pods.reader, names)
 
 
 def _misses(
@@ -1261,9 +1332,7 @@ def _only_its_worker_keeps_the_save(
     assert (misses[:1], sampled_workers) == ((), proxy.worker_pids()), (save.pid, len(samples), misses[:3])
 
 
-def _every_worker_follows_before_the_hold_ends(
-    pods: Pods, save: PinnedSave, stored: Mapping[str, str | None]
-) -> None:
+def _every_worker_follows_before_the_hold_ends(pods: Pods, save: PinnedSave, stored: Mapping[str, str | None]) -> None:
     hold_ends: Final = save.started_at + SAVE_HOLD_SECONDS - HOLD_END_MARGIN_SECONDS
     eventually(
         lambda: _environments(pods.writer, tuple(stored)),
@@ -1289,7 +1358,11 @@ def _catch_up(pod: ReplicaPod) -> None:
 
 
 def _only_its_worker_keeps_the_save_until_the_hold_ends(
-    pods: Pods, save: PinnedSave, saved: Mapping[str, str | None], stored: Mapping[str, str | None]
+    pods: Pods,
+    save: PinnedSave,
+    saved: Mapping[str, str | None],
+    stored: Mapping[str, str | None],
+    hold_seconds: int = SAVE_HOLD_SECONDS,
 ) -> None:
     eventually(
         lambda: _environments(pods.writer, tuple(saved)),
@@ -1300,9 +1373,22 @@ def _only_its_worker_keeps_the_save_until_the_hold_ends(
         seconds=CONVERGE_SECONDS,
     )
     _only_its_worker_keeps_the_save(
-        pods.writer, save, saved, stored, save.started_at + SAVE_HOLD_SECONDS - HOLD_END_MARGIN_SECONDS
+        pods.writer, save, saved, stored, save.started_at + hold_seconds - HOLD_END_MARGIN_SECONDS
     )
     _settled_on_both(pods, stored)
+
+
+def _reset_on_both(pods: Pods, reset: Callable[[OwnedProxy], None], expected: Mapping[str, str | None]) -> None:
+    reset(pods.reader)
+    eventually(
+        lambda: _environments(pods.writer, tuple(expected)),
+        lambda seen: (
+            frozenset(seen) == pods.writer.worker_pids()
+            and all(environment == dict(expected) for environment in seen.values())
+        ),
+        seconds=SAVE_HOLD_SECONDS + CONVERGE_SECONDS,
+    )
+    _settled_on_both(pods, expected)
 
 
 def test_theme_reset_on_another_pod_reaches_the_worker_that_saved_the_logo_once_its_hold_ends(
@@ -1310,7 +1396,7 @@ def test_theme_reset_on_another_pod_reaches_the_worker_that_saved_the_logo_once_
 ) -> None:
     reset: Final = {"UI_LOGO_PATH": None}
     saved: Final = {"UI_LOGO_PATH": f"{LOGO_URL}?saved-{uuid.uuid4().hex}"}
-    _settled(held_pods.writer, reset)
+    _reset_on_both(held_pods, lambda proxy: _update_theme(proxy.gateway, None), reset)
     save: Final = _pinned_save(held_pods.writer, THEME_ROUTE, _theme(saved["UI_LOGO_PATH"]), saved)
     _settled(held_pods.reader, saved)
 
@@ -1337,7 +1423,7 @@ def test_sso_clear_on_another_pod_reaches_the_worker_that_saved_the_settings_onc
     held_pods: Pods,
 ) -> None:
     saved_id: Final = f"lit9489-saved-{uuid.uuid4().hex}"
-    _settled(held_pods.writer, CLEARED_SSO_ENVIRONMENT)
+    _reset_on_both(held_pods, lambda proxy: _save_sso(proxy, CLEARED_SSO_FIELDS), CLEARED_SSO_ENVIRONMENT)
     save: Final = _pinned_save(held_pods.writer, SSO_ROUTE, _sso_fields(saved_id), _sso_environment(saved_id))
     _settled(held_pods.reader, _sso_environment(saved_id))
 
@@ -1424,8 +1510,11 @@ def test_sso_save_keeps_its_settings_when_an_sso_read_that_started_before_it_ret
     assert misses[:1] == (), (len(while_held), len(after_release), misses[:3])
 
 
+@pytest.mark.parametrize(
+    "cache_ttl_seconds", (CONFIG_CACHE_TTL_SECONDS, LONG_CONFIG_CACHE_TTL_SECONDS), ids=("ttl1", "ttl20")
+)
 def test_sso_save_keeps_its_settings_after_syncs_read_the_old_sso_keys_it_was_removing_from_the_row(
-    tmp_path: Path,
+    tmp_path: Path, cache_ttl_seconds: int
 ) -> None:
     legacy_id: Final = f"lit9489-legacy-{uuid.uuid4().hex}"
     saved_id: Final = f"lit9489-saved-{uuid.uuid4().hex}"
@@ -1442,7 +1531,10 @@ def test_sso_save_keeps_its_settings_after_syncs_read_the_old_sso_keys_it_was_re
             provider,
             _plaintext(relayed_url),
             workers=1,
-            environment={"LITELLM_SALT_KEY": SALT_KEY},
+            environment={
+                "LITELLM_SALT_KEY": SALT_KEY,
+                "LITELLM_CONFIG_PARAM_CACHE_TTL_SECONDS": str(cache_ttl_seconds),
+            },
         ) as proxy,
     ):
         _merge_into_row(database_url, {**_sso_environment(legacy_id), cleanup_marker: "cleanup-marker"})
@@ -1451,7 +1543,11 @@ def test_sso_save_keeps_its_settings_after_syncs_read_the_old_sso_keys_it_was_re
         saving: Final = pool.submit(_save_sso, proxy, _sso_fields(saved_id))
         assert relay.held.wait(CONVERGE_SECONDS), "The SSO save never rewrote the environment row"
         assert not saving.done(), "Something other than the SSO save rewrote the environment row"
-        time.sleep(HELD_READ_SECONDS)
+        eventually(
+            lambda: _worker_environment(proxy, SSO_ENVIRONMENT_KEYS).environment,
+            lambda environment: dict(environment) == dict(_sso_environment(saved_id)),
+            seconds=HELD_READ_SECONDS,
+        )
         relay.release()
         saving.result()
         after_the_save: Final = tuple(
@@ -1461,3 +1557,340 @@ def test_sso_save_keeps_its_settings_after_syncs_read_the_old_sso_keys_it_was_re
 
     misses: Final = _misses(after_the_save, _sso_environment(saved_id))
     assert misses[:1] == (), (len(after_the_save), misses[:3])
+
+
+def test_theme_change_back_to_the_replaced_logo_on_another_pod_reaches_the_worker_that_saved_once_its_hold_ends(
+    held_pods: Pods,
+) -> None:
+    replaced: Final = {"UI_LOGO_PATH": f"{LOGO_URL}?replaced-{uuid.uuid4().hex}"}
+    saved: Final = {"UI_LOGO_PATH": f"{LOGO_URL}?saved-{uuid.uuid4().hex}"}
+    _update_theme(held_pods.reader.gateway, replaced["UI_LOGO_PATH"])
+    _settled_on_both(held_pods, replaced)
+    save: Final = _pinned_save(held_pods.writer, THEME_ROUTE, _theme(saved["UI_LOGO_PATH"]), saved)
+    _settled(held_pods.reader, saved)
+
+    _update_theme(held_pods.reader.gateway, replaced["UI_LOGO_PATH"])
+    _settled(held_pods.reader, replaced)
+
+    _only_its_worker_keeps_the_save_until_the_hold_ends(held_pods, save, saved, replaced)
+
+
+def _stored_sso_row(database_url: str) -> JsonValue:
+    rows: Final = read_rows('SELECT sso_settings FROM "LiteLLM_SSOConfig"', (), database_url=database_url)
+    assert len(rows) == 1, len(rows)
+    return rows[0]["sso_settings"]
+
+
+def test_sso_change_back_to_the_replaced_settings_on_another_pod_reaches_the_worker_that_saved_once_its_hold_ends(
+    held_pods: Pods,
+) -> None:
+    replaced_id: Final = f"lit9489-replaced-{uuid.uuid4().hex}"
+    saved_id: Final = f"lit9489-saved-{uuid.uuid4().hex}"
+    _save_sso(held_pods.reader, _sso_fields(replaced_id))
+    _settled_on_both(held_pods, _sso_environment(replaced_id))
+    replaced_row: Final = _stored_sso_row(held_pods.database_url)
+    save: Final = _pinned_save(held_pods.writer, SSO_ROUTE, _sso_fields(saved_id), _sso_environment(saved_id))
+    _settled(held_pods.reader, _sso_environment(saved_id))
+
+    _store_sso_row(held_pods.database_url, replaced_row)
+
+    _only_its_worker_keeps_the_save_until_the_hold_ends(
+        held_pods, save, _sso_environment(saved_id), _sso_environment(replaced_id)
+    )
+
+
+def test_theme_reset_on_another_pod_waits_out_a_hold_that_scales_with_the_config_cache_ttl(tmp_path: Path) -> None:
+    reset: Final = {"UI_LOGO_PATH": None}
+    saved: Final = {"UI_LOGO_PATH": f"{LOGO_URL}?saved-{uuid.uuid4().hex}"}
+    with _two_pods(
+        tmp_path, {"LITELLM_CONFIG_PARAM_CACHE_TTL_SECONDS": str(LONG_CONFIG_CACHE_TTL_SECONDS)}
+    ) as long_ttl_pods:
+        save: Final = _pinned_save(long_ttl_pods.writer, THEME_ROUTE, _theme(saved["UI_LOGO_PATH"]), saved)
+        _settled(long_ttl_pods.reader, saved)
+
+        _update_theme(long_ttl_pods.reader.gateway, None)
+        _settled(long_ttl_pods.reader, reset)
+
+        _only_its_worker_keeps_the_save_until_the_hold_ends(long_ttl_pods, save, saved, reset, LONG_SAVE_HOLD_SECONDS)
+
+
+def _sso_tables(database_url: str) -> tuple[list[dict[str, JsonValue]], Mapping[str, JsonValue]]:
+    return (
+        read_rows('SELECT id, sso_settings FROM "LiteLLM_SSOConfig" ORDER BY id', (), database_url=database_url),
+        _environment_row(database_url),
+    )
+
+
+def test_sso_save_with_a_null_character_answers_400_and_changes_nothing(pods: Pods) -> None:
+    before_marker: Final = f"sync-{uuid.uuid4().hex}"
+    _merge_into_row(pods.database_url, {SYNC_MARKER: before_marker})
+    _settled(pods.reader, {SYNC_MARKER: before_marker})
+    stored_before: Final = _sso_tables(pods.database_url)
+    reader_before: Final = _worker_environment(pods.reader, SSO_ENVIRONMENT_KEYS).environment
+    fields: Final = {**_sso_fields(f"lit9489-nul-{uuid.uuid4().hex}"), "generic_client_secret": NUL_SECRET}
+
+    pinned: Final = _pinned_request(pods.writer, SSO_ROUTE, fields, SSO_ENVIRONMENT_KEYS)
+
+    assert (pinned.response.status_code, "generic_client_secret" in pinned.response.text) == (400, True), (
+        pinned.response.status_code,
+        pinned.response.text[:300],
+    )
+    assert (pinned.after.pid, dict(pinned.after.environment)) == (pinned.before.pid, dict(pinned.before.environment))
+    assert _sso_tables(pods.database_url) == stored_before
+    after_marker: Final = f"sync-{uuid.uuid4().hex}"
+    _merge_into_row(pods.database_url, {SYNC_MARKER: after_marker})
+    _settled(pods.reader, {**reader_before, SYNC_MARKER: after_marker})
+
+
+def test_sso_save_with_empty_fields_keeps_the_pods_own_sso_settings(tmp_path: Path) -> None:
+    fields: Final = {**_sso_fields(""), "generic_client_secret": ""}
+    expected: Final = {
+        **{field.upper(): value for field, value in GENERIC_SSO_FIELDS.items()},
+        **OWN_SSO_ENVIRONMENT,
+    }
+    with (
+        gateway_from_environment() as gateway,
+        wire_server(_anthropic_message) as provider,
+        scratch_database() as database_url,
+        _pod(gateway, tmp_path / "pod", provider, database_url, environment=OWN_SSO_ENVIRONMENT) as proxy,
+    ):
+        _settled(proxy, OWN_SSO_ENVIRONMENT)
+
+        _pinned_save(proxy, SSO_ROUTE, fields, expected)
+
+        _settled(proxy, expected)
+        assert _sso_client_id(proxy) == OWN_SSO_ENVIRONMENT["GENERIC_CLIENT_ID"]
+
+
+def _create_credential(proxy: OwnedProxy, name: str, api_key: str) -> None:
+    response: Final = proxy.gateway.request(
+        "POST",
+        "/credentials",
+        {"credential_name": name, "credential_values": {"api_key": api_key}, "credential_info": {}},
+    )
+    assert response.status_code == 200, response.text
+
+
+def _stored_credential_api_key(database_url: str, name: str) -> str:
+    rows: Final = read_rows(
+        'SELECT credential_values ->> %s AS api_key FROM "LiteLLM_CredentialsTable" WHERE credential_name = %s',
+        ("api_key", name),
+        database_url=database_url,
+    )
+    assert len(rows) == 1, len(rows)
+    return string_value(rows[0]["api_key"])
+
+
+def _store_environment_row(database_url: str, param_value: JsonValue) -> None:
+    write_rows(
+        'INSERT INTO "LiteLLM_Config" (param_name, param_value) VALUES (%s, %s::jsonb) '
+        "ON CONFLICT (param_name) DO UPDATE SET param_value = EXCLUDED.param_value",
+        ("environment_variables", json.dumps(param_value)),
+        database_url=database_url,
+    )
+
+
+def _raw_environment_row(database_url: str) -> JsonValue:
+    rows: Final = read_rows(
+        'SELECT param_value FROM "LiteLLM_Config" WHERE param_name = %s',
+        ("environment_variables",),
+        database_url=database_url,
+    )
+    assert len(rows) == 1, len(rows)
+    return rows[0]["param_value"]
+
+
+@pytest.mark.parametrize("rotation", tuple(ROTATIONS))
+def test_rotation_leaves_an_environment_row_that_is_not_an_object_as_stored_and_rotates_the_rest(
+    tmp_path: Path, rotation: str
+) -> None:
+    stored: Final[JsonValue] = [
+        [PLAINTEXT_KEY, f"lit9489-plaintext-{uuid.uuid4().hex}"],
+        [DECRYPTABLE_KEY, _legacy_ciphertext(f"lit9489-decryptable-{uuid.uuid4().hex}", SALT_KEY)],
+    ]
+    credential_name: Final = f"lit9489-credential-{uuid.uuid4().hex}"
+    credential_key: Final = f"sk-lit9489-credential-{uuid.uuid4().hex}"
+    with (
+        gateway_from_environment() as gateway,
+        wire_server(_anthropic_message) as provider,
+        scratch_database() as database_url,
+        _pod(
+            gateway,
+            tmp_path / "pod",
+            provider,
+            database_url,
+            general_settings=ROTATIONS[rotation].general_settings,
+            environment={"LITELLM_SALT_KEY": SALT_KEY},
+        ) as proxy,
+    ):
+        _create_credential(proxy, credential_name, credential_key)
+        credential_before: Final = _stored_credential_api_key(database_url, credential_name)
+        _store_environment_row(database_url, stored)
+
+        signing_key: Final = ROTATIONS[rotation].rotate(proxy)
+
+        credential_after: Final = _stored_credential_api_key(database_url, credential_name)
+        assert _raw_environment_row(database_url) == stored
+        assert (credential_after != credential_before, decrypt_if_encrypted_with(credential_after, signing_key)) == (
+            True,
+            credential_key,
+        )
+
+
+def test_theme_save_loses_its_dark_logo_on_its_worker_when_the_read_replica_stays_behind_past_the_hold(
+    replica_pod: ReplicaPod,
+) -> None:
+    unset: Final = {"UI_LOGO_PATH_DARK": None}
+    saved: Final = {"UI_LOGO_PATH_DARK": f"{LOGO_URL}?dark-{uuid.uuid4().hex}"}
+    marker: Final = f"sync-{uuid.uuid4().hex}"
+    _merge_into_row(replica_pod.writer_url, {SYNC_MARKER: marker})
+    _catch_up(replica_pod)
+    _settled(replica_pod.proxy, {**unset, SYNC_MARKER: marker})
+
+    save: Final = _pinned_save(
+        replica_pod.proxy,
+        THEME_ROUTE,
+        {"logo_url": None, "logo_url_dark": saved["UI_LOGO_PATH_DARK"], "favicon_url": None},
+        saved,
+    )
+
+    _only_its_worker_keeps_the_save(
+        replica_pod.proxy, save, saved, unset, save.started_at + SAVE_HOLD_SECONDS - HOLD_END_MARGIN_SECONDS
+    )
+    _settled(replica_pod.proxy, unset)
+    _catch_up(replica_pod)
+    _settled(replica_pod.proxy, saved)
+
+
+def test_theme_reset_on_another_pod_waits_out_the_hold_on_the_worker_that_saved_over_a_database_logo(
+    startup_pods: Pods,
+) -> None:
+    database_logo: Final = {"UI_LOGO_PATH": f"{LOGO_URL}?database-{uuid.uuid4().hex}"}
+    saved: Final = {"UI_LOGO_PATH": f"{LOGO_URL}?saved-{uuid.uuid4().hex}"}
+    startup: Final = {"UI_LOGO_PATH": STARTUP_LOGO}
+    _merge_into_row(startup_pods.database_url, database_logo)
+    _settled_on_both(startup_pods, database_logo)
+    save: Final = _pinned_save(startup_pods.writer, THEME_ROUTE, _theme(saved["UI_LOGO_PATH"]), saved)
+    _settled(startup_pods.reader, saved)
+
+    _update_theme(startup_pods.reader.gateway, None)
+    _settled(startup_pods.reader, startup)
+
+    _only_its_worker_keeps_the_save_until_the_hold_ends(startup_pods, save, saved, startup)
+
+
+def test_sso_clear_on_another_pod_waits_out_the_hold_on_the_worker_that_saved_over_a_table_value(
+    startup_pods: Pods,
+) -> None:
+    table_id: Final = f"lit9489-table-{uuid.uuid4().hex}"
+    saved_id: Final = f"lit9489-saved-{uuid.uuid4().hex}"
+    _store_sso_row(startup_pods.database_url, _encrypted_sso_row(table_id))
+    _settled_on_both(startup_pods, _sso_environment(table_id))
+    save: Final = _pinned_save(startup_pods.writer, SSO_ROUTE, _sso_fields(saved_id), _sso_environment(saved_id))
+    _settled(startup_pods.reader, _sso_environment(saved_id))
+
+    _save_sso(startup_pods.reader, CLEARED_SSO_FIELDS)
+    _settled(startup_pods.reader, CLEARED_TO_OWN_SSO_ENVIRONMENT)
+
+    _only_its_worker_keeps_the_save_until_the_hold_ends(
+        startup_pods, save, _sso_environment(saved_id), CLEARED_TO_OWN_SSO_ENVIRONMENT
+    )
+
+
+@pytest.mark.parametrize("shape", tuple(NON_OBJECT_ROWS))
+def test_environment_row_that_is_not_an_object_keeps_every_applied_key_while_the_sync_runs(
+    salted_pod: SaltedPod, shape: str
+) -> None:
+    kept: Final = {"ANTHROPIC_API_KEY": f"sk-ant-db-kept-{shape}", DB_ONLY: f"lit9489-kept-{shape}"}
+    _store_environment_row(salted_pod.database_url, {**kept})
+    _settled(salted_pod.proxy, kept)
+
+    _store_environment_row(salted_pod.database_url, NON_OBJECT_ROWS[shape])
+    for synced_id in (f"lit9489-synced-{uuid.uuid4().hex}", f"lit9489-synced-again-{uuid.uuid4().hex}"):
+        _store_sso_row(salted_pod.database_url, _encrypted_sso_row(synced_id))
+        _settled(salted_pod.proxy, {"GENERIC_CLIENT_ID": synced_id})
+
+    _settled(salted_pod.proxy, kept)
+    assert _key_received(salted_pod.proxy.gateway, salted_pod.provider) == kept["ANTHROPIC_API_KEY"]
+    marker: Final = f"sync-{uuid.uuid4().hex}"
+    _store_environment_row(salted_pod.database_url, {**kept, SYNC_MARKER: marker})
+    _settled(salted_pod.proxy, {**kept, SYNC_MARKER: marker})
+
+
+def _reaches_every_worker_before_the_hold_ends(
+    proxy: OwnedProxy, save_started_at: float, expected: Mapping[str, str | None]
+) -> None:
+    hold_ends: Final = save_started_at + SAVE_HOLD_SECONDS - HOLD_END_MARGIN_SECONDS
+    eventually(
+        lambda: _environments(proxy, tuple(expected)),
+        lambda seen: (
+            frozenset(seen) == proxy.worker_pids()
+            and all(environment == dict(expected) for environment in seen.values())
+        ),
+        seconds=hold_ends - time.monotonic(),
+    )
+
+
+def _distinct_sso_fields(tag: str) -> Mapping[str, str]:
+    return MappingProxyType(
+        {
+            "generic_client_id": f"lit9489-{tag}",
+            **{field: f"{value}-{tag}" for field, value in GENERIC_SSO_FIELDS.items()},
+        }
+    )
+
+
+def _encrypted_sso_fields(fields: Mapping[str, str]) -> dict[str, JsonValue]:
+    return {field: _legacy_ciphertext(value, SALT_KEY) for field, value in fields.items()}
+
+
+def _environment_of(fields: Mapping[str, str]) -> Mapping[str, str]:
+    return MappingProxyType({field.upper(): value for field, value in fields.items()})
+
+
+def test_theme_reset_on_another_pod_reaches_a_worker_whose_own_save_reset_the_logo_at_its_next_sync(
+    startup_pods: Pods,
+) -> None:
+    database_logo: Final = {"UI_LOGO_PATH": f"{LOGO_URL}?database-{uuid.uuid4().hex}"}
+    stored: Final = {"UI_LOGO_PATH": f"{LOGO_URL}?stored-{uuid.uuid4().hex}"}
+    startup: Final = {"UI_LOGO_PATH": STARTUP_LOGO}
+    _merge_into_row(startup_pods.database_url, database_logo)
+    _settled_on_both(startup_pods, database_logo)
+    reset: Final = _pinned_save(startup_pods.reader, THEME_ROUTE, _theme(None), startup)
+
+    _update_theme(startup_pods.writer.gateway, stored["UI_LOGO_PATH"])
+    _settled(startup_pods.reader, stored)
+    _update_theme(startup_pods.writer.gateway, None)
+
+    _reaches_every_worker_before_the_hold_ends(startup_pods.reader, reset.started_at, startup)
+
+
+def test_sso_clear_on_another_pod_reaches_a_worker_whose_own_save_cleared_the_settings_at_its_next_sync(
+    startup_pods: Pods,
+) -> None:
+    table: Final = _distinct_sso_fields(f"table-{uuid.uuid4().hex}")
+    stored_id: Final = f"lit9489-stored-{uuid.uuid4().hex}"
+    _store_sso_row(startup_pods.database_url, _encrypted_sso_fields(table))
+    _settled_on_both(startup_pods, _environment_of(table))
+    clear: Final = _pinned_save(startup_pods.reader, SSO_ROUTE, CLEARED_SSO_FIELDS, CLEARED_TO_OWN_SSO_ENVIRONMENT)
+
+    _save_sso(startup_pods.writer, _sso_fields(stored_id))
+    _settled(startup_pods.reader, _sso_environment(stored_id))
+    _save_sso(startup_pods.writer, CLEARED_SSO_FIELDS)
+
+    _reaches_every_worker_before_the_hold_ends(startup_pods.reader, clear.started_at, CLEARED_TO_OWN_SSO_ENVIRONMENT)
+
+
+def test_sso_save_on_another_pod_reaches_a_worker_that_cleared_the_settings_whole_at_its_next_sync(
+    startup_pods: Pods,
+) -> None:
+    table_id: Final = f"lit9489-table-{uuid.uuid4().hex}"
+    stored_id: Final = f"lit9489-stored-{uuid.uuid4().hex}"
+    _store_sso_row(startup_pods.database_url, _encrypted_sso_row(table_id))
+    _settled_on_both(startup_pods, _sso_environment(table_id))
+    clear: Final = _pinned_request(startup_pods.reader, SSO_ROUTE, CLEARED_SSO_FIELDS, SSO_ENVIRONMENT_KEYS)
+    assert clear.response.status_code == 200, clear.response.text
+
+    _save_sso(startup_pods.writer, _sso_fields(stored_id))
+
+    _reaches_every_worker_before_the_hold_ends(startup_pods.reader, clear.started_at, _sso_environment(stored_id))

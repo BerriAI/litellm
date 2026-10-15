@@ -4005,6 +4005,22 @@ async def test_ProxyConfig_db_env_row_with_an_invalid_environment_entry_still_sy
     assert "LIT_DB_ENV_NUL" not in os.environ
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", ["LIT_DB_ENV_UNSETTABLE", "lit_db_env_unsettable"], ids=["uppercase", "lowercase"])
+async def test_ProxyConfig_db_env_value_the_environment_cannot_hold_keeps_the_last_applied_value_until_removed(
+    monkeypatch: pytest.MonkeyPatch, key: str
+) -> None:
+    _unset_env_for_test(monkeypatch, key, key.upper())
+    pc: Final = ProxyConfig()
+
+    await _sync_db_env_row(monkeypatch, pc, {key: "applied"}, {})
+    await _sync_db_env_row(monkeypatch, pc, {key: "a\0b"}, {})
+    while_unsettable: Final = (os.environ.get(key), os.environ.get(key.upper()))
+    await _sync_db_env_row(monkeypatch, pc, {}, {})
+
+    assert (while_unsettable, os.environ.get(key), os.environ.get(key.upper())) == (("applied", "applied"), None, None)
+
+
 class _ManualClock:
     def __init__(self) -> None:
         self.now = 0.0
@@ -4041,32 +4057,111 @@ def _save_sso_environment(pc: ProxyConfig, updates: Mapping[str, str | None]) ->
     [{}, {"supported_db_objects": ["models"]}],
     ids=["all-db-objects", "supported-db-objects-without-sso"],
 )
-@pytest.mark.parametrize(
-    ("sso_table_client_id", "expected_after_removal"),
-    [("sso-table-id", "sso-table-id"), (None, None)],
-    ids=["sso-table-sets-it", "no-sso-table-row"],
-)
 async def test_ProxyConfig_sso_key_removed_from_the_env_row_takes_its_sso_table_value(
-    monkeypatch: pytest.MonkeyPatch,
-    general_settings: Mapping[str, object],
-    sso_table_client_id: str | None,
-    expected_after_removal: str | None,
+    monkeypatch: pytest.MonkeyPatch, general_settings: Mapping[str, object]
 ) -> None:
     from litellm.proxy import proxy_server
 
     monkeypatch.setattr(proxy_server, "general_settings", dict(general_settings))
     _unset_env_for_test(monkeypatch, "GOOGLE_CLIENT_ID")
     monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
-    prisma_client: Final = _prisma_with_sso_table(
-        None if sso_table_client_id is None else {"google_client_id": encrypt_value_helper(sso_table_client_id)}
-    )
+    prisma_client: Final = _prisma_with_sso_table({"google_client_id": encrypt_value_helper("sso-table-id")})
     pc: Final = ProxyConfig()
 
     await _sync_db_env_row(monkeypatch, pc, {"GOOGLE_CLIENT_ID": "env-row-id"}, {}, prisma_client)
     assert os.environ.get("GOOGLE_CLIENT_ID") == "env-row-id"
     await _sync_db_env_row(monkeypatch, pc, {}, {}, prisma_client)
 
-    assert os.environ.get("GOOGLE_CLIENT_ID") == expected_after_removal
+    assert os.environ.get("GOOGLE_CLIENT_ID") == "sso-table-id"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "general_settings",
+    [{}, {"supported_db_objects": ["models"]}],
+    ids=["all-db-objects", "supported-db-objects-without-sso"],
+)
+@pytest.mark.parametrize(
+    "lagging_sso_table",
+    [None, {"google_client_id": None}],
+    ids=["sso-row-not-replicated-yet", "sso-row-from-before-the-save"],
+)
+async def test_ProxyConfig_sso_key_moved_to_the_sso_table_keeps_its_value_while_the_sso_table_read_lags(
+    monkeypatch: pytest.MonkeyPatch,
+    general_settings: Mapping[str, object],
+    lagging_sso_table: Mapping[str, str | None] | None,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", dict(general_settings))
+    _unset_env_for_test(monkeypatch, "GOOGLE_CLIENT_ID")
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_ssoconfig.find_unique = AsyncMock(
+        side_effect=[
+            None if lagging_sso_table is None else SimpleNamespace(sso_settings=dict(lagging_sso_table)),
+            SimpleNamespace(sso_settings={"google_client_id": encrypt_value_helper("sso-table-id")}),
+        ]
+    )
+    pc: Final = ProxyConfig()
+
+    await _sync_db_env_row(monkeypatch, pc, {"GOOGLE_CLIENT_ID": "env-row-id"}, {}, prisma_client)
+    await _sync_db_env_row(monkeypatch, pc, {}, {}, prisma_client)
+    while_the_read_lags: Final = os.environ.get("GOOGLE_CLIENT_ID")
+    await _sync_db_env_row(monkeypatch, pc, {}, {}, prisma_client)
+
+    assert (while_the_read_lags, os.environ.get("GOOGLE_CLIENT_ID")) == ("env-row-id", "sso-table-id")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("startup_client_id", [None, "pod-own-id"], ids=["unset-at-startup", "set-at-startup"])
+@pytest.mark.parametrize(
+    "sso_table_without_the_key",
+    [None, {"google_client_id": None}],
+    ids=["no-sso-table-row", "field-cleared"],
+)
+async def test_ProxyConfig_sso_key_removed_from_the_env_row_with_no_sso_table_value_takes_the_startup_value_once_the_hold_ends(
+    monkeypatch: pytest.MonkeyPatch,
+    startup_client_id: str | None,
+    sso_table_without_the_key: Mapping[str, str | None] | None,
+) -> None:
+    _unset_env_for_test(monkeypatch, "GOOGLE_CLIENT_ID")
+    if startup_client_id is not None:
+        monkeypatch.setenv("GOOGLE_CLIENT_ID", startup_client_id)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
+    prisma_client: Final = _prisma_with_sso_table(_encrypted_sso_table(sso_table_without_the_key))
+    clock: Final = _ManualClock()
+    pc: Final = ProxyConfig(clock=clock)
+
+    await _sync_db_env_row(monkeypatch, pc, {"GOOGLE_CLIENT_ID": "env-row-id"}, {}, prisma_client)
+    clock.now = 1
+    await _sync_db_env_row(monkeypatch, pc, {}, {}, prisma_client)
+    clock.now = _SAVED_ENVIRONMENT_HOLD_SECONDS
+    await _sync_db_env_row(monkeypatch, pc, {}, {}, prisma_client)
+    at_the_end_of_the_hold: Final = os.environ.get("GOOGLE_CLIENT_ID")
+    clock.now = _SAVED_ENVIRONMENT_HOLD_SECONDS + 1
+    await _sync_db_env_row(monkeypatch, pc, {}, {}, prisma_client)
+
+    assert (at_the_end_of_the_hold, os.environ.get("GOOGLE_CLIENT_ID")) == ("env-row-id", startup_client_id)
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_sso_key_removed_again_after_returning_to_the_env_row_waits_a_full_hold_for_the_sso_table(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _unset_env_for_test(monkeypatch, "GOOGLE_CLIENT_ID")
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
+    prisma_client: Final = _prisma_with_sso_table(None)
+    clock: Final = _ManualClock()
+    pc: Final = ProxyConfig(clock=clock)
+
+    await _sync_db_env_row(monkeypatch, pc, {"GOOGLE_CLIENT_ID": "env-row-id"}, {}, prisma_client)
+    await _sync_db_env_row(monkeypatch, pc, {}, {}, prisma_client)
+    await _sync_db_env_row(monkeypatch, pc, {"GOOGLE_CLIENT_ID": "re-added-id"}, {}, prisma_client)
+    clock.now = _SAVED_ENVIRONMENT_HOLD_SECONDS
+    await _sync_db_env_row(monkeypatch, pc, {}, {}, prisma_client)
+
+    assert os.environ.get("GOOGLE_CLIENT_ID") == "re-added-id"
 
 
 @pytest.mark.asyncio
@@ -4444,6 +4539,123 @@ async def test_ProxyConfig_sso_field_changed_elsewhere_during_the_hold_is_held_o
         await pc._init_sso_settings_in_db(_prisma_with_sso_table(_encrypted_sso_table(table)))
 
     assert os.environ.get("GOOGLE_CLIENT_ID") == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "saved_logo", [None, "https://example.com/saved.png"], ids=["worker-reset-the-logo", "worker-saved-a-logo"]
+)
+@pytest.mark.parametrize(
+    "startup_logo", [None, "https://example.com/startup.png"], ids=["no-startup-value", "startup-value"]
+)
+async def test_ProxyConfig_db_env_var_reset_on_another_pod_after_its_newer_value_was_applied_is_applied_at_the_next_sync(
+    monkeypatch: pytest.MonkeyPatch, saved_logo: str | None, startup_logo: str | None
+) -> None:
+    _unset_env_for_test(monkeypatch, "UI_LOGO_PATH")
+    if startup_logo is not None:
+        monkeypatch.setenv("UI_LOGO_PATH", startup_logo)
+    clock: Final = _ManualClock()
+    pc: Final = ProxyConfig(clock=clock)
+    await _sync_db_env_row(monkeypatch, pc, {"UI_LOGO_PATH": "https://example.com/older.png"}, {})
+    clock.now = 1
+    _save_db_environment(pc, {"UI_LOGO_PATH": saved_logo})
+
+    clock.now = 2
+    await _sync_db_env_row(monkeypatch, pc, {"UI_LOGO_PATH": "https://example.com/other-pod.png"}, {})
+    clock.now = 3
+    await _sync_db_env_row(monkeypatch, pc, {}, {})
+
+    assert os.environ.get("UI_LOGO_PATH") == startup_logo
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_theme_save_on_another_pod_applies_every_theme_key_at_the_next_sync(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _unset_env_for_test(monkeypatch, "UI_LOGO_PATH", "LITELLM_FAVICON_URL")
+    clock: Final = _ManualClock()
+    pc: Final = ProxyConfig(clock=clock)
+    await _sync_db_env_row(
+        monkeypatch,
+        pc,
+        {"UI_LOGO_PATH": "https://example.com/older.png", "LITELLM_FAVICON_URL": "https://example.com/older.ico"},
+        {},
+    )
+    clock.now = 1
+    _save_db_environment(
+        pc, {"UI_LOGO_PATH": "https://example.com/saved.png", "LITELLM_FAVICON_URL": "https://example.com/saved.ico"}
+    )
+
+    clock.now = 2
+    await _sync_db_env_row(
+        monkeypatch,
+        pc,
+        {"UI_LOGO_PATH": "https://example.com/other-pod.png", "LITELLM_FAVICON_URL": "https://example.com/older.ico"},
+        {},
+    )
+
+    assert (os.environ.get("UI_LOGO_PATH"), os.environ.get("LITELLM_FAVICON_URL")) == (
+        "https://example.com/other-pod.png",
+        "https://example.com/older.ico",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("other_pods_tables", "expected"),
+    [
+        (({"google_client_id": "new-id", "google_client_secret": "shared-secret"},), ("new-id", "shared-secret")),
+        (({"google_client_id": "new-id", "google_client_secret": "new-secret"}, {}), (None, None)),
+    ],
+    ids=["saves-a-new-id-with-the-cleared-secret", "saves-new-settings-then-clears-them"],
+)
+async def test_ProxyConfig_sso_change_on_another_pod_after_this_workers_clear_applies_every_field_at_the_next_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+    other_pods_tables: tuple[Mapping[str, str | None], ...],
+    expected: tuple[str | None, str | None],
+) -> None:
+    _unset_env_for_test(monkeypatch, "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET")
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
+    clock: Final = _ManualClock()
+    pc: Final = ProxyConfig(clock=clock)
+    await pc._init_sso_settings_in_db(
+        _prisma_with_sso_table(
+            _encrypted_sso_table({"google_client_id": "old-id", "google_client_secret": "shared-secret"})
+        )
+    )
+    clock.now = 1
+    _save_sso_environment(pc, {"GOOGLE_CLIENT_ID": "", "GOOGLE_CLIENT_SECRET": ""})
+
+    for read_at, table in enumerate(other_pods_tables, start=2):
+        clock.now = read_at
+        await pc._init_sso_settings_in_db(_prisma_with_sso_table(_encrypted_sso_table(table)))
+
+    assert (os.environ.get("GOOGLE_CLIENT_ID"), os.environ.get("GOOGLE_CLIENT_SECRET")) == expected
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_sso_save_on_another_pod_after_this_workers_clear_applies_every_field_once_the_env_row_drops_them(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _unset_env_for_test(monkeypatch, "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET")
+    clock: Final = _ManualClock()
+    pc: Final = ProxyConfig(clock=clock)
+    await _sync_db_env_row(monkeypatch, pc, {"GOOGLE_CLIENT_ID": "old-id", "GOOGLE_CLIENT_SECRET": "shared-secret"}, {})
+    clock.now = 1
+    _save_sso_environment(pc, {"GOOGLE_CLIENT_ID": "", "GOOGLE_CLIENT_SECRET": ""})
+
+    clock.now = 2
+    await _sync_db_env_row(
+        monkeypatch,
+        pc,
+        {},
+        {},
+        _prisma_with_sso_table(
+            _encrypted_sso_table({"google_client_id": "new-id", "google_client_secret": "shared-secret"})
+        ),
+    )
+
+    assert (os.environ.get("GOOGLE_CLIENT_ID"), os.environ.get("GOOGLE_CLIENT_SECRET")) == ("new-id", "shared-secret")
 
 
 @pytest.mark.asyncio

@@ -2173,6 +2173,7 @@ class _SSOEnvironmentValues:
 @dataclass(frozen=True, slots=True)
 class _SavedEnvironmentValue:
     saved_at: float
+    saved: str | None
     replaced: frozenset[str | None]
 
 
@@ -5655,6 +5656,7 @@ class ProxyConfig:
         self._sso_environment_keys: frozenset[str] = frozenset()
         self._clock: Callable[[], float] = clock
         self._saved_environment_values: Mapping[str, _SavedEnvironmentValue] = MappingProxyType({})
+        self._sso_keys_awaiting_table_since: Mapping[str, float] = MappingProxyType({})
         self._cyberark_boot_env: dict[str, str | None] | None = None  # mutable-ok: deployment env snapshot, set once
         self.worker_registry: list[WorkerRegistryEntry] = []
         self.config_sync_subscriber: ConfigSyncSubscriber | None = None
@@ -7927,11 +7929,14 @@ class ProxyConfig:
             **decrypted,
             **{key.upper(): decrypted_value for key, decrypted_value in decrypted.items()},
         }
-        removed: Final = self._db_environment_keys - row_values.keys() - _SSO_ENVIRONMENT_VARIABLES
+        stored_strings: Final = frozenset(key for key, value in row.items() if isinstance(value, str))
+        still_stored: Final = stored_strings | frozenset(key.upper() for key in stored_strings)
+        removed: Final = self._db_environment_keys - still_stored - _SSO_ENVIRONMENT_VARIABLES
+        self._end_holds_of_saves_the_read_moved_past(read_started_at, row_values)
         held_keys: Final = self._environment_keys_held_against_read(read_started_at, row_values, removed)
         applied: Final = {key: value for key, value in row_values.items() if key not in held_keys}
         self._restore_environment_without_db(removed - held_keys)
-        self._db_environment_keys = frozenset(applied) | (self._db_environment_keys & held_keys)
+        self._db_environment_keys = frozenset(applied) | (self._db_environment_keys & (held_keys | still_stored))
         os.environ.update(applied)
         return _as_settings_mapping(row_values)
 
@@ -7975,6 +7980,7 @@ class ProxyConfig:
                 **{
                     key: _SavedEnvironmentValue(
                         saved_at=saved_at,
+                        saved=updates[key] or self._environment_before_db.get(key),
                         replaced=self._values_replaced_by_save(
                             key, saved_at, values_before_save.get(key, os.environ.get(key))
                         ),
@@ -8001,6 +8007,19 @@ class ProxyConfig:
         self._restore_environment_without_db(frozenset(updates) - saved.keys())
         os.environ.update(saved)
         return tracked_keys | frozenset(saved)
+
+    def _end_holds_of_saves_the_read_moved_past(self, read_started_at: float, read_values: Mapping[str, str]) -> None:
+        moved_past: Final = frozenset(
+            saved.saved_at
+            for key, saved in self._saved_environment_values.items()
+            if key in read_values
+            and saved.saved_at <= read_started_at
+            and read_values[key] != saved.saved
+            and read_values[key] not in saved.replaced
+        )
+        self._saved_environment_values = MappingProxyType(
+            {key: saved for key, saved in self._saved_environment_values.items() if saved.saved_at not in moved_past}
+        )
 
     def _environment_keys_held_against_read(
         self, read_started_at: float, read_values: Mapping[str, str], restored: frozenset[str]
@@ -8453,20 +8472,34 @@ class ProxyConfig:
     ) -> None:
         removed_sso_keys: Final = removed_keys & _SSO_ENVIRONMENT_VARIABLES
         if not removed_sso_keys:
+            self._sso_keys_awaiting_table_since = MappingProxyType({})
             return
         stored_sso_settings: Final = await self._stored_sso_settings(prisma_client)
         if stored_sso_settings is None:
             self._db_environment_keys = self._db_environment_keys | removed_sso_keys
             return
         stored_values: Final = self._sso_environment_values(stored_sso_settings).applied
+        self._end_holds_of_saves_the_read_moved_past(read_started_at, stored_values)
+        awaiting_table: Final = self._sso_keys_still_awaiting_the_table(removed_sso_keys - stored_values.keys())
+        self._db_environment_keys = self._db_environment_keys | awaiting_table
+        settled: Final = removed_sso_keys - awaiting_table
         held_keys: Final = self._environment_keys_held_against_read(
             read_started_at,
-            {key: value for key, value in stored_values.items() if key in removed_sso_keys},
-            removed_sso_keys - stored_values.keys(),
+            {key: value for key, value in stored_values.items() if key in settled},
+            settled - stored_values.keys(),
         )
         self._sso_environment_keys = self._applied_environment_keys(
-            self._sso_environment_keys, {key: stored_values.get(key) for key in removed_sso_keys - held_keys}
+            self._sso_environment_keys, {key: stored_values.get(key) for key in settled - held_keys}
         )
+
+    def _sso_keys_still_awaiting_the_table(self, missing_from_table: frozenset[str]) -> frozenset[str]:
+        now: Final = self._clock()
+        left_row_at: Final = {key: self._sso_keys_awaiting_table_since.get(key, now) for key in missing_from_table}
+        awaiting: Final = frozenset(
+            key for key, since in left_row_at.items() if now - since < _SAVED_ENVIRONMENT_HOLD_SECONDS
+        )
+        self._sso_keys_awaiting_table_since = MappingProxyType({key: left_row_at[key] for key in awaiting})
+        return awaiting
 
     def _warn_about_shadowed_db_settings(self) -> None:
         shadowed: Final[frozenset[tuple[Section, str]]] = frozenset(
@@ -8932,6 +8965,7 @@ class ProxyConfig:
     def _apply_sso_settings(self, stored_sso_settings: Mapping[str, object], read_started_at: float) -> None:
         values: Final = self._sso_environment_values(stored_sso_settings)
         restored: Final = self._sso_environment_keys - values.still_stored - self._db_environment_keys
+        self._end_holds_of_saves_the_read_moved_past(read_started_at, values.applied)
         held_keys: Final = self._environment_keys_held_against_read(read_started_at, values.applied, restored)
         applied: Final = {key: value for key, value in values.applied.items() if key not in held_keys}
         os.environ.update(applied)
