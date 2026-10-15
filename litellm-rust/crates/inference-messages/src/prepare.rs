@@ -124,7 +124,7 @@ fn prepare_provider_request(
         url,
         body: transformed,
         environment,
-        timeout,
+        timeout: timeout.or_else(|| shaping.settings.request_timeout()),
         api_key: api_key.map(SecretValue::new),
     })
 }
@@ -251,6 +251,41 @@ mod tests {
             (auth.as_slice(), prepared.url.as_str()),
             (expected_auth, expected_url)
         );
+    }
+
+    #[rstest]
+    #[case::nothing_configured(None, None, None)]
+    #[case::configured_setting(None, Some(1800.0), Some(Duration::from_secs(1800)))]
+    #[case::call_timeout_wins(
+        Some(Duration::from_secs(30)),
+        Some(1800.0),
+        Some(Duration::from_secs(30))
+    )]
+    #[case::call_timeout_only(Some(Duration::from_secs(30)), None, Some(Duration::from_secs(30)))]
+    #[case::unusable_setting_ignored(None, Some(-1.0), None)]
+    #[case::zero_setting_ignored(None, Some(0.0), None)]
+    fn timeout_falls_back_to_the_configured_request_timeout(
+        shaping: MessagesShaping,
+        #[case] call_timeout: Option<Duration>,
+        #[case] request_timeout: Option<f64>,
+        #[case] expected: Option<Duration>,
+    ) {
+        let prepared = prepare(MessagesCall {
+            body: body(json!({"model": "claude-test", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16})),
+            api_key: Some("sk-test".into()),
+            api_base: Some("https://anthropic.test".into()),
+            custom_llm_provider: Some("anthropic".into()),
+            litellm_params: Default::default(),
+            extra_headers: None,
+            provider_specific_header: None,
+            timeout: call_timeout,
+            shaping: MessagesShaping {
+                settings: MessagesSettings { request_timeout, ..shaping.settings },
+                ..shaping
+            },
+        })
+        .unwrap();
+        assert_eq!(prepared.timeout, expected);
     }
 
     fn prepared_body(fields: Value, shaping: MessagesShaping) -> Result<Value, Error> {

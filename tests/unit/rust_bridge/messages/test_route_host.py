@@ -1,10 +1,12 @@
 from types import MappingProxyType
 from typing import Final
 
-from litellm.rust_bridge.messages.route_host import response
 import pytest
+
 import litellm
+from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
 from litellm.rust_bridge.messages import route_host
+from litellm.rust_bridge.messages.route_host import response
 
 
 def test_response_is_a_detached_public_messages_dict() -> None:
@@ -31,6 +33,8 @@ def test_response_is_a_detached_public_messages_dict() -> None:
 def test_settings_project_caller_configuration_without_resolving_a_model(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     monkeypatch.setattr(litellm, "reasoning_auto_summary", True)
+    monkeypatch.setattr(litellm, "request_timeout", 1800)
+    monkeypatch.setattr(litellm, "request_timeout_explicitly_set", True)
 
     projected: Final = route_host.settings({"drop_params": "true", "additional_drop_params": ["metadata.user_id"]})
 
@@ -38,7 +42,25 @@ def test_settings_project_caller_configuration_without_resolving_a_model(monkeyp
         "drop_params": True,
         "reasoning_auto_summary": True,
         "additional_drop_params": ("metadata.user_id",),
+        "request_timeout": 1800.0,
     }
+
+
+@pytest.mark.parametrize(
+    ("timeout", "explicitly_set", "expected"),
+    [
+        (DEFAULT_REQUEST_TIMEOUT_SECONDS, False, None),
+        (DEFAULT_REQUEST_TIMEOUT_SECONDS, True, DEFAULT_REQUEST_TIMEOUT_SECONDS),
+        (300, False, 300.0),
+    ],
+)
+def test_request_timeout_carries_only_a_configured_global_timeout(
+    monkeypatch: pytest.MonkeyPatch, timeout: float, explicitly_set: bool, expected: float | None
+) -> None:
+    monkeypatch.setattr(litellm, "request_timeout", timeout)
+    monkeypatch.setattr(litellm, "request_timeout_explicitly_set", explicitly_set)
+
+    assert route_host.settings({})["request_timeout"] == expected
 
 
 @pytest.mark.parametrize(
