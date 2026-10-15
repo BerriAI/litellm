@@ -10,7 +10,6 @@ import httpx
 import pytest
 import pytest_asyncio
 import respx
-import zstandard
 from fastapi import FastAPI
 from starlette.types import Message, Receive, Scope, Send
 
@@ -148,7 +147,7 @@ async def test_status_body_and_headers_are_relayed_without_redirects(
 
 
 @pytest.mark.asyncio
-async def test_compressed_native_envelope_is_not_interpreted_as_relay_configuration(
+async def test_native_envelope_is_not_interpreted_as_relay_configuration(
     codex_gateway: httpx.AsyncClient,
 ) -> None:
     payload: Final = {
@@ -161,8 +160,8 @@ async def test_compressed_native_envelope_is_not_interpreted_as_relay_configurat
         observed: Final = upstream.post(f"{_BASE}/responses").respond(429, json={"error": {"message": "synthetic"}})
         response: Final = await codex_gateway.post(
             "/backend-api/codex/responses",
-            content=zstandard.ZstdCompressor().compress(json.dumps(payload).encode()),
-            headers={**_CREDENTIALS, "content-type": "application/json", "content-encoding": "zstd"},
+            json=payload,
+            headers=_CREDENTIALS,
         )
     assert response.status_code == 429, response.text
     assert json.loads(observed.calls.last.request.content) == payload
@@ -171,19 +170,39 @@ async def test_compressed_native_envelope_is_not_interpreted_as_relay_configurat
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("body", [b"{", b"[]"])
-@pytest.mark.parametrize("encoding", ["identity", "zstd"])
-async def test_invalid_json_object_never_contacts_provider(
-    codex_gateway: httpx.AsyncClient, body: bytes, encoding: str
-) -> None:
+async def test_invalid_json_object_never_contacts_provider(codex_gateway: httpx.AsyncClient, body: bytes) -> None:
     with respx.mock(assert_all_called=False) as upstream:
         provider: Final = upstream.post(f"{_BASE}/responses").respond(json={})
         response: Final = await codex_gateway.post(
             "/backend-api/codex/responses",
-            content=zstandard.ZstdCompressor().compress(body) if encoding == "zstd" else body,
-            headers={**_CREDENTIALS, "content-type": "application/json", "content-encoding": encoding},
+            content=body,
+            headers={**_CREDENTIALS, "content-type": "application/json"},
         )
     assert response.status_code == 400, response.text
     assert response.json() == {"detail": "A JSON object is required"}
+    assert not provider.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("encodings", [("zstd",), ("gzip",), ("br",), ("",), ("identity", "zstd")])
+@pytest.mark.parametrize("authenticated", [False, True])
+async def test_encoded_requests_are_rejected_before_reading_or_authentication(
+    codex_gateway: httpx.AsyncClient, encodings: tuple[str, ...], authenticated: bool
+) -> None:
+    body: Final = ObservedStream()
+    with respx.mock(assert_all_called=False) as upstream:
+        provider: Final = upstream.post(f"{_BASE}/responses").respond(json={})
+        response: Final = await codex_gateway.post(
+            "/backend-api/codex/responses",
+            content=body,
+            headers=(
+                *(_CREDENTIALS.items() if authenticated else ()),
+                *(("content-encoding", encoding) for encoding in encodings),
+            ),
+        )
+    assert response.status_code == 415, response.text
+    assert "enable_request_compression = false" in response.json()["detail"]
+    assert not body.started.is_set()
     assert not provider.called
 
 
@@ -292,7 +311,7 @@ async def test_custom_auth_and_callback_copies_cannot_expose_credentials(
     assert MASTER_KEY not in str(provider.calls.last.request.headers)
 
 
-class ObservedUpstreamStream(httpx.AsyncByteStream):
+class ObservedStream(httpx.AsyncByteStream):
     def __init__(self) -> None:
         self.started: Final = Event()
         self.closed: Final = Event()
@@ -322,7 +341,7 @@ async def test_upstream_is_closed_if_downstream_header_delivery_fails_before_ite
 
         await isolated(scope, receive, fail_start)
 
-    stream: Final = ObservedUpstreamStream()
+    stream: Final = ObservedStream()
     with respx.mock() as upstream:
         upstream.post(f"{_BASE}/responses").mock(
             return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=stream)

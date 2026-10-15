@@ -1,8 +1,8 @@
 # Use a personal ChatGPT subscription through LiteLLM
 
-Pi and compatible Codex clients can send subscription requests through an authenticated LiteLLM gateway. The client signs into ChatGPT and refreshes its own tokens. LiteLLM does not sign in, refresh tokens, or store subscription credentials.
+Compatible Codex clients can send subscription requests through an authenticated LiteLLM gateway. The client signs into ChatGPT and refreshes its own tokens. LiteLLM does not sign in, refresh tokens, or store subscription credentials.
 
-This route supports HTTP and server-sent events, including zstd-compressed requests. Subscription WebSockets, voice, and gateway OAuth sign-in are not supported. It does not change the API-key-backed `/v1/responses` endpoint.
+This route supports HTTP and server-sent events with uncompressed JSON requests. Set `features.enable_request_compression = false` in Codex. Requests declaring a content encoding other than `identity` return HTTP 415 before gateway authentication or body parsing. Subscription WebSockets, voice, and gateway OAuth sign-in are not supported. It does not change the API-key-backed `/v1/responses` endpoint.
 
 ## Configure the gateway
 
@@ -13,6 +13,8 @@ Set the client base URL to `https://litellm.example.com/backend-api/codex`. The 
 LiteLLM forwards requests only to the corresponding endpoint under `https://chatgpt.com/backend-api/codex`, with redirects disabled. Gateway credentials and cookies are not forwarded. `ChatGPT-Account-ID` and client protocol headers are preserved. Missing gateway or subscription credentials are rejected before an upstream request.
 
 ## Pi
+
+Pi 1.0.4 compresses SSE request bodies when its runtime supports zstd. Direct compressed Pi requests are not supported. Use the configuration below only behind an ingress explicitly configured to decompress requests before forwarding them to LiteLLM. TLS termination or response compression alone is insufficient. The ingress must enforce decompression limits and update the content encoding and length headers.
 
 Sign into the built-in `openai-codex` provider through Pi's `/login`. Keep the subscription credential in Pi, not in the gateway configuration.
 
@@ -45,7 +47,16 @@ Pi retains responsibility for its normal ChatGPT login and refresh flow. Restart
 
 ## Codex
 
-Use a Codex build supporting OpenAI's [ChatGPT gateway flow](https://developers.openai.com/codex/enterprise/sign-in-with-chatgpt-through-a-gateway). For a managed workspace, configure the provider in `requirements.toml`.
+Use a Codex build supporting OpenAI's [ChatGPT gateway flow](https://developers.openai.com/codex/enterprise/sign-in-with-chatgpt-through-a-gateway). Disable request compression in the client's `config.toml`.
+
+```toml
+[features]
+enable_request_compression = false
+```
+
+This is a client setting, not a LiteLLM gateway setting. Codex selects request compression locally rather than negotiating support from server headers. A client sending `Content-Encoding: zstd` receives HTTP 415 unless an ingress decompresses the request first.
+
+For a managed workspace, configure the provider in `requirements.toml`.
 
 ```toml
 model_provider = "litellm_subscription"
@@ -54,6 +65,7 @@ model_provider = "litellm_subscription"
 name = "LiteLLM subscription gateway"
 base_url = "https://litellm.example.com/backend-api/codex"
 requires_openai_auth = true
+supports_websockets = false
 env_http_headers = { "x-litellm-api-key" = "LITELLM_GATEWAY_KEY" }
 ```
 
@@ -69,4 +81,6 @@ Gateway cost estimates are API-equivalent estimates, not subscription invoices, 
 
 Subscription credentials are redacted in gateway logging and callback header copies. Keep credentials out of request bodies, URLs, screenshots, shell history, and custom application logs. Do not enable shell tracing or verbose curl output when testing with real credentials.
 
-Compressed subscription requests have a 32 MiB compressed-input, decoded-output, and decoder-window limit. Malformed or unsupported encodings are rejected. Other proxy routes retain their existing request-body behavior.
+## Compressed requests
+
+Native zstd request decoding is deferred. Supporting `enable_request_compression = true` requires a maintainer follow-up that declares the zstd dependency and adds bounded decoding before authentication and body parsing. Adding the dependency alone does not enable compressed requests. Other proxy routes retain their existing request-body behavior.
