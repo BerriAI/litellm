@@ -1,5 +1,7 @@
 import os
 import time
+import types
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from httpx import Headers, Response
@@ -232,11 +234,11 @@ class PredibaseConfig(BaseConfig):
         except Exception:
             # Keep usage calculation non-blocking if token counting fails.
             pass
-        output_text: Final = model_response["choices"][0]["message"].get("content", "")
+        output_text: Final = model_response.choices[0].message.content
         if encoding is not None and output_text is not None and len(output_text) > 0:
             completion_tokens = 0
             try:
-                completion_tokens = len(encoding.encode(model_response["choices"][0]["message"].get("content", "")))
+                completion_tokens = len(encoding.encode(output_text))
             except Exception:
                 # Keep usage calculation non-blocking if encoding fails.
                 pass
@@ -282,7 +284,7 @@ class PredibaseConfig(BaseConfig):
             prompt = prompt_factory(model=model, messages=messages)
 
         request_optional_params: Final = {**optional_params}
-        config: Final = self.get_config()
+        config: Final[Mapping[str, object]] = types.MappingProxyType(self.get_config())
         for k, v in config.items():
             if k not in request_optional_params:
                 request_optional_params[k] = v

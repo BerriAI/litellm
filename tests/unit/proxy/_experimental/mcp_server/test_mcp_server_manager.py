@@ -258,6 +258,51 @@ def restore_mcp_manager_singleton():
         module.global_mcp_server_manager = manager
 
 
+@pytest.mark.parametrize(
+    "auth_type",
+    [
+        MCPAuth.none,
+        MCPAuth.api_key,
+        MCPAuth.bearer_token,
+        MCPAuth.basic,
+        MCPAuth.oauth_delegate,
+        MCPAuth.true_passthrough,
+    ],
+)
+@pytest.mark.parametrize("explicit_key", [False, True])
+def test_validated_admission_jwt_is_not_forwarded_as_an_extra_header(auth_type: MCPAuth, explicit_key: bool) -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _openapi_forwarded_extra_headers
+    from litellm.proxy._experimental.mcp_server.operations import _prepare_mcp_server_headers
+
+    server: Final = MCPServer(
+        server_id="header-boundary",
+        name="header-boundary",
+        transport=MCPTransport.http,
+        auth_type=auth_type,
+        extra_headers=["Authorization", "x-tenant"],
+    )
+    raw: Final = {
+        "Authorization": "Bearer validated-jwt",
+        "x-tenant": "tenant-control",
+        **({"x-litellm-api-key": "sk-admission"} if explicit_key else {}),
+    }
+    user: Final = UserAPIKeyAuth(api_key="stored-key-hash", jwt_claims={"sub": "caller"})
+    expected: Final = {
+        "x-tenant": "tenant-control",
+        **({"Authorization": "Bearer validated-jwt"} if explicit_key else {}),
+    }
+    _, upstream_headers = _prepare_mcp_server_headers(
+        server,
+        mcp_auth_header=None,
+        mcp_server_auth_headers=None,
+        oauth2_headers=None,
+        raw_headers=raw,
+        user_api_key_auth=user,
+    )
+    assert upstream_headers == expected
+    assert _openapi_forwarded_extra_headers(server, raw, user) == expected
+
+
 class TestMCPServerManager:
     """Test MCP Server Manager stdio functionality"""
 
@@ -14745,6 +14790,27 @@ class TestLitellmAdmissionKeyIsNeverTheSubjectToken:
 
     _ADMISSION_KEY: Final = "sk-litellm-virtual-key"
     _USER_TOKEN: Final = "user-idp-jwt"
+
+    @pytest.mark.parametrize("explicit_admission", [None, "", "Bearer mapped-jwt"])
+    @pytest.mark.parametrize("oauth_headers", [None, {"Authorization": "Bearer mapped-jwt"}])
+    def test_validated_jwt_remains_the_subject_after_virtual_key_mapping(
+        self, explicit_admission: str | None, oauth_headers: dict[str, str] | None
+    ) -> None:
+        auth: Final = UserAPIKeyAuth(api_key="hashed-mapped-key", user_id="caller", jwt_claims={"sub": "caller"})
+        headers: Final = {
+            "Authorization": "Bearer mapped-jwt",
+            **({"x-litellm-api-key": explicit_admission} if explicit_admission is not None else {}),
+        }
+        assert MCPServerManager.extract_subject_token(oauth_headers, headers, auth) == "mapped-jwt"
+
+    @pytest.mark.parametrize("explicit_admission", [False, True])
+    def test_litellm_key_is_not_a_subject_even_with_jwt_claims(self, explicit_admission: bool) -> None:
+        auth: Final = UserAPIKeyAuth(api_key="hashed-key", jwt_claims={"sub": "caller"})
+        headers: Final = {
+            "Authorization": f"Bearer {self._ADMISSION_KEY}",
+            **({"x-litellm-api-key": self._ADMISSION_KEY} if explicit_admission else {}),
+        }
+        assert MCPServerManager.extract_subject_token(None, headers, auth) is None
 
     @staticmethod
     def _token_exchange_server(server_id: str) -> MCPServer:

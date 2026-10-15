@@ -12,7 +12,7 @@ from types import MappingProxyType
 from typing import Annotated, Any, Final, TypeAlias, TypedDict, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
-from pydantic import BaseModel, BeforeValidator, ConfigDict, JsonValue, ValidationError, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, JsonValue, TypeAdapter, ValidationError, model_validator
 from pydantic_core import ErrorDetails, PydanticCustomError
 
 import litellm
@@ -27,9 +27,11 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     is_anthropic_tool_search_use,
     message_field,
     parts_of,
+    place_mid_conversation_system,
+    split_leading_system_run,
 )
 from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
-from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
+from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client, header_value
 from litellm.types.files import get_file_extension_from_mime_type
 from litellm.types.llms.anthropic import *
 from litellm.types.llms.bedrock import CachePointBlock
@@ -217,6 +219,7 @@ def _handle_ollama_system_message(messages: list, prompt: str, msg_i: int) -> tu
 
 
 _OLLAMA_USER_ROLES: Final = frozenset({"user", "tool", "function"})
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _ollama_bad_message(model: str, message: AllMessageValues, msg_i: int, detail: str) -> "litellm.BadRequestError":
@@ -1292,7 +1295,7 @@ def get_thought_signature_from_tool(tool: Mapping[str, object]) -> str | None:
                 if signature_from_function_fields:
                     return cast(str, signature_from_function_fields)  # cast-ok: untyped provider response field
         elif hasattr(function, "provider_specific_fields") and getattr(function, "provider_specific_fields"):
-            function_provider_fields: Final[object] = getattr(function, "provider_specific_fields")
+            function_provider_fields: Final[object] = getattr(function, "provider_specific_fields", None)
             if isinstance(function_provider_fields, dict):
                 typed_function_provider_fields: Final = cast(  # cast-ok: provider fields are dynamic
                     dict[str, object], function_provider_fields
@@ -1883,6 +1886,8 @@ def _tool_call_ids_with_a_kept_server_result(message: object) -> frozenset[str]:
     from litellm.llms.anthropic.common_utils import tool_call_is_rebuilt_as_server_tool_use
 
     provider_specific_fields: Final = message_field(message, "provider_specific_fields")
+    if provider_specific_fields is None:
+        return frozenset()
     return frozenset(
         tool_call_id
         for tool_call in parts_of(message_field(message, "tool_calls"))
@@ -1914,8 +1919,36 @@ def server_tool_answers_replaced_by_their_result(messages: Sequence[object]) -> 
     )
 
 
-def tool_call_ids_answered_by_client(messages: Sequence[object]) -> frozenset[str]:
+def tool_call_ids_answered_by_client(
+    messages: Sequence[object], supports_mid_conversation_system: bool = True
+) -> frozenset[str]:
+    return tool_call_ids_answered_in(_as_the_request_builder_sends_them(messages, supports_mid_conversation_system))
+
+
+def tool_call_ids_answered_in(messages: Sequence[object]) -> frozenset[str]:
     return _tool_call_ids_in_tool_messages(messages) - server_tool_answers_replaced_by_their_result(messages)
+
+
+def _as_the_request_builder_sends_them(
+    messages: Sequence[object], supports_mid_conversation_system: bool
+) -> Sequence[object]:
+    if not all(callable(getattr(message, "get", None)) for message in messages):
+        return messages
+    chat_messages: Final = cast(Sequence[AllMessageValues], messages)  # cast-ok: placement reads messages via get
+    try:
+        return _placed_and_paired(chat_messages, supports_mid_conversation_system)
+    except TypeError:
+        return messages
+
+
+def _placed_and_paired(
+    messages: Sequence[AllMessageValues], supports_mid_conversation_system: bool
+) -> Sequence[AllMessageValues]:
+    _, conversation = split_leading_system_run(messages)
+    placed: Final = place_mid_conversation_system(
+        conversation, supports_mid_conversation_system=supports_mid_conversation_system
+    )
+    return _pair_tool_calls_with_results(placed) if litellm.modify_params else placed
 
 
 _AnthropicToolInvokeItem: TypeAlias = AnthropicMessagesToolUseParam | dict[str, Any]
@@ -2225,7 +2258,7 @@ def _sanitize_empty_text_content(
 
 def _add_missing_tool_results(
     current_message: AllMessageValues,
-    messages: list[AllMessageValues],
+    messages: Sequence[AllMessageValues],
     current_index: int,
 ) -> tuple[list[AllMessageValues], int]:
     """
@@ -2328,7 +2361,7 @@ def _add_missing_tool_results(
 
 def _is_orphaned_tool_result(
     current_message: AllMessageValues,
-    sanitized_messages: list[AllMessageValues],
+    latest_assistant_tool_call_ids: frozenset[object],
 ) -> bool:
     """
     Case B: Orphaned tool_result (unexpected result)
@@ -2346,32 +2379,26 @@ def _is_orphaned_tool_result(
     if not tool_call_id:
         return False
 
-    # Look back to find the most recent assistant message with tool_calls
-    found_matching_tool_call = False
+    if latest_assistant_tool_call_ids and tool_call_id in latest_assistant_tool_call_ids:
+        return False
 
-    for j in range(len(sanitized_messages) - 1, -1, -1):
-        prev_msg = sanitized_messages[j]
-        if prev_msg.get("role") == "assistant":
-            tool_calls = prev_msg.get("tool_calls")
-            if tool_calls:
-                for tool_call in cast(list, tool_calls):
-                    tc_id = None
-                    if isinstance(tool_call, dict):
-                        tc_id = tool_call.get("id")
-                    else:
-                        tc_id = getattr(tool_call, "id", None)
+    verbose_logger.debug("_is_orphaned_tool_result: Found orphaned tool result with redacted tool_call_id")
+    return True
 
-                    if tc_id == tool_call_id:
-                        found_matching_tool_call = True
-                        break
 
-            break
+def _tool_call_id(tool_call: object) -> object:
+    return tool_call.get("id") if isinstance(tool_call, dict) else getattr(tool_call, "id", None)
 
-    if not found_matching_tool_call:
-        verbose_logger.debug("_is_orphaned_tool_result: Found orphaned tool result with redacted tool_call_id")
-        return True
 
-    return False
+def _tool_call_ids_of_the_latest_assistant(
+    latest_ids: frozenset[object], message: AllMessageValues
+) -> frozenset[object]:
+    if message.get("role") != "assistant":
+        return latest_ids
+    tool_calls: Final = message.get("tool_calls") or ()
+    return frozenset(
+        tool_call_id for tool_call_id in map(_tool_call_id, cast(Iterable[object], tool_calls)) if tool_call_id
+    )
 
 
 def _declared_tool_call_ids(message: Mapping[str, object]) -> frozenset[str]:
@@ -2444,35 +2471,7 @@ def sanitize_messages_for_tool_calling(
     """
     if not litellm.modify_params:
         return messages
-
-    sanitized_messages: list[AllMessageValues] = []
-    i = 0
-
-    while i < len(messages):
-        current_message = messages[i]
-
-        # Case C: Sanitize empty text content
-        current_message = _sanitize_empty_text_content(current_message)
-
-        # Case A: Check if assistant message has tool_calls without following tool results
-        if current_message.get("role") == "assistant":
-            result_messages, messages_consumed = _add_missing_tool_results(current_message, messages, i)
-
-            # If dummy tool results were added, extend sanitized_messages and skip consumed messages
-            if len(result_messages) > 1:
-                sanitized_messages.extend(result_messages)
-                # Skip the assistant message and any actual tool results that were included
-                i += 1 + messages_consumed
-                continue
-
-        # Case B: Check for orphaned tool results
-        if _is_orphaned_tool_result(current_message, sanitized_messages):
-            i += 1
-            continue  # Skip this orphaned tool result
-
-        # Add the message to sanitized list
-        sanitized_messages.append(current_message)
-        i += 1
+    sanitized_messages: Final = _pair_tool_calls_with_results(messages)
 
     # Case D: Deduplicate tool results with the same tool_call_id.
     # Anthropic requires exactly one tool_result per tool_use. Session history
@@ -2510,10 +2509,43 @@ def sanitize_messages_for_tool_calling(
             # a turn boundary and would mask real within-block duplicates.
             seen_in_block = {}
 
-    if duplicates_to_remove:
-        sanitized_messages = [msg for idx, msg in enumerate(sanitized_messages) if idx not in duplicates_to_remove]
+    return [msg for idx, msg in enumerate(sanitized_messages) if idx not in duplicates_to_remove]
 
-    return sanitized_messages
+
+def _pair_tool_calls_with_results(messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
+    latest_assistant_tool_call_ids: Final = tuple(
+        itertools.accumulate(messages, _tool_call_ids_of_the_latest_assistant, initial=frozenset[object]())
+    )
+    sanitized_messages: list[AllMessageValues] = []
+    i = 0
+
+    while i < len(messages):
+        current_message = messages[i]
+
+        # Case C: Sanitize empty text content
+        current_message = _sanitize_empty_text_content(current_message)
+
+        # Case A: Check if assistant message has tool_calls without following tool results
+        if current_message.get("role") == "assistant":
+            result_messages, messages_consumed = _add_missing_tool_results(current_message, messages, i)
+
+            # If dummy tool results were added, extend sanitized_messages and skip consumed messages
+            if len(result_messages) > 1:
+                sanitized_messages.extend(result_messages)
+                # Skip the assistant message and any actual tool results that were included
+                i += 1 + messages_consumed
+                continue
+
+        # Case B: Check for orphaned tool results
+        if _is_orphaned_tool_result(current_message, latest_assistant_tool_call_ids[i]):
+            i += 1
+            continue  # Skip this orphaned tool result
+
+        # Add the message to sanitized list
+        sanitized_messages.append(current_message)
+        i += 1
+
+    return tuple(sanitized_messages)
 
 
 def _replayable_thinking_blocks(
@@ -3033,7 +3065,7 @@ def parse_xml_params(xml_content, json_schema: dict | None = None):
                     for value in _element:
                         try:
                             if value.text is not None:
-                                _value = json.loads(value.text)
+                                _value = _DECODED_JSON.validate_python(json.loads(value.text))
                             else:
                                 continue
                         except json.JSONDecodeError:
@@ -3043,7 +3075,7 @@ def parse_xml_params(xml_content, json_schema: dict | None = None):
             # If property is not an array, append the value directly
             elif _element is not None and _element.text is not None:
                 try:
-                    _value = json.loads(_element.text)
+                    _value = _DECODED_JSON.validate_python(json.loads(_element.text))
                 except json.JSONDecodeError:
                     _value = _element.text
                 params[prop] = _value
@@ -3403,7 +3435,7 @@ def _load_image_from_url(image_url):
         response.raise_for_status()  # Raise an exception for HTTP errors
 
         # Check the response's content type to ensure it is an image
-        content_type: Final = response.headers.get("content-type")
+        content_type: Final = header_value(response.headers, "content-type")
         if not content_type or "image" not in content_type:
             raise ValueError(f"URL does not point to a valid image (content-type: {content_type})")
 
@@ -3499,11 +3531,6 @@ def gemini_text_image_pt(messages: list):
         ]
     }
     """
-    try:
-        pass
-    except Exception:
-        raise Exception("Importing google.generativeai failed, please run 'pip install -q google-generativeai")
-
     prompt = ""
     images: Final = []
     for message in messages:
@@ -3605,7 +3632,7 @@ class BedrockImageProcessor:
     @staticmethod
     def _post_call_image_processing(response: httpx.Response, image_url: str = "") -> tuple[str, str]:
         # Check the response's content type to ensure it is an image
-        content_type: str | None = response.headers.get("content-type")
+        content_type: str | None = header_value(response.headers, "content-type")
 
         # Use helper function to infer content type with fallback logic
         content_type = infer_content_type_from_url_and_content(
@@ -5431,40 +5458,63 @@ def _bedrock_tools_pt(
     return tool_block_list
 
 
+def _is_system_message(message: Mapping[str, object]) -> bool:
+    role: Final = message.get("role")
+    return isinstance(role, str) and "system" in role
+
+
+_CONTENT_BLOCKS: Final = TypeAdapter(list[object])
+
+
+def _content_with_function_prompt(
+    content: object, function_prompt: str, *, model: str, llm_provider: str, drop_params: bool
+) -> str | Sequence[object]:
+    if isinstance(content, str):
+        return f"{content} {function_prompt}"
+    if isinstance(content, list):
+        return [*_CONTENT_BLOCKS.validate_python(content), {"type": "text", "text": f" {function_prompt}"}]
+    if drop_params:
+        return function_prompt
+    raise litellm.BadRequestError(
+        message=(
+            f"system message content must be a string or a list of content parts, got {type(content).__name__}. "
+            "Pass drop_params=True to send the function prompt in its place"
+        ),
+        model=model,
+        llm_provider=llm_provider,
+    )
+
+
 # Function call template
 def function_call_prompt(
     messages: list[dict[str, object]],
     functions: list[object],
+    *,
+    model: str,
+    llm_provider: str,
+    drop_params: bool,
 ) -> list[dict[str, object]]:
-    function_prompt = """To call a function, reply with JSON ONLY in this format {"name": "function_name", "arguments":{"argument_name": "argument_value"}}. Once a function result answers the request, reply to the user in plain text instead of calling a function again. The following functions are available to you:"""
-    for function in functions:
-        function_prompt += f"""\n{function}\n"""
-
-    def _append_function_prompt(message: dict[str, object]) -> bool:
-        role: Final = cast(  # cast-ok: preserve dynamic role membership behavior
-            Container[object], message["role"]
+    header: Final = """To call a function, reply with JSON ONLY in this format {"name": "function_name", "arguments":{"argument_name": "argument_value"}}. Once a function result answers the request, reply to the user in plain text instead of calling a function again. The following functions are available to you:"""
+    function_prompt: Final = header + "".join(f"\n{function}\n" for function in functions)
+    if not any(_is_system_message(message) for message in messages):
+        return [*messages, {"role": "system", "content": function_prompt}]
+    return [
+        (
+            {
+                **message,
+                "content": _content_with_function_prompt(
+                    message.get("content"),
+                    function_prompt,
+                    model=model,
+                    llm_provider=llm_provider,
+                    drop_params=drop_params,
+                ),
+            }
+            if _is_system_message(message)
+            else message
         )
-        if "system" not in role:
-            return False
-
-        content: Final = message["content"]
-        if isinstance(content, str):
-            message["content"] = f"{content} {function_prompt}"
-        else:
-            cast(  # cast-ok: preserve dynamic content append behavior
-                list[object], content
-            ).append({"type": "text", "text": f""" {function_prompt}"""})
-        return True
-
-    function_added_to_prompt = False
-    for message in messages:
-        if _append_function_prompt(message):
-            function_added_to_prompt = True
-
-    if function_added_to_prompt is False:
-        messages.append({"role": "system", "content": f"""{function_prompt}"""})
-
-    return messages
+        for message in messages
+    ]
 
 
 def response_schema_prompt(model: str, response_schema: dict, llm_provider: str) -> str:
