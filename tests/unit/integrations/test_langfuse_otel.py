@@ -1019,12 +1019,12 @@ class TestLangfuseOtelTraceIdentity:
 
         return TracerProvider().get_tracer("test").start_span("generation")
 
-    def _kwargs(self, slp_metadata=None, litellm_metadata=None, model_parameters=None, slp_extra=None):
+    def _kwargs(self, slp_metadata=None, request_metadata=None, model_parameters=None, slp_extra=None):
         return {
             "model": "gpt-4o",
             "messages": [{"role": "user", "content": "hello"}],
             "optional_params": {},
-            "litellm_params": {"metadata": litellm_metadata or {}, "custom_llm_provider": "openai"},
+            "litellm_params": {"metadata": request_metadata or {}, "custom_llm_provider": "openai"},
             "standard_logging_object": {
                 "call_type": "acompletion",
                 "model_parameters": model_parameters or {},
@@ -1075,7 +1075,7 @@ class TestLangfuseOtelTraceIdentity:
         identity, _ = self._identity(
             self._kwargs(
                 slp_metadata={"user_api_key_end_user_id": "end-1"},
-                litellm_metadata={"trace_user_id": "caller-1"},
+                request_metadata={"trace_user_id": "caller-1"},
             )
         )
         assert identity == {"user.id": "caller-1", "session.id": None}
@@ -1096,7 +1096,7 @@ class TestLangfuseOtelTraceIdentity:
         identity, _ = self._identity(
             self._kwargs(
                 slp_metadata={"user_api_key_end_user_id": "end-1"},
-                litellm_metadata={"session_id": "sess-1"},
+                request_metadata={"session_id": "sess-1"},
             )
         )
         assert identity == {"user.id": "end-1", "session.id": "sess-1"}
@@ -1104,7 +1104,7 @@ class TestLangfuseOtelTraceIdentity:
     def test_langfuse_trace_user_id_header_wins_without_an_overwrite_warning(self, caplog):
         kwargs = self._kwargs(
             slp_metadata={"user_api_key_end_user_id": "end-1"},
-            litellm_metadata={"user_api_key_end_user_id": "end-1"},
+            request_metadata={"user_api_key_end_user_id": "end-1"},
         )
         kwargs["litellm_params"]["proxy_server_request"] = {"headers": {"langfuse_trace_user_id": "header-1"}}
         with caplog.at_level(logging.WARNING, logger="LiteLLM"):
@@ -1136,6 +1136,10 @@ class TestLangfuseOtelTraceIdentity:
     def test_internal_user_without_an_end_user_never_lands_in_user_id(self):
         identity, _ = self._identity(self._kwargs(slp_metadata={"user_api_key_user_id": "internal-1"}))
         assert identity == {"user.id": None, "session.id": None}
+
+    def test_logged_end_user_lands_in_user_id_without_a_metadata_copy(self):
+        identity, _ = self._identity(self._kwargs(slp_extra={"end_user": "end-1"}))
+        assert identity == {"user.id": "end-1", "session.id": None}
 
     def test_request_context_attributes_still_emit(self):
         _, attributes = self._identity(

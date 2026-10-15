@@ -339,7 +339,7 @@ def test_langfuse_otel_unknown_model_error_reaches_the_caller(gateway: Gateway, 
         _subsequent_request_still_lands(candidate, collector, batches, model)
 
 
-def test_langfuse_otel_empty_and_null_session_id_stay_absent(gateway: Gateway, tmp_path: Path) -> None:
+def test_langfuse_otel_empty_and_null_session_id_never_carry_the_end_user(gateway: Gateway, tmp_path: Path) -> None:
     markers: Final = tuple(uuid.uuid4().hex for _ in range(3))
     with (
         wire_server(lambda request: _upstream_reply_for(request, _marker_from_body(request))) as provider,
