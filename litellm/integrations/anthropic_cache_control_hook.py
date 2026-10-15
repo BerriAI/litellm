@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.exceptions import ModelNotMappedError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.integrations.prompt_management_base import PromptManagementClient
@@ -260,7 +261,19 @@ def _keeps_mid_conversation_system(model: str | None, custom_llm_provider: str |
         return True
     from litellm.utils import supports_mid_conversation_system
 
-    return supports_mid_conversation_system(model=model, custom_llm_provider=custom_llm_provider)
+    if supports_mid_conversation_system(model=model, custom_llm_provider=custom_llm_provider):
+        return True
+    return _flagged_or_unmapped(model, custom_llm_provider)
+
+
+def _flagged_or_unmapped(model: str, custom_llm_provider: str | None) -> bool:
+    from litellm.utils import get_model_info
+
+    try:
+        model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    except ModelNotMappedError:
+        return True
+    return model_info.get("supports_mid_conversation_system") is True
 
 
 def _is_marked_server_tool_call(tool_call: object) -> bool:

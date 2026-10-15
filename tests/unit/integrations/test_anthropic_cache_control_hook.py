@@ -1293,9 +1293,17 @@ def test_cache_control_hook_never_counts_fewer_marks_than_anthropic_receives_aft
     assert census >= _wire_cache_marks(messages, model)
 
 
-@pytest.mark.parametrize("model", ["claude-opus-5-5", "claude-sonnet-4-6"])
+@pytest.mark.parametrize(
+    ("hook_model", "wire_model"),
+    [
+        ("anthropic/claude-opus-5-5", "claude-opus-5-5"),
+        ("anthropic/claude-sonnet-4-6", "claude-sonnet-4-6"),
+        pytest.param("invoke/us.anthropic.claude-opus-5-5", "claude-opus-5-5", id="provider-left-out-of-the-params"),
+        pytest.param("my-claude-deployment", "claude-opus-5-5", id="model-the-cost-map-does-not-know"),
+    ],
+)
 def test_cache_control_hook_fills_the_mark_budget_when_the_client_answers_one_of_two_marked_search_calls(
-    monkeypatch: pytest.MonkeyPatch, model: str
+    monkeypatch: pytest.MonkeyPatch, hook_model: str, wire_model: str
 ):
     monkeypatch.setattr(litellm, "modify_params", True)
     marked_text: Final = {"type": "text", "text": "Context: a trip.", "cache_control": {"type": "ephemeral"}}
@@ -1323,7 +1331,7 @@ def test_cache_control_hook_fills_the_mark_budget_when_the_client_answers_one_of
     ]
 
     _, processed, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
-        model=f"anthropic/{model}",
+        model=hook_model,
         messages=cast(list[AllMessageValues], messages),
         non_default_params={
             "cache_control_injection_points": [
@@ -1336,7 +1344,7 @@ def test_cache_control_hook_fills_the_mark_budget_when_the_client_answers_one_of
         dynamic_callback_params={},
     )
 
-    assert _wire_cache_marks(processed, model) == 4
+    assert _wire_cache_marks(processed, wire_model) == 4
 
 
 @pytest.mark.parametrize("tool_call_type", ["function", "custom", None])
