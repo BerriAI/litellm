@@ -9,7 +9,7 @@ from litellm.types.google_genai.adapters import GenerateContentCompletionKwargs
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelResponse
 
-from .transformation import GoogleGenAIAdapter, deployment_supports_openai_param
+from .transformation import GoogleGenAIAdapter
 
 # Initialize adapter
 GOOGLE_GENAI_ADAPTER: Final = GoogleGenAIAdapter()
@@ -22,18 +22,14 @@ def _mark_failure_logged_by_inner_completion(adapter_kwargs: Mapping[str, object
         outer_logging_obj.mark_logging_complete(event_type="async_failure")
 
 
-def _adapter_stream_options(
-    requested: object, model: str, custom_llm_provider: str | None
-) -> ChatCompletionStreamOptionsParam | None:
+def _adapter_stream_options(requested: object) -> ChatCompletionStreamOptionsParam | None:
     match requested:
         case {"include_usage": True}:
             return {"include_usage": True}
         case Mapping():
             return None
-        case _ if deployment_supports_openai_param(model, custom_llm_provider, "stream_options", when_unknown=False):
-            return {"include_usage": True}
         case _:
-            return None
+            return {"include_usage": True}
 
 
 class GenerateContentToCompletionHandler:
@@ -76,11 +72,7 @@ class GenerateContentToCompletionHandler:
 
         if stream:
             completion_kwargs["stream"] = stream
-            stream_options: Final = _adapter_stream_options(
-                (extra_kwargs or {}).get("stream_options"),
-                model,
-                litellm_params.custom_llm_provider if litellm_params else None,
-            )
+            stream_options: Final = _adapter_stream_options((extra_kwargs or {}).get("stream_options"))
             if stream_options is not None:
                 completion_kwargs["stream_options"] = stream_options
 

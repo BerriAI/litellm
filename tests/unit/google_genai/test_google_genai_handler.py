@@ -309,6 +309,41 @@ _CHAT_SSE_WITH_USAGE = _CHAT_SSE.replace(
     "data: [DONE]",
 )
 
+_ANTHROPIC_SSE: Final = "".join(
+    f"event: {event}\ndata: {json.dumps(data)}\n\n"
+    for event, data in (
+        (
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-haiku-4-5",
+                    "content": [],
+                    "stop_reason": None,
+                    "usage": {"input_tokens": 20, "output_tokens": 1},
+                },
+            },
+        ),
+        (
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        (
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "144"}},
+        ),
+        ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        (
+            "message_delta",
+            {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 5}},
+        ),
+        ("message_stop", {"type": "message_stop"}),
+    )
+)
+
 
 class _FailureCallTypes(CustomLogger):
     def __init__(self) -> None:
@@ -419,18 +454,34 @@ async def test_generate_content_adapter_asks_openai_compatible_upstream_for_stre
     assert json.loads(route.calls[0].request.content).get("stream_options") == expected_stream_options
 
 
+@pytest.mark.parametrize(
+    ("model", "api_base", "upstream_url", "upstream_sse", "prompt_tokens"),
+    [
+        (
+            "hosted_vllm/grok",
+            "http://upstream.test/v1",
+            "http://upstream.test/v1/chat/completions",
+            _CHAT_SSE_WITH_USAGE,
+            340,
+        ),
+        ("anthropic/claude-haiku-4-5", "http://upstream.test", "http://upstream.test/v1/messages", _ANTHROPIC_SSE, 20),
+    ],
+    ids=["openai_compatible", "anthropic"],
+)
 @pytest.mark.asyncio
-async def test_generate_content_adapter_stream_ends_with_upstream_usage(_httpx_transport: None):
+async def test_generate_content_adapter_stream_ends_with_upstream_usage(
+    _httpx_transport: None, model: str, api_base: str, upstream_url: str, upstream_sse: str, prompt_tokens: int
+):
     from litellm.types.router import GenericLiteLLMParams
 
     with respx.mock() as upstream:
-        upstream.post("http://upstream.test/v1/chat/completions").mock(
-            return_value=httpx.Response(200, text=_CHAT_SSE_WITH_USAGE, headers={"content-type": "text/event-stream"})
+        upstream.post(upstream_url).mock(
+            return_value=httpx.Response(200, text=upstream_sse, headers={"content-type": "text/event-stream"})
         )
         response = await GenerateContentToCompletionHandler.async_generate_content_handler(
-            model="hosted_vllm/grok",
+            model=model,
             contents=[{"role": "user", "parts": [{"text": "Hello"}]}],
-            litellm_params=GenericLiteLLMParams(api_base="http://upstream.test/v1", api_key="k"),
+            litellm_params=GenericLiteLLMParams(api_base=api_base, api_key="k"),
             stream=True,
         )
         events: Final = [chunk async for chunk in response]
@@ -440,7 +491,7 @@ async def test_generate_content_adapter_stream_ends_with_upstream_usage(_httpx_t
         for line in b"".join(events).decode().splitlines()
         if line.startswith("data: {")
     ]
-    assert payloads[-1]["usageMetadata"]["promptTokenCount"] == 340
+    assert payloads[-1]["usageMetadata"]["promptTokenCount"] == prompt_tokens
 
 
 @pytest.mark.parametrize("entrypoint", ["agenerate_content", "agenerate_content_stream"])
