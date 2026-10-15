@@ -166,6 +166,9 @@ def test_end_user_is_stored_only_while_end_user_cost_tracking_is_on(
     row: Final = spend_log_row_from_payload(cast(StandardLoggingPayload, payload), {})
 
     assert row["end_user"] == expected_end_user
+    assert json.loads(row["metadata"])["user_api_key_end_user_id"] == (
+        None if tracking_disabled else payload["metadata"]["user_api_key_end_user_id"]
+    )
 
 
 def test_success_row_mapping():

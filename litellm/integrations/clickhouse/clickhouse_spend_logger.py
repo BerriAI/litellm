@@ -136,6 +136,7 @@ def spend_log_row_from_payload(
     trace_id, span_id = _find_traceparent(metadata, kwargs)
     request_id = str(payload.get("id") or "")
     redact = litellm.turn_off_message_logging is True
+    track_end_user: Final = not litellm.disable_end_user_cost_tracking
     completion_start_ms = _to_ms(payload.get("completionStartTime"))
     response_cost: Final = payload.get("response_cost")
     unknown_success_cost: Final[bool] = payload.get("status") == "success" and kwargs.get("response_cost") is None
@@ -171,11 +172,7 @@ def spend_log_row_from_payload(
         team_alias=metadata.get("user_api_key_team_alias") or metadata.get("team_alias") or "",
         organization_id=metadata.get("user_api_key_org_id") or "",
         user=metadata.get("user_api_key_user_id") or "",
-        end_user=(
-            ""
-            if litellm.disable_end_user_cost_tracking
-            else payload.get("end_user") or metadata.get("user_api_key_end_user_id") or ""
-        ),
+        end_user=(payload.get("end_user") or metadata.get("user_api_key_end_user_id") or "") if track_end_user else "",
         model=payload.get("model") or "",
         model_group=payload.get("model_group") or "",
         model_id=payload.get("model_id") or "",
@@ -198,7 +195,14 @@ def spend_log_row_from_payload(
         span_id=span_id,
         request_tags=_request_tags(payload.get("request_tags")),
         metadata=_json_mapping(
-            MappingProxyType({**request_metadata, **metadata, "litellm_lens_internal": is_lens_analysis()})
+            MappingProxyType(
+                {
+                    **request_metadata,
+                    **metadata,
+                    "litellm_lens_internal": is_lens_analysis(),
+                    **({} if track_end_user else {"user_api_key_end_user_id": None}),
+                }
+            )
         ),
         messages="" if redact else _json(payload.get("messages")),
         response="" if redact else _json(payload.get("response")),
