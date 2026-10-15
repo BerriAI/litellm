@@ -6,7 +6,7 @@ import json
 import mimetypes
 import re
 import xml.etree.ElementTree as ET
-from collections.abc import Container, Iterator, Mapping, Sequence
+from collections.abc import Container, Iterable, Iterator, Mapping, Sequence
 from enum import Enum
 from types import MappingProxyType
 from typing import Any, Final, TypeAlias, TypedDict, cast, overload
@@ -1878,24 +1878,32 @@ def server_tool_answers_replaced_by_their_result(messages: Sequence[object]) -> 
     )
 
 
-def tool_call_ids_answered_by_client(messages: Sequence[object]) -> frozenset[str]:
-    sent: Final = _as_the_request_builder_sends_them(messages)
+def tool_call_ids_answered_by_client(
+    messages: Sequence[object], supports_mid_conversation_system: bool
+) -> frozenset[str]:
+    sent: Final = _as_the_request_builder_sends_them(messages, supports_mid_conversation_system)
     return _tool_call_ids_in_tool_messages(sent) - server_tool_answers_replaced_by_their_result(sent)
 
 
-def _as_the_request_builder_sends_them(messages: Sequence[object]) -> Sequence[object]:
+def _as_the_request_builder_sends_them(
+    messages: Sequence[object], supports_mid_conversation_system: bool
+) -> Sequence[object]:
     if not all(callable(getattr(message, "get", None)) for message in messages):
         return messages
     chat_messages: Final = cast(Sequence[AllMessageValues], messages)  # cast-ok: placement reads messages via get
     try:
-        return _placed_and_paired(chat_messages)
+        return _placed_and_paired(chat_messages, supports_mid_conversation_system)
     except TypeError:
         return messages
 
 
-def _placed_and_paired(messages: Sequence[AllMessageValues]) -> Sequence[AllMessageValues]:
+def _placed_and_paired(
+    messages: Sequence[AllMessageValues], supports_mid_conversation_system: bool
+) -> Sequence[AllMessageValues]:
     _, conversation = split_leading_system_run(messages)
-    placed: Final = place_mid_conversation_system(conversation, supports_mid_conversation_system=True)
+    placed: Final = place_mid_conversation_system(
+        conversation, supports_mid_conversation_system=supports_mid_conversation_system
+    )
     return _pair_tool_calls_with_results(placed) if litellm.modify_params else placed
 
 
@@ -2309,7 +2317,7 @@ def _add_missing_tool_results(
 
 def _is_orphaned_tool_result(
     current_message: AllMessageValues,
-    sanitized_messages: list[AllMessageValues],
+    latest_assistant_tool_call_ids: frozenset[object],
 ) -> bool:
     """
     Case B: Orphaned tool_result (unexpected result)
@@ -2327,32 +2335,26 @@ def _is_orphaned_tool_result(
     if not tool_call_id:
         return False
 
-    # Look back to find the most recent assistant message with tool_calls
-    found_matching_tool_call = False
+    if latest_assistant_tool_call_ids and tool_call_id in latest_assistant_tool_call_ids:
+        return False
 
-    for j in range(len(sanitized_messages) - 1, -1, -1):
-        prev_msg = sanitized_messages[j]
-        if prev_msg.get("role") == "assistant":
-            tool_calls = prev_msg.get("tool_calls")
-            if tool_calls:
-                for tool_call in cast(list, tool_calls):
-                    tc_id = None
-                    if isinstance(tool_call, dict):
-                        tc_id = tool_call.get("id")
-                    else:
-                        tc_id = getattr(tool_call, "id", None)
+    verbose_logger.debug("_is_orphaned_tool_result: Found orphaned tool result with redacted tool_call_id")
+    return True
 
-                    if tc_id == tool_call_id:
-                        found_matching_tool_call = True
-                        break
 
-            break
+def _tool_call_id(tool_call: object) -> object:
+    return tool_call.get("id") if isinstance(tool_call, dict) else getattr(tool_call, "id", None)
 
-    if not found_matching_tool_call:
-        verbose_logger.debug("_is_orphaned_tool_result: Found orphaned tool result with redacted tool_call_id")
-        return True
 
-    return False
+def _tool_call_ids_of_the_latest_assistant(
+    latest_ids: frozenset[object], message: AllMessageValues
+) -> frozenset[object]:
+    if message.get("role") != "assistant":
+        return latest_ids
+    tool_calls: Final = message.get("tool_calls") or ()
+    return frozenset(
+        tool_call_id for tool_call_id in map(_tool_call_id, cast(Iterable[object], tool_calls)) if tool_call_id
+    )
 
 
 def _declared_tool_call_ids(message: Mapping[str, object]) -> frozenset[str]:
@@ -2467,6 +2469,9 @@ def sanitize_messages_for_tool_calling(
 
 
 def _pair_tool_calls_with_results(messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
+    latest_assistant_tool_call_ids: Final = tuple(
+        itertools.accumulate(messages, _tool_call_ids_of_the_latest_assistant, initial=frozenset[object]())
+    )
     sanitized_messages: list[AllMessageValues] = []
     i = 0
 
@@ -2488,7 +2493,7 @@ def _pair_tool_calls_with_results(messages: Sequence[AllMessageValues]) -> tuple
                 continue
 
         # Case B: Check for orphaned tool results
-        if _is_orphaned_tool_result(current_message, sanitized_messages):
+        if _is_orphaned_tool_result(current_message, latest_assistant_tool_call_ids[i]):
             i += 1
             continue  # Skip this orphaned tool result
 

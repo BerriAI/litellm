@@ -25,6 +25,8 @@ from integration.providers._cache_control_marks_support import (
 )
 from integration.providers._tool_search_support import (
     KEPT_FIELDS,
+    Event,
+    MODEL,
     SEARCH_CALL,
     SEARCH_ID,
     SEARCH_TURN,
@@ -108,18 +110,20 @@ def test_modify_params_placeholder_for_the_kept_search_is_dropped_when_no_answer
     assert SEARCH_ID not in answered_ids(received[0]), received[0].body
 
 
+def _marked_search_call(search_id: str) -> dict[str, JsonValue]:
+    return {
+        "id": search_id,
+        "type": "function",
+        "function": {"name": "tool_search_tool_bm25", "arguments": '{"query": "weather"}'},
+        "cache_control": EPHEMERAL,
+    }
+
+
 def _marked_search_turn() -> dict[str, JsonValue]:
     return {
         "role": "assistant",
         "content": "",
-        "tool_calls": [
-            {
-                "id": SEARCH_ID,
-                "type": "function",
-                "function": {"name": "tool_search_tool_bm25", "arguments": '{"query": "weather"}'},
-                "cache_control": EPHEMERAL,
-            }
-        ],
+        "tool_calls": [_marked_search_call(SEARCH_ID)],
         "provider_specific_fields": KEPT_FIELDS,
     }
 
@@ -172,6 +176,51 @@ def test_modify_params_trailing_search_turn_before_a_system_message_keeps_the_sy
     assert labels == [SYSTEM_LABEL, ASK_LABEL, *(tool_use_label(city) for city in _CITIES)], labels
     assert wire_assistant(received[0], 3)[-2:] == [SEARCH_USE, SEARCH_RESULT], received[0].body
     assert SEARCH_ID not in answered_ids(received[0]), received[0].body
+
+
+_SECOND_SEARCH_ID: Final = "srvtoolu_02ScriptedSearch"
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_labels"),
+    [
+        pytest.param(
+            f"anthropic/{MODEL}",
+            [SYSTEM_LABEL, ASK_LABEL, f"assistant:tool_use:{SEARCH_ID}", f"assistant:tool_use:{_SECOND_SEARCH_ID}"],
+            id="keeps-mid-conversation-system",
+        ),
+        pytest.param(
+            "anthropic/claude-sonnet-4-6",
+            [SYSTEM_LABEL, ASK_LABEL, f"user:text:{_SYSTEM_NOTE}"],
+            id="converts-mid-conversation-system",
+        ),
+    ],
+)
+def test_modify_params_client_answer_to_one_of_two_marked_search_calls_fills_the_cache_mark_budget(
+    modify_params_gateway: Gateway, model: str, expected_labels: list[str]
+) -> None:
+    second_result: Final[Event] = {**SEARCH_RESULT, "tool_use_id": _SECOND_SEARCH_ID}
+    messages: Final[list[JsonValue]] = [
+        {"role": "system", "content": SYSTEM},
+        ask(marked=True),
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [_marked_search_call(SEARCH_ID), _marked_search_call(_SECOND_SEARCH_ID)],
+            "provider_specific_fields": {"tool_results": [SEARCH_RESULT, second_result]},
+        },
+        {"role": "tool", "tool_call_id": SEARCH_ID, "content": "found get_weather"},
+        {"role": "system", "content": _SYSTEM_NOTE},
+    ]
+    with wire_server(anthropic_peer) as wire, modify_params_gateway.scenario() as scenario:
+        deployed: Final = scenario.model(model=model, api_base=wire.url, api_key="scripted-anthropic-key")
+        status, _, text = post_chat(
+            modify_params_gateway, chat_body(deployed, messages, stream=False, cache_control_injection_points=POINTS)
+        )
+        received: Final = wire.drain()
+    assert status == 200, text
+    assert len(received) == 1, received
+    assert anthropic_labels(received[0]) == expected_labels, received[0].body
 
 
 def _with_tokyo_call(identity: JsonValue) -> dict[str, JsonValue]:

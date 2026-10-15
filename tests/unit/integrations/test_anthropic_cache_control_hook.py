@@ -1196,9 +1196,10 @@ def _wire_cache_marks(messages: list[AllMessageValues], model: str = "claude-opu
         litellm_params={},
         headers={},
     )
-    blocks: Final = itertools.chain.from_iterable(
+    message_blocks: Final = itertools.chain.from_iterable(
         message["content"] for message in request["messages"] if isinstance(message["content"], list)
     )
+    blocks: Final = itertools.chain(request.get("system") or (), message_blocks)
     return sum(1 for block in blocks if isinstance(block, dict) and "cache_control" in block)
 
 
@@ -1290,6 +1291,52 @@ def test_cache_control_hook_never_counts_fewer_marks_than_anthropic_receives_aft
     census: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(messages)
 
     assert census >= _wire_cache_marks(messages, model)
+
+
+@pytest.mark.parametrize("model", ["claude-opus-5-5", "claude-sonnet-4-6"])
+def test_cache_control_hook_fills_the_mark_budget_when_the_client_answers_one_of_two_marked_search_calls(
+    monkeypatch: pytest.MonkeyPatch, model: str
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+    marked_text: Final = {"type": "text", "text": "Context: a trip.", "cache_control": {"type": "ephemeral"}}
+    two_kept_searches: Final = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [_SEARCH_CALL, {**_SEARCH_CALL, "id": "srvtoolu_02Search"}],
+        "provider_specific_fields": {
+            "tool_results": [
+                {
+                    "type": "tool_search_tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content": {"type": "tool_search_tool_search_result", "tool_references": []},
+                }
+                for tool_use_id in ("srvtoolu_01Search", "srvtoolu_02Search")
+            ]
+        },
+    }
+    messages: Final = [
+        {"role": "system", "content": "You are a weather assistant."},
+        {"role": "user", "content": [marked_text, {**marked_text, "text": "Find a weather tool."}]},
+        two_kept_searches,
+        _SEARCH_ANSWER,
+        _SYSTEM_NOTE,
+    ]
+
+    _, processed, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+        model=f"anthropic/{model}",
+        messages=cast(list[AllMessageValues], messages),
+        non_default_params={
+            "cache_control_injection_points": [
+                {"location": "message", "role": "system"},
+                {"location": "message", "index": -1},
+            ]
+        },
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+
+    assert _wire_cache_marks(processed, model) == 4
 
 
 @pytest.mark.parametrize("tool_call_type", ["function", "custom", None])

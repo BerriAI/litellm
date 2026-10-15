@@ -239,13 +239,28 @@ def _tool_call_carries_cache_breakpoint(tool_call: object, message: object, answ
     )
 
 
-def _tool_call_ids_answered_by_client_when_a_server_tool_call_is_marked(messages: Sequence[object]) -> frozenset[str]:
+def _tool_call_ids_answered_by_client_when_a_server_tool_call_is_marked(
+    messages: Sequence[object], model: str | None = None, custom_llm_provider: str | None = None
+) -> frozenset[str]:
     tool_calls: Final = itertools.chain.from_iterable(
         _as_object_list(_attribute_or_key(message, "tool_calls")) or () for message in messages
     )
     if not any(_is_marked_server_tool_call(tool_call) for tool_call in tool_calls):
         return frozenset()
-    return tool_call_ids_answered_by_client(messages)
+    return tool_call_ids_answered_by_client(messages, _keeps_mid_conversation_system(model, custom_llm_provider))
+
+
+def _custom_llm_provider(non_default_params: Mapping[str, object]) -> str | None:
+    provider: Final = non_default_params.get("custom_llm_provider")
+    return provider if isinstance(provider, str) else None
+
+
+def _keeps_mid_conversation_system(model: str | None, custom_llm_provider: str | None) -> bool:
+    if model is None:
+        return True
+    from litellm.utils import supports_mid_conversation_system
+
+    return supports_mid_conversation_system(model=model, custom_llm_provider=custom_llm_provider)
 
 
 def _is_marked_server_tool_call(tool_call: object) -> bool:
@@ -355,13 +370,14 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         )
         remaining_points: Final = tuple(point for point in injection_points if point.get("location") != "message")
 
+        custom_llm_provider: Final = _custom_llm_provider(non_default_params)
         stamped_dialect: Final = injection_points[0].get("_litellm_openai_dialect")
         openai_dialect: Final = (
             stamped_dialect
             if isinstance(stamped_dialect, bool)
             else AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
                 model,
-                non_default_params.get("custom_llm_provider"),
+                custom_llm_provider,
                 non_default_params.get("api_base") or non_default_params.get("base_url"),
                 non_default_params.get("prompt_cache_options"),
             )
@@ -385,7 +401,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             remaining_points, external_breakpoints, openai_dialect
         )
         answered_tool_ids: Final = _tool_call_ids_answered_by_client_when_a_server_tool_call_is_marked(
-            processed_messages
+            processed_messages, model, custom_llm_provider
         )
         breakpoints_before: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(
             processed_messages, answered_tool_ids=answered_tool_ids
