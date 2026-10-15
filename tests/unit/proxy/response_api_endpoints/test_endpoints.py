@@ -647,6 +647,103 @@ async def test_a_finished_read_never_bills_a_response_already_billed_or_billed_b
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "read_body, expected_billed_events, expected_status",
+    [(b"", 1, "completed"), (b'{"api_base": "https://caller.example/v1"}', 0, "queued")],
+)
+async def test_only_a_read_of_the_configured_deployment_settles_a_background_response(
+    monkeypatch: pytest.MonkeyPatch, read_body: bytes, expected_billed_events: int, expected_status: str
+):
+    """A read the caller sends to its own endpoint returns whatever usage that endpoint claims, so it
+    must not settle the job: the job stays pending for the poll to bill from the real provider."""
+    from fastapi import Response as FastAPIResponse
+    from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+    from starlette.requests import Request
+
+    from litellm.caching.caching import DualCache
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.response_api_endpoints.endpoints import get_response
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
+    class _CapturingLogger(_SpendEvents, CustomLogger):
+        pass
+
+    spend_events: Final = _CapturingLogger()
+    monkeypatch.setattr(litellm, "_async_success_callback", [spend_events])
+    response_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="openai", model_id="deployment-read", response_id="resp_read"
+    )
+    table: Final = _UniqueManagedObjectTable(
+        (
+            _ManagedObjectRow(
+                id="job-read",
+                unified_object_id=response_id,
+                model_object_id="resp_read",
+                status="queued",
+                file_object={"model": "gpt-5.6"},
+            ),
+        )
+    )
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_managedobjecttable = table
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    proxy_logging: Final = MagicMock()
+    proxy_logging.get_proxy_hook = MagicMock(
+        return_value=_PROXY_LiteLLMManagedFiles(internal_usage_cache=DualCache(), prisma_client=prisma_client)
+    )
+    processor: Final = MagicMock()
+    processor.base_process_llm_request = AsyncMock(
+        return_value=ResponsesAPIResponse(
+            id=response_id,
+            object="response",
+            status="completed",
+            created_at=1,
+            model="gpt-5.6",
+            output=[],
+            usage=None,
+            background=True,
+        )
+    )
+
+    async def receive():
+        return {"type": "http.request", "body": read_body, "more_body": False}
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": f"/v1/responses/{response_id}",
+            "headers": [(b"content-type", b"application/json")],
+        },
+        receive,
+    )
+
+    with (
+        patch(  # test-quality-ok: endpoint constructs the processor directly
+            "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+            return_value=processor,
+        ),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch("litellm.proxy.proxy_server.llm_router", MagicMock()),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch("litellm.aget_responses", side_effect=AssertionError("billing must not read the provider again")),
+    ):
+        await get_response(
+            response_id=response_id,
+            request=request,
+            fastapi_response=FastAPIResponse(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-reader"),
+        )
+
+    assert len(spend_events.payloads) == expected_billed_events
+    (row,) = table.rows
+    assert row.status == expected_status
+
+
+@pytest.mark.asyncio
 async def test_background_create_the_provider_confirms_is_stored_under_its_provider_id(
     monkeypatch: pytest.MonkeyPatch,
 ):

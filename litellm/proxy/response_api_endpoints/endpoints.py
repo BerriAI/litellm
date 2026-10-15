@@ -37,6 +37,7 @@ from litellm.llms.openai.responses.guardrail_translation.handler import (
     build_blocked_response,
 )
 from litellm.proxy._types import *
+from litellm.proxy.auth.auth_utils import carries_client_side_overrides
 from litellm.proxy.auth.user_api_key_auth import (
     UserAPIKeyAuth,
     user_api_key_auth,
@@ -772,6 +773,7 @@ async def get_response(
 
     # Normal provider response flow
     data: Final = await read_request_body(request=request)
+    read_settles_billing: Final = not carries_client_side_overrides(data)
     data["response_id"] = response_id
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -800,9 +802,10 @@ async def get_response(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
-    await _bill_finished_background_response(
-        response=response, response_id=response_id, user_api_key_dict=user_api_key_dict
-    )
+    if read_settles_billing:
+        await _bill_finished_background_response(
+            response=response, response_id=response_id, user_api_key_dict=user_api_key_dict
+        )
     return response
 
 
@@ -1369,6 +1372,7 @@ async def cancel_response(
 
     # Normal provider response flow
     data: Final = await read_request_body(request=request)
+    read_settles_billing: Final = not carries_client_side_overrides(data)
     data["response_id"] = response_id
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -1397,9 +1401,10 @@ async def cancel_response(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
-    await _bill_finished_background_response(
-        response=response, response_id=response_id, user_api_key_dict=user_api_key_dict
-    )
+    if read_settles_billing:
+        await _bill_finished_background_response(
+            response=response, response_id=response_id, user_api_key_dict=user_api_key_dict
+        )
     return response
 
 
