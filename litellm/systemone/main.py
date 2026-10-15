@@ -8,6 +8,7 @@ from litellm.decisions.call import (
     DecisionsCall,
     DecisionsImages,
     DecisionsVideoClips,
+    SystemOneAssets,
     SystemOneQuestions,
     SystemOneRequestFields,
     asend,
@@ -25,6 +26,7 @@ def _prepare_systemone_call(
     state: DecisionsJSON | None,
     questions: SystemOneQuestions | None,
     images: DecisionsImages | None,
+    assets: SystemOneAssets | None,
     safety_identifier: str | None,
     audio: DecisionsAudioClips | None,
     videos: DecisionsVideoClips | None,
@@ -38,7 +40,9 @@ def _prepare_systemone_call(
     reject_other_format(model=model, kwargs=kwargs, field_name="input", other_function="decisions")
     return prepare_call(
         model=model,
-        fields=SystemOneRequestFields(state=state, questions=questions, images=images, audio=audio, videos=videos),
+        fields=SystemOneRequestFields(
+            state=state, questions=questions, images=images, audio=audio, videos=videos, assets=assets
+        ),
         safety_identifier=safety_identifier,
         api_key=api_key,
         api_base=api_base,
@@ -68,6 +72,7 @@ async def asystemone(
     audio: DecisionsAudioClips | None = None,
     videos: DecisionsVideoClips | None = None,
     images: DecisionsImages | None = None,
+    assets: SystemOneAssets | None = None,
     **kwargs: object,  # kwargs-ok: litellm_params forwarded by @client
 ) -> DecisionsResponse:
     call: Final = _prepare_systemone_call(
@@ -75,6 +80,7 @@ async def asystemone(
         state=state,
         questions=questions,
         images=images,
+        assets=assets,
         safety_identifier=safety_identifier,
         audio=audio,
         videos=videos,
@@ -102,6 +108,7 @@ def systemone(
     audio: DecisionsAudioClips | None = None,
     videos: DecisionsVideoClips | None = None,
     images: DecisionsImages | None = None,
+    assets: SystemOneAssets | None = None,
     **kwargs: object,  # kwargs-ok: litellm_params forwarded by @client
 ) -> DecisionsResponse:
     call: Final = _prepare_systemone_call(
@@ -109,6 +116,7 @@ def systemone(
         state=state,
         questions=questions,
         images=images,
+        assets=assets,
         safety_identifier=safety_identifier,
         audio=audio,
         videos=videos,

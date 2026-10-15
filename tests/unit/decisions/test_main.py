@@ -290,6 +290,121 @@ async def test_router_dispatches_typesafe_decisions_without_api_base(
     assert response.answers["sentiment"].choice == "positive"
 
 
+_TYPESAFE_SYSTEMONE_URL: Final = "https://api.typesafe.ai/v1/systemone"
+_KITCHEN_ASSETS: Final[Mapping[str, object]] = {
+    "a3f1c2e8-kitchen": {"type": "image", "format": "png", "data_base64": "iVBORw0KGgo="}
+}
+_BOX_RESPONSE: Final[Mapping[str, object]] = {
+    "model": "jev-1.14.0",
+    "answers": {
+        "mug": {"type": "box", "box": {"top": 0.25, "bottom": 0.82, "left": 0.44, "right": 0.84}, "confidence": 0.9}
+    },
+    "usage": {"input_tokens": 1210, "output_tokens": 9},
+}
+
+
+@pytest.mark.parametrize(
+    ("questions", "assets"),
+    (
+        ({"mug": {"type": "box", "instructions": "the mug in `photo`"}}, None),
+        ({"mug": {"type": "box", "instructions": "the mug in `photo`"}}, _KITCHEN_ASSETS),
+        ({"has_mug": {"type": "noul", "instructions": "Is there a mug in `photo`?"}}, _KITCHEN_ASSETS),
+    ),
+    ids=("box", "box-and-assets", "assets"),
+)
+def test_typesafe_gets_box_questions_and_assets_with_the_images_header(
+    questions: Mapping[str, object], assets: Mapping[str, object] | None, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(_TYPESAFE_SYSTEMONE_URL).respond(json=_BOX_RESPONSE)
+
+    litellm.systemone(
+        model="typesafe/jev-1.14.0",
+        state={"photo": "a3f1c2e8-kitchen"},
+        questions=questions,
+        assets=assets,
+        api_key="k",
+    )
+
+    assert route.calls[0].request.headers.get("typesafe-danger-zone-images") == "true"
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "jev-1.14.0",
+        "state": {"photo": "a3f1c2e8-kitchen"},
+        "questions": questions,
+        **({} if assets is None else {"assets": assets}),
+    }
+
+
+def test_a_typesafe_box_answer_reaches_the_caller(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post(_TYPESAFE_SYSTEMONE_URL).respond(json=_BOX_RESPONSE)
+
+    response: Final = litellm.systemone(
+        model="typesafe/jev-1.14.0",
+        state={"photo": "a3f1c2e8-kitchen"},
+        questions={"mug": {"type": "box", "instructions": "the mug in `photo`"}},
+        assets=_KITCHEN_ASSETS,
+        api_key="k",
+    )
+
+    assert response.model_dump(mode="json") == _BOX_RESPONSE
+
+
+def test_typesafe_text_requests_carry_no_danger_zone_header(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_TYPESAFE_SYSTEMONE_URL).respond(json=_RESPONSE)
+
+    litellm.systemone(
+        model="typesafe/jev-1.14.0",
+        state="review",
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        api_key="k",
+    )
+
+    assert "typesafe-danger-zone-images" not in route.calls[0].request.headers
+
+
+def test_a_caller_header_overrides_the_typesafe_images_header(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_TYPESAFE_SYSTEMONE_URL).respond(json=_BOX_RESPONSE)
+
+    litellm.systemone(
+        model="typesafe/jev-1.14.0",
+        state={"photo": "a3f1c2e8-kitchen"},
+        questions={"mug": {"type": "box", "instructions": "the mug in `photo`"}},
+        api_key="k",
+        extra_headers={"TypeSafe-Danger-Zone-Images": "false"},
+    )
+
+    assert route.calls[0].request.headers["typesafe-danger-zone-images"] == "false"
+
+
+@pytest.mark.parametrize(
+    ("request_kwargs", "reason"),
+    (
+        (
+            {"questions": {"mug": {"type": "box", "instructions": "the mug"}}},
+            "box questions are not supported by this Decisions model",
+        ),
+        (
+            {
+                "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+                "assets": _KITCHEN_ASSETS,
+            },
+            "assets are not supported by this Decisions model",
+        ),
+    ),
+    ids=("box", "assets"),
+)
+def test_box_questions_and_assets_are_refused_before_http_by_other_providers(
+    request_kwargs: Mapping[str, object], reason: str, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.BadRequestError, match=rf"provider 'perplexity' cannot serve this request: {reason}"):
+        litellm.systemone(
+            model="perplexity/pplx-decider-v1-27b", state="a3f1c2e8-kitchen", api_key="k", **request_kwargs
+        )
+
+    assert not route.called
+
+
 def test_decisions_uses_the_same_wire_contract_for_sync_calls(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
 

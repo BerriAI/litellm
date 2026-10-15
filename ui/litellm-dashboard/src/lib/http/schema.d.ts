@@ -15943,8 +15943,12 @@ export interface paths {
          * @description Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.
          *
          *     Question types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with
-         *     `confidence` and `probabilities`) and `score` (an index into the `criteria` levels, with `confidence`,
-         *     `legend` and `probabilities`). Requests that break these rules are rejected with a 400 before any provider
+         *     `confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,
+         *     `legend` and `probabilities`) and `box` (TypeSafe only, the `top`, `bottom`, `left` and `right` edges of
+         *     what `instructions` describe in an image, as fractions of its height and width, with `confidence`). TypeSafe
+         *     takes images as `assets`, keyed by a reference string that the `state`, `instructions` or `criteria`
+         *     contain, and LiteLLM sends its `TypeSafe-Danger-Zone-Images: true` header for requests with assets or box
+         *     questions. Requests that break these rules are rejected with a 400 before any provider
          *     is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format
          *     too, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.
          *
@@ -22225,8 +22229,12 @@ export interface paths {
          * @description Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.
          *
          *     Question types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with
-         *     `confidence` and `probabilities`) and `score` (an index into the `criteria` levels, with `confidence`,
-         *     `legend` and `probabilities`). Requests that break these rules are rejected with a 400 before any provider
+         *     `confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,
+         *     `legend` and `probabilities`) and `box` (TypeSafe only, the `top`, `bottom`, `left` and `right` edges of
+         *     what `instructions` describe in an image, as fractions of its height and width, with `confidence`). TypeSafe
+         *     takes images as `assets`, keyed by a reference string that the `state`, `instructions` or `criteria`
+         *     contain, and LiteLLM sends its `TypeSafe-Danger-Zone-Images: true` header for requests with assets or box
+         *     questions. Requests that break these rules are rejected with a 400 before any provider
          *     is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format
          *     too, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.
          *
@@ -27542,6 +27550,32 @@ export interface components {
             /** Input Reference */
             input_reference?: string | null;
         };
+        /** BoxAnswer */
+        BoxAnswer: {
+            box: components["schemas"]["BoxCoordinates"];
+            /** Confidence */
+            confidence: number | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "box";
+        } & {
+            [key: string]: unknown;
+        };
+        /** BoxCoordinates */
+        BoxCoordinates: {
+            /** Bottom */
+            bottom: number;
+            /** Left */
+            left: number;
+            /** Right */
+            right: number;
+            /** Top */
+            top: number;
+        } & {
+            [key: string]: unknown;
+        };
         /**
          * BreakdownMetrics
          * @description Breakdown of spend by different dimensions
@@ -31354,7 +31388,7 @@ export interface components {
         DecisionsResponse: {
             /** Answers */
             answers: {
-                [key: string]: components["schemas"]["NoulAnswer"] | components["schemas"]["ChoiceAnswer"] | components["schemas"]["ScoreAnswer"];
+                [key: string]: components["schemas"]["NoulAnswer"] | components["schemas"]["ChoiceAnswer"] | components["schemas"]["ScoreAnswer"] | components["schemas"]["BoxAnswer"];
             };
             /** Model */
             model?: string | null;
@@ -71771,6 +71805,29 @@ export interface operations {
                  */
                 "application/json": {
                     /**
+                     * Assets
+                     * @description TypeSafe only. Images keyed by a reference string that the state, instructions or criteria contain
+                     */
+                    assets?: {
+                        [key: string]: {
+                            /**
+                             * Data Base64
+                             * @description Base64-encoded image bytes
+                             */
+                            data_base64: string;
+                            /**
+                             * Format
+                             * @enum {string}
+                             */
+                            format: "png" | "jpg" | "jpeg";
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "image";
+                        };
+                    } | null;
+                    /**
                      * Audio
                      * @description Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}
                      * @default []
@@ -71810,7 +71867,7 @@ export interface operations {
                     model: string;
                     /**
                      * Questions
-                     * @description Named noul, choice and score questions. Each key becomes a key in the answers
+                     * @description Named noul, choice, score and box questions. Each key becomes a key in the answers
                      */
                     questions: {
                         [key: string]: ({
@@ -71881,6 +71938,21 @@ export interface operations {
                              * @constant
                              */
                             type: "score";
+                        } & {
+                            [key: string]: unknown;
+                        }) | ({
+                            /**
+                             * Instructions
+                             * @description What to locate in the request's image
+                             */
+                            instructions?: string | {
+                                [key: string]: unknown;
+                            } | unknown[] | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "box";
                         } & {
                             [key: string]: unknown;
                         });
@@ -80651,6 +80723,29 @@ export interface operations {
                  */
                 "application/json": {
                     /**
+                     * Assets
+                     * @description TypeSafe only. Images keyed by a reference string that the state, instructions or criteria contain
+                     */
+                    assets?: {
+                        [key: string]: {
+                            /**
+                             * Data Base64
+                             * @description Base64-encoded image bytes
+                             */
+                            data_base64: string;
+                            /**
+                             * Format
+                             * @enum {string}
+                             */
+                            format: "png" | "jpg" | "jpeg";
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "image";
+                        };
+                    } | null;
+                    /**
                      * Audio
                      * @description Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}
                      * @default []
@@ -80690,7 +80785,7 @@ export interface operations {
                     model: string;
                     /**
                      * Questions
-                     * @description Named noul, choice and score questions. Each key becomes a key in the answers
+                     * @description Named noul, choice, score and box questions. Each key becomes a key in the answers
                      */
                     questions: {
                         [key: string]: ({
@@ -80761,6 +80856,21 @@ export interface operations {
                              * @constant
                              */
                             type: "score";
+                        } & {
+                            [key: string]: unknown;
+                        }) | ({
+                            /**
+                             * Instructions
+                             * @description What to locate in the request's image
+                             */
+                            instructions?: string | {
+                                [key: string]: unknown;
+                            } | unknown[] | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "box";
                         } & {
                             [key: string]: unknown;
                         });

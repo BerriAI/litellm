@@ -223,6 +223,37 @@ def test_a_systemone_question_with_one_option_is_unsupported_by_openai(question:
     assert isinstance(ir_to_openai_request("gpt-6-luna", systemone_request_to_ir(request)), UnsupportedDecisionsRequest)
 
 
+@pytest.mark.parametrize(
+    ("extra_fields", "reason"),
+    (
+        (
+            {"questions": {"mug": {"type": "box", "instructions": "the mug"}}},
+            "box questions are not supported by this Decisions provider",
+        ),
+        (
+            {
+                "state": "photo-ref",
+                "assets": {"photo-ref": {"type": "image", "format": "png", "data_base64": "iVBORw0KGgo="}},
+            },
+            "assets are not supported by this Decisions provider",
+        ),
+    ),
+    ids=("box", "assets"),
+)
+def test_box_questions_and_assets_are_unsupported_by_openai(extra_fields: Mapping[str, object], reason: str) -> None:
+    request: Final = _SYSTEMONE_BODY.validate_python(
+        {
+            "state": "Screen cracked",
+            "questions": {"damaged": {"type": "noul", "instructions": "Damaged?"}},
+            **extra_fields,
+        }
+    )
+
+    assert ir_to_openai_request("gpt-6-luna", systemone_request_to_ir(request)) == UnsupportedDecisionsRequest(
+        reason=reason
+    )
+
+
 def test_an_openai_response_becomes_systemone_answers_with_the_callers_score_labels() -> None:
     ir: Final = systemone_request_to_ir(
         _SYSTEMONE_BODY.validate_python(

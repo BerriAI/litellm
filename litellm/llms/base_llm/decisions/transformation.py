@@ -14,6 +14,8 @@ import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.decisions import (
+    BoxAnswer,
+    BoxQuestion,
     ChoiceAnswer,
     ChoiceQuestion,
     DecisionAnswer,
@@ -21,6 +23,8 @@ from litellm.types.decisions import (
     DecisionsBase64Image,
     DecisionsImage,
     DecisionsIRAnswer,
+    DecisionsIRBoxAnswer,
+    DecisionsIRBoxQuestion,
     DecisionsIRChoiceAnswer,
     DecisionsIRChoiceOption,
     DecisionsIRChoiceProbability,
@@ -98,6 +102,8 @@ def _ir_question(name: str, question: DecisionQuestion) -> DecisionsIRQuestion:
                 ),
                 extra=extra,
             )
+        case BoxQuestion():
+            return DecisionsIRBoxQuestion(name=name, instructions=question.instructions, extra=extra)
         case _:
             assert_never(question)
 
@@ -107,6 +113,7 @@ def systemone_request_to_ir(request: DecisionsRequestBody) -> DecisionsIRRequest
         input=DecisionsIRState(state=request.state, images=tuple(request.images or ())),
         audio=request.audio,
         videos=request.videos,
+        assets=MappingProxyType(dict(request.assets or {})),
         questions=tuple(_ir_question(name, question) for name, question in request.questions.items()),
     )
 
@@ -282,17 +289,33 @@ def _systemone_question(question: DecisionsIRQuestion) -> Mapping[str, object]:
                 "criteria": [_level_criterion(level) for level in question.levels],
                 **question.extra,
             }
+        case DecisionsIRBoxQuestion():
+            return {"type": "box", **_optional("instructions", question.instructions), **question.extra}
         case _:
             assert_never(question)
 
 
+def has_box_questions(request: DecisionsIRRequest) -> bool:
+    return any(isinstance(question, DecisionsIRBoxQuestion) for question in request.questions)
+
+
 def ir_to_systemone_request(
-    model: str, request: DecisionsIRRequest, *, supports_audio: bool = False, supports_video: bool = False
+    model: str,
+    request: DecisionsIRRequest,
+    *,
+    supports_audio: bool = False,
+    supports_video: bool = False,
+    supports_assets: bool = False,
+    supports_box_questions: bool = False,
 ) -> Mapping[str, object] | UnsupportedDecisionsRequest:
     if request.audio and not supports_audio:
         return UnsupportedDecisionsRequest(reason="audio input is not supported by this Decisions model")
     if request.videos and not supports_video:
         return UnsupportedDecisionsRequest(reason="video input is not supported by this Decisions model")
+    if request.assets and not supports_assets:
+        return UnsupportedDecisionsRequest(reason="assets are not supported by this Decisions model")
+    if has_box_questions(request) and not supports_box_questions:
+        return UnsupportedDecisionsRequest(reason="box questions are not supported by this Decisions model")
     state: Final = _systemone_state(request.input)
     keyed_questions: Final = zip(systemone_keys(request.questions), request.questions, strict=True)
     images: Final = input_images(request.input)
@@ -311,6 +334,11 @@ def ir_to_systemone_request(
         ),
         "questions": {key: _systemone_question(question) for key, question in keyed_questions},
         **({"images": [_systemone_image(image) for image in images]} if images else {}),
+        **(
+            {"assets": {reference: asset.model_dump() for reference, asset in request.assets.items()}}
+            if request.assets
+            else {}
+        ),
     }
 
 
@@ -351,6 +379,15 @@ def _ir_answer(question: DecisionsIRQuestion, answer: DecisionAnswer | None) -> 
             return _ir_choice_answer(question, answer)
         case DecisionsIRScoreQuestion(), ScoreAnswer():
             return _ir_score_answer(question, answer)
+        case DecisionsIRBoxQuestion(), BoxAnswer():
+            return DecisionsIRBoxAnswer(
+                top=answer.box.top,
+                bottom=answer.box.bottom,
+                left=answer.box.left,
+                right=answer.box.right,
+                confidence=answer.confidence,
+                extra=MappingProxyType(answer.model_extra or {}),
+            )
         case _:
             return DecisionsIRRefusal()
 
@@ -403,6 +440,15 @@ def _systemone_answer(answer: DecisionsIRAnswer) -> DecisionAnswer | None:
                     "probabilities": {str(item.value): item.probability for item in answer.probabilities},
                 }
             )
+        case DecisionsIRBoxAnswer():
+            return BoxAnswer.model_validate(
+                {
+                    **answer.extra,
+                    "type": "box",
+                    "box": {"top": answer.top, "bottom": answer.bottom, "left": answer.left, "right": answer.right},
+                    "confidence": answer.confidence,
+                }
+            )
         case DecisionsIRRefusal():
             return None
         case _:
@@ -446,6 +492,8 @@ class BaseDecisionsConfig(ABC):
     api_key_required: bool = True
     supports_safety_identifier: bool = False
     supports_images: bool = False
+    supports_assets: bool = False
+    supports_box_questions: bool = False
     max_images: int | None = None
     max_image_bytes: int | None = None
     max_total_image_bytes: int | None = None
@@ -482,6 +530,9 @@ class BaseDecisionsConfig(ABC):
 
     def request_model(self, model: str) -> str:
         return model
+
+    def request_headers(self, request: DecisionsIRRequest) -> Mapping[str, str]:
+        return {}
 
     def validate_environment(self, headers: Mapping[str, str], model: str, api_key: str | None) -> dict[str, str]:
         return {
@@ -528,6 +579,8 @@ class BaseDecisionsConfig(ABC):
             request,
             supports_audio=self.supports_audio_input(model, custom_llm_provider),
             supports_video=self.supports_video_input(model, custom_llm_provider),
+            supports_assets=self.supports_assets,
+            supports_box_questions=self.supports_box_questions,
         )
 
     def unwrap_response(self, payload: object) -> object:

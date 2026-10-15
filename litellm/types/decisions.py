@@ -56,8 +56,15 @@ class ScoreQuestion(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(extra="allow", frozen=True)
 
 
+class BoxQuestion(LiteLLMPydanticObjectBase):
+    type: Literal["box"]
+    instructions: Annotated[DecisionsJSON | None, Field(description="What to locate in the request's image")] = None
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
 DecisionQuestion: TypeAlias = Annotated[
-    NoulQuestion | ChoiceQuestion | ScoreQuestion,
+    NoulQuestion | ChoiceQuestion | ScoreQuestion | BoxQuestion,
     Field(discriminator="type"),
 ]
 
@@ -94,6 +101,15 @@ class DecisionsBase64Video(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class DecisionsAsset(LiteLLMPydanticObjectBase):
+    type: Literal["image"]
+    format: Literal["png", "jpg", "jpeg"]
+    data_base64: Annotated[str, Field(min_length=1, description="Base64-encoded image bytes")]
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+DecisionsAssets: TypeAlias = Mapping[Annotated[str, Field(min_length=1)], DecisionsAsset]
 DecisionsAudio: TypeAlias = Annotated[str, Field(pattern=r"^data:audio/[^;,\s]+;base64,.+$")] | DecisionsBase64Audio
 DecisionsVideo: TypeAlias = Annotated[str, Field(pattern=r"^data:video/[^;,\s]+;base64,.+$")] | DecisionsBase64Video
 
@@ -129,11 +145,19 @@ class DecisionsRequestBody(DecisionsMediaBody):
     ]
     questions: Annotated[
         DecisionQuestionMap,
-        Field(description="Named noul, choice and score questions. Each key becomes a key in the answers"),
+        Field(description="Named noul, choice, score and box questions. Each key becomes a key in the answers"),
     ]
     images: Annotated[
         Sequence[DecisionsImage] | None,
         Field(description="Images as data URLs or content_type plus base64, for providers that look at images"),
+    ] = None
+    assets: Annotated[
+        DecisionsAssets | None,
+        Field(
+            description=(
+                "TypeSafe only. Images keyed by a reference string that the state, instructions or criteria contain"
+            )
+        ),
     ] = None
 
     model_config = ConfigDict(extra="allow", frozen=True)
@@ -149,6 +173,7 @@ class DecisionsCallParams(TypedDict, total=False):
     state: Required[ReadOnly[DecisionsJSON]]
     questions: Required[ReadOnly[DecisionQuestionMap]]
     images: ReadOnly[Sequence[DecisionsImage] | None]
+    assets: ReadOnly[DecisionsAssets | None]
     audio: ReadOnly[Sequence[DecisionsAudio]]
     videos: ReadOnly[Sequence[DecisionsVideo]]
     api_key: ReadOnly[str | None]
@@ -184,8 +209,25 @@ class ScoreAnswer(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(extra="allow", frozen=True)
 
 
+class BoxCoordinates(LiteLLMPydanticObjectBase):
+    top: float
+    bottom: float
+    left: float
+    right: float
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
+class BoxAnswer(LiteLLMPydanticObjectBase):
+    type: Literal["box"]
+    box: BoxCoordinates
+    confidence: float | None
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
 DecisionAnswer: TypeAlias = Annotated[
-    NoulAnswer | ChoiceAnswer | ScoreAnswer,
+    NoulAnswer | ChoiceAnswer | ScoreAnswer | BoxAnswer,
     Field(discriminator="type"),
 ]
 
@@ -432,6 +474,7 @@ class OpenAIDecisionResponse(_HiddenParamsResponse):
 
 
 _NO_EXTRA: Final[Mapping[str, object]] = MappingProxyType({})
+_NO_ASSETS: Final[Mapping[str, DecisionsAsset]] = MappingProxyType({})
 
 
 @dataclass(frozen=True, slots=True)
@@ -481,7 +524,16 @@ class DecisionsIRScoreQuestion:
     extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
 
 
-DecisionsIRQuestion: TypeAlias = DecisionsIRPredicateQuestion | DecisionsIRChoiceQuestion | DecisionsIRScoreQuestion
+@dataclass(frozen=True, slots=True)
+class DecisionsIRBoxQuestion:
+    name: str | None
+    instructions: DecisionsJSON | None
+    extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
+
+
+DecisionsIRQuestion: TypeAlias = (
+    DecisionsIRPredicateQuestion | DecisionsIRChoiceQuestion | DecisionsIRScoreQuestion | DecisionsIRBoxQuestion
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -491,6 +543,7 @@ class DecisionsIRRequest:
     safety_identifier: str | None = None
     audio: tuple[DecisionsAudio, ...] = ()
     videos: tuple[DecisionsVideo, ...] = ()
+    assets: Mapping[str, DecisionsAsset] = field(default_factory=lambda: _NO_ASSETS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -529,12 +582,26 @@ class DecisionsIRScoreAnswer:
 
 
 @dataclass(frozen=True, slots=True)
+class DecisionsIRBoxAnswer:
+    top: float
+    bottom: float
+    left: float
+    right: float
+    confidence: float | None
+    extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
+
+
+@dataclass(frozen=True, slots=True)
 class DecisionsIRRefusal:
     pass
 
 
 DecisionsIRAnswer: TypeAlias = (
-    DecisionsIRPredicateAnswer | DecisionsIRChoiceAnswer | DecisionsIRScoreAnswer | DecisionsIRRefusal
+    DecisionsIRPredicateAnswer
+    | DecisionsIRChoiceAnswer
+    | DecisionsIRScoreAnswer
+    | DecisionsIRBoxAnswer
+    | DecisionsIRRefusal
 )
 
 

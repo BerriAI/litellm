@@ -1,5 +1,5 @@
 from collections.abc import Mapping, Sequence
-from typing import Final
+from typing import Final, TypeAlias
 
 from pydantic import TypeAdapter
 from typing_extensions import assert_never
@@ -10,6 +10,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.decisions import (
     DecisionsImage,
     DecisionsIRAnswer,
+    DecisionsIRBoxQuestion,
     DecisionsIRChoiceAnswer,
     DecisionsIRChoiceOption,
     DecisionsIRChoiceProbability,
@@ -53,6 +54,7 @@ from litellm.types.decisions import (
 )
 
 _OPENAI_RESPONSE_ADAPTER: Final[TypeAdapter[OpenAIDecisionResponse]] = TypeAdapter(OpenAIDecisionResponse)
+_OpenAIServableQuestion: TypeAlias = DecisionsIRPredicateQuestion | DecisionsIRChoiceQuestion | DecisionsIRScoreQuestion
 _SINGLE_OPTION: Final = UnsupportedDecisionsRequest(
     reason="OpenAI needs at least 2 choices or levels on every choice or score question"
 )
@@ -117,7 +119,7 @@ def _predicate_instructions(question: DecisionsIRPredicateQuestion) -> str:
     return "\n\n".join((*instructions, *criteria))
 
 
-def _openai_question(question: DecisionsIRQuestion) -> Mapping[str, object]:
+def _openai_question(question: _OpenAIServableQuestion) -> Mapping[str, object]:
     match question:
         case DecisionsIRPredicateQuestion():
             return {
@@ -187,12 +189,19 @@ def _has_one_option(question: DecisionsIRQuestion) -> bool:
 def ir_to_openai_request(model: str, request: DecisionsIRRequest) -> Mapping[str, object] | UnsupportedDecisionsRequest:
     if request.audio or request.videos:
         return UnsupportedDecisionsRequest(reason="audio/video input is not supported by this Decisions provider")
-    if any(_has_one_option(question) for question in request.questions):
+    if request.assets:
+        return UnsupportedDecisionsRequest(reason="assets are not supported by this Decisions provider")
+    servable: Final = tuple(
+        question for question in request.questions if not isinstance(question, DecisionsIRBoxQuestion)
+    )
+    if len(servable) != len(request.questions):
+        return UnsupportedDecisionsRequest(reason="box questions are not supported by this Decisions provider")
+    if any(_has_one_option(question) for question in servable):
         return _SINGLE_OPTION
     return {
         "model": model,
         "input": _openai_input(request.input),
-        "questions": [_openai_question(question) for question in request.questions],
+        "questions": [_openai_question(question) for question in servable],
         **_text_field("safety_identifier", request.safety_identifier),
     }
 

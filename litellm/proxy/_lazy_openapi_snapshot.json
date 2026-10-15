@@ -9649,6 +9649,66 @@
   "decisions": {
     "components": {
       "schemas": {
+        "BoxAnswer": {
+          "additionalProperties": true,
+          "properties": {
+            "box": {
+              "$ref": "#/components/schemas/BoxCoordinates"
+            },
+            "confidence": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Confidence"
+            },
+            "type": {
+              "const": "box",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "box",
+            "confidence"
+          ],
+          "title": "BoxAnswer",
+          "type": "object"
+        },
+        "BoxCoordinates": {
+          "additionalProperties": true,
+          "properties": {
+            "bottom": {
+              "title": "Bottom",
+              "type": "number"
+            },
+            "left": {
+              "title": "Left",
+              "type": "number"
+            },
+            "right": {
+              "title": "Right",
+              "type": "number"
+            },
+            "top": {
+              "title": "Top",
+              "type": "number"
+            }
+          },
+          "required": [
+            "top",
+            "bottom",
+            "left",
+            "right"
+          ],
+          "title": "BoxCoordinates",
+          "type": "object"
+        },
         "ChoiceAnswer": {
           "additionalProperties": true,
           "properties": {
@@ -9689,6 +9749,7 @@
               "additionalProperties": {
                 "discriminator": {
                   "mapping": {
+                    "box": "#/components/schemas/BoxAnswer",
                     "choice": "#/components/schemas/ChoiceAnswer",
                     "noul": "#/components/schemas/NoulAnswer",
                     "score": "#/components/schemas/ScoreAnswer"
@@ -9704,6 +9765,9 @@
                   },
                   {
                     "$ref": "#/components/schemas/ScoreAnswer"
+                  },
+                  {
+                    "$ref": "#/components/schemas/BoxAnswer"
                   }
                 ]
               },
@@ -10614,7 +10678,7 @@
       },
       "/systemone": {
         "post": {
-          "description": "Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.\n\nQuestion types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with\n`confidence` and `probabilities`) and `score` (an index into the `criteria` levels, with `confidence`,\n`legend` and `probabilities`). Requests that break these rules are rejected with a 400 before any provider\nis called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format\ntoo, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
+          "description": "Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.\n\nQuestion types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with\n`confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,\n`legend` and `probabilities`) and `box` (TypeSafe only, the `top`, `bottom`, `left` and `right` edges of\nwhat `instructions` describe in an image, as fractions of its height and width, with `confidence`). TypeSafe\ntakes images as `assets`, keyed by a reference string that the `state`, `instructions` or `criteria`\ncontain, and LiteLLM sends its `TypeSafe-Danger-Zone-Images: true` header for requests with assets or box\nquestions. Requests that break these rules are rejected with a 400 before any provider\nis called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format\ntoo, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
           "operationId": "systemone_systemone_post",
           "requestBody": {
             "content": {
@@ -10649,6 +10713,53 @@
                 "schema": {
                   "additionalProperties": true,
                   "properties": {
+                    "assets": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "data_base64": {
+                                "description": "Base64-encoded image bytes",
+                                "minLength": 1,
+                                "title": "Data Base64",
+                                "type": "string"
+                              },
+                              "format": {
+                                "enum": [
+                                  "png",
+                                  "jpg",
+                                  "jpeg"
+                                ],
+                                "title": "Format",
+                                "type": "string"
+                              },
+                              "type": {
+                                "const": "image",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "format",
+                              "data_base64"
+                            ],
+                            "title": "DecisionsAsset",
+                            "type": "object"
+                          },
+                          "propertyNames": {
+                            "minLength": 1
+                          },
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "TypeSafe only. Images keyed by a reference string that the state, instructions or criteria contain",
+                      "title": "Assets"
+                    },
                     "audio": {
                       "default": [],
                       "description": "Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}",
@@ -10930,10 +11041,45 @@
                             ],
                             "title": "ScoreQuestion",
                             "type": "object"
+                          },
+                          {
+                            "additionalProperties": true,
+                            "properties": {
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "What to locate in the request's image",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "box",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type"
+                            ],
+                            "title": "BoxQuestion",
+                            "type": "object"
                           }
                         ]
                       },
-                      "description": "Named noul, choice and score questions. Each key becomes a key in the answers",
+                      "description": "Named noul, choice, score and box questions. Each key becomes a key in the answers",
                       "maxProperties": 128,
                       "minProperties": 1,
                       "propertyNames": {
@@ -11505,7 +11651,7 @@
       },
       "/v1/systemone": {
         "post": {
-          "description": "Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.\n\nQuestion types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with\n`confidence` and `probabilities`) and `score` (an index into the `criteria` levels, with `confidence`,\n`legend` and `probabilities`). Requests that break these rules are rejected with a 400 before any provider\nis called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format\ntoo, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
+          "description": "Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.\n\nQuestion types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with\n`confidence` and `probabilities`), `score` (an index into the `criteria` levels, with `confidence`,\n`legend` and `probabilities`) and `box` (TypeSafe only, the `top`, `bottom`, `left` and `right` edges of\nwhat `instructions` describe in an image, as fractions of its height and width, with `confidence`). TypeSafe\ntakes images as `assets`, keyed by a reference string that the `state`, `instructions` or `criteria`\ncontain, and LiteLLM sends its `TypeSafe-Danger-Zone-Images: true` header for requests with assets or box\nquestions. Requests that break these rules are rejected with a 400 before any provider\nis called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format\ntoo, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
           "operationId": "systemone_v1_systemone_post",
           "requestBody": {
             "content": {
@@ -11540,6 +11686,53 @@
                 "schema": {
                   "additionalProperties": true,
                   "properties": {
+                    "assets": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "data_base64": {
+                                "description": "Base64-encoded image bytes",
+                                "minLength": 1,
+                                "title": "Data Base64",
+                                "type": "string"
+                              },
+                              "format": {
+                                "enum": [
+                                  "png",
+                                  "jpg",
+                                  "jpeg"
+                                ],
+                                "title": "Format",
+                                "type": "string"
+                              },
+                              "type": {
+                                "const": "image",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "format",
+                              "data_base64"
+                            ],
+                            "title": "DecisionsAsset",
+                            "type": "object"
+                          },
+                          "propertyNames": {
+                            "minLength": 1
+                          },
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "TypeSafe only. Images keyed by a reference string that the state, instructions or criteria contain",
+                      "title": "Assets"
+                    },
                     "audio": {
                       "default": [],
                       "description": "Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}",
@@ -11821,10 +12014,45 @@
                             ],
                             "title": "ScoreQuestion",
                             "type": "object"
+                          },
+                          {
+                            "additionalProperties": true,
+                            "properties": {
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "What to locate in the request's image",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "box",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type"
+                            ],
+                            "title": "BoxQuestion",
+                            "type": "object"
                           }
                         ]
                       },
-                      "description": "Named noul, choice and score questions. Each key becomes a key in the answers",
+                      "description": "Named noul, choice, score and box questions. Each key becomes a key in the answers",
                       "maxProperties": 128,
                       "minProperties": 1,
                       "propertyNames": {

@@ -31,6 +31,7 @@ from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.decisions.transformation import ir_to_openai_response, openai_request_to_ir
 from litellm.types.decisions import (
     DecisionQuestion,
+    DecisionsAsset,
     DecisionsAudio,
     DecisionsBase64Image,
     DecisionsImage,
@@ -56,6 +57,7 @@ OpenAIDecisionQuestions: TypeAlias = Sequence[OpenAIDecisionQuestion | Mapping[s
 DecisionsImages: TypeAlias = Sequence[str | DecisionsBase64Image | Mapping[str, object]]
 DecisionsAudioClips: TypeAlias = Sequence[DecisionsAudio | Mapping[str, object]]
 DecisionsVideoClips: TypeAlias = Sequence[DecisionsVideo | Mapping[str, object]]
+SystemOneAssets: TypeAlias = Mapping[str, DecisionsAsset | Mapping[str, object]]
 DecisionsRequestFormat: TypeAlias = DecisionsRequestBody | OpenAIDecisionRequestBody
 
 _SYSTEMONE_REQUEST_ADAPTER: Final[TypeAdapter[DecisionsRequestBody]] = TypeAdapter(DecisionsRequestBody)
@@ -109,6 +111,7 @@ class SystemOneRequestFields:
     images: object = None
     audio: DecisionsAudioClips | None = None
     videos: DecisionsVideoClips | None = None
+    assets: SystemOneAssets | None = None
 
     def validate(self, *, safety_identifier: str | None, drops_params: bool) -> DecisionsRequestBody:
         return _SYSTEMONE_REQUEST_ADAPTER.validate_python(
@@ -116,6 +119,7 @@ class SystemOneRequestFields:
                 "state": self.state,
                 "questions": self.questions,
                 "images": _request_images(self.images, drops_params) or None,
+                "assets": self.assets,
                 "audio": self.audio,
                 "videos": self.videos,
             }
@@ -425,7 +429,7 @@ def prepare_call(
         api_base=resolved_api_base,
         api_key=resolved_api_key,
         logging_obj=logging_obj if isinstance(logging_obj, LiteLLMLoggingObj) else None,
-        headers=extra_headers or {},
+        headers={**provider_config.request_headers(ir_request), **(extra_headers or {})},
         timeout=timeout,
         litellm_params=kwargs,
     )

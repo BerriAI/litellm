@@ -195,7 +195,9 @@ def test_each_media_kind_is_gated_by_its_own_support_flag() -> None:
     audio: Final = ["data:audio/wav;base64,YQ=="]
     videos: Final = ["data:video/mp4;base64,YQ=="]
     audio_only: Final = systemone_request_to_ir(_SYSTEMONE_BODY.validate_python({**_SYSTEMONE_REQUEST, "audio": audio}))
-    video_only: Final = systemone_request_to_ir(_SYSTEMONE_BODY.validate_python({**_SYSTEMONE_REQUEST, "videos": videos}))
+    video_only: Final = systemone_request_to_ir(
+        _SYSTEMONE_BODY.validate_python({**_SYSTEMONE_REQUEST, "videos": videos})
+    )
 
     assert ir_to_systemone_request("clef-omni", audio_only, supports_audio=True) == {
         "model": "clef-omni",
@@ -207,5 +209,74 @@ def test_each_media_kind_is_gated_by_its_own_support_flag() -> None:
         **_SYSTEMONE_REQUEST,
         "videos": videos,
     }
-    assert isinstance(ir_to_systemone_request("clef-omni", audio_only, supports_video=True), UnsupportedDecisionsRequest)
-    assert isinstance(ir_to_systemone_request("clef-omni", video_only, supports_audio=True), UnsupportedDecisionsRequest)
+    assert isinstance(
+        ir_to_systemone_request("clef-omni", audio_only, supports_video=True), UnsupportedDecisionsRequest
+    )
+    assert isinstance(
+        ir_to_systemone_request("clef-omni", video_only, supports_audio=True), UnsupportedDecisionsRequest
+    )
+
+
+_BOX_AND_ASSET_REQUEST: Final[Mapping[str, object]] = {
+    "state": {"photo": "a3f1c2e8-kitchen", "room": "kitchen"},
+    "questions": {
+        "mug": {"type": "box", "instructions": "the coffee mug in `photo`"},
+        "has_mug": {"type": "noul", "instructions": "Is there a mug in `photo`?"},
+    },
+    "assets": {"a3f1c2e8-kitchen": {"type": "image", "format": "png", "data_base64": "iVBORw0KGgo="}},
+}
+
+
+def test_box_questions_and_assets_reach_a_provider_that_takes_them_unchanged() -> None:
+    ir: Final = systemone_request_to_ir(_SYSTEMONE_BODY.validate_python(_BOX_AND_ASSET_REQUEST))
+
+    assert ir_to_systemone_request("jev-1.14.0", ir, supports_assets=True, supports_box_questions=True) == {
+        "model": "jev-1.14.0",
+        **_BOX_AND_ASSET_REQUEST,
+    }
+
+
+@pytest.mark.parametrize(
+    ("request_body", "reason"),
+    [
+        (
+            {**_SYSTEMONE_REQUEST, "questions": {"mug": {"type": "box", "instructions": "the mug"}}},
+            "box questions are not supported by this Decisions model",
+        ),
+        (
+            {
+                **_SYSTEMONE_REQUEST,
+                "assets": {"ref": {"type": "image", "format": "jpg", "data_base64": "/9j/4AAQ"}},
+            },
+            "assets are not supported by this Decisions model",
+        ),
+    ],
+    ids=["box", "assets"],
+)
+def test_box_questions_and_assets_are_unsupported_by_a_provider_without_them(
+    request_body: Mapping[str, object], reason: str
+) -> None:
+    ir: Final = systemone_request_to_ir(_SYSTEMONE_BODY.validate_python(request_body))
+
+    assert ir_to_systemone_request("pplx-decider", ir) == UnsupportedDecisionsRequest(reason=reason)
+
+
+def test_a_box_answer_reaches_the_caller_unchanged_with_provider_extras() -> None:
+    payload: Final = {
+        "model": "jev-1.14.0",
+        "answers": {
+            "mug": {
+                "type": "box",
+                "box": {"top": 0.25, "bottom": 0.82, "left": 0.44, "right": 0.84},
+                "confidence": None,
+                "rationale": "handle visible",
+            },
+            "has_mug": {"type": "noul", "noul": 0.97},
+        },
+        "usage": {"input_tokens": 1210, "output_tokens": 9},
+    }
+    ir: Final = systemone_request_to_ir(_SYSTEMONE_BODY.validate_python(_BOX_AND_ASSET_REQUEST))
+
+    response: Final = ir_to_systemone_response(parse_systemone_response(payload, ir), ir)
+
+    assert response.model_dump(mode="json") == payload
