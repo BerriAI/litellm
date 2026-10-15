@@ -1,182 +1,206 @@
-"""
-Tests for the Inference APIs provider configuration and integration.
-"""
-
 import json
+from pathlib import Path
+from typing import Final
 
-import httpx
+import pytest
+import respx
 
 import litellm
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+INFERENCEAPIS_API_BASE: Final = "https://api.inferenceapis.com/v1"
+INFERENCEAPIS_MODEL_ID: Final = "deepseek-ai/DeepSeek-V4-Flash"
+INFERENCEAPIS_MODEL: Final = f"inferenceapis/{INFERENCEAPIS_MODEL_ID}"
 
 
-class TestInferenceAPIsProviderConfig:
-    def test_inferenceapis_in_provider_list(self):
-        from litellm import LlmProviders
+def _chat_completion_body(usage: dict[str, object]) -> dict[str, object]:
+    return {
+        "id": "chatcmpl_inferenceapis",
+        "object": "chat.completion",
+        "created": 1_789_550_000,
+        "model": INFERENCEAPIS_MODEL_ID,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello from Inference APIs"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": usage,
+    }
 
-        assert hasattr(LlmProviders, "INFERENCEAPIS")
-        assert LlmProviders.INFERENCEAPIS.value == "inferenceapis"
-        assert "inferenceapis" in litellm.provider_list
 
-    def test_inferenceapis_json_config_exists(self):
-        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+def test_inferenceapis_provider_resolution(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("INFERENCEAPIS_API_KEY", "inferenceapis-env-key")
 
-        assert JSONProviderRegistry.exists("inferenceapis")
+    model, provider, api_key, api_base = get_llm_provider(
+        model=INFERENCEAPIS_MODEL,
+        custom_llm_provider=None,
+        api_base=None,
+        api_key=None,
+    )
 
-        provider = JSONProviderRegistry.get("inferenceapis")
-        assert provider is not None
-        assert provider.base_url == "https://api.inferenceapis.com/v1"
-        assert provider.api_key_env == "INFERENCEAPIS_API_KEY"
-        assert provider.param_mappings == {}
+    assert model == INFERENCEAPIS_MODEL_ID
+    assert provider == "inferenceapis"
+    assert api_key == "inferenceapis-env-key"
+    assert api_base == INFERENCEAPIS_API_BASE
 
-    def test_inferenceapis_supports_responses_api(self):
-        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
-        assert JSONProviderRegistry.supports_responses_api("inferenceapis")
+def test_inferenceapis_provider_keeps_explicit_credentials(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("INFERENCEAPIS_API_KEY", "inferenceapis-env-key")
 
-    def test_inferenceapis_in_openai_compatible_providers(self):
-        from litellm.constants import (
-            openai_compatible_endpoints,
-            openai_compatible_providers,
+    _, provider, api_key, api_base = get_llm_provider(
+        model="inferenceapis/openai/gpt-oss-120b",
+        custom_llm_provider=None,
+        api_base="https://inferenceapis.internal.example/v1",
+        api_key="inferenceapis-explicit-key",
+    )
+
+    assert provider == "inferenceapis"
+    assert api_key == "inferenceapis-explicit-key"
+    assert api_base == "https://inferenceapis.internal.example/v1"
+
+
+def test_inferenceapis_provider_detected_from_api_base():
+    model, provider, _, api_base = get_llm_provider(
+        model="zai-org/GLM-5.3",
+        custom_llm_provider=None,
+        api_base=INFERENCEAPIS_API_BASE,
+        api_key=None,
+    )
+
+    assert model == "zai-org/GLM-5.3"
+    assert provider == "inferenceapis"
+    assert api_base == INFERENCEAPIS_API_BASE
+
+
+def test_inferenceapis_is_available_in_add_model_form():
+    fields_path: Final = Path(litellm.__file__).parent / "proxy" / "public_endpoints" / "provider_create_fields.json"
+    providers: Final = json.loads(fields_path.read_text())
+    inferenceapis: Final = next(provider for provider in providers if provider["litellm_provider"] == "inferenceapis")
+
+    assert inferenceapis["provider"] == "INFERENCEAPIS"
+    assert inferenceapis["provider_display_name"] == "Inference APIs"
+    assert {field["key"]: field["required"] for field in inferenceapis["credential_fields"]} == {
+        "api_base": False,
+        "api_key": True,
+    }
+
+
+def test_inferenceapis_supported_endpoints():
+    matrix_path: Final = Path(litellm.__file__).parent / "provider_endpoints_support_backup.json"
+    endpoints: Final = json.loads(matrix_path.read_text())["providers"]["inferenceapis"]["endpoints"]
+
+    assert {name for name, supported in endpoints.items() if supported} == {"chat_completions", "responses"}
+
+
+def test_inferenceapis_cost_map_rows_only_list_registered_endpoints():
+    provider: Final = JSONProviderRegistry.get("inferenceapis")
+    assert provider is not None
+    registered: Final = set(provider.supported_endpoints)
+    rows: Final = {
+        name: info for name, info in litellm.model_cost.items() if info.get("litellm_provider") == "inferenceapis"
+    }
+
+    assert rows
+    assert all(set(info["supported_endpoints"]) <= registered for info in rows.values())
+
+
+def test_inferenceapis_chat_completion_request():
+    with respx.mock() as upstream:
+        route: Final = upstream.post(f"{INFERENCEAPIS_API_BASE}/chat/completions").respond(
+            200, json=_chat_completion_body({"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7})
         )
-
-        assert "inferenceapis" in openai_compatible_providers
-        assert "https://api.inferenceapis.com/v1" in openai_compatible_endpoints
-
-    def test_inferenceapis_provider_resolution(self):
-        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-
-        model, provider, _api_key, api_base = get_llm_provider(
-            model="inferenceapis/deepseek-ai/DeepSeek-V4-Flash",
-            custom_llm_provider=None,
-            api_base=None,
-            api_key=None,
-        )
-
-        assert model == "deepseek-ai/DeepSeek-V4-Flash"
-        assert provider == "inferenceapis"
-        assert api_base == "https://api.inferenceapis.com/v1"
-
-    def test_inferenceapis_api_base_override(self):
-        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-
-        _model, provider, api_key, api_base = get_llm_provider(
-            model="inferenceapis/openai/gpt-oss-120b",
-            custom_llm_provider=None,
-            api_base="https://proxy.example.com/v1",
-            api_key="sk-test",
-        )
-
-        assert provider == "inferenceapis"
-        assert api_base == "https://proxy.example.com/v1"
-        assert api_key == "sk-test"
-
-    def test_inferenceapis_url_autodetection(self):
-        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-
-        _model, provider, _api_key, api_base = get_llm_provider(
-            model="zai-org/GLM-5.3",
-            custom_llm_provider=None,
-            api_base="https://api.inferenceapis.com/v1",
-            api_key=None,
-        )
-        assert provider == "inferenceapis"
-        assert api_base == "https://api.inferenceapis.com/v1"
-
-    def test_inferenceapis_max_completion_tokens_passed_through(self):
-        from litellm.llms.openai_like.dynamic_config import create_config_class
-        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
-
-        provider = JSONProviderRegistry.get("inferenceapis")
-        assert provider is not None
-        config = create_config_class(provider)()
-
-        optional_params = config.map_openai_params(
-            non_default_params={"max_completion_tokens": 256},
-            optional_params={},
-            model="openai/gpt-oss-120b",
-            drop_params=False,
-        )
-        assert optional_params["max_completion_tokens"] == 256
-
-    def test_inferenceapis_router_config(self):
-        from litellm import Router
-
-        router = Router(
-            model_list=[
-                {
-                    "model_name": "inferenceapis-chat",
-                    "litellm_params": {
-                        "model": "inferenceapis/deepseek-ai/DeepSeek-V4-Flash",
-                        "api_key": "test-key",
-                    },
-                }
-            ]
-        )
-
-        assert len(router.model_list) == 1
-        assert router.model_list[0]["model_name"] == "inferenceapis-chat"
-
-
-CHAT_RESPONSE = {
-    "id": "chatcmpl-1",
-    "object": "chat.completion",
-    "created": 1,
-    "model": "deepseek-ai/DeepSeek-V4-Flash",
-    "choices": [
-        {
-            "index": 0,
-            "message": {"role": "assistant", "content": "pong"},
-            "finish_reason": "stop",
-        }
-    ],
-    "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
-}
-
-
-def _recording_session(sent):
-    def handler(request):
-        sent.append(request)
-        return httpx.Response(200, json=CHAT_RESPONSE)
-
-    return httpx.Client(transport=httpx.MockTransport(handler))
-
-
-class TestInferenceAPIsRequests:
-    def test_completion_sends_request_to_inferenceapis(self, monkeypatch):
-        sent = []
-        monkeypatch.setattr(litellm, "client_session", _recording_session(sent))
-
-        response = litellm.completion(
-            model="inferenceapis/deepseek-ai/DeepSeek-V4-Flash",
-            messages=[{"role": "user", "content": "ping"}],
+        response: Final = litellm.completion(
+            model=INFERENCEAPIS_MODEL,
+            messages=[{"role": "user", "content": "Say hello"}],
             max_completion_tokens=7,
-            api_key="sk-test-explicit",
+            api_key="inferenceapis-test-key",
         )
 
-        assert response.choices[0].message.content == "pong"
-        assert len(sent) == 1
-        request = sent[0]
-        assert request.method == "POST"
-        assert str(request.url) == "https://api.inferenceapis.com/v1/chat/completions"
-        assert request.headers["authorization"] == "Bearer sk-test-explicit"
-        body = json.loads(request.content)
-        assert body["model"] == "deepseek-ai/DeepSeek-V4-Flash"
-        assert body["max_completion_tokens"] == 7
-        assert "max_tokens" not in body
+    request: Final = route.calls.last.request
+    body: Final = json.loads(request.content)
+    assert route.call_count == 1
+    assert request.headers["authorization"] == "Bearer inferenceapis-test-key"
+    assert body["model"] == INFERENCEAPIS_MODEL_ID
+    assert body["messages"] == [{"role": "user", "content": "Say hello"}]
+    assert body["max_completion_tokens"] == 7
+    assert "max_tokens" not in body
+    assert response.choices[0].message.content == "Hello from Inference APIs"
 
-    def test_completion_reads_key_and_base_from_env(self, monkeypatch):
-        monkeypatch.setenv("INFERENCEAPIS_API_KEY", "sk-from-env")
-        monkeypatch.setenv("INFERENCEAPIS_API_BASE", "https://proxy.example.com/v1")
-        sent = []
-        monkeypatch.setattr(litellm, "client_session", _recording_session(sent))
 
-        litellm.completion(
-            model="inferenceapis/openai/gpt-oss-120b",
-            messages=[{"role": "user", "content": "ping"}],
+def test_inferenceapis_chat_completion_reads_key_and_base_from_env(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("INFERENCEAPIS_API_KEY", "inferenceapis-env-key")
+    monkeypatch.setenv("INFERENCEAPIS_API_BASE", "https://inferenceapis.internal.example/v1")
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://inferenceapis.internal.example/v1/chat/completions").respond(
+            200, json=_chat_completion_body({"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7})
+        )
+        litellm.completion(model=INFERENCEAPIS_MODEL, messages=[{"role": "user", "content": "Say hello"}])
+
+    assert route.call_count == 1
+    assert route.calls.last.request.headers["authorization"] == "Bearer inferenceapis-env-key"
+
+
+def test_inferenceapis_responses_request():
+    with respx.mock() as upstream:
+        route: Final = upstream.post(f"{INFERENCEAPIS_API_BASE}/responses").respond(
+            200,
+            json={
+                "id": "resp_inferenceapis",
+                "object": "response",
+                "created_at": 1_789_550_000,
+                "model": INFERENCEAPIS_MODEL_ID,
+                "status": "completed",
+                "output": [
+                    {
+                        "id": "msg_inferenceapis",
+                        "type": "message",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [{"type": "output_text", "text": "Hello from Inference APIs", "annotations": []}],
+                    }
+                ],
+                "usage": {"input_tokens": 4, "output_tokens": 3, "total_tokens": 7},
+            },
+        )
+        response: Final = litellm.responses(
+            model=INFERENCEAPIS_MODEL,
+            input="Say hello",
+            api_key="inferenceapis-test-key",
         )
 
-        assert len(sent) == 1
-        request = sent[0]
-        assert str(request.url) == "https://proxy.example.com/v1/chat/completions"
-        assert request.headers["authorization"] == "Bearer sk-from-env"
-        assert json.loads(request.content)["model"] == "openai/gpt-oss-120b"
+    request: Final = route.calls.last.request
+    body: Final = json.loads(request.content)
+    assert route.call_count == 1
+    assert request.headers["authorization"] == "Bearer inferenceapis-test-key"
+    assert body["model"] == INFERENCEAPIS_MODEL_ID
+    assert body["input"] == "Say hello"
+    assert response.output[0].content[0].text == "Hello from Inference APIs"
+
+
+def test_inferenceapis_chat_completion_cost_bills_cached_tokens_at_cache_read_rate():
+    row: Final = litellm.model_cost[INFERENCEAPIS_MODEL]
+    with respx.mock() as upstream:
+        upstream.post(f"{INFERENCEAPIS_API_BASE}/chat/completions").respond(
+            200,
+            json=_chat_completion_body(
+                {
+                    "prompt_tokens": 1000,
+                    "completion_tokens": 20,
+                    "total_tokens": 1020,
+                    "prompt_tokens_details": {"cached_tokens": 800},
+                }
+            ),
+        )
+        response: Final = litellm.completion(
+            model=INFERENCEAPIS_MODEL,
+            messages=[{"role": "user", "content": "Say hello"}],
+            api_key="inferenceapis-test-key",
+        )
+
+    assert row["cache_read_input_token_cost"] < row["input_cost_per_token"]
+    assert litellm.completion_cost(completion_response=response, model=INFERENCEAPIS_MODEL) == pytest.approx(
+        200 * row["input_cost_per_token"] + 800 * row["cache_read_input_token_cost"] + 20 * row["output_cost_per_token"]
+    )

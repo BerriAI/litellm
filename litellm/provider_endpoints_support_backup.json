@@ -2203,7 +2203,8 @@
         "moderations": false,
         "batches": false,
         "rerank": false,
-        "a2a": false
+        "a2a": false,
+        "interactions": false
       }
     },
     "snowflake": {
