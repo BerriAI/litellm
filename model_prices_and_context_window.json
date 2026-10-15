@@ -16647,7 +16647,6 @@
         "mode": "chat",
         "source": "https://api.cohere.com/v1/models/north-large-01-2026",
         "supports_function_calling": true,
-        "supports_tool_choice": true,
         "supports_vision": true
     },
     "coralbricks/glm-5.3-fast": {
