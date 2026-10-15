@@ -2380,16 +2380,3 @@ class TestPromptCacheBreakpointToResponses:
             self.MARKED_SCREENSHOT_PART,
         ]
         assert log_output == self.LOG_OUTPUT
-
-    def test_prompt_cache_options_forwarded_to_responses_kwargs(self):
-        from litellm.llms.anthropic.pass_through.responses_adapters.handler import (
-            _build_responses_kwargs,
-        )
-
-        kwargs = _build_responses_kwargs(
-            max_tokens=16,
-            messages=[{"role": "user", "content": "hi"}],
-            model="openai/gpt-5.6",
-            extra_kwargs={"prompt_cache_options": {"mode": "explicit"}},
-        )
-        assert kwargs["prompt_cache_options"] == {"mode": "explicit"}

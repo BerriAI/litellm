@@ -512,7 +512,7 @@ class _AsyncPromptManagementOutcome:
     deployment_model_info: object
 
 
-def _resolve_responses_api_provider_config(
+def resolve_responses_api_provider_config(
     model: str, custom_llm_provider: str, model_info: object, api_base: str | None
 ) -> BaseResponsesAPIConfig | None:
     provider_config: Final = ProviderConfigManager.get_provider_responses_api_config(
@@ -557,7 +557,7 @@ def _will_bridge_to_chat_completions(
         return True
     return isinstance(
         plan_responses_route(
-            _resolve_responses_api_provider_config(
+            resolve_responses_api_provider_config(
                 _dispatched_model_name(normalized_model[0], custom_llm_provider, api_base),
                 custom_llm_provider,
                 model_info,
@@ -1001,7 +1001,46 @@ def _strip_responses_routing_prefix(model: str) -> str:
     return model[len(_RESPONSES_ROUTING_PREFIX) :]
 
 
-def _resolve_model_provider_for_responses(
+def with_provider_affinity_header(
+    extra_headers: dict[str, object] | None,
+    litellm_params: GenericLiteLLMParams,
+    metadata: Mapping[str, object] | None,
+    kwargs: Mapping[str, object],
+    model: str,
+    custom_llm_provider: str | None,
+) -> dict[str, object] | None:
+    if litellm_params.provider_affinity_header is None:
+        return extra_headers
+    try:
+        return add_provider_affinity_header(
+            headers=extra_headers or MappingProxyType({}),
+            litellm_params=MappingProxyType(
+                {
+                    "provider_affinity_header": litellm_params.provider_affinity_header,
+                    "litellm_session_id": kwargs.get("litellm_session_id"),
+                    "session_id": kwargs.get("session_id"),
+                    "metadata": metadata,
+                    "litellm_metadata": kwargs.get("litellm_metadata"),
+                }
+            ),
+        )
+    except ValueError as affinity_error:
+        raise litellm.BadRequestError(
+            message=str(affinity_error), model=model, llm_provider=custom_llm_provider
+        ) from affinity_error
+
+
+def requested_reasoning(params: Mapping[str, object]) -> Reasoning | None:
+    current_reasoning: Final = cast(  # cast-ok: prompt-managed reasoning arrives as a plain dict
+        Reasoning | None, params.get("reasoning")
+    )
+    reasoning_effort: Final = params.get("reasoning_effort")
+    if current_reasoning is None and reasoning_effort is not None:
+        return LiteLLMResponsesTransformationHandler().map_reasoning_effort(reasoning_effort)
+    return current_reasoning
+
+
+def resolve_model_provider_for_responses(
     model: str,
     custom_llm_provider: str | None,
     litellm_params: GenericLiteLLMParams,
@@ -1026,7 +1065,7 @@ def _resolve_model_provider_for_responses(
     return _strip_responses_routing_prefix(provider_model), resolved_provider
 
 
-def _apply_managed_file_id_mapping(
+def apply_managed_file_id_mapping(
     input: str | ResponseInputParam,
     tools: Iterable[ToolParam] | None,
     kwargs: dict[str, Any],
@@ -1329,27 +1368,9 @@ def responses(
 
         # get llm provider logic
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
-        try:
-            effective_extra_headers: Final = (
-                add_provider_affinity_header(
-                    headers=extra_headers or MappingProxyType({}),
-                    litellm_params=MappingProxyType(
-                        {
-                            "provider_affinity_header": litellm_params.provider_affinity_header,
-                            "litellm_session_id": kwargs.get("litellm_session_id"),
-                            "session_id": kwargs.get("session_id"),
-                            "metadata": metadata,
-                            "litellm_metadata": kwargs.get("litellm_metadata"),
-                        }
-                    ),
-                )
-                if litellm_params.provider_affinity_header is not None
-                else extra_headers
-            )
-        except ValueError as affinity_error:
-            raise litellm.BadRequestError(
-                message=str(affinity_error), model=model, llm_provider=custom_llm_provider
-            ) from affinity_error
+        effective_extra_headers: Final = with_provider_affinity_header(
+            extra_headers, litellm_params, metadata, kwargs, model, custom_llm_provider
+        )
 
         #########################################################
         # MOCK RESPONSE LOGIC
@@ -1357,7 +1378,7 @@ def responses(
         if litellm_params.mock_response and isinstance(litellm_params.mock_response, str):
             return mock_responses_api_response(mock_response=litellm_params.mock_response)
 
-        model, custom_llm_provider = _resolve_model_provider_for_responses(
+        model, custom_llm_provider = resolve_model_provider_for_responses(
             model=model,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
@@ -1367,7 +1388,7 @@ def responses(
         #########################################################
         # Update input and tools with provider-specific file IDs if managed files are used
         #########################################################
-        input, tools = _apply_managed_file_id_mapping(input=input, tools=tools, kwargs=kwargs, local_vars=local_vars)
+        input, tools = apply_managed_file_id_mapping(input=input, tools=tools, kwargs=kwargs, local_vars=local_vars)
 
         #########################################################
         # Native MCP Responses API
@@ -1410,7 +1431,7 @@ def responses(
         if custom_llm_provider is None:
             responses_api_provider_config = None
         else:
-            responses_api_provider_config = _resolve_responses_api_provider_config(
+            responses_api_provider_config = resolve_responses_api_provider_config(
                 model, custom_llm_provider, deployment_model_info, litellm_params.api_base
             )
 
@@ -1426,15 +1447,7 @@ def responses(
             _raise_responses_compatibility_failure(compatibility_failure, model, custom_llm_provider)
 
         local_vars.update(kwargs)
-        current_reasoning: Final = cast(  # cast-ok: prompt-managed reasoning arrives as a plain dict
-            Reasoning | None, local_vars.get("reasoning")
-        )
-        reasoning_effort: Final = local_vars.get("reasoning_effort")
-        request_reasoning: Final = (
-            LiteLLMResponsesTransformationHandler().map_reasoning_effort(reasoning_effort)
-            if current_reasoning is None and reasoning_effort is not None
-            else current_reasoning
-        )
+        request_reasoning: Final = requested_reasoning(local_vars)
         response_api_optional_params: Final[ResponsesAPIOptionalRequestParams] = (
             ResponsesAPIRequestUtils.get_requested_response_api_optional_param(
                 {k: v for k, v in {**local_vars, "reasoning": request_reasoning}.items() if k != "reasoning_effort"}
@@ -2265,7 +2278,7 @@ def compact_responses(
         # get llm provider logic
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
 
-        model, custom_llm_provider = _resolve_model_provider_for_responses(
+        model, custom_llm_provider = resolve_model_provider_for_responses(
             model=model,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,

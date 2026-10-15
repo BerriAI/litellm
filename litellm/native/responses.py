@@ -96,6 +96,16 @@ def execute_responses(
         litellm_metadata=litellm_metadata,
         shared_session=shared_session,
     )
+    if isinstance(response, Coroutine):
+        return _stamped_when_done(response, litellm_metadata, custom_llm_provider)
+    return _stamped(response, litellm_metadata, custom_llm_provider)
+
+
+def _stamped(
+    response: ResponsesAPIResponse | BaseResponsesAPIStreamingIterator,
+    litellm_metadata: Mapping[str, object] | None,
+    custom_llm_provider: str,
+) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
     if not isinstance(response, ResponsesAPIResponse):
         return response
     stamped: Final = ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
@@ -105,3 +115,11 @@ def execute_responses(
     )
     stamped.hidden_params["custom_llm_provider"] = custom_llm_provider
     return stamped
+
+
+async def _stamped_when_done(
+    response: Coroutine[object, object, ResponsesAPIResponse | BaseResponsesAPIStreamingIterator],
+    litellm_metadata: Mapping[str, object] | None,
+    custom_llm_provider: str,
+) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
+    return _stamped(await response, litellm_metadata, custom_llm_provider)
