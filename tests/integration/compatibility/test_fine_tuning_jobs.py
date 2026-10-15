@@ -27,7 +27,6 @@ MANAGED_MODEL: Final = "gpt-4.1-openai"
 DEPLOYMENT_KEYS: Final = ("sk-fine-tuning-deployment-a", "sk-fine-tuning-deployment-b")
 PROVIDER_JOB: Final = "ftjob-provider-123"
 RUN: Final = uuid.uuid4().hex[:12]
-MANAGED_JOB: Final = f"ftjob-managed-{RUN}"
 TRAINING_LINE: Final = b'{"messages": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}]}\n'
 JOB_PATH: Final = re.compile(r"^/(?:openai/)?(?:v1/)?fine_tuning/jobs/([^/]+)(/cancel)?$")
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
@@ -88,8 +87,18 @@ def _job(job_id: str, status: str, training_file: str = "file-abc123", **fields:
     }
 
 
-def _provider_file_id(bearer: str) -> str:
-    return f"file-{RUN}-" + bearer.removeprefix("sk-fine-tuning-")
+def _provider_file_id(bearer: str, filename: str) -> str:
+    return f"file-{RUN}-" + bearer.removeprefix("sk-fine-tuning-") + "-" + filename.removesuffix(".jsonl")
+
+
+def _managed_job_id(provider_training_file: str) -> str:
+    return provider_training_file.replace("file-", "ftjob-managed-", 1)
+
+
+def _uploaded_filename(request: Request) -> str:
+    names: Final = [part.get_filename() for part in _multipart_parts(request) if part.get_filename()]
+    assert len(names) == 1, request.body[:300]
+    return str(names[0])
 
 
 def _bearer(request: Request) -> str:
@@ -118,19 +127,27 @@ def _respond(request: Request) -> Reply:
     if (request.method, path) == ("POST", "/v1/files"):
         return _reply(
             {
-                "id": _provider_file_id(_bearer(request)),
+                "id": _provider_file_id(_bearer(request), _uploaded_filename(request)),
                 "object": "file",
                 "bytes": len(TRAINING_LINE),
                 "created_at": 1700000000,
-                "filename": "train.jsonl",
+                "filename": _uploaded_filename(request),
                 "purpose": "fine-tune",
                 "status": "processed",
             }
         )
     if (request.method, path) in {("POST", "/v1/fine_tuning/jobs"), ("POST", "/openai/fine_tuning/jobs")}:
         sent: Final = JSON_OBJECT.validate_json(request.body)
-        job_id: Final = MANAGED_JOB if _bearer(request) in DEPLOYMENT_KEYS else PROVIDER_JOB
-        return _reply(_job(job_id, "validating_files", str(sent["training_file"])))
+        managed: Final = _bearer(request) in DEPLOYMENT_KEYS
+        echoed: Final = {"validation_file": sent.get("validation_file")} if managed else {}
+        return _reply(
+            _job(
+                _managed_job_id(str(sent["training_file"])) if managed else PROVIDER_JOB,
+                "validating_files",
+                str(sent["training_file"]),
+                **echoed,
+            )
+        )
     matched: Final = JOB_PATH.match(path)
     if matched and matched.group(1) and request.method == "GET":
         return _reply(_job(matched.group(1), "running"))
@@ -329,6 +346,30 @@ def test_azure_create_merges_finetune_settings_and_keeps_azure_fields(rig: Rig) 
     assert Job.model_validate_json(raw.text) == _client_job(PROVIDER_JOB, "validating_files", "file-abc"), raw.text
 
 
+@pytest.mark.parametrize(
+    ("provider", "target", "provider_defaults"),
+    [
+        ("openai", "/v1/fine_tuning/jobs", {}),
+        ("azure", f"/openai/fine_tuning/jobs?api-version={AZURE_API_VERSION}", {"trainingType": 1}),
+    ],
+)
+def test_create_sends_the_model_without_its_provider_prefix(
+    rig: Rig, provider: str, target: str, provider_defaults: Mapping[str, JsonValue]
+) -> None:
+    with rig.sdk("/v1") as client:
+        raw: Final = client.fine_tuning.jobs.with_raw_response.create(
+            model=f"{provider}/gpt-4o-mini", training_file="file-abc123", extra_body={"custom_llm_provider": provider}
+        )
+    sent: Final = _only(_drained(rig), "POST", target)
+    assert JSON_OBJECT.validate_json(sent.body) == {
+        "model": "gpt-4o-mini",
+        "training_file": "file-abc123",
+        "hyperparameters": {},
+        **provider_defaults,
+    }, sent.body
+    assert raw.status_code == 200, raw.text
+
+
 def test_azure_cancel_merges_finetune_settings(rig: Rig) -> None:
     with rig.sdk("/v1") as client:
         raw: Final = client.fine_tuning.jobs.with_raw_response.cancel(
@@ -400,10 +441,6 @@ def test_retrieve_reads_the_documented_custom_llm_provider_header(rig: Rig) -> N
 
 
 def test_managed_create_sends_the_provider_file_id_of_the_pinned_deployment(rig: Rig) -> None:
-    pytest.skip(
-        "BUG: managed create sends the base64 LiteLLM file id and the prefixed model openai/gpt-4.1 to the provider"
-        " and returns the decoded unified id as training_file"
-    )
     with rig.sdk("/v1") as client:
         uploaded: Final = client.files.with_raw_response.create(
             file=("train.jsonl", TRAINING_LINE, "application/jsonl"),
@@ -431,12 +468,48 @@ def test_managed_create_sends_the_provider_file_id_of_the_pinned_deployment(rig:
     assert deployment_key in DEPLOYMENT_KEYS, sent.headers
     assert JSON_OBJECT.validate_json(sent.body) == {
         "model": "gpt-4.1",
-        "training_file": _provider_file_id(deployment_key),
+        "training_file": _provider_file_id(deployment_key, "train.jsonl"),
         "hyperparameters": {},
     }, sent.body
     assert raw.status_code == 200, raw.text
     job: Final = Job.model_validate_json(raw.text)
     assert re.fullmatch(
-        rf"litellm_proxy;model_id:[0-9a-f]{{64}};generic_response_id:{MANAGED_JOB}", _decoded(job.id)
+        rf"litellm_proxy;model_id:[0-9a-f]{{64}};generic_response_id:"
+        rf"{_managed_job_id(_provider_file_id(deployment_key, 'train.jsonl'))}",
+        _decoded(job.id),
     ), raw.text
     assert job.training_file == managed_file, raw.text
+
+
+def _managed_upload(rig: Rig, client: OpenAI, filename: str) -> str:
+    uploaded: Final = client.files.with_raw_response.create(
+        file=(filename, TRAINING_LINE, "application/jsonl"),
+        purpose="fine-tune",
+        extra_body={"target_model_names": MANAGED_MODEL},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    assert sorted((request.method, request.target, _bearer(request)) for request in _drained(rig)) == [
+        ("POST", "/v1/files", key) for key in DEPLOYMENT_KEYS
+    ]
+    return str(JSON_OBJECT.validate_json(uploaded.text)["id"])
+
+
+def test_managed_create_sends_the_provider_ids_of_managed_training_and_validation_files(rig: Rig) -> None:
+    with rig.sdk("/v1") as client:
+        training_file: Final = _managed_upload(rig, client, "tune.jsonl")
+        validation_file: Final = _managed_upload(rig, client, "validate.jsonl")
+        raw: Final = client.fine_tuning.jobs.with_raw_response.create(
+            model=MANAGED_MODEL, training_file=training_file, validation_file=validation_file
+        )
+    sent: Final = _only(_drained(rig), "POST", "/v1/fine_tuning/jobs")
+    deployment_key: Final = _bearer(sent)
+    assert deployment_key in DEPLOYMENT_KEYS, sent.headers
+    assert JSON_OBJECT.validate_json(sent.body) == {
+        "model": "gpt-4.1",
+        "training_file": _provider_file_id(deployment_key, "tune.jsonl"),
+        "validation_file": _provider_file_id(deployment_key, "validate.jsonl"),
+        "hyperparameters": {},
+    }, sent.body
+    assert raw.status_code == 200, raw.text
+    job: Final = Job.model_validate_json(raw.text)
+    assert (job.training_file, job.validation_file) == (training_file, validation_file), raw.text

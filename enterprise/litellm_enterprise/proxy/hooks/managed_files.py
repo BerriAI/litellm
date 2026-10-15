@@ -6,6 +6,7 @@ import base64
 import json
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from itertools import chain
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -406,6 +407,13 @@ def _storage_metadata_of(file_object: OpenAIFileObject | None) -> Mapping[str, s
 
 
 _MANAGED_FILES_TARGET: Final = "managed_files"
+_PROVIDER_FILE_ID_KWARGS: Final = MappingProxyType(
+    {
+        CallTypes.acreate_batch: ("input_file_id",),
+        CallTypes.acreate_fine_tuning_job: ("training_file", "validation_file"),
+    }
+)
+_PROVIDER_FILE_ID_KEYS: Final = tuple(dict.fromkeys(chain.from_iterable(_PROVIDER_FILE_ID_KWARGS.values())))
 _PROVIDER_FILE_RETRIEVE_RETRY_DELAYS_SECONDS: Final = (0.5, 1.0, 2.0)
 
 
@@ -1439,6 +1447,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 if isinstance(file_id, str) and file_id
             )
             await self.check_file_ids_access(fine_tuning_file_ids, user_api_key_dict)
+            if fine_tuning_file_ids:
+                data["model_file_id_mapping"] = await self.get_model_file_id_mapping(
+                    fine_tuning_file_ids, user_api_key_dict.parent_otel_span
+                )
 
         return data
 
@@ -1453,24 +1465,27 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         if request_kwargs is None:
             return healthy_deployments
 
-        input_file_id = cast(Optional[str], request_kwargs.get("input_file_id"))
-        model_file_id_mapping = cast(
-            Optional[Dict[str, Dict[str, str]]],
-            request_kwargs.get("model_file_id_mapping"),
+        request: Final = cast(Mapping[str, object], request_kwargs)
+        model_file_id_mapping: Final = cast(Mapping[str, Mapping[str, str]], request.get("model_file_id_mapping") or {})
+        requested_file_ids: Final = (request.get(key) for key in _PROVIDER_FILE_ID_KEYS)
+        model_ids_per_file: Final = tuple(
+            frozenset(model_file_id_mapping[file_id])
+            for file_id in requested_file_ids
+            if isinstance(file_id, str) and file_id in model_file_id_mapping
         )
-        allowed_model_ids = []
-        if input_file_id and model_file_id_mapping:
-            model_id_dict = model_file_id_mapping.get(input_file_id, {})
-            allowed_model_ids = list(model_id_dict.keys())
+        allowed_model_ids: Final[frozenset[str]] = (
+            model_ids_per_file[0].intersection(*model_ids_per_file[1:]) if model_ids_per_file else frozenset()
+        )
 
         if len(allowed_model_ids) == 0:
             return healthy_deployments
 
-        return [
+        holders: Final[list[dict[str, object]]] = [
             deployment
             for deployment in healthy_deployments
             if deployment.get("model_info", {}).get("id") in allowed_model_ids
         ]
+        return holders if holders or "input_file_id" in request else healthy_deployments
 
     async def async_pre_call_deployment_hook(
         self, kwargs: Dict[str, Any], call_type: Optional[CallTypes]
@@ -1478,25 +1493,21 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         """
         Allow modifying the request just before it's sent to the deployment.
         """
-        accessor_key: Optional[str] = None
-        if call_type and call_type == CallTypes.acreate_batch:
-            accessor_key = "input_file_id"
-        elif call_type and call_type == CallTypes.acreate_fine_tuning_job:
-            accessor_key = "training_file"
-        else:
+        accessor_keys: Final = _PROVIDER_FILE_ID_KWARGS.get(call_type) if call_type else None
+        if accessor_keys is None:
             return kwargs
 
-        if accessor_key:
+        model_file_id_mapping = cast(Optional[Dict[str, Dict[str, str]]], kwargs.get("model_file_id_mapping"))
+        # model_info may be at top-level or nested under litellm_metadata
+        # (batch/file operations use litellm_metadata)
+        model_id = cast(Optional[str], kwargs.get("model_info", {}).get("id", None))
+        if model_id is None:
+            model_id = cast(
+                Optional[str],
+                kwargs.get("litellm_metadata", {}).get("model_info", {}).get("id", None),
+            )
+        for accessor_key in accessor_keys:
             input_file_id = cast(Optional[str], kwargs.get(accessor_key))
-            model_file_id_mapping = cast(Optional[Dict[str, Dict[str, str]]], kwargs.get("model_file_id_mapping"))
-            # model_info may be at top-level or nested under litellm_metadata
-            # (batch/file operations use litellm_metadata)
-            model_id = cast(Optional[str], kwargs.get("model_info", {}).get("id", None))
-            if model_id is None:
-                model_id = cast(
-                    Optional[str],
-                    kwargs.get("litellm_metadata", {}).get("model_info", {}).get("id", None),
-                )
             mapped_file_id: Optional[str] = None
             if input_file_id and model_file_id_mapping and model_id:
                 mapped_file_id = model_file_id_mapping.get(input_file_id, {}).get(model_id, None)
@@ -1690,7 +1701,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     ),
                 )
 
-    async def get_model_file_id_mapping(self, file_ids: List[str], litellm_parent_otel_span: Span) -> dict:
+    async def get_model_file_id_mapping(self, file_ids: Sequence[str], litellm_parent_otel_span: Span) -> dict:
         """
         Get model-specific file IDs for a list of proxy file IDs.
         Returns a dictionary mapping litellm_proxy/ file_id -> model_id -> model_file_id
