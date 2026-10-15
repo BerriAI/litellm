@@ -15,7 +15,7 @@ from typing_extensions import ReadOnly
 
 from litellm import get_secret_str
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import PYTHON_GC_THRESHOLD
+from litellm.constants import LITELLM_GC_FREEZE_AFTER_STARTUP, PYTHON_GC_THRESHOLD
 from litellm.litellm_core_utils.bug_report import EnvironmentReport
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -58,6 +58,21 @@ def configure_gc_thresholds():
 
 # Initialize GC configuration
 configure_gc_thresholds()
+
+
+def freeze_gc_after_startup(enabled: bool = LITELLM_GC_FREEZE_AFTER_STARTUP) -> None:
+    """Freeze the objects that exist once startup is done (LITELLM_GC_FREEZE_AFTER_STARTUP).
+
+    Full collections are stop-the-world and walk every tracked object; the startup heap
+    (modules, typing/Pydantic metadata, cost map, config) never becomes garbage, so moving
+    it to the permanent generation shortens those pauses. Startup garbage is collected first
+    so it is not frozen with the rest.
+    """
+    if not enabled:
+        return
+    gc.collect()
+    gc.freeze()
+    verbose_proxy_logger.info("GC: froze %s objects after startup", gc.get_freeze_count())
 
 
 @router.get(
