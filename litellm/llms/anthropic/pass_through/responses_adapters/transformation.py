@@ -97,6 +97,10 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         return None
 
     @staticmethod
+    def _input_image_part(url: str) -> dict[str, object]:  # mutable-ok: API message payload
+        return {"type": "input_image", "image_url": url, "detail": "auto"}
+
+    @staticmethod
     def _translate_anthropic_document_block_to_file_part(
         block: Mapping[str, object],
     ) -> dict[str, str] | None:  # mutable-ok: API message payload
@@ -149,9 +153,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             if block.get("type") == "image"
         )
         return tuple(
-            with_prompt_cache_breakpoint({"type": "input_image", "image_url": url}, breakpoint)
-            for url, breakpoint in sources
-            if url
+            with_prompt_cache_breakpoint(cls._input_image_part(url), breakpoint) for url, breakpoint in sources if url
         )
 
     @classmethod
@@ -357,7 +359,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                             if url:
                                 user_parts.append(
                                     with_prompt_cache_breakpoint(
-                                        {"type": "input_image", "image_url": url}, block.get("prompt_cache_breakpoint")
+                                        self._input_image_part(url), block.get("prompt_cache_breakpoint")
                                     )
                                 )
                         elif btype == "document":
