@@ -27,8 +27,10 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     create_response,
+    first_validation_error,
     log_llm_api_exception,
     proxy_exception_from_http_exception,
+    request_drops_params,
     resolve_litellm_call_id,
 )
 from litellm.proxy.common_utils.error_body_call_id import error_body_call_id
@@ -91,11 +93,6 @@ def _anthropic_error_json_response(exc: ProxyException, request: Request) -> JSO
 _DROPPABLE_TOKEN_COUNT_FIELDS: Final = frozenset({"tools"})
 
 
-def _drops_params(data: Mapping[str, object]) -> bool:
-    requested: Final = data.get("drop_params")
-    return requested if isinstance(requested, bool) else litellm.drop_params is True
-
-
 def _validate_token_count_request(fields: Mapping[str, object]) -> TokenCountRequest | ValidationError:
     try:
         return TokenCountRequest.model_validate(fields)
@@ -104,11 +101,10 @@ def _validate_token_count_request(fields: Mapping[str, object]) -> TokenCountReq
 
 
 def _invalid_request_error(e: ValidationError) -> ProxyException:
-    errors: Final = e.errors(include_url=False)
     return ProxyException(
-        message="; ".join(f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}" for error in errors),
+        message=first_validation_error(e),
         type="invalid_request_error",
-        param=str(errors[0]["loc"][0]),
+        param=str(e.errors(include_url=False)[0]["loc"][0]),
         code=status.HTTP_400_BAD_REQUEST,
     )
 
@@ -377,7 +373,7 @@ async def count_tokens(
 
         token_request: Final = _token_count_request(
             {"model": model_name, "messages": messages, "tools": data.get("tools"), "system": data.get("system")},
-            drop_params=_drops_params(data),
+            drop_params=request_drops_params(data),
         )
         if isinstance(token_request, ProxyException):
             return _anthropic_error_json_response(token_request, request)

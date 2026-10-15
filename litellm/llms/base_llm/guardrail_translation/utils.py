@@ -292,7 +292,7 @@ def openai_tool_name(tool: object) -> str | None:
     return flat_name if isinstance(flat_name, str) else None
 
 
-_FIELDS: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True))
+_FIELDS: Final = TypeAdapter(Mapping[object, object], config=ConfigDict(strict=True))
 _ITEMS: Final = TypeAdapter(Sequence[object], config=ConfigDict(strict=True))
 
 

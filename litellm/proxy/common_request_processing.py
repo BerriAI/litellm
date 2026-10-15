@@ -631,6 +631,37 @@ def serialize_http_exception_detail(
     return str(detail), None
 
 
+_ROUTES_WITH_TOOLS: Final = frozenset({"acompletion", "aresponses", "anthropic_messages"})
+_TOOL_LIST: Final = TypeAdapter(list[dict[str, object]], config=ConfigDict(strict=True))
+_REQUEST_FIELDS: Final = TypeAdapter(Mapping[object, object], config=ConfigDict(strict=True))
+
+
+def request_drops_params(data: Mapping[object, object]) -> bool:
+    requested: Final = data.get("drop_params")
+    return requested if isinstance(requested, bool) else litellm.drop_params is True
+
+
+def first_validation_error(e: ValidationError, prefix: tuple[str, ...] = ()) -> str:
+    error: Final = e.errors(include_url=False)[0]
+    return f"{'.'.join(str(part) for part in (*prefix, *error['loc']))}: {error['msg']}"
+
+
+def malformed_tools_error(data: Mapping[object, object]) -> ProxyException | None:
+    tools: Final = data.get("tools")
+    if tools is None:
+        return None
+    try:
+        _TOOL_LIST.validate_python(tools)
+    except ValidationError as e:
+        return ProxyException(
+            message=first_validation_error(e, prefix=("tools",)),
+            type=ProxyErrorTypes.bad_request_error,
+            param="tools",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+    return None
+
+
 def proxy_exception_from_http_exception(exc: HTTPException, headers: dict[str, str]) -> ProxyException:
     raw_detail: Final = attribute_of(exc, "detail", str(exc))
     message, structured_fields = serialize_http_exception_detail(raw_detail)
@@ -2153,6 +2184,12 @@ class ProxyBaseLLMRequestProcessing:
                 param="model",
                 code=status.HTTP_400_BAD_REQUEST,
             )
+        request_fields: Final = _REQUEST_FIELDS.validate_python(self.data)
+        tools_error: Final = malformed_tools_error(request_fields) if route_type in _ROUTES_WITH_TOOLS else None
+        if tools_error is not None and not request_drops_params(request_fields):
+            raise tools_error
+        if tools_error is not None:
+            self.data = {name: value for name, value in self.data.items() if name != "tools"}
         self.data = await add_litellm_data_to_request(
             data=self.data,
             request=request,

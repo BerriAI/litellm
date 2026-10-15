@@ -33,16 +33,17 @@ else:
     PrismaClient = Any
 
 _DB_ROW: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
-_TOOLS: Final = TypeAdapter(Sequence[object], config=ConfigDict(strict=True))
+_ITEMS: Final = TypeAdapter(Sequence[object], config=ConfigDict(strict=True))
 _TOOL: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True))
-_VECTOR_STORE_IDS: Final = TypeAdapter(Sequence[str], config=ConfigDict(strict=True))
 
 
-def _tool_vector_store_ids(tool: object) -> Sequence[str]:
+def _tool_vector_store_ids(tool: object) -> tuple[str, ...]:
     try:
-        return _VECTOR_STORE_IDS.validate_python(_TOOL.validate_python(tool).get("vector_store_ids"))
+        requested: Final = _TOOL.validate_python(tool).get("vector_store_ids")
+        entries: Final = (requested,) if isinstance(requested, str) else _ITEMS.validate_python(requested)
     except ValidationError:
         return ()
+    return tuple(entry for entry in entries if isinstance(entry, str))
 
 
 class VectorStoreIndexRegistry:
@@ -407,7 +408,7 @@ class VectorStoreRegistry:
         Returns the vector store ids from the tool calls
         """
         try:
-            validated_tools: Final = _TOOLS.validate_python(tools)
+            validated_tools: Final = _ITEMS.validate_python(tools)
         except ValidationError:
             return vector_store_ids
         for tool in validated_tools:
