@@ -1476,11 +1476,11 @@ class _RetryClientHandler(AsyncHTTPHandler):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["post", "put", "patch", "delete"])
-async def test_connection_error_retry_forwards_method_and_content(method: str):
-    captured: list[tuple[str, bytes]] = []  # mutable-ok: async closure capture buffer
+async def test_connection_error_retry_forwards_content(method: str):
+    captured: Final[list[tuple[str, bytes]]] = []  # mutable-ok: async closure capture buffer
 
     async def raise_connection_error(request: httpx.Request) -> httpx.Response:
-        raise httpx.RemoteProtocolError("connection dropped", request=request)
+        raise httpx.ConnectError("connection dropped", request=request)
 
     async def capture_and_succeed(request: httpx.Request) -> httpx.Response:
         captured.append((request.method, request.content))
@@ -1491,10 +1491,59 @@ async def test_connection_error_retry_forwards_method_and_content(method: str):
     async with first, retry:
         handler: Final = _RetryClientHandler(first=first, retry=retry)
 
-        body = b'{"post": ["run1"]}'
+        body: Final = b'{"post": ["run1"]}'
         await getattr(handler, method)("https://api.example.com/runs/batch", content=body)
 
-        assert captured == [(method.upper(), body)], "the retried request must keep its method and content= body"
+        assert captured == [(method.upper(), body)]
+        await handler.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["post", "patch"])
+async def test_disconnect_after_send_is_not_replayed(method: str) -> None:
+    retried_requests: Final[list[httpx.Request]] = []  # mutable-ok: async closure capture buffer
+
+    async def raise_disconnect(request: httpx.Request) -> httpx.Response:
+        raise httpx.RemoteProtocolError("connection dropped after send", request=request)
+
+    async def capture_retry(request: httpx.Request) -> httpx.Response:
+        retried_requests.append(request)
+        return httpx.Response(200, request=request)
+
+    first: Final = httpx.AsyncClient(transport=httpx.MockTransport(raise_disconnect))
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(capture_retry))
+    async with first, retry:
+        handler: Final = _RetryClientHandler(first=first, retry=retry)
+
+        with pytest.raises(httpx.RemoteProtocolError):
+            await getattr(handler, method)("https://api.example.com/runs/batch", content=b'{"a":1}')
+
+        assert retried_requests == []
+        await handler.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["put", "delete"])
+async def test_idempotent_disconnect_is_replayed(method: str) -> None:
+    captured: Final[list[tuple[str, bytes]]] = []  # mutable-ok: async closure capture buffer
+
+    async def raise_disconnect(request: httpx.Request) -> httpx.Response:
+        raise httpx.RemoteProtocolError("connection dropped after send", request=request)
+
+    async def capture_retry(request: httpx.Request) -> httpx.Response:
+        captured.append((request.method, request.content))
+        return httpx.Response(200, request=request)
+
+    first: Final = httpx.AsyncClient(transport=httpx.MockTransport(raise_disconnect))
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(capture_retry))
+    async with first, retry:
+        handler: Final = _RetryClientHandler(first=first, retry=retry)
+
+        body: Final = b'{"a":1}'
+        response: Final = await getattr(handler, method)("https://api.example.com/runs/batch", content=body)
+
+        assert response.status_code == 200
+        assert captured == [(method.upper(), body)]
         await handler.close()
 
 
@@ -1503,7 +1552,7 @@ async def test_connection_error_retry_forwards_multipart_files():
     captured: list[bytes] = []  # mutable-ok: async closure capture buffer
 
     async def raise_connection_error(request: httpx.Request) -> httpx.Response:
-        raise httpx.RemoteProtocolError("connection dropped", request=request)
+        raise httpx.ConnectError("connection refused", request=request)
 
     async def capture_and_succeed(request: httpx.Request) -> httpx.Response:
         captured.append(await request.aread())
@@ -1542,7 +1591,7 @@ async def test_connection_error_retry_keeps_the_handlers_tls_settings(tmp_path: 
     server: Final = await asyncio.start_server(cut_first_then_answer, "127.0.0.1", 0, ssl=server_tls)
     handler: Final = AsyncHTTPHandler(timeout=5.0, ssl_verify=False)
     try:
-        response: Final = await handler.post(f"https://127.0.0.1:{server.sockets[0].getsockname()[1]}/")
+        response: Final = await handler.delete(f"https://127.0.0.1:{server.sockets[0].getsockname()[1]}/")
     finally:
         await handler.close()
         server.close()

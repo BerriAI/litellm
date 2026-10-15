@@ -290,7 +290,7 @@ test-rust-extension:
 	"$$temporary/venv/bin/python" -I -m mypy.stubtest \
 		--mypy-config-file tests/unit/rust_bridge/stubtest.ini \
 		litellm.rust_bridge._native && \
-	LITELLM_RUST=1 LITELLM_LOCAL_MODEL_COST_MAP=True \
+	LITELLM_LOCAL_MODEL_COST_MAP=True \
 	"$$temporary/venv/bin/python" -I -m pytest --import-mode=importlib -m requires_rust_extension tests/test_litellm_rust
 
 rust-sqlx-prepare:

@@ -489,6 +489,9 @@ async def test_circuit_breaker_disabled_guard_always_calls_method():
             self._circuit_breaker = RedisCircuitBreaker(failure_threshold=1, recovery_timeout=60, enabled=False)
             self.call_count = 0
 
+        def _admit_async_call(self, call):
+            return call()
+
         @_redis_circuit_breaker_guard
         async def boom(self):
             self.call_count += 1

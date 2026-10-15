@@ -3,6 +3,7 @@ import concurrent.futures
 import contextlib
 import itertools
 import socket
+import struct
 import sys
 from collections.abc import AsyncIterator
 from typing import Final
@@ -1322,12 +1323,12 @@ async def _upstream_that_cuts_the_first_connection(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True], ids=["buffered", "streamed"])
 async def test_server_disconnect_before_response_is_retried_on_a_fresh_connection(stream: bool) -> None:
-    """The request must be resent on a new connection instead of failing the
-    caller, and a streamed resend must stay readable after post() returns."""
+    """An idempotent request must be resent on a new connection instead of failing
+    the caller, and a streamed resend must stay readable after delete() returns."""
     async with _upstream_that_cuts_the_first_connection(b"200 OK", b'{"ok": true}') as (base_url, attempts):
         handler: Final = AsyncHTTPHandler(timeout=5.0)
         try:
-            response: Final = await handler.post(f"{base_url}/", json={"hello": "world"}, stream=stream)
+            response: Final = await handler.delete(f"{base_url}/", json={"hello": "world"}, stream=stream)
             await response.aread()
         finally:
             await handler.close()
@@ -1347,7 +1348,7 @@ async def test_status_error_on_the_resend_is_masked_like_the_first_attempt(strea
         handler: Final = AsyncHTTPHandler(timeout=5.0)
         try:
             with pytest.raises(MaskedHTTPStatusError) as raised:
-                await handler.post(f"{base_url}/v1/x?key=SUPERSECRET", json={"hello": "world"}, stream=stream)
+                await handler.delete(f"{base_url}/v1/x?key=SUPERSECRET", json={"hello": "world"}, stream=stream)
         finally:
             await handler.close()
 
@@ -1356,3 +1357,53 @@ async def test_status_error_on_the_resend_is_masked_like_the_first_attempt(strea
         assert "SUPERSECRET" not in str(raised.value)
         assert "SUPERSECRET" not in str(raised.value.request.url)
         assert next(attempts) == 3
+
+
+@pytest.mark.asyncio
+async def test_server_disconnect_on_a_post_is_a_remote_protocol_error_and_is_not_replayed() -> None:
+    """The upstream may have read the POST before closing, so it is reported, not resent."""
+    async with _upstream_that_cuts_the_first_connection(b"200 OK", b'{"ok": true}') as (base_url, attempts):
+        handler: Final = AsyncHTTPHandler(timeout=5.0)
+        try:
+            with pytest.raises(httpx.RemoteProtocolError):
+                await handler.post(f"{base_url}/", json={"hello": "world"})
+        finally:
+            await handler.close()
+
+        assert next(attempts) == 2
+
+
+@pytest.mark.asyncio
+async def test_reset_after_request_is_not_replayed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+    monkeypatch.setenv("no_proxy", "127.0.0.1")
+    received_requests: Final[list[bytes]] = []  # mutable-ok: local server captures requests
+
+    async def reset_after_request(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        headers: Final = await reader.readuntil(b"\r\n\r\n")
+        content_length: Final = next(
+            (
+                int(header.split(b":", 1)[1])
+                for header in headers.split(b"\r\n")
+                if header.lower().startswith(b"content-length:")
+            ),
+            0,
+        )
+        await reader.readexactly(content_length)
+        received_requests.append(headers)
+        transport_socket: Final = writer.get_extra_info("socket")
+        assert transport_socket is not None
+        transport_socket.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        writer.transport.abort()
+
+    server: Final = await asyncio.start_server(reset_after_request, "127.0.0.1", 0)
+    port: Final = server.sockets[0].getsockname()[1]
+    handler: Final = AsyncHTTPHandler()
+    try:
+        async with server:
+            with pytest.raises(httpx.ReadError):
+                await handler.post(f"http://127.0.0.1:{port}/", content=b'{"a":1}')
+
+            assert len(received_requests) == 1
+    finally:
+        await handler.close()

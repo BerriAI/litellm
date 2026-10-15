@@ -58,6 +58,7 @@ from litellm.types.utils import (
 from ...anthropic.chat.transformation import (
     REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT,
     AnthropicConfig,
+    tools_without_unsupported_tool_search,
 )
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 from ..common_utils import DatabricksBase, DatabricksException
@@ -65,6 +66,7 @@ from ..common_utils import DatabricksBase, DatabricksException
 _RESPONSE_FORMAT_ADAPTER: (  # mutable-ok: mirrors the dict return contract of get_json_schema_from_pydantic_object
     Final[TypeAdapter[dict[str, object] | None]]
 ) = TypeAdapter(dict[str, object] | None)
+_TOOLS_ADAPTER: Final = TypeAdapter(list[object])
 
 
 def _is_bare_assistant_message(message_dict: Mapping[str, object]) -> bool:
@@ -73,6 +75,15 @@ def _is_bare_assistant_message(message_dict: Mapping[str, object]) -> bool:
     return message_dict.get("role") == "assistant" and not any(
         message_dict.get(key) for key in ("content", "tool_calls", "function_call")
     )
+
+
+def _collapse_single_text_block(message: Mapping[str, object]) -> Mapping[str, object]:
+    content: Final = message.get("content")
+    match content:
+        case [{"type": "text", "text": str() as text}] if content == [{"type": "text", "text": text}]:
+            return {**message, "content": text}
+        case _:
+            return message
 
 
 def _sanitize_empty_content(message_dict: dict[str, object]) -> None:
@@ -317,13 +328,23 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             function=function_params,
         )
 
-    def _map_openai_to_dbrx_tool(self, model: str, tools: list) -> list[DatabricksTool]:
+    def _map_openai_to_dbrx_tool(self, model: str, tools: list, drop_params: bool) -> list[DatabricksTool]:
         # if not claude, send as is
         if "claude" not in model:
             return tools
 
         # if claude, convert to anthropic tool and then to databricks tool
-        anthropic_tools, _ = self._map_tools(tools=tools)  # unclear how mcp tool calling on databricks works
+        anthropic_tools, _ = self._map_tools(
+            tools=list(
+                tools_without_unsupported_tool_search(
+                    tools=_TOOLS_ADAPTER.validate_python(tools),
+                    model=model,
+                    route="databricks",
+                    drop_params=drop_params,
+                    remedy="",
+                )
+            )
+        )  # unclear how mcp tool calling on databricks works
         databricks_tools: Final = [
             cast(DatabricksTool, self.convert_anthropic_tool_to_databricks_tool(tool)) for tool in anthropic_tools
         ]
@@ -374,7 +395,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 model=model, optional_params=mapped_params, custom_llm_provider="databricks"
             )
         if "tools" in mapped_params:
-            mapped_params["tools"] = self._map_openai_to_dbrx_tool(model=model, tools=mapped_params["tools"])
+            mapped_params["tools"] = self._map_openai_to_dbrx_tool(
+                model=model, tools=mapped_params["tools"], drop_params=drop_params
+            )
         if "max_completion_tokens" in non_default_params and replace_max_completion_tokens_with_max_tokens:
             mapped_params["max_tokens"] = non_default_params[
                 "max_completion_tokens"
@@ -463,6 +486,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         Databricks does not support:
         - 'name' in user message.
         - litellm's internal `thinking_blocks` / `reasoning_content` on assistant messages.
+        - non-Claude json_object "json" checks read only string content, so a single text block is sent as a string.
         """
         new_messages = []
         for idx, message in enumerate(messages):
@@ -478,7 +502,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             _sanitize_empty_content(cast(dict[str, object], _message))
             if _is_bare_assistant_message(_message):
                 continue
-            new_messages.append(_message)
+            new_messages.append(_collapse_single_text_block(_message) if "claude" not in model else _message)
 
         if "claude" not in model:
             new_messages = _split_parallel_tool_calls(
@@ -799,7 +823,11 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
                     if block_reasoning_content is not None
                     else DatabricksConfig.extract_top_level_reasoning_content(choice["delta"])
                 )
-                choice["delta"]["thinking_blocks"] = thinking_blocks
+                choice["delta"]["thinking_blocks"] = (
+                    [{**block, "index": position} for position, block in enumerate(thinking_blocks)]
+                    if thinking_blocks
+                    else thinking_blocks
+                )
                 translated_choices.append(choice)
             service_tier: Final = chunk.get("service_tier")
             if isinstance(service_tier, str) and service_tier:

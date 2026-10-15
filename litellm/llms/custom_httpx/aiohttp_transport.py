@@ -53,7 +53,7 @@ AIOHTTP_EXC_MAP: Final[dict[type[BaseException], type[Exception]]] = {
     aiohttp.ServerFingerprintMismatch: httpx.ProtocolError,
     # Network related exceptions
     aiohttp.ClientConnectorError: httpx.ConnectError,
-    aiohttp.ClientOSError: httpx.ConnectError,
+    aiohttp.ClientOSError: httpx.ReadError,
     aiohttp.ClientPayloadError: httpx.ReadError,
     # Connection disconnection exceptions
     aiohttp.ServerDisconnectedError: httpx.RemoteProtocolError,
