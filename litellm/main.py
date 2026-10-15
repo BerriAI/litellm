@@ -77,6 +77,7 @@ from litellm.litellm_core_utils.chat_completion_agentic_loop import (
     maybe_run_chat_completion_agentic_loop,
 )
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_litellm_params import (
     AWS_CREDENTIAL_KWARGS_KEYS,
@@ -5635,10 +5636,11 @@ def completion(
             if bridges_to_responses_api
             else kwargs.get("allowed_openai_params")
         )
-        requester_metadata: Final = metadata.get("requester_metadata") if isinstance(metadata, dict) else None
-        caller_metadata: Final = (
-            add_openai_metadata(requester_metadata) if isinstance(requester_metadata, dict) else None
+        metadata_mapping: Final = as_str_mapping(metadata)
+        requester_metadata: Final = (
+            as_str_mapping(metadata_mapping.get("requester_metadata")) if metadata_mapping is not None else None
         )
+        caller_metadata: Final = add_openai_metadata(requester_metadata)
         optional_param_args: Final = {
             "functions": functions,
             "function_call": function_call,

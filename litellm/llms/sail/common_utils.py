@@ -3,6 +3,7 @@ from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry, SimpleProviderConfig
 from litellm.types.utils import LlmProviders
 
@@ -218,8 +219,8 @@ def params_with_completion_window(
 
 
 def billed_service_tier(params: Mapping[str, object]) -> str | None:
-    metadata: Final = params.get("metadata")
-    if isinstance(metadata, Mapping):
+    metadata: Final = as_str_mapping(params.get("metadata"))
+    if metadata is not None:
         window: Final = metadata.get("completion_window")
         if isinstance(window, str) and window.lower() in _BILLED_TIER_FOR_WINDOW:
             return _BILLED_TIER_FOR_WINDOW[window.lower()]

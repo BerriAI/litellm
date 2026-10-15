@@ -7,7 +7,9 @@ from litellm.types.router import GenericLiteLLMParams
 
 
 class SailAnthropicMessagesConfig(JSONProviderAnthropicMessagesConfig):
-    def get_supported_anthropic_messages_params(self, model: str) -> list:  # mutable-ok: matches the provider interface
+    def get_supported_anthropic_messages_params(
+        self, model: str
+    ) -> list[str]:  # mutable-ok: matches the provider interface
         return [*super().get_supported_anthropic_messages_params(model), "metadata"]
 
     def request_metadata(self, metadata: Mapping[str, object] | None) -> Mapping[str, object] | None:
@@ -18,11 +20,11 @@ class SailAnthropicMessagesConfig(JSONProviderAnthropicMessagesConfig):
     def transform_anthropic_messages_request(
         self,
         model: str,
-        messages: list[dict],  # mutable-ok: matches the native Messages provider interface
-        anthropic_messages_optional_request_params: dict,  # mutable-ok: matches the provider interface
+        messages: list[dict[str, object]],  # mutable-ok: matches the native Messages provider interface
+        anthropic_messages_optional_request_params: dict[str, object],  # mutable-ok: matches the provider interface
         litellm_params: GenericLiteLLMParams,
-        headers: dict,  # mutable-ok: matches the native Messages provider interface
-    ) -> dict:  # mutable-ok: HTTP bodies and the provider interface require plain dicts
+        headers: dict[str, str],  # mutable-ok: matches the native Messages provider interface
+    ) -> dict[str, object]:  # mutable-ok: HTTP bodies and the provider interface require plain dicts
         normalized: Final = params_with_completion_window(
             anthropic_messages_optional_request_params,
             model=model,
