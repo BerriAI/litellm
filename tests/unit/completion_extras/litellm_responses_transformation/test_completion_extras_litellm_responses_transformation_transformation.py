@@ -4032,6 +4032,75 @@ def test_search_only_turn_keeps_tool_search_items_for_the_next_request(status, i
     assert [item["id"] for item in replayed] == ["rs_raw", "rs_incomplete", "tsc_1", "tso_1"]
 
 
+_CLIENT_SEARCH_CALL: Final = {
+    "type": "tool_search_call",
+    "id": "tsc_client",
+    "arguments": {"query": "weather"},
+    "call_id": "call_search",
+    "execution": "client",
+    "status": "completed",
+}
+
+
+def _non_streamed_client_search_turn() -> "ModelResponse":
+    raw_response = _make_incomplete_responses_api_response(None, [_CLIENT_SEARCH_CALL], status="completed")
+    return _call_transform_response(LiteLLMResponsesTransformationHandler(), raw_response)
+
+
+def _streamed_client_search_turn() -> "ModelResponse":
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    completed: Final = iterator.chunk_parser(
+        {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_client_search",
+                "status": "completed",
+                "output": [_CLIENT_SEARCH_CALL],
+                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            },
+        }
+    )
+    built: Final = litellm.stream_chunk_builder([completed], messages=[{"role": "user", "content": "weather in Paris"}])
+    assert isinstance(built, litellm.ModelResponse)
+    return built
+
+
+@pytest.mark.parametrize(
+    "client_search_turn",
+    [_non_streamed_client_search_turn, _streamed_client_search_turn],
+    ids=["non-streaming", "streaming"],
+)
+def test_client_search_turn_returns_its_call_and_replays_with_the_client_output(client_search_turn):
+    choice: Final = client_search_turn().choices[0]
+    client_output: Final = {
+        "type": "tool_search_output",
+        "call_id": "call_search",
+        "execution": "client",
+        "status": "completed",
+        "tools": [{"type": "function", "name": "get_weather", "parameters": {}, "defer_loading": True}],
+    }
+
+    assert choice.finish_reason == "stop"
+    assert choice.message.provider_specific_fields["tool_search_items"] == [_CLIENT_SEARCH_CALL]
+    answered: Final = {
+        **choice.message.model_dump(),
+        "provider_specific_fields": {"tool_search_items": [_CLIENT_SEARCH_CALL, client_output]},
+    }
+    request: Final = LiteLLMResponsesTransformationHandler().transform_request(
+        model="gpt-5.5",
+        messages=[{"role": "user", "content": "weather in Paris"}, answered],
+        optional_params={"tools": [_CLIENT_TOOL_SEARCH]},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+    assert request["input"][1:3] == [_CLIENT_SEARCH_CALL, client_output]
+
+
 def test_reasoning_after_a_tool_search_replays_after_the_search_it_followed():
     from unittest.mock import Mock
 
