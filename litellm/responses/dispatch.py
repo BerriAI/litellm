@@ -1,10 +1,14 @@
 import inspect
 from collections.abc import Awaitable, Callable, Coroutine, Mapping
+from types import MappingProxyType
 from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding selects a sync result or an async awaitable
 
+from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.responses import main
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
-from litellm.rust_bridge.catalog import Route, RouteContext
+from litellm.rust_bridge import detectors
+from litellm.rust_bridge.catalog import Feature, Route, RouteContext
 from litellm.rust_bridge.dispatch import PublicDispatch
 from litellm.rust_bridge.public_call import (
     AsyncFlag,
@@ -61,11 +65,34 @@ def _public_request(
     return native_call(legacy, args, kwargs)
 
 
+def _provider(request: NativeCall) -> str | None:
+    provider: Final = optional_str(request.resolved.get("custom_llm_provider"))
+    try:
+        return get_llm_provider(str(request.resolved["model"]), provider)[1]
+    except BadRequestError:
+        return provider
+
+
+_FEATURES: Final[detectors.Detectors] = MappingProxyType(
+    {
+        **detectors.COMMON,
+        Feature.DROP_MODIFY_PARAMS: detectors.drop_modify_params,
+        Feature.STREAMING: detectors.streaming,
+        Feature.PROMPT_MANAGEMENT: detectors.prompt_management,
+        Feature.TEXT_FORMAT: detectors.text_format,
+        Feature.RETRIES_FALLBACKS: detectors.retries_fallbacks,
+        Feature.DEPLOYMENT_RESPONSE_ID: detectors.deployment_response_id,
+        Feature.ENCODED_ITEM_IDS: detectors.encoded_item_ids,
+    }
+)
+
+
 def _context(request: NativeCall) -> RouteContext:
     return RouteContext(
         Route.RESPONSES,
-        provider=optional_str(request.resolved.get("custom_llm_provider")),
+        provider=_provider(request),
         model=str(request.resolved["model"]),
+        features=detectors.detected(_FEATURES, request),
     )
 
 

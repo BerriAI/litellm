@@ -6,7 +6,9 @@ from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding sele
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.anthropic.pass_through.messages import handler as main
+from litellm.llms.anthropic.pass_through.messages.interceptors import get_messages_interceptors
 from litellm.llms.anthropic.pass_through.safeguards import native_route_classifies
+from litellm.rust_bridge import detectors
 from litellm.rust_bridge.catalog import Feature, Route, RouteContext, Target
 from litellm.rust_bridge.dispatch import PublicDispatch
 from litellm.rust_bridge.messages.entrypoints import (
@@ -87,11 +89,25 @@ def _target(request: NativeCall, model: str, provider: str | None) -> Target:
     return Target.CHAT_COMPLETIONS
 
 
-_FEATURES: Final[Mapping[Feature, Callable[[NativeCall], bool]]] = MappingProxyType(
+def _intercepted(request: NativeCall) -> bool:
+    tools: Final = optional_sequence(request.resolved.get("tools"))
+    if not tools:
+        return False
+    tool_dicts: Final[list[dict[str, object]]] = [tool for tool in tools if isinstance(tool, dict)]
+    provider: Final = _resolved(request)[1]
+    return any(interceptor.can_handle(tool_dicts, provider) for interceptor in get_messages_interceptors())
+
+
+_FEATURES: Final[detectors.Detectors] = MappingProxyType(
     {
+        **detectors.COMMON,
         Feature.SAFEGUARDS_CLASSIFIER: lambda request: native_route_classifies(
             str(request.resolved["model"]), request.resolved.get("safeguards")
         ),
+        Feature.PRE_REQUEST_HOOK: detectors.pre_request_hook,
+        Feature.WEBSEARCH_INTERCEPTION: detectors.websearch_interception,
+        Feature.MESSAGES_INTERCEPTOR: _intercepted,
+        Feature.RESPONSE_CACHE: detectors.response_cache,
     }
 )
 
@@ -104,7 +120,7 @@ def _context(request: NativeCall) -> RouteContext:
         provider=provider,
         model=requested_model,
         target=_target(request, model, provider),
-        features=frozenset(feature for feature, detected in _FEATURES.items() if detected(request)),
+        features=detectors.detected(_FEATURES, request),
     )
 
 

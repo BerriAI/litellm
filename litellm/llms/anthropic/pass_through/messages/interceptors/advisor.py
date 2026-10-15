@@ -47,7 +47,7 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
 
     def can_handle(
         self,
-        tools: list[dict] | None,
+        tools: list[dict[str, object]] | None,
         custom_llm_provider: str | None,
     ) -> bool:
         if not tools:

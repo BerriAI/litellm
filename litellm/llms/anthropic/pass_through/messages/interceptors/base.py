@@ -21,7 +21,7 @@ class MessagesInterceptor(ABC):
     @abstractmethod
     def can_handle(
         self,
-        tools: list[dict] | None,
+        tools: list[dict[str, object]] | None,
         custom_llm_provider: str | None,
     ) -> bool:
         """Return True if this interceptor should handle the request."""

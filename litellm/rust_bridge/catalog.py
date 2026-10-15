@@ -33,6 +33,23 @@ class Target(str, Enum):
 
 class Feature(str, Enum):
     SAFEGUARDS_CLASSIFIER = "safeguards_classifier"
+    MOCK_RESPONSE = "mock_response"
+    PROXY_MCP_TOOLS = "proxy_mcp_tools"
+    CALLER_CLIENT = "caller_client"
+    TIMEOUT_VARIANTS = "timeout_variants"
+    DROP_MODIFY_PARAMS = "drop_modify_params"
+    STREAMING = "streaming"
+    PROMPT_MANAGEMENT = "prompt_management"
+    TEXT_FORMAT = "text_format"
+    RETRIES_FALLBACKS = "retries_fallbacks"
+    DEPLOYMENT_RESPONSE_ID = "deployment_response_id"
+    ENCODED_ITEM_IDS = "encoded_item_ids"
+    PRE_REQUEST_HOOK = "pre_request_hook"
+    WEBSEARCH_INTERCEPTION = "websearch_interception"
+    MESSAGES_INTERCEPTOR = "messages_interceptor"
+    AGENTIC_LOOP_HOOK = "agentic_loop_hook"
+    RESPONSE_CACHE = "response_cache"
+    SSL_SECURITY_LEVEL = "ssl_security_level"
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,14 +85,44 @@ class RouteRule:
 
 Rules: TypeAlias = tuple[RouteRule, ...]
 
+COMMON_PYTHON_FEATURES: Final = frozenset(
+    {
+        Feature.MOCK_RESPONSE,
+        Feature.PROXY_MCP_TOOLS,
+        Feature.CALLER_CLIENT,
+        Feature.TIMEOUT_VARIANTS,
+        Feature.AGENTIC_LOOP_HOOK,
+        Feature.SSL_SECURITY_LEVEL,
+    }
+)
+
+MESSAGES_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {
+    Feature.SAFEGUARDS_CLASSIFIER,
+    Feature.PRE_REQUEST_HOOK,
+    Feature.WEBSEARCH_INTERCEPTION,
+    Feature.MESSAGES_INTERCEPTOR,
+    Feature.RESPONSE_CACHE,
+}
+
+RESPONSES_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {
+    Feature.DROP_MODIFY_PARAMS,
+    Feature.STREAMING,
+    Feature.PROMPT_MANAGEMENT,
+    Feature.TEXT_FORMAT,
+    Feature.RETRIES_FALLBACKS,
+    Feature.DEPLOYMENT_RESPONSE_ID,
+    Feature.ENCODED_ITEM_IDS,
+}
+
 RULES: Final[Rules] = (
     RouteRule(Route.CHAT_COMPLETIONS, Rollout.PYTHON_ONLY),
     RouteRule(Route.EMBEDDINGS, Rollout.PYTHON_ONLY),
     RouteRule(Route.OCR, Rollout.RUST_REQUIRED),
     RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, targets=frozenset({Target.CHAT_COMPLETIONS, Target.RESPONSES})),
-    RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, features=frozenset({Feature.SAFEGUARDS_CLASSIFIER})),
+    RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, features=MESSAGES_PYTHON_FEATURES),
     RouteRule(Route.MESSAGES, Rollout.RUST_OPT_IN, providers=frozenset({"anthropic"})),
     RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY),
+    RouteRule(Route.RESPONSES, Rollout.PYTHON_ONLY, features=RESPONSES_PYTHON_FEATURES),
     RouteRule(Route.RESPONSES, Rollout.PYTHON_ONLY),
     RouteRule(Route.TOKEN_COUNTER, Rollout.PYTHON_ONLY),
     RouteRule(Route.TOKENIZER, Rollout.PYTHON_ONLY),
