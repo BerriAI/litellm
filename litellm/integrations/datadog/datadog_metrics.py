@@ -234,7 +234,7 @@ class DatadogMetricsLogger(CustomBatchLogger):
         try:
             if distributions:
                 await self._upload_distributions_to_datadog({"series": distributions})
-        except Exception as e:
+        except (Exception, asyncio.CancelledError) as e:
             self.log_queue[: len(batch)] = distributions
             verbose_logger.exception("Datadog Metrics: Error in async_send_batch: %s", e)
             raise

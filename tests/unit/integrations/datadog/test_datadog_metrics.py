@@ -1,3 +1,4 @@
+import asyncio
 import gzip
 import json
 import time
@@ -538,6 +539,87 @@ async def test_flush_retries_only_distributions_after_v1_failure(clean_env):
     assert [call.args[0] for call in logger.async_client.post.call_args_list] == [v2_url, v1_url, v2_url, v1_url]
     second_v2 = json.loads(gzip.decompress(logger.async_client.post.call_args_list[2].kwargs["content"]))
     assert [s["metric"] for s in second_v2["series"]] == ["litellm.llm_api.request_count"]
+
+
+@pytest.mark.asyncio
+async def test_flush_keeps_the_whole_batch_when_the_series_upload_fails(clean_env):
+    logger = DatadogMetricsLogger(start_periodic_flush=False)
+    logger.async_client = AsyncMock()
+    v2_url = "https://api.test.datadoghq.com/api/v2/series"
+    v1_url = "https://api.test.datadoghq.com/api/v1/distribution_points"
+    responses = {
+        v2_url: Response(503, json={"errors": ["down"]}, request=Request("POST", v2_url)),
+        v1_url: Response(202, json={"status": "ok"}, request=Request("POST", v1_url)),
+    }
+    logger.async_client.post.side_effect = lambda url, **_: responses[url]
+    timestamp = int(time.time())
+    gauge = {
+        "metric": "litellm.request.total_latency",
+        "type": 3,
+        "points": [{"timestamp": timestamp, "value": 1.5}],
+        "tags": ["env:test"],
+    }
+    distribution = {
+        "metric": "litellm.request.total_latency.distribution",
+        "type": "distribution",
+        "points": ((timestamp, (1.5,)),),
+        "tags": ("env:test",),
+    }
+    logger.log_queue = [gauge, distribution]
+
+    await logger.flush_queue()
+
+    assert logger.log_queue == [gauge, distribution]
+
+    responses[v2_url] = Response(202, json={"status": "ok"}, request=Request("POST", v2_url))
+    await logger.flush_queue()
+
+    assert logger.log_queue == []
+    assert [call.args[0] for call in logger.async_client.post.call_args_list] == [v2_url, v2_url, v1_url]
+
+
+@pytest.mark.asyncio
+async def test_flush_cancelled_during_the_distribution_upload_resends_only_distributions(clean_env):
+    """A size-triggered flush runs under the logging worker's deadline; when it is cancelled after Datadog
+    took the series, the next flush must not count those series a second time."""
+    logger = DatadogMetricsLogger(start_periodic_flush=False)
+    logger.async_client = AsyncMock()
+    v2_url = "https://api.test.datadoghq.com/api/v2/series"
+    v1_url = "https://api.test.datadoghq.com/api/v1/distribution_points"
+    v1_hangs = asyncio.Event()
+    v1_hangs.set()
+
+    async def post(url, **_):
+        if url == v1_url and v1_hangs.is_set():
+            await asyncio.sleep(3600)
+        return Response(202, json={"status": "ok"}, request=Request("POST", url))
+
+    logger.async_client.post.side_effect = post
+    timestamp = int(time.time())
+    count = {
+        "metric": "litellm.llm_api.request_count",
+        "type": 1,
+        "points": [{"timestamp": timestamp, "value": 1}],
+        "tags": ["env:test"],
+    }
+    distribution = {
+        "metric": "litellm.request.total_latency.distribution",
+        "type": "distribution",
+        "points": ((timestamp, (1.5,)),),
+        "tags": ("env:test",),
+    }
+    logger.log_queue = [count, distribution]
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(logger.flush_queue(), timeout=0.1)
+
+    assert logger.log_queue == [distribution]
+
+    v1_hangs.clear()
+    await logger.flush_queue()
+
+    assert logger.log_queue == []
+    assert [call.args[0] for call in logger.async_client.post.call_args_list] == [v2_url, v1_url, v1_url]
 
 
 @pytest.mark.asyncio

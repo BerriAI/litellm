@@ -42,6 +42,7 @@ SITE_HOSTS: Final = ("api.localhost",)
 DD_API_KEY: Final = "synthetic-datadog-api-key"
 WORKERS: Final = 2
 FLUSH_WAIT_SECONDS: Final = 60
+LOGGER_FLUSH_INTERVAL_SECONDS: Final = 5
 SERIES_LIST: Final = TypeAdapter(list[dict[str, JsonValue]])
 
 
@@ -52,6 +53,7 @@ class Upload:
     api_key: str | None
     status: int
     series: tuple[dict[str, JsonValue], ...]
+    received: float
 
 
 class DatadogIntake:
@@ -62,7 +64,7 @@ class DatadogIntake:
 
     def __init__(self, failing: Mapping[str, int] | None = None, delay: float = 0) -> None:
         self._failing: Final = dict(failing or {})
-        self._delay: Final = delay
+        self.delay: Final = delay
         self._lock: Final = threading.Lock()
         self._uploads: Final[list[Upload]] = []
 
@@ -89,10 +91,11 @@ class DatadogIntake:
                     request.headers.get("dd-api-key"),
                     status,
                     tuple(SERIES_LIST.validate_python(payload["series"])),
+                    time.monotonic(),
                 )
             )
-        if self._delay:
-            time.sleep(self._delay)
+        if self.delay:
+            time.sleep(self.delay)
         if status == 503:
             return Reply(status=503, body=b'{"errors": ["Service Unavailable"]}')
         return Reply(status=202, body=b'{"status": "ok"}' if request.target == DISTRIBUTIONS else b'{"errors": []}')
@@ -402,13 +405,26 @@ def test_failed_requests_report_latency_under_their_status_code(
                 + tuple(f"fail-{marker}-{index}" for index in range(per_outcome)),
             )
             assert sorted(statuses) == [200] * per_outcome + [500] * per_outcome, statuses
-            eventually(
-                lambda: len(distribution_samples(intake, LATENCIES[0], model, "500")),
-                lambda total: total >= (per_outcome if reports_failures else 0),
-                seconds=FLUSH_WAIT_SECONDS,
-                return_last_on_timeout=True,
-            )
             _wait_for_samples(intake, model, per_outcome)
+
+            def failed_samples() -> int:
+                return len(distribution_samples(intake, LATENCIES[0], model, "500"))
+
+            if reports_failures:
+                eventually(
+                    failed_samples,
+                    lambda total: total >= per_outcome,
+                    seconds=FLUSH_WAIT_SECONDS,
+                    return_last_on_timeout=True,
+                )
+            else:
+                # The failures finished with the successes, so two more periodic flushes would have carried them
+                eventually(
+                    failed_samples,
+                    lambda total: total > 0,
+                    seconds=2 * LOGGER_FLUSH_INTERVAL_SECONDS,
+                    return_last_on_timeout=True,
+                )
 
             assert len(distribution_samples(intake, LATENCIES[0], model, "200")) == per_outcome
             failed: Final = distribution_samples(intake, LATENCIES[0], model, "500")
@@ -466,8 +482,10 @@ def test_requests_finishing_while_a_slow_flush_is_in_flight_are_not_lost(rig_fac
             model: Final = scenario.model(api_base=rig.provider_url + "/v1", api_key="synthetic-provider-key")
             key: Final = scenario.key(models=[model])
             marker: Final = f"dd-{uuid.uuid4().hex[:8]}"
+            finished: Final[list[float]] = []
             for index in range(requests):
                 assert _chat(str(rig.proxy.client.base_url), key, model, (f"{marker}-{index}",)) == (200,)
+                finished.append(time.monotonic())
                 time.sleep(0.3)
             _wait_for_samples(intake, model, requests)
             eventually(
@@ -477,7 +495,12 @@ def test_requests_finishing_while_a_slow_flush_is_in_flight_are_not_lost(rig_fac
                 return_last_on_timeout=True,
             )
 
-            assert len(intake.accepted(DISTRIBUTIONS)) >= 2, "every sample fit in one flush, nothing overlapped"
+            in_flight: Final = tuple(
+                done
+                for done in finished
+                if any(upload.received < done < upload.received + intake.delay for upload in intake.uploads())
+            )
+            assert in_flight, "no request finished while an upload was in flight"
             for metric in LATENCIES:
                 assert len(distribution_samples(intake, metric, model)) == requests, metric
                 assert len(series_points(intake, metric, model)) == requests, metric
