@@ -360,6 +360,10 @@ class ChatStreamOptions(BaseModel):
     include_usage: bool
 
 
+class PromptCacheOptions(BaseModel):
+    mode: Literal["implicit", "explicit"]
+
+
 class ChatBody(BaseModel):
     model: str
     messages: Sequence[ChatTurn]
@@ -1358,10 +1362,6 @@ class CacheControlInjectionPoint(BaseModel):
     location: Literal["message"]
     role: str | None = None
     index: int | None = None
-
-
-class PromptCacheOptions(BaseModel):
-    mode: Literal["implicit", "explicit"]
 
 
 class LiteLLMParamsBody(BaseModel):
