@@ -28,6 +28,10 @@ from .handler import (
     AsyncSAPStreamIterator,
     GenAIHubOrchestrationError,
     SAPStreamIterator,
+    normalize_reasoning_content,
+)
+from .handler import (
+    normalize_choice as _normalize_choice_fn,
 )
 from .models import (
     ChatCompletionTool,
@@ -405,7 +409,9 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             original_response=raw_response.text,
             additional_args={"complete_input_dict": request_data},
         )
-        response = ModelResponse.model_validate(raw_response.json()["final_result"])
+        response = ModelResponse.model_validate(
+            normalize_reasoning_content(raw_response.json()["final_result"])
+        )
 
         # Strip markdown code blocks if JSON response_format was used with Anthropic models
         # SAP GenAI Hub with Anthropic models sometimes wraps JSON in ```json ... ```
@@ -417,6 +423,20 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
                 response = self._strip_markdown_json(response)
 
         return response
+
+    @staticmethod
+    def _normalize_reasoning_content(raw: dict[str, object]) -> dict[str, object]:
+        # SAP AI Core returns reasoning tokens as a list: message.reasoning_content = [{"content": ..., "signature": ...}]
+        # ModelResponse.reasoning_content is typed Optional[str], so map the list to
+        # thinking_blocks and collapse the text into a single joined string.
+        return normalize_reasoning_content(raw)
+
+    @staticmethod
+    def _normalize_choice(choice: dict[str, object]) -> dict[str, object]:
+        # Normalize a single choice dict (message or delta shape) in isolation.
+        # Exposed as a static method so tests and callers can exercise one choice
+        # without constructing a full response envelope.
+        return _normalize_choice_fn(choice)
 
     def _strip_markdown_json(self, response: ModelResponse) -> ModelResponse:
         """Strip markdown code block wrapper from JSON content if present.

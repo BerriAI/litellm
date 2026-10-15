@@ -124,11 +124,17 @@ class SAPUserMessage(LiteLLMBaseModel):
     content: str | TextContent | ImageContent | list[TextContent | ImageContent]
 
 
+class ReasoningBlock(LiteLLMBaseModel):
+    content: str = ""
+    signature: str = ""
+
+
 class SAPAssistantMessage(LiteLLMBaseModel):
     role: Literal["assistant"] = "assistant"
     content: str | TextContent | list[TextContent] = ""
     refusal: str = ""
     tool_calls: list[MessageToolCall] = Field(default=[])
+    reasoning_content: list[ReasoningBlock] | None = None
 
 
 class SAPToolChatMessage(LiteLLMBaseModel):
