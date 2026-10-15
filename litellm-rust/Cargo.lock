@@ -3922,13 +3922,16 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "futures-util",
+ "litellm-coroutine",
  "litellm-host",
+ "parking_lot",
  "pyo3",
  "pyo3-async-runtimes",
  "pythonize",
  "rstest",
  "serde",
  "serde_json",
+ "thiserror 2.0.19",
  "tokio",
 ]
 
@@ -4024,6 +4027,7 @@ dependencies = [
  "litellm-cache-memory",
  "litellm-cache-response",
  "litellm-core-utils",
+ "litellm-framer",
  "litellm-host",
  "litellm-host-native",
  "litellm-http",
@@ -4107,9 +4111,11 @@ name = "litellm-inference-testing"
 version = "0.1.0"
 dependencies = [
  "futures-util",
+ "litellm-auth",
  "litellm-http",
  "litellm-inference",
  "litellm-secrets",
+ "tokio",
 ]
 
 [[package]]

@@ -10,7 +10,7 @@ import pytest
 from pydantic import JsonValue
 
 from tests.integration._support.client import Gateway, eventually, gateway_from_environment, object_value, string_value
-from tests.integration._support.process import owned_proxy
+from tests.integration._support.process import owned_proxy, stop_child
 
 _SERVICE_URL: Final = "http://127.0.0.1:9414"
 _CONFIG: Final = Path(__file__).with_name("team_metadata_validation_proxy_config.yaml")
@@ -87,9 +87,7 @@ def cost_center_service() -> Iterator[None]:
         assert health is not None and health.status_code == 200
         yield
     finally:
-        if process.poll() is None:
-            process.terminate()
-        process.wait(timeout=5)
+        stop_child(process, grace_seconds=5)
 
 
 @pytest.fixture(scope="module")

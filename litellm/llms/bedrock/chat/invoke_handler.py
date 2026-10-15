@@ -1,9 +1,10 @@
+import json
 import types
 from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Final, cast
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
@@ -13,9 +14,12 @@ from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
+from litellm.litellm_core_utils.prompt_templates.common_utils import native_redacted_thinking_data
 from litellm.llms.anthropic.chat.handler import (
     ModelResponseIterator as AnthropicModelResponseIterator,
 )
+from litellm.llms.anthropic.chat.transformation import JsonModeRequest
+from litellm.llms.base_llm.base_utils import ResponseFormatSchema
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -174,15 +178,34 @@ class AmazonCohereChatConfig:
         return optional_params
 
 
+_REQUEST_BODY: Final = TypeAdapter(Mapping[str, object])
+
+
+def response_format_schema_from_request(data: str, json_mode: bool | None) -> ResponseFormatSchema | None:
+    if not json_mode:
+        return None
+    try:
+        body: Final = _REQUEST_BODY.validate_python(json.loads(data))
+    except (json.JSONDecodeError, ValidationError):
+        return None
+    return JsonModeRequest.model_validate(body).tool_schema()
+
+
 def _stream_decoder(
     bedrock_invoke_provider: litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL | None,
     *,
     model: str,
     json_mode: bool | None,
     sync_stream: bool,
+    response_format_schema: ResponseFormatSchema | None = None,
 ) -> "AWSEventStreamDecoder":
     if bedrock_invoke_provider == "anthropic":
-        return AmazonAnthropicClaudeStreamDecoder(model=model, sync_stream=sync_stream, json_mode=json_mode)
+        return AmazonAnthropicClaudeStreamDecoder(
+            model=model,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+            response_format_schema=response_format_schema,
+        )
     if bedrock_invoke_provider == "deepseek_r1":
         return AmazonDeepSeekR1StreamDecoder(model=model, sync_stream=sync_stream)
     if bedrock_invoke_provider == "moonshot":
@@ -250,7 +273,11 @@ async def make_call(
             )
         else:
             decoder: Final = _stream_decoder(
-                bedrock_invoke_provider, model=model, json_mode=json_mode, sync_stream=False
+                bedrock_invoke_provider,
+                model=model,
+                json_mode=json_mode,
+                sync_stream=False,
+                response_format_schema=response_format_schema_from_request(data, json_mode),
             )
             completion_stream = decoder.aiter_bytes(
                 response.aiter_bytes(chunk_size=stream_chunk_size), response_headers=response.headers
@@ -341,7 +368,11 @@ def make_sync_call(
             )
         else:
             decoder: Final = _stream_decoder(
-                bedrock_invoke_provider, model=model, json_mode=json_mode, sync_stream=True
+                bedrock_invoke_provider,
+                model=model,
+                json_mode=json_mode,
+                sync_stream=True,
+                response_format_schema=response_format_schema_from_request(data, json_mode),
             )
             completion_stream = decoder.iter_bytes(
                 response.iter_bytes(chunk_size=stream_chunk_size), response_headers=response.headers
@@ -452,6 +483,8 @@ class AWSEventStreamDecoder:
         self.json_mode = json_mode
         self._current_tool_name: str | None = None
         self._thinking_ran = False
+        self._thinking_block_index = -1
+        self._thinking_content_block_index: int | None = None
         self._provider_reasoning_tokens: int | None = None
 
     def check_empty_tool_call_args(self) -> bool:
@@ -483,8 +516,14 @@ class AWSEventStreamDecoder:
             return reasoning_content_block["text"]
         return None
 
+    def _thinking_block_index_for(self, content_block_index: int) -> int:
+        if self._thinking_content_block_index != content_block_index:
+            self._thinking_content_block_index = content_block_index
+            self._thinking_block_index += 1
+        return self._thinking_block_index
+
     def translate_thinking_blocks(
-        self, thinking_block: BedrockConverseReasoningContentBlockDelta
+        self, thinking_block: BedrockConverseReasoningContentBlockDelta, content_block_index: int = 0
     ) -> list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None:
         """
         Translate the thinking blocks to a string
@@ -492,17 +531,20 @@ class AWSEventStreamDecoder:
 
         thinking_blocks_list: Final[list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock]] = []
         _thinking_block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock | None = None
+        index: Final = self._thinking_block_index_for(content_block_index)
 
         if "text" in thinking_block:
-            _thinking_block = ChatCompletionThinkingBlock(type="thinking")
+            _thinking_block = ChatCompletionThinkingBlock(type="thinking", index=index)
             _thinking_block["thinking"] = thinking_block["text"]
         elif "signature" in thinking_block:
-            _thinking_block = ChatCompletionThinkingBlock(type="thinking")
+            _thinking_block = ChatCompletionThinkingBlock(type="thinking", index=index)
             _thinking_block["signature"] = thinking_block["signature"]
             _thinking_block["thinking"] = ""  # consistent with anthropic response
         elif "redactedContent" in thinking_block:
             _thinking_block = ChatCompletionRedactedThinkingBlock(
-                type="redacted_thinking", data=thinking_block["redactedContent"]
+                type="redacted_thinking",
+                data=native_redacted_thinking_data(thinking_block["redactedContent"]),
+                index=index,
             )
         if _thinking_block is not None:
             thinking_blocks_list.append(_thinking_block)
@@ -522,6 +564,7 @@ class AWSEventStreamDecoder:
     def _handle_converse_start_event(
         self,
         start_obj: ContentBlockStartEvent,
+        content_block_index: int = 0,
     ) -> tuple[
         ChatCompletionToolCallChunk | None,
         dict,
@@ -558,7 +601,7 @@ class AWSEventStreamDecoder:
             elif (
                 "reasoningContent" in start_obj and start_obj["reasoningContent"] is not None
             ):  # redacted thinking can be in start object
-                thinking_blocks = self.translate_thinking_blocks(start_obj["reasoningContent"])
+                thinking_blocks = self.translate_thinking_blocks(start_obj["reasoningContent"], content_block_index)
                 provider_specific_fields = {
                     "reasoningContent": start_obj["reasoningContent"],
                 }
@@ -605,7 +648,7 @@ class AWSEventStreamDecoder:
                 "reasoningContent": delta_obj["reasoningContent"],
             }
             reasoning_content = self.extract_reasoning_content_str(delta_obj["reasoningContent"])
-            thinking_blocks = self.translate_thinking_blocks(delta_obj["reasoningContent"])
+            thinking_blocks = self.translate_thinking_blocks(delta_obj["reasoningContent"], index)
             if thinking_blocks and len(thinking_blocks) > 0 and reasoning_content is None:
                 reasoning_content = ""  # set to non-empty string to ensure consistency with Anthropic
         elif "citationsContent" in delta_obj:
@@ -667,7 +710,7 @@ class AWSEventStreamDecoder:
                     tool_use,
                     provider_specific_fields,
                     thinking_blocks,
-                ) = self._handle_converse_start_event(start_obj)
+                ) = self._handle_converse_start_event(start_obj, content_block_index)
             elif "delta" in chunk_data:
                 delta_obj: Final = ContentBlockDeltaEvent(**chunk_data["delta"])
                 (
@@ -878,6 +921,7 @@ class AmazonAnthropicClaudeStreamDecoder(AWSEventStreamDecoder):
         model: str,
         sync_stream: bool,
         json_mode: bool | None = None,
+        response_format_schema: ResponseFormatSchema | None = None,
     ) -> None:
         """
         Child class of AWSEventStreamDecoder that handles the streaming response from the Anthropic family of models
@@ -889,6 +933,7 @@ class AmazonAnthropicClaudeStreamDecoder(AWSEventStreamDecoder):
             streaming_response=None,
             sync_stream=sync_stream,
             json_mode=json_mode,
+            response_format_schema=response_format_schema,
         )
 
     def _chunk_parser(self, chunk_data: dict) -> ModelResponseStream:
