@@ -409,6 +409,7 @@ jobs:
               tests/unit/embeddings
               tests/unit/endpoints
               tests/unit/files
+              tests/unit/fine_tuning
               tests/unit/images
               tests/unit/interactions
               tests/unit/messages

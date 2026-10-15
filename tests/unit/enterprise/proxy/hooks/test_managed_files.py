@@ -3,6 +3,7 @@ import json
 import logging
 import time
 import asyncio
+import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, cast
@@ -12,6 +13,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 from openai import APIConnectionError
+from pydantic import TypeAdapter
 
 if TYPE_CHECKING:
     from litellm.types.utils import LiteLLMBatch
@@ -5455,3 +5457,71 @@ async def test_fine_tuning_create_keeps_a_raw_validation_file_next_to_a_managed_
     )
 
     assert (sent["training_file"], sent["validation_file"]) == ("file-train", "file-raw-validate"), sent
+
+
+_REQUEST_KWARGS: Final = TypeAdapter(dict[str, object])
+_DEPLOYMENTS: Final = TypeAdapter(list[dict[str, dict[str, str]]])
+
+
+async def _routable_deployment_ids(
+    managed_files: PROXY_LiteLLMManagedFiles, call_type: str, request: Mapping[str, str]
+) -> tuple[str, ...]:
+    prepared: Final = _REQUEST_KWARGS.validate_python(
+        await managed_files.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(user_id="user_a", team_id="team_a", parent_otel_span=MagicMock()),
+            cache=MagicMock(),
+            data=dict(request),
+            call_type=call_type,
+        )
+    )
+    routable: Final = _DEPLOYMENTS.validate_python(
+        await managed_files.async_filter_deployments(
+            model="gpt-4o-mini",
+            healthy_deployments=[{"model_info": {"id": model_id}} for model_id in ("model-a", "model-b", "model-c")],
+            messages=None,
+            request_kwargs=prepared,
+        )
+    )
+    return tuple(deployment["model_info"]["id"] for deployment in routable)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_type", "files", "expected"),
+    [
+        pytest.param(
+            "acreate_fine_tuning_job",
+            {"training_file": {"model-a": "f-1", "model-b": "f-2"}, "validation_file": {"model-b": "f-3"}},
+            ("model-b",),
+            id="fine-tune-routes-to-the-deployment-holding-both-files",
+        ),
+        pytest.param(
+            "acreate_fine_tuning_job",
+            {"training_file": {"model-a": "f-1", "model-b": "f-2"}, "validation_file": "file-raw-validate"},
+            ("model-a", "model-b"),
+            id="fine-tune-raw-validation-file-does-not-narrow",
+        ),
+        pytest.param(
+            "acreate_fine_tuning_job",
+            {"training_file": {"model-a": "f-1"}, "validation_file": {"model-b": "f-3"}},
+            ("model-a", "model-b", "model-c"),
+            id="fine-tune-files-on-disjoint-deployments-keep-every-deployment",
+        ),
+        pytest.param("acreate_batch", {"input_file_id": {"model-c": "f-4"}}, ("model-c",), id="batch-input-file"),
+    ],
+)
+async def test_create_from_managed_files_routes_only_to_deployments_holding_every_file(
+    call_type: str, files: Mapping[str, Mapping[str, str] | str], expected: tuple[str, ...]
+) -> None:
+    owned: Final = {
+        field: _owned_managed_file(str(uuid.uuid5(uuid.NAMESPACE_URL, field)), mappings)
+        for field, mappings in files.items()
+        if not isinstance(mappings, str)
+    }
+    managed_files, _ = _managed_files_with_fake_prisma(*(row for _, row in owned.values()))
+    request: Final = {
+        "model": "gpt-4o-mini",
+        **{field: owned[field][0] if field in owned else str(mappings) for field, mappings in files.items()},
+    }
+
+    assert await _routable_deployment_ids(managed_files, call_type, request) == expected
