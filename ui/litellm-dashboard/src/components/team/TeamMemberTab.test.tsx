@@ -664,6 +664,96 @@ describe("TeamMembersComponent", () => {
     });
   });
 
+  describe("temporary budget increase", () => {
+    const renderWithTempBudget = (temp: {
+      temp_budget_increase?: number | null;
+      temp_budget_expiry?: string | null;
+    }) => {
+      const base = createMockTeamData();
+      const membership = base.team_memberships[0];
+      renderWithProviders(
+        <TeamMembersComponent
+          teamData={createMockTeamData({
+            team_memberships: [
+              { ...membership, litellm_budget_table: { ...membership.litellm_budget_table!, ...temp } },
+            ],
+          })}
+          canEditTeam={false}
+          handleMemberDelete={mockHandleMemberDelete}
+          onMemberSpendReset={mockOnMemberSpendReset}
+          onMemberBudgetReset={mockOnMemberBudgetReset}
+          setSelectedEditMember={mockSetSelectedEditMember}
+          setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
+          setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
+        />,
+      );
+    };
+
+    it("shows just the amount of an active increase", () => {
+      renderWithTempBudget({ temp_budget_increase: 150, temp_budget_expiry: "2099-11-01T00:00:00Z" });
+
+      const cell = screen.getByTestId("member-temp-budget");
+      expect(cell).toHaveAttribute("data-active", "true");
+      expect(cell).toHaveTextContent(/^\$150\.00$/);
+    });
+
+    it("shows an expired increase muted and struck through, still as just the amount", () => {
+      renderWithTempBudget({ temp_budget_increase: 150, temp_budget_expiry: "2020-01-11T00:00:00Z" });
+
+      const cell = screen.getByTestId("member-temp-budget");
+      expect(cell).toHaveAttribute("data-active", "false");
+      expect(cell).toHaveTextContent(/^\$150\.00$/);
+      expect(cell).toHaveClass("line-through");
+    });
+
+    it("treats an expiry without a timezone as UTC, matching the key views", () => {
+      renderWithTempBudget({ temp_budget_increase: 10, temp_budget_expiry: "2099-06-15T12:00:00" });
+
+      expect(screen.getByTestId("member-temp-budget")).toHaveAttribute("data-active", "true");
+    });
+
+    it("shows nothing for a member without an increase, with a 0 increase, or with only one of the two fields", () => {
+      renderWithTempBudget({ temp_budget_increase: null, temp_budget_expiry: null });
+      expect(screen.queryByTestId("member-temp-budget")).not.toBeInTheDocument();
+    });
+
+    it("has its own Temporary Budget column, separate from Team Member Budget", () => {
+      renderWithTempBudget({ temp_budget_increase: 150, temp_budget_expiry: "2099-11-01T00:00:00Z" });
+
+      expect(screen.getByRole("columnheader", { name: /temporary budget/i })).toBeInTheDocument();
+      const row = screen.getByRole("row", { name: /user1@test\.com/ });
+      const budgetCell = within(row)
+        .getAllByRole("cell")
+        .find((cell) => within(cell).queryByText("$1,000.00") !== null);
+      expect(budgetCell).toBeDefined();
+      expect(within(budgetCell!).queryByTestId("member-temp-budget")).not.toBeInTheDocument();
+      expect(within(row).getByTestId("member-temp-budget")).toBeInTheDocument();
+    });
+
+    it("lets the column be hidden from the Columns menu, and remembers the choice", async () => {
+      window.localStorage.clear();
+      const user = userEvent.setup();
+      renderWithTempBudget({ temp_budget_increase: 150, temp_budget_expiry: "2099-11-01T00:00:00Z" });
+
+      await user.click(screen.getByTestId("view-options-trigger"));
+      await user.click(await screen.findByTestId("view-option-temp_budget"));
+
+      await waitFor(() => expect(screen.queryByTestId("member-temp-budget")).not.toBeInTheDocument());
+      expect(window.localStorage.getItem("litellm_table_columns_team-members")).toBe('{"temp_budget":false}');
+      window.localStorage.clear();
+    });
+
+    it("shows nothing for a 0 increase", () => {
+      renderWithTempBudget({ temp_budget_increase: 0, temp_budget_expiry: "2099-11-01T00:00:00Z" });
+      expect(screen.queryByTestId("member-temp-budget")).not.toBeInTheDocument();
+    });
+
+    it("shows nothing when the expiry is missing", () => {
+      renderWithTempBudget({ temp_budget_increase: 150, temp_budget_expiry: null });
+      expect(screen.queryByTestId("member-temp-budget")).not.toBeInTheDocument();
+    });
+  });
+
   describe("budget source", () => {
     const teamDataWithDefault = () => {
       const base = createMockTeamData();

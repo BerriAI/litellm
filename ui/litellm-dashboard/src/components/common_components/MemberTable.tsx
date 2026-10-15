@@ -10,6 +10,7 @@ import {
   DataTableSortHeader,
   DataTableToolbar,
 } from "@/components/shared/DataTable";
+import { usePersistedColumnVisibility } from "@/components/shared/DataTable/usePersistedColumnVisibility";
 import { StatusBadge } from "@/components/shared/table_cells";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -21,6 +22,8 @@ export type MemberTableSortValue = string | number | null | undefined;
 
 export interface MemberTableColumn {
   title: React.ReactNode;
+  // Plain-text name shown in the Columns menu; the title is often a ReactNode (text plus tooltip icon).
+  label?: string;
   key: string;
   render: (member: Member) => React.ReactNode;
   sortValue?: (member: Member) => MemberTableSortValue;
@@ -40,6 +43,8 @@ export interface MemberTableProps {
   onResetSpend?: (member: Member) => void;
   resetSpendDisabledReason?: (member: Member) => string | null;
   emptyText?: string;
+  // When set, shows the Columns menu and remembers the hidden columns in localStorage under this id.
+  columnsTableId?: string;
 }
 
 const ALL_ROLES = "all";
@@ -101,7 +106,7 @@ const extraColumnDef = (column: MemberTableColumn): ColumnDef<Member> => {
       header: () => <span className="font-medium">{column.title}</span>,
       enableSorting: false,
       enableGlobalFilter: false,
-      meta: { numeric: column.numeric },
+      meta: { numeric: column.numeric, title: column.label },
       cell: ({ row }) => column.render(row.original),
     };
   }
@@ -112,7 +117,7 @@ const extraColumnDef = (column: MemberTableColumn): ColumnDef<Member> => {
     sortDescFirst: false,
     sortUndefined: "last",
     enableGlobalFilter: false,
-    meta: { numeric: column.numeric },
+    meta: { numeric: column.numeric, title: column.label },
     cell: ({ row }) => column.render(row.original),
   };
 };
@@ -184,6 +189,7 @@ const buildColumns = ({
     header: "Actions",
     size: ACTIONS_COLUMN_WIDTH,
     enableSorting: false,
+    enableHiding: false,
     enableGlobalFilter: false,
     meta: { pinned: "right" },
     cell: ({ row }) =>
@@ -227,7 +233,9 @@ export default function MemberTable({
   onResetSpend,
   resetSpendDisabledReason,
   emptyText,
+  columnsTableId,
 }: MemberTableProps) {
+  const { columnVisibility, onColumnVisibilityChange } = usePersistedColumnVisibility(columnsTableId ?? "members");
   const [globalFilter, setGlobalFilter] = useState("");
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -267,6 +275,8 @@ export default function MemberTable({
         onColumnFiltersChange={setColumnFilters}
         globalFilter={globalFilter}
         onGlobalFilterChange={setGlobalFilter}
+        columnVisibility={columnVisibility}
+        onColumnVisibilityChange={onColumnVisibilityChange}
         noDataMessage={
           <span className="text-muted-foreground">
             {isNarrowed ? "No members match your search or filters" : emptyText ?? "No data"}
@@ -280,7 +290,7 @@ export default function MemberTable({
               onSearchChange={setGlobalFilter}
               searchPlaceholder="Search by name, email, or user ID"
               onOpenFilters={() => setFiltersOpen(true)}
-              showViewOptions={false}
+              showViewOptions={columnsTableId !== undefined}
             />
             <DataTableFilterDrawer
               table={table}
