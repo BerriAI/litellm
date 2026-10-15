@@ -1,3 +1,4 @@
+import airiaLogo from "../../../../../public/assets/logos/airia.svg";
 import aimSecurityLogo from "../../../../../public/assets/logos/aim_security.jpeg";
 import aktoLogo from "../../../../../public/assets/logos/akto.svg";
 import aliceLogo from "../../../../../public/assets/logos/alice.svg";
@@ -325,6 +326,7 @@ export const guardrailLogoMap = {
   "LLM Shield Proxy": llmShieldProxyLogo.src,
   "Conduct Guard": conductLogo.src,
   Wingback: wingbackLogo.src,
+  "Airia Guardrail": airiaLogo.src,
   "Decision Model": litellmLogo.src,
 } satisfies Record<string, string>;
 
