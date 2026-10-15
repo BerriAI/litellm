@@ -521,6 +521,9 @@ def test_missing_continuation_key_reports_configuration_for_each_carrier(tmp_pat
     "event_kind,access",
     [
         ("tools", "normal"),
+        ("tools", "rollback"),
+        ("tools", "legacy-upstream-sse"),
+        ("updated", "legacy-upstream-sse"),
         ("tools", "modern-boundary"),
         ("prompts", "normal"),
         ("resources", "normal"),
@@ -702,10 +705,10 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
 
             return EmptyResult()
 
-        if ctx.request.headers.get("x-probe-target") == "limited":
+        if getattr(ctx.request, "headers", {}).get("x-probe-target") == "limited":
             limited_requests.append(ctx.method)
         if ctx.method == "tools/list":
-            catalog_credentials.append(ctx.request.headers.get("authorization"))
+            catalog_credentials.append(getattr(ctx.request, "headers", {}).get("authorization"))
             if access == "setup-race" and connected.is_set() and not setup_changed.is_set():
                 setup_changed.set()
                 await change_tools()
@@ -721,7 +724,7 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
             else:
                 raise MCPError(code=-32603, message="Discovery unavailable")
         if ctx.method == "subscriptions/listen":
-            listener_credentials.append(ctx.request.headers.get("authorization"))
+            listener_credentials.append(getattr(ctx.request, "headers", {}).get("authorization"))
             if access == "legacy-caller-no-notifications":
                 raise MCPError(code=-32601, message="Upstream has no subscription support")
             return await upstream_listener(ctx, SubscriptionsListenRequestParams.model_validate(ctx.params))
@@ -1056,11 +1059,19 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
                                     await asyncio.sleep(0.2)
                             assert token_grants[0] == token_grants[-1]
                         if access != "setup-race":
-                            async with streamable_http_client(upstream_url + "/mcp") as direct_streams:
+                            direct_connection = (
+                                sse_client(upstream_url + "/sse")
+                                if access == "legacy-upstream-sse"
+                                else streamable_http_client(upstream_url + "/mcp")
+                            )
+                            async with direct_connection as direct_streams:
                                 async with ClientSession(direct_streams[0], direct_streams[1]) as direct:
-                                    direct.adopt(
-                                        DiscoverResult.model_validate(await direct.send_discover("2026-07-28"))
-                                    )
+                                    if access == "legacy-upstream-sse":
+                                        await direct.initialize()
+                                    else:
+                                        direct.adopt(
+                                            DiscoverResult.model_validate(await direct.send_discover("2026-07-28"))
+                                        )
                                     changed = await direct.call_tool("change_tools", {})
                                     assert not changed.is_error
                         if access in (
@@ -1123,7 +1134,7 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
                                 await asyncio.wait_for(anext(subscription), 0.5)
                     assert await asyncio.to_thread(disconnected.wait, 3), "Upstream listener survived disconnect"
 
-    app: Final = upstream.streamable_http_app(
+    app: Final = (upstream.sse_app if access == "legacy-upstream-sse" else upstream.streamable_http_app)(
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False)
     )
 
@@ -1162,9 +1173,9 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
                                 if access.startswith("renewal")
                                 else {}
                             ),
-                            "url": upstream_url + "/mcp",
-                            "transport": "http",
-                            "protocol_version": "2025-11-25" if access in ("legacy", "legacy-both") else "2026-07-28",
+                            "url": upstream_url + ("/sse" if access == "legacy-upstream-sse" else "/mcp"),
+                            "transport": "sse" if access == "legacy-upstream-sse" else "http",
+                            "protocol_version": "2025-11-25" if access in ("legacy", "legacy-both", "legacy-upstream-sse") else "2026-07-28",
                             **({"allowed_tools": ["change_tools"]} if access == "hidden" else {}),
                             **({"rpm": 1, "static_headers": {"X-Probe-Target": "limited"}} if access == "rate-limited" else {}),
                             **({"timeout": 2} if access == "concurrent-probes" else {}),
@@ -1236,6 +1247,28 @@ def test_modern_subscription_delivers_changes_between_calls_and_refreshes_tools(
 
             eventually(lambda: len(active_listeners), lambda count: count == 0, seconds=10)
             assert not active_listeners, "Upstream listener survived client disconnect"
+
+        if access == "rollback":
+            rolled_back = yaml.safe_load(config.read_text())
+            rolled_back["general_settings"]["mcp_advertised_versions"] = ["2025-11-25"]
+            config.write_text(yaml.safe_dump(rolled_back))
+
+            async def legacy_after_rollback(gateway: Gateway) -> None:
+                async with httpx2.AsyncClient(headers={"Authorization": "Bearer " + gateway.key}) as client:
+                    async with streamable_http_client(str(gateway.client.base_url).rstrip("/") + "/mcp/", http_client=client) as streams:
+                        async with ClientSession(streams[0], streams[1]) as session:
+                            await session.initialize()
+                            assert "peer-added" in {tool.name for tool in (await session.list_tools()).tools}
+                            result = await session.call_tool("peer-added", {})
+                            assert not result.is_error
+                            assert result.content[0].text == "new tool"
+
+            with owned_proxy(seed, tmp_path / "rollback", environment, config=config, database_setup=(), remove_environment=("DATABASE_URL", "DATABASE_URL_READ_REPLICA", "DIRECT_URL", "INTEGRATION_PROXY_DATABASE_URL", "INTEGRATION_PROXY_READ_REPLICA_URL")) as rollback:
+                rejected = rpc(rollback, "tools/list", {}, status=400)
+                assert "error" in rejected
+                asyncio.run(legacy_after_rollback(rollback))
+            eventually(lambda: len(active_listeners), lambda count: count == 0, seconds=10)
+            assert tool_executions == ["change_tools", "added"], "Rollback duplicated or restarted upstream tool execution"
 
 
 def test_subscription_partial_setup_releases_upstream_capacity() -> None:
@@ -1426,3 +1459,67 @@ def test_modern_sampling_obeys_opt_in_and_completes_upstream_interaction(tmp_pat
                 assert response["result"]["isError"], response
                 assert "sampling" in json.dumps(response).lower(), response
                 assert calls == (), "Disabled sampling reached the model provider"
+
+
+
+@pytest.mark.parametrize("downstream", ["2025-11-25", "2026-07-28"])
+@pytest.mark.parametrize("upstream", ["2025-11-25", "2026-07-28"])
+def test_input_interaction_pairs_preserve_consent_and_never_restart_legacy_work(
+    tmp_path: Path, downstream: str, upstream: str
+) -> None:
+    import asyncio
+
+    import httpx2
+    from integration._support.mcp import mcp_peer, tool_calls
+    from mcp import ClientSession
+    from mcp.client.streamable_http import streamable_http_client
+    from mcp.types import CallToolResult, DiscoverResult, ElicitResult, InputRequiredResult
+
+    modern_upstream = upstream == "2026-07-28"
+    peer_context = wire_server(interaction_peer) if modern_upstream else mcp_peer("sse", rich=True)
+    with peer_context as peer, httpx.Client() as http_client:
+        config = tmp_path / "proxy.yaml"
+        config.write_text(yaml.safe_dump({
+            "model_list": [],
+            "mcp_servers": {"peer": {"url": peer.url, "transport": "http" if modern_upstream else "sse", "protocol_version": upstream, "allow_elicitation": True}},
+            "general_settings": {"master_key": _KEY, "store_model_in_db": False, "mcp_advertised_versions": ["2025-11-25", "2026-07-28"]},
+        }))
+        consent_requests = []
+
+        async def consent(context, params):
+            consent_requests.append(params.message)
+            return ElicitResult(action="accept", content=None if modern_upstream else {"confirmed": True})
+
+        async def exercise(gateway):
+            async with httpx2.AsyncClient(headers={"Authorization": "Bearer " + gateway.key}) as client:
+                async with streamable_http_client(str(gateway.client.base_url).rstrip("/") + "/mcp/", http_client=client) as streams:
+                    async with ClientSession(streams[0], streams[1], elicitation_callback=consent) as session:
+                        if downstream == "2026-07-28":
+                            session.adopt(DiscoverResult.model_validate(await session.send_discover(downstream)))
+                        else:
+                            await session.initialize()
+                        name = "peer-confirm" if modern_upstream else "peer-elicit"
+                        args = {} if modern_upstream else {"question": "Confirm"}
+                        await session.list_tools()
+                        result = await session.call_tool(name, args, allow_input_required=True)
+                        if downstream == "2026-07-28" and modern_upstream:
+                            assert isinstance(result, InputRequiredResult)
+                            assert set(result.input_requests) == {"consent"}
+                            result = await session.call_tool(name, args, request_state=result.request_state, input_responses={"consent": ElicitResult(action="accept")})
+                        assert isinstance(result, CallToolResult)
+                        if downstream == "2026-07-28" and not modern_upstream:
+                            assert result.is_error
+                            assert "legacy upstream cannot resume input" in result.content[0].text.lower()
+                            assert "partially completed" in result.content[0].text.lower()
+                            assert consent_requests == []
+                        else:
+                            assert not result.is_error, result
+                            assert result.content[0].text == ("confirmed" if modern_upstream else "elicited:accept")
+                            assert len(consent_requests) == (0 if downstream == "2026-07-28" else 1)
+
+        seed = Gateway(http_client, _KEY, peer.url)
+        with owned_proxy(seed, tmp_path / "gateway", {"PYTHONPATH": _PROXY_PYTHONPATH, "STORE_MODEL_IN_DB": "False", "DISABLE_SCHEMA_UPDATE": "true", "LITELLM_SALT_KEY": "interaction-matrix-test"}, config=config, database_setup=(), remove_environment=("DATABASE_URL", "DATABASE_URL_READ_REPLICA", "DIRECT_URL", "REDIS_URL", "REDIS_HOST")) as gateway:
+            asyncio.run(exercise(gateway))
+        observed = peer.drain()
+        calls = [json.loads(item.body) for item in observed if item.method == "POST" and json.loads(item.body).get("method") == "tools/call"] if modern_upstream else tool_calls(observed)
+        assert len(calls) == (2 if modern_upstream else 1), "Gateway restarted work instead of returning or resuming the original request"

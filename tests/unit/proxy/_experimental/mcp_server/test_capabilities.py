@@ -145,7 +145,8 @@ def test_modern_protocol_is_rejected_on_legacy_sse_paths(path: str, monkeypatch:
 @pytest.mark.parametrize("revision,upstreams,transport,allowed", [
     ("2026-07-28", frozenset({"2026-07-28"}), MCPTransport.http, True),
     ("2025-11-25", frozenset({"2026-07-28"}), MCPTransport.http, False),
-    ("2026-07-28", frozenset({"2025-11-25", "2026-07-28"}), MCPTransport.http, False),
+    ("2026-07-28", frozenset({"2025-11-25", "2026-07-28"}), MCPTransport.http, True),
+    ("2026-07-28", frozenset({"2025-11-25"}), MCPTransport.http, True),
     ("2026-07-28", frozenset({"2026-07-28"}), MCPTransport.stdio, False),
 ])
 def test_subscription_flags_require_a_supported_protocol_pair(revision, upstreams, transport, allowed):
