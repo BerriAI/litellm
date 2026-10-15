@@ -13,6 +13,7 @@ from functools import partial
 from types import EllipsisType
 from typing import Any, Final, NoReturn, TypeAlias, overload
 
+import anyio
 from fastapi import HTTPException
 from mcp import MCPError, ReadResourceResult, Resource
 from mcp.types import (
@@ -52,6 +53,7 @@ from typing_extensions import ReadOnly, TypedDict, assert_never
 from litellm._logging import verbose_logger
 from litellm.constants import (
     MAXIMUM_TRACEBACK_LINES_TO_LOG,
+    MCP_TOOL_LISTING_TIMEOUT,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
@@ -3501,6 +3503,7 @@ class GatewayOperations:
     async def _execute(self, operation: GatewayOperation, context: OperationContext) -> GatewayResult:
         match operation:
             case DiscoverRequest():
+                deadline: Final = time.monotonic() + MCP_TOOL_LISTING_TIMEOUT
                 disabled: Final = disabled_capabilities()
                 listings: Final = (
                     ()
@@ -3524,6 +3527,17 @@ class GatewayOperations:
                 )
                 try:
                     results: Final = await asyncio.gather(*tasks)
+                    from litellm.proxy._experimental.mcp_server.subscriptions import subscription_capabilities
+
+                    async def discover_notifications() -> tuple[frozenset[str], ServerCapabilities]:
+                        remaining: Final = deadline - time.monotonic()
+                        if context.protocol_version == "2026-07-28" and not context.mcp_proxy_mode and remaining > 0:
+                            # Optional probes share the catalog budget, including target preparation.
+                            with anyio.move_on_after(remaining):
+                                return await subscription_capabilities(context)
+                        return frozenset(MCP_LEGACY_VERSIONS), ServerCapabilities()
+
+                    upstream_versions, notifications = await discover_notifications()
                 finally:
                     try:
                         for task in tasks:
@@ -3536,21 +3550,30 @@ class GatewayOperations:
                     revision=context.protocol_version or "2025-11-25",
                     transport=MCPTransport.http,
                     authorized_operations=enabled_gateway_operations(disabled),
-                    upstream_versions=frozenset(MCP_LEGACY_VERSIONS),
+                    upstream_versions=upstream_versions,
                     capabilities=ServerCapabilities(
-                        tools=ToolsCapability()
-                        if any(isinstance(result, ListToolsResult) and result.tools for result in results)
-                        else None,
-                        prompts=PromptsCapability()
-                        if any(isinstance(result, ListPromptsResult) and result.prompts for result in results)
-                        else None,
-                        resources=ResourcesCapability()
-                        if any(
-                            (isinstance(result, ListResourcesResult) and result.resources)
-                            or (isinstance(result, ListResourceTemplatesResult) and result.resource_templates)
-                            for result in results
-                        )
-                        else None,
+                        tools=notifications.tools
+                        or (
+                            ToolsCapability()
+                            if any(isinstance(result, ListToolsResult) and result.tools for result in results)
+                            else None
+                        ),
+                        prompts=notifications.prompts
+                        or (
+                            PromptsCapability()
+                            if any(isinstance(result, ListPromptsResult) and result.prompts for result in results)
+                            else None
+                        ),
+                        resources=notifications.resources
+                        or (
+                            ResourcesCapability()
+                            if any(
+                                (isinstance(result, ListResourcesResult) and result.resources)
+                                or (isinstance(result, ListResourceTemplatesResult) and result.resource_templates)
+                                for result in results
+                            )
+                            else None
+                        ),
                     ),
                 )
             case AuthorizedToolCall():

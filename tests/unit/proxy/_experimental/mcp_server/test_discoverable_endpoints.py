@@ -582,6 +582,66 @@ async def test_authorize_endpoint_preserves_existing_query_params():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("auth_mode", ["direct", "true_passthrough", "oauth_delegate"])
+@pytest.mark.parametrize(
+    ("authorization_url", "expected_access_type", "expected_prompt"),
+    [
+        ("https://accounts.google.com/o/oauth2/v2/auth", ["offline"], ["consent"]),
+        ("https://accounts.google.com/o/oauth2/v2/auth?prompt=select_account", ["offline"], ["select_account"]),
+        ("https://accounts.google.com/o/oauth2/v2/auth?access_type=online&prompt=none", ["online"], ["none"]),
+        ("https://provider.example/oauth/authorize", None, None),
+        ("https://accounts.google.com.example/oauth/authorize", None, None),
+    ],
+)
+async def test_authorize_preserves_contract_with_provider_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+    auth_mode: str,
+    authorization_url: str,
+    expected_access_type: list[str] | None,
+    expected_prompt: list[str] | None,
+) -> None:
+    from urllib.parse import parse_qs, urlparse
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import authorize_with_server
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "isolated-oauth-test-salt")
+    is_bridge: Final = auth_mode != "direct"
+    server: Final = _bridge_server(
+        auth_type=MCPAuth(auth_mode) if is_bridge else MCPAuth.oauth2,
+        dcr_bridge=is_bridge,
+        client_id=None if is_bridge else "configured-client",
+        authorization_url=authorization_url + ("&" if "?" in authorization_url else "?") + "scope=configured-scope",
+    )
+    response: Final = await authorize_with_server(
+        request=_bridge_mock_request(),
+        mcp_server=server,
+        client_id="caller-client",
+        redirect_uri=_BRIDGE_CLIENT_REDIRECT if is_bridge else "http://127.0.0.1:60108/callback",
+        state="caller-state",
+        scope="requested-scope",
+        code_challenge="caller-challenge",
+        code_challenge_method="S256",
+    )
+    query: Final = parse_qs(urlparse(response.headers["location"]).query)
+
+    assert response.status_code == 307
+    assert query.get("access_type") == expected_access_type
+    assert query.get("prompt") == expected_prompt
+    assert query["scope"] == ["requested-scope"]
+    assert query["code_challenge"] == ["caller-challenge"]
+    assert query["code_challenge_method"] == ["S256"]
+    assert query["client_id"] == ["caller-client" if is_bridge else "configured-client"]
+    if is_bridge:
+        assert query["redirect_uri"] == [_BRIDGE_CLIENT_REDIRECT]
+        assert query["state"] == ["caller-state"]
+        assert "set-cookie" not in response.headers
+    else:
+        assert query["redirect_uri"] == ["https://litellm.example.com/callback"]
+        assert query["state"] != ["caller-state"]
+        assert "set-cookie" in response.headers
+
+
+@pytest.mark.asyncio
 async def test_authorize_endpoint_forwards_pkce_parameters():
     """Test that authorize endpoint forwards PKCE parameters (code_challenge and code_challenge_method)"""
     try:
