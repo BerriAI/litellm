@@ -26,9 +26,12 @@ def router(monkeypatch: pytest.MonkeyPatch) -> Router:
         model_list=[
             _deployment("gpt-4.1-mini"),
             _deployment("gpt-4.1", model="openai/gpt-4.1"),
-            _deployment("model_name_team1_abc", team_id="team1", team_public_model_name="team-chat"),
+            _deployment(
+                "model_name_team1_abc", model="openai/gpt-4o", team_id="team1", team_public_model_name="team-chat"
+            ),
             _deployment("hidden", model="anthropic/claude-sonnet-4-5", discoverable=False),
-        ]
+        ],
+        model_group_alias={"legacy": "gpt-4.1"},
     )
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "llm_model_list", router.model_list)
@@ -162,3 +165,44 @@ async def test_alias_the_key_also_lists_reports_its_target_metadata_at_list_and_
     assert rows["fast"] == {**rows["gpt-4.1-mini"], "id": "fast"}
     target = await proxy_server.model_info(model_id="gpt-4.1-mini", user_api_key_dict=caller)
     assert await proxy_server.model_info(model_id="fast", user_api_key_dict=caller) == {**target, "id": "fast"}
+
+
+def _keyholder(*models: str) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(api_key="sk-test", user_id="u", user_role=LitellmUserRoles.INTERNAL_USER, models=list(models))
+
+
+@pytest.mark.asyncio
+async def test_team_alias_to_a_model_the_team_does_not_list_reports_that_model_at_list_and_retrieval(
+    router: Router,
+) -> None:
+    caller = _team_member(models=["gpt-4.1-mini", "model_name_team1_abc", "fast"], team_model_aliases={"fast": "gpt-4.1"})
+    target_holder = _keyholder("gpt-4.1")
+
+    rows = {row["id"]: row for row in (await proxy_server.model_list(user_api_key_dict=caller, request=None))["data"]}
+    target_rows = (await proxy_server.model_list(user_api_key_dict=target_holder, request=None))["data"]
+    assert [rows["fast"]] == [{**row, "id": "fast"} for row in target_rows if row["id"] == "gpt-4.1"]
+    target = await proxy_server.model_info(model_id="gpt-4.1", user_api_key_dict=target_holder)
+    assert await proxy_server.model_info(model_id="fast", user_api_key_dict=caller) == {**target, "id": "fast"}
+
+
+@pytest.mark.asyncio
+async def test_alias_named_like_a_listed_model_keeps_that_model_s_metadata_at_list_and_retrieval(
+    router: Router,
+) -> None:
+    plain = await proxy_server.model_list(user_api_key_dict=_team_member(), request=None)
+    shadowing = _team_member(team_model_aliases={"gpt-4.1-mini": "team-chat"})
+
+    assert (await proxy_server.model_list(user_api_key_dict=shadowing, request=None))["data"] == plain["data"]
+    assert await proxy_server.model_info(model_id="gpt-4.1-mini", user_api_key_dict=shadowing) == (
+        await proxy_server.model_info(model_id="gpt-4.1-mini", user_api_key_dict=_team_member())
+    )
+
+
+@pytest.mark.asyncio
+async def test_router_alias_the_caller_lists_resolves_at_retrieval_like_its_listing_row(router: Router) -> None:
+    caller = _keyholder("gpt-4.1", "legacy")
+
+    rows = {row["id"]: row for row in (await proxy_server.model_list(user_api_key_dict=caller, request=None))["data"]}
+    assert rows["legacy"] == {**rows["gpt-4.1"], "id": "legacy"}
+    target = await proxy_server.model_info(model_id="gpt-4.1", user_api_key_dict=caller)
+    assert await proxy_server.model_info(model_id="legacy", user_api_key_dict=caller) == {**target, "id": "legacy"}

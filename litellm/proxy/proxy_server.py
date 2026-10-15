@@ -463,6 +463,7 @@ from litellm.proxy.common_utils.load_config_utils import get_config_from_bucket
 from litellm.proxy.common_utils.model_deprecation import collect_model_deprecations
 from litellm.proxy.common_utils.model_listing_utils import (
     ClaudeCodeRoutingNames,
+    DeployedModelGroups,
     TeamModelNameTranslator,
     alias_listing_entries,
     alias_target,
@@ -12121,6 +12122,7 @@ async def model_list(
             TeamModelNameTranslator.listing_entries(all_models, llm_router, settings), user_api_key_dict
         ),
         caller_aliases,
+        DeployedModelGroups(llm_router),
     )
     for response_id, lookup_id in entries:
         model_info = create_model_info_response(
@@ -12238,17 +12240,16 @@ async def model_info(
         all_models, llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id
     )
 
+    listed_entries: Final = TeamModelNameTranslator.listing_entries(
+        tuple(m for m in all_models if m not in undiscoverable_names), llm_router, settings
+    )
     aliased_model_id: Final = alias_target(
         model_id,
         caller_alias_maps(
             user_api_key_dict.aliases, user_api_key_dict.team_model_aliases, user_api_key_dict.team_id, team_id
         ),
-        frozenset(
-            response_id
-            for response_id, _ in TeamModelNameTranslator.listing_entries(
-                tuple(m for m in all_models if m not in undiscoverable_names), llm_router, settings
-            )
-        ),
+        listed_entries,
+        DeployedModelGroups(llm_router),
     )
     resolved_model_id: Final = TeamModelNameTranslator.resolve_public_name(
         model_id=aliased_model_id or model_id,
@@ -12257,14 +12258,16 @@ async def model_info(
         general_settings=settings,
     )
 
-    # Validate that the requested model is accessible
-    validate_model_access(model_id=resolved_model_id, available_models=all_models)
+    if all(response_id != model_id for response_id, _ in listed_entries):
+        validate_model_access(model_id=resolved_model_id, available_models=all_models)
 
     # Get provider information from the router deployment
     if llm_router is None:
         raise HTTPException(status_code=500, detail="Router not initialized")
 
-    deployment: Final = llm_router.get_deployment_by_model_group_name(resolved_model_id)
+    deployment: Final = llm_router.get_deployment_by_model_group_name(
+        llm_router.routable_model_group(resolved_model_id)
+    )
     if deployment is None:
         raise HTTPException(
             status_code=404,

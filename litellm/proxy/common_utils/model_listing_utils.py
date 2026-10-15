@@ -13,7 +13,6 @@ from __future__ import annotations
 import re
 from collections.abc import Container, Mapping, Sequence
 from dataclasses import dataclass
-from functools import reduce
 from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast
@@ -160,13 +159,35 @@ class ClaudeCodeRoutingNames:
 
 @dataclass(frozen=True, slots=True)
 class CallerAliases:
-    """`own` are the caller's key and team alias maps, the names `/v1/models` lists for it.
+    """The caller's `team` and `key` alias maps, the names `/v1/models` lists for it.
     `rewrite` are the maps `/chat/completions` rewrites its model through, in the order it
     applies them: the team's, the key's in `add_litellm_data_to_request`, then the global
     `model_alias_map` and the key's again in `common_processing_pre_call_logic`."""
 
-    own: tuple[object, ...]
-    rewrite: tuple[object, ...]
+    team: object
+    key: object
+
+    @property
+    def own(self) -> tuple[object, ...]:
+        return (self.team, self.key)
+
+    @property
+    def rewrite(self) -> tuple[object, ...]:
+        return (self.team, self.key, litellm.model_alias_map, self.key)
+
+
+@dataclass(frozen=True, slots=True)
+class DeployedModelGroups:
+    """Names the router serves from deployments of their own, directly or as a `model_group_alias`."""
+
+    llm_router: Router | None
+
+    def __contains__(self, name: object) -> bool:
+        if not isinstance(name, str) or self.llm_router is None:
+            return False
+        return (
+            self.llm_router.get_deployment_by_model_group_name(self.llm_router.routable_model_group(name)) is not None
+        )
 
 
 def caller_alias_maps(
@@ -177,8 +198,8 @@ def caller_alias_maps(
 ) -> CallerAliases:
     """Team aliases count only when listing the team the key authenticated as."""
     if listed_team_id is not None and listed_team_id != key_team_id:
-        return CallerAliases((key_aliases,), (key_aliases, litellm.model_alias_map, key_aliases))
-    return CallerAliases((team_aliases, key_aliases), (team_aliases, key_aliases, litellm.model_alias_map, key_aliases))
+        return CallerAliases(None, key_aliases)
+    return CallerAliases(team_aliases, key_aliases)
 
 
 def alias_map(aliases: object) -> Mapping[str, str]:
@@ -195,57 +216,92 @@ def _alias_names(alias_maps: Sequence[Mapping[str, str]]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(chain.from_iterable(alias_maps)))
 
 
-def _rewrite(model_id: str, alias_maps: Sequence[Mapping[str, str]]) -> str | None:
-    target: Final = reduce(lambda name, aliases: aliases.get(name, name), alias_maps, model_id)
-    return None if target == model_id else target
+def _dispatch(model_id: str, aliases: CallerAliases) -> tuple[str, bool]:
+    """The model `/chat/completions` sends `model_id` to, and whether a key alias rewrote it
+    on the way, which makes auth check the caller's access to that model instead of `model_id`."""
+    team: Final = alias_map(aliases.team)
+    key: Final = alias_map(aliases.key)
+    after_team: Final = team.get(model_id, model_id)
+    after_key: Final = key.get(after_team, after_team)
+    after_global: Final = alias_map(litellm.model_alias_map).get(after_key, after_key)
+    dispatched: Final = key.get(after_global, after_global)
+    return dispatched, after_key != after_team or dispatched != after_global
 
 
-def alias_target(model_id: str, aliases: CallerAliases, listed: Container[str] = frozenset()) -> str | None:
-    """The model group `/chat/completions` rewrites `model_id` to, else None. A `model_id`
-    already `listed` only resolves to a `listed` target, so retrieval never describes a
-    model the caller cannot list."""
-    target: Final = _rewrite(model_id, tuple(alias_map(raw) for raw in aliases.rewrite))
-    if model_id in listed and (target is None or target not in listed):
-        return None
-    return target
+def _lookup_id(name: str, lookup_by_response: Mapping[str, str], lookup_ids: Container[str]) -> str | None:
+    if name in lookup_by_response:
+        return lookup_by_response[name]
+    return name if name in lookup_ids else None
 
 
 def _listed_lookup_id(
-    name: str,
-    maps: Sequence[Mapping[str, str]],
+    response_id: str,
+    lookup_id: str,
+    aliases: CallerAliases,
     lookup_by_response: Mapping[str, str],
     lookup_ids: Container[str],
+    deployed: Container[str],
+) -> str:
+    if lookup_id in deployed:
+        return lookup_id
+    target, through_key_alias = _dispatch(response_id, aliases)
+    if target == response_id:
+        return lookup_id
+    listed: Final = _lookup_id(target, lookup_by_response, lookup_ids)
+    if listed is not None:
+        return listed
+    return target if not through_key_alias and target in deployed else lookup_id
+
+
+def _added_lookup_id(
+    alias: str, aliases: CallerAliases, lookup_by_response: Mapping[str, str], lookup_ids: Container[str]
 ) -> str | None:
-    target: Final = _rewrite(name, maps)
-    if target is None:
-        return None
-    if target in lookup_by_response:
-        return lookup_by_response[target]
-    return target if target in lookup_ids else None
+    target, _ = _dispatch(alias, aliases)
+    return None if target == alias else _lookup_id(target, lookup_by_response, lookup_ids)
 
 
 def alias_listing_entries(
     entries: Sequence[tuple[str, str]],
     aliases: CallerAliases,
+    deployed: Container[str],
 ) -> tuple[tuple[str, str], ...]:
-    """`entries` plus one row per key or team alias not listed itself, every alias looked
-    up under the listed model `/chat/completions` rewrites it to. An alias whose target
-    is not listed is neither added nor retargeted."""
-    maps: Final = tuple(alias_map(raw) for raw in aliases.rewrite)
-    own: Final = tuple(alias_map(raw) for raw in aliases.own)
+    """`entries` plus one row per key or team alias whose target is listed. A listed name
+    with no `deployed` group of its own is looked up under the model `/chat/completions`
+    sends it to when the caller may call that model through it, so the row describes the
+    model that answers."""
     lookup_by_response: Final = MappingProxyType(dict(entries))
     lookup_ids: Final = frozenset(lookup_by_response.values())
     retargeted: Final = tuple(
-        (response_id, _listed_lookup_id(response_id, maps, lookup_by_response, lookup_ids) or lookup_id)
+        (response_id, _listed_lookup_id(response_id, lookup_id, aliases, lookup_by_response, lookup_ids, deployed))
         for response_id, lookup_id in entries
     )
     added: Final = tuple(
         (alias, lookup_id)
-        for alias in _alias_names(own)
+        for alias in _alias_names(tuple(alias_map(raw) for raw in aliases.own))
         if alias not in lookup_by_response
-        and (lookup_id := _listed_lookup_id(alias, maps, lookup_by_response, lookup_ids)) is not None
+        and (lookup_id := _added_lookup_id(alias, aliases, lookup_by_response, lookup_ids)) is not None
     )
     return (*retargeted, *added)
+
+
+def alias_target(
+    model_id: str,
+    aliases: CallerAliases,
+    entries: Sequence[tuple[str, str]],
+    deployed: Container[str],
+) -> str | None:
+    """The id `GET /v1/models/{model_id}` looks `model_id` up under when one of the caller's
+    aliases rewrites it, else None. A listed `model_id` resolves to the row
+    `alias_listing_entries` lists for it."""
+    lookup_by_response: Final = MappingProxyType(dict(entries))
+    listed_lookup_id: Final = lookup_by_response.get(model_id)
+    if listed_lookup_id is None:
+        target, _ = _dispatch(model_id, aliases)
+        return None if target == model_id else target
+    lookup_id: Final = _listed_lookup_id(
+        model_id, listed_lookup_id, aliases, lookup_by_response, frozenset(lookup_by_response.values()), deployed
+    )
+    return None if lookup_id == listed_lookup_id else lookup_id
 
 
 def claude_code_requested_group(

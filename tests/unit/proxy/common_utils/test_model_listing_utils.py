@@ -27,8 +27,8 @@ def _marked(name):
     return f"{_encoded(name)}[1m]"
 
 
-def _caller(*maps: object) -> CallerAliases:
-    return CallerAliases(maps, maps)
+def _caller(team: object = None, key: object = None) -> CallerAliases:
+    return CallerAliases(team, key)
 
 
 def _row(name, limit=1000000):
@@ -134,24 +134,38 @@ def test_mutation_breaking_the_hex_name_cannot_route_to_the_source(source):
 
 def test_team_alias_is_listed_under_its_target_metadata_and_only_when_the_target_is_accessible() -> None:
     entries = [("gpt-4.1-mini", "gpt-4.1-mini"), ("team-public", "model_name_team_1_abc")]
-    aliases = (
+    aliases = _caller(
         {"gpt-4.1-mini": "team-public"},
-        None,
         {"claude-sonnet-4-5": "gpt-4.1-mini", "via-public": "team-public", "not-granted": "gpt-4.1"},
     )
-    assert alias_listing_entries(entries, _caller(*aliases)) == (
-        ("gpt-4.1-mini", "model_name_team_1_abc"),
-        ("team-public", "model_name_team_1_abc"),
+    deployed = frozenset({"gpt-4.1-mini", "model_name_team_1_abc", "gpt-4.1"})
+    assert alias_listing_entries(entries, aliases, deployed) == (
+        *entries,
         ("claude-sonnet-4-5", "gpt-4.1-mini"),
         ("via-public", "model_name_team_1_abc"),
     )
-    assert alias_listing_entries(entries, _caller(None, {})) == tuple(entries)
+    assert alias_listing_entries(entries, _caller(None, {}), deployed) == tuple(entries)
 
 
 def test_alias_target_resolves_the_requested_alias_across_key_and_team_maps() -> None:
     maps = _caller({"o": "gpt-4.1"}, {"claude-sonnet-4-5": "gpt-4.1-mini"})
-    assert alias_target("claude-sonnet-4-5", maps) == "gpt-4.1-mini"
-    assert alias_target("gpt-4.1-mini", _caller(None, {"claude-sonnet-4-5": "gpt-4.1-mini"})) is None
+    assert alias_target("claude-sonnet-4-5", maps, (), frozenset()) == "gpt-4.1-mini"
+    assert alias_target("gpt-4.1-mini", _caller(None, {"claude-sonnet-4-5": "gpt-4.1-mini"}), (), frozenset()) is None
+
+
+@pytest.mark.parametrize("layer", ["team", "key", "global"])
+def test_alias_colliding_with_a_deployed_listed_model_keeps_that_model_at_list_and_retrieval(
+    monkeypatch: pytest.MonkeyPatch, layer: str
+) -> None:
+    alias = {"fast": "gpt-4.1-mini"}
+    monkeypatch.setattr(litellm, "model_alias_map", alias if layer == "global" else {})
+    maps = _caller(alias if layer == "team" else None, alias if layer == "key" else None)
+    entries = [("fast", "fast"), ("gpt-4.1-mini", "gpt-4.1-mini")]
+    deployed = frozenset({"fast", "gpt-4.1-mini"})
+
+    assert alias_listing_entries(entries, maps, deployed) == tuple(entries)
+    assert alias_target("fast", maps, entries, deployed) is None
+    assert alias_target("fast", maps, (), deployed) == "gpt-4.1-mini"
 
 
 def test_listed_alias_is_looked_up_under_the_listed_model_it_rewrites_to_at_list_and_retrieval() -> None:
@@ -159,38 +173,48 @@ def test_listed_alias_is_looked_up_under_the_listed_model_it_rewrites_to_at_list
         ("fast", "fast"),
         ("gpt-4.1-mini", "gpt-4.1-mini"),
         ("chat", "chat"),
+        ("internal", "internal"),
         ("team-public", "model_name_team_1_abc"),
     ]
-    maps = _caller({"fast": "gpt-4.1-mini", "chat": "team-public"})
-    listed = frozenset(response_id for response_id, _ in entries)
+    maps = _caller({"fast": "gpt-4.1-mini", "chat": "team-public", "internal": "model_name_team_1_abc"})
+    deployed = frozenset({"gpt-4.1-mini", "model_name_team_1_abc"})
+    listing = alias_listing_entries(entries, maps, deployed)
 
-    assert alias_listing_entries(entries, maps) == (
+    assert listing == (
         ("fast", "gpt-4.1-mini"),
         ("gpt-4.1-mini", "gpt-4.1-mini"),
         ("chat", "model_name_team_1_abc"),
+        ("internal", "model_name_team_1_abc"),
         ("team-public", "model_name_team_1_abc"),
     )
-    assert alias_target("fast", maps, listed) == "gpt-4.1-mini"
-    assert alias_target("chat", maps, listed) == "team-public"
+    assert all(
+        (alias_target(response_id, maps, entries, deployed) or dict(entries)[response_id]) == lookup_id
+        for response_id, lookup_id in listing
+    )
 
 
-def test_listed_alias_to_a_model_the_caller_cannot_list_keeps_its_own_row_at_list_and_retrieval() -> None:
+def test_listed_team_alias_reports_its_deployed_target_unless_a_key_alias_needs_the_caller_to_list_it() -> None:
     entries = [("fast", "fast"), ("gpt-4.1-mini", "gpt-4.1-mini")]
-    maps = _caller({"fast": "restricted"})
-    listed = frozenset(response_id for response_id, _ in entries)
+    deployed = frozenset({"gpt-4.1-mini", "gpt-4.1"})
+    through_team = _caller({"fast": "gpt-4.1"})
+    through_key = _caller(None, {"fast": "gpt-4.1"})
+    to_nothing_deployed = _caller({"fast": "restricted"})
 
-    assert alias_listing_entries(entries, maps) == tuple(entries)
-    assert alias_target("fast", maps, listed) is None
-    assert alias_target("fast", maps) == "restricted"
+    assert alias_listing_entries(entries, through_team, deployed) == (("fast", "gpt-4.1"), entries[1])
+    assert alias_target("fast", through_team, entries, deployed) == "gpt-4.1"
+    for maps in (through_key, to_nothing_deployed):
+        assert alias_listing_entries(entries, maps, deployed) == tuple(entries)
+        assert alias_target("fast", maps, entries, deployed) is None
 
 
 def test_alias_maps_apply_in_the_order_chat_completions_applies_them() -> None:
     team_then_key = _caller({"fast": "gpt-4.1-mini", "hop": "mid"}, {"fast": "gpt-4.1", "mid": "gpt-4.1"})
     entries = [("gpt-4.1-mini", "gpt-4.1-mini"), ("gpt-4.1", "gpt-4.1")]
+    deployed = frozenset({"gpt-4.1-mini", "gpt-4.1"})
 
-    assert alias_target("fast", team_then_key) == "gpt-4.1-mini"
-    assert alias_target("hop", team_then_key) == "gpt-4.1"
-    assert alias_listing_entries(entries, team_then_key) == (
+    assert alias_target("fast", team_then_key, (), deployed) == "gpt-4.1-mini"
+    assert alias_target("hop", team_then_key, (), deployed) == "gpt-4.1"
+    assert alias_listing_entries(entries, team_then_key, deployed) == (
         *entries,
         ("fast", "gpt-4.1-mini"),
         ("hop", "gpt-4.1"),
@@ -201,17 +225,20 @@ def test_alias_maps_apply_in_the_order_chat_completions_applies_them() -> None:
 def test_one_bad_alias_entry_hides_only_itself() -> None:
     aliases = {"fast": "gpt-4.1-mini", "broken": 5, 7: "gpt-4.1-mini"}
     entries = [("gpt-4.1-mini", "gpt-4.1-mini")]
+    deployed = frozenset({"gpt-4.1-mini"})
 
-    assert alias_listing_entries(entries, _caller(aliases)) == (*entries, ("fast", "gpt-4.1-mini"))
-    assert alias_target("fast", _caller(aliases)) == "gpt-4.1-mini"
+    assert alias_listing_entries(entries, _caller(aliases), deployed) == (*entries, ("fast", "gpt-4.1-mini"))
+    assert alias_target("fast", _caller(aliases), (), deployed) == "gpt-4.1-mini"
 
 
 def test_chained_key_alias_is_listed_only_when_its_final_target_is_listable() -> None:
     key_aliases = {"a": "b", "b": "hidden"}
     entries = [("b", "b")]
+    maps = caller_alias_maps(key_aliases, None, "team-a", None)
+    deployed = frozenset({"b", "hidden"})
 
-    assert alias_listing_entries(entries, caller_alias_maps(key_aliases, None, "team-a", None)) == (*entries,)
-    assert alias_target("a", caller_alias_maps(key_aliases, None, "team-a", None)) == "hidden"
+    assert alias_listing_entries(entries, maps, deployed) == (*entries,)
+    assert alias_target("a", maps, (), deployed) == "hidden"
 
 
 def test_team_aliases_only_apply_when_listing_the_team_the_key_authenticated_as(
@@ -219,12 +246,10 @@ def test_team_aliases_only_apply_when_listing_the_team_the_key_authenticated_as(
 ) -> None:
     key_aliases, team_aliases, global_aliases = {"k": "gpt-4.1"}, {"t": "gpt-4.1-mini"}, {"g": "gpt-4.1"}
     monkeypatch.setattr(litellm, "model_alias_map", global_aliases)
-    own_team = CallerAliases((team_aliases, key_aliases), (team_aliases, key_aliases, global_aliases, key_aliases))
-    assert caller_alias_maps(key_aliases, team_aliases, "team-a", None) == own_team
+    own_team = caller_alias_maps(key_aliases, team_aliases, "team-a", None)
+    assert own_team.rewrite == (team_aliases, key_aliases, global_aliases, key_aliases)
     assert caller_alias_maps(key_aliases, team_aliases, "team-a", "team-a") == own_team
-    assert caller_alias_maps(key_aliases, team_aliases, "team-a", "team-b") == CallerAliases(
-        (key_aliases,), (key_aliases, global_aliases, key_aliases)
-    )
+    assert caller_alias_maps(key_aliases, team_aliases, "team-a", "team-b") == CallerAliases(None, key_aliases)
 
 
 def test_global_alias_rewrites_between_the_two_key_passes_like_chat_completions(
@@ -234,18 +259,20 @@ def test_global_alias_rewrites_between_the_two_key_passes_like_chat_completions(
     key_aliases = {"a": "b", "b": "c"}
     entries = [("c", "c"), ("d", "d")]
     maps = caller_alias_maps(key_aliases, None, "team-a", None)
+    deployed = frozenset({"c", "d"})
 
-    assert alias_target("a", maps) == "d"
-    assert alias_listing_entries(entries, maps) == (*entries, ("a", "d"), ("b", "c"))
+    assert alias_target("a", maps, (), deployed) == "d"
+    assert alias_listing_entries(entries, maps, deployed) == (*entries, ("a", "d"), ("b", "c"))
 
 
 def test_global_aliases_rewrite_but_are_not_listed_as_caller_rows(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "model_alias_map", {"g": "gpt-4.1-mini"})
     entries = [("gpt-4.1-mini", "gpt-4.1-mini")]
     maps = caller_alias_maps({"k": "g"}, None, "team-a", None)
+    deployed = frozenset({"gpt-4.1-mini"})
 
-    assert alias_listing_entries(entries, maps) == (*entries, ("k", "gpt-4.1-mini"))
-    assert alias_target("g", maps) == "gpt-4.1-mini"
+    assert alias_listing_entries(entries, maps, deployed) == (*entries, ("k", "gpt-4.1-mini"))
+    assert alias_target("g", maps, (), deployed) == "gpt-4.1-mini"
 
 
 def test_team_public_name_uses_the_same_scope_at_list_and_request():
