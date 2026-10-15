@@ -116,7 +116,7 @@ def _optional_int_attr(obj: object, name: str, *, default: int) -> int:
     return value if isinstance(value, int) else default
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class _ToolCallPart:
     index: int
     call_id: str | None
@@ -153,7 +153,8 @@ class _CombinedChunkSplitter:
     """
     Splits a streaming chunk that carries BOTH response content and a
     ``finish_reason`` into two chunks: a content-only chunk followed by a
-    finish-only chunk.
+    finish-only chunk, and a chunk that carries several tool calls into one chunk
+    per call (see ``_route_tool_calls``).
 
     ``AnthropicStreamWrapper`` (via ``translate_streaming_openai_response_to_anthropic``)
     assumes content and ``finish_reason`` never arrive in the same chunk — true for
@@ -325,7 +326,7 @@ class _CombinedChunkSplitter:
             _optional_attr_sequence(_optional_attr(choices[0], "delta"), "tool_calls") if len(choices) == 1 else ()
         )
         if not tool_calls:
-            return (*self._release_held_calls(), chunk)
+            return (*self._release_held_calls(), chunk) if choices else (chunk,)
         parts: Final = self._tool_call_parts(tool_calls)
         held: Final = self._held_calls
         if not held and len(parts) == 1:
@@ -334,9 +335,10 @@ class _CombinedChunkSplitter:
             return (chunk,)
 
         new_parts: Final = tuple(part for part in parts if part.index not in held)
-        keeps_live_call: Final = bool(held) or any(part.index == self._live_call_index for part in parts)
         live_index: Final = (
-            self._live_call_index if keeps_live_call else next((part.index for part in new_parts if part.name), None)
+            self._live_call_index
+            if self._live_call_index is not None
+            else next((part.index for part in new_parts if part.name), None)
         )
         self._live_call_index = live_index
         live: Final = tuple(part for part in new_parts if not part.name or part.index == live_index)

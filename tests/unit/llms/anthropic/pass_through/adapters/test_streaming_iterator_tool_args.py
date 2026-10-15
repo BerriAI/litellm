@@ -651,6 +651,56 @@ def test_call_opening_alone_while_another_is_held_waits_behind_the_live_call(use
 
 
 @pytest.mark.parametrize("use_async", [False, True])
+def test_two_calls_opening_together_behind_a_live_call_wait_for_it(use_async):
+    chunks = [
+        _stream_chunk(
+            Delta(role="assistant", tool_calls=[_tool_call(0, '{"command": ', call_id="call_a", name="Bash")])
+        ),
+        _stream_chunk(
+            Delta(
+                tool_calls=[
+                    _tool_call(1, '{"command": "ls -d /var"}', call_id="call_b", name="Bash"),
+                    _tool_call(2, '{"command": "ls -d /etc"}', call_id="call_c", name="Bash"),
+                ]
+            )
+        ),
+        _stream_chunk(Delta(tool_calls=[_tool_call(0, '"ls -d /tmp"}')])),
+        _stream_chunk(Delta(), finish_reason="tool_calls"),
+    ]
+
+    blocks = _blocks(_drain(chunks, use_async))
+
+    assert [block["start"]["id"] for block in blocks] == ["call_a", "call_b", "call_c"]
+    assert [json.loads(block["json"])["command"] for block in blocks] == ["ls -d /tmp", "ls -d /var", "ls -d /etc"]
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+def test_chunk_without_choices_mid_stream_keeps_held_calls_gathering(use_async):
+    usage_only = ModelResponseStream(choices=[])
+    usage_only.usage = Usage(prompt_tokens=40, completion_tokens=3, total_tokens=43)
+    chunks = [
+        _stream_chunk(
+            Delta(
+                role="assistant",
+                tool_calls=[
+                    _tool_call(0, "", call_id="call_a", name="Bash"),
+                    _tool_call(1, "", call_id="call_b", name="Bash"),
+                ],
+            )
+        ),
+        usage_only,
+        _stream_chunk(Delta(tool_calls=[_tool_call(1, '{"command": "ls -d /var"}')])),
+        _stream_chunk(Delta(tool_calls=[_tool_call(0, '{"command": "ls -d /tmp"}')])),
+        _stream_chunk(Delta(), finish_reason="tool_calls"),
+    ]
+
+    blocks = _blocks(_drain(chunks, use_async))
+
+    assert [block["start"]["id"] for block in blocks] == ["call_a", "call_b"]
+    assert [json.loads(block["json"]) for block in blocks] == [{"command": "ls -d /tmp"}, {"command": "ls -d /var"}]
+
+
+@pytest.mark.parametrize("use_async", [False, True])
 def test_one_call_split_across_chunks_is_unchanged(use_async):
     chunks = [
         _stream_chunk(Delta(role="assistant", tool_calls=[_tool_call(0, "", call_id="call_a", name="Bash")])),
