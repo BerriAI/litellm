@@ -3,6 +3,7 @@ use std::{collections::BTreeMap, future::Future, sync::Arc, time::Duration};
 
 use litellm_auth::{InputSource, SecretValue, Sourced, TokenProviderHandle};
 use litellm_core_utils::{call_arguments::CallArguments, settings::ProcessEnvironment};
+use litellm_host::interceptors::RawResponse;
 use litellm_http::outbound::{OutboundRequest, RequestSigner};
 use litellm_secrets::source::Secrets;
 use serde::{
@@ -358,9 +359,13 @@ pub trait BaseOcrConfig: Send + Sync + Sized + 'static {
         context: OcrResponseContext<'_>,
     ) -> impl Future<Output = Result<LiteLLMOcrResponse, Error>> + Send {
         async move {
+            let headers = litellm_http::request::response_headers(raw_response.headers());
             let bytes =
                 read_response_bytes(raw_response, context.connection.max_response_bytes).await?;
-            context.hooks.response_received(&bytes).await?;
+            context
+                .hooks
+                .response_received(RawResponse::from_bytes(headers, &bytes))
+                .await?;
             self.transform_ocr_response(model, &bytes, context.request_format)
         }
     }

@@ -216,6 +216,7 @@ async fn projection_custom_operations_and_hooks_feed_the_http_response(intercept
                 .await?;
             route_hooks
                 .after_provider_response(RawResponse {
+                    headers: Vec::new(),
                     body: wire.url.clone(),
                 })
                 .await?;
@@ -502,6 +503,7 @@ async fn hook_rejection_stops_execution_and_is_reported_once(
             if event {
                 route_hooks
                     .after_provider_response(RawResponse {
+                        headers: Vec::new(),
                         body: "response".into(),
                     })
                     .await?;
@@ -638,6 +640,7 @@ async fn unary_calls_use_into_response_after_hooks_and_before_success(intercepto
                 .await?;
             route_hooks
                 .after_provider_response(RawResponse {
+                    headers: Vec::new(),
                     body: wire.url.clone(),
                 })
                 .await?;
@@ -689,7 +692,10 @@ async fn unary_failure_preserves_the_error_without_converting(
         None,
         |_, _, route_hooks, _observations| async move {
             route_hooks
-                .after_provider_response(RawResponse { body: "raw".into() })
+                .after_provider_response(RawResponse {
+                    headers: Vec::new(),
+                    body: "raw".into(),
+                })
                 .await?;
             Err(TestError::Provider)
         },

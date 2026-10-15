@@ -3,7 +3,7 @@ use std::sync::Arc;
 use bytes::{Bytes, BytesMut};
 use futures_util::future::BoxFuture;
 use litellm_auth::AuthServices;
-use litellm_host::interceptors::WireRequest;
+use litellm_host::interceptors::{RawResponse, WireRequest};
 use litellm_http::{
     Client, ClientVariant, HttpClientConfig, HttpClientPool,
     media::{MediaFetcher, UrlPolicy},
@@ -29,7 +29,7 @@ use litellm_secrets::source::SecretSource;
 pub trait CallHooks<E>: Send + Sync {
     fn before_provider_request(&self, wire: WireRequest) -> BoxFuture<'_, Result<WireRequest, E>>;
 
-    fn response_received<'a>(&'a self, body: &'a [u8]) -> BoxFuture<'a, Result<(), E>>;
+    fn response_received(&self, raw: RawResponse) -> BoxFuture<'_, Result<(), E>>;
 }
 
 #[derive(Clone)]

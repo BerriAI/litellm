@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import Iterator
 from contextvars import ContextVar
+from dataclasses import replace
 from datetime import datetime
 from typing import Final
 
@@ -427,3 +428,14 @@ async def test_sync_call_returns_the_provider_message(server: RecordingServer) -
     assert_served_natively(server, response)
     assert response_id(response) == MESSAGES_RESPONSE["id"]
     assert len(await recorder.wait_for_async("log_success_event")) == 1
+
+
+@pytest.mark.asyncio
+async def test_provider_response_headers_reach_logging(server: RecordingServer) -> None:
+    server.default_response = replace(server.default_response, headers={"request-id": "req_native"})
+    recorder: Final = RecordingLogger()
+
+    await call(server, callbacks=[recorder])
+
+    success: Final = await recorder.wait_for_async("async_log_success_event")
+    assert success[0].kwargs["response_headers"]["request-id"] == "req_native"

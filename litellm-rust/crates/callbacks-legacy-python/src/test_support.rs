@@ -62,8 +62,8 @@ FAKES = {
         custom_llm_provider=provider,
     ),
     'pre_call': lambda logger, input, api_key, additional_args: logger.pre_call(input, api_key, additional_args),
-    'post_call': lambda logger, original_response, api_key, additional_args: logger.post_call(
-        original_response, api_key, additional_args
+    'post_call': lambda logger, original_response, response_headers, api_key, additional_args: logger.post_call(
+        original_response, api_key, additional_args, response_headers
     ),
     'defers_async_logging': lambda logger: bool(getattr(logger, '_defer_async_logging', False)),
     'defer_success': lambda logger, pending: setattr(logger, '_native_pending_logging', pending),

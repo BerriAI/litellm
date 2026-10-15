@@ -1,3 +1,4 @@
+from dataclasses import replace
 from typing import Final
 
 import pytest
@@ -63,3 +64,14 @@ async def test_pre_call_deployment_hook_can_delete_keywords(server: RecordingSer
     sent: Final = server.requests[0]
     assert "temperature" not in _OBJECT.validate_python(sent.body)
     assert sent.headers.get("x-deleted") is None
+
+
+@pytest.mark.asyncio
+async def test_provider_response_headers_reach_logging(server: RecordingServer) -> None:
+    server.default_response = replace(server.default_response, headers={"request-id": "req_native"})
+    recorder: Final = RecordingLogger()
+
+    await call(server, callbacks=[recorder])
+
+    success: Final = await recorder.wait_for_async("async_log_success_event")
+    assert success[0].kwargs["response_headers"]["request-id"] == "req_native"

@@ -2,6 +2,11 @@ use std::future::Future;
 
 use serde_json::Value;
 
+use crate::{
+    lifecycle::{CallEvent, ExecutionEvent},
+    observation::ObservationSender,
+};
+
 /// The provider request as it is about to leave, offered to the host for rewriting.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WireRequest {
@@ -27,6 +32,7 @@ pub struct RequestContext {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RawResponse {
+    pub headers: Vec<(String, String)>,
     pub body: String,
 }
 
@@ -108,6 +114,28 @@ impl<E, T: Interceptors<E> + ?Sized> Interceptors<E> for &T {
     }
 }
 
+impl RawResponse {
+    pub fn from_bytes(headers: Vec<(String, String)>, body: &[u8]) -> Self {
+        Self {
+            headers,
+            body: String::from_utf8_lossy(body).into_owned(),
+        }
+    }
+}
+
+pub async fn report_provider_response<E>(
+    observers: Option<&ObservationSender>,
+    interceptors: &impl Interceptors<E>,
+    raw: RawResponse,
+) -> Result<(), E> {
+    if let Some(observers) = observers {
+        observers.emit(CallEvent::Execution(
+            ExecutionEvent::ProviderResponseReceived { raw: raw.clone() },
+        ));
+    }
+    interceptors.after_provider_response(raw).await
+}
+
 impl<E> Interceptors<E> for () {
     async fn before_provider_request(
         &self,
@@ -186,7 +214,10 @@ mod tests {
                 .await?;
                 Interceptors::after_provider_response(
                     &channel.interceptors,
-                    RawResponse { body: "raw".into() },
+                    RawResponse {
+                        headers: Vec::new(),
+                        body: "raw".into(),
+                    },
                 )
                 .await?;
                 Ok((sent, ()))

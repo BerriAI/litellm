@@ -30,6 +30,7 @@
   "post_call": [
     "logger",
     "original_response",
+    "response_headers",
     "api_key",
     "additional_args"
   ],

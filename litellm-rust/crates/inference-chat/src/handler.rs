@@ -1,8 +1,10 @@
-use litellm_host::{lifecycle::ExecutionEvent, observation::ObservationSender};
+use litellm_host::observation::ObservationSender;
 use std::time::Duration;
 
 use litellm_auth::AuthServices;
-use litellm_host::interceptors::{Interceptors, RawResponse, RequestContext, WireRequest};
+use litellm_host::interceptors::{
+    Interceptors, RawResponse, RequestContext, WireRequest, report_provider_response,
+};
 use litellm_http::{Client, outbound::OutboundRequest, request::truncate_error_body};
 use litellm_llms::base_llm::{
     auth::{Authenticated, resolve_auth},
@@ -93,6 +95,7 @@ pub(super) async fn execute(
                 })?;
 
             let status = response.status();
+            let headers = litellm_http::request::response_headers(response.headers());
             let text = response.text().await.map_err(|err| {
                 Error::Transport(litellm_http::transport::Error::Network(err.to_string()))
             })?;
@@ -103,14 +106,11 @@ pub(super) async fn execute(
                     body: truncate_error_body(&text),
                 }));
             }
-            let raw = RawResponse { body: text.clone() };
-            if let Some(observers) = observers {
-                observers.emit(litellm_host::lifecycle::CallEvent::Execution(
-                    ExecutionEvent::ProviderResponseReceived { raw: raw.clone() },
-                ));
-            }
-            interceptors
-                .after_provider_response(raw)
+            let raw = RawResponse {
+                headers,
+                body: text.clone(),
+            };
+            report_provider_response(observers, &interceptors, raw)
                 .await
                 .map_err(Error::post_call)?;
 

@@ -105,7 +105,10 @@ mod tests {
             Box::pin(async move { Ok(wire) })
         }
 
-        fn response_received<'a>(&'a self, _body: &'a [u8]) -> BoxFuture<'a, Result<(), Error>> {
+        fn response_received(
+            &self,
+            _raw: litellm_host::interceptors::RawResponse,
+        ) -> BoxFuture<'_, Result<(), Error>> {
             Box::pin(async { Ok(()) })
         }
     }

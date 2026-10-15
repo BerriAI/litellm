@@ -171,6 +171,7 @@ fn dispatching_call() -> TestMachine {
                 .await?;
             route_hooks
                 .after_provider_response(RawResponse {
+                    headers: Vec::new(),
                     body: wire.url.clone(),
                 })
                 .await?;
@@ -661,6 +662,7 @@ async fn response_interception_waits_and_can_reject_after_observation(#[case] re
         Some(sender),
         |_, _, interceptors, observers| async move {
             let raw = RawResponse {
+                headers: Vec::new(),
                 body: "provider response".into(),
             };
             observers.unwrap().emit(CallEvent::Execution(

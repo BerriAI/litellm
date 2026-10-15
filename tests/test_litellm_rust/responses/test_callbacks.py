@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import Iterator
 from contextvars import ContextVar
+from dataclasses import replace
 from datetime import datetime
 from typing import Final
 
@@ -406,3 +407,14 @@ async def test_dataset_hook_returning_none_drops_the_record_from_the_success_sin
             await sink.flush_queue()
 
     assert [request.method for request in server.requests] == ["GET", "POST"]
+
+
+@pytest.mark.asyncio
+async def test_provider_response_headers_reach_logging(server: RecordingServer) -> None:
+    server.default_response = replace(server.default_response, headers={"request-id": "req_native"})
+    recorder: Final = RecordingLogger()
+
+    await call(server, callbacks=[recorder])
+
+    success: Final = await recorder.wait_for_async("async_log_success_event")
+    assert success[0].kwargs["response_headers"]["request-id"] == "req_native"

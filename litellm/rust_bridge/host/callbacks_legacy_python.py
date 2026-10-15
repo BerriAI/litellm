@@ -11,7 +11,7 @@ import contextvars
 import datetime
 import traceback
 import uuid
-from collections.abc import Awaitable, Coroutine, Mapping
+from collections.abc import Awaitable, Coroutine, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
@@ -98,7 +98,9 @@ def finalize(
 
 class LoggingSurface(Protocol):
     @property
-    def model_call_details(self) -> Mapping[str, object]: ...
+    def model_call_details(
+        self,
+    ) -> MutableMapping[str, object]: ...  # mutable-ok: legacy Logging state, read by every callback
 
     @property
     def litellm_params(self) -> Mapping[str, object]: ...
@@ -221,8 +223,13 @@ def pre_call(logger: LoggingSurface, input: str, api_key: str | None, additional
 
 
 def post_call(
-    logger: LoggingSurface, original_response: str, api_key: str | None, additional_args: dict[str, object]
+    logger: LoggingSurface,
+    original_response: str,
+    response_headers: Sequence[tuple[str, str]],
+    api_key: str | None,
+    additional_args: dict[str, object],
 ) -> None:
+    _record_response_headers(logger, dict(response_headers))
     logger.post_call(original_response=original_response, api_key=api_key, additional_args=additional_args)
 
 
@@ -342,12 +349,14 @@ def after_deployment_failure(kwargs: dict[str, object], error: Exception, call_t
 _STREAM_HEADERS: Final = TypeAdapter(Mapping[str, str])
 
 
+def _record_response_headers(logger: LoggingSurface, headers: Mapping[str, str]) -> None:
+    logger.model_call_details["response_headers"] = headers
+
+
 def stream_opened(logger: Logging, head: Mapping[str, object]) -> None:
     logger.stream = True
     logger.model_call_details["stream"] = True
-    logger.model_call_details["response_headers"] = _STREAM_HEADERS.validate_python(
-        head.get("additional_headers") or {}
-    )
+    _record_response_headers(logger, _STREAM_HEADERS.validate_python(head.get("additional_headers") or {}))
 
 
 def stream_success(
