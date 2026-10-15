@@ -6834,7 +6834,7 @@ def embedding(
             response = huggingface_embed.embedding(
                 model=model,
                 input=input,
-                encoding=sys.modules[__name__].encoding,
+                encoding=_load_module_encoding(),
                 api_key=api_key,
                 api_base=api_base,
                 logging_obj=logging,
@@ -9064,9 +9064,9 @@ _encoding_cache: Tokenizer | None = None
 
 
 def _load_module_encoding() -> Tokenizer:
-    import sys
+    from litellm import main as litellm_main
 
-    return sys.modules[__name__].encoding
+    return litellm_main.encoding
 
 
 def _get_encoding() -> Tokenizer:
@@ -9089,8 +9089,6 @@ def __getattr__(name: str) -> Tokenizer:
     if name == "encoding":
         _encoding: Final = _load_default_encoding()
         # Cache it in the module's __dict__ for subsequent accesses
-        import sys
-
         sys.modules[__name__].__dict__["encoding"] = _encoding
         global _encoding_cache
         _encoding_cache = _encoding

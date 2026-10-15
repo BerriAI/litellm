@@ -58,6 +58,7 @@ if TYPE_CHECKING:
 _JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 _STR: Final = TypeAdapter(str)
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _map_reasoning_effort(value: object) -> object:
@@ -745,7 +746,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
 
         ## RESPONSE OBJECT
         try:
-            completion_response: Final = raw_response.json()
+            completion_response: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             response_headers: Final = getattr(raw_response, "headers", None)
             raise FireworksAIException(

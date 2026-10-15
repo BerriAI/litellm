@@ -297,7 +297,7 @@ class GitLabPromptManager(CustomPromptManagement):
 
     def __init__(
         self,
-        gitlab_config: dict[str, Any],
+        gitlab_config: dict[str, object],
         prompt_id: str | None = None,
         ref: str | None = None,  # tag/branch/SHA override
         gitlab_client: GitLabClient | None = None,
@@ -662,7 +662,7 @@ class GitLabPromptCache:
 
     def __init__(
         self,
-        gitlab_config: dict[str, Any],
+        gitlab_config: dict[str, object],
         *,
         ref: str | None = None,
         gitlab_client: GitLabClient | None = None,

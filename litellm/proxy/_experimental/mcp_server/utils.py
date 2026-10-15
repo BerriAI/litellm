@@ -10,7 +10,7 @@ import re
 import typing
 from collections.abc import Iterable, Iterator, Mapping, MutableMapping, MutableSequence, Sequence
 from collections.abc import Set as AbstractSet
-from typing import Any, Final, Protocol
+from typing import Any, Final, Literal, Protocol, overload
 from urllib.parse import quote
 
 from litellm._logging import verbose_logger
@@ -21,6 +21,20 @@ if typing.TYPE_CHECKING:
 
 MCP_SERVERS_TARGET: Final = "mcp_servers"
 MCP_OAUTH_TOKENS_TARGET: Final = "mcp_oauth_tokens"
+
+
+class ASGIScopeFields(Protocol):
+    @overload
+    def get(
+        self, key: Literal["headers"], default: Sequence[tuple[bytes, bytes]], /
+    ) -> Sequence[tuple[bytes, bytes]]: ...
+
+    @overload
+    def get(self, key: Literal["path", "method"], default: str, /) -> str: ...
+
+
+def asgi_scope_fields(scope: ASGIScopeFields) -> ASGIScopeFields:
+    return scope
 
 
 class _McpServerLike(Protocol):

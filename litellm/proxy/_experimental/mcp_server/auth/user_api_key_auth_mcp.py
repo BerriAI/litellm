@@ -41,6 +41,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
     is_session_bearer_shaped,
 )
+from litellm.proxy._experimental.mcp_server.utils import asgi_scope_fields
 from litellm.proxy._types import (
     UI_TEAM_ID,
     LiteLLM_AccessGroupTable,
@@ -1705,7 +1706,7 @@ class MCPRequestHandler:
         ``Authorization`` headers is malformed for bearer auth anyway (RFC 9110: not
         a comma-combinable field), so fail closed with a 400.
         """
-        raw_headers: Final = scope.get("headers", [])
+        raw_headers: Final = asgi_scope_fields(scope).get("headers", [])
         MCPRequestHandler._reject_duplicate_authorization(raw_headers)
         try:
             # ASGI headers are list of [name: bytes, value: bytes] pairs

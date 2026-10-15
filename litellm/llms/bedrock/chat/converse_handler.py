@@ -1,5 +1,6 @@
 import json
-from typing import Any, Final
+from collections.abc import Iterator
+from typing import Final
 
 import httpx
 
@@ -35,7 +36,7 @@ def make_sync_call(
     fake_stream: bool = False,
     stream_chunk_size: int | None = None,
     timeout: float | httpx.Timeout | None = None,
-) -> tuple[Any, httpx.Headers]:
+) -> tuple[MockResponseIterator | Iterator[object], httpx.Headers]:
     if client is None:
         client = get_httpx_client()  # Create a new client if none provided
 
@@ -69,7 +70,9 @@ def make_sync_call(
             messages=messages,
             encoding=litellm.encoding,
         )
-        completion_stream: Any = MockResponseIterator(model_response=model_response, json_mode=json_mode)
+        completion_stream: MockResponseIterator | Iterator[object] = MockResponseIterator(
+            model_response=model_response, json_mode=json_mode
+        )
     else:
         decoder: Final = AWSEventStreamDecoder(model=model, json_mode=json_mode)
         completion_stream = decoder.iter_bytes(

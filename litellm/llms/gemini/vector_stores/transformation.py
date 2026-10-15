@@ -208,18 +208,20 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
             else:
                 file_search_config["metadata_filter"] = metadata_filter
 
-        # Build request body
-        request_body: Final[dict[str, Any]] = {
-            "contents": [{"parts": [{"text": query}]}],
-            "tools": [{"file_search": file_search_config}],
-        }
-
         # Add max_num_results if specified
         max_results: Final = vector_store_search_optional_params.get("max_num_results")
-        if max_results:
-            # This might need to be added to generationConfig or tool config
-            # depending on Gemini's API requirements
-            request_body.setdefault("generationConfig", {})["candidateCount"] = 1
+        # This might need to be added to generationConfig or tool config
+        # depending on Gemini's API requirements
+        generation_config: Final[Mapping[str, object]] = (
+            {"generationConfig": {"candidateCount": 1}} if max_results else {}
+        )
+
+        # Build request body
+        request_body: Final[dict[str, object]] = {
+            "contents": [{"parts": [{"text": query}]}],
+            "tools": [{"file_search": file_search_config}],
+            **generation_config,
+        }
 
         litellm_logging_obj.model_call_details["query"] = query
         litellm_logging_obj.model_call_details["vector_store_id"] = vector_store_id

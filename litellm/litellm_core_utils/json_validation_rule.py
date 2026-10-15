@@ -1,7 +1,11 @@
 import json
 from typing import Any, Final
 
+from pydantic import TypeAdapter
+
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+
+_DECODED_RESPONSE: Final = TypeAdapter(object)
 
 
 def normalize_json_schema_types(
@@ -109,7 +113,7 @@ def validate_schema(schema: dict, response: str):
     from litellm import JSONSchemaValidationError
 
     try:
-        response_dict: Final = json.loads(response)
+        response_dict: Final = _DECODED_RESPONSE.validate_python(json.loads(response))
     except json.JSONDecodeError:
         raise JSONSchemaValidationError(model="", llm_provider="", raw_response=response, schema=json.dumps(schema))
 

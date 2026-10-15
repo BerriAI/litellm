@@ -2,6 +2,7 @@
 DeepSeek Anthropic-compatible messages transformation config.
 """
 
+from collections.abc import Sequence
 from typing import Any, Final
 
 import litellm
@@ -46,7 +47,7 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
         self,
         headers: dict,
         model: str,
-        messages: list[Any],
+        messages: Sequence[object],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,

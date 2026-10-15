@@ -101,7 +101,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         self,
         generate_content_config_dict: GenerateContentConfigDict,
         model: str,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Map Google GenAI parameters to provider-specific format.
 
@@ -337,7 +337,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         contents: GenerateContentContentListUnionDict,
         tools: ToolConfigDict | None,
         generate_content_config_dict: dict,
-        system_instruction: Any | None = None,
+        system_instruction: object | None = None,
     ) -> dict:
         from litellm.types.google_genai.main import (
             GenerateContentConfigDict,

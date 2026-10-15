@@ -14,6 +14,7 @@ from openai.lib import _parsing, _pydantic  # pyright: ignore[reportPrivateUsage
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
 from litellm.types.utils import Message, ProviderSpecificModelInfo, TokenCountResponse
 
@@ -24,8 +25,8 @@ class BaseTokenCounter(ABC):
         self,
         model_to_use: str,
         messages: list[dict[str, Any]] | None,
-        contents: list[dict[str, Any]] | None,
-        deployment: dict[str, Any] | None = None,
+        contents: list[dict[str, object]] | None,
+        deployment: dict[str, object] | None = None,
         request_model: str = "",
         tools: list[dict[str, Any]] | None = None,
         system: Any | None = None,
@@ -141,8 +142,9 @@ def convert_tool_response_to_message(
     json_mode_content_str: Final[str | None] = tool_calls[0]["function"].get("arguments")
     try:
         if json_mode_content_str is not None:
-            args: Final = json.loads(json_mode_content_str)
-            if isinstance(args, dict) and (values := args.get("values")) is not None:
+            args: Final = _DECODED_JSON.validate_python(json.loads(json_mode_content_str))
+            args_object: Final = as_str_mapping(args)
+            if args_object is not None and (values := args_object.get("values")) is not None:
                 _message = Message(content=json.dumps(values))
                 return _message
             else:
@@ -170,6 +172,7 @@ class ResponseFormatSchema:
         return self.allows_undeclared_keys and not self.required_names
 
 
+_DECODED_JSON: Final = TypeAdapter(object)
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, JsonValue])
 _NAMES: Final = TypeAdapter(frozenset[str])
 
@@ -224,7 +227,7 @@ def _json_object_or_encoded_object(value: JsonValue) -> Mapping[str, JsonValue] 
     if not isinstance(value, str):
         return as_json_object(value)
     try:
-        return as_json_object(json.loads(value))
+        return as_json_object(_DECODED_JSON.validate_python(json.loads(value)))
     except (json.JSONDecodeError, RecursionError):
         return None
 

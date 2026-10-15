@@ -61,6 +61,7 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME, MCP_GATEWAY_SESSION_ID_PREFIX_LENGTH
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
     LITELLM_MCP_SERVER_NAME,
@@ -100,6 +101,10 @@ TEMPORARY_MCP_SERVER_REDIS_KEY_PREFIX: Final = "litellm:mcp:temporary_server"
 
 class _HasServerId(Protocol):
     server_id: str
+
+
+def _session_cookie_claims(claims: Mapping[str, object]) -> Mapping[str, object]:
+    return claims
 
 
 def does_mcp_server_exist(mcp_server_records: Iterable[_HasServerId], mcp_server_id: str) -> bool:
@@ -585,13 +590,13 @@ if MCP_AVAILABLE:
         if decrypted_json is None:
             return None
         try:
-            loaded: Final = json.loads(decrypted_json)
+            loaded: Final = _CACHED_VALUE.validate_python(json.loads(decrypted_json))
         except Exception as e:
             verbose_proxy_logger.debug("Invalid decrypted temporary MCP payload in Redis cache: %s", e)
             return None
-        if not isinstance(loaded, dict):
+        payload_dict: Final = as_str_mapping(loaded)
+        if payload_dict is None:
             return None
-        payload_dict: Final[dict[str, object]] = loaded
 
         try:
             return MCPServer.model_validate(payload_dict)
@@ -2194,8 +2199,9 @@ if MCP_AVAILABLE:
                         # UI session cookies may omit exp; don't require it.
                         options={"verify_exp": False, "verify_aud": False},
                     )
-                    if decoded.get("login_method") in ("sso", "username_password"):
-                        cookie_key: Final[str] = decoded.get("key", "")
+                    session_claims: Final = _session_cookie_claims(decoded)
+                    if session_claims.get("login_method") in ("sso", "username_password"):
+                        cookie_key: Final = session_claims.get("key", "")
                         if cookie_key:
                             api_key = f"Bearer {cookie_key}"
                 except _jwt.InvalidTokenError:
@@ -3369,10 +3375,12 @@ if MCP_AVAILABLE:
         "openapi_registry.json",
     )
 
+    _OPENAPI_REGISTRY_ADAPTER: Final = TypeAdapter(dict[str, object])
+
     @functools.lru_cache(maxsize=1)
     def _load_openapi_registry() -> dict[str, object]:
         with open(_OPENAPI_REGISTRY_PATH, "r") as f:
-            data: Final[dict[str, object]] = json.load(f)
+            data: Final = _OPENAPI_REGISTRY_ADAPTER.validate_python(json.load(f))
         return data
 
     @router.get(

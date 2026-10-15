@@ -14,7 +14,9 @@ import datetime
 import uuid
 from collections.abc import AsyncIterator, Coroutine, Mapping
 from types import MappingProxyType, ModuleType
-from typing import TYPE_CHECKING, Any, Final, Optional, cast
+from typing import TYPE_CHECKING, Final, Optional, cast
+
+from typing_extensions import TypedDict, Unpack
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
@@ -87,6 +89,10 @@ from litellm.a2a_protocol.exceptions import A2ALocalhostURLError
 
 # Use our custom resolver instead of the default A2A SDK resolver
 A2ACardResolver: Final = LiteLLMA2ACardResolver
+
+
+class _SendMessageOptions(TypedDict, total=False, extra_items=object):
+    pass
 
 
 def _set_usage_on_logging_obj(
@@ -563,7 +569,7 @@ async def asend_message(
 def send_message(
     a2a_client: "A2AClientType",
     request: "SendMessageRequest",
-    **kwargs: Any,
+    **kwargs: Unpack[_SendMessageOptions],
 ) -> LiteLLMSendMessageResponse | Coroutine[object, object, LiteLLMSendMessageResponse]:
     """
     Sync: Send a message to an A2A agent.

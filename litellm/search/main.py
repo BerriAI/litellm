@@ -7,7 +7,7 @@ import contextvars
 from collections.abc import Coroutine, Mapping
 from functools import partial
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Final
 
 import httpx
 from pydantic import TypeAdapter
@@ -78,7 +78,7 @@ async def asearch(
     api_key: str | None = None,
     api_base: str | None = None,
     timeout: float | httpx.Timeout | None = None,
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
     **kwargs,
 ) -> SearchResponse:
     """
@@ -181,9 +181,9 @@ def search(
     api_key: str | None = None,
     api_base: str | None = None,
     timeout: float | httpx.Timeout | None = None,
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
     **kwargs,
-) -> SearchResponse | Coroutine[Any, Any, SearchResponse]:
+) -> SearchResponse | Coroutine[object, object, SearchResponse]:
     """
     Synchronous Search function.
 

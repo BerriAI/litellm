@@ -1,11 +1,11 @@
 import time
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Generator, Mapping, Sequence
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Protocol, runtime_checkable
 
 import httpx
 from fastapi import HTTPException
-from pydantic import ConfigDict, RootModel, with_config
+from pydantic import ConfigDict, RootModel, TypeAdapter, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 if TYPE_CHECKING:
@@ -66,6 +66,12 @@ from litellm.types.utils import (
 )
 
 GUARDRAIL_NAME: Final = "model_armor"
+_RESPONSE_JSON: Final = TypeAdapter(object)
+
+
+@runtime_checkable
+class _AwaitableJSON(Protocol):
+    def __await__(self) -> Generator[object, None, object]: ...
 
 
 @with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
@@ -411,8 +417,8 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             )
             raise ModelArmorAPIError(detail)
 
-        json_response: Final = response.json()
-        if hasattr(json_response, "__await__"):
+        json_response: Final = _RESPONSE_JSON.validate_python(response.json())
+        if isinstance(json_response, _AwaitableJSON):
             return _ModelArmorResponseRoot.model_validate(await json_response).root
         return _ModelArmorResponseRoot.model_validate(json_response).root
 

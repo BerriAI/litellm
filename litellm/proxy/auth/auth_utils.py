@@ -245,6 +245,7 @@ def _allow_model_level_clientside_configurable_parameters(
 reject_server_owned_wif_params = _reject_server_owned_wif_params
 
 _CREDENTIAL_VALUES: Final = TypeAdapter(dict[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def reject_federated_credential_reference(body: Mapping[str, object]) -> None:
@@ -697,7 +698,7 @@ def _coerce_metadata_to_dict(value: object) -> dict[str, object] | None:
     if isinstance(value, str):
         from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 
-        parsed: Final = safe_json_loads(value)
+        parsed: Final = _DECODED_JSON.validate_python(safe_json_loads(value))
         if isinstance(parsed, dict):
             return parsed
     return None
@@ -1733,7 +1734,7 @@ def _coerce_user_id_to_str(value: object) -> str | None:
         # behind the flag preserves backwards compatibility for deployments
         # that intentionally pass JSON-encoded user identifiers.
         if litellm.validate_end_user_id_in_db and stripped[:1] in ("{", "["):
-            parsed: Final[object] = safe_json_loads(stripped)
+            parsed: Final[object] = _DECODED_JSON.validate_python(safe_json_loads(stripped))
             if isinstance(parsed, (dict, list)):
                 return None
         return stripped
@@ -1799,7 +1800,7 @@ def get_end_user_id_from_request_body(
         if isinstance(value, dict):
             return value
         if isinstance(value, str):
-            parsed: Final = safe_json_loads(value)
+            parsed: Final = _DECODED_JSON.validate_python(safe_json_loads(value))
             return parsed if isinstance(parsed, dict) else {}
         return {}
 

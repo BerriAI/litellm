@@ -6,11 +6,13 @@ import logging
 import os
 import re
 import sys
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from datetime import datetime
 from logging import Formatter
 from typing import Final, TextIO
 from urllib.parse import unquote
+
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.constants import (
@@ -84,11 +86,16 @@ _redact_string = redact_string
 
 _REDACTED_RECORD_ATTR: Final = "litellm_redacted"
 _REDACTED_STAMP: Final = object()
+_DECODED_LOG_PAYLOAD: Final = TypeAdapter(object)
 _UNREDACTED_SCALAR_TYPES: Final = (bool, int, float, type(None))
 
 
 def _is_redacted(record: logging.LogRecord) -> bool:
     return getattr(record, _REDACTED_RECORD_ATTR, None) is _REDACTED_STAMP
+
+
+def _record_attributes(record: logging.LogRecord) -> Mapping[str, object]:
+    return record.__dict__
 
 
 def _scrubbing_changed_nothing(scrubbed: object, original: object) -> bool:
@@ -438,7 +445,7 @@ def _process_record(record: logging.LogRecord, *, base64_limit: int, text_limit:
                     key, substituted_color if key == "color_message" and substituted_color is not None else value
                 ),
             )
-            for key, value in record.__dict__.items()
+            for key, value in _record_attributes(record).items()
             if key not in _STANDARD_RECORD_ATTRS
             and key != _REDACTED_RECORD_ATTR
             and not isinstance(value, _UNREDACTED_SCALAR_TYPES)
@@ -669,7 +676,7 @@ def _try_parse_json_message(message: str) -> dict[str, object] | None:
     msg_stripped: Final = message.strip()
     if not (msg_stripped.startswith("{") or msg_stripped.startswith("[")):
         return None
-    parsed: Final[object] = safe_json_loads(message, default=None)
+    parsed: Final = _DECODED_LOG_PAYLOAD.validate_python(safe_json_loads(message, default=None))
     if parsed is None or not isinstance(parsed, dict):
         return None
     return parsed
@@ -699,7 +706,7 @@ def _try_parse_embedded_python_dict(message: str) -> dict[str, object] | None:
                 if depth == 0:
                     substr = message[start : j + 1]
                     try:
-                        result: object = ast.literal_eval(substr)
+                        result: object = _DECODED_LOG_PAYLOAD.validate_python(ast.literal_eval(substr))
                         if isinstance(result, dict) and len(result) > 0:
                             return result
                     except (ValueError, SyntaxError, TypeError):
@@ -757,7 +764,7 @@ class JsonFormatter(Formatter):
                     json_record[key] = value
 
         # Include extra attributes passed via logger.debug("msg", extra={...})
-        for key, value in record.__dict__.items():
+        for key, value in _record_attributes(record).items():
             if key not in _NON_EXTRA_RECORD_ATTRS and key not in json_record:
                 json_record[key] = value
 

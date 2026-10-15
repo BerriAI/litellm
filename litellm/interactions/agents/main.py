@@ -101,7 +101,7 @@ async def acreate(
     instructions: str | None = None,
     base_environment: InteractionEnvironment | None = None,
     custom_llm_provider: str | None = None,
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
     extra_body: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     **kwargs,
@@ -145,7 +145,7 @@ def create(
     instructions: str | None = None,
     base_environment: InteractionEnvironment | None = None,
     custom_llm_provider: str | None = None,
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
     extra_body: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     **kwargs,
@@ -207,7 +207,7 @@ def create(
 @client
 async def alist(
     custom_llm_provider: str | None = None,
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
     **kwargs,
 ) -> AgentListResponse:
@@ -241,7 +241,7 @@ async def alist(
 @client
 def list(
     custom_llm_provider: str | None = None,
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
     **kwargs,
 ) -> AgentListResponse | Coroutine[object, object, AgentListResponse]:
@@ -281,7 +281,7 @@ def list(
 async def aget(
     name: str,
     custom_llm_provider: str | None = None,
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
     **kwargs,
 ) -> AgentCreateResponse:
@@ -317,7 +317,7 @@ async def aget(
 def get(
     name: str,
     custom_llm_provider: str | None = None,
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
     **kwargs,
 ) -> AgentCreateResponse | Coroutine[object, object, AgentCreateResponse]:
@@ -358,7 +358,7 @@ def get(
 async def adelete(
     name: str,
     custom_llm_provider: str | None = None,
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
     **kwargs,
 ) -> AgentDeleteResult:
@@ -394,7 +394,7 @@ async def adelete(
 def delete(
     name: str,
     custom_llm_provider: str | None = None,
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
     **kwargs,
 ) -> AgentDeleteResult | Coroutine[object, object, AgentDeleteResult]:
@@ -435,7 +435,7 @@ def delete(
 async def alist_versions(
     name: str,
     custom_llm_provider: str | None = None,
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
     **kwargs,
 ) -> AgentVersionsResponse:
@@ -471,7 +471,7 @@ async def alist_versions(
 def list_versions(
     name: str,
     custom_llm_provider: str | None = None,
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
     **kwargs,
 ) -> AgentVersionsResponse | Coroutine[object, object, AgentVersionsResponse]:

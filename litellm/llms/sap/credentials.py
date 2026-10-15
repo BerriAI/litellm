@@ -11,6 +11,7 @@ from threading import Lock
 from typing import Any, Final, Protocol
 
 import httpx
+from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -29,6 +30,8 @@ SERVICE_KEY_ENV_VAR: Final = "AICORE_SERVICE_KEY"
 
 DEFAULT_HOME_PATH: Final = os.path.join(os.path.expanduser("~"), ".aicore")
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
 
 def _get_home() -> str:
     return os.getenv(HOME_PATH_ENV_VAR, DEFAULT_HOME_PATH)
@@ -39,7 +42,7 @@ def _get_nested(d: object, path: Sequence[str]) -> object:
     if isinstance(cur, str):
         # This shouldn't happen if service keys are pre-parsed correctly
         try:
-            cur = json.loads(cur)
+            cur = _DECODED_JSON.validate_python(json.loads(cur))
         except json.JSONDecodeError:
             verbose_logger.warning("SAP service key or VCAP service is a string but not valid JSON.")
             return None

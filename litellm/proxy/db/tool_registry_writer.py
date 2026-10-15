@@ -330,8 +330,8 @@ async def list_overrides_for_tool(
         )
         for perm in perms:
             op_id = getattr(perm, "object_permission_id", None) or ""
-            tokens = getattr(perm, "verification_tokens", []) or []
-            teams = getattr(perm, "teams", []) or []
+            tokens: Sequence[object] = getattr(perm, "verification_tokens", []) or []
+            teams: Sequence[object] = getattr(perm, "teams", []) or []
             for t in tokens:
                 out.append(
                     ToolPolicyOverrideRow(

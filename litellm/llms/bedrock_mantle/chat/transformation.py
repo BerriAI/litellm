@@ -11,7 +11,7 @@ Auth: Bearer token (litellm_params.api_key, BEDROCK_MANTLE_API_KEY, or the
 """
 
 from collections.abc import AsyncIterator, Iterator
-from typing import Any, Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -26,11 +26,17 @@ from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_serie
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import ModelResponse
 
 from ...base_llm.chat.transformation import BaseLLMException
 from ...bedrock.common_utils import BedrockError
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 from ..common_utils import mantle_base_segment, split_mantle_region_prefix
+
+if TYPE_CHECKING:
+    from litellm.llms.openai.chat.gpt_transformation import (
+        OpenAIChatCompletionStreamingHandler,
+    )
 
 
 class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
@@ -161,10 +167,10 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Iterator[str] | AsyncIterator[str] | Any,
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> Any:
+    ) -> "OpenAIChatCompletionStreamingHandler":
         from litellm.llms.openai.chat.gpt_transformation import (
             OpenAIChatCompletionStreamingHandler,
         )

@@ -145,6 +145,7 @@ else:
 
 vertex_llm_base: Final = VertexBase()
 router: Final = APIRouter()
+_DECODED_JSON: Final = TypeAdapter(object)
 default_vertex_config: Final = None
 passthrough_endpoint_router: Final = PassthroughEndpointRouter()
 
@@ -3549,7 +3550,7 @@ async def _tinyfish_json_object_field_names(request: Request) -> frozenset[str] 
     if not raw_body:
         return frozenset()
     try:
-        parsed: Final[object] = json.loads(raw_body)  # any-ok: json.loads -> Any
+        parsed: Final = _DECODED_JSON.validate_python(json.loads(raw_body))
     except (json.JSONDecodeError, UnicodeDecodeError):
         return None
     return frozenset(parsed) if isinstance(parsed, dict) else None

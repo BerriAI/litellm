@@ -20,9 +20,10 @@ from datetime import datetime, timezone
 from itertools import groupby
 from operator import itemgetter
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, field_validator, model_validator
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -801,6 +802,52 @@ def _scope_admits(router: "Router | None", job: "ActiveShadowEvalJob", model_gro
     return not job.models or any(_canonical_group(router, name) == model_group for name in job.models)
 
 
+class _ShadowEvalJobRow(Protocol):
+    @property
+    def id(self) -> str: ...
+
+    @property
+    def target_type(self) -> str: ...
+
+    @property
+    def target_id(self) -> str: ...
+
+
+class _AttemptCount(TypedDict):
+    _all: ReadOnly[int]
+
+
+class _AttemptGroup(TypedDict):
+    job_id: ReadOnly[str]
+    _count: ReadOnly[_AttemptCount]
+    _sum: ReadOnly[Mapping[str, object] | None]
+
+
+class _ShadowEvalJobTable(Protocol):
+    async def find_many(self, *, where: Mapping[str, object]) -> Sequence[_ShadowEvalJobRow]: ...
+
+
+class _ShadowEvalAttemptTable(Protocol):
+    async def group_by(
+        self,
+        *,
+        by: Sequence[str],
+        count: bool,
+        sum: Mapping[str, bool],
+        where: Mapping[str, object],
+    ) -> Sequence[_AttemptGroup]: ...
+
+    async def create(self, *, data: Mapping[str, object]) -> object: ...
+
+
+def _shadow_eval_job_table(prisma: "PrismaClient") -> _ShadowEvalJobTable:
+    return prisma.db.litellm_shadowevaljob
+
+
+def _shadow_eval_attempt_table(prisma: "PrismaClient") -> _ShadowEvalAttemptTable:
+    return prisma.db.litellm_shadowevalattempt
+
+
 def _as_active_job(record: object, attempts: int, spend: float) -> ActiveShadowEvalJob | None:
     """The sampling path's view of one job row, or None for a row it cannot sample: an
     unknown direction, or a reverse job with no baseline model to duplicate against.
@@ -860,14 +907,14 @@ class ShadowEvalLogger(CustomLogger):
         if prisma is None:
             return _EMPTY_JOBS
         try:
-            records: Final = await prisma.db.litellm_shadowevaljob.find_many(
+            records: Final = await _shadow_eval_job_table(prisma).find_many(
                 where={
                     "stopped_at": None,
                     "ends_at": {"gt": datetime.now(timezone.utc)},
                 },
             )
             grouped: Final = (
-                await prisma.db.litellm_shadowevalattempt.group_by(
+                await _shadow_eval_attempt_table(prisma).group_by(
                     by=["job_id"],
                     count=True,
                     sum={"judge_cost": True, "shadow_cost": True, "shadow_classifier_cost": True},
@@ -894,7 +941,10 @@ class ShadowEvalLogger(CustomLogger):
                 )
             )
             jobs: Final = MappingProxyType(
-                {target: tuple(job for _, job in group) for target, group in groupby(by_target, key=itemgetter(0))}
+                {
+                    target: tuple(job for _, job in group)
+                    for target, group in groupby(by_target, key=lambda entry: entry[0])
+                }
             )
             await self._jobs_cache.async_set_cache(_JOBS_CACHE_KEY, jobs)
             self._job_starts = {}
@@ -1242,7 +1292,7 @@ class ShadowEvalLogger(CustomLogger):
         if prisma is None:
             return
         try:
-            await prisma.db.litellm_shadowevalattempt.create(
+            await _shadow_eval_attempt_table(prisma).create(
                 data={
                     "job_id": job.id,
                     "request_id": request_id,

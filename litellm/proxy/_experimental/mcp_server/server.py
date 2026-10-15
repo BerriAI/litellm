@@ -30,6 +30,7 @@ from litellm.constants import (
     MCP_GATEWAY_SESSION_ID_PREFIX_LENGTH,
     MCP_PEEKED_BODY_SCOPE_KEY,
 )
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -89,6 +90,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
     LITELLM_MCP_SERVER_NAME,
     LITELLM_MCP_SERVER_VERSION,
+    asgi_scope_fields,
     merge_mcp_headers,
 )
 from litellm.proxy._types import (
@@ -130,6 +132,7 @@ _MCP_ROUTING_PEEK_MAX_BYTES: Final = 4096
 _MCP_TRANSPORT_SPAN_SCOPE_KEY: Final = "litellm_otel_transport_span"
 _MCP_DESTINATIONS_SCOPE_KEY: Final = "litellm_otel_request_destinations"
 _MCP_PROTOCOL_VERSION_HEADER: Final = b"mcp-protocol-version"
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def reject_disallowed_mcp_origin(request: StarletteRequest) -> None:
@@ -137,6 +140,14 @@ def reject_disallowed_mcp_origin(request: StarletteRequest) -> None:
 
     if "*" not in origins and any(origin not in origins for origin in request.headers.getlist("origin")):
         raise HTTPException(status_code=403, detail="Invalid Origin header")
+
+
+def _scope_path(scope: Scope) -> str:
+    return asgi_scope_fields(scope).get("path", "")
+
+
+def _scope_headers(scope: Scope) -> Sequence[tuple[bytes, bytes]]:
+    return asgi_scope_fields(scope).get("headers", [])
 
 
 def unsupported_protocol_version(scope: Scope) -> str | None:
@@ -148,7 +159,7 @@ def unsupported_protocol_version(scope: Scope) -> str | None:
         raw.decode("latin-1").strip() for key, raw in headers if key.lower() == _MCP_PROTOCOL_VERSION_HEADER
     )
     for value in values:
-        if value == "2026-07-28" and scope.get("path", "").rstrip("/").endswith("/sse"):
+        if value == "2026-07-28" and _scope_path(scope).rstrip("/").endswith("/sse"):
             return value
         if value and value not in configured_versions():
             return value
@@ -1377,8 +1388,8 @@ if MCP_AVAILABLE:
         if not body:
             return False
         try:
-            data: Final = json.loads(body)
-            return isinstance(data, dict) and data.get("method") == "initialize"
+            data: Final = as_str_mapping(_DECODED_JSON.validate_python(json.loads(body)))
+            return data is not None and data.get("method") == "initialize"
         except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
             return False
 
@@ -1678,7 +1689,7 @@ if MCP_AVAILABLE:
             return False
 
         # --- Session not in this worker's memory ---
-        method: Final = scope.get("method", "").upper()
+        method: Final = asgi_scope_fields(scope).get("method", "").upper()
 
         if method == "DELETE":
             _remove_stateful_session_tracking(_session_id)
@@ -2025,7 +2036,7 @@ if MCP_AVAILABLE:
 
     def _get_authorization_header_from_scope(scope: Scope) -> str | None:
         """First ``Authorization`` header value in the ASGI scope, or None."""
-        scope_headers: Final[Sequence[tuple[bytes, bytes]]] = scope.get("headers", [])
+        scope_headers: Final = _scope_headers(scope)
         for key, value in scope_headers:
             if key.lower() == b"authorization":
                 return value.decode("latin-1")
@@ -2045,7 +2056,7 @@ if MCP_AVAILABLE:
         ``MCPRequestHandler.process_mcp_request``), and forwarding it upstream
         would leak the proxy key to a third-party MCP server.
         """
-        scope_headers: Final[Sequence[tuple[bytes, bytes]]] = scope.get("headers", [])
+        scope_headers: Final = _scope_headers(scope)
         has_litellm_key_header: Final = any(key.lower() == b"x-litellm-api-key" for key, _ in scope_headers)
         if not has_litellm_key_header:
             return None
@@ -2285,7 +2296,7 @@ if MCP_AVAILABLE:
                     },
                 )(scope, receive, send)
                 return
-            path: Final[str] = scope.get("path", "")
+            path: Final = _scope_path(scope)
             peek: Final = _LazyPeekedBody(receive) if scope.get("method") == "POST" else None
             if peek is not None:
                 receive = peek.receive  # rebind-ok: replay peeked ASGI messages to the downstream handler
@@ -2320,7 +2331,7 @@ if MCP_AVAILABLE:
             )
 
             # Strip any client-supplied x-mcp-toolset-id to prevent forgery.
-            scope_headers: Final[Sequence[tuple[bytes, bytes]]] = scope.get("headers", [])
+            scope_headers: Final = _scope_headers(scope)
             scope["headers"] = [(k, v) for k, v in scope_headers if k.lower() != b"x-mcp-toolset-id"]
 
             # Apply toolset scope if set server-side via ContextVar (set by
@@ -2503,9 +2514,9 @@ if MCP_AVAILABLE:
             request_method: Final = (scope.get("method") or "").upper()
             if body and request_method == "POST":
                 try:
-                    _peeked: Final = json.loads(body)
+                    _peeked: Final = as_str_mapping(_DECODED_JSON.validate_python(json.loads(body)))
                     if (
-                        isinstance(_peeked, dict)
+                        _peeked is not None
                         and _peeked.get("jsonrpc") == "2.0"
                         and "id" in _peeked
                         and "method" not in _peeked
@@ -2693,7 +2704,7 @@ if MCP_AVAILABLE:
             )
 
             # Strip any client-supplied x-mcp-toolset-id to prevent forgery.
-            scope_headers: Final[Sequence[tuple[bytes, bytes]]] = scope.get("headers", [])
+            scope_headers: Final = _scope_headers(scope)
             scope["headers"] = [(k, v) for k, v in scope_headers if k.lower() != b"x-mcp-toolset-id"]
 
             # Apply toolset scope if set server-side via ContextVar so the

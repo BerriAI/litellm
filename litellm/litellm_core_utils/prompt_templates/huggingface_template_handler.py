@@ -2,6 +2,7 @@ import json
 from datetime import datetime
 from typing import Any, Final, Literal
 
+from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.llms.custom_httpx.http_handler import (
@@ -9,6 +10,8 @@ from litellm.llms.custom_httpx.http_handler import (
     get_httpx_client,
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
+
+_DECODED_TOKENIZER_CONFIG: Final = TypeAdapter(object)
 
 
 class _TokenizerConfigResult(TypedDict):
@@ -55,7 +58,7 @@ def get_tokenizer_config(hf_model_name: str) -> _TokenizerConfigResult:
     except Exception as e:
         raise e
     if response.status_code == 200:
-        tokenizer_config: Final = json.loads(response.content)
+        tokenizer_config: Final = _DECODED_TOKENIZER_CONFIG.validate_python(json.loads(response.content))
         return {"status": "success", "tokenizer": tokenizer_config}
     else:
         return {"status": "failure"}
@@ -83,7 +86,7 @@ async def aget_tokenizer_config(hf_model_name: str) -> _TokenizerConfigResult:
     except Exception as e:
         raise e
     if response.status_code == 200:
-        tokenizer_config: Final = json.loads(response.content)
+        tokenizer_config: Final = _DECODED_TOKENIZER_CONFIG.validate_python(json.loads(response.content))
         return {"status": "success", "tokenizer": tokenizer_config}
     else:
         return {"status": "failure"}

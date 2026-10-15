@@ -211,11 +211,12 @@ def _message_events(message: object, skip_tools: frozenset[str]) -> tuple[Event,
         calls = getattr(message, "tool_calls", None) or ()
         return tuple(tool_call_event(call) for call in calls if call.get("name") not in skip_tools)
     if kind == "tool" and getattr(message, "name", None) not in skip_tools:
+        status: Final[object] = getattr(message, "status", None)
         return (
             ToolResult(
                 id=str(getattr(message, "tool_call_id", "") or ""),
                 output=content_text(getattr(message, "content", "")),
-                is_error=getattr(message, "status", None) == "error",
+                is_error=status == "error",
             ),
         )
     return ()

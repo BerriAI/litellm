@@ -9,7 +9,7 @@ import contextvars
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Coroutine, Generator, Iterator
 from functools import partial
 from types import TracebackType
-from typing import Any, Final, cast
+from typing import Final, cast
 
 import httpx
 from httpx._types import CookieTypes, QueryParamTypes, RequestContent, RequestFiles
@@ -104,7 +104,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
     def headers(self, value: httpx.Headers) -> None:
         self._headers = value
 
-    def __await__(self) -> Iterator[Any]:
+    def __await__(self) -> Generator[object, None, AsyncPassthroughStreamingResponse]:
         async def _init():
             if not self._initialized:
                 self._response = await self._response_coro

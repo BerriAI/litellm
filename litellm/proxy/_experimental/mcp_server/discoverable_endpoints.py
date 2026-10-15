@@ -297,6 +297,7 @@ def decode_state_hash(encrypted_state: str) -> dict:
 
 
 _MANAGED_AUTH_CODE_PREFIX: Final = "llm_scope_"
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _ManagedAuthorizationCode(LiteLLMBaseModel):
@@ -2823,7 +2824,7 @@ async def fetch_upstream_oauth_protected_resource(
                 continue
             if response.status_code == 200:
                 try:
-                    payload = response.json()
+                    payload = _DECODED_JSON.validate_python(response.json())
                 except Exception as exc:
                     verbose_logger.warning(
                         "MCP OAuth metadata at %s returned 200 but JSON "

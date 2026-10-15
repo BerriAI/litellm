@@ -613,7 +613,10 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         if provider is not None:
             return provider
 
-        for provider in get_args(BEDROCK_INVOKE_PROVIDERS_LITERAL):
+        invoke_providers: Final[tuple[BEDROCK_INVOKE_PROVIDERS_LITERAL, ...]] = get_args(
+            BEDROCK_INVOKE_PROVIDERS_LITERAL
+        )
+        for provider in invoke_providers:
             if provider in model:
                 return provider
         return None
@@ -726,9 +729,12 @@ class BaseAWSLLM(SignsRequestsWithAWS):
                 return cast(BEDROCK_EMBEDDING_PROVIDERS_LITERAL, potential_provider)
 
         # Fallback: check if any provider name appears in the model string
-        for provider in get_args(BEDROCK_EMBEDDING_PROVIDERS_LITERAL):
+        embedding_providers: Final[tuple[BEDROCK_EMBEDDING_PROVIDERS_LITERAL, ...]] = get_args(
+            BEDROCK_EMBEDDING_PROVIDERS_LITERAL
+        )
+        for provider in embedding_providers:
             if provider in model:
-                return cast(BEDROCK_EMBEDDING_PROVIDERS_LITERAL, provider)
+                return provider
 
         return None
 

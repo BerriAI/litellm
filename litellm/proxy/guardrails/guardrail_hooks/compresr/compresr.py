@@ -22,7 +22,7 @@ import json
 import time
 from collections import Counter, OrderedDict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Final, Literal, TypeGuard
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeGuard
 from urllib.parse import urlparse
 
 import httpx
@@ -142,6 +142,14 @@ def _validate_api_base(url: str) -> str:
     if host in _BLOCKED_METADATA_HOSTS or (ip_literal is not None and ip_literal in _BLOCKED_METADATA_IPS):
         raise ValueError(f"Compresr guardrail api_base {host!r} is a blocked cloud-metadata host")
     return url
+
+
+class _JsonResponse(Protocol):
+    def json(self) -> object: ...
+
+
+def _json_body(response: _JsonResponse) -> object:
+    return response.json()
 
 
 def _is_str_object_dict(value: object) -> TypeGuard[dict[str, object]]:  # guard-ok: isinstance narrows correctly; predicate is trivially correct  # fmt: skip
@@ -794,7 +802,7 @@ class CompresrGuardrail(CustomGuardrail):
             return None
 
         try:
-            body: Final[object] = raw_response.json()
+            body: Final = _json_body(raw_response)
         except (ValueError, httpx.DecodingError, RecursionError):
             # RecursionError: a deeply nested JSON body overflows the parser;
             # route it through the fail policy rather than let it escape as a 500.

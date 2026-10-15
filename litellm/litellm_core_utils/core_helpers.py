@@ -3,9 +3,9 @@
 import copy
 import logging
 import re
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, runtime_checkable
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
@@ -54,6 +54,33 @@ _DROP_PARAMS_BOOL: Final = TypeAdapter(bool)
 
 def as_str_mapping(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, Mapping) else None
+
+
+@runtime_checkable
+class _SupportsIter(Protocol):
+    def __iter__(self) -> Iterator[object]: ...
+
+
+@runtime_checkable
+class _SupportsGetItem(Protocol):
+    def __getitem__(self, index: int, /) -> object: ...
+
+
+def attribute_or_none(source: object, name: str) -> object:
+    return getattr(source, name, None)
+
+
+def iter_items(value: object) -> Iterable[object]:
+    if isinstance(value, _SupportsIter):
+        return value
+    if isinstance(value, _SupportsGetItem):
+        return iter(value)
+    raise TypeError(f"'{type(value).__name__}' object is not iterable")
+
+
+def attribute_items(source: object, name: str) -> Iterable[object]:
+    value: Final = attribute_or_none(source, name)
+    return iter_items(value) if value else ()
 
 
 def normalize_drop_params(value: object) -> bool | None:
@@ -275,7 +302,13 @@ def remove_index_from_tool_calls(
                         tool_call.pop("index", None)
 
 
-def remove_items_at_indices(items: list[Any] | None, indices: Iterable[int]) -> None:
+class _PoppableByIndex(Protocol):
+    def __len__(self) -> int: ...
+
+    def pop(self, index: int, /) -> object: ...
+
+
+def remove_items_at_indices(items: _PoppableByIndex | None, indices: Iterable[int]) -> None:
     """Remove items from a list in-place by index"""
     if items is None:
         return

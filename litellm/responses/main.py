@@ -296,9 +296,7 @@ async def aresponses_api_with_mcp(
             served_tools=original_mcp_tools,
             **kwargs,
         )
-        await mcp_streaming_response._create_initial_response_iterator()
-        if mcp_streaming_response._initial_creation_error is not None:
-            raise mcp_streaming_response._initial_creation_error
+        await mcp_streaming_response.start_initial_response()
         return mcp_streaming_response
 
     # Determine if we should auto-execute tools
@@ -1432,7 +1430,7 @@ def responses(
         current_reasoning: Final = cast(  # cast-ok: prompt-managed reasoning arrives as a plain dict
             Reasoning | None, local_vars.get("reasoning")
         )
-        reasoning_effort: Final = local_vars.get("reasoning_effort")
+        reasoning_effort: Final[object] = local_vars.get("reasoning_effort")
         request_reasoning: Final = (
             LiteLLMResponsesTransformationHandler().map_reasoning_effort(reasoning_effort)
             if current_reasoning is None and reasoning_effort is not None

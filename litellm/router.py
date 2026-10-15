@@ -521,6 +521,7 @@ _SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
 _RESOLVED_RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy | None)
 _ROUTING_KWARGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _FALLBACK_HOP_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_OPAQUE_VALUE_ADAPTER: Final = TypeAdapter(object)
 _DEPLOYMENT_SELECTED_EVENT: Final = "litellm.request.deployment_selected"
 
 
@@ -821,7 +822,8 @@ MAX_HELD_PRE_OUTPUT_RESPONSES_EVENTS: Final = 200
 
 def _retry_policy_ceiling(policy: RetryPolicy) -> int:
     """The most retries any error class under this policy can be granted."""
-    return max((retries for retries in policy.model_dump().values() if isinstance(retries, int)), default=0)
+    retry_counts: Final[Iterable[object]] = policy.model_dump().values()
+    return max((retries for retries in retry_counts if isinstance(retries, int)), default=0)
 
 
 def _responses_stream_holds_event(item: object, held_event_count: int) -> bool:
@@ -1534,7 +1536,7 @@ class Router:
         if not startup_nodes:
             _env_cluster_nodes: Final = get_secret("REDIS_CLUSTER_NODES")
             if _env_cluster_nodes is not None and isinstance(_env_cluster_nodes, str):
-                startup_nodes = json.loads(_env_cluster_nodes)
+                startup_nodes = _OPAQUE_VALUE_ADAPTER.validate_python(json.loads(_env_cluster_nodes))
 
         if startup_nodes:
             return RedisClusterCache(**{**cache_config, "startup_nodes": startup_nodes})
@@ -5416,17 +5418,19 @@ class Router:
             self._stamp_retry_skip_deployment_id(e, kwargs)
             raise e
 
-    async def _asearch_with_fallbacks(self, original_function: Callable, **kwargs):
+    async def _asearch_with_fallbacks(self, original_function: Callable, **kwargs) -> object:
         """
         Helper function to make a search API call through the router with load balancing and fallbacks.
         Reuses the router's retry/fallback infrastructure.
         """
         from litellm.router_utils.search_api_router import SearchAPIRouter
 
-        return await SearchAPIRouter.async_search_with_fallbacks(
-            router_instance=self,
-            original_function=original_function,
-            **kwargs,
+        return _OPAQUE_VALUE_ADAPTER.validate_python(
+            await SearchAPIRouter.async_search_with_fallbacks(
+                router_instance=self,
+                original_function=original_function,
+                **kwargs,
+            )
         )
 
     async def _asearch_with_fallbacks_helper(self, model: str, original_generic_function: Callable, **kwargs):
@@ -6197,16 +6201,18 @@ class Router:
                 )
                 else e
             )
-            fallback_response: Final = await self.async_function_with_fallbacks_common_utils(
-                e=fallback_trigger,
-                disable_fallbacks=fallbacks_disabled_for_request(initial_kwargs),
-                fallbacks=fallbacks,
-                context_window_fallbacks=context_window_fallbacks,
-                content_policy_fallbacks=content_policy_fallbacks,
-                model_group=model_group,
-                args=(),
-                kwargs=initial_kwargs,
-                include_fallback_errors=initial_kwargs.get("include_fallback_errors", False) is True,
+            fallback_response: Final = _OPAQUE_VALUE_ADAPTER.validate_python(
+                await self.async_function_with_fallbacks_common_utils(
+                    e=fallback_trigger,
+                    disable_fallbacks=fallbacks_disabled_for_request(initial_kwargs),
+                    fallbacks=fallbacks,
+                    context_window_fallbacks=context_window_fallbacks,
+                    content_policy_fallbacks=content_policy_fallbacks,
+                    model_group=model_group,
+                    args=(),
+                    kwargs=initial_kwargs,
+                    include_fallback_errors=initial_kwargs.get("include_fallback_errors", False) is True,
+                )
             )
             async for fallback_item in self._aanthropic_messages_yield_recovered(fallback_response, wrapper):
                 yield fallback_item
