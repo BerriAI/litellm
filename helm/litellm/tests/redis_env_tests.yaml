@@ -3,6 +3,7 @@ templates:
   - gateway/deployment.yaml
   - gateway/configmap.yaml
   - backend/deployment.yaml
+  - migrations-job.yaml
 values:
   - ./values/required.yaml
 tests:
@@ -320,3 +321,168 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "redis.passwordSecret.name is required when hostKey or urlKey is set"
+
+  - it: redis omits TLS env vars by default
+    template: gateway/deployment.yaml
+    set:
+      redis.host: redis.example.com
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_SSL
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_SSL_CERT_REQS
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_SSL_CA_CERTS
+          any: true
+
+  - it: redis ssl false omits REDIS_SSL
+    template: gateway/deployment.yaml
+    set:
+      redis.host: redis.example.com
+      redis.ssl: false
+      redis.sslCertReqs: required
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_SSL
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_SSL_CERT_REQS
+            value: "required"
+
+  - it: gateway renders redis TLS env vars
+    template: gateway/deployment.yaml
+    set:
+      redis.host: redis.example.com
+      redis.ssl: true
+      redis.sslCertReqs: none
+      redis.sslCaCerts: /etc/redis-tls/ca.crt
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_SSL
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_SSL_CERT_REQS
+            value: "none"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_SSL_CA_CERTS
+            value: "/etc/redis-tls/ca.crt"
+
+  - it: backend renders redis TLS env vars
+    template: backend/deployment.yaml
+    set:
+      redis.host: redis.example.com
+      redis.ssl: true
+      redis.sslCertReqs: required
+      redis.sslCaCerts: /etc/redis-tls/ca.crt
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_SSL
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_SSL_CERT_REQS
+            value: "required"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_SSL_CA_CERTS
+            value: "/etc/redis-tls/ca.crt"
+
+  - it: migration job renders redis TLS env vars
+    template: migrations-job.yaml
+    set:
+      db.deployStandalone: false
+      db.useExisting: true
+      db.endpoint: postgres.example.com
+      db.secret.name: pg-secret
+      redis.host: redis.example.com
+      redis.ssl: true
+      redis.sslCertReqs: optional
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_SSL
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_SSL_CERT_REQS
+            value: "optional"
+
+  - it: redis TLS values reject a secret-backed URL
+    template: gateway/deployment.yaml
+    set:
+      redis.passwordSecret.name: redis-secret
+      redis.passwordSecret.urlKey: connection-url
+      redis.sslCaCerts: /etc/redis-tls/ca.crt
+    asserts:
+      - failedTemplate:
+          errorMessage: "redis.ssl, redis.sslCertReqs and redis.sslCaCerts cannot be combined with redis.passwordSecret.urlKey, use a rediss:// URL with ssl_cert_reqs / ssl_ca_certs query parameters instead"
+
+  - it: hostKey mode renders redis TLS env vars
+    template: gateway/deployment.yaml
+    set:
+      redis.passwordSecret.name: redis-secret
+      redis.passwordSecret.hostKey: hostname
+      redis.ssl: true
+      redis.sslCaCerts: /etc/redis-tls/ca.crt
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_SSL
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_SSL_CA_CERTS
+            value: "/etc/redis-tls/ca.crt"
+
+  - it: redis TLS env vars are omitted when redis is not configured
+    template: gateway/deployment.yaml
+    set:
+      redis.ssl: true
+      redis.sslCertReqs: none
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_SSL
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_SSL_CERT_REQS
+          any: true
+
+  - it: redis sslCertReqs rejects unknown values
+    template: gateway/deployment.yaml
+    set:
+      redis.host: redis.example.com
+      redis.ssl: true
+      redis.sslCertReqs: strict
+    asserts:
+      - failedTemplate:
+          errorMessage: 'redis.sslCertReqs must be one of none, optional, required (got "strict")'
