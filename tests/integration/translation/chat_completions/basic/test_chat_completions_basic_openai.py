@@ -6,6 +6,7 @@ from integration.translation.chat_completions.bases.openai import (
     GPT_5_4_TEST_CASE,
     GPT_5_6_LUNA_TEST_CASE,
     GPT_5_6_SOL_TEST_CASE,
+    GPT_5_6_TERRA_TEST_CASE,
     GPT_6_1_SOL_TEST_CASE,
     GPT_6_LUNA_TEST_CASE,
 )
@@ -18,6 +19,7 @@ from integration.translation.runner import assert_translation
         GPT_5_4_TEST_CASE,
         GPT_5_6_SOL_TEST_CASE,
         GPT_5_6_LUNA_TEST_CASE,
+        GPT_5_6_TERRA_TEST_CASE,
         GPT_6_LUNA_TEST_CASE,
         GPT_6_1_SOL_TEST_CASE,
     ],
