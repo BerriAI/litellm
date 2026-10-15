@@ -23599,7 +23599,7 @@ export interface paths {
          *         search: Case-insensitive partial match on model name or team public name.
          *         modelId: Return a single deployment by LiteLLM model id.
          *         teamId: Filter to models with direct access or team membership for this team id.
-         *         sortBy / sortOrder: Sort by model_name, created_at, updated_at, costs, status, or blocked.
+         *         sortBy / sortOrder: Sort by model_name, created_at, updated_at, costs, or status.
          *         blocked: Filter by routing status (false = active, true = paused).
          *         access_group: Only return deployments in this model access group.
          *         wildcard_only: Only return deployments whose `model_name` contains `*`.
