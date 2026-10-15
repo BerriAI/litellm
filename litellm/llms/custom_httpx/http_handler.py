@@ -74,6 +74,8 @@ _IPV4_LOCAL_ADDRESS: Final = "0.0.0.0"
 
 _HttpxTransportT = TypeVar("_HttpxTransportT", HTTPTransport, AsyncHTTPTransport)
 
+HTTPEventHooks: TypeAlias = Mapping[str, list[Callable[..., object]]]
+
 
 def http2_enabled() -> bool:
     from litellm.secret_managers.main import str_to_bool
@@ -666,7 +668,7 @@ class AsyncHTTPHandler:
     def create_client(
         self,
         timeout: float | httpx.Timeout | None,
-        event_hooks: Mapping[str, list[Callable[..., object]]] | None,
+        event_hooks: HTTPEventHooks | None,
         ssl_verify: VerifyTypes | None = None,
         shared_session: Optional["ClientSession"] = None,
     ) -> httpx.AsyncClient:
