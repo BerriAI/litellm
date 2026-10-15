@@ -1,0 +1,1 @@
+{"model": "claude-haiku-b", "max_tokens": 60, "messages": [{"role": "user", "content": "Repeat back exactly what is between the brackets and nothing else: [card 4111 1111 1111 1111 ok]"}]}

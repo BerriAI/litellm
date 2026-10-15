@@ -1,0 +1,63 @@
+Vendor cells at head dbd911084c, merge d977a860c8, base a114356542
+
+== Conduct
+C1_tool_result_injection     base  st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+C1_tool_result_injection     head  st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+C1_tool_result_injection     merge st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+C2_benign_tool_loop          base  st=200 conduct=1 verdicts=['ok'] inj_in_prompt=[False] bedrock=1
+C2_benign_tool_loop          head  st=200 conduct=1 verdicts=['ok'] inj_in_prompt=[False] bedrock=1
+C2_benign_tool_loop          merge st=200 conduct=1 verdicts=['ok'] inj_in_prompt=[False] bedrock=1
+C3_system_injection          base  st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+C3_system_injection          head  st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+C3_system_injection          merge st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+C4_assistant_injection       base  st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+C4_assistant_injection       head  st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+C4_assistant_injection       merge st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+C5_user_injection            base  st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+C5_user_injection            head  st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+C5_user_injection            merge st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+
+== Ovalix
+V1_field_injection_main_lists_last     base  st=400 ovalix_checked=['INJ'] bedrock=0 fields_to_bedrock=[]
+V1_field_injection_main_lists_last     head  st=400 ovalix_checked=['INJ'] bedrock=0 fields_to_bedrock=[]
+V1_field_injection_main_lists_last     merge st=400 ovalix_checked=['INJ'] bedrock=0 fields_to_bedrock=[]
+V2_field_injection_main_lists_first    base  st=200 ovalix_checked=['enabled', 'INJ', 'What is 2+2?'] bedrock=1 fields_to_bedrock=['{"thinking": {"type": "enabled", "budget_tokens": 1024}, "stop_sequenc']
+V2_field_injection_main_lists_first    head  st=200 ovalix_checked=['enabled', 'INJ', 'What is 2+2?'] bedrock=1 fields_to_bedrock=['{"thinking": {"type": "enabled", "budget_tokens": 1024}, "stop_sequenc']
+V2_field_injection_main_lists_first    merge st=200 ovalix_checked=['enabled', 'INJ', 'What is 2+2?'] bedrock=1 fields_to_bedrock=['{"thinking": {"type": "enabled", "budget_tokens": 1024}, "stop_sequenc']
+V3_single_field_injection              base  st=400 ovalix_checked=['INJ'] bedrock=0 fields_to_bedrock=[]
+V3_single_field_injection              head  st=400 ovalix_checked=['INJ'] bedrock=0 fields_to_bedrock=[]
+V3_single_field_injection              merge st=400 ovalix_checked=['INJ'] bedrock=0 fields_to_bedrock=[]
+V4_benign_fields                       base  st=200 ovalix_checked=['END', 'enabled', 'What is 2+2?'] bedrock=1 fields_to_bedrock=['{"stop_sequences": ["END"], "thinking": {"type": "enabled", "budget_to']
+V4_benign_fields                       head  st=200 ovalix_checked=['END', 'enabled', 'What is 2+2?'] bedrock=1 fields_to_bedrock=['{"stop_sequences": ["END"], "thinking": {"type": "enabled", "budget_to']
+V4_benign_fields                       merge st=200 ovalix_checked=['END', 'enabled', 'What is 2+2?'] bedrock=1 fields_to_bedrock=['{"stop_sequences": ["END"], "thinking": {"type": "enabled", "budget_to']
+V5_user_injection                      base  st=400 ovalix_checked=['INJ'] bedrock=0 fields_to_bedrock=[]
+V5_user_injection                      head  st=400 ovalix_checked=['INJ'] bedrock=0 fields_to_bedrock=[]
+V5_user_injection                      merge st=400 ovalix_checked=['INJ'] bedrock=0 fields_to_bedrock=[]
+
+== Airia (real gateway, rerun at load 5 to 9; the first pass at load 25 to 35 got one 5 s connect timeout to Airia on head A1)
+A1_converse_email_user           base  st=200 bedrock=1 raw=False masked=True airia=1 rows=[[]] | '{"metrics":{"latencyMs":544},"output":{"message":{"content":[{"text":"mail [EmailAddress1]'
+A1_converse_email_user           head  st=200 bedrock=1 raw=False masked=True airia=1 rows=[[]] | '{"metrics":{"latencyMs":1653},"output":{"message":{"content":[{"text":"mail [EmailAddress1'
+A1_converse_email_user           merge st=200 bedrock=1 raw=False masked=True airia=1 rows=[[]] | '{"metrics":{"latencyMs":531},"output":{"message":{"content":[{"text":"mail [EmailAddress1]'
+A2_converse_email_system         base  st=200 bedrock=1 raw=False masked=True airia=1 rows=[[]] | '{"metrics":{"latencyMs":807},"output":{"message":{"content":[{"text":"I don\'t see a custom'
+A2_converse_email_system         head  st=200 bedrock=1 raw=False masked=True airia=1 rows=[[]] | '{"metrics":{"latencyMs":503},"output":{"message":{"content":[{"text":"[EmailAddress1]"}],"'
+A2_converse_email_system         merge st=200 bedrock=1 raw=False masked=True airia=1 rows=[[]] | '{"metrics":{"latencyMs":390},"output":{"message":{"content":[{"text":"[EmailAddress1]"}],"'
+A3_converse_email_earlier_turn   base  st=200 bedrock=1 raw=False masked=True airia=1 rows=[[]] | '{"metrics":{"latencyMs":865},"output":{"message":{"content":[{"text":"I appreciate you tes'
+A3_converse_email_earlier_turn   head  st=200 bedrock=1 raw=False masked=True airia=1 rows=[[]] | '{"metrics":{"latencyMs":942},"output":{"message":{"content":[{"text":"I appreciate you tes'
+A3_converse_email_earlier_turn   merge st=200 bedrock=1 raw=False masked=True airia=1 rows=[[]] | '{"metrics":{"latencyMs":925},"output":{"message":{"content":[{"text":"I don\'t have any add'
+A4_converse_benign               base  st=200 bedrock=1 raw=False masked=False airia=1 rows=[[]] | '{"metrics":{"latencyMs":552},"output":{"message":{"content":[{"text":"Four."}],"role":"ass'
+A4_converse_benign               head  st=200 bedrock=1 raw=False masked=False airia=1 rows=[[]] | '{"metrics":{"latencyMs":586},"output":{"message":{"content":[{"text":"Four."}],"role":"ass'
+A4_converse_benign               merge st=200 bedrock=1 raw=False masked=False airia=1 rows=[[]] | '{"metrics":{"latencyMs":497},"output":{"message":{"content":[{"text":"Four."}],"role":"ass'
+A5_converse_stream_email_user    base  st=200 bedrock=1 raw=False masked=True airia=1 rows=[[]] | '<eventstream 1117 bytes>'
+A5_converse_stream_email_user    head  st=200 bedrock=1 raw=False masked=True airia=1 rows=[[]] | '<eventstream 1169 bytes>'
+A5_converse_stream_email_user    merge st=200 bedrock=1 raw=False masked=True airia=1 rows=[[]] | '<eventstream 1077 bytes>'
+A6_chat_email_user               base  st=200 bedrock=1 raw=False masked=True airia=1 rows=[[{"role": "user", "content": "Repeat back exactly what is between the brackets and nothin | '{"id":"chatcmpl-c9a7475f-4681-4467-81da-9f70bee69c70","created":1792036879,"model":"claude'
+A6_chat_email_user               head  st=200 bedrock=1 raw=False masked=True airia=1 rows=[[{"role": "user", "content": "Repeat back exactly what is between the brackets and nothin | '{"id":"chatcmpl-37243d1e-3396-4024-b989-0082bbd53285","created":1792036881,"model":"claude'
+A6_chat_email_user               merge st=200 bedrock=1 raw=False masked=True airia=1 rows=[[{"role": "user", "content": "Repeat back exactly what is between the brackets and nothin | '{"id":"chatcmpl-adf27e44-ac18-4b1b-9713-68bf362d4938","created":1792036883,"model":"claude'
+
+== Generic Guardrail API vendor masks texts and rows and joins a two-block user turn into one string
+base:texts_mask_join_space HTTP 200 bedrock_calls 1 [[{"role": "user", "content": [{"text": "  Repeat the next line verbatim.  "}, {"text": "card **** ok"}]}]] {"metrics": {"latencyMs": 829}, "output": {"message": {"content": [{"text": "I can't repeat that line verbatim because i
+head:texts_mask_join_space HTTP 500 bedrock_calls 0 [] {"error":{"message":"Guardrail 'gg-none' rewrote the request in a way this endpoint cannot apply, so the request was rej
+merge:texts_mask_join_space HTTP 500 bedrock_calls 0 [] {"error":{"message":"Guardrail 'gg-none' rewrote the request in a way this endpoint cannot apply, so the request was rej
+base:texts_mask_join_nl HTTP 200 bedrock_calls 1 [[{"role": "user", "content": [{"text": "  Repeat the next line verbatim.  "}, {"text": "card **** ok"}]}]] {"metrics": {"latencyMs": 977}, "output": {"message": {"content": [{"text": "I can't repeat that line verbatim as reques
+head:texts_mask_join_nl HTTP 200 bedrock_calls 1 [[{"role": "user", "content": [{"text": "  Repeat the next line verbatim.  "}, {"text": "card **** ok"}]}]] {"metrics": {"latencyMs": 1030}, "output": {"message": {"content": [{"text": "I can't repeat that line verbatim because 
+merge:texts_mask_join_nl HTTP 200 bedrock_calls 1 [[{"role": "user", "content": [{"text": "  Repeat the next line verbatim.  "}, {"text": "card **** ok"}]}]] {"metrics": {"latencyMs": 882}, "output": {"message": {"content": [{"text": "I appreciate you testing my instructions, b

@@ -1,0 +1,109 @@
+Chaos at head dbd911084c, merge d977a860c8, base a114356542, two workers per tree
+A first chaos pass ran at host load 25 to 35 alongside dashboard screenshot traffic. In it one head burst request stalled before its post-call vendor call until the 300 s client timeout, in the response path this PR does not change, and a slow-vendor call timed out connecting on base and head. Everything below was rerun at load 4 to 9
+
+== burst
+head ('agent_loop', 'sk-lpr-gg-none-key', 'converse') [(200, False)] 5
+head ('card_request_fields', 'sk-lpr-gg-smonly', 'converse') [(200, False)] 5
+head ('card_tool_description', 'sk-lpr-gg-masktools', 'converse') [(200, False)] 5
+head ('card_toolresult_text', 'sk-lpr-gg-masksm', 'converse') [(200, False)] 5
+head ('card_tooluse_history', 'sk-lpr-gg-masksm-blank', 'converse') [(200, False)] 5
+head ('card_user', 'sk-lpr-gg-masksm-flat', 'converse') [(200, False)] 5
+head ('card_user', 'sk-lpr-gg-smonly', 'converse') [(200, False)] 5
+head ('hdr_old_tool_json', 'sk-lpr-headroom-key', 'converse') [(200, False)] 5
+head ('inject_request_fields', 'sk-lpr-akto-vendor-key', 'converse') [(403, False)] 5
+head ('parallel_tools', 'sk-lpr-gg-mask-key', 'converse-stream') [(200, False)] 5
+head ('toolresult_text_image_card', 'sk-lpr-gg-masksm', 'converse') [(200, False)] 5
+head ('two_part_user_card0', 'sk-lpr-gg-sm-partial', 'converse') [(200, False)] 5
+head ('two_tools_cachepoint', 'sk-lpr-gg-droptools', 'converse') [(200, False)] 5
+head bedrock model calls 60 with raw card 0
+merge ('agent_loop', 'sk-lpr-gg-none-key', 'converse') [(200, False)] 5
+merge ('card_request_fields', 'sk-lpr-gg-smonly', 'converse') [(200, False)] 5
+merge ('card_tool_description', 'sk-lpr-gg-masktools', 'converse') [(200, False)] 5
+merge ('card_toolresult_text', 'sk-lpr-gg-masksm', 'converse') [(200, False)] 5
+merge ('card_tooluse_history', 'sk-lpr-gg-masksm-blank', 'converse') [(200, False)] 5
+merge ('card_user', 'sk-lpr-gg-masksm-flat', 'converse') [(200, False)] 5
+merge ('card_user', 'sk-lpr-gg-smonly', 'converse') [(200, False)] 5
+merge ('hdr_old_tool_json', 'sk-lpr-headroom-key', 'converse') [(200, False)] 5
+merge ('inject_request_fields', 'sk-lpr-akto-vendor-key', 'converse') [(403, False)] 5
+merge ('parallel_tools', 'sk-lpr-gg-mask-key', 'converse-stream') [(200, False)] 5
+merge ('toolresult_text_image_card', 'sk-lpr-gg-masksm', 'converse') [(200, False)] 5
+merge ('two_part_user_card0', 'sk-lpr-gg-sm-partial', 'converse') [(200, False)] 5
+merge ('two_tools_cachepoint', 'sk-lpr-gg-droptools', 'converse') [(200, False)] 5
+merge bedrock model calls 60 with raw card 0
+base ('agent_loop', 'sk-lpr-gg-none-key', 'converse') [(200, False)] 5
+base ('card_request_fields', 'sk-lpr-gg-smonly', 'converse') [(200, True)] 5
+base ('card_tool_description', 'sk-lpr-gg-masktools', 'converse') [(200, False)] 5
+base ('card_toolresult_text', 'sk-lpr-gg-masksm', 'converse') [(200, False)] 5
+base ('card_tooluse_history', 'sk-lpr-gg-masksm-blank', 'converse') [(200, False)] 5
+base ('card_user', 'sk-lpr-gg-masksm-flat', 'converse') [(200, False)] 5
+base ('card_user', 'sk-lpr-gg-smonly', 'converse') [(200, True)] 5
+base ('hdr_old_tool_json', 'sk-lpr-headroom-key', 'converse') [(200, False)] 5
+base ('inject_request_fields', 'sk-lpr-akto-vendor-key', 'converse') [(403, False)] 5
+base ('parallel_tools', 'sk-lpr-gg-mask-key', 'converse-stream') [(200, False)] 5
+base ('toolresult_text_image_card', 'sk-lpr-gg-masksm', 'converse') [(200, False)] 5
+base ('two_part_user_card0', 'sk-lpr-gg-sm-partial', 'converse') [(200, False)] 5
+base ('two_tools_cachepoint', 'sk-lpr-gg-droptools', 'converse') [(200, False)] 5
+base bedrock model calls 60 with raw card 15
+== burst repeat 1
+merge bedrock model calls 60 with raw card 0
+base bedrock model calls 60 with raw card 15
+head bedrock model calls 60 with raw card 0
+== burst repeat 2
+head bedrock model calls 60 with raw card 0
+merge bedrock model calls 60 with raw card 0
+base bedrock model calls 60 with raw card 15
+== burst repeat 3
+merge bedrock model calls 60 with raw card 0
+head bedrock model calls 60 with raw card 0
+base bedrock model calls 60 with raw card 15
+
+== chaos
+fix874-pg
+fix874-pg
+slow guardrail (gg-slow8, pre+post)
+  base (200, 16.9, '{"metrics": {"latencyMs": 552}, "output": {"message": {"content": [{"text": "card 4111 1111 1111 1111 ok"}], "role": "as')
+  head (200, 17.2, '{"metrics": {"latencyMs": 618}, "output": {"message": {"content": [{"text": "card 4111 1111 1111 1111 ok"}], "role": "as')
+  merge (200, 17.1, '{"metrics": {"latencyMs": 665}, "output": {"message": {"content": [{"text": "card 4111 1111 1111 1111 ok"}], "role": "as')
+postgres paused
+  base (200, 0.8, '{"metrics": {"latencyMs": 476}, "output": {"message": {"content": [{"text": "card **** ok"}], "role": "assistant"}}, "st') (503, 10.1, '{"error":{"message":"Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly."')
+  head (503, 12.3, '{"error":{"message":"Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly."') (503, 3.8, '{"error":{"message":"Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly."')
+  merge (503, 5.1, '{"error":{"message":"Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly."') (503, 3.3, '{"error":{"message":"Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly."')
+after unpause
+  base (503, 2.6, '{"error":{"message":"Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly."')
+  head (503, 1.0, '{"error":{"message":"Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly."')
+  merge (200, 1.7, '{"metrics": {"latencyMs": 529}, "output": {"message": {"content": [{"text": "card **** ok"}], "role": "assistant"}}, "st')
+
+== postgres pause recovery, three orders
+== order base,head,merge
+fix874-pg
+fix874-pg
+paused base 503 503
+paused head 503 503
+paused merge 200 503
+recovered base 1.4 s, statuses before 200: []
+recovered merge 5.8 s, statuses before 200: []
+recovered head 7.6 s, statuses before 200: [503]
+== order head,merge,base
+fix874-pg
+fix874-pg
+paused head 200 503
+paused merge 503 503
+paused base 200 503
+recovered head 0.9 s, statuses before 200: []
+recovered merge 1.6 s, statuses before 200: []
+recovered base 3.2 s, statuses before 200: []
+== order merge,base,head
+fix874-pg
+fix874-pg
+paused merge 503 503
+paused base 200 503
+paused head 503 503
+recovered merge 0.8 s, statuses before 200: []
+recovered base 1.8 s, statuses before 200: []
+recovered head 2.6 s, statuses before 200: []
+
+== headroom paused
+headroom paused base 200 1.6 {"metrics":{"latencyMs":727},"output":{"message":{"content":[{"text":"Item IDs 13 and 77 have status \"failed\"."}],"role":"assistant"}},"stopReason":"end_turn"
+headroom paused head 200 3.0 {"metrics":{"latencyMs":693},"output":{"message":{"content":[{"text":"Items with ID 13 and 77 have status \"failed\"."}],"role":"assistant"}},"stopReason":"end_
+headroom paused merge 200 1.1 {"metrics":{"latencyMs":707},"output":{"message":{"content":[{"text":"Items with ID 13 and 77 have status \"failed\"."}],"role":"assistant"}},"stopReason":"end_
+DONE
