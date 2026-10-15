@@ -30,12 +30,8 @@ pub struct TencentAnthropicMessagesConfig;
 pub const TENCENT_MESSAGES_CONFIG: TencentAnthropicMessagesConfig = TencentAnthropicMessagesConfig;
 
 impl BaseMessagesConfig for TencentAnthropicMessagesConfig {
-    fn shape_request(
-        &self,
-        request: MessagesRequest,
-        reasoning_auto_summary: bool,
-    ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, reasoning_auto_summary)
+    fn shape_request(&self, request: MessagesRequest) -> Result<MessagesRequest, Error> {
+        shape_anthropic_messages_request(request)
     }
 
     fn validate_environment(

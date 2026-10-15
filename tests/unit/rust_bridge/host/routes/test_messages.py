@@ -30,20 +30,7 @@ def test_response_is_a_detached_public_messages_dict() -> None:
     assert "_hidden_params" not in native
 
 
-def test_settings_project_caller_configuration_without_resolving_a_model(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(litellm, "drop_params", False)
-    monkeypatch.setattr(litellm, "reasoning_auto_summary", True)
-    monkeypatch.setattr(litellm, "request_timeout", 1800)
-    monkeypatch.setattr(litellm, "request_timeout_explicitly_set", True)
-
-    projected: Final = messages_host.settings({"drop_params": "true", "additional_drop_params": ["metadata.user_id"]})
-
-    assert projected == {
-        "drop_params": True,
-        "reasoning_auto_summary": True,
-        "additional_drop_params": ("metadata.user_id",),
-        "request_timeout": 1800.0,
-    }
+SAMPLING_REMOVED_MODEL: Final = "claude-test-sampling-removed"
 
 
 @pytest.mark.parametrize(
@@ -64,21 +51,62 @@ def test_request_timeout_carries_only_a_configured_global_timeout(
 
 
 @pytest.mark.parametrize(
-    ("global_flag", "kwargs", "expected"),
+    ("global_flag", "kwargs"),
     [
-        (False, {}, False),
-        (True, {}, True),
-        (False, {"drop_params": "true"}, True),
-        (False, {"drop_params": "nonsense"}, False),
-        (False, {"drop_params": False}, False),
+        (True, {}),
+        (False, {"drop_params": "true"}),
+        (False, {"drop_params": True}),
     ],
 )
-def test_drop_params_merges_the_global_flag_with_the_request(
-    monkeypatch: pytest.MonkeyPatch, global_flag: bool, kwargs: dict[str, object], expected: bool
+def test_body_params_drop_an_unsupported_param_under_either_drop_params_flag(
+    monkeypatch: pytest.MonkeyPatch, global_flag: bool, kwargs: dict[str, object]
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", global_flag)
+    monkeypatch.setitem(
+        litellm.model_cost,
+        SAMPLING_REMOVED_MODEL,
+        {"litellm_provider": "anthropic", "mode": "chat", "supports_sampling_params": False},
+    )
 
-    assert messages_host.settings(kwargs)["drop_params"] is expected
+    body: Final = messages_host.body_params(
+        {"model": f"anthropic/{SAMPLING_REMOVED_MODEL}", "max_tokens": 16, "temperature": 0.3, **kwargs}
+    )
+
+    assert body == {"max_tokens": 16}
+
+
+@pytest.mark.parametrize("kwargs", [{}, {"drop_params": "nonsense"}, {"drop_params": False}])
+def test_body_params_reject_an_unsupported_param_without_drop_params(
+    monkeypatch: pytest.MonkeyPatch, kwargs: dict[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setitem(
+        litellm.model_cost,
+        SAMPLING_REMOVED_MODEL,
+        {"litellm_provider": "anthropic", "mode": "chat", "supports_sampling_params": False},
+    )
+
+    with pytest.raises(litellm.BadRequestError, match="temperature"):
+        messages_host.body_params({"model": f"anthropic/{SAMPLING_REMOVED_MODEL}", "temperature": 0.3, **kwargs})
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "kept"),
+    [
+        ("anthropic/claude-sonnet-5", None, True),
+        ("claude-sonnet-5", "anthropic", True),
+        ("deepseek/deepseek-chat", None, False),
+        ("vertex_ai/claude-sonnet-5", None, False),
+    ],
+)
+def test_body_params_keep_service_tier_only_for_providers_that_accept_it(
+    model: str, custom_llm_provider: str | None, kept: bool
+) -> None:
+    body: Final = messages_host.body_params(
+        {"model": model, "custom_llm_provider": custom_llm_provider, "service_tier": "standard_only"}
+    )
+
+    assert ("service_tier" in body) is kept
 
 
 @pytest.mark.parametrize(

@@ -23,7 +23,7 @@ impl SupportedEffortTiers {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MessagesModelCapabilities {
     #[serde(default)]
     pub supports_reasoning: bool,
@@ -35,34 +35,10 @@ pub struct MessagesModelCapabilities {
     pub supports_legacy_thinking: bool,
     #[serde(default)]
     pub supports_output_config: bool,
-    #[serde(default = "default_true")]
-    pub supports_sampling_params: bool,
-    #[serde(default)]
-    pub supports_speed: bool,
     #[serde(default)]
     pub supports_mid_conversation_system: bool,
     #[serde(default)]
     pub effort_tiers: SupportedEffortTiers,
-}
-
-fn default_true() -> bool {
-    true
-}
-
-impl Default for MessagesModelCapabilities {
-    fn default() -> Self {
-        Self {
-            supports_reasoning: false,
-            supports_adaptive_thinking: false,
-            thinking_always_on: false,
-            supports_legacy_thinking: false,
-            supports_output_config: false,
-            supports_sampling_params: true,
-            supports_speed: false,
-            supports_mid_conversation_system: false,
-            effort_tiers: SupportedEffortTiers::default(),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,24 +90,18 @@ pub struct ThinkingContext {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MessagesTransformContext {
     pub thinking: ThinkingContext,
-    pub drop_params: bool,
 }
 impl MessagesTransformContext {
-    pub fn new(capabilities: MessagesModelCapabilities, drop_params: bool) -> Self {
-        Self::with_lookup(capabilities, drop_params, &ProcessEnvironment)
+    pub fn new(capabilities: MessagesModelCapabilities) -> Self {
+        Self::with_lookup(capabilities, &ProcessEnvironment)
     }
 
-    pub fn with_lookup(
-        capabilities: MessagesModelCapabilities,
-        drop_params: bool,
-        env: &impl Lookup,
-    ) -> Self {
+    pub fn with_lookup(capabilities: MessagesModelCapabilities, env: &impl Lookup) -> Self {
         Self {
             thinking: ThinkingContext {
                 capabilities,
                 budgets: ThinkingBudgets::from_lookup(env),
             },
-            drop_params,
         }
     }
 }

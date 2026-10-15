@@ -36,12 +36,8 @@ pub const AZURE_ANTHROPIC_MESSAGES_CONFIG: AzureAnthropicMessagesConfig =
     AzureAnthropicMessagesConfig;
 
 impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
-    fn shape_request(
-        &self,
-        request: MessagesRequest,
-        reasoning_auto_summary: bool,
-    ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, reasoning_auto_summary)
+    fn shape_request(&self, request: MessagesRequest) -> Result<MessagesRequest, Error> {
+        shape_anthropic_messages_request(request)
     }
 
     fn get_complete_url(
@@ -383,10 +379,8 @@ mod tests {
                 supports_adaptive_thinking: true,
                 supports_legacy_thinking: true,
                 supports_output_config: true,
-                supports_speed: true,
                 ..Default::default()
             },
-            false,
             &|_: &str| None,
         );
         let transformed = to_value(
@@ -398,13 +392,10 @@ mod tests {
     }
 
     fn context_with(supports_mid_conversation_system: bool) -> MessagesTransformContext {
-        MessagesTransformContext::new(
-            MessagesModelCapabilities {
-                supports_mid_conversation_system,
-                ..MessagesModelCapabilities::default()
-            },
-            false,
-        )
+        MessagesTransformContext::new(MessagesModelCapabilities {
+            supports_mid_conversation_system,
+            ..MessagesModelCapabilities::default()
+        })
     }
 
     #[rstest]
@@ -511,10 +502,8 @@ mod tests {
                 supports_adaptive_thinking: true,
                 supports_legacy_thinking: true,
                 supports_output_config: true,
-                supports_speed: true,
                 ..Default::default()
             },
-            false,
             &|_: &str| None,
         );
         let transformed = to_value(

@@ -102,9 +102,7 @@ fn programmatic_deployments_preserve_overrides_and_last_entry_wins() {
         timeout: Some(Duration::from_secs(7)),
         shaping: MessagesShaping {
             settings: MessagesSettings {
-                drop_params: true,
                 additional_drop_params: vec!["metadata.test".into()],
-                ..MessagesSettings::default()
             },
             ..Default::default()
         },

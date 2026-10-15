@@ -173,3 +173,20 @@ async def test_mid_conversation_tool_changes_send_their_beta(server: RecordingSe
 
     _, headers = sent(server)
     assert ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER in betas(headers)
+
+
+@pytest.mark.asyncio
+async def test_service_tier_reaches_anthropic(server: RecordingServer) -> None:
+    await call(server, service_tier="standard_only")
+
+    body, _ = sent(server)
+    assert body["service_tier"] == "standard_only"
+
+
+@pytest.mark.asyncio
+async def test_service_tier_is_dropped_for_a_provider_that_rejects_it(server: RecordingServer) -> None:
+    await call(server, model="deepseek/deepseek-chat", service_tier="standard_only")
+
+    body, _ = sent(server)
+    assert body["model"] == "deepseek-chat"
+    assert "service_tier" not in body

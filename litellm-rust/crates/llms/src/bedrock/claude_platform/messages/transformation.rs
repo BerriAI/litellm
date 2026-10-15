@@ -47,12 +47,8 @@ pub const BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG: BedrockClaudePlatformMessages
     BedrockClaudePlatformMessagesConfig;
 
 impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
-    fn shape_request(
-        &self,
-        request: MessagesRequest,
-        reasoning_auto_summary: bool,
-    ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, reasoning_auto_summary)
+    fn shape_request(&self, request: MessagesRequest) -> Result<MessagesRequest, Error> {
+        shape_anthropic_messages_request(request)
     }
 
     fn validate_environment(
