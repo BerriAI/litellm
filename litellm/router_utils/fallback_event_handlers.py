@@ -645,6 +645,48 @@ async def _is_fallback_target_within_budget(
     return False
 
 
+# Call-type dispatch stores the OCR entrypoint under one of these two kwargs keys depending on
+# whether the request went through the plain or generic-API-call path (see
+# references_provider_scoped_resource below for the same two-key pattern).
+_OCR_HANDLER_FUNCTION_NAMES: Final = frozenset({"aocr", "ocr"})
+
+
+def _is_ocr_fallback_request(kwargs: Mapping[str, object]) -> bool:
+    return any(
+        getattr(kwargs.get(function_key), "__name__", None) in _OCR_HANDLER_FUNCTION_NAMES
+        for function_key in ("original_function", "original_generic_function")
+    )
+
+
+def _is_fallback_target_ocr_capable(
+    litellm_router: LitellmRouter,
+    fallback_entry: str | Mapping[str, object],
+    original_model_group: str,
+    kwargs: Mapping[str, object],
+) -> bool:
+    """
+    An OCR call retried against a deployment explicitly configured for a different mode
+    (e.g. mode="chat") can never succeed: it costs a full round trip to that deployment
+    before failing the exact same way the primary deployment did. A model_group with no
+    mode configured is treated as compatible, since most deployments never set mode="ocr"
+    explicitly and an unset mode means "unknown", not "known incompatible".
+    """
+    if not _is_ocr_fallback_request(kwargs):
+        return True
+    target: Final = _get_fallback_target_model_group(fallback_entry)
+    if target is None or target == original_model_group:
+        return True
+    configured_mode: Final = litellm_router.get_configured_mode(target)
+    if configured_mode is None or configured_mode == "ocr":
+        return True
+    verbose_router_logger.info(
+        "Skipping fallback to model_group = %s: configured mode = %s does not support OCR calls",
+        mask_sensitive_structure(fallback_entry),
+        configured_mode,
+    )
+    return False
+
+
 def references_provider_scoped_resource(kwargs: Mapping[str, object]) -> bool:
     """
     True when a file, batch, or fine-tuning job operation names an id that only exists
@@ -761,6 +803,8 @@ async def run_async_fallback(
         if not await _is_fallback_target_authorized(litellm_router, mg, original_model_group, kwargs):
             continue
         if not await _is_fallback_target_within_budget(litellm_router, mg, original_model_group, kwargs):
+            continue
+        if not _is_fallback_target_ocr_capable(litellm_router, mg, original_model_group, kwargs):
             continue
         attempt_key = fallback_attempt_key(mg)
         if attempt_key is not None:

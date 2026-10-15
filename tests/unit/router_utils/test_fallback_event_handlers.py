@@ -570,6 +570,121 @@ async def test_run_async_fallback_does_not_consult_access_check_for_same_model_g
     assert router.access_checks == []
 
 
+async def aocr(*args: object, **kwargs: object) -> NoReturn:
+    raise AssertionError("only used for its __name__")
+
+
+class OcrModeAwareRouter(AttemptRecordingRouter):
+    fallback_access_check = None
+    fallback_budget_check = None
+
+    def __init__(self, configured_modes: Dict[str, str]):
+        super().__init__()
+        self.configured_modes = configured_modes
+
+    def get_configured_mode(self, model_name):
+        return self.configured_modes.get(model_name)
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_skips_ocr_incapable_target():
+    """A chat-only fallback can never serve an OCR call, so retrying it only costs a
+    round trip before failing the same way the primary deployment did."""
+    router = OcrModeAwareRouter(configured_modes={"chat-only-model": "chat", "ocr-model": "ocr"})
+
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=["chat-only-model", "ocr-model"],
+        original_model_group="primary-ocr-model",
+        original_exception=RuntimeError("primary ocr deployment failed"),
+        max_fallbacks=3,
+        fallback_depth=0,
+        original_function=aocr,
+    )
+
+    assert router.attempted_model_groups == ["ocr-model"]
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_detects_ocr_via_generic_function_kwarg():
+    """`/v1/ocr` dispatches through the generic-API-call path, which stores the real
+    handler under original_generic_function and overwrites original_function with the
+    generic helper (see references_provider_scoped_resource for the same two-key read)."""
+    router = OcrModeAwareRouter(configured_modes={"chat-only-model": "chat"})
+
+    with pytest.raises(RuntimeError, match="primary ocr deployment failed"):
+        await run_async_fallback(
+            litellm_router=router,
+            fallback_model_group=["chat-only-model"],
+            original_model_group="primary-ocr-model",
+            original_exception=RuntimeError("primary ocr deployment failed"),
+            max_fallbacks=3,
+            fallback_depth=0,
+            original_function=router.async_function_with_fallbacks,
+            original_generic_function=aocr,
+        )
+
+    assert router.attempted_model_groups == []
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_treats_unconfigured_mode_as_ocr_capable():
+    """Most deployments never set model_info.mode explicitly, so an unset mode reads as
+    "unknown", not "known incompatible" -- otherwise every ordinary OCR fallback would be
+    skipped by default."""
+    router = OcrModeAwareRouter(configured_modes={})
+
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=["unconfigured-model"],
+        original_model_group="primary-ocr-model",
+        original_exception=RuntimeError("primary ocr deployment failed"),
+        max_fallbacks=3,
+        fallback_depth=0,
+        original_function=aocr,
+    )
+
+    assert router.attempted_model_groups == ["unconfigured-model"]
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_does_not_mode_gate_non_ocr_calls():
+    """The capability check is scoped to OCR calls only: a chat completion retried against
+    a model_group configured for a different mode is an existing, separate gap and must not
+    change behavior here."""
+    router = OcrModeAwareRouter(configured_modes={"ocr-only-model": "ocr"})
+
+    await run_async_fallback(
+        litellm_router=router,
+        fallback_model_group=["ocr-only-model"],
+        original_model_group="primary-model",
+        original_exception=RuntimeError("primary chat deployment failed"),
+        max_fallbacks=3,
+        fallback_depth=0,
+        original_function=_acompletion,
+    )
+
+    assert router.attempted_model_groups == ["ocr-only-model"]
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_raises_original_error_when_no_ocr_capable_fallback_exists():
+    router = OcrModeAwareRouter(configured_modes={"chat-only-model": "chat", "other-chat-model": "chat"})
+
+    with pytest.raises(RuntimeError, match="primary ocr deployment failed"):
+        await run_async_fallback(
+            litellm_router=router,
+            fallback_model_group=["chat-only-model", "other-chat-model"],
+            original_model_group="primary-ocr-model",
+            original_exception=RuntimeError("primary ocr deployment failed"),
+            max_fallbacks=3,
+            fallback_depth=0,
+            original_function=aocr,
+        )
+
+    assert router.attempted_model_groups == []
+
+
 class RecordingFailRouter:
     fallback_access_check = None
     fallback_budget_check = None

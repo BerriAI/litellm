@@ -909,7 +909,9 @@ class ModelGroupInfo(LiteLLMBaseModel):
     input_cost_per_pixel: float | None = None
     mode: (
         str
-        | Literal["chat", "embedding", "completion", "image_generation", "audio_transcription", "rerank", "moderations"]
+        | Literal[
+            "chat", "embedding", "completion", "image_generation", "audio_transcription", "rerank", "moderations", "ocr"
+        ]
         | None
     ) = Field(default="chat")
     tpm: int | None = None
