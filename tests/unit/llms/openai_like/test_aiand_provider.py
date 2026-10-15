@@ -30,7 +30,6 @@ def test_aiand_chat_provider(monkeypatch: pytest.MonkeyPatch):
     assert api_base == AIAND_API_BASE
 
 
-
 def test_aiand_completion_request(respx_mock: respx.MockRouter):
     messages = [{"role": "user", "content": "Hello"}]
     route = respx_mock.post(f"{AIAND_API_BASE}/chat/completions").mock(
