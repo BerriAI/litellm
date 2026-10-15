@@ -30,7 +30,8 @@ Anthropic wire shape is built later by ``anthropic_messages_pt``.
 """
 
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from itertools import chain, dropwhile, groupby, takewhile
+from itertools import accumulate, chain, dropwhile, groupby, takewhile
+from operator import itemgetter
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias, TypeVar
 
@@ -259,8 +260,9 @@ def _system_runs(messages: Sequence[AllMessageValues]) -> tuple[tuple[int, ...],
     )
 
 
-def _block_containing(message_index: int, blocks: Sequence[tuple[bool, tuple[int, ...]]]) -> int:
-    return next(index for index, (_, indices) in enumerate(blocks) if message_index in indices)
+def _block_index_by_message(blocks: Sequence[tuple[bool, tuple[int, ...]]]) -> Mapping[int, int]:
+    pairs: Final = (((index, block_index) for index in indices) for block_index, (_, indices) in enumerate(blocks))
+    return MappingProxyType(dict(chain.from_iterable(pairs)))
 
 
 def _thinking_block_renders(block: object) -> bool:
@@ -272,8 +274,7 @@ def _assistant_part_renders(part: object) -> bool:
     """A text part always renders: the converter pads empty text with a placeholder."""
     part_type: Final = message_field(part, "type")
     if part_type == "thinking":
-        thinking: Final = message_field(part, "thinking")
-        return isinstance(thinking, str) and bool(thinking) and _thinking_block_renders(part)
+        return _thinking_block_renders(part)
     return part_type in _RENDERED_ASSISTANT_PART_TYPES or (
         isinstance(part_type, str) and part_type.endswith("_tool_result")
     )
@@ -434,37 +435,30 @@ def _rendered_indices(messages: Sequence[object]) -> frozenset[int]:
     return frozenset(index for index, message in enumerate(messages) if _renders(message, answered.get(index, _NO_IDS)))
 
 
-def _rendered_block(
-    message_index: int,
-    rendered: frozenset[int],
-    blocks: Sequence[tuple[bool, tuple[int, ...]]],
-) -> int | None:
-    block_index: Final = _block_containing(message_index, blocks)
-    _, indices = blocks[block_index]
-    return block_index if not rendered.isdisjoint(indices) else None
+def _anchorable_blocks(rendered: frozenset[int], blocks: Sequence[tuple[bool, tuple[int, ...]]]) -> tuple[bool, ...]:
+    """Whether a system message behind each block lands on the wire after a user turn and before an assistant turn.
 
-
-def _system_may_follow(
-    block_index: int,
-    rendered: frozenset[int],
-    blocks: Sequence[tuple[bool, tuple[int, ...]]],
-) -> bool:
-    """Whether a system message behind this block precedes an assistant turn or ends the array on the wire.
-
-    Blocks alternate between user-type and assistant, so the check is whether the
-    first later block that puts anything on the wire is an assistant block.
+    The block has to put something on the wire. Blocks alternate between user-type
+    and assistant, so the first later block that puts anything on the wire has to be
+    an assistant block, or there is none and the system message ends the array.
     """
-    return next(
-        (not is_user for is_user, indices in blocks[block_index + 1 :] if not rendered.isdisjoint(indices)),
-        True,
+
+    def may_follow_from(may_follow_later: bool, block: tuple[bool, tuple[int, ...]]) -> bool:
+        is_user, indices = block
+        return may_follow_later if rendered.isdisjoint(indices) else not is_user
+
+    may_follow_from_block: Final = tuple(reversed(tuple(accumulate(reversed(blocks), may_follow_from, initial=True))))
+    return tuple(
+        not rendered.isdisjoint(indices) and may_follow_from_block[block_index + 1]
+        for block_index, (_, indices) in enumerate(blocks)
     )
 
 
 def _anchor_block(
     run: Sequence[int],
     messages: Sequence[AllMessageValues],
-    rendered: frozenset[int],
-    blocks: Sequence[tuple[bool, tuple[int, ...]]],
+    block_index_by_message: Mapping[int, int],
+    anchorable: Sequence[bool],
 ) -> int | None:
     """The user-type block a system run must follow, or ``None`` when it converts in place.
 
@@ -481,10 +475,17 @@ def _anchor_block(
     neighbour: Final = previous if _is_user_type(messages[previous]) else run[-1] + 1
     if neighbour >= len(messages) or not _is_user_type(messages[neighbour]):
         return None
-    block_index: Final = _rendered_block(neighbour, rendered, blocks)
-    if block_index is None or not _system_may_follow(block_index, rendered, blocks):
-        return None
-    return block_index
+    block_index: Final = block_index_by_message[neighbour]
+    return block_index if anchorable[block_index] else None
+
+
+def _runs_by_anchor(
+    anchors: Sequence[tuple[tuple[int, ...], int | None]],
+) -> Mapping[int, tuple[tuple[int, ...], ...]]:
+    anchored: Final = tuple(sorted(((anchor, run) for run, anchor in anchors if anchor is not None), key=itemgetter(0)))
+    return MappingProxyType(
+        {anchor: tuple(run for _, run in group) for anchor, group in groupby(anchored, key=itemgetter(0))}
+    )
 
 
 def _placed_for_flagged_model(messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
@@ -497,19 +498,22 @@ def _placed_for_flagged_model(messages: Sequence[AllMessageValues]) -> tuple[All
     move it. Runs that share a user turn merge into one system message.
     """
     blocks: Final = _user_type_blocks(messages)
-    rendered: Final = _rendered_indices(messages)
-    anchors: Final = tuple((run, _anchor_block(run, messages, rendered, blocks)) for run in _system_runs(messages))
+    block_index_by_message: Final = _block_index_by_message(blocks)
+    anchorable: Final = _anchorable_blocks(_rendered_indices(messages), blocks)
+    anchors: Final = tuple(
+        (run, _anchor_block(run, messages, block_index_by_message, anchorable)) for run in _system_runs(messages)
+    )
+    runs_by_anchor: Final = _runs_by_anchor(anchors)
+    converted_run_after: Final = MappingProxyType({run[0] - 1: run for run, anchor in anchors if anchor is None})
 
     def messages_of(run: tuple[int, ...]) -> tuple[AllMessageValues, ...]:
         return tuple(messages[index] for index in run)
 
     def anchored_to(block_index: int) -> tuple[AllMessageValues, ...]:
-        anchored_runs: Final = tuple(run for run, anchor in anchors if anchor == block_index)
-        return tuple(chain.from_iterable(map(messages_of, anchored_runs)))
+        return tuple(chain.from_iterable(map(messages_of, runs_by_anchor.get(block_index, ()))))
 
     def converted_after(message_index: int) -> tuple[ChatCompletionUserMessage, ...]:
-        following_runs: Final = tuple(run for run, anchor in anchors if anchor is None and run[0] == message_index + 1)
-        return tuple(chain.from_iterable(_converted_user_turns(messages_of(run)) for run in following_runs))
+        return _converted_user_turns(messages_of(converted_run_after.get(message_index, ())))
 
     def emit(block_index: int) -> Iterator[AllMessageValues]:
         is_user, indices = blocks[block_index]

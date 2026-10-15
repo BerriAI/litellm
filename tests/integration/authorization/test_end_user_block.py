@@ -114,7 +114,8 @@ def test_block_route_marks_the_customer_blocked_and_update_unblocks(gateway: Gat
         assert created.status_code == 200, created.text
         scenario.cleanups.callback(gateway.request, "POST", "/customer/delete", {"user_ids": [end_user]})
 
-        gateway.request("POST", block_route, {"user_ids": [end_user]})
+        blocked: Final = gateway.request("POST", block_route, {"user_ids": [end_user]})
+        assert blocked.status_code == 200, blocked.text
         assert eventually(lambda: _blocked_row(end_user), lambda value: value == [{"blocked": True}], seconds=15) == [
             {"blocked": True}
         ]
@@ -165,7 +166,6 @@ def test_end_user_block_route_creates_and_blocks_an_unseen_customer(gateway: Gat
 
 
 def test_customer_block_route_creates_and_blocks_an_unseen_customer(gateway: Gateway) -> None:
-    pytest.skip("BUG: POST /customer/block for an unseen customer returns 500 instead of 200 BlockUsersResponse")
     _assert_unseen_customer_is_blocked(gateway, "/customer/block")
 
 
@@ -313,7 +313,6 @@ def test_unblock_route_requires_the_blocked_user_check_callback(gateway: Gateway
 
 
 def test_block_route_returns_the_blocked_records(gateway: Gateway) -> None:
-    pytest.skip("BUG: POST /customer/block returns 500 instead of 200 BlockUsersResponse")
     end_user: Final = f"integration-end-user-{uuid.uuid4().hex}"
     with gateway.scenario() as scenario:
         created: Final = gateway.request("POST", "/customer/new", {"user_id": end_user})

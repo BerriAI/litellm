@@ -59,6 +59,16 @@ def test_connection_defaults_preserve_openai_precedence(
     assert connection_defaults("openai") == (expected, litellm.api_base)
 
 
+@pytest.mark.parametrize(("global_key", "expected"), (("global", "global"), (None, None)))
+def test_connection_defaults_keep_the_openai_key_away_from_openrouter(
+    monkeypatch: pytest.MonkeyPatch, global_key: str | None, expected: str | None
+) -> None:
+    monkeypatch.setattr(litellm, "api_key", global_key)
+    monkeypatch.setattr(litellm, "openai_key", "openai-only")
+    monkeypatch.setattr(litellm, "api_base", None)
+    assert connection_defaults("openrouter") == (expected, None)
+
+
 class _UpstreamFailure(Exception):
     headers: Final = ()
 

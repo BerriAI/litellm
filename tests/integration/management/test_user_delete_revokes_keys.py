@@ -1,9 +1,11 @@
 import os
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from hashlib import sha256
 from typing import Final
 
 import httpx
+import psycopg
 import pytest
 from integration._support.client import Gateway, eventually, object_value, string_value
 from integration._support.database import read_rows
@@ -11,6 +13,12 @@ from pydantic import JsonValue
 
 from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+
+
+TAKE_TEAM_LOCK_SQL: Final = "SELECT pg_advisory_xact_lock(hashtext(%s))"
+SESSIONS_BLOCKED_BY_SQL: Final = (
+    "SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE %s::int = ANY(pg_blocking_pids(pid))"
+)
 
 
 def _observed(upstream: httpx.Client) -> list[dict[str, JsonValue]]:
@@ -387,3 +395,35 @@ def test_scim_user_delete_revokes_keys(gateway: Gateway, peer: Gateway, monkeypa
         assert denied_peer.json() == _blocked_key_error(), denied_peer.text
         assert _observed(upstream) == []
         assert _observed(upstream) == []
+
+
+def _sessions_blocked_by(backend_pid: int) -> int:
+    waiting: Final = read_rows(SESSIONS_BLOCKED_BY_SQL, (str(backend_pid),))[0]["waiting"]
+    assert isinstance(waiting, int)
+    return waiting
+
+
+def test_user_delete_deletes_a_user_whose_team_is_deleted_while_it_waits_on_the_team_lock(gateway: Gateway) -> None:
+    team_id: Final = string_value(
+        gateway.post("/team/new", {"team_alias": f"integration-{uuid.uuid4().hex}"})["team_id"]
+    )
+    user_id: Final = _new_user(gateway)
+    gateway.post("/team/member_add", {"team_id": team_id, "member": {"role": "user", "user_id": user_id}})
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with psycopg.connect(os.environ["DATABASE_URL"]) as holder:
+            _ = holder.execute(TAKE_TEAM_LOCK_SQL, (team_id,))
+            deletion: Final = pool.submit(gateway.request, "POST", "/user/delete", {"user_ids": [user_id]})
+            _ = eventually(
+                lambda: _sessions_blocked_by(holder.info.backend_pid), lambda waiting: waiting >= 1, seconds=30
+            )
+            _ = holder.execute('DELETE FROM "LiteLLM_TeamMembership" WHERE team_id = %s', (team_id,))
+            _ = holder.execute(
+                'UPDATE "LiteLLM_UserTable" SET teams = array_remove(teams, %s) WHERE %s = ANY(teams)',
+                (team_id, team_id),
+            )
+            _ = holder.execute('DELETE FROM "LiteLLM_TeamTable" WHERE team_id = %s', (team_id,))
+            assert not deletion.done(), deletion.result().text
+        deleted: Final = deletion.result()
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json() == 1
+    assert _user_rows(user_id)["user"] == []

@@ -757,6 +757,7 @@ def owned_proxy_process(
     coverage_file: Path | None = None,
     healthcheck: WorkerHealthcheck = WorkerHealthcheck.STRICT,
     inherited: Mapping[str, str] = os.environ,
+    client_timeout: float = 15,
 ) -> Iterator[OwnedProxy]:
     assert "--timeout_worker_healthcheck" not in extra_arguments, "Choose the worker healthcheck with `healthcheck`"
     root: Final = _proxy_root()
@@ -788,9 +789,48 @@ def owned_proxy_process(
     process: Final = launch.process
     try:
         with httpx.Client(
-            base_url=f"http://127.0.0.1:{launch.port}", timeout=15, trust_env=False, limits=GATEWAY_LIMITS
+            base_url=f"http://127.0.0.1:{launch.port}", timeout=client_timeout, trust_env=False, limits=GATEWAY_LIMITS
         ) as client:
             yield OwnedProxy(Gateway(client, gateway.key, gateway.upstream_url), process, launch.log, healthcheck)
+    finally:
+        _stop_launch(launch)
+
+
+@contextmanager
+def configless_proxy_process(
+    gateway: Gateway,
+    directory: Path,
+    overrides: Mapping[str, str],
+    *,
+    model: str,
+    api_base: str,
+    workers: int = 1,
+) -> Iterator[OwnedProxy]:
+    environment: Final = _proxy_environment(gateway, {**overrides, "STORE_MODEL_IN_DB": "False"}, ())
+    output: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR", str(directory)))
+    output.mkdir(parents=True, exist_ok=True)
+    command: Final = (
+        sys.executable,
+        "-m",
+        "integration._support.proxy",
+        "--model",
+        model,
+        "--api_base",
+        api_base,
+        "--host",
+        "127.0.0.1",
+        "--num_workers",
+        str(workers),
+        "--timeout_worker_healthcheck",
+        str(healthcheck_seconds(WorkerHealthcheck.STRICT)),
+        *DB_PUSH,
+    )
+    launch: Final = _launch_until_bound(command, _proxy_root(), environment, output, _PORT_ATTEMPTS, workers)
+    try:
+        with httpx.Client(
+            base_url=f"http://127.0.0.1:{launch.port}", timeout=15, trust_env=False, limits=GATEWAY_LIMITS
+        ) as client:
+            yield OwnedProxy(Gateway(client, gateway.key, gateway.upstream_url), launch.process, launch.log)
     finally:
         _stop_launch(launch)
 

@@ -8565,7 +8565,8 @@ export interface paths {
          *           hour), so subtracting budget_duration from it does not give the window's start
          *         - model_max_budget: dict - Per-model budgets, e.g. {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
          *         - model_max_budget_usage: dict | None - Current-window spend per model, present only when
-         *           the key has per-model budgets
+         *           the key has per-model budgets. Each entry's budget_reset_at is when that model's open
+         *           window ends and its spend resets, or None when no window is open or it ends after year 9999
          *         - budget_limits: list | None - Concurrent budget windows, exactly as stored
          *         - budget_limits_usage: dict | None - Current-window spend per budget window, e.g.
          *           {"1h": {"current_spend": 0.0009}}, present only when the key has budget windows
@@ -9912,7 +9913,8 @@ export interface paths {
          *
          *     Reads `deprecation_date` metadata from `model_prices_and_context_window.json`
          *     (and any per-deployment `model_info.deprecation_date` overrides) for the
-         *     models configured on this proxy.
+         *     models configured on this proxy. An entry also names its `successor_model`
+         *     when the deployment sets `model_info.successor_model`.
          *
          *     Parameters:
          *         warn_within_days: Window (in days) used to bucket "imminent" models,
@@ -21203,7 +21205,8 @@ export interface paths {
          *
          *     Reads `deprecation_date` metadata from `model_prices_and_context_window.json`
          *     (and any per-deployment `model_info.deprecation_date` overrides) for the
-         *     models configured on this proxy.
+         *     models configured on this proxy. An entry also names its `successor_model`
+         *     when the deployment sets `model_info.successor_model`.
          *
          *     Parameters:
          *         warn_within_days: Window (in days) used to bucket "imminent" models,
@@ -31337,6 +31340,11 @@ export interface components {
              */
             total_prompt_tokens: number;
             /**
+             * Total Ptu Hours
+             * @default 0
+             */
+            total_ptu_hours: number;
+            /**
              * Total Response Time Ms
              * @default 0
              */
@@ -38051,6 +38059,11 @@ export interface components {
              * @enum {string}
              */
             status: "upcoming" | "imminent" | "deprecated";
+            /**
+             * Successor Model
+             * @description The model to migrate to, as set in model_info.successor_model on the deployment.
+             */
+            successor_model?: string | null;
         };
         /** ModelDeprecationResponse */
         ModelDeprecationResponse: {
@@ -45425,6 +45438,11 @@ export interface components {
              */
             prompt_tokens: number;
             /**
+             * Ptu Hours
+             * @default 0
+             */
+            ptu_hours: number;
+            /**
              * Spend
              * @default 0
              */
@@ -49928,6 +49946,10 @@ export interface components {
             ptu_effective_from?: string | null;
             /** Ptu Effective To */
             ptu_effective_to?: string | null;
+            /** Ptu Shares */
+            ptu_shares?: {
+                [key: string]: number;
+            } | null;
             /** Team Id */
             team_id?: string | null;
             /** Team Public Model Name */
