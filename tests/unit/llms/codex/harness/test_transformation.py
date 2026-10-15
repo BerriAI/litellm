@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from litellm.harness.context import SessionContext
 from litellm.harness.errors import HarnessError, HarnessInstallFailed, OptionsMismatch
@@ -270,6 +270,36 @@ def test_parse_file_change_and_mcp_and_web_search():
     web = {"id": "i3", "type": "web_search", "query": "litellm"}
     events = parse_event({"type": "item.completed", "item": web}, state)
     assert events[0].name == "web_search" and events[0].input == {"query": "litellm"}
+
+
+@pytest.mark.parametrize(
+    ("changes", "output"),
+    [
+        ([{"path": "a.txt", "kind": "add"}, {"path": "b.txt", "kind": "update", "diff": "@@"}], "add a.txt\nupdate b.txt"),
+        ([{"path": "only-path.txt"}, {"kind": "delete"}, {}], "only-path.txt\ndelete\n"),
+        ([], ""),
+        (None, ""),
+    ],
+)
+def test_completed_file_change_lists_each_change(changes: object, output: str):
+    state = CodexStreamState(started={"i1"})
+    item = {"id": "i1", "type": "file_change", "changes": changes, "status": "completed"}
+
+    assert parse_event({"type": "item.completed", "item": item}, state) == [
+        ToolResult(id="i1", output=output, is_error=False)
+    ]
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [["a.txt"], [{"path": "a.txt"}, None], "a.txt", {"a.txt": {"kind": "add"}}, 7],
+)
+def test_completed_file_change_rejects_changes_that_are_not_a_list_of_objects(changes: object):
+    state = CodexStreamState(started={"i1"})
+    item = {"id": "i1", "type": "file_change", "changes": changes, "status": "completed"}
+
+    with pytest.raises(ValidationError):
+        parse_event({"type": "item.completed", "item": item}, state)
 
 
 def test_parse_failed_command_is_error_and_unknown_events_ignored():

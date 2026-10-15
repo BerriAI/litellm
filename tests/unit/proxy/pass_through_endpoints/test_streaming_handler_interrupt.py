@@ -55,7 +55,7 @@ async def test_chunk_processor_logs_on_normal_completion():
 
     with patch.object(
         PassThroughStreamingHandler,
-        "_route_streaming_logging_to_handler",
+        "route_streaming_logging_to_handler",
         new=AsyncMock(),
     ) as mock_route:
         received = []
@@ -88,7 +88,7 @@ async def test_chunk_processor_logs_on_client_disconnect():
 
     with patch.object(
         PassThroughStreamingHandler,
-        "_route_streaming_logging_to_handler",
+        "route_streaming_logging_to_handler",
         new=AsyncMock(),
     ) as mock_route:
         gen = PassThroughStreamingHandler.chunk_processor(
@@ -126,7 +126,7 @@ async def test_chunk_processor_does_not_schedule_success_logging_for_upstream_er
 
     with patch.object(
         PassThroughStreamingHandler,
-        "_route_streaming_logging_to_handler",
+        "route_streaming_logging_to_handler",
         new=AsyncMock(),
     ) as mock_route:
         received = []
@@ -156,7 +156,7 @@ async def test_chunk_processor_does_not_schedule_logging_when_no_chunks():
 
     with patch.object(
         PassThroughStreamingHandler,
-        "_route_streaming_logging_to_handler",
+        "route_streaming_logging_to_handler",
         new=AsyncMock(),
     ) as mock_route:
         received = []
@@ -193,7 +193,7 @@ async def test_chunk_processor_routes_logging_through_logging_worker():
     with (
         patch.object(
             PassThroughStreamingHandler,
-            "_route_streaming_logging_to_handler",
+            "route_streaming_logging_to_handler",
             new=AsyncMock(),
         ),
         patch.object(
@@ -235,7 +235,7 @@ async def test_chunk_processor_routes_logging_through_logging_worker_on_disconne
     with (
         patch.object(
             PassThroughStreamingHandler,
-            "_route_streaming_logging_to_handler",
+            "route_streaming_logging_to_handler",
             new=AsyncMock(),
         ),
         patch.object(
@@ -261,7 +261,7 @@ async def test_chunk_processor_routes_logging_through_logging_worker_on_disconne
 
 
 def _logging_obj_with_write_once_cst():
-    """Build a MagicMock that mirrors the real Logging behavior: _update_completion_start_time
+    """Build a MagicMock that mirrors the real Logging behavior: update_completion_start_time
     latches self.completion_start_time so the write-once guard actually latches."""
     obj = _unarmed_logging_obj()
     obj.completion_start_time = None
@@ -269,7 +269,7 @@ def _logging_obj_with_write_once_cst():
     def _update(*, completion_start_time):
         obj.completion_start_time = completion_start_time
 
-    obj._update_completion_start_time.side_effect = _update
+    obj.update_completion_start_time.side_effect = _update
     return obj
 
 
@@ -287,7 +287,7 @@ async def test_chunk_processor_stamps_completion_start_time_on_first_chunk():
 
     with patch.object(
         PassThroughStreamingHandler,
-        "_route_streaming_logging_to_handler",
+        "route_streaming_logging_to_handler",
         new=AsyncMock(),
     ):
         received = []
@@ -305,8 +305,8 @@ async def test_chunk_processor_stamps_completion_start_time_on_first_chunk():
         await asyncio.sleep(0)
 
     assert received == chunks
-    mock_logging_obj._update_completion_start_time.assert_called_once()
-    stamped = mock_logging_obj._update_completion_start_time.call_args.kwargs["completion_start_time"]
+    mock_logging_obj.update_completion_start_time.assert_called_once()
+    stamped = mock_logging_obj.update_completion_start_time.call_args.kwargs["completion_start_time"]
     assert isinstance(stamped, datetime)
 
 
@@ -326,7 +326,7 @@ async def test_chunk_processor_does_not_reset_completion_start_time_on_later_chu
 
     with patch.object(
         PassThroughStreamingHandler,
-        "_route_streaming_logging_to_handler",
+        "route_streaming_logging_to_handler",
         new=AsyncMock(),
     ):
         async for _ in PassThroughStreamingHandler.chunk_processor(
@@ -340,7 +340,7 @@ async def test_chunk_processor_does_not_reset_completion_start_time_on_later_chu
         ):
             pass
 
-    mock_logging_obj._update_completion_start_time.assert_not_called()
+    mock_logging_obj.update_completion_start_time.assert_not_called()
     assert mock_logging_obj.completion_start_time == real_first
 
 
@@ -361,7 +361,7 @@ async def test_chunk_processor_stamps_completion_start_time_on_cost_injection_pa
     try:
         with patch.object(
             PassThroughStreamingHandler,
-            "_route_streaming_logging_to_handler",
+            "route_streaming_logging_to_handler",
             new=AsyncMock(),
         ):
             async for _ in PassThroughStreamingHandler.chunk_processor(
@@ -377,7 +377,7 @@ async def test_chunk_processor_stamps_completion_start_time_on_cost_injection_pa
     finally:
         litellm_mod.include_cost_in_streaming_usage = original
 
-    mock_logging_obj._update_completion_start_time.assert_called_once()
+    mock_logging_obj.update_completion_start_time.assert_called_once()
 
 
 def _openai_passthrough_stream_chunks():

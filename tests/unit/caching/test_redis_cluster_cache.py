@@ -1,20 +1,22 @@
 import asyncio
-from importlib import import_module
+import gc
 import json
 import ssl
+import weakref
+from collections.abc import Awaitable, Callable
+from importlib import import_module
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
 from redis.asyncio import Redis, RedisCluster
 from redis.asyncio.cluster import ClusterNode
 from redis.asyncio.connection import SSLConnection
 
-
-from litellm.caching.redis_cache import RedisCache
-from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.caching.evicted_client_closer import EvictedClientCloser
 from litellm.caching.llm_caching_handler import LLMClientCache
+from litellm.caching.redis_cache import RedisCache
+from litellm.caching.redis_cluster_cache import ClusterConnectionGate, RedisClusterCache
 
 
 @patch("litellm._redis.init_redis_cluster")
@@ -73,9 +75,7 @@ async def test_redis_cluster_async_batch_get(mock_init_redis_cluster):
 @patch("litellm._redis.get_redis_connection_pool")
 @patch("litellm._redis.get_redis_client")
 @patch.object(import_module("litellm.caching.redis_cache").RedisCache, "_setup_health_pings")
-def test_cache_init_creates_cluster_cache_from_env_var(
-    mock_health, mock_get_client, mock_get_pool, monkeypatch
-):
+def test_cache_init_creates_cluster_cache_from_env_var(mock_health, mock_get_client, mock_get_pool, monkeypatch):
     """
     Test that Cache() creates RedisClusterCache when REDIS_CLUSTER_NODES env var is set.
 
@@ -215,9 +215,7 @@ async def test_disconnect_without_cluster_client_does_not_raise(mock_redis_clust
         ),
     ],
 )
-def test_router_create_redis_cache_cluster_detection(
-    startup_nodes, env_var, expected_cache_type, monkeypatch
-):
+def test_router_create_redis_cache_cluster_detection(startup_nodes, env_var, expected_cache_type, monkeypatch):
     """
     Test that Router._create_redis_cache() creates RedisClusterCache when
     either startup_nodes is in config or REDIS_CLUSTER_NODES env var is set.
@@ -408,3 +406,256 @@ def test_expired_pubsub_client_closes_connections_after_eviction() -> None:
 
     with patch("litellm.in_memory_llm_clients_cache", clients):
         asyncio.run(exercise())
+
+
+def test_init_async_client_returns_one_cluster_client_per_event_loop() -> None:
+    clients = LLMClientCache()
+    with (
+        patch("litellm.in_memory_llm_clients_cache", clients),
+        patch("redis.RedisCluster", return_value=MagicMock()),
+        patch("redis.Redis", return_value=MagicMock()),
+    ):
+        cache = RedisClusterCache(startup_nodes=[{"host": "127.0.0.1", "port": 7000}])
+        loop_a = asyncio.new_event_loop()
+        loop_b = asyncio.new_event_loop()
+
+        async def get_client() -> RedisCluster:
+            return cache.init_async_client()
+
+        async def get_client_pair() -> tuple[RedisCluster, RedisCluster]:
+            return cache.init_async_client(), cache.init_async_client()
+
+        try:
+            client_a, client_a_again = loop_a.run_until_complete(get_client_pair())
+            client_b, client_b_again = loop_b.run_until_complete(get_client_pair())
+
+            assert isinstance(client_a, RedisCluster)
+            assert isinstance(client_b, RedisCluster)
+            assert client_a is client_a_again
+            assert client_b is client_b_again
+            assert client_a is not client_b
+
+            loop_a.close()
+            assert loop_b.run_until_complete(get_client()) is client_b
+        finally:
+            loop_a.close()
+            loop_b.close()
+
+
+@pytest.mark.parametrize("cluster", [True, False])
+def test_evicted_async_client_is_closed_only_for_cluster(cluster: bool) -> None:
+    clients = LLMClientCache(evicted_client_closer=EvictedClientCloser(grace_seconds=0))
+    with (
+        patch("litellm.in_memory_llm_clients_cache", clients),
+        patch("redis.RedisCluster", return_value=MagicMock()),
+        patch("redis.Redis", return_value=MagicMock()),
+    ):
+        cache = (
+            RedisClusterCache(startup_nodes=[{"host": "127.0.0.1", "port": 7000}])
+            if cluster
+            else RedisCache(host="standalone-evicted-client", port=6379)
+        )
+
+        async def exercise() -> None:
+            client = cache.init_async_client()
+            closed = asyncio.Event()
+            client.aclose = AsyncMock(side_effect=closed.set)
+            cache_key = clients.update_cache_key_with_event_loop(cache._get_async_client_cache_key())
+            clients.ttl_dict[cache_key] = 0
+
+            replacement = cache.init_async_client()
+
+            assert replacement is not client
+            if cluster:
+                await asyncio.wait_for(closed.wait(), timeout=1)
+                client.aclose.assert_awaited_once()
+            else:
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
+                client.aclose.assert_not_awaited()
+
+        asyncio.run(exercise())
+
+
+class _InFlightCountingClient:
+    """Async cluster client double that records how many commands were in flight at once."""
+
+    def __init__(self, command_seconds: float) -> None:
+        self.command_seconds = command_seconds
+        self.in_flight = 0
+        self.peak_in_flight = 0
+        self.completed = 0
+
+    async def set(self, *args: object, **kwargs: object) -> bool:
+        self.in_flight += 1
+        self.peak_in_flight = max(self.peak_in_flight, self.in_flight)
+        await asyncio.sleep(self.command_seconds)
+        self.in_flight -= 1
+        self.completed += 1
+        return True
+
+
+def _cluster_set_cache_with_client(
+    client: _InFlightCountingClient,
+    max_connections: int | None = None,
+    connection_gate: ClusterConnectionGate | None = None,
+) -> Callable[[str, str], Awaitable[object]]:
+    with patch("litellm._redis.init_redis_cluster"):
+        cache = RedisClusterCache(
+            startup_nodes=[{"host": "localhost", "port": 7000}],
+            max_connections=max_connections,
+            connection_gate=connection_gate,
+        )
+    setattr(cache, "init_async_client", MagicMock(return_value=client))
+    return cast(
+        "Callable[[str, str], Awaitable[object]]", cache.async_set_cache
+    )  # cast-ok: wrapped **kwargs are untyped
+
+
+@pytest.mark.asyncio
+async def test_cluster_cache_queues_commands_beyond_max_connections_instead_of_failing() -> None:
+    """A burst larger than max_connections used to hand every command to the node at once, so redis-py raised
+    MaxConnectionsError on the overflow and the circuit breaker opened. The overflow now waits for a slot."""
+    client = _InFlightCountingClient(command_seconds=0.01)
+    set_cache = _cluster_set_cache_with_client(client, max_connections=3)
+
+    await asyncio.gather(*(set_cache(f"key-{i}", "value") for i in range(20)))
+
+    assert client.completed == 20
+    assert client.peak_in_flight <= 3
+
+
+@pytest.mark.asyncio
+async def test_cluster_cache_without_max_connections_does_not_throttle() -> None:
+    client = _InFlightCountingClient(command_seconds=0.01)
+    set_cache = _cluster_set_cache_with_client(client)
+
+    await asyncio.gather(*(set_cache(f"key-{i}", "value") for i in range(20)))
+
+    assert client.completed == 20
+    assert client.peak_in_flight == 20
+
+
+@pytest.mark.asyncio
+async def test_cluster_cache_sends_after_the_connection_wait_timeout() -> None:
+    """A command that cannot get a slot within the pool timeout is still sent, so a saturated pool keeps
+    surfacing through the client's own errors and the breaker rather than stalling forever."""
+    client = _InFlightCountingClient(command_seconds=0.2)
+    set_cache = _cluster_set_cache_with_client(
+        client, connection_gate=ClusterConnectionGate(limit=1, wait_timeout=0.02)
+    )
+
+    await asyncio.wait_for(asyncio.gather(*(set_cache(f"key-{i}", "value") for i in range(3))), timeout=1.0)
+
+    assert client.completed == 3
+    assert client.peak_in_flight == 3
+
+
+@pytest.mark.asyncio
+async def test_cluster_caches_sharing_a_client_share_the_connection_cap() -> None:
+    """init_async_client hands caches with identical settings the same client, so two caches must not each admit
+    a full max_connections worth of commands against that one pool."""
+    client = _InFlightCountingClient(command_seconds=0.01)
+    first = _cluster_set_cache_with_client(client, max_connections=3)
+    second = _cluster_set_cache_with_client(client, max_connections=3)
+
+    await asyncio.gather(
+        *(first(f"first-{i}", "value") for i in range(10)), *(second(f"second-{i}", "value") for i in range(10))
+    )
+
+    assert client.completed == 20
+    assert client.peak_in_flight <= 3
+
+
+@pytest.mark.asyncio
+async def test_guarded_command_nested_in_a_guarded_command_reuses_the_slot() -> None:
+    """batch_cache_write flushes through async_set_cache_pipeline while it is itself admitted. With one slot the
+    inner command must run on the outer slot instead of waiting for the pool timeout."""
+    gate = ClusterConnectionGate(limit=1, wait_timeout=5.0)
+
+    async def inner() -> str:
+        return "flushed"
+
+    async def outer() -> str:
+        return await gate.run(inner, "client-a")
+
+    assert await asyncio.wait_for(gate.run(outer, "client-a"), timeout=1.0) == "flushed"
+
+
+@pytest.mark.asyncio
+async def test_nested_guarded_command_on_another_client_waits_for_that_clients_slot() -> None:
+    gate = ClusterConnectionGate(limit=1, wait_timeout=5.0)
+    client_b_busy = asyncio.Event()
+    release_b = asyncio.Event()
+    peak_b = 0
+    in_flight_b = 0
+
+    async def hold_b() -> None:
+        nonlocal peak_b, in_flight_b
+        in_flight_b += 1
+        peak_b = max(peak_b, in_flight_b)
+        client_b_busy.set()
+        await release_b.wait()
+        in_flight_b -= 1
+
+    async def touch_b() -> None:
+        nonlocal peak_b, in_flight_b
+        in_flight_b += 1
+        peak_b = max(peak_b, in_flight_b)
+        await asyncio.sleep(0)
+        in_flight_b -= 1
+
+    async def outer_on_a() -> None:
+        await client_b_busy.wait()
+        await gate.run(touch_b, "client-b")
+
+    holder = asyncio.create_task(gate.run(hold_b, "client-b"))
+    nested = asyncio.create_task(gate.run(outer_on_a, "client-a"))
+    await client_b_busy.wait()
+    await asyncio.sleep(0.05)
+    release_b.set()
+    await asyncio.gather(holder, nested)
+
+    assert peak_b == 1
+
+
+@pytest.mark.asyncio
+async def test_child_task_spawned_inside_a_guarded_command_does_not_inherit_the_slot() -> None:
+    gate = ClusterConnectionGate(limit=1, wait_timeout=5.0)
+    peak = 0
+    in_flight = 0
+
+    async def command() -> None:
+        nonlocal peak, in_flight
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await asyncio.sleep(0.02)
+        in_flight -= 1
+
+    spawned: list[asyncio.Task[None]] = []
+
+    async def parent() -> None:
+        spawned.append(asyncio.create_task(gate.run(command, "client-a")))
+        await command()
+
+    await gate.run(parent, "client-a")
+    await asyncio.gather(*spawned)
+
+    assert peak == 1
+
+
+def test_closed_event_loop_is_collected_after_contended_gate_use() -> None:
+    gate = ClusterConnectionGate(limit=1, wait_timeout=5.0)
+
+    async def command() -> None:
+        await asyncio.sleep(0.01)
+
+    async def contend() -> "weakref.ref[asyncio.AbstractEventLoop]":
+        await asyncio.gather(gate.run(command, "client-a"), gate.run(command, "client-a"))
+        return weakref.ref(asyncio.get_running_loop())
+
+    loop_ref = asyncio.run(contend())
+    gc.collect()
+
+    assert loop_ref() is None
