@@ -183,6 +183,10 @@ class TestTheNormalizedTierIsTheTierSent:
     def test_a_declared_tier_reaches_the_outgoing_request(self, local_model_cost_map, model, provider):
         assert _reasoning_effort_sent(model, provider, "max") == "max"
 
+    @pytest.mark.parametrize("effort, expected", [("xhigh", "high"), ("minimal", "low")])
+    def test_a_tier_the_entry_does_not_declare_still_degrades(self, local_model_cost_map, effort, expected):
+        assert _reasoning_effort_sent("kimi-k3", "fireworks_ai", effort) == expected
+
     def test_the_fallback_is_a_tier_the_deployment_accepts(self, local_model_cost_map):
         """gpt-5.5-pro refuses ``low``, the floor the ``minimal`` chain used to stop on, so stopping
         there would have sent a level the model map says the model rejects."""
@@ -295,23 +299,6 @@ class TestADeclaredDeploymentRoundsTheMessagesTierOntoItsLevels:
             r"https://vllm\.example\.test/v1/chat/completions",
             _CHAT_COMPLETION,
             **messages_params,
-        )
-
-        assert sent["reasoning_effort"] == expected
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("effort, expected", [("xhigh", "max"), ("minimal", "low")])
-    async def test_a_model_map_declaration_rounds_up_onto_its_levels(
-        self, local_model_cost_map: None, respx_mock: respx.MockRouter, effort: str, expected: str
-    ) -> None:
-        sent: Final = await _body_sent_upstream(
-            respx_mock,
-            {"model": "fireworks_ai/kimi-k3", "api_key": "fake-key"},
-            {},
-            r"https://api\.fireworks\.ai/inference/v1/chat/completions",
-            _CHAT_COMPLETION,
-            thinking={"type": "adaptive"},
-            output_config={"effort": effort},
         )
 
         assert sent["reasoning_effort"] == expected

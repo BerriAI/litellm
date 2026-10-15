@@ -541,8 +541,9 @@ class TestResolveDeploymentReasoningEffort:
         monkeypatch.setattr(litellm, "reasoning_effort_rounding", invalid)
         assert _sent("medium", {**KIMI_DEPLOYMENT, "reasoning_effort_rounding": invalid}) == "high"
 
-    def test_the_deployment_declaration_wins_over_the_model_map(self, local_model_cost_map):
-        assert _sent("xhigh", None, model="kimi-k3", provider="fireworks_ai") == "max"
+    def test_only_the_deployment_declaration_rounds_never_the_model_map(self, local_model_cost_map):
+        assert _sent("xhigh", None, model="kimi-k3", provider="fireworks_ai") == "xhigh"
+        assert _sent("xhigh", {"id": "kimi-1"}, model="kimi-k3", provider="fireworks_ai") == "xhigh"
         assert _sent("xhigh", {"reasoning_effort_levels": ["medium"]}, model="kimi-k3", provider="fireworks_ai") == (
             "medium"
         )

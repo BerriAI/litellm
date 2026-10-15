@@ -96,7 +96,7 @@ def declared_reasoning_efforts(model_info: Mapping[str, object]) -> tuple[str, .
     return tuple(effort for effort in REASONING_EFFORT_ADVERTISEMENT_ORDER if effort in declared)
 
 
-def declared_reasoning_efforts_for_model(model: str, custom_llm_provider: str | None) -> tuple[str, ...] | None:
+def declared_reasoning_efforts_for_model(model: str, custom_llm_provider: str) -> tuple[str, ...] | None:
     """The levels an entry declares, resolved from the model string a provider config holds rather
     than from a router deployment's model_info.
 
@@ -146,20 +146,17 @@ _DEFAULT_EFFORT: Final = "default"
 _EFFORT_KEY: Final = "effort"
 
 
-def deployment_reasoning_effort_levels(
-    model: str, custom_llm_provider: str | None, deployment_model_info: object
-) -> tuple[str, ...] | None:
+def deployment_reasoning_effort_levels(deployment_model_info: object) -> tuple[str, ...] | None:
+    """Only the deployment's own declaration counts. The router copies it onto the shared
+    provider/model map key, and map entries describe a model rather than what a deployment's
+    endpoint accepts, so reading the map here would round requests for siblings and for models
+    nobody declared levels on."""
     own_info: Final = as_str_mapping(deployment_model_info)
-    own: Final = declared_reasoning_efforts(own_info) if own_info is not None else None
-    if own is not None:
-        return own
-    return declared_reasoning_efforts_for_model(model, custom_llm_provider)
+    return declared_reasoning_efforts(own_info) if own_info is not None else None
 
 
-def deployment_rounds_reasoning_effort(
-    model: str, custom_llm_provider: str | None, deployment_model_info: object
-) -> bool:
-    declared: Final = deployment_reasoning_effort_levels(model, custom_llm_provider, deployment_model_info)
+def deployment_rounds_reasoning_effort(deployment_model_info: object) -> bool:
+    declared: Final = deployment_reasoning_effort_levels(deployment_model_info)
     return declared is not None and any(level in _STRENGTH_RANK for level in declared)
 
 
@@ -208,7 +205,7 @@ def model_group_from_metadata(*metadata: object) -> str | None:
 @dataclass(frozen=True, slots=True)
 class DeploymentReasoningEffort:
     value: RequestedReasoningEffort
-    declares_sent_level: bool
+    deployment_accepts_effort: bool
 
 
 def resolve_deployment_reasoning_effort(
@@ -220,10 +217,10 @@ def resolve_deployment_reasoning_effort(
     model_group: str | None,
 ) -> DeploymentReasoningEffort:
     requested_level: Final = _requested_level(requested)
-    unchanged: Final = DeploymentReasoningEffort(value=requested, declares_sent_level=False)
+    unchanged: Final = DeploymentReasoningEffort(value=requested, deployment_accepts_effort=False)
     if requested_level is None:
         return unchanged
-    declared: Final = deployment_reasoning_effort_levels(model, custom_llm_provider, deployment_model_info)
+    declared: Final = deployment_reasoning_effort_levels(deployment_model_info)
     if declared is None:
         return unchanged
     rounding: Final = _deployment_rounding(deployment_model_info)
@@ -232,9 +229,9 @@ def resolve_deployment_reasoning_effort(
         if requested_level == _DEFAULT_EFFORT
         else nearest_declared_reasoning_effort(requested_level, declared, rounding)
     )
-    declares_sent_level: Final = sent_level is not None and sent_level in declared
+    deployment_accepts_effort: Final = sent_level is not None and len(declared) > 0
     if sent_level == requested_level:
-        return DeploymentReasoningEffort(value=requested, declares_sent_level=declares_sent_level)
+        return DeploymentReasoningEffort(value=requested, deployment_accepts_effort=deployment_accepts_effort)
     _log_remap(
         requested_level=requested_level,
         sent_level=sent_level,
@@ -243,7 +240,9 @@ def resolve_deployment_reasoning_effort(
         deployment_model_info=deployment_model_info,
         model_group=model_group,
     )
-    return DeploymentReasoningEffort(value=_with_level(requested, sent_level), declares_sent_level=declares_sent_level)
+    return DeploymentReasoningEffort(
+        value=_with_level(requested, sent_level), deployment_accepts_effort=deployment_accepts_effort
+    )
 
 
 def _provider_model(model: str, custom_llm_provider: str | None) -> str:
@@ -286,8 +285,9 @@ def reasoning_effort_needs_allowing(
     resolved: DeploymentReasoningEffort, *, model: str, custom_llm_provider: str, base_model: str | None
 ) -> bool:
     """A provider that lists reasoning_effort maps it itself, so allowing the raw key as well would
-    send it twice (anthropic turns it into thinking and rejects the raw key)."""
-    if not resolved.declares_sent_level:
+    send it twice (anthropic turns it into thinking and rejects the raw key). A level outside the
+    declaration is still sent once the deployment declares any, for its backend to judge."""
+    if not resolved.deployment_accepts_effort:
         return False
     return "reasoning_effort" not in (
         get_supported_openai_params(model=model, custom_llm_provider=custom_llm_provider, base_model=base_model) or ()

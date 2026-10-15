@@ -188,8 +188,8 @@ def normalize_reasoning_effort_value(
 ) -> str:
     """Lower a tier the deployment does not accept to the nearest one it does, leaving others alone.
 
-    A deployment or model map entry whose reasoning_effort_levels name a strength tier keeps the tier
-    as sent, since completion() and responses() round it onto those levels.
+    A deployment whose own reasoning_effort_levels name a strength tier keeps the tier as sent, since
+    completion() and responses() round it onto those levels.
 
     The accepted set is resolved by the same owner that answers ``/model_group/info``, so a level
     the proxy advertises is a level this path forwards.
@@ -210,7 +210,7 @@ def normalize_reasoning_effort_value(
         resolve_supported_reasoning_efforts,
     )
 
-    if deployment_rounds_reasoning_effort(model, custom_llm_provider, deployment_model_info):
+    if deployment_rounds_reasoning_effort(deployment_model_info):
         return effort
     from litellm.utils import get_model_info
 

@@ -8353,7 +8353,11 @@ _HELLO: Final = [{"role": "user", "content": "hello"}]
 
 
 def _chat_body_sent(
-    respx_mock: respx.MockRouter, model: str, reasoning_effort: str, model_info: Mapping[str, object] | None
+    respx_mock: respx.MockRouter,
+    model: str,
+    reasoning_effort: str | None,
+    model_info: Mapping[str, object] | None,
+    **params: object,
 ) -> Mapping[str, object]:
     route: Final = respx_mock.post(f"{_VLLM_API_BASE}/chat/completions").mock(
         return_value=_mocked_openai_chat_response(model)
@@ -8365,6 +8369,7 @@ def _chat_body_sent(
         messages=_HELLO,
         reasoning_effort=reasoning_effort,
         model_info=model_info,
+        **params,
     )
     return json.loads(route.calls.last.request.content)
 
@@ -8409,15 +8414,61 @@ def test_default_on_a_declaring_deployment_leaves_the_effort_to_the_provider(res
     assert "reasoning_effort" not in _chat_body_sent(respx_mock, "hosted_vllm/my-kimi", "default", _KIMI_DEPLOYMENT)
 
 
-def test_azure_ai_forwards_reasoning_effort_only_at_a_level_the_deployment_declares(
+def test_azure_ai_forwards_reasoning_effort_once_the_deployment_declares_levels(
     respx_mock: respx.MockRouter,
 ) -> None:
     with pytest.raises(litellm.exceptions.UnsupportedParamsError):
         _chat_body_sent(respx_mock, "azure_ai/my-kimi", "medium", {"id": "kimi-azure-1"})
     with pytest.raises(litellm.exceptions.UnsupportedParamsError):
-        _chat_body_sent(respx_mock, "azure_ai/my-kimi", "none", {"reasoning_effort_levels": ["low", "high"]})
+        _chat_body_sent(respx_mock, "azure_ai/my-kimi", "medium", {"reasoning_effort_levels": []})
 
     assert _chat_body_sent(respx_mock, "azure_ai/my-kimi", "medium", _KIMI_DEPLOYMENT)["reasoning_effort"] == "high"
+    assert _chat_body_sent(respx_mock, "azure_ai/my-kimi", "adaptive", _KIMI_DEPLOYMENT)["reasoning_effort"] == (
+        "adaptive"
+    )
+    assert _chat_body_sent(respx_mock, "azure_ai/my-kimi", "none", {"reasoning_effort_levels": ["low", "high"]})[
+        "reasoning_effort"
+    ] == "none"
+
+
+def test_a_model_map_declaration_alone_leaves_reasoning_effort_to_drop_params(
+    local_model_cost_map: None, respx_mock: respx.MockRouter
+) -> None:
+    assert "reasoning_effort" not in _chat_body_sent(
+        respx_mock, "azure_ai/FW-Kimi-K3", "medium", {"id": "kimi-azure-1"}, drop_params=True
+    )
+
+
+@pytest.mark.parametrize("model_info, expected", [(_KIMI_DEPLOYMENT, "high"), (None, "medium")])
+def test_a_hosted_vllm_thinking_budget_is_rounded_onto_the_declared_levels(
+    respx_mock: respx.MockRouter, model_info: Mapping[str, object] | None, expected: str
+) -> None:
+    sent: Final = _chat_body_sent(
+        respx_mock, "hosted_vllm/my-kimi", None, model_info, thinking={"type": "enabled", "budget_tokens": 2048}
+    )
+
+    assert sent["reasoning_effort"] == expected
+
+
+def test_an_undeclared_sibling_of_a_declaring_deployment_gets_the_request_untouched(
+    respx_mock: respx.MockRouter,
+) -> None:
+    from litellm.router import Router
+
+    route: Final = respx_mock.post(f"{_VLLM_API_BASE}/chat/completions").mock(
+        return_value=_mocked_openai_chat_response("my-kimi")
+    )
+    shared_params: Final = {"model": "hosted_vllm/my-kimi", "api_base": _VLLM_API_BASE, "api_key": "fake-key"}
+    router: Final = Router(
+        model_list=[
+            {"model_name": "kimi-declared", "litellm_params": {**shared_params}, "model_info": _KIMI_DEPLOYMENT},
+            {"model_name": "kimi-plain", "litellm_params": {**shared_params}, "model_info": {"id": "kimi-plain-1"}},
+        ]
+    )
+
+    router.completion(model="kimi-plain", messages=_HELLO, reasoning_effort="medium")
+
+    assert json.loads(route.calls.last.request.content)["reasoning_effort"] == "medium"
 
 
 def test_an_anthropic_deployment_declaring_its_levels_sends_the_rounded_tier_in_its_own_shape(

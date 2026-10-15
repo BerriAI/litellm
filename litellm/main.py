@@ -104,6 +104,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response as get_content_from_model_response,  # noqa: PLC0414  # public re-export
 )
 from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
+from litellm.litellm_core_utils.reasoning_effort_utils import reasoning_effort_from_thinking
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
@@ -5487,7 +5488,9 @@ def completion(
         )
         routing_kwargs: Final = cast("Mapping[str, object]", kwargs)  # cast-ok: kwargs is the untyped request dict
         deployment_reasoning_effort: Final = resolve_deployment_reasoning_effort(
-            reasoning_effort,
+            reasoning_effort
+            if reasoning_effort is not None or custom_llm_provider != "hosted_vllm"
+            else reasoning_effort_from_thinking(thinking),
             model=model,
             custom_llm_provider=custom_llm_provider,
             deployment_model_info=routing_kwargs.get("model_info"),

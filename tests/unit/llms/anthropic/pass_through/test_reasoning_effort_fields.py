@@ -18,21 +18,9 @@ from litellm.llms.anthropic.pass_through.utils import (
     normalize_reasoning_effort_value,
 )
 from litellm.router_utils.reasoning_effort_capability import (
-    RequestedReasoningEffort,
-    resolve_deployment_reasoning_effort,
     resolve_supported_reasoning_efforts,
 )
 from litellm.utils import get_model_info
-
-
-def _tier_sent(effort: str, model: str, provider: str) -> RequestedReasoningEffort:
-    return resolve_deployment_reasoning_effort(
-        normalize_reasoning_effort_value(effort, model, provider),
-        model=model,
-        custom_llm_provider=provider,
-        deployment_model_info=None,
-        model_group=None,
-    ).value
 
 
 def _load_model_registry() -> Dict[str, Any]:
@@ -244,11 +232,11 @@ class TestAdvertisedLevelsAreTheForwardedLevels:
         assert normalize_reasoning_effort_value("max", model, provider) == "max"
 
     @pytest.mark.parametrize("model, provider", KIMI_K3_SPELLINGS)
-    def test_a_level_the_entry_does_not_declare_rounds_up_onto_it(self, local_model_cost_map, model, provider):
-        """kimi-k3 declares low, high and max, so xhigh and minimal are absent from its set and are
-        rounded up onto it rather than being waved past by the presence of a declaration."""
-        assert _tier_sent("xhigh", model, provider) == "max"
-        assert _tier_sent("minimal", model, provider) == "low"
+    def test_a_level_the_entry_does_not_declare_still_degrades(self, local_model_cost_map, model, provider):
+        """kimi-k3 declares low, high and max, so xhigh and minimal are absent from its set and keep
+        falling through the chain rather than being waved past by the presence of a declaration."""
+        assert normalize_reasoning_effort_value("xhigh", model, provider) == "high"
+        assert normalize_reasoning_effort_value("minimal", model, provider) == "low"
 
     @pytest.mark.parametrize(
         "model, provider",
@@ -270,7 +258,7 @@ class TestAdvertisedLevelsAreTheForwardedLevels:
 
         assert supported is not None
         for effort in ("minimal", "xhigh", "max"):
-            assert _tier_sent(effort, model, provider) in supported
+            assert normalize_reasoning_effort_value(effort, model, provider) in supported
 
     def test_the_wider_perplexity_entry_keeps_the_levels_it_declares(self, local_model_cost_map):
         """The entry describing that reseller declares a six-level set, and every one of them is
@@ -312,15 +300,15 @@ class TestADeclarationDisjointFromTheChain:
     @pytest.mark.parametrize("declared_effort_entry", [("max",)], indirect=True)
     @pytest.mark.parametrize("effort", ["minimal", "xhigh"])
     def test_a_chain_that_matches_nothing_still_lands_inside_the_declaration(self, declared_effort_entry, effort):
-        assert _tier_sent(effort, declared_effort_entry, "synthetic") == "max"
+        assert normalize_reasoning_effort_value(effort, declared_effort_entry, "synthetic") == "max"
 
     @pytest.mark.parametrize("declared_effort_entry", [("none", "max")], indirect=True)
     def test_a_fallback_never_silently_turns_thinking_off(self, declared_effort_entry):
         """``none`` is an off switch, so it must never be chosen as the nearest accepted level for a
         caller who explicitly asked to think."""
-        assert _tier_sent("minimal", declared_effort_entry, "synthetic") == "max"
+        assert normalize_reasoning_effort_value("minimal", declared_effort_entry, "synthetic") == "max"
 
-    @pytest.mark.parametrize("declared_effort_entry", [(), ("none",)], indirect=True)
+    @pytest.mark.parametrize("declared_effort_entry", [()], indirect=True)
     @pytest.mark.parametrize("effort, expected", [("max", "high"), ("xhigh", "high"), ("minimal", "low")])
     def test_a_deployment_accepting_no_tier_keeps_the_historical_floor(self, declared_effort_entry, effort, expected):
         """There is no correct level to send a deployment that accepts none, so this keeps exactly
