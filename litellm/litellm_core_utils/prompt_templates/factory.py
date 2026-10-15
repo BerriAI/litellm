@@ -1459,6 +1459,14 @@ def _is_part_reference(node: JsonValue) -> bool:
     return isinstance(ref, str) and ref != ""
 
 
+_REF_CHAR_ESCAPE: Final = re.compile(r"\\u00(?:24|72|65|66)")
+
+
+def _may_spell_ref_key(raw_json: str) -> bool:
+    """JSON text can only spell the key $ref literally or by \\u-escaping one of its four characters"""
+    return '"$ref"' in raw_json or _REF_CHAR_ESCAPE.search(raw_json) is not None
+
+
 def _contains_part_reference(payload: JsonValue) -> bool:
     """Gemini reads any {"$ref": "<non-empty string>"} object in a function_response as a pointer to one of its parts"""
     levels: Final = itertools.takewhile(
@@ -1612,7 +1620,7 @@ def convert_to_gemini_tool_call_result(
         if content_str.strip().startswith("{") or content_str.strip().startswith("["):
             # Try to parse as JSON (for Computer Use structured responses)
             parsed: Final[JsonValue] = json.loads(content_str)
-            if isinstance(parsed, dict) and not _contains_part_reference(parsed):
+            if isinstance(parsed, dict) and not (_may_spell_ref_key(content_str) and _contains_part_reference(parsed)):
                 response_data = parsed  # Use the parsed JSON directly
             else:
                 response_data = {"content": content_str}

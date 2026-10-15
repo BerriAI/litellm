@@ -1424,6 +1424,27 @@ def test_convert_gemini_tool_result_wraps_non_schema_string_ref():
     assert result["function_response"]["response"] == {"content": dbref_json}
 
 
+def _json_unicode_escape(text: str) -> str:
+    return "".join(f"\\u{ord(char):04x}" for char in text)
+
+
+@pytest.mark.parametrize(
+    "ref_key",
+    ["$ref"[:index] + _json_unicode_escape("$ref"[index]) + "$ref"[index + 1 :] for index in range(4)],
+)
+def test_convert_gemini_tool_result_wraps_unicode_escaped_ref_key(ref_key: str):
+    """A $ref key spelled with JSON unicode escapes still decodes to $ref, so it must be wrapped too."""
+    escaped_json = '{"v":{"' + ref_key + '":"#/a"}}'
+    message, last_message_with_tool_calls = _gemini_tool_result_fixture(escaped_json)
+
+    result = convert_to_gemini_tool_call_result(
+        message=message,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+
+    assert result["function_response"]["response"] == {"content": escaped_json}
+
+
 @pytest.mark.parametrize(
     "schema_json",
     [
