@@ -540,32 +540,9 @@ _PER_CALL_LITELLM_PARAM_DICTS: Final = frozenset({"metadata", "litellm_metadata"
 _LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
 
 
-def _proxy_server_request_with_body(
-    litellm_params: Mapping[str, object], request_body: Mapping[str, object]
-) -> Mapping[str, object]:
-    proxy_server_request: Final = litellm_params.get("proxy_server_request")
-    return (
-        {"proxy_server_request": {**_LITELLM_PARAMS.validate_python(proxy_server_request), "body": dict(request_body)}}
-        if isinstance(proxy_server_request, Mapping)
-        else {}
-    )
-
-
 def _provider_response_id(source: object) -> str | None:
     candidate: Final = source.get("id") if isinstance(source, dict) else getattr(source, "id", None)
     return candidate if isinstance(candidate, str) and candidate else None
-
-
-def _logged_response_id(
-    response: Mapping[str, object], litellm_call_id: object, falls_back_on_empty_id: bool
-) -> str | None:
-    call_id: Final = litellm_call_id if isinstance(litellm_call_id, str) else None
-    if falls_back_on_empty_id:
-        return _provider_response_id(response) or call_id
-    if "id" not in response:
-        return call_id
-    response_id: Final = response["id"]
-    return None if response_id is None else str(response_id)
 
 
 def mask_api_base_credentials(api_base: str) -> str:
@@ -798,18 +775,19 @@ class Logging(LiteLLMLoggingBaseClass):
         self.on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
 
-    def copy_for_new_call(
-        self, litellm_call_id: str, start_time: datetime.datetime, request_body: Mapping[str, object]
-    ) -> "Logging":
-        connection_params: Final = _LITELLM_PARAMS.validate_python(self.litellm_params)
+    def copy_for_new_call(self, litellm_call_id: str, start_time: datetime.datetime) -> "Logging":
+        """One turn of a long-lived connection: the connection's deployment, key and metadata under its own call id,
+        start time and chunk buffers, so the turn logs and bills as a request of its own."""
+        connection_params: Final = _LITELLM_PARAMS.validate_python(
+            self.litellm_params  # pyright: ignore[reportUnknownMemberType]  # Logging.litellm_params is untyped
+        )
         litellm_params: Final[dict[str, object]] = {
             **connection_params,
             **{
-                key: {**value}
+                key: _LITELLM_PARAMS.validate_python(value)
                 for key, value in connection_params.items()
                 if key in _PER_CALL_LITELLM_PARAM_DICTS and isinstance(value, dict)
             },
-            **_proxy_server_request_with_body(connection_params, request_body),
             "litellm_call_id": litellm_call_id,
         }
         new_call: Final = copy.copy(self)
@@ -6771,12 +6749,7 @@ def get_standard_logging_object_payload(
             else raw_usage_dict
         )
 
-        litellm_call_id: Final[object] = kwargs.get("litellm_call_id")
-        id = _logged_response_id(
-            response_obj,
-            litellm_call_id,
-            falls_back_on_empty_id=isinstance(init_response_obj, LiteLLMRealtimeStreamLoggingObject),
-        )
+        id = response_obj.get("id") or kwargs.get("litellm_call_id")
 
         _model_id: Final = metadata.get("model_info", {}).get("id", "")
         _model_group: Final = metadata.get("model_group", "")

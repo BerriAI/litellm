@@ -8579,7 +8579,8 @@ class Router:
         Track remaining tpm/rpm quota for model in model_list
         """
         try:
-            if kwargs.get("call_type") == "_arealtime":
+            # WS session wrappers fire with result=None; per-turn costs tracked by inner calls.
+            if kwargs.get("call_type") in ("_aresponses_websocket", "_arealtime"):
                 return
             if is_batch_retrieve_call_type(kwargs.get("call_type")):
                 return

@@ -2,9 +2,8 @@
 Unit Tests for the max parallel request limiter v1 for the proxy
 """
 
-import asyncio
 import itertools
-from collections.abc import Awaitable, Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from datetime import datetime
 from typing import Final
 
@@ -13,11 +12,10 @@ import pytest
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.parallel_request_limiter import (
     PROXY_MaxParallelRequestsHandler,
 )
-from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
+from litellm.proxy.utils import InternalUsageCache, hash_token
 from litellm.types.utils import CallTypes, EmbeddingResponse, ModelResponse, TextCompletionResponse, Usage
 
 FROZEN_INSTANT: Final = datetime(2026, 1, 31, 23, 59, 30)
@@ -327,123 +325,31 @@ async def test_retry_after_is_the_seconds_until_the_next_minute_of_the_injected_
     assert exc_info.value.headers["retry-after"] == "14.5"
 
 
-async def _log_websocket_turn_success(
-    handler: PROXY_MaxParallelRequestsHandler, metadata: Mapping[str, object]
-) -> None:
+@pytest.mark.asyncio
+async def test_websocket_turn_callbacks_keep_the_sockets_slot_until_the_disconnect_release():
+    api_key = hash_token("sk-websocket")
+    handler = PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()), clock=_frozen_clock)
+    bucket = f"{api_key}::{FROZEN_INSTANT.strftime('%Y-%m-%d-%H-%M')}::request_count"
+    await handler.internal_usage_cache.async_set_cache(
+        key=bucket,
+        value={"current_requests": 1, "current_tpm": 0, "current_rpm": 1},
+        litellm_parent_otel_span=None,
+    )
+    turn_kwargs = {
+        "call_type": CallTypes.aresponses_websocket.value,
+        "litellm_params": {"metadata": {"user_api_key": api_key}},
+        "exception": RuntimeError("provider rejected the turn"),
+    }
+
     await handler.async_log_success_event(
-        kwargs={"litellm_params": {"metadata": dict(metadata)}},
-        response_obj=None,
-        start_time=FROZEN_INSTANT,
-        end_time=FROZEN_INSTANT,
+        kwargs=turn_kwargs, response_obj=None, start_time=FROZEN_INSTANT, end_time=FROZEN_INSTANT
     )
-
-
-async def _log_websocket_turn_failure(
-    handler: PROXY_MaxParallelRequestsHandler, metadata: Mapping[str, object]
-) -> None:
     await handler.async_log_failure_event(
-        kwargs={"litellm_params": {"metadata": dict(metadata)}, "exception": Exception("upstream turn failed")},
-        response_obj=None,
-        start_time=FROZEN_INSTANT,
-        end_time=FROZEN_INSTANT,
+        kwargs=turn_kwargs, response_obj=None, start_time=FROZEN_INSTANT, end_time=FROZEN_INSTANT
     )
+    after_two_turns = await handler.internal_usage_cache.async_get_cache(key=bucket, litellm_parent_otel_span=None)
+    assert after_two_turns["current_requests"] == 1, after_two_turns
 
-
-def _proxy_logging_with(handler: PROXY_MaxParallelRequestsHandler) -> ProxyLogging:
-    proxy_logging: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
-    proxy_logging.proxy_hook_mapping["parallel_request_limiter"] = handler
-    return proxy_logging
-
-
-async def _requests_admitted(
-    handler: PROXY_MaxParallelRequestsHandler, session: UserAPIKeyAuth, metadata: Mapping[str, object]
-) -> int:
-    for admitted in range(3):
-        try:
-            await handler.async_pre_call_hook(
-                user_api_key_dict=session,
-                cache=DualCache(),
-                data={"metadata": dict(metadata)},
-                call_type=CallTypes.acompletion.value,
-            )
-        except ProxyRateLimitError:
-            return admitted
-        await asyncio.sleep(0)
-    return 3
-
-
-@pytest.mark.parametrize("log_turn", [_log_websocket_turn_success, _log_websocket_turn_failure])
-@pytest.mark.parametrize(
-    "max_parallel_requests,limit_metadata,admitted_while_open",
-    [(1, {}, 0), (None, {"global_max_parallel_requests": 2}, 1)],
-    ids=["key_limit", "global_limit"],
-)
-@pytest.mark.asyncio
-async def test_a_websocket_connection_holds_its_parallel_slot_through_its_turns_until_it_closes(
-    log_turn: Callable[[PROXY_MaxParallelRequestsHandler, Mapping[str, object]], Awaitable[None]],
-    max_parallel_requests: int | None,
-    limit_metadata: Mapping[str, object],
-    admitted_while_open: int,
-):
-    handler: Final = PROXY_MaxParallelRequestsHandler(
-        internal_usage_cache=InternalUsageCache(DualCache()), clock=_frozen_clock
-    )
-    api_key: Final = hash_token("sk-websocket-slot")
-    session: Final = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=max_parallel_requests)
-    turn_logged: Final = asyncio.Event()
-    socket_closed: Final = asyncio.Event()
-
-    async def websocket_connection() -> None:
-        await handler.async_pre_call_hook(
-            user_api_key_dict=session,
-            cache=DualCache(),
-            data={"metadata": dict(limit_metadata)},
-            call_type=CallTypes.aresponses_websocket.value,
-        )
-        await asyncio.sleep(0)
-        await log_turn(handler, {"user_api_key": api_key, "user_api_key_model_max_budget": {}, **limit_metadata})
-        turn_logged.set()
-        await socket_closed.wait()
-        await _proxy_logging_with(handler).arelease_max_parallel_requests_on_disconnect(session)
-
-    connection: Final = asyncio.create_task(websocket_connection())
-    await turn_logged.wait()
-    assert await _requests_admitted(handler, session, limit_metadata) == admitted_while_open
-
-    socket_closed.set()
-    await connection
-    assert await _requests_admitted(handler, session, limit_metadata) == 1
-
-
-@pytest.mark.asyncio
-async def test_a_websocket_turn_logged_in_a_later_minute_leaves_no_slot_held_after_the_socket_closes():
-    handler: Final = PROXY_MaxParallelRequestsHandler(
-        internal_usage_cache=InternalUsageCache(DualCache()), clock=_clock_rolling_over_after_first_read()
-    )
-    api_key: Final = hash_token("sk-websocket-rollover")
-    session: Final = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=1)
-
-    async def websocket_connection() -> None:
-        await handler.async_pre_call_hook(
-            user_api_key_dict=session, cache=DualCache(), data={}, call_type=CallTypes.aresponses_websocket.value
-        )
-        await asyncio.sleep(0)
-        await _log_websocket_turn_success(handler, {"user_api_key": api_key, "user_api_key_model_max_budget": {}})
-        await handler.async_release_websocket_connection_slot()
-
-    await asyncio.create_task(websocket_connection())
-
-    assert await _requests_admitted(handler, session, {}) == 1
-
-
-@pytest.mark.asyncio
-async def test_a_disconnect_release_outside_a_websocket_connection_leaves_the_request_slot_held():
-    handler: Final = PROXY_MaxParallelRequestsHandler(
-        internal_usage_cache=InternalUsageCache(DualCache()), clock=_frozen_clock
-    )
-    session: Final = UserAPIKeyAuth(api_key=hash_token("sk-http-slot"), max_parallel_requests=1)
-
-    assert await _requests_admitted(handler, session, {}) == 1
-    await _proxy_logging_with(handler).arelease_max_parallel_requests_on_disconnect(session)
-
-    assert await _requests_admitted(handler, session, {}) == 0
+    await handler.async_release_max_parallel_requests_on_disconnect(UserAPIKeyAuth(api_key=api_key))
+    after_disconnect = await handler.internal_usage_cache.async_get_cache(key=bucket, litellm_parent_otel_span=None)
+    assert after_disconnect["current_requests"] == 0, after_disconnect

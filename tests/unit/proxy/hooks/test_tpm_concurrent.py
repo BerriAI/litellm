@@ -42,7 +42,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.rerank import RerankResponse
-from litellm.types.utils import CallTypes, ModelResponse, PromptTokensDetailsWrapper, Usage
+from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
 
 
 @pytest.fixture
@@ -3727,98 +3727,3 @@ async def test_the_project_itpm_reservation_counts_the_request_off_the_event_loo
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])
-
-
-@pytest.mark.asyncio
-async def test_websocket_turn_usage_is_not_counted_twice_toward_project_itpm_and_otpm(rate_limiter):
-    """
-    A native Responses WebSocket connection reserves project ITPM/OTPM at pre-call, and
-    each response.create frame is charged its own estimate before it is forwarded. The
-    turns that frame starts log under their own call ids, success and failure alike, and
-    must not count toward the project counters a second time. The disconnect hands back
-    only the connection's estimate.
-    """
-    handler, cache = rate_limiter
-    api_key = hash_token("sk-ws-project-turns")
-    user_api_key_dict = UserAPIKeyAuth(
-        api_key=api_key,
-        project_id="proj-ws-turns",
-        project_metadata={
-            "model_itpm_limit": {"bedrock_mantle/claude-opus": 1000},
-            "model_otpm_limit": {"bedrock_mantle/claude-opus": 500},
-        },
-    )
-    await handler.async_pre_call_hook(
-        user_api_key_dict=user_api_key_dict,
-        cache=cache,
-        data={
-            "model": "bedrock_mantle/claude-opus",
-            "messages": [{"role": "user", "content": "hello"}],
-            "max_tokens": 50,
-            "litellm_call_id": "connection-call-id",
-        },
-        call_type=CallTypes.aresponses_websocket.value,
-    )
-    stash = get_request_stash()
-    assert stash is not None and stash.itpm_reserved_tokens > 0 and stash.otpm_reserved_tokens > 0
-    (itpm_scope,) = stash.itpm_reserved_scopes
-    (otpm_scope,) = stash.otpm_reserved_scopes
-    itpm_key = handler.create_rate_limit_keys(itpm_scope[0], itpm_scope[1], "tokens")
-    otpm_key = handler.create_rate_limit_keys(otpm_scope[0], otpm_scope[1], "tokens")
-
-    async def counters() -> tuple[int, int]:
-        return (
-            int(await cache.async_get_cache(key=itpm_key) or 0),
-            int(await cache.async_get_cache(key=otpm_key) or 0),
-        )
-
-    def turn_kwargs(call_id: str, usage: Usage | None = None) -> dict[str, object]:
-        return {
-            "litellm_call_id": call_id,
-            "model": "bedrock_mantle/claude-opus",
-            "combined_usage_object": usage,
-            "litellm_params": {"metadata": {"user_api_key": api_key}},
-            "standard_logging_object": {
-                "metadata": {"user_api_key_hash": api_key, "user_api_key_project_id": "proj-ws-turns"}
-            },
-        }
-
-    async def charge_frame() -> None:
-        await handler.enforce_project_io_token_quota_for_frame(
-            user_api_key_dict=user_api_key_dict,
-            requested_model="bedrock_mantle/claude-opus",
-            estimated_input_tokens=9,
-            estimated_output_tokens=40,
-        )
-
-    await charge_frame()
-    reserved_and_one_frame = (stash.itpm_reserved_tokens + 9, stash.otpm_reserved_tokens + 40)
-    assert await counters() == reserved_and_one_frame
-
-    await handler.async_log_success_event(
-        kwargs={**turn_kwargs("turn-1"), "call_type": CallTypes.aresponses_websocket.value},
-        response_obj=[
-            {"type": "response.created", "response": {"id": "resp_1"}},
-            {
-                "type": "response.completed",
-                "response": {"id": "resp_1", "usage": {"input_tokens": 30, "output_tokens": 7, "total_tokens": 37}},
-            },
-        ],
-        start_time=datetime.now(),
-        end_time=datetime.now(),
-    )
-    assert await counters() == reserved_and_one_frame
-
-    await charge_frame()
-    await handler.async_log_failure_event(
-        kwargs=turn_kwargs("turn-2", Usage(prompt_tokens=10, completion_tokens=3, total_tokens=13)),
-        response_obj=None,
-        start_time=datetime.now(),
-        end_time=datetime.now(),
-    )
-    assert await counters() == (stash.itpm_reserved_tokens + 18, stash.otpm_reserved_tokens + 80)
-
-    await handler.async_release_max_parallel_requests_on_disconnect(user_api_key_dict=user_api_key_dict)
-
-    assert await counters() == (18, 80)
-    assert stash.reservation_released is True

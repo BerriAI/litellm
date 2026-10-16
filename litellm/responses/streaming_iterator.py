@@ -28,6 +28,7 @@ from litellm.constants import (
 from litellm.exceptions import MidStreamFallbackError, RateLimitError
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.internal_call_metadata import without_budget_reservation
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
@@ -58,7 +59,6 @@ if TYPE_CHECKING:
         ResponsesBackendWebSocket,
         ResponsesClientWebSocket,
         ResponsesWebSocketRequestDefaults,
-        ResponsesWebSocketTurnFailureHook,
     )
     from litellm.types.router import LiteLLM_Params
 
@@ -1905,10 +1905,9 @@ _HISTORY_TERMINAL_EVENT_TYPES: Final = frozenset({"response.completed", "respons
 RESPONSES_WS_MASKABLE_TEXT_BLOCK_TYPES: Final = frozenset({"input_text", "output_text", "text"})
 
 _RESPONSES_WS_FAILURE_EVENT_TYPES: Final = frozenset({"error", "response.failed"})
+_PER_TURN_METADATA_KEYS: Final = frozenset({"metadata", "litellm_metadata"})
 
 _RESPONSES_WS_TERMINAL_EVENT_TYPES: Final = _HISTORY_TERMINAL_EVENT_TYPES | _RESPONSES_WS_FAILURE_EVENT_TYPES
-
-_RESPONSES_WS_OUTPUT_ITEM_EVENT_TYPES: Final = frozenset({"response.output_item.added", "response.output_item.done"})
 
 
 def _json_object_or_none(message: object) -> Mapping[str, object] | None:
@@ -1939,37 +1938,46 @@ def _user_texts_in_input_item(item: object) -> tuple[str, ...]:
     )
 
 
-def _logged_user_messages(client_frame: object) -> tuple[dict[str, object], ...]:
+def _logged_user_messages(client_frame: object) -> tuple[Mapping[str, object], ...]:
     frame: Final = _json_object_or_none(client_frame)
     if frame is None or frame.get("type") != "response.create":
         return ()
-    nested_response: Final = frame.get("response")
-    input_items: Final = frame.get(
-        "input", nested_response.get("input", []) if _is_json_object(nested_response) else []
-    )
+    input_items: Final = frame.get("input", [])
     if isinstance(input_items, str):
         return ({"role": "user", "content": input_items},)
     texts: Final = chain.from_iterable(_user_texts_in_input_item(item) for item in _json_array_or_empty(input_items))
     return tuple({"role": "user", "content": text} for text in texts)
 
 
-def _ws_event_response_id(event: object) -> str | None:
-    response: Final = event.get("response") if _is_json_object(event) else None
-    response_id: Final = response.get("id") if _is_json_object(response) else None
-    return response_id if isinstance(response_id, str) else None
+def _record_usage_for_failure(turn_logging_obj: LiteLLMLoggingObj, events: Sequence[Mapping[str, object]]) -> None:
+    from litellm.cost_calculator import ResponsesWebSocketTokenUsageProcessor
+
+    logging_result: Final = ResponsesWebSocketTokenUsageProcessor.create_logging_object(events)
+    response_cost: Final = turn_logging_obj.response_cost_calculator(result=logging_result) or 0.0
+    turn_logging_obj.record_partial_usage_for_failure(logging_result.usage, response_cost)
 
 
 @dataclass(frozen=True, slots=True)
 class _ResponsesWsTurn:
+    """One ``response.create`` on a native Responses socket, logged and billed as its own call once a terminal
+    event (``response.completed``, ``response.incomplete``, ``response.failed`` or ``error``) closes it."""
+
     logging_obj: LiteLLMLoggingObj
-    events: tuple[_MutableJsonObject, ...] = ()
+    events: tuple[Mapping[str, object], ...] = ()
 
-    @property
-    def response_id(self) -> str | None:
-        return next(filter(None, map(_ws_event_response_id, self.events)), None)
-
-    def with_event(self, event: _MutableJsonObject) -> _ResponsesWsTurn:
+    def with_event(self, event: Mapping[str, object]) -> _ResponsesWsTurn:
         return _ResponsesWsTurn(logging_obj=self.logging_obj, events=(*self.events, event))
+
+    def failure(self, model: str, custom_llm_provider: str) -> Exception | None:
+        failed_event: Final = next(
+            (event for event in self.events if event.get("type") in _RESPONSES_WS_FAILURE_EVENT_TYPES), None
+        )
+        if failed_event is None:
+            return None
+        return _map_stream_error_to_exception(_ws_event_error(failed_event), model, custom_llm_provider)
+
+
+_RESPONSES_WS_OUTPUT_ITEM_EVENT_TYPES: Final = frozenset({"response.output_item.added", "response.output_item.done"})
 
 
 def _ws_event_error(event: Mapping[str, object]) -> object:
@@ -2007,31 +2015,6 @@ def _restore_wrapped_ids_in_response_create(msg_obj: Mapping[str, object]) -> di
         {"response": {**nested, **nested_fields}} if _is_json_object(nested) and nested_fields else EMPTY_MAPPING
     )
     return {**msg_obj, **top_fields, **restored_nested}
-
-
-_RESPONSE_CREATE_MASKED_FIELDS: Final = ("input", "instructions")
-
-
-def _with_masked_fields(client: Mapping[str, object], forwarded: Mapping[str, object]) -> Mapping[str, object]:
-    masked: Final = {
-        key: forwarded[key] for key in _RESPONSE_CREATE_MASKED_FIELDS if key in client and key in forwarded
-    }
-    return {**client, **masked}
-
-
-def _client_frame_with_masked_text(client_frame: str, forwarded_frame: str) -> str:
-    client: Final = _json_object_or_none(client_frame)
-    forwarded: Final = _json_object_or_none(forwarded_frame)
-    if client is None or forwarded is None:
-        return client_frame
-    client_nested: Final = client.get("response")
-    forwarded_nested: Final = forwarded.get("response")
-    nested: Final = (
-        {"response": _with_masked_fields(client_nested, forwarded_nested)}
-        if _is_json_object(client_nested) and _is_json_object(forwarded_nested)
-        else {}
-    )
-    return json.dumps({**_with_masked_fields(client, forwarded), **nested})
 
 
 def _wrap_output_item_encrypted_content(
@@ -2079,7 +2062,6 @@ class ResponsesWebSocketStreaming:
         authorized_model: str | None = None,
         custom_llm_provider: str | None = None,
         request_defaults: ResponsesWebSocketRequestDefaults | None = None,
-        on_turn_failure: ResponsesWebSocketTurnFailureHook | None = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
@@ -2089,8 +2071,8 @@ class ResponsesWebSocketStreaming:
         litellm_metadata: Final = self.request_data.get("litellm_metadata")
         self.litellm_metadata: dict[str, object] = litellm_metadata if _is_json_object(litellm_metadata) else {}
         self.custom_llm_provider: str | None = custom_llm_provider
-        self.on_turn_failure: ResponsesWebSocketTurnFailureHook | None = on_turn_failure
         self._open_turns: tuple[_ResponsesWsTurn, ...] = ()
+        self._failure: Exception | None = None
         self.first_message = first_message
         self.guardrail_callbacks: Sequence[PresidioGuardrailCallback] = guardrail_callbacks or []
         self.output_guardrail_callbacks: list[PresidioGuardrailCallback] = output_guardrail_callbacks or []
@@ -2101,20 +2083,28 @@ class ResponsesWebSocketStreaming:
         self.request_defaults: ResponsesWebSocketRequestDefaults | None = request_defaults
 
     def _start_turn(self, client_frame: str | None) -> None:
-        turn_start: Final = datetime.now()  # noqa: DTZ005  # logging pipeline uses naive datetimes
+        start_time: Final = datetime.now()  # noqa: DTZ005  # naive to match the logging pipeline start_time
         turn_logging_obj: Final = self.logging_obj.copy_for_new_call(
-            litellm_call_id=str(uuid.uuid4()),
-            start_time=turn_start,
-            request_body=_json_object_or_none(client_frame) or {},
+            litellm_call_id=str(uuid.uuid4()), start_time=start_time
         )
+        self._detach_budget_reservation()
         turn_logging_obj.model_call_details["messages"] = list(_logged_user_messages(client_frame))
         turn_logging_obj.pre_call(input=client_frame, api_key="")
         self._open_turns = (*self._open_turns, _ResponsesWsTurn(logging_obj=turn_logging_obj))
 
-    def _logged_client_frame(self, client_frame: str, forwarded_frame: str) -> str:
-        if not self.guardrail_callbacks or forwarded_frame is client_frame:
-            return client_frame
-        return _client_frame_with_masked_text(client_frame, forwarded_frame)
+    def _detach_budget_reservation(self) -> None:
+        """Only the first turn settles the connection's admission reservation; later turns charge their cost directly."""
+        litellm_params: Final = _json_object_or_none(
+            self.logging_obj.litellm_params  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging.litellm_params is untyped
+        )
+        if litellm_params is None:
+            return
+        self.logging_obj.litellm_params = {
+            key: without_budget_reservation(value)
+            if key in _PER_TURN_METADATA_KEYS and _is_json_object(value)
+            else value
+            for key, value in litellm_params.items()
+        }
 
     def _record_client_frame(self, client_frame: str) -> None:
         frame: Final = _json_object_or_none(client_frame)
@@ -2127,34 +2117,12 @@ class ResponsesWebSocketStreaming:
             return
         if not self._open_turns:
             self._start_turn(None)
-        index: Final = self._turn_index_for_event(event_obj)
-        turn: Final = self._open_turns[index].with_event(event_obj)
-        other_turns: Final = (*self._open_turns[:index], *self._open_turns[index + 1 :])
+        turn: Final = self._open_turns[0].with_event(event_obj)
         if event_obj.get("type") in _RESPONSES_WS_TERMINAL_EVENT_TYPES:
-            self._open_turns = other_turns
+            self._open_turns = self._open_turns[1:]
             self._log_turn(turn)
             return
-        self._open_turns = (*self._open_turns[:index], turn, *self._open_turns[index + 1 :])
-
-    def _turn_index_for_event(self, event_obj: Mapping[str, object]) -> int:
-        """
-        An event naming a response id belongs to the turn whose ``response.created``
-        carried it. The backend answers turns strictly in order, so an id-less event,
-        a rejected turn's ``error`` included, goes to the oldest turn still waiting for
-        its ``response.created``. The one exception is an id-less ``error`` while a turn
-        is streaming: the backend rejects a ``response.create`` it cannot parse as soon
-        as it reads it, so that error belongs to the newest pending turn.
-        """
-        response_id: Final = _ws_event_response_id(event_obj)
-        turn_ids: Final = tuple(turn.response_id for turn in self._open_turns)
-        if response_id is not None and response_id in turn_ids:
-            return turn_ids.index(response_id)
-        pending: Final = tuple(index for index, turn_id in enumerate(turn_ids) if turn_id is None)
-        if not pending:
-            return 0
-        if response_id is None and event_obj.get("type") == "error" and len(pending) < len(turn_ids):
-            return pending[-1]
-        return pending[0]
+        self._open_turns = (turn, *self._open_turns[1:])
 
     def _log_open_turns(self) -> None:
         open_turns: Final = self._open_turns
@@ -2164,35 +2132,18 @@ class ResponsesWebSocketStreaming:
                 self._log_turn(turn)
 
     def _log_turn(self, turn: _ResponsesWsTurn) -> None:
-        _spawn_logging_task(
-            asyncio.get_running_loop(), self._dispatch_turn(turn), task_name="Responses WS turn logging"
-        )
-
-    async def _dispatch_turn(self, turn: _ResponsesWsTurn) -> None:
         events: Final = list(turn.events)
-        failed_event: Final = next(
-            (event for event in events if event.get("type") in _RESPONSES_WS_FAILURE_EVENT_TYPES), None
-        )
-        if failed_event is None:
-            await turn.logging_obj.dispatch_success_handlers(events, prefer_async_handlers=True)
+        exception: Final = turn.failure(self.authorized_model or "", self.custom_llm_provider or "")
+        if exception is None:
+            asyncio.create_task(turn.logging_obj.dispatch_success_handlers(events, prefer_async_handlers=True))
             return
-        exception: Final = _map_stream_error_to_exception(
-            _ws_event_error(failed_event), self.authorized_model or "", self.custom_llm_provider or ""
+        if self._failure is None:
+            self._failure = exception
+        _record_usage_for_failure(turn.logging_obj, events)
+        traceback_exception: Final = "".join(traceback.format_exception(exception))
+        asyncio.create_task(
+            turn.logging_obj.dispatch_failure_handlers(exception, traceback_exception, prefer_async_handlers=True)
         )
-        self._record_usage_for_failure(turn.logging_obj, events)
-        await turn.logging_obj.dispatch_failure_handlers(
-            exception, "".join(traceback.format_exception(exception)), prefer_async_handlers=True
-        )
-        if self.on_turn_failure is not None:
-            await self.on_turn_failure(turn.logging_obj, exception)
-
-    @staticmethod
-    def _record_usage_for_failure(turn_logging_obj: LiteLLMLoggingObj, events: Sequence[_MutableJsonObject]) -> None:
-        from litellm.cost_calculator import ResponsesWebSocketTokenUsageProcessor
-
-        logging_result: Final = ResponsesWebSocketTokenUsageProcessor.create_logging_object(events)
-        response_cost: Final = turn_logging_obj.response_cost_calculator(result=logging_result) or 0.0
-        turn_logging_obj.record_partial_usage_for_failure(logging_result.usage, response_cost)
 
     def _wrap_response_event(self, response_str: str) -> str:
         try:
@@ -2605,7 +2556,7 @@ class ResponsesWebSocketStreaming:
         try:
             if self.first_message is not None and await self._enforce_or_reject_frame(self.first_message):
                 masked_first: Final = await self._mask_response_create(self.first_message)
-                self._record_client_frame(self._logged_client_frame(self.first_message, masked_first))
+                self._record_client_frame(masked_first)
                 await self.backend_ws.send(masked_first)
 
             while True:
@@ -2613,13 +2564,13 @@ class ResponsesWebSocketStreaming:
                 if not await self._enforce_or_reject_frame(message):
                     continue
                 masked = await self._mask_response_create(message)
-                self._record_client_frame(self._logged_client_frame(message, masked))
+                self._record_client_frame(masked)
                 await self.backend_ws.send(masked)
 
         except Exception as e:
             verbose_logger.debug("Responses WS client_to_backend ended: %s", e)
 
-    async def bidirectional_forward(self) -> None:
+    async def bidirectional_forward(self) -> Exception | None:
         forward_task: Final = asyncio.create_task(self.backend_to_client())
         try:
             await self.client_to_backend()
@@ -2636,6 +2587,7 @@ class ResponsesWebSocketStreaming:
                 await self.backend_ws.close()
             except Exception:
                 pass
+        return self._failure
 
 
 # ---------------------------------------------------------------------------

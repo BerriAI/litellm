@@ -3004,7 +3004,7 @@ class RealtimeAPITokenUsageProcessor(BaseTokenUsageProcessor):
         )
 
 
-_RESPONSES_WS_BILLABLE_EVENT_TYPES: Final = frozenset({"response.completed", "response.incomplete", "response.failed"})
+_RESPONSES_WS_BILLABLE_EVENT_TYPES: Final = frozenset({"response.completed", "response.incomplete"})
 
 
 class _ResponsesWsEventResponse(LiteLLMBaseModel):
@@ -3063,20 +3063,17 @@ class ResponsesWebSocketTokenUsageProcessor(BaseTokenUsageProcessor):
     @staticmethod
     def response_id_from_responses_ws_results(results: Sequence[Mapping[str, object]]) -> str | None:
         response_ids: Final = tuple(
-            event.response.id
-            for event in (_ResponsesWsEvent.model_validate(result) for result in results)
-            if event.response is not None and event.response.id
+            response.id for _, response in _billable_responses_ws_events(results) if response.id
         )
         return response_ids[-1] if response_ids else None
 
     @staticmethod
     def create_logging_object(results: Sequence[Mapping[str, object]]) -> LiteLLMRealtimeStreamLoggingObject:
         tier_partition: Final = ResponsesWebSocketTokenUsageProcessor.partition_results_by_service_tier(results)
-        raw_events: Final = cast(OpenAIRealtimeStreamList, list(results))  # cast-ok: raw WS frames, unvalidated field
         return LiteLLMRealtimeStreamLoggingObject(
             id=ResponsesWebSocketTokenUsageProcessor.response_id_from_responses_ws_results(results),
             usage=ResponsesWebSocketTokenUsageProcessor.collect_and_combine_usage_from_responses_ws_results(results),
-            results=raw_events,
+            results=cast(OpenAIRealtimeStreamList, list(results)),  # cast-ok: raw WS frames, unvalidated field
             service_tier=next(iter(tier_partition)) if len(tier_partition) == 1 else None,
         )
 

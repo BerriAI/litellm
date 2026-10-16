@@ -7,7 +7,7 @@ import contextlib
 import dataclasses
 import json
 import unittest
-from collections.abc import Coroutine, Mapping
+from collections.abc import Mapping
 from typing import Any, Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1643,6 +1643,29 @@ class TestResponsesWSStreamingFirstMessage:
 
 class TestWSSessionCostTracking:
     @pytest.mark.asyncio
+    async def test_router_budget_limiter_skips_aresponses_websocket_call_type(self):
+        """
+        RouterBudgetLimiting.async_log_success_event must not raise when
+        call_type='_aresponses_websocket', even when standard_logging_object is None.
+        Per-turn costs are tracked by individual aresponses calls inside the session;
+        the outer session wrapper fires with result=None.
+        """
+        from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
+
+        limiter = RouterBudgetLimiting.__new__(RouterBudgetLimiting)
+        kwargs = {
+            "call_type": "_aresponses_websocket",
+            "standard_logging_object": None,
+            "litellm_params": {"custom_llm_provider": "vertex_ai"},
+        }
+        await limiter.async_log_success_event(
+            kwargs=kwargs,
+            response_obj=None,
+            start_time=None,
+            end_time=None,
+        )
+
+    @pytest.mark.asyncio
     async def test_router_budget_limiter_skips_arealtime_call_type(self):
         """Same guard applies to _arealtime WS session wrappers."""
         from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
@@ -1899,7 +1922,8 @@ class TestResponsesWSFirstFrameModelAuth:
         ws.close.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_endpoint_books_each_failed_turn_as_its_own_failed_request(self):
+    @pytest.mark.parametrize("provider_rejected", [True, False])
+    async def test_endpoint_books_a_provider_rejected_connection_as_a_failed_request(self, provider_rejected: bool):
         from litellm.proxy.response_api_endpoints.endpoints import (
             responses_websocket_endpoint,
         )
@@ -1911,39 +1935,24 @@ class TestResponsesWSFirstFrameModelAuth:
         ws.url = "ws://testserver/v1/responses"
         ws.accept = AsyncMock()
         ws.receive_text = AsyncMock(
-            return_value=json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": "first turn"})
+            return_value=json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": []})
         )
         ws.close = AsyncMock()
 
-        connection_metadata = {"user_api_key_alias": "codex", "model_group": "gpt-4o-mini"}
         processor = MagicMock()
         processor.common_processing_pre_call_logic = AsyncMock(
-            return_value=(
-                {
-                    "model": "gpt-4o-mini",
-                    "metadata": connection_metadata,
-                    "litellm_metadata": {},
-                    "litellm_call_id": "connection-call",
-                    "proxy_server_request": {"url": "ws://testserver/v1/responses", "body": {"input": "first turn"}},
-                },
-                MagicMock(),
-            )
+            return_value=({"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock())
         )
-        turn_proxy_server_request = {"url": "ws://testserver/v1/responses", "body": {"input": "second turn"}}
-        turn_logging_obj = MagicMock()
-        turn_logging_obj.litellm_call_id = "turn-2-call"
-        turn_logging_obj.litellm_params = {"proxy_server_request": turn_proxy_server_request}
         failure = litellm.BadRequestError(
-            message="previous_response_not_found", model="gpt-4o-mini", llm_provider="openai"
+            message="invalid_encrypted_content", model="gpt-4o-mini", llm_provider="openai"
         )
 
-        async def relay_with_one_failed_turn():
-            routed = mock_route_request.await_args.kwargs["data"]
-            await routed["responses_ws_turn_failure_hook"](turn_logging_obj, failure)
+        async def fake_llm_call():
+            return failure if provider_rejected else None
 
         proxy_logging_obj = MagicMock()
         proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
-        proxy_logging_obj.arelease_max_parallel_requests_on_disconnect = AsyncMock()
+        proxy_logging_obj.arelease_max_parallel_requests_on_disconnect = AsyncMock(return_value=None)
         user_api_key_dict = MagicMock()
 
         with (
@@ -1951,15 +1960,15 @@ class TestResponsesWSFirstFrameModelAuth:
                 "litellm.proxy.response_api_endpoints.endpoints._enforce_responses_ws_first_frame_model_auth",
                 new_callable=AsyncMock,
             ),
-            patch(  # test-quality-ok: the pre-call processor needs a live proxy; how the endpoint books a failed turn is under test
+            patch(  # test-quality-ok: the pre-call processor needs a live proxy; what the endpoint does with the relay's outcome is under test
                 "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
                 return_value=processor,
             ),
-            patch(  # test-quality-ok: routing is the seam that hands the turn failure hook to the relay
+            patch(  # test-quality-ok: routing is the seam that hands back the relay's outcome
                 "litellm.proxy.route_llm_request.route_request",
                 new_callable=AsyncMock,
-                side_effect=lambda **_: relay_with_one_failed_turn(),
-            ) as mock_route_request,
+                return_value=fake_llm_call(),
+            ),
             patch(  # test-quality-ok: the failure hook is the proxy's only path to a failed spend log row
                 "litellm.proxy.proxy_server.proxy_logging_obj",
                 proxy_logging_obj,
@@ -1972,79 +1981,14 @@ class TestResponsesWSFirstFrameModelAuth:
             )
 
         ws.close.assert_not_awaited()
+        if not provider_rejected:
+            proxy_logging_obj.post_call_failure_hook.assert_not_awaited()
+            return
         proxy_logging_obj.post_call_failure_hook.assert_awaited_once()
         booked = proxy_logging_obj.post_call_failure_hook.await_args.kwargs
         assert booked["original_exception"] is failure
         assert booked["user_api_key_dict"] is user_api_key_dict
-        turn_request = booked["request_data"]
-        assert turn_request["litellm_call_id"] == "turn-2-call"
-        assert turn_request["litellm_logging_obj"] is turn_logging_obj
-        assert turn_request["model"] == "gpt-4o-mini"
-        assert turn_request["metadata"] == connection_metadata
-        assert turn_request["metadata"] is not connection_metadata
-        assert "input" not in turn_request
-        assert "first_message" not in turn_request
-        assert turn_request["proxy_server_request"] == turn_proxy_server_request
-        proxy_logging_obj.arelease_max_parallel_requests_on_disconnect.assert_awaited_once_with(user_api_key_dict)
-
-    @pytest.mark.asyncio
-    async def test_endpoint_hands_the_connection_reservation_to_its_first_settling_turn_only(self):
-        from litellm.proxy._types import UserAPIKeyAuth
-        from litellm.proxy.response_api_endpoints.endpoints import (
-            responses_websocket_endpoint,
-        )
-        from litellm.proxy.spend_tracking.budget_reservation import claim_budget_reservation
-
-        ws = MagicMock()
-        ws.headers = {}
-        ws.query_params = {}
-        ws.scope = {"headers": []}
-        ws.url = "ws://testserver/v1/responses"
-        ws.accept = AsyncMock()
-        ws.receive_text = AsyncMock(
-            return_value=json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": "first turn"})
-        )
-        ws.close = AsyncMock()
-        user_api_key_dict = UserAPIKeyAuth(
-            api_key="hashed-token", budget_reservation={"reserved_cost": 0.5, "entries": []}
-        )
-        processor = MagicMock()
-        processor.common_processing_pre_call_logic = AsyncMock(
-            return_value=({"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock())
-        )
-        proxy_logging_obj = MagicMock()
-        proxy_logging_obj.arelease_max_parallel_requests_on_disconnect = AsyncMock()
-
-        async def relay() -> None:
-            return None
-
-        def route(**_: object) -> Coroutine[object, object, None]:
-            return relay()
-
-        with (
-            patch(  # test-quality-ok: first-frame model auth needs a live router and key table and has its own tests above
-                "litellm.proxy.response_api_endpoints.endpoints._enforce_responses_ws_first_frame_model_auth",
-                new_callable=AsyncMock,
-            ),
-            patch(  # test-quality-ok: the pre-call processor needs a live proxy; the reservation it leaves is under test
-                "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
-                return_value=processor,
-            ),
-            patch(  # test-quality-ok: routing starts the relay, which needs a live upstream socket
-                "litellm.proxy.route_llm_request.route_request",
-                new_callable=AsyncMock,
-                side_effect=route,
-            ),
-            patch(  # test-quality-ok: the disconnect release reads proxy_logging_obj off proxy_server
-                "litellm.proxy.proxy_server.proxy_logging_obj",
-                proxy_logging_obj,
-            ),
-        ):
-            await responses_websocket_endpoint(websocket=ws, model=None, user_api_key_dict=user_api_key_dict)
-
-        reservation = user_api_key_dict.budget_reservation
-        assert claim_budget_reservation(budget_reservation=reservation, litellm_call_id="turn-1") is reservation
-        assert claim_budget_reservation(budget_reservation=reservation, litellm_call_id="turn-2") is None
+        assert booked["request_data"]["model"] == "gpt-4o-mini"
 
     @pytest.mark.asyncio
     async def test_endpoint_sends_an_error_frame_when_routing_rejects_the_connection(self):
@@ -2111,7 +2055,6 @@ class TestResponsesWSFirstFrameModelAuth:
         assert booked["original_exception"] is rejection
         assert booked["user_api_key_dict"] is user_api_key_dict
         assert booked["request_data"]["model"] == "gpt-4o-mini"
-        proxy_logging_obj.arelease_max_parallel_requests_on_disconnect.assert_awaited_once_with(user_api_key_dict)
 
     @pytest.mark.asyncio
     async def test_reruns_model_auth_for_first_frame_model(self):

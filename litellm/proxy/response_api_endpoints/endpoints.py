@@ -57,7 +57,6 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attributio
     request_tags_from_request_data,
 )
 from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
-from litellm.proxy.spend_tracking.budget_reservation import share_budget_reservation_across_calls
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     REASONING_EFFORT,
@@ -65,7 +64,6 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.responses.main import DeleteResponseResult
-from litellm.types.responses.streaming_websocket import ResponsesWebSocketTurnFailureHook
 from litellm.types.utils import TokenCountResponse
 
 if TYPE_CHECKING:
@@ -1732,42 +1730,6 @@ def _routing_hints_from_first_ws_frame(first_message: str) -> Mapping[str, objec
     return MappingProxyType({key: value for key, value in hints.items() if value is not None})
 
 
-_RESPONSES_WS_FIRST_FRAME_KEYS: Final = frozenset({"first_message", "input", "previous_response_id"})
-_RESPONSES_WS_PER_TURN_DICT_KEYS: Final = frozenset({"metadata", "litellm_metadata"})
-
-
-def _responses_ws_turn_request_data(
-    connection_request_data: Mapping[str, object], turn_logging_obj: "LiteLLMLoggingObj"
-) -> dict[str, object]:
-    turn_proxy_server_request: Final = turn_logging_obj.litellm_params.get("proxy_server_request")
-    return {
-        **{key: value for key, value in connection_request_data.items() if key not in _RESPONSES_WS_FIRST_FRAME_KEYS},
-        **{
-            key: {**value}
-            for key, value in connection_request_data.items()
-            if key in _RESPONSES_WS_PER_TURN_DICT_KEYS and isinstance(value, dict)
-        },
-        **({"proxy_server_request": turn_proxy_server_request} if isinstance(turn_proxy_server_request, dict) else {}),
-        "litellm_call_id": turn_logging_obj.litellm_call_id,
-        "litellm_logging_obj": turn_logging_obj,
-    }
-
-
-def _responses_ws_turn_failure_hook(
-    proxy_logging_obj: "ProxyLogging",
-    user_api_key_dict: UserAPIKeyAuth,
-    connection_request_data: Mapping[str, object],
-) -> ResponsesWebSocketTurnFailureHook:
-    async def book_turn_failure(turn_logging_obj: "LiteLLMLoggingObj", exception: Exception) -> None:
-        await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict,
-            original_exception=exception,
-            request_data=_responses_ws_turn_request_data(connection_request_data, turn_logging_obj),
-        )
-
-    return book_turn_failure
-
-
 def _responses_ws_failure_frame(failure: Exception) -> str:
     raw_status: Final = getattr(failure, "status_code", None)
     status: Final = raw_status if isinstance(raw_status, int) and not isinstance(raw_status, bool) else 500
@@ -1915,12 +1877,8 @@ async def _responses_websocket_session(
         await websocket.close(code=1008, reason="Pre-call error")
         return
 
-    share_budget_reservation_across_calls(user_api_key_dict.budget_reservation)
     routed_data: Final = dict(
-        data,
-        user_api_key_dict=user_api_key_dict,
-        responses_ws_turn_failure_hook=_responses_ws_turn_failure_hook(proxy_logging_obj, user_api_key_dict, data),
-        **_routing_hints_from_first_ws_frame(first_message),
+        data, user_api_key_dict=user_api_key_dict, **_routing_hints_from_first_ws_frame(first_message)
     )
     # Phase 2: route to upstream provider
     try:
@@ -1930,7 +1888,13 @@ async def _responses_websocket_session(
             llm_router=llm_router,
             user_model=user_model,
         )
-        await llm_call
+        failure: Final = await llm_call
+        if isinstance(failure, Exception):
+            await proxy_logging_obj.post_call_failure_hook(
+                user_api_key_dict=user_api_key_dict,
+                original_exception=failure,
+                request_data=routed_data,
+            )
     except Exception as e:
         verbose_proxy_logger.exception("Responses WebSocket error")
         with contextlib.suppress(Exception):

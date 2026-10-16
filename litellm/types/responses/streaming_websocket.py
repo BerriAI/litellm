@@ -2,12 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import Protocol
 
 from litellm.types.guardrails import PresidioPerRequestConfig
-
-if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging
 
 
 class ResponsesClientWebSocket(Protocol):
@@ -44,12 +41,6 @@ class PresidioGuardrailCallback(Protocol):
         presidio_config: PresidioPerRequestConfig | None,
         request_data: dict[str, object],
     ) -> str: ...
-
-
-class ResponsesWebSocketTurnFailureHook(Protocol):
-    """Books one failed ``response.create`` turn of a native Responses API socket from that turn's logging object."""
-
-    async def __call__(self, turn_logging_obj: Logging, exception: Exception) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)

@@ -39,7 +39,6 @@ from litellm.litellm_core_utils.litellm_logging import (
     StandardLoggingPayloadSetup,
     _extract_response_obj_and_hidden_params,
     _get_status_fields,
-    get_standard_logging_object_payload,
     set_callbacks,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -2051,34 +2050,34 @@ async def test_arealtime_marks_litellm_params_async(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_aresponses_websocket_writes_no_connection_level_success_log(
+async def test_aresponses_websocket_hands_back_the_provider_failure_without_a_success_log(
     monkeypatch: pytest.MonkeyPatch,
 ):
     from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
     from litellm.responses.main import base_llm_http_handler
 
-    logged_call_ids = []
+    success_events = []
 
     class CaptureLogger(CustomLogger):
         async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-            logged_call_ids.append(kwargs.get("litellm_call_id"))
+            success_events.append(response_obj)
 
     monkeypatch.setattr(litellm, "callbacks", [CaptureLogger()])
     monkeypatch.setattr(litellm, "failure_callback", [])
     monkeypatch.setattr(litellm, "_async_failure_callback", [])
     monkeypatch.setattr(litellm, "success_callback", [])
     monkeypatch.setattr(litellm, "_async_success_callback", [])
-    with patch.object(  # test-quality-ok: the provider socket is the seam; each turn logs inside it, so the wrapper must not
-        base_llm_http_handler, "async_responses_websocket", AsyncMock(return_value=None)
+    failure = litellm.BadRequestError(message="invalid_encrypted_content", model="gpt-4o", llm_provider="openai")
+    with patch.object(  # test-quality-ok: the provider socket is the seam; how the wrapper treats the relay's outcome is under test
+        base_llm_http_handler, "async_responses_websocket", AsyncMock(return_value=failure)
     ):
-        await litellm._aresponses_websocket(
-            model="openai/gpt-4o", websocket=MagicMock(), api_key="sk-test", litellm_call_id="socket-call"
-        )
+        outcome = await litellm._aresponses_websocket(model="openai/gpt-4o", websocket=MagicMock(), api_key="sk-test")
     await asyncio.sleep(0)
     with contextlib.suppress(asyncio.TimeoutError):
         await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
 
-    assert "socket-call" not in logged_call_ids
+    assert outcome is failure
+    assert success_events == []
 
 
 @pytest.mark.asyncio
@@ -8354,107 +8353,6 @@ def test_normalize_logging_result_prices_responses_websocket_at_returned_service
     assert priority_http_cost > default_http_cost
 
 
-@pytest.mark.parametrize(
-    ("completed_response_id", "expected_request_id"),
-    (("resp_wrapped_turn_2", "resp_wrapped_turn_2"), (None, "turn-2-call")),
-)
-def test_responses_websocket_turn_is_logged_under_the_response_id_the_client_saw(
-    completed_response_id: str | None, expected_request_id: str
-):
-    events = [
-        {"type": "response.created", "response": {"id": completed_response_id}},
-        {
-            "type": "response.completed",
-            "response": {
-                "id": completed_response_id,
-                "usage": {"input_tokens": 100, "output_tokens": 40, "total_tokens": 140},
-            },
-        },
-    ]
-    logging_obj = _responses_ws_logging_obj()
-    now = datetime.datetime.now()
-
-    payload = litellm.litellm_core_utils.litellm_logging.get_standard_logging_object_payload(
-        kwargs={"litellm_call_id": "turn-2-call", "model": "gpt-4o", "messages": []},
-        init_response_obj=logging_obj.normalize_logging_result(result=events),
-        start_time=now,
-        end_time=now,
-        logging_obj=logging_obj,
-        status="success",
-    )
-
-    assert payload is not None
-    assert payload["id"] == expected_request_id
-
-
-@pytest.mark.parametrize(
-    ("response_obj", "expected_id"),
-    (({"id": ""}, ""), ({"id": "chatcmpl-1"}, "chatcmpl-1"), ({}, "http-call")),
-)
-def test_non_websocket_payload_id_is_the_response_id_field_as_returned(
-    logging_obj: LitellmLogging, response_obj: dict[str, str], expected_id: str
-):
-    now = datetime.datetime.now()
-
-    payload = get_standard_logging_object_payload(
-        kwargs={"litellm_call_id": "http-call", "model": "gpt-4o", "messages": []},
-        init_response_obj=response_obj,
-        start_time=now,
-        end_time=now,
-        logging_obj=logging_obj,
-        status="success",
-    )
-
-    assert payload is not None
-    assert payload["id"] == expected_id
-
-
-def test_copy_for_new_call_gives_each_call_its_own_id_clock_and_metadata():
-    reservation = {"reserved_cost": 0.5, "finalized": False}
-    connection = _responses_ws_logging_obj()
-    connection_start = connection.start_time
-    connection_request = {"url": "ws://proxy/v1/responses", "body": {"first_message": "turn 1 frame"}}
-    connection.litellm_params = {
-        "metadata": {"user_api_key_alias": "codex", "budget_reservation": reservation},
-        "litellm_metadata": {"model_info": {"id": "dep-1"}},
-        "litellm_call_id": connection.litellm_call_id,
-        "proxy_server_request": connection_request,
-    }
-    connection.model_call_details = {
-        **connection.model_call_details,
-        "litellm_params": connection.litellm_params,
-        "first_api_call_start_time": connection_start,
-    }
-    turn_start = datetime.datetime(2026, 10, 9, 17, 24, 47)
-
-    turn_frame = {"type": "response.create", "input": "turn 2 frame"}
-    turn = connection.copy_for_new_call(litellm_call_id="turn-1-call", start_time=turn_start, request_body=turn_frame)
-    turn.litellm_params["metadata"]["status"] = "failure"
-    turn.litellm_params["litellm_metadata"]["model_group"] = "gpt-4o"
-    turn.model_call_details["standard_logging_object"] = {"id": "resp_1"}
-
-    assert (turn.litellm_call_id, turn.start_time) == ("turn-1-call", turn_start)
-    assert turn.model_call_details["litellm_call_id"] == "turn-1-call"
-    assert turn.model_call_details["start_time"] == turn_start
-    assert turn.model_call_details["litellm_params"]["litellm_call_id"] == "turn-1-call"
-    assert turn.model_call_details["first_api_call_start_time"] is None
-    assert turn.litellm_params["metadata"]["budget_reservation"] is reservation
-    assert turn.model_call_details["litellm_params"]["proxy_server_request"] == {
-        "url": "ws://proxy/v1/responses",
-        "body": turn_frame,
-    }
-    assert connection.litellm_params["proxy_server_request"] == {
-        "url": "ws://proxy/v1/responses",
-        "body": {"first_message": "turn 1 frame"},
-    }
-    assert (connection.litellm_call_id, connection.start_time) == ("responses-ws-usage-test", connection_start)
-    assert connection.litellm_params["litellm_call_id"] == "responses-ws-usage-test"
-    assert "status" not in connection.litellm_params["metadata"]
-    assert "model_group" not in connection.litellm_params["litellm_metadata"]
-    assert "standard_logging_object" not in connection.model_call_details
-    assert connection.model_call_details["first_api_call_start_time"] == connection_start
-
-
 def test_get_standard_logging_object_payload_reads_overhead_from_logging_obj_for_dict_results(logging_obj):
     """LIT-5466: /v1/messages returns a plain dict with no _hidden_params, so the overhead
     recorded on the logging object must reach hidden_params.litellm_overhead_time_ms (SpendLogs)."""
@@ -11982,3 +11880,55 @@ def test_masking_function_not_in_metadata_when_not_provided():
     assert "_langfuse_masking_function" not in result
 
     assert result["metadata"]["some_key"] == "some_value"
+
+
+def test_copy_for_new_call_logs_a_turn_under_its_own_call_id_against_the_connections_reservation() -> None:
+    reservation: Final[dict[str, object]] = {"reserved_cost": 0.5, "entries": []}
+    connection: Final = LitellmLogging(
+        model="gpt-5.4",
+        messages=[],
+        stream=False,
+        call_type=CallTypes.aresponses_websocket.value,
+        start_time=time.time(),
+        litellm_call_id="connection-call",
+        function_id="connection-call",
+    )
+    connection.litellm_params = {
+        "litellm_call_id": "connection-call",
+        "metadata": {"user_api_key": "hashed-key", "user_api_key_budget_reservation": reservation},
+    }
+    connection.model_call_details["litellm_params"] = connection.litellm_params
+    turn_start: Final = datetime.datetime(2026, 1, 1, 12, 0, 0)
+
+    turn: Final = connection.copy_for_new_call(litellm_call_id="turn-1", start_time=turn_start)
+
+    assert (turn.litellm_call_id, turn.start_time) == ("turn-1", turn_start)
+    assert (turn.model_call_details["litellm_call_id"], turn.model_call_details["start_time"]) == ("turn-1", turn_start)
+    assert turn.model_call_details["litellm_params"]["litellm_call_id"] == "turn-1"
+    assert turn.litellm_params["metadata"]["user_api_key"] == "hashed-key"
+    assert turn.litellm_params["metadata"]["user_api_key_budget_reservation"] is reservation
+    turn.litellm_params["metadata"]["turn_only"] = True
+    assert "turn_only" not in connection.litellm_params["metadata"]
+    assert (connection.litellm_call_id, connection.model_call_details["litellm_call_id"]) == (
+        "connection-call",
+        "connection-call",
+    )
+
+
+@pytest.mark.parametrize("response_id, expected_row_id", [(None, "turn-7"), ("resp_9", "resp_9")])
+def test_a_websocket_turn_row_is_keyed_by_the_response_id_or_else_its_call_id(
+    logging_obj: LitellmLogging, response_id: str | None, expected_row_id: str
+) -> None:
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+
+    now: Final = datetime_unit_test(2026, 1, 1, 12, 0, 0)
+    payload: Final = get_standard_logging_object_payload(
+        kwargs={"litellm_call_id": "turn-7", "litellm_params": {"metadata": {}}},
+        init_response_obj=LiteLLMRealtimeStreamLoggingObject(id=response_id, usage=Usage(), results=[]),
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+    assert payload is not None
+    assert payload["id"] == expected_row_id

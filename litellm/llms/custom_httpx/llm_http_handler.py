@@ -157,10 +157,7 @@ from litellm.types.llms.openai import (
 from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.rerank import RerankResponse
 from litellm.types.responses.main import DeleteResponseResult
-from litellm.types.responses.streaming_websocket import (
-    ResponsesWebSocketRequestDefaults,
-    ResponsesWebSocketTurnFailureHook,
-)
+from litellm.types.responses.streaming_websocket import ResponsesWebSocketRequestDefaults
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     CallTypes,
@@ -6809,9 +6806,8 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str | None = None,
         first_message: str | None = None,
         request_defaults: ResponsesWebSocketRequestDefaults | None = None,
-        on_turn_failure: ResponsesWebSocketTurnFailureHook | None = None,
         **kwargs: object,
-    ) -> None:
+    ) -> Exception | None:
         """
         Handles Responses API WebSocket mode.
 
@@ -6845,7 +6841,7 @@ class BaseLLMHTTPHandler:
                 **kwargs,
             )
             await handler.run()
-            return
+            return None
 
         import websockets
         from websockets.asyncio.client import ClientConnection
@@ -6966,9 +6962,8 @@ class BaseLLMHTTPHandler:
                     authorized_model=model,
                     custom_llm_provider=custom_llm_provider,
                     request_defaults=request_defaults,
-                    on_turn_failure=on_turn_failure,
                 )
-                await streaming.bidirectional_forward()
+                return await streaming.bidirectional_forward()
 
         except websockets.exceptions.InvalidStatus as e:
             verbose_logger.exception("Error connecting to responses WS backend: %s", e)
@@ -6982,6 +6977,7 @@ class BaseLLMHTTPHandler:
                     pass
                 else:
                     raise Exception(f"Unexpected error while closing WebSocket: {close_error}")
+        return None
 
     def image_edit_handler(
         self,

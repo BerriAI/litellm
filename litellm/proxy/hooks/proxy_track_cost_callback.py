@@ -4,8 +4,6 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Final, Protocol, cast
 
-from pydantic import TypeAdapter
-
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.batch_utils import batch_cost_is_final
@@ -139,12 +137,6 @@ class _ProxyDBLogger(CustomLogger):
         if self.spend_event_producer is None or not is_offloadable_success(response_obj):
             await self._PROXY_track_cost_callback(kwargs, response_obj, start_time, end_time)
             return
-        _claim_budget_reservation(
-            budget_reservation=_get_budget_reservation_from_metadata(
-                metadata=get_litellm_metadata_from_kwargs(kwargs=dict(kwargs))
-            ),
-            litellm_call_id=_string_call_id(_CALLBACK_DATA.validate_python(kwargs)),
-        )
         event: Final = build_spend_event(
             kwargs,
             response_obj,
@@ -174,18 +166,14 @@ class _ProxyDBLogger(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         traceback_str: str | None = None,
     ) -> None:
-        budget_reservation: Final = _claim_budget_reservation(
-            budget_reservation=user_api_key_dict.budget_reservation,
-            litellm_call_id=_string_call_id(_CALLBACK_DATA.validate_python(request_data)),
-        )
         try:
-            await _release_budget_reservation(budget_reservation=budget_reservation)
+            await _release_budget_reservation(budget_reservation=user_api_key_dict.budget_reservation)
         except Exception:
             verbose_proxy_logger.exception("Failed to release budget reservation during failure handling")
             try:
-                await _invalidate_budget_reservation_counters(budget_reservation=budget_reservation)
-                if budget_reservation is not None:
-                    budget_reservation["finalized"] = True
+                await _invalidate_budget_reservation_counters(budget_reservation=user_api_key_dict.budget_reservation)
+                if user_api_key_dict.budget_reservation is not None:
+                    user_api_key_dict.budget_reservation["finalized"] = True
             except Exception:
                 verbose_proxy_logger.exception(
                     "Failed to invalidate budget reservation counters after failure release failed"
@@ -357,10 +345,7 @@ class _ProxyDBLogger(CustomLogger):
                     resolve_missing_key_identity=str(kwargs.get("call_type")) not in _CAPTURED_IDENTITY_CALL_TYPES,
                 )
                 _write_spend_metadata_to_kwargs(kwargs=kwargs, metadata=metadata)
-            budget_reservation: Final = _claim_budget_reservation(
-                budget_reservation=_get_budget_reservation_from_metadata(metadata=metadata),
-                litellm_call_id=_string_call_id(_CALLBACK_DATA.validate_python(kwargs)),
-            )
+            budget_reservation: Final = _get_budget_reservation_from_metadata(metadata=metadata)
             if (
                 isinstance(completion_response, LiteLLMBatch)
                 and kwargs.get("call_type") == CallTypes.aretrieve_batch.value
@@ -486,7 +471,11 @@ class _ProxyDBLogger(CustomLogger):
                 await _release_budget_reservation(budget_reservation=budget_reservation)
                 # Non-model call types (health checks, afile_delete) have no model or standard_logging_object.
                 # Use .get() for "stream" to avoid KeyError on health checks.
-                if sl_object is None and (not kwargs.get("model") or kwargs.get("call_type") == "_arealtime"):
+                # WS session wrappers (_aresponses_websocket, _arealtime) also reach here with
+                # result=None; their per-turn costs are tracked on the inner aresponses/realtime calls.
+                if sl_object is None and (
+                    not kwargs.get("model") or kwargs.get("call_type") in ("_aresponses_websocket", "_arealtime")
+                ):
                     verbose_proxy_logger.warning(
                         "Cost tracking - skipping, no standard_logging_object for call_type=%s",
                         kwargs.get("call_type", "unknown"),
@@ -632,7 +621,7 @@ class _ProxyDBLogger(CustomLogger):
 ProxyDBLogger: Final = _ProxyDBLogger
 
 
-def _write_spend_metadata_to_kwargs(kwargs: dict, metadata: Mapping[str, object]) -> None:
+def _write_spend_metadata_to_kwargs(kwargs: dict, metadata: dict) -> None:
     patch = {k: v for k, v in metadata.items() if (k.startswith("user_api_key") or k == "tags") and v is not None}
     if not patch:
         return
@@ -708,29 +697,13 @@ def _metadata_keys(metadata: object) -> tuple[str, ...]:
     return tuple(sorted(str(key) for key in metadata))
 
 
-def _get_budget_reservation_from_metadata(metadata: Mapping[str, object]) -> dict[str, object] | None:
+def _get_budget_reservation_from_metadata(metadata: dict) -> dict | None:
     return budget_reservation_from_metadata(metadata)
-
-
-_CALLBACK_DATA: Final = TypeAdapter(Mapping[str, object])
-
-
-def _string_call_id(callback_data: Mapping[str, object]) -> str | None:
-    call_id: Final = callback_data.get("litellm_call_id")
-    return call_id if isinstance(call_id, str) else None
-
-
-def _claim_budget_reservation(
-    budget_reservation: dict[str, object] | None, litellm_call_id: str | None
-) -> dict[str, object] | None:
-    from litellm.proxy.spend_tracking.budget_reservation import claim_budget_reservation
-
-    return claim_budget_reservation(budget_reservation=budget_reservation, litellm_call_id=litellm_call_id)
 
 
 def _get_request_tags_for_cost_tracking(
     sl_object: StandardLoggingPayload | None,
-    metadata: Mapping[str, object],
+    metadata: dict,
 ) -> list[str] | None:
     if sl_object is not None:
         request_tags: Final = sl_object.get("request_tags", None)

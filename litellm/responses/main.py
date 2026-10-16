@@ -62,10 +62,7 @@ from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.get_llm_provider_logic import is_openai_compatible_endpoint
 from litellm.llms.openai.data_residency import infer_openai_data_residency
 from litellm.types.responses.main import *
-from litellm.types.responses.streaming_websocket import (
-    ResponsesWebSocketRequestDefaults,
-    ResponsesWebSocketTurnFailureHook,
-)
+from litellm.types.responses.streaming_websocket import ResponsesWebSocketRequestDefaults
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import all_litellm_params
 from litellm.utils import (
@@ -2478,13 +2475,12 @@ async def _aresponses_websocket(
     api_base: str | None = None,
     api_key: str | None = None,
     timeout: float | None = None,
-    responses_ws_turn_failure_hook: ResponsesWebSocketTurnFailureHook | None = None,
     **kwargs,
-) -> None:
+) -> Exception | None:
     """
     Private function to handle the Responses API WebSocket mode.
 
-    For PROXY use only. ``responses_ws_turn_failure_hook`` books each failed turn of a native socket.
+    For PROXY use only. Returns the provider failure that ended the connection, if any.
 
     Resolves the LLM provider from ``model``, looks up the matching
     ``BaseResponsesAPIConfig``, and hands off to
@@ -2554,7 +2550,7 @@ async def _aresponses_websocket(
     deployment_kwargs: Final = {k: v for k, v in kwargs.items() if k not in _RESPONSES_WS_ROUTING_HINT_KEYS}
     first_message: Final = kwargs.get("first_message")
 
-    await base_llm_http_handler.async_responses_websocket(
+    return await base_llm_http_handler.async_responses_websocket(
         model=resolved_model,
         websocket=websocket,
         logging_obj=litellm_logging_obj,
@@ -2571,6 +2567,5 @@ async def _aresponses_websocket(
         litellm_metadata=_build_litellm_metadata_for_ws(kwargs),
         custom_llm_provider=_custom_llm_provider,
         request_defaults=_build_responses_websocket_request_defaults(deployment_kwargs),
-        on_turn_failure=responses_ws_turn_failure_hook,
         **remaining_kwargs,
     )
