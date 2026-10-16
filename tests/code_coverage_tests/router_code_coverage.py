@@ -121,6 +121,11 @@ ignored_function_names = [
     "_pre_call_check_requested_chat_params",  # Tested through the unsupported-param pre-call check tests in test_router.py
     "_deployment_supports_param",  # Tested through the deployment-capability pre-call check tests in test_router.py
     "_capability_model_and_provider",  # Tested through the authenticating-provider pre-call check test in test_router.py
+    "_exact_base_model_max_input_tokens",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
+    "_base_model_widened_window",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
+    "_provider_model_id",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
+    "_names_route_model",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
+    "_declared_base_model",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
 ]
 
 

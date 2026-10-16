@@ -3027,6 +3027,13 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "(see GitHub issue #12905)."
         ),
     )
+    agent_access_default_deny: bool = Field(
+        False,
+        description=(
+            "When true, a key with no agent grants on itself or its team can reach no agents instead of all agents. "
+            "Proxy admins are exempt."
+        ),
+    )
     user_url_validation: bool | None = Field(
         None,
         description=(
@@ -3805,6 +3812,16 @@ class ModelAccessDeniedProxyException(ProxyException):
 
     def sanitized_internal_message(self) -> str:
         return self.internal_message.replace("\r", "").replace("\n", "")
+
+
+class AwsErrorTypeProxyException(Exception):
+    """A ProxyException answered to an AWS SDK, which reads the error code from the ``x-amzn-errortype`` header and
+    the message from a top-level ``message`` field."""
+
+    def __init__(self, error: ProxyException, aws_error_type: str) -> None:
+        super().__init__(error.message)
+        self.error: Final = error
+        self.aws_error_type: Final = aws_error_type
 
 
 from litellm.types.proxy.common_proxy_errors import (  # noqa: E402  # public re-export

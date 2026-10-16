@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-import socket
 import threading
 import uuid
 from collections.abc import AsyncIterator, Callable, Generator, Mapping
@@ -82,12 +81,6 @@ UNMAPPED_500: Final = Mapped(500, "internal_server_error", None)
 
 def new_marker() -> str:
     return f"m{uuid.uuid4().hex}"
-
-
-def free_port() -> int:
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        return reserve.getsockname()[1]
 
 
 def proxy_path(route: Route, marker: str) -> str:

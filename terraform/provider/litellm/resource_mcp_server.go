@@ -24,6 +24,7 @@ func resourceLiteLLMMCPServer() *schema.Resource {
 			"alias": {
 				Type:        schema.TypeString,
 				Optional:    true,
+				Computed:    true,
 				Description: "Alias for the MCP server",
 			},
 			"description": {
