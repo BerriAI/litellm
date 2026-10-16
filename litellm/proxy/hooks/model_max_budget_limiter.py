@@ -583,6 +583,8 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         redis_cache: Final = self.dual_cache.redis_cache
         if redis_cache is None:
             return await self.dual_cache.async_get_cache(key=spend_key)
+        if self._spend_awaiting_redis:
+            await self._push_in_memory_increments_to_redis()
         return await redis_cache.async_get_cache(key=spend_key)
 
     @with_service_target("model_budgets")

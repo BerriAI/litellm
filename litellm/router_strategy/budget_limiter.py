@@ -443,6 +443,8 @@ class RouterBudgetLimiting(CustomLogger):
             self.redis_increment_operation_queue.append(increment_op)
 
     def _hold_spend_until_redis_attaches(self, spend_key: str, response_cost: float, ttl: int) -> None:
+        if response_cost == 0:
+            return
         now: Final = self._clock()
         is_new_key: Final = spend_key not in self._spend_awaiting_redis
         if is_new_key and len(self._spend_awaiting_redis) >= self._prune_spend_awaiting_redis_at:

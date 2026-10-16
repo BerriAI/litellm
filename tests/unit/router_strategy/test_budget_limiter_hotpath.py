@@ -591,6 +591,18 @@ async def test_spend_held_for_a_late_redis_is_sent_once_with_the_rest_of_its_win
 
 
 @pytest.mark.asyncio
+async def test_zero_cost_success_sends_nothing_to_a_late_redis(disable_budget_sync) -> None:
+    clock: Final = _ManualClock(now=1_000.0)
+    dual_cache: Final = DualCache(in_memory_cache=InMemoryCache(clock=clock))
+    budget_limiter: Final = RouterBudgetLimiting(dual_cache=dual_cache, provider_budget_config=None, clock=clock)
+
+    await budget_limiter._increment_spend_in_current_window(spend_key="cache-hit", response_cost=0.0, ttl=1_000)
+    await budget_limiter._increment_spend_in_current_window(spend_key="paid", response_cost=2.0, ttl=1_000)
+
+    assert await _attach_redis_and_sync(budget_limiter, dual_cache) == {"paid": 2.0}
+
+
+@pytest.mark.asyncio
 async def test_spend_held_for_a_late_redis_ends_with_its_budget_window(disable_budget_sync) -> None:
     clock: Final = _ManualClock(now=1_000.0)
     dual_cache: Final = DualCache(in_memory_cache=InMemoryCache(clock=clock))

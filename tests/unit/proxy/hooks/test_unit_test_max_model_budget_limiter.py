@@ -524,7 +524,7 @@ class _LateRedis:
 
 
 @pytest.mark.asyncio
-async def test_over_budget_key_stays_blocked_when_redis_attaches_behind_more_budgets_than_the_cache_holds():
+async def test_over_budget_key_is_blocked_on_its_first_check_after_redis_attaches_behind_more_budgets():
     dual_cache = DualCache(in_memory_cache=InMemoryCache(max_size_in_memory=2))
     limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
     end_user_budget = {"gpt-4": {"budget_limit": 100.0, "time_period": "1d"}}
@@ -550,17 +550,6 @@ async def test_over_budget_key_stays_blocked_when_redis_attaches_behind_more_bud
     )
 
     dual_cache.redis_cache = _LateRedis()
-    await limiter.async_log_success_event(
-        _success_kwargs(
-            model_group="gpt-4",
-            response_cost=0.1,
-            end_user_id="end-user-1",
-            end_user_model_max_budget=end_user_budget,
-        ),
-        response_obj=None,
-        start_time=None,
-        end_time=None,
-    )
 
     with pytest.raises(litellm.BudgetExceededError):
         await limiter.is_key_within_model_budget(UserAPIKeyAuth(token="vk-hash", model_max_budget=key_budget), "gpt-4")
