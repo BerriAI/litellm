@@ -129,6 +129,7 @@ from litellm.llms.base_llm.vector_store.transformation import (
     RouterVectorStoreEmbeddingExecutor,
     vector_store_request_metadata,
 )
+from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.openai_like.model_info import (
@@ -380,6 +381,7 @@ from litellm.utils import (
     get_non_default_completion_params,
     get_secret,
     get_utc_datetime,
+    is_generalized_model_info,
     is_region_allowed,
     provider_rejectable_params,
     set_live_deployment_replay,
@@ -528,6 +530,7 @@ _SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
 _RESOLVED_RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy | None)
 _ROUTING_KWARGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _FALLBACK_HOP_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_OPAQUE_VALUE_ADAPTER: Final = TypeAdapter(object)
 _DEPLOYMENT_SELECTED_EVENT: Final = "litellm.request.deployment_selected"
 _UNCONSTRAINED_RESPONSE_FORMAT: Final[Mapping[str, str]] = MappingProxyType({"type": "text"})
 _CONTENT_BLOCKS_ADAPTER: Final = TypeAdapter(list[dict[str, object]])
@@ -838,7 +841,8 @@ MAX_HELD_PRE_OUTPUT_RESPONSES_EVENTS: Final = 200
 
 def _retry_policy_ceiling(policy: RetryPolicy) -> int:
     """The most retries any error class under this policy can be granted."""
-    return max((retries for retries in policy.model_dump().values() if isinstance(retries, int)), default=0)
+    retry_counts: Final[Iterable[object]] = policy.model_dump().values()
+    return max((retries for retries in retry_counts if isinstance(retries, int)), default=0)
 
 
 def _responses_stream_holds_event(item: object, held_event_count: int) -> bool:
@@ -1004,6 +1008,49 @@ def as_output_cap(value: object) -> int | None:
     except (ValueError, OverflowError):
         return None
     return cap if cap >= 0 else None
+
+
+def _exact_base_model_max_input_tokens(base_model: str) -> int | None:
+    try:
+        model_info: Final = litellm.get_model_info(model=base_model)
+    except Exception:  # noqa: BLE001  # get_model_info raises ModelNotMappedError or a bare Exception for an unmapped model
+        return None
+    if is_generalized_model_info(model_info):
+        return None
+    return model_info.get("max_input_tokens")
+
+
+def _provider_model_id(model_name: str, custom_llm_provider: str) -> str:
+    model_id: Final = model_name.rsplit("/", 1)[-1]
+    return get_bedrock_base_model(model_id) if custom_llm_provider.startswith("bedrock") else model_id
+
+
+def _names_route_model(base_model: str, route_key: str, custom_llm_provider: str) -> bool:
+    route_model_id: Final = _provider_model_id(route_key, custom_llm_provider)
+    base_model_id: Final = _provider_model_id(base_model, custom_llm_provider)
+    return route_model_id in (base_model_id, base_model_id.split("@", 1)[0])
+
+
+def _declared_base_model(user_model_info: Mapping[str, object]) -> str | None:
+    match user_model_info:
+        case {"base_model": str() as base_model}:
+            return base_model
+        case _:
+            return None
+
+
+def _base_model_widened_window(
+    route_model_info: ModelMapInfo, base_model: str | None, custom_llm_provider: str
+) -> Mapping[str, int]:
+    route_max_input_tokens: Final = route_model_info.get("max_input_tokens")
+    if base_model is None or route_max_input_tokens is None:
+        return MappingProxyType({})
+    if not _names_route_model(base_model, route_model_info["key"], custom_llm_provider):
+        return MappingProxyType({})
+    base_max_input_tokens: Final = _exact_base_model_max_input_tokens(base_model)
+    if base_max_input_tokens is None or base_max_input_tokens <= route_max_input_tokens:
+        return MappingProxyType({})
+    return MappingProxyType({"max_input_tokens": base_max_input_tokens})
 
 
 class Router:
@@ -1566,7 +1613,7 @@ class Router:
         if not startup_nodes:
             _env_cluster_nodes: Final = get_secret("REDIS_CLUSTER_NODES")
             if _env_cluster_nodes is not None and isinstance(_env_cluster_nodes, str):
-                startup_nodes = json.loads(_env_cluster_nodes)
+                startup_nodes = _OPAQUE_VALUE_ADAPTER.validate_python(json.loads(_env_cluster_nodes))
 
         if startup_nodes:
             return RedisClusterCache(**{**cache_config, "startup_nodes": startup_nodes})
@@ -5615,17 +5662,19 @@ class Router:
             self._stamp_retry_skip_deployment_id(e, kwargs)
             raise e
 
-    async def _asearch_with_fallbacks(self, original_function: Callable, **kwargs):
+    async def _asearch_with_fallbacks(self, original_function: Callable, **kwargs) -> object:
         """
         Helper function to make a search API call through the router with load balancing and fallbacks.
         Reuses the router's retry/fallback infrastructure.
         """
         from litellm.router_utils.search_api_router import SearchAPIRouter
 
-        return await SearchAPIRouter.async_search_with_fallbacks(
-            router_instance=self,
-            original_function=original_function,
-            **kwargs,
+        return _OPAQUE_VALUE_ADAPTER.validate_python(
+            await SearchAPIRouter.async_search_with_fallbacks(
+                router_instance=self,
+                original_function=original_function,
+                **kwargs,
+            )
         )
 
     async def _asearch_with_fallbacks_helper(self, model: str, original_generic_function: Callable, **kwargs):
@@ -6396,16 +6445,18 @@ class Router:
                 )
                 else e
             )
-            fallback_response: Final = await self.async_function_with_fallbacks_common_utils(
-                e=fallback_trigger,
-                disable_fallbacks=fallbacks_disabled_for_request(initial_kwargs),
-                fallbacks=fallbacks,
-                context_window_fallbacks=context_window_fallbacks,
-                content_policy_fallbacks=content_policy_fallbacks,
-                model_group=model_group,
-                args=(),
-                kwargs=initial_kwargs,
-                include_fallback_errors=initial_kwargs.get("include_fallback_errors", False) is True,
+            fallback_response: Final = _OPAQUE_VALUE_ADAPTER.validate_python(
+                await self.async_function_with_fallbacks_common_utils(
+                    e=fallback_trigger,
+                    disable_fallbacks=fallbacks_disabled_for_request(initial_kwargs),
+                    fallbacks=fallbacks,
+                    context_window_fallbacks=context_window_fallbacks,
+                    content_policy_fallbacks=content_policy_fallbacks,
+                    model_group=model_group,
+                    args=(),
+                    kwargs=initial_kwargs,
+                    include_fallback_errors=initial_kwargs.get("include_fallback_errors", False) is True,
+                )
             )
             async for fallback_item in self._aanthropic_messages_yield_recovered(fallback_response, wrapper):
                 yield fallback_item
@@ -11536,6 +11587,7 @@ class Router:
         Augment litellm info with additional params set in `model_info`.
 
         For azure models, ignore the `model:`. Only set max tokens, cost values if base_model is set.
+        For every other provider, a base_model naming the same model as `model:` can only widen its context window.
 
         Returns
         - ModelInfo - If found -> typed dict with max tokens, input cost, etc.
@@ -11632,20 +11684,23 @@ class Router:
 
         ## CHECK USER SET MODEL INFO
         raw_user_model_info: Final = deployment.get("model_info")
-        user_model_info: Final = (
+        user_model_info: Final = _MODEL_INFO_ADAPTER.validate_python(
             raw_user_model_info.model_dump(exclude_none=True)
             if isinstance(raw_user_model_info, BaseModel)
-            else raw_user_model_info
+            else raw_user_model_info or {}
         )
 
         # get_model_info() hands back an lru_cache'd dict, so merge into a copy; unset
         # values are skipped or Deployment's None pricing defaults would erase the map's
         merged_model_info: Final[ModelMapInfo] = {
             **copy.deepcopy(model_info),
-            **self.get_discovered_model_info((deployment.get("model_info") or {}).get("id")),
-            **MappingProxyType(
-                {key: value for key, value in (user_model_info or MappingProxyType({})).items() if value is not None}
+            **_base_model_widened_window(
+                model_info,
+                _declared_base_model(user_model_info) or _declared_base_model(litellm_params.model_extra or {}),
+                custom_llm_provider,
             ),
+            **self.get_discovered_model_info((deployment.get("model_info") or {}).get("id")),
+            **MappingProxyType({key: value for key, value in user_model_info.items() if value is not None}),
         }
 
         return merged_model_info

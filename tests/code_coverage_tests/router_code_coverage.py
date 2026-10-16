@@ -118,6 +118,11 @@ ignored_function_names = [
     "_set_mid_stream_fallback_continuation",  # Tested through the update_settings continuation test in test_router.py
     "_is_flag_enabled",  # Tested through the string-flag continuation tests in test_router.py
     "_set_retry_policy",  # Tested through update_settings in test_router_retry_policy_update.py
+    "_exact_base_model_max_input_tokens",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
+    "_base_model_widened_window",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
+    "_provider_model_id",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
+    "_names_route_model",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
+    "_declared_base_model",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
 ]
 
 

@@ -45,6 +45,7 @@ from litellm.types.utils import (
 )
 
 GUARDRAIL_NAME: Final = "tool_permission"
+_DECODED_ARGUMENTS: Final = TypeAdapter(object)
 _REQUEST_DATA: Final = TypeAdapter(object)
 
 
@@ -326,7 +327,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         parsed_arguments: object = {}
         try:
             if isinstance(arguments, str):
-                parsed_arguments = json.loads(arguments)
+                parsed_arguments = _DECODED_ARGUMENTS.validate_python(json.loads(arguments))
             elif isinstance(arguments, dict):
                 parsed_arguments = arguments
             else:

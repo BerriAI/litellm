@@ -18,6 +18,7 @@ from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from pydantic import JsonValue, TypeAdapter
 
 _API_KEY: Final = "synthetic-decisions-key"
@@ -180,10 +181,9 @@ async def test_a_flagged_deployment_recovers_box_answers_after_an_upstream_outag
     gateway: Gateway,
 ) -> None:
     base_url: Final = str(gateway.client.base_url)
+    port: Final = allocate_port()
     with gateway.scenario() as scenario:
-        with wire_server(_reply) as wire:
-            port: Final = urlsplit(wire.url).port
-            assert port is not None
+        with wire_server(_reply, port=port) as wire:
             model: Final = scenario.model(
                 model=_backend(), api_base=wire.url, api_key=_API_KEY, model_info={"supports_box_questions": True}
             )

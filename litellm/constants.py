@@ -382,6 +382,7 @@ REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES: Final = get_env_int_or_none("REALTIME
 REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS: Final = get_env_float(
     "REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS", 20.0
 )
+BEDROCK_REALTIME_CLOSE_TIMEOUT_SECONDS: Final = get_env_float("BEDROCK_REALTIME_CLOSE_TIMEOUT_SECONDS", 5.0)
 
 # RFC 6455 caps the close frame payload at 125 bytes, 2 of which carry the status code
 WEBSOCKET_CLOSE_REASON_MAX_BYTES: Final = 123
@@ -970,7 +971,7 @@ DEFAULT_CHAT_COMPLETION_PARAM_VALUES: Final = {
     "context_management": None,
 }
 
-openai_compatible_endpoints: Final[list] = [
+openai_compatible_endpoints: Final[list[str]] = [
     "api.perplexity.ai",
     "api.endpoints.anyscale.com/v1",
     "api.deepinfra.com/v1/openai",
@@ -1706,6 +1707,7 @@ AZURE_SPEECH_FAST_TRANSCRIPTION_PATH: Final = "/speechtotext/transcriptions:tran
 AZURE_SPEECH_STT_DOMAIN: Final = "stt.speech.microsoft.com"
 AZURE_SPEECH_COGNITIVE_SERVICES_DOMAIN: Final = "api.cognitive.microsoft.com"
 AZURE_SPEECH_SUBSCRIPTION_KEY_HEADER: Final = "Ocp-Apim-Subscription-Key"
+AWS_ERROR_TYPE_HEADER: Final = "x-amzn-errortype"
 AZURE_SPEECH_SHORT_AUDIO_MODEL: Final = "short-audio"
 AZURE_SPEECH_BATCH_MODEL: Final = "batch-transcription"
 AZURE_SPEECH_FAST_TRANSCRIPTION_MODEL: Final = "fast-transcription"
