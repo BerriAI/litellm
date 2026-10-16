@@ -1679,6 +1679,33 @@ def test_get_model_group_info_merges_custom_tags_and_metadata_across_deployments
     assert (group.custom_tags, group.custom_metadata) == (expected_tags, expected_metadata)
 
 
+
+@pytest.mark.parametrize(
+    "alias_target",
+    [pytest.param("gpt-4", id="string"), pytest.param({"model": "gpt-4", "hidden": False}, id="item")],
+)
+def test_get_model_group_info_serves_the_target_groups_custom_fields_on_an_alias_row(
+    alias_target: str | dict[str, object],
+) -> None:
+    from litellm.proxy.proxy_server import get_model_group_info
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake"},
+                "model_info": {"custom_tags": ["deprecated"], "custom_metadata": {"retirement_date": "2027-03-01"}},
+            }
+        ],
+        model_group_alias={"gpt-alias": alias_target},
+    )
+
+    groups: Final = get_model_group_info(llm_router=router, all_models_str=["gpt-4", "gpt-alias"], model_group=None)
+
+    assert {group.model_group: (group.custom_tags, group.custom_metadata) for group in groups} == {
+        model_group: (("deprecated",), {"retirement_date": "2027-03-01"}) for model_group in ("gpt-4", "gpt-alias")
+    }
+
 @pytest.fixture
 def mock_team_data():
     return [

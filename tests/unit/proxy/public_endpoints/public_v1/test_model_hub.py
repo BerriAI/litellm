@@ -24,6 +24,7 @@ class _FakeRouter:
     """Stands in for the running Router: `_get_model_group_info` only ever asks it these."""
 
     infos: Mapping[str, ModelGroupInfo]
+    model_group_alias: Mapping[str, str] = MappingProxyType({})
 
     def get_model_group_info(self, model_group: str) -> ModelGroupInfo | None:
         return self.infos.get(model_group)

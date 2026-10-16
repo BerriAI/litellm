@@ -205,6 +205,7 @@ def _yaml_config(
     model_info: Mapping[str, object] = MappingProxyType(
         {"custom_tags": ["deprecated", "ptu"], "custom_metadata": LIFECYCLE_METADATA}
     ),
+    model_group_alias: Mapping[str, str] = MappingProxyType({}),
 ) -> Path:
     config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     deployment: Final = {
@@ -213,7 +214,12 @@ def _yaml_config(
         "model_info": dict(model_info),
     }
     path: Final = directory / "custom_fields.yaml"
-    path.write_text(yaml.safe_dump({**config, "model_list": [*config["model_list"], deployment]}))
+    router_settings: Final = {**config.get("router_settings", {}), "model_group_alias": dict(model_group_alias)}
+    path.write_text(
+        yaml.safe_dump(
+            {**config, "model_list": [*config["model_list"], deployment], "router_settings": router_settings}
+        )
+    )
     return path
 
 
@@ -256,3 +262,15 @@ def test_yaml_custom_metadata_that_json_cannot_carry_is_dropped_without_breaking
         assert every_group.status_code == 200, every_group.text
         group: Final = _model_group(owned.gateway, model_name)
         assert _custom_fields(group) == (["ptu"], {"retirement_date": "2027-03-01"}), group
+
+
+@pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+def test_an_alias_group_serves_the_custom_tags_and_metadata_of_the_group_it_points_to(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    model_name: Final = f"integration-yaml-{uuid.uuid4().hex}"
+    alias: Final = f"{model_name}-alias"
+    config: Final = _yaml_config(tmp_path, gateway.upstream_url, model_name, model_group_alias={alias: model_name})
+    with owned_proxy_process(gateway, tmp_path, {}, config=config) as owned:
+        group: Final = _model_group(owned.gateway, alias)
+        assert _custom_fields(group) == (["deprecated", "ptu"], LIFECYCLE_METADATA), group
