@@ -6,7 +6,7 @@ import asyncio
 import json
 import time
 from functools import partial
-from typing import Final
+from typing import Final, NoReturn
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -30,12 +30,18 @@ from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockToken
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import ProxyException, TokenCountRequest
+from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted
 from litellm.proxy.anthropic_endpoints.endpoints import (
     count_tokens as anthropic_count_tokens,
 )
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
-from litellm.proxy.common_utils.token_count_settings import UNAVAILABLE_FALLBACK_TTL_SECONDS, TokenCountSettings
+from litellm.proxy.common_utils.token_count_settings import (
+    UNAVAILABLE_FALLBACK_TTL_SECONDS,
+    ProviderCountFailure,
+    TokenCountSettings,
+)
 from litellm.proxy.proxy_server import (
+    _estimate_or_provider_error,
     _provider_or_fallback_token_count,
     _try_provider_token_count,
     count_request_tokens,
@@ -1528,6 +1534,48 @@ async def test_framed_estimate_that_cannot_read_the_body_answers_the_provider_er
 
     assert (raised.value.code, raised.value.message) == ("400", "scripted 400 for kimi")
     assert readable.count_source == "local_estimate"
+
+
+@pytest.mark.asyncio
+async def test_framed_deployment_whose_custom_tokenizer_cannot_load_answers_the_provider_error(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    counter: Final = _ScriptedCounter({"us.moonshotai.kimi-k3": _provider_reply("kimi", status_code=400)})
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "kimi",
+                    "litellm_params": {"model": "bedrock/us.moonshotai.kimi-k3"},
+                    "model_info": {"custom_tokenizer": {"identifier": "moonshotai/kimi-k3", "revision": "main"}},
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "_get_provider_token_counter", lambda deployment, model: (counter, model, "bedrock")
+    )
+
+    with pytest.raises(ProxyException) as raised:
+        await token_counter(
+            request=TokenCountRequest(model="kimi", messages=[{"role": "user", "content": "What is new?"}]),
+            call_endpoint=True,
+        )
+
+    assert (raised.value.code, raised.value.message) == ("400", "scripted 400 for kimi")
+
+
+@pytest.mark.asyncio
+async def test_fork_guard_error_in_the_estimate_is_never_answered_as_the_provider_error():
+    async def forked_estimate() -> NoReturn:
+        raise ForkedAfterNativeRuntimeStarted("native runtime started before fork")
+
+    with pytest.raises(ForkedAfterNativeRuntimeStarted):
+        await _estimate_or_provider_error(
+            forked_estimate(), provider_failure=ProviderCountFailure(status_code=400, message="scripted 400")
+        )
 
 
 @pytest.mark.asyncio

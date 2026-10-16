@@ -14504,13 +14504,46 @@ async def _provider_or_fallback_token_count(
     raise primary.to_proxy_exception()
 
 
-async def _estimate_or_provider_error(estimate: Awaitable[int], provider_failure: ProviderCountFailure | None) -> int:
+@dataclass(frozen=True, slots=True)
+class _LocalTokenEstimate:
+    total_tokens: int
+    tokenizer_type: str
+
+
+async def _estimate_or_provider_error(
+    estimate: Awaitable[_LocalTokenEstimate], provider_failure: ProviderCountFailure | None
+) -> _LocalTokenEstimate:
     try:
         return await estimate
     except Exception as e:
-        if provider_failure is None:
+        from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted, ProcessReservedForForking
+
+        if provider_failure is None or isinstance(e, (ForkedAfterNativeRuntimeStarted, ProcessReservedForForking)):
             raise
+        verbose_proxy_logger.warning(
+            "Local token estimate failed after the provider's count error %s, answering that error: %r",
+            provider_failure.status_code,
+            e,
+        )
         raise provider_failure.to_proxy_exception() from e
+
+
+async def _local_token_estimate(
+    model: str,
+    prompt: str | None,
+    messages: Sequence[AllMessageValues] | None,
+    tools: list[ChatCompletionToolParam] | None,
+    custom_tokenizer: CustomHuggingfaceTokenizer | None,
+) -> _LocalTokenEstimate:
+    tokenizer: Final = await asyncify(litellm.utils.select_tokenizer)(model=model, custom_tokenizer=custom_tokenizer)
+    total_tokens: Final = await offload_token_count(litellm.token_counter)(
+        model=model,
+        text=prompt,
+        messages=messages,
+        tools=tools,
+        custom_tokenizer=tokenizer,
+    )
+    return _LocalTokenEstimate(total_tokens=total_tokens, tokenizer_type=str(tokenizer["type"]))
 
 
 class _TokenCountDeployment(TypedDict, total=False):
@@ -14662,11 +14695,6 @@ async def count_request_tokens(
             CustomHuggingfaceTokenizer | None,
             model_info.get("custom_tokenizer", None),
         )
-    _tokenizer_used: Final = await asyncify(litellm.utils.select_tokenizer)(
-        model=model_to_use, custom_tokenizer=custom_tokenizer
-    )
-
-    tokenizer_used: Final = str(_tokenizer_used["type"])
     system_message: Final = _system_message(system)
     typed_messages: Final = cast(  # cast-ok: request messages are raw chat-shaped dicts that token_counter normalizes
         Sequence[AllMessageValues] | None, messages
@@ -14677,22 +14705,22 @@ async def count_request_tokens(
     counted_tools: Final = cast(  # cast-ok: raw OpenAI or Anthropic tool dicts, both of which token_counter formats
         list[ChatCompletionToolParam] | None, tools if counted_messages is not None else None
     )
-    total_tokens: Final = await _estimate_or_provider_error(
-        offload_token_count(litellm.token_counter)(
+    estimate: Final = await _estimate_or_provider_error(
+        _local_token_estimate(
             model=model_to_use,
-            text=prompt,
+            prompt=prompt,
             messages=counted_messages,
             tools=counted_tools,
-            custom_tokenizer=_tokenizer_used,
+            custom_tokenizer=custom_tokenizer,
         ),
         provider_failure=ladder,
     )
     framing: Final = settings.framing if counted_messages is not None and settings.framing is not None else 0
     return TokenCountResponse(
-        total_tokens=total_tokens + framing,
+        total_tokens=estimate.total_tokens + framing,
         request_model=request.model,
         model_used=model_to_use,
-        tokenizer_type=tokenizer_used,
+        tokenizer_type=estimate.tokenizer_type,
         count_source="local_estimate",
     )
 
