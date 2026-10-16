@@ -30,6 +30,17 @@ _V = TypeVar("_V")
 MID_STREAM_CONTINUATION_KWARG: Final = "_mid_stream_continuation"
 ROUTER_ONLY_CALL_KWARGS: Final = frozenset({"silent_model", "include_fallback_errors", MID_STREAM_CONTINUATION_KWARG})
 _OBJECT_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
+_OBJECT_TUPLE_ADAPTER: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
+_GEMINI_SEARCH_TOOL_KEYS: Final = frozenset(
+    {
+        "googleSearch",
+        "google_search",
+        "googleSearchRetrieval",
+        "google_search_retrieval",
+        "enterpriseWebSearch",
+        "enterprise_web_search",
+    }
+)
 
 
 def without_router_only_kwargs(kwargs: Mapping[str, _V]) -> dict[str, _V]:
@@ -329,6 +340,16 @@ def _deployment_supports_web_search(deployment: dict) -> bool:
     return True
 
 
+def _is_web_search_tool(tool: object) -> bool:
+    if not isinstance(tool, Mapping):
+        return False
+    tool_mapping: Final = _OBJECT_MAPPING_ADAPTER.validate_python(tool)
+    tool_type: Final = tool_mapping.get("type")
+    if isinstance(tool_type, str) and (tool_type == "web_search" or tool_type.startswith("web_search_")):
+        return True
+    return any(key in _GEMINI_SEARCH_TOOL_KEYS for key in tool_mapping if isinstance(key, str))
+
+
 def filter_web_search_deployments(
     healthy_deployments: list[dict] | dict,
     request_kwargs: dict | None = None,
@@ -343,13 +364,9 @@ def filter_web_search_deployments(
     if isinstance(healthy_deployments, dict):
         return healthy_deployments
 
-    is_web_search_request = False
-    tools: Final = request_kwargs.get("tools") or []
-    for tool in tools:
-        # These are the two websearch tools for OpenAI / Azure.
-        if tool.get("type") == "web_search" or tool.get("type") == "web_search_preview":
-            is_web_search_request = True
-            break
+    tools_value: Final[object] = request_kwargs.get("tools") or []
+    tools: Final = _OBJECT_TUPLE_ADAPTER.validate_python(tools_value)
+    is_web_search_request: Final = any(_is_web_search_tool(tool) for tool in tools)
 
     if not is_web_search_request:
         return healthy_deployments
