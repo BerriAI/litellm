@@ -50,7 +50,6 @@ class _Placed:
     path: _Path
     ttl: Literal["5m", "1h"]
     kind: _Kind
-    translated: bool
     first_read: tuple[int, ...]
     last_read: tuple[int, ...]
 
@@ -471,10 +470,10 @@ def _ttl(cache_control: object) -> Literal["5m", "1h"]:
     return "1h" if (_fields(cache_control) or {}).get("ttl") == "1h" else "5m"
 
 
-def _kind(cache_control: object, from_breakpoint: bool) -> _Kind:
-    if (_fields(cache_control) or {}).get("ttl") is None:
-        return "free"
-    return "explicit" if from_breakpoint else "written"
+def _kind(path: _Path, cache_control: object, translated: frozenset[_Path]) -> _Kind:
+    if path not in translated:
+        return "written"
+    return "free" if (_fields(cache_control) or {}).get("ttl") is None else "explicit"
 
 
 def _chosen(mark: _Placed, ttl: Literal["5m", "1h"]) -> bool:
@@ -518,9 +517,9 @@ def _loosened(marks: Sequence[_Placed], drop_params: bool) -> tuple[_Placed, ...
 
 
 def _settled(marks: Sequence[_Placed], drop_params: bool) -> tuple[_Placed, ...]:
-    """A mark without a ttl, a breakpoint's or a ``cache_control`` the request already carries, takes 1h when Claude
-    may read a 1h mark after it and no 5m mark before it, so the request stays valid for Claude; under
-    ``drop_params`` a ttl the client set on a breakpoint that breaks that order is dropped first."""
+    """A breakpoint without a ttl takes 1h when Claude may read a 1h mark after it and no 5m mark before it, so the
+    request stays valid for Claude; under ``drop_params`` a ttl the client set on a breakpoint that breaks that order
+    is dropped first."""
     loosened: Final = _loosened(marks, drop_params)
     first_five: Final = _first_five(loosened)
     last_hour: Final = max((mark.last_read for mark in loosened if _chosen(mark, "1h")), default=(-1,))
@@ -534,12 +533,20 @@ def _settled(marks: Sequence[_Placed], drop_params: bool) -> tuple[_Placed, ...]
 
 def _route_marks(
     tool_config_cache_control: ChatCompletionCachedContent | None, request_mark: object
-) -> tuple[tuple[_Path, object, bool], ...]:
-    """Neither the cachePoint a route appends after the tools nor the request-level mark is ever dropped."""
-    return (
-        *(() if tool_config_cache_control is None else ((_TOOL_CONFIG, tool_config_cache_control, False),)),
-        *(() if request_mark is None else ((_REQUEST, request_mark, False),)),
+) -> tuple[tuple[_Path, object, _Kind], ...]:
+    """The cachePoint a route appends after the tools takes 1h like a breakpoint when it sets no ttl. Neither it nor
+    the request-level mark is ever dropped."""
+    tool_config_kind: Final[_Kind] = (
+        "free" if tool_config_cache_control is None or tool_config_cache_control.get("ttl") is None else "written"
     )
+    return (
+        *(() if tool_config_cache_control is None else ((_TOOL_CONFIG, tool_config_cache_control, tool_config_kind),)),
+        *(() if request_mark is None else ((_REQUEST, request_mark, "written"),)),
+    )
+
+
+def _droppable(mark: _Placed) -> bool:
+    return mark.kind != "written" and mark.path != _TOOL_CONFIG
 
 
 def claude_prompt_cache(
@@ -590,9 +597,9 @@ def claude_prompt_cache(
     run_ends: Final = _run_ends(messages)
     unsent_call_ids: Final = frozenset() if pairs_unanswered_tool_calls else unanswered_tool_search_call_ids(messages)
     request_mark: Final = params.get("cache_control")
-    placements: Final[tuple[tuple[_Path, object, bool], ...]] = (
+    placements: Final[tuple[tuple[_Path, object, _Kind], ...]] = (
         *(
-            (path, block.get("cache_control"), path in translated)
+            (path, block.get("cache_control"), _kind(path, block.get("cache_control"), translated))
             for path, block in _markable(renamed_messages, renamed_tools)
             if block.get("cache_control") is not None
             and _on_wire(
@@ -606,18 +613,17 @@ def claude_prompt_cache(
             _Placed(
                 path,
                 _ttl(cache_control),
-                _kind(cache_control, from_breakpoint),
-                from_breakpoint,
+                kind,
                 _wire_position(path, leading_system_count),
                 _last_read(path, messages, leading_system_count, run_ends),
             )
-            for path, cache_control, from_breakpoint in placements
+            for path, cache_control, kind in placements
         ),
         key=lambda mark: mark.first_read,
     )
     excess: Final = len(marks) - MAX_CACHE_CONTROL_BLOCKS
     dropped: Final[frozenset[_Path]] = (
-        frozenset(tuple(mark.path for mark in marks if mark.translated)[:excess])
+        frozenset(tuple(mark.path for mark in marks if _droppable(mark))[:excess])
         if excess > 0 and drop_params
         else frozenset()
     )

@@ -229,20 +229,6 @@ def test_a_breakpoint_on_a_tool_search_call_nobody_answered_takes_a_slot_only_wh
     assert result.messages[0] == {"role": "system", "content": [_part("sys", **system_mark)]}
 
 
-def test_a_cache_control_without_a_ttl_takes_the_hour_a_later_breakpoint_asks_for():
-    result: Final = _resolved(
-        [
-            {"role": "system", "content": [_part("sys", cache_control=_EPHEMERAL)]},
-            {"role": "user", "content": [_part("ask", prompt_cache_breakpoint={"mode": "explicit", "ttl": "1h"})]},
-        ]
-    )
-
-    assert list(result.messages) == [
-        {"role": "system", "content": [_part("sys", cache_control=_ONE_HOUR)]},
-        {"role": "user", "content": [_part("ask", cache_control=_ONE_HOUR)]},
-    ]
-
-
 @pytest.mark.parametrize(
     ("function_marks_on_wire", "system_mark"),
     [(True, _EPHEMERAL), (False, _ONE_HOUR)],
@@ -398,10 +384,10 @@ def test_a_breakpoint_read_after_the_last_one_hour_mark_keeps_the_default_ttl():
     ("system", "ask", "as_written", "under_drop_params"),
     [
         (
-            {"cache_control": {"type": "ephemeral", "ttl": "5m"}},
+            {"cache_control": _EPHEMERAL},
             {"prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}},
-            ({"cache_control": {"type": "ephemeral", "ttl": "5m"}}, {"cache_control": _ONE_HOUR}),
-            ({"cache_control": {"type": "ephemeral", "ttl": "5m"}}, {"cache_control": _EPHEMERAL}),
+            ({"cache_control": _EPHEMERAL}, {"cache_control": _ONE_HOUR}),
+            ({"cache_control": _EPHEMERAL}, {"cache_control": _EPHEMERAL}),
         ),
         (
             {"prompt_cache_breakpoint": {"mode": "explicit", "ttl": "5m"}},
