@@ -1222,6 +1222,7 @@ def _register_custom_pricing_for_request(
         persist_across_reloads=False,
         warning_display_name=shared_key,
         custom_llm_provider=custom_llm_provider,
+        add_to_provider_model_sets=False,
     )
 
 
