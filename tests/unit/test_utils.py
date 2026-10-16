@@ -7039,6 +7039,76 @@ async def test_router_resolves_an_oidc_api_key_only_on_a_proxy_level_deployment(
     assert sent == expected
 
 
+_DEPLOYMENT_HOST_REFERENCE_REFUSAL: Final = "goes only to the host its deployment configures"
+_BEDROCK_RUNTIME: Final = "https://bedrock-runtime.us-east-1.amazonaws.com"
+_BEDROCK_CLAUDE: Final = "us.anthropic.claude-sonnet-5-5"
+_BEDROCK_REPLY: Final = {
+    "output": {"message": {"role": "assistant", "content": [{"text": "pong"}]}},
+    "stopReason": "end_turn",
+    "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+}
+
+
+def _bedrock_router(api_key: str, endpoint: str | None) -> litellm.Router:
+    params: Final = {"model": f"bedrock/converse/{_BEDROCK_CLAUDE}", "aws_region_name": "us-east-1", "api_key": api_key}
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {**params, "aws_bedrock_runtime_endpoint": endpoint} if endpoint else params,
+            }
+        ],
+        num_retries=0,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_endpoint", "call_endpoint"),
+    [(None, "https://caller.example"), (_BEDROCK_RUNTIME, f"{_BEDROCK_RUNTIME}:8443")],
+    ids=["deployment without an endpoint", "endpoint on another port"],
+)
+async def test_an_inline_oidc_api_key_is_refused_before_its_file_is_read_when_the_call_picks_another_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, deployment_endpoint: str | None, call_endpoint: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
+    router: Final = _bedrock_router(f"oidc/file/{tmp_path / 'missing-token'}", deployment_endpoint)
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.route().respond(200, json=_BEDROCK_REPLY)
+            with pytest.raises(litellm.AuthenticationError, match=_DEPLOYMENT_HOST_REFERENCE_REFUSAL):
+                await router.acompletion(model="claude", messages=_PING, aws_bedrock_runtime_endpoint=call_endpoint)
+    finally:
+        router.discard()
+
+    assert upstream.calls.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_an_inline_oidc_api_key_reaches_the_endpoint_its_deployment_configures_when_the_call_names_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    token: Final = _allowed_token_file(tmp_path, monkeypatch, "file-token")
+    router: Final = _bedrock_router(f"oidc/file/{token}", _BEDROCK_RUNTIME)
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.route().respond(200, json=_BEDROCK_REPLY)
+            await router.acompletion(
+                model="claude", messages=_PING, aws_bedrock_runtime_endpoint="https://BEDROCK-runtime.us-east-1.amazonaws.com"
+            )
+            sent: Final = tuple(
+                (call.request.url.host, call.request.headers["Authorization"]) for call in upstream.calls
+            )
+    finally:
+        router.discard()
+
+    assert sent == (("bedrock-runtime.us-east-1.amazonaws.com", "Bearer file-token"),)
+
+
 _CALLER_HOST_REFERENCE_REFUSAL: Final = "sends it only to that credential's own api_base"
 
 

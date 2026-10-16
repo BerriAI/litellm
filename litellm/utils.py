@@ -225,7 +225,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import (
     ABOVE_THRESHOLD_COST_KEY_PATTERN,
-    CREDENTIAL_UPSTREAM_PARAMS,
+    API_KEY_UPSTREAM_PARAMS,
     OPENAI_RESPONSE_HEADERS,
     AdminApiKeySecretReference,
     CallTypes,
@@ -761,15 +761,9 @@ def resolve_api_key_secret_reference(
 def _secret_behind_api_key_reference(
     reference: AdminApiKeySecretReference, model: object, llm_provider: object, upstream: Mapping[str, object]
 ) -> str:
-    if isinstance(reference, CredentialApiKeySecretReference) and not reference.may_reach(upstream):
+    if not reference.may_reach(upstream):
         raise AuthenticationError(
-            message=(
-                f"api_key secret reference {reference} comes from a stored credential, so LiteLLM sends it only to "
-                "that credential's own api_base. Set this api_base on the credential, or give this model its own "
-                "credential."
-            ),
-            llm_provider=llm_provider,
-            model=model,
+            message=_unreachable_upstream_message(reference), llm_provider=llm_provider, model=model
         )
     if not reference.startswith(LOCAL_OIDC_SECRET_PREFIXES):
         raise AuthenticationError(
@@ -791,6 +785,23 @@ def _secret_behind_api_key_reference(
             return secret
 
 
+def _unreachable_upstream_message(reference: AdminApiKeySecretReference) -> str:
+    if isinstance(reference, CredentialApiKeySecretReference):
+        return (
+            f"api_key secret reference {reference} comes from a stored credential, so LiteLLM sends it only to "
+            "that credential's own api_base. Set this api_base on the credential, or give this model its own "
+            "credential."
+        )
+    return (
+        f"api_key secret reference {reference} goes only to the host its deployment configures, and this call "
+        "points at another one. Send your own api_key with that host."
+    )
+
+
+def with_named_credential(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    return {**kwargs, **_named_credential_values(kwargs)}
+
+
 def load_credentials_from_list(kwargs: dict[str, object]) -> None:
     """
     Updates kwargs with the credentials if credential_name in kwarg, then swaps an admin-configured oidc/ api_key
@@ -809,7 +820,7 @@ def _credential_updates(kwargs: Mapping[str, object]) -> Mapping[str, object]:
         model=kwargs.get("model"),
         llm_provider=kwargs.get("custom_llm_provider"),
         upstream=MappingProxyType(
-            {key: kwargs.get(key, credential_values.get(key)) for key in CREDENTIAL_UPSTREAM_PARAMS}
+            {key: kwargs.get(key, credential_values.get(key)) for key in API_KEY_UPSTREAM_PARAMS}
         ),
     )
     return MappingProxyType({**credential_values, "api_key": secret})

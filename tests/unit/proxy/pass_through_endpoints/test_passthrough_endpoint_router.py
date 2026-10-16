@@ -449,7 +449,7 @@ def test_oidc_file_reference_outside_allowed_dirs_is_refused(tmp_path, monkeypat
         _passthrough_router(None).get_credentials(custom_llm_provider="openai", region_name=None)
 
     assert excinfo.value.status_code == 401
-    assert f"oidc/file/{outside}" in str(excinfo.value.detail)
+    assert str(outside) not in str(excinfo.value.detail)
     assert "outside the allowed credential directories" in str(excinfo.value.detail)
 
 
@@ -461,7 +461,8 @@ def test_missing_oidc_token_file_is_a_clear_auth_error(tmp_path, monkeypatch):
         _passthrough_router(None).get_credentials(custom_llm_provider="openai", region_name=None)
 
     assert excinfo.value.status_code == 401
-    assert f"oidc/file/{tmp_path / 'missing-token'}" in str(excinfo.value.detail)
+    assert "pass-through credential oidc/file" in str(excinfo.value.detail)
+    assert str(tmp_path) not in str(excinfo.value.detail)
 
 
 def test_oidc_env_reference_is_resolved(monkeypatch):

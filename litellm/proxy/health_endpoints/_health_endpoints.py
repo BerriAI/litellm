@@ -81,7 +81,7 @@ from litellm.router_utils.clientside_credential_handler import (
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.proxy.litellm_pre_call_utils import RedactedDict, SecretFields
 from litellm.types.router import reject_server_owned_wif_fields
-from litellm.types.utils import admin_api_key_secret_reference
+from litellm.types.utils import AdminApiKeySecretReference, admin_api_key_secret_reference
 
 #### Health ENDPOINTS ####
 
@@ -163,11 +163,14 @@ def _request_inherits_config_credentials(
     return not any(param in request_params for param in _BANNED_REQUEST_BODY_PARAMS)
 
 
-def _admin_api_key_from_request(request_litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+def _admin_api_key_from_request(
+    request_litellm_params: Mapping[str, object], call_params: Mapping[str, object]
+) -> Mapping[str, object]:
     """Only reached once the model auth check passed, which refuses an ``oidc/`` api_key from anyone but a proxy
     admin."""
-    marked: Final = admin_api_key_secret_reference(request_litellm_params)
-    return MappingProxyType({} if marked is request_litellm_params else {"api_key": marked["api_key"]})
+    marked: Final = admin_api_key_secret_reference({**call_params, "api_key": request_litellm_params.get("api_key")})
+    api_key: Final = marked.get("api_key")
+    return MappingProxyType({"api_key": api_key} if isinstance(api_key, AdminApiKeySecretReference) else {})
 
 
 def _config_base_for_health_check(
@@ -2350,7 +2353,10 @@ async def test_model_connection(
         )
         health_check_params: Final = {
             **_OBJECT_MAPPING.validate_python(litellm_params),
-            **_admin_api_key_from_request(_OBJECT_MAPPING.validate_python(request_litellm_params)),
+            **_admin_api_key_from_request(
+                _OBJECT_MAPPING.validate_python(request_litellm_params),
+                _OBJECT_MAPPING.validate_python(litellm_params),
+            ),
             "secret_fields": SecretFields(raw_headers=RedactedDict(raw_headers)),
         }
 

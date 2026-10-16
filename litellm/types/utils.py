@@ -4167,19 +4167,14 @@ API_KEY_SECRET_REFERENCE_REJECTION: Final = (
 )
 
 
-class AdminApiKeySecretReference(str):
-    """An ``oidc/`` api_key reference read from a source only a proxy admin writes: a proxy-level deployment or a
-    stored credential. The call path swaps only this type for the secret it points to, so the same text arriving
-    in a request, a prompt template, or a row a non-admin wrote is sent as written."""
-
-    __slots__ = ()
-
-    @classmethod
-    def __get_pydantic_core_schema__(cls, source: object, handler: GetCoreSchemaHandler) -> core_schema.CoreSchema:
-        return core_schema.is_instance_schema(cls, serialization=core_schema.to_string_ser_schema())
-
-
-CREDENTIAL_UPSTREAM_PARAMS: Final = ("api_base", "base_url")
+API_KEY_UPSTREAM_PARAMS: Final = (
+    "api_base",
+    "base_url",
+    "aws_bedrock_runtime_endpoint",
+    "s3_endpoint_url",
+    "sagemaker_base_url",
+    "deployment_url",
+)
 
 
 def _origin(url: str) -> str:
@@ -4188,26 +4183,36 @@ def _origin(url: str) -> str:
 
 
 def upstream_origins(params: Mapping[str, object]) -> frozenset[str]:
-    values: Final = (params.get(key) for key in CREDENTIAL_UPSTREAM_PARAMS)
+    values: Final = (params.get(key) for key in API_KEY_UPSTREAM_PARAMS)
     return frozenset(_origin(value) for value in values if isinstance(value, str) and value)
 
 
-class CredentialApiKeySecretReference(AdminApiKeySecretReference):
-    """An admin ``oidc/`` api_key reference stored in a named credential. Rows and requests that name the credential
-    can set their own api_base, so the secret may only go to the origins of the credential's own api_base/base_url."""
+class AdminApiKeySecretReference(str):
+    """An ``oidc/`` api_key reference read from a source only a proxy admin writes: a proxy-level deployment or a
+    stored credential. The call path swaps only this type for the secret it points to, so the same text arriving
+    in a request, a prompt template, or a row a non-admin wrote is sent as written, and the secret goes only to the
+    origins the admin configured beside the reference."""
 
-    def __new__(cls, reference: str, credential_origins: frozenset[str]) -> "CredentialApiKeySecretReference":
+    def __new__(cls, reference: str, origins: frozenset[str]) -> "AdminApiKeySecretReference":
         return super().__new__(cls, reference)
 
-    def __init__(self, reference: str, credential_origins: frozenset[str]) -> None:
+    def __init__(self, reference: str, origins: frozenset[str]) -> None:
         super().__init__()
-        self.credential_origins: Final = credential_origins
+        self.origins: Final = origins
 
-    def __reduce__(self) -> tuple[type["CredentialApiKeySecretReference"], tuple[str, frozenset[str]]]:
-        return type(self), (str(self), self.credential_origins)
+    def __reduce__(self) -> tuple[type["AdminApiKeySecretReference"], tuple[str, frozenset[str]]]:
+        return type(self), (str(self), self.origins)
 
     def may_reach(self, upstream: Mapping[str, object]) -> bool:
-        return upstream_origins(upstream) <= self.credential_origins
+        return upstream_origins(upstream) <= self.origins
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source: object, handler: GetCoreSchemaHandler) -> core_schema.CoreSchema:
+        return core_schema.is_instance_schema(cls, serialization=core_schema.to_string_ser_schema())
+
+
+class CredentialApiKeySecretReference(AdminApiKeySecretReference):
+    """An admin ``oidc/`` api_key reference stored in a named credential, so its origins are the credential's own."""
 
 
 def _unmarked_api_key_secret_reference(params: Mapping[str, object]) -> str | None:
@@ -4223,7 +4228,9 @@ def _unmarked_api_key_secret_reference(params: Mapping[str, object]) -> str | No
 
 def admin_api_key_secret_reference(params: Mapping[str, object]) -> Mapping[str, object]:
     api_key: Final = _unmarked_api_key_secret_reference(params)
-    return params if api_key is None else {**params, "api_key": AdminApiKeySecretReference(api_key)}
+    if api_key is None:
+        return params
+    return {**params, "api_key": AdminApiKeySecretReference(api_key, upstream_origins(params))}
 
 
 def credential_api_key_secret_reference(credential_values: Mapping[str, object]) -> Mapping[str, object]:

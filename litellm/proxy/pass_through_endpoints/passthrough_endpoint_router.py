@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Final
 from fastapi import HTTPException
 
 import litellm
-from litellm._logging import verbose_router_logger
+from litellm._logging import redact_internal_details_from_client_message, verbose_router_logger
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     LiteLLM_ManagedVectorStore,
 )
@@ -50,7 +50,9 @@ def _resolve_oidc_reference(credential: str | None) -> str | None:
         case UnresolvableSecretReference(reference=reference, reason=reason):
             raise HTTPException(
                 status_code=401,
-                detail=f"pass-through credential {reference} could not be resolved: {reason}",
+                detail=redact_internal_details_from_client_message(
+                    f"pass-through credential {reference} could not be resolved: {reason}"
+                ),
             )
         case str() as resolved:
             return resolved
