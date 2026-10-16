@@ -144,12 +144,14 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
         replace_max_completion_tokens_with_max_tokens: bool = True,
     ) -> dict[str, object]:  # mutable-ok: OpenAILikeChatConfig.map_openai_params signature
         gpt_reasoning_model: Final = is_gpt_reasoning_series_name(model)
-        mapped_params: dict[str, object] = super().map_openai_params(  # mutable-ok: may remap max_tokens then strip tools  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # OpenAILikeChatConfig types its params and result as bare dicts  # mutable-ok: parent returns a dict
-            non_default_params,
-            optional_params,
-            model,
-            drop_params,
-            replace_max_completion_tokens_with_max_tokens and not gpt_reasoning_model,
+        mapped_params: dict[str, object] = (
+            super().map_openai_params(  # mutable-ok: may remap max_tokens then strip tools  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # OpenAILikeChatConfig types its params and result as bare dicts  # mutable-ok: parent returns a dict
+                non_default_params,
+                optional_params,
+                model,
+                drop_params,
+                replace_max_completion_tokens_with_max_tokens and not gpt_reasoning_model,
+            )
         )
         if gpt_reasoning_model and "max_tokens" in mapped_params:
             mapped_params = {
