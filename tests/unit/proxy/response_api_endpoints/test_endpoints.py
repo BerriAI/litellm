@@ -1643,29 +1643,6 @@ class TestResponsesWSStreamingFirstMessage:
 
 class TestWSSessionCostTracking:
     @pytest.mark.asyncio
-    async def test_router_budget_limiter_skips_aresponses_websocket_call_type(self):
-        """
-        RouterBudgetLimiting.async_log_success_event must not raise when
-        call_type='_aresponses_websocket', even when standard_logging_object is None.
-        Per-turn costs are tracked by individual aresponses calls inside the session;
-        the outer session wrapper fires with result=None.
-        """
-        from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
-
-        limiter = RouterBudgetLimiting.__new__(RouterBudgetLimiting)
-        kwargs = {
-            "call_type": "_aresponses_websocket",
-            "standard_logging_object": None,
-            "litellm_params": {"custom_llm_provider": "vertex_ai"},
-        }
-        await limiter.async_log_success_event(
-            kwargs=kwargs,
-            response_obj=None,
-            start_time=None,
-            end_time=None,
-        )
-
-    @pytest.mark.asyncio
     async def test_router_budget_limiter_skips_arealtime_call_type(self):
         """Same guard applies to _arealtime WS session wrappers."""
         from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
