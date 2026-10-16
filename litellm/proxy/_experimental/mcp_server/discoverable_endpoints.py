@@ -893,6 +893,25 @@ def _require_s256_pkce(
     )
 
 
+def _cap_requested_scopes(requested: str | None, server: MCPServer) -> str | None:
+    configured: Final = server.configured_scopes
+    if not requested or not configured:
+        return requested
+    scopes: Final = requested.split()
+    dropped: Final = [scope for scope in scopes if scope not in configured]
+    if dropped:
+        verbose_logger.debug(
+            "MCP server %s: dropped requested OAuth scopes %s outside the configured scopes",
+            server.server_id,
+            dropped,
+        )
+    return " ".join(scope for scope in scopes if scope in configured) or None
+
+
+def _default_scope(server: MCPServer) -> str | None:
+    return " ".join(server.scopes) if server.scopes else None
+
+
 def _redirect_to_upstream_authorize(
     *,
     mcp_server: MCPServer,
@@ -907,7 +926,7 @@ def _redirect_to_upstream_authorize(
     """The bridge relay arm's authorize redirect: every client-supplied parameter passes through
     to the upstream authorize endpoint verbatim, no relay state cookie is set, and the upstream
     enforces its own registered redirect binding for the client."""
-    scope_value: Final = scope or (" ".join(mcp_server.scopes) if mcp_server.scopes else None)
+    scope_value: Final = _cap_requested_scopes(scope, mcp_server) or _default_scope(mcp_server)
     upstream_resource: Final = resolve_upstream_resource(mcp_server)
     passthrough_params: Final = {
         "client_id": client_id,
@@ -1006,7 +1025,8 @@ async def _managed_authorization_scope(
         if scope_user_id and prisma_client is not None
         else None
     )
-    merged_scope: Final = union_scopes(" ".join(prior_grant.get("scopes") or ()) if prior_grant else None, scope)
+    prior_scope: Final = " ".join(prior_grant.get("scopes") or ()) if prior_grant else None
+    merged_scope: Final = union_scopes(_cap_requested_scopes(prior_scope, server), scope)
     selected_scope: Final = (
         get_client_metadata_scopes(
             merged_scope,
@@ -1100,7 +1120,7 @@ async def authorize_with_server(
     managed_per_user: Final = resolved_server.is_gateway_managed_oauth2 and resolved_server.needs_user_oauth_token
     initial_scope: Final = union_scopes(
         "openid" if enforce_binding else None,
-        scope or (" ".join(resolved_server.scopes) if resolved_server.scopes else None),
+        _cap_requested_scopes(scope, resolved_server) or _default_scope(resolved_server),
     )
     selected_scope, scope_user_id = (
         await _managed_authorization_scope(request, resolved_server, initial_scope, litellm_user_id)
@@ -1327,7 +1347,12 @@ async def exchange_token_with_server(
             "refresh_token": upstream_refresh_token,
             **token_request.body,
         }
-        refresh_request_scope = scope or bridge_upstream_scope
+        client_refresh_scope: Final = scope or bridge_upstream_scope
+        refresh_request_scope = (
+            _cap_requested_scopes(client_refresh_scope, resolved_server) or _default_scope(resolved_server)
+            if client_refresh_scope
+            else None
+        )
         if refresh_request_scope:
             token_data["scope"] = refresh_request_scope
         refresh_ownership = (  # rebind-ok: grant-specific branches assign one ownership value

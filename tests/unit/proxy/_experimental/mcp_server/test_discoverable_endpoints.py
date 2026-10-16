@@ -5068,60 +5068,121 @@ async def test_oauth_authorize_includes_scopes_from_server_config():
         )
 
 
-@pytest.mark.asyncio
-async def test_oauth_authorize_prefers_request_scope_over_server_config():
-    """Test that explicit scope parameter takes precedence over server configuration."""
-    try:
-        from fastapi import Request
+_READ_SCOPES: Final = ("ir.incidents:read", "ir.services:read")
 
-        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-            authorize_with_server,
-        )
-        from litellm.proxy._types import MCPTransport
-        from litellm.types.mcp import MCPAuth
-        from litellm.types.mcp_server.mcp_server_manager import MCPServer
-    except ImportError:
-        pytest.skip("MCP discoverable endpoints not available")
 
-    oauth_server = MCPServer(
-        server_id="test_server",
-        name="test",
-        server_name="test",
-        transport=MCPTransport.http,
-        auth_type=MCPAuth.oauth2,
-        authorization_url="https://provider.com/oauth/authorize",
-        token_url="https://provider.com/oauth/token",
-        client_id="test_client",
-        scopes=["default_scope1", "default_scope2"],
-    )
+async def _upstream_authorize_scope(server: "MCPServer", client_scope: str | None) -> list[str] | None:
+    from urllib.parse import parse_qs, urlparse
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import authorize_with_server
 
     mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
-
-    with patch("litellm.proxy._experimental.mcp_server.discoverable_endpoints.encrypt_value_helper") as mock_encrypt:
-        mock_encrypt.return_value = "encrypted_state"
-
-        # Call authorize WITH explicit scope parameter
+    with patch(  # test-quality-ok: state sealing is unrelated to which scope reaches the upstream
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.encrypt_value_helper",
+        return_value="encrypted_state",
+    ):
         response = await authorize_with_server(
             request=mock_request,
-            mcp_server=oauth_server,
-            client_id="test_client",
+            mcp_server=server,
+            client_id="caller-client",
             redirect_uri="http://localhost:3000/callback",
-            state="test_state",
-            code_challenge="test_challenge",
+            state="client-state",
+            code_challenge="challenge",
             code_challenge_method="S256",
-            response_type="code",
-            scope="custom_scope1 custom_scope2",  # Explicit scope should take precedence
+            scope=client_scope,
         )
+    scope_values = parse_qs(urlparse(response.headers["location"]).query).get("scope")
+    return None if scope_values is None else scope_values[0].split()
 
-        # Should use the explicit scope, not server config
-        assert response.status_code in (307, 302)
-        redirect_url = response.headers["location"]
-        assert (
-            "scope=custom_scope1+custom_scope2" in redirect_url or "scope=custom_scope1%20custom_scope2" in redirect_url
-        )
-        assert "default_scope" not in redirect_url
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "client_scope, expected",
+    [
+        ("all", list(_READ_SCOPES)),
+        ("ir.incidents:read", ["ir.incidents:read"]),
+        ("ir.incidents:read ir.incidents:write", ["ir.incidents:read"]),
+        ("ir.incidents:write admin", list(_READ_SCOPES)),
+        (None, list(_READ_SCOPES)),
+    ],
+)
+async def test_authorize_never_requests_a_scope_outside_the_configured_scopes(client_scope, expected):
+    server = _resource_server(scopes=list(_READ_SCOPES), configured_scopes=_READ_SCOPES)
+
+    assert await _upstream_authorize_scope(server, client_scope) == expected
+
+
+@pytest.mark.asyncio
+async def test_authorize_passes_client_scope_through_when_no_scopes_are_configured():
+    discovered_only = _resource_server(scopes=["discovered:read"], configured_scopes=None)
+
+    assert await _upstream_authorize_scope(discovered_only, "custom_scope1 custom_scope2") == [
+        "custom_scope1",
+        "custom_scope2",
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("client_scope", ["all", None])
+async def test_bridge_relay_authorize_never_requests_a_scope_outside_the_configured_scopes(client_scope):
+    from urllib.parse import parse_qs, urlparse
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import authorize_with_server
+
+    response = await authorize_with_server(
+        request=_bridge_mock_request(),
+        mcp_server=_bridge_server(
+            auth_type=MCPAuth.oauth_delegate, scopes=list(_READ_SCOPES), configured_scopes=_READ_SCOPES
+        ),
+        client_id="dcr-client-123",
+        redirect_uri=_BRIDGE_CLIENT_REDIRECT,
+        state="client-state",
+        code_challenge="chal",
+        code_challenge_method="S256",
+        scope=client_scope,
+    )
+
+    assert parse_qs(urlparse(response.headers["location"]).query)["scope"] == [" ".join(_READ_SCOPES)]
+
+
+@pytest.mark.asyncio
+async def test_authorize_with_enforced_identity_binding_adds_only_openid_beyond_the_configured_scopes():
+    from litellm.types.mcp_server.mcp_server_manager import MCPOAuthIdentityBinding
+
+    server = _resource_server(
+        scopes=list(_READ_SCOPES),
+        configured_scopes=_READ_SCOPES,
+        oauth_identity_binding=MCPOAuthIdentityBinding(
+            mode="enforce", issuer="https://idp.example.com", audiences=["gateway-client"]
+        ),
+    )
+    with (
+        patch(  # test-quality-ok: isolate caller resolution from the scope the upstream is asked for
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._resolve_oauth_authorization_user",
+            new=AsyncMock(return_value="alice"),
+        ),
+    ):
+        requested = await _upstream_authorize_scope(server, "all ir.incidents:read")
+
+    assert requested == ["openid", "ir.incidents:read"]
+
+
+@pytest.mark.asyncio
+async def test_authorize_logs_dropped_scope_names_and_server_but_not_client_credentials(caplog):
+    import logging
+
+    server = _resource_server(scopes=list(_READ_SCOPES), configured_scopes=_READ_SCOPES)
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        await _upstream_authorize_scope(server, "all ir.incidents:read")
+
+    dropped_logs = [record for record in caplog.records if "outside the configured" in record.getMessage()]
+    assert [record.levelno for record in dropped_logs] == [logging.DEBUG], caplog.text
+    message = dropped_logs[0].getMessage()
+    assert "'all'" in message and "res-srv" in message
+    assert "ir.incidents:read" not in message
+    assert "gateway-client" not in message and "gateway-secret" not in message
 
 
 @pytest.mark.asyncio
@@ -6868,6 +6929,73 @@ async def test_bridge_refresh_re_requests_the_sealed_scope_when_client_omits_it(
 
     assert response.status_code == 200
     assert captured["client"].post.call_args.kwargs["data"]["scope"] == "read:tools write:tools"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sealed_scope, client_scope, expected_upstream_scope",
+    [
+        ("ir.incidents:read ir.incidents:write", None, "ir.incidents:read"),
+        ("ir.incidents:read", "all ir.incidents:read", "ir.incidents:read"),
+        (None, "all", " ".join(_READ_SCOPES)),
+        ("ir.incidents:write", None, " ".join(_READ_SCOPES)),
+        (None, None, None),
+    ],
+)
+async def test_bridge_refresh_never_requests_a_scope_outside_the_configured_scopes(
+    sealed_scope, client_scope, expected_upstream_scope
+):
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import exchange_token_with_server
+
+    server = _bridge_server(auth_type=MCPAuth.oauth_delegate, scopes=list(_READ_SCOPES), configured_scopes=_READ_SCOPES)
+    refresh_env = _mint_test_refresh_envelope(server_id=server.server_id, upstream_refresh="UP", scope=sealed_scope)
+    upstream: Final = MagicMock()
+    upstream.json.return_value = {"access_token": "NEW", "token_type": "Bearer", "expires_in": 3600}
+    http_client: Final = MagicMock(post=AsyncMock(return_value=upstream))
+    with (
+        patch(  # test-quality-ok: fake the upstream token endpoint at the HTTP client boundary
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=http_client,
+        ),
+        patch(  # test-quality-ok: the sealed key is active; revocation is covered by its own tests
+            "litellm.proxy._experimental.mcp_server.bridge_token_flow._revalidate_active_subject",
+            new=AsyncMock(return_value=None),
+        ),
+        patch("litellm.proxy.proxy_server.master_key", _BRIDGE_MASTER_KEY),
+    ):
+        response = await exchange_token_with_server(
+            request=_bridge_mock_request(),
+            mcp_server=server,
+            grant_type="refresh_token",
+            code=None,
+            redirect_uri=None,
+            client_id="dcr-client-123",
+            client_secret=None,
+            code_verifier=None,
+            refresh_token=refresh_env,
+            scope=client_scope,
+        )
+
+    assert response.status_code == 200, response.body
+    assert http_client.post.call_args.kwargs["data"].get("scope") == expected_upstream_scope
+
+
+@pytest.mark.asyncio
+async def test_refresh_passes_client_scope_through_when_no_scopes_are_configured():
+    server = _bridge_server(auth_type=MCPAuth.oauth_delegate, scopes=["discovered:read"], configured_scopes=None)
+    refresh_env = _mint_test_refresh_envelope(server_id=server.server_id, upstream_refresh="UP", scope="a b")
+    captured: dict = {}
+
+    response = await _refresh_for_bridge_server(
+        server,
+        refresh_env,
+        {"access_token": "NEW", "token_type": "Bearer", "expires_in": 3600},
+        None,
+        fake_client_out=captured,
+    )
+
+    assert response.status_code == 200, response.body
+    assert captured["client"].post.call_args.kwargs["data"]["scope"] == "a b"
 
 
 @pytest.mark.asyncio
@@ -14494,10 +14622,16 @@ async def test_saved_refresh_metadata_is_bound_to_the_callers_stored_grant(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "prior_scopes, expected", [(["tools.read"], "tools.read tools.write"), (None, "tools.write"), ([], "tools.write")]
+    "prior_scopes, configured, expected",
+    [
+        (["tools.read"], None, "tools.read tools.write"),
+        (None, None, "tools.write"),
+        ([], None, "tools.write"),
+        (["tools.read", "admin"], ("tools.read", "tools.write"), "tools.read tools.write"),
+    ],
 )
 async def test_managed_authorize_retains_the_callers_previous_grant(
-    jwt_oauth_identity, monkeypatch, prior_scopes, expected
+    jwt_oauth_identity, monkeypatch, prior_scopes, configured, expected
 ):
     from types import SimpleNamespace
     from urllib.parse import parse_qs, urlsplit
@@ -14508,7 +14642,9 @@ async def test_managed_authorize_retains_the_callers_previous_grant(
 
     _, signing_key = jwt_oauth_identity
     monkeypatch.setenv("LITELLM_SALT_KEY", "scope-grant-test-salt")
-    server = _cimd_oauth_server().model_copy(update={"client_id": "scope-client", "scopes": ["tools.read"]})
+    server = _cimd_oauth_server().model_copy(
+        update={"client_id": "scope-client", "scopes": ["tools.read"], "configured_scopes": configured}
+    )
     global_mcp_server_manager.registry[server.server_id] = server
     credential = db.encrypt_value_helper(
         json.dumps({"type": "oauth2", "access_token": "old-access", "scopes": prior_scopes})
