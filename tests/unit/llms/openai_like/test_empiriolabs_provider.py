@@ -2,13 +2,19 @@
 Unit tests for the EmpirioLabs OpenAI-like provider.
 """
 
+import json
 import os
 import sys
+from typing import Final
+
+import pytest
+import respx
 
 sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
 )
 
+import litellm
 from litellm.llms.openai_like.dynamic_config import create_config_class
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
@@ -61,3 +67,50 @@ def test_empiriolabs_complete_url_appends_endpoint():
         stream=False,
     )
     assert url == f"{EMPIRIOLABS_BASE_URL}/chat/completions"
+
+
+def test_empiriolabs_chat_models_still_route_through_the_json_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EMPIRIOLABS_API_KEY", "environment-key")
+    monkeypatch.delenv("EMPIRIOLABS_API_BASE", raising=False)
+
+    with respx.mock() as upstream:
+        route: Final = upstream.post(f"{EMPIRIOLABS_BASE_URL}/chat/completions").respond(
+            200,
+            json={
+                "id": "chatcmpl_empiriolabs",
+                "object": "chat.completion",
+                "created": 1_789_550_000,
+                "model": "qwen3-7-plus",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Hello from EmpirioLabs AI"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 4, "completion_tokens": 5, "total_tokens": 9},
+            },
+        )
+        response: Final = litellm.completion(
+            model="empiriolabs/qwen3-7-plus",
+            messages=[{"role": "user", "content": "Say hello"}],
+            max_completion_tokens=16,
+        )
+
+    request: Final = route.calls.last.request
+    assert litellm.get_llm_provider("empiriolabs/qwen3-7-plus") == (
+        "qwen3-7-plus",
+        "empiriolabs",
+        "environment-key",
+        EMPIRIOLABS_BASE_URL,
+    )
+    assert route.call_count == 1
+    assert request.headers["authorization"] == "Bearer environment-key"
+    assert json.loads(request.content) == {
+        "model": "qwen3-7-plus",
+        "messages": [{"role": "user", "content": "Say hello"}],
+        "max_tokens": 16,
+    }
+    assert response.choices[0].message.content == "Hello from EmpirioLabs AI"
