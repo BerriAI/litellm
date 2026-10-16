@@ -3003,7 +3003,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # Merge so earlier values (e.g. Bedrock Invoke region_name / custom_llm_provider
         # set in main.py for region-based pricing) are not wiped. See #44002.
         model_response.hidden_params = {  # rebind-ok: merge preexisting Bedrock region pricing keys into hidden_params without wiping region_name
-            **model_response.hidden_params,
+            **model_response.hidden_params,  # pyright: ignore[reportUnknownMemberType]  # ModelResponse.hidden_params is an untyped pydantic dict here
             **_hidden_params,
         }
         return model_response
