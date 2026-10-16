@@ -343,10 +343,13 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         annotations = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(
                             content_item.get("annotations", None)
                         )
+                        phase = item.get("phase")
+                        provider_specific_fields = {"phase": phase} if isinstance(phase, str) else None
                         msg = Message(
                             role=item.get("role", "assistant"),
                             content=response_text if response_text else "",
                             annotations=annotations,
+                            provider_specific_fields=provider_specific_fields,
                         )
                         choice = Choices(message=msg, finish_reason="stop", index=index)
                         return choice, index + 1
@@ -356,6 +359,15 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         # Unknown or unsupported type
         return None, index
+
+    @staticmethod
+    def _extract_message_phase(message: Mapping[str, Any]) -> str | None:
+        phase = message.get("phase")
+        if not isinstance(phase, str):
+            provider_specific_fields = message.get("provider_specific_fields")
+            if isinstance(provider_specific_fields, Mapping):
+                phase = provider_specific_fields.get("phase")
+        return phase if isinstance(phase, str) else None
 
     def convert_chat_completion_messages_to_responses_api(
         self, messages: list["AllMessageValues"]
@@ -440,13 +452,15 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             elif role == "assistant" and tool_calls and isinstance(tool_calls, list):
                 input_items.extend(_reasoning_input_items(msg))
                 if content:
-                    input_items.append(
-                        {
-                            "type": "message",
-                            "role": "assistant",
-                            "content": self._convert_content_to_responses_format(content, "assistant"),
-                        }
-                    )
+                    message_item: dict[str, object] = {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": self._convert_content_to_responses_format(content, "assistant"),
+                    }
+                    phase = self._extract_message_phase(msg)
+                    if phase is not None:
+                        message_item["phase"] = phase
+                    input_items.append(message_item)
                 for tool_call in tool_calls:
                     function = tool_call.get("function")
                     custom = tool_call.get("custom")
@@ -474,13 +488,16 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             elif content is not None:
                 if role == "assistant":
                     input_items.extend(_reasoning_input_items(msg))
-                input_items.append(
-                    {
-                        "type": "message",
-                        "role": role,
-                        "content": self._convert_content_to_responses_format(content, cast(str, role)),
-                    }
-                )
+                message_item = {
+                    "type": "message",
+                    "role": role,
+                    "content": self._convert_content_to_responses_format(content, cast(str, role)),
+                }
+                if role == "assistant":
+                    phase = self._extract_message_phase(msg)
+                    if phase is not None:
+                        message_item["phase"] = phase
+                input_items.append(message_item)
             elif role == "assistant":
                 input_items.extend(_reasoning_input_items(msg))
 
@@ -1336,6 +1353,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         self._chat_completion_id: str | None = None
         self._served_service_tier: str | None = None
         self._tool_call_index_map: dict[int, int] = {}  # mutable-ok: per-stream accumulator state
+        self._message_phase_by_output_index: dict[int, str] = {}  # mutable-ok: per-stream message metadata
 
     def _handle_string_chunk(
         self, str_line: Union[str, "BaseModel"]
@@ -1376,6 +1394,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
     def translate_responses_chunk_to_openai_stream(
         parsed_chunk: dict | BaseModel,
         tool_call_index_map: dict[int, int] | None = None,  # mutable-ok: per-stream state, remapped in place
+        message_phase_by_output_index: Mapping[int, str] | None = None,
     ) -> "ModelResponseStream":
         """
         Translate a Responses API streaming chunk to OpenAI chat completion streaming format.
@@ -1383,6 +1402,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         Args:
             parsed_chunk: Dict containing the Responses API event chunk
             tool_call_index_map: Per-stream output_index -> sequential tool_call index map
+            message_phase_by_output_index: Per-stream Responses message output_index -> phase mapping
 
         Returns:
             ModelResponseStream: OpenAI-formatted streaming chunk
@@ -1463,6 +1483,18 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                         StreamingChoices(
                             index=0,
                             delta=Delta(tool_calls=[tool_call_chunk]),
+                            finish_reason=None,
+                        )
+                    ]
+                )
+            elif output_item.get("type") == "message":
+                phase = output_item.get("phase")
+                provider_specific_fields = {"phase": phase} if isinstance(phase, str) else None
+                return ModelResponseStream(
+                    choices=[
+                        StreamingChoices(
+                            index=0,
+                            delta=Delta(content="", provider_specific_fields=provider_specific_fields),
                             finish_reason=None,
                         )
                     ]
@@ -1551,11 +1583,17 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             # Content part added to output
             content_part = parsed_chunk.get("delta", None)
             if content_part is not None:
+                output_index = cast(int, parsed_chunk.get("output_index", 0))
+                phase = message_phase_by_output_index.get(output_index) if message_phase_by_output_index else None
+                provider_specific_fields = {"phase": phase} if phase is not None else None
                 return ModelResponseStream(
                     choices=[
                         StreamingChoices(
                             index=0,
-                            delta=Delta(content=content_part),
+                            delta=Delta(
+                                content=content_part,
+                                provider_specific_fields=provider_specific_fields,
+                            ),
                             finish_reason=None,
                         )
                     ]
@@ -1647,13 +1685,26 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         """
         verbose_logger.debug("Chat provider: transform_streaming_response called with chunk: %s", chunk)
         self._remember_served_service_tier(chunk)
+        self._remember_message_phase(chunk)
         return self._with_served_service_tier(
             self._with_stream_scoped_id(
                 OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
-                    chunk, tool_call_index_map=self._tool_call_index_map
+                    chunk,
+                    tool_call_index_map=self._tool_call_index_map,
+                    message_phase_by_output_index=self._message_phase_by_output_index,
                 )
             )
         )
+
+    def _remember_message_phase(self, chunk: dict[str, object]) -> None:
+        if chunk.get("type") != ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED:
+            return
+        output_item = chunk.get("item")
+        if not isinstance(output_item, dict) or output_item.get("type") != "message":
+            return
+        phase = output_item.get("phase")
+        if isinstance(phase, str):
+            self._message_phase_by_output_index[cast(int, chunk.get("output_index", 0))] = phase
 
     def _remember_served_service_tier(self, chunk: dict[str, object]) -> None:
         response_payload: Final = chunk.get("response")
