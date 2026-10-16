@@ -1,17 +1,20 @@
+import asyncio
 import datetime
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from types import MappingProxyType
-from typing import Final, TypeAlias
+from typing import Final, TypeAlias, cast
 
 import httpx
 import pytest
 import respx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.anthropic.pass_through.adapters.handler import LiteLLMMessagesToCompletionTransformationHandler
+from litellm.llms.anthropic.pass_through.adapters.streaming_iterator import AnthropicSSEStream
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.utils import StandardCallbackDynamicParams
@@ -28,10 +31,8 @@ CHAT_RESPONSE: Final = {
 
 
 class _DeploymentHookCounter(CustomLogger):
-    def __init__(self) -> None:
-        super().__init__()
-        self.pre_call = 0
-        self.post_call = 0
+    pre_call: int = 0
+    post_call: int = 0
 
     async def async_pre_call_deployment_hook(self, kwargs: Mapping[str, object], call_type: object) -> None:
         self.pre_call += 1
@@ -142,6 +143,18 @@ async def test_bridge_maps_an_upstream_429_to_rate_limit_error(
         await _ask()
 
 
+def _sync_bridge(logging_obj: Logging, *, stream: bool) -> object:
+    return LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
+        max_tokens=10,
+        messages=[{"role": "user", "content": "hi"}],
+        model="hosted_vllm/served-model",
+        stream=stream,
+        api_base=API_BASE,
+        api_key="sk-chat",
+        litellm_logging_obj=logging_obj,
+    )
+
+
 def test_sync_bridge_answers_from_one_upstream_call(upstream: respx.Route):
     logging_obj: Final = Logging(
         model="hosted_vllm/served-model",
@@ -153,14 +166,7 @@ def test_sync_bridge_answers_from_one_upstream_call(upstream: respx.Route):
         function_id="1234",
     )
 
-    response: Final = LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
-        max_tokens=10,
-        messages=[{"role": "user", "content": "hi"}],
-        model="hosted_vllm/served-model",
-        api_base=API_BASE,
-        api_key="sk-chat",
-        litellm_logging_obj=logging_obj,
-    )
+    response: Final = _sync_bridge(logging_obj, stream=False)
 
     assert isinstance(response, dict)
     assert response["content"] == [{"type": "text", "text": "from upstream"}]
@@ -202,3 +208,147 @@ async def test_bridge_goes_through_a_wrapped_acompletion(upstream: respx.Route, 
     assert response["content"] == [{"type": "text", "text": "from upstream"}]
     assert seen == ["hosted_vllm/served-model"]
     assert upstream.call_count == 1
+
+
+class _SuccessRowRecorder(CustomLogger):
+    call_types: tuple[str, ...] = ()
+
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.call_types = (*self.call_types, str(kwargs.get("call_type")))
+
+    def log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.call_types = (*self.call_types, str(kwargs.get("call_type")))
+
+
+_PARKED_COMPLETION: Final = TypeAdapter(tuple[object])
+
+
+async def _release(parked: Coroutine[object, object, object]) -> None:
+    await parked
+
+
+async def _settled_rows(recorder: _SuccessRowRecorder) -> tuple[str, ...]:
+    for _ in range(200):
+        if recorder.call_types:
+            break
+        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.05)
+    return recorder.call_types
+
+
+STREAM_CHUNK: Final = '{"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"streamed"},"finish_reason":null}]}'
+STREAM_DONE: Final = '{"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}'
+
+
+@pytest.fixture
+def stream_recorder(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch) -> _SuccessRowRecorder:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post(f"{API_BASE}/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            content=f"data: {STREAM_CHUNK}\n\ndata: {STREAM_DONE}\n\ndata: [DONE]\n\n".encode(),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+    recorder: Final = _SuccessRowRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    return recorder
+
+
+async def _read_through_message_stop(stream: AsyncIterator[bytes]) -> None:
+    async for frame in stream:
+        if frame.startswith(b"event: message_stop"):
+            return
+
+
+@pytest.mark.asyncio
+async def test_bridged_stream_logs_one_row_when_the_client_stream_ends(stream_recorder: _SuccessRowRecorder):
+    stream: Final = await _ask({"stream": True})
+    assert isinstance(stream, AnthropicSSEStream)
+
+    await _read_through_message_stop(stream)
+    rows_while_the_client_stream_is_open: Final = await _settled_rows(stream_recorder)
+    remaining: Final[list[bytes]] = [frame async for frame in stream]
+
+    assert rows_while_the_client_stream_is_open == ()
+    assert remaining == []
+    assert await _settled_rows(stream_recorder) == ("anthropic_messages",)
+
+
+@pytest.mark.asyncio
+async def test_bridged_stream_still_logs_when_the_client_leaves_after_message_stop(
+    stream_recorder: _SuccessRowRecorder,
+):
+    stream: Final = await _ask({"stream": True})
+    assert isinstance(stream, AnthropicSSEStream)
+
+    await _read_through_message_stop(stream)
+    await stream.aclose()
+
+    assert await _settled_rows(stream_recorder) == ("anthropic_messages",)
+
+
+@pytest.mark.asyncio
+async def test_bridged_stream_holds_its_row_for_the_proxy_end_of_stream_guardrails(
+    stream_recorder: _SuccessRowRecorder, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "_async_success_callback", [stream_recorder])
+    logging_obj: Final = Logging(
+        model="hosted_vllm/served-model",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.datetime.now(datetime.timezone.utc),
+        litellm_call_id="6825beef-0000-4000-8000-000000000007",
+        function_id="1234",
+    )
+
+    async def release(*held: object) -> None:
+        return None
+
+    setattr(logging_obj, "_on_deferred_stream_complete", release)  # noqa: B010  # the proxy arms this slot dynamically
+    stream: Final = await LiteLLMMessagesToCompletionTransformationHandler.async_anthropic_messages_handler(
+        max_tokens=10,
+        messages=[{"role": "user", "content": "hi"}],
+        model="hosted_vllm/served-model",
+        stream=True,
+        api_base=API_BASE,
+        api_key="sk-chat",
+        litellm_logging_obj=logging_obj,
+    )
+    assert isinstance(stream, AnthropicSSEStream)
+    frames: Final = [frame async for frame in stream]
+    rows_before_release: Final = await _settled_rows(stream_recorder)
+    held: Final[object] = getattr(logging_obj, "_deferred_stream_complete_args", None)
+
+    assert frames[-1].startswith(b"event: message_stop")
+    assert rows_before_release == ()
+    (parked,) = _PARKED_COMPLETION.validate_python(held)
+    assert asyncio.iscoroutine(parked)
+    await _release(parked)
+    assert stream_recorder.call_types == ("anthropic_messages",)
+
+
+def test_sync_bridged_stream_logs_one_row(stream_recorder: _SuccessRowRecorder, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "success_callback", [stream_recorder])
+    logging_obj: Final = Logging(
+        model="hosted_vllm/served-model",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.datetime.now(datetime.timezone.utc),
+        litellm_call_id="6825beef-0000-4000-8000-000000000006",
+        function_id="1234",
+    )
+
+    stream: Final = _sync_bridge(logging_obj, stream=True)
+    assert isinstance(stream, Iterator)
+    frames: Final = list(cast(Iterator[bytes], stream))  # cast-ok: the sync bridge streams SSE frames as bytes
+
+    assert frames[-1].startswith(b"event: message_stop")
+    assert asyncio.run(_settled_rows(stream_recorder)) == ("anthropic_messages",)
