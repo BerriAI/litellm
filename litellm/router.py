@@ -12262,7 +12262,9 @@ class Router:
         members: Final = routing_group.models if routing_group is not None else ()
         return served_model if served_model == target or served_model in members else model_name
 
-    def map_team_model(self, team_model_name: str | None, team_id: str) -> str | None:
+    def map_team_model(
+        self, team_model_name: str | None, team_id: str, custom_llm_provider: str | None = None
+    ) -> str | None:
         """
         Check if team_model_name resolves to team-specific deployments.
 
@@ -12271,13 +12273,16 @@ class Router:
         single internal model_name.
 
         When team_model_name is None (e.g. vector store / file endpoints that
-        don't include a model in their request), returns the first matching
-        team deployment's team_public_model_name so the router can inject BYOK
-        credentials from the team-scoped deployment.
+        don't include a model in their request), returns a team deployment's
+        team_public_model_name so the router can inject BYOK credentials from
+        the team-scoped deployment. With custom_llm_provider set, only a team
+        deployment serving that provider qualifies (a langgraph team model must
+        not receive a Bedrock vector store search); without it, the first team
+        deployment is used.
 
         Returns:
         - str: the team_model_name if team deployments exist for this team
-        - None: if no team-specific model is found
+        - None: if no team-specific model is found, or none serves custom_llm_provider
         """
         models: Final = self.get_model_list(model_name=team_model_name, team_id=team_id)
         if not models:
@@ -12288,6 +12293,11 @@ class Router:
                     # No model was specified (e.g. vector store endpoints).
                     # Return the deployment's public model name so the router
                     # can route to it and inject the BYOK API key.
+                    if (
+                        custom_llm_provider is not None
+                        and provider_for_generic_call(model.get("litellm_params", {})) != custom_llm_provider
+                    ):
+                        continue
                     return model.get("model_info", {}).get("team_public_model_name") or model.get("model_name")
                 return team_model_name
 
