@@ -1,4 +1,5 @@
 import base64
+import builtins
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -118,6 +119,7 @@ class _BaseChunk(TypedDict, total=False):
     created: ReadOnly[int]
     model: ReadOnly[str]
     system_fingerprint: ReadOnly[str | None]
+    provider_specific_fields: ReadOnly[Mapping[str, builtins.object] | None]
     service_tier: ReadOnly[str | None]
     choices: ReadOnly[Required[Sequence[StreamingChoices]]]
     _hidden_params: ReadOnly[_ChunkHiddenParams]
@@ -430,6 +432,11 @@ class ChunkProcessor:
                 "created": created,
                 "model": model,
                 "system_fingerprint": system_fingerprint,
+                **(
+                    {"provider_specific_fields": chunks[0].get("provider_specific_fields")}
+                    if system_fingerprint == "fp_ollama"
+                    else {}
+                ),
                 **(
                     MappingProxyType({"service_tier": service_tier})
                     if service_tier is not None

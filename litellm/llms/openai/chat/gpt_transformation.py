@@ -958,9 +958,11 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
                 )
             choices = chunk.get("choices", [])
             choices = self._map_reasoning_to_reasoning_content(choices)
+            fingerprint: Final = _OBJECT_MAPPING.validate_python(chunk).get("system_fingerprint")
 
             kwargs: Final[dict[str, Any]] = {
                 "id": chunk.get("id"),
+                "system_fingerprint": fingerprint,
                 "object": "chat.completion.chunk",
                 "created": chunk.get("created"),
                 "model": chunk.get("model"),
