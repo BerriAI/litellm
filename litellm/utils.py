@@ -3346,39 +3346,50 @@ def _without_overridden_price_variants(
     )
 
 
-def _inherited_builtin_entry(
-    key: str, matched_key: str, entry: Mapping[str, object], value: Mapping[str, object]
-) -> Mapping[str, object]:
-    return entry if matched_key == key else _without_overridden_price_variants(entry, value)
+@dataclass(frozen=True, slots=True)
+class _BuiltinCostMatch:
+    entry: Mapping[str, object]
+    names_the_row: bool
 
 
-def _resolve_builtin_model_cost_entry(key: str, provider: str) -> tuple[str, dict[str, object]] | None:
+def _inherited_builtin_entry(match: _BuiltinCostMatch, value: Mapping[str, object]) -> Mapping[str, object]:
+    return match.entry if match.names_the_row else _without_overridden_price_variants(match.entry, value)
+
+
+def _resolve_builtin_model_cost_entry(key: str, provider: str) -> _BuiltinCostMatch | None:
     """Best-effort lookup of a built-in ``model_cost`` entry for a custom key
     whose shape ``get_model_info`` cannot resolve (repeated provider prefixes
     like ``bedrock/bedrock/bedrock/us.anthropic.claude-sonnet-4-6`` or region
-    aliases).
+    aliases), or whose lookup tripped.
 
-    The key itself is tried first, so a catalog row whose lookup tripped
-    inherits from itself rather than from a region-stripped sibling priced at
-    the base rate. Returns the matched candidate key and a copy of its entry so
-    the caller can inherit its defaults without mutating the shared built-in.
-    Returns ``None`` when no candidate exists under a provider ``get_model_info``
-    would accept for ``provider``, or, when the value names none, for the provider prefix
-    the key itself carries, which is what ``get_model_info`` derives when it
-    reads the key back.
+    The key itself is tried first, then the key behind its provider prefixes
+    and bedrock route, so a catalog row whose lookup tripped inherits from
+    itself rather than from a region-stripped sibling priced at the base rate.
+    ``names_the_row`` is set when the match is the row the key names, which
+    ``get_model_info`` resolves it to, so the caller keeps that row's rates as
+    an untripped registration does. Returns ``None`` when no candidate exists
+    under a provider ``get_model_info`` would accept for ``provider``, or, when
+    the value names none, for the provider prefix the key itself carries,
+    which is what ``get_model_info`` derives when it reads the key back.
     """
+    from litellm.llms.bedrock.common_utils import strip_bedrock_routing_prefix
+
     segments: Final = key.split("/")
     match_provider: Final = provider or (segments[0] if len(segments) > 1 and segments[0] in LlmProvidersSet else "")
     provider_prefix_count: Final = next(
         (idx for idx, segment in enumerate(segments[:-1]) if segment not in LlmProvidersSet), len(segments) - 1
     )
     prefix_stripped: Final = tuple("/".join(segments[idx:]) for idx in range(1, provider_prefix_count + 1))
-    base: Final = prefix_stripped[-1] if prefix_stripped else key
+    prefix_free: Final = prefix_stripped[-1] if prefix_stripped else key
+    base: Final = (
+        strip_bedrock_routing_prefix(prefix_free) if match_provider in ("bedrock", "bedrock_converse") else prefix_free
+    )
     region_stripped: Final = tuple(
         base[len(region_prefix) :] for region_prefix in _BEDROCK_REGION_PREFIXES if base.startswith(region_prefix)
     )
     stripped: Final = _strip_model_name(model=base, custom_llm_provider=match_provider) if match_provider else base
-    candidates: Final = (key, *prefix_stripped, *region_stripped, *((stripped,) if stripped != base else ()))
+    row_names: Final = (key, *prefix_stripped, base, stripped)
+    candidates: Final = (key, *prefix_stripped, base, *region_stripped, stripped)
 
     builtin_cost_map: Final = _builtin_cost_map()
     for candidate in candidates:
@@ -3388,7 +3399,7 @@ def _resolve_builtin_model_cost_entry(key: str, provider: str) -> tuple[str, dic
             and entry.get("litellm_provider") is not None
             and _check_provider_match(entry, match_provider)
         ):
-            return candidate, dict(entry)
+            return _BuiltinCostMatch(entry=dict(entry), names_the_row=candidate in row_names)
     return None
 
 
@@ -3542,7 +3553,7 @@ def register_model(
         if provider in _skip_get_model_info_providers or any(
             _key_str.startswith(f"{p}/") for p in _skip_get_model_info_providers
         ):
-            existing_model = litellm.model_cost.get(key, {})
+            existing_model = dict(_builtin_cost_map().get(key, {}))
             model_cost_key = key
         else:
             builtin_model_info = _get_builtin_model_info_for_registration(
@@ -3558,7 +3569,7 @@ def register_model(
                 model_cost_key = key
                 builtin_match = _resolve_builtin_model_cost_entry(key=_key_str, provider=provider)
                 existing_model = (
-                    dict(_inherited_builtin_entry(_key_str, *builtin_match, value))
+                    dict(_inherited_builtin_entry(builtin_match, value))
                     if builtin_match is not None
                     else dict(match_capability_generalizations(_key_str) or {})
                 )
@@ -3583,7 +3594,7 @@ def register_model(
             existing_model.pop("litellm_provider", None)
         ## override / add new keys to the existing model cost dictionary
         updated_dictionary = update_dictionary(existing_model, value)
-        litellm.model_cost.setdefault(model_cost_key, {}).update(updated_dictionary)
+        litellm.model_cost[model_cost_key] = {**_builtin_cost_map().get(model_cost_key, {}), **updated_dictionary}
 
         # Invalidate case-insensitive lookup map since model_cost was modified
         _invalidate_model_cost_lowercase_map()

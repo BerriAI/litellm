@@ -797,9 +797,13 @@ def test_embedding_direct_sdk_custom_pricing_still_registers_shared_key():
         _invalidate_model_cost_lowercase_map()
 
 
-def test_register_model_prices_a_geo_alias_from_its_builtin_when_the_lookup_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("route", ["", "converse/", "invoke/"])
+def test_register_model_prices_a_geo_alias_from_its_builtin_when_the_lookup_fails(
+    monkeypatch: pytest.MonkeyPatch, route: str
+) -> None:
     """After a price data reload the deployment replay registers every bedrock
-    geo deployment (``bedrock/au.anthropic.<model>``) with metadata only. When
+    geo deployment (``bedrock/au.anthropic.<model>``, with or without a
+    ``converse/`` or ``invoke/`` route) with metadata only. When
     ``get_model_info`` failed for a reason other than the model being unmapped
     (a request thread registering pricing tripped its map rebuild), the
     registration fell through to the unmapped path and wrote a raw-key entry
@@ -812,7 +816,7 @@ def test_register_model_prices_a_geo_alias_from_its_builtin_when_the_lookup_fail
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
     _invalidate_model_cost_lowercase_map()
     canonical_key: Final = "au.anthropic.claude-sonnet-5"
-    alias: Final = f"bedrock/{canonical_key}"
+    alias: Final = f"bedrock/{route}{canonical_key}"
     canonical: Final = litellm.model_cost[canonical_key]
 
     def lookup_tripped_by_a_concurrent_registration(model: str, custom_llm_provider: str | None = None) -> NoReturn:
@@ -891,15 +895,17 @@ def test_register_model_keeps_a_catalog_rows_own_prices_when_the_lookup_fails(mo
         _invalidate_model_cost_lowercase_map()
 
 
+@pytest.mark.parametrize("key_prefix", ["", "bedrock/", "bedrock/converse/"])
 def test_register_model_bills_a_catalog_rows_tier_rates_the_same_when_the_lookup_fails(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, key_prefix: str
 ) -> None:
-    """A custom flat price registered on a catalog row bills a long prompt the same whether or not
-    ``get_model_info`` trips during the registration, so a reload storm never flips the bill."""
+    """A custom flat price registered on a catalog row, under its own key or behind a provider prefix and
+    bedrock route, bills a long prompt the same whether or not ``get_model_info`` trips during the
+    registration, so a reload storm never flips the bill."""
     from litellm.types.utils import ModelResponse, Usage
 
     catalog_key: Final = "au.anthropic.lit-5853-tiered-geo-model"
-    registered_key: Final = catalog_key
+    registered_key: Final = f"{key_prefix}{catalog_key}"
     catalog_row: Final = {
         "litellm_provider": "bedrock_converse",
         "mode": "chat",
@@ -942,6 +948,39 @@ def test_register_model_bills_a_catalog_rows_tier_rates_the_same_when_the_lookup
         assert long_prompt_cost_after_registering_with(lookup_tripped_by_a_concurrent_registration) == pytest.approx(
             long_prompt_cost_after_registering_with(litellm.utils.get_model_info)
         )
+    finally:
+        _invalidate_model_cost_lowercase_map()
+
+
+def test_register_model_leaves_the_entry_a_lookup_is_walking_intact(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A request thread walking a catalog entry while another registers pricing on it must finish its walk,
+    since a registration that grows the entry in place makes the walk raise and the lookup fail."""
+    catalog_key: Final = "lit-5853-live-entry-model"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.get_model_cost_map(url=""),
+            catalog_key: {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 2e-06},
+        },
+    )
+    _invalidate_model_cost_lowercase_map()
+    walk: Final = iter(litellm.model_cost[catalog_key].items())
+    first_field: Final = next(walk)
+
+    try:
+        litellm.register_model(
+            {catalog_key: {"litellm_provider": "openai", "input_cost_per_token": 1e-06, "supports_vision": True}},
+            persist_across_reloads=False,
+        )
+        assert dict((first_field, *walk)) == {
+            "litellm_provider": "openai",
+            "mode": "chat",
+            "input_cost_per_token": 2e-06,
+        }
+        assert litellm.get_model_info(catalog_key)["input_cost_per_token"] == 1e-06
+        assert litellm.get_model_info(catalog_key)["supports_vision"] is True
     finally:
         _invalidate_model_cost_lowercase_map()
 
