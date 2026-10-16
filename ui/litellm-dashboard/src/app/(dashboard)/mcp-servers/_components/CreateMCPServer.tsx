@@ -56,7 +56,7 @@ import EnvVarsSection from "./EnvVarsSection";
 import { isAdminRole } from "@/utils/roles";
 import { validateMCPServerUrl, validateMCPServerName } from "./utils";
 import { toast } from "@/lib/toast";
-import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
+import { useMcpOAuthFlow, type McpDcrCredentials } from "@/hooks/useMcpOAuthFlow";
 import { useTestMCPConnection } from "@/hooks/useTestMCPConnection";
 import {
   MountedFormField,
@@ -144,7 +144,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   // it can never be collected as a client-forwarded server's declared app; injected into the payload
   // only on an oauth2 submit (where persisting the registered client is correct), and cleared on any
   // invalidation or modal close. An abandoned authorize leaves it null, which is the desired asymmetry.
-  const dcrClientRef = React.useRef<{ client_id: string; client_secret?: string } | null>(null);
+  const dcrClientRef = React.useRef<McpDcrCredentials | null>(null);
   // Set when the upstream identity (url/endpoints) changed while a declared app is present, so the
   // section can warn that the saved app may not match the new upstream (the app is kept, not wiped).
   const [appMayNotMatchUpstream, setAppMayNotMatchUpstream] = useState(false);
@@ -264,12 +264,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       // The DCR-minted client is held in a ref, NOT written into form.credentials, so it can never be
       // collected as a client-forwarded server's declared app; it is injected into the payload only on
       // an oauth2 submit. An admin-typed client already lives in form.credentials and is left untouched.
-      dcrClientRef.current = registeredClient?.clientId
-        ? {
-            client_id: registeredClient.clientId,
-            ...(registeredClient.clientSecret && { client_secret: registeredClient.clientSecret }),
-          }
-        : null;
+      dcrClientRef.current = registeredClient ?? null;
 
       const current = (allFieldsValue(form).credentials as Record<string, unknown> | undefined) ?? {};
       const nextCredentials = {
@@ -816,6 +811,28 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                         min={1}
                         step={1}
                         placeholder="e.g. 10"
+                        className="w-full rounded-lg"
+                      />
+                    )}
+                  </MountedFormField>
+
+                  <MountedFormField
+                    label={
+                      <span className="text-sm font-medium text-foreground flex items-center">
+                        RPM limit (all callers)
+                        <SimpleTooltip content="Max requests per minute to this server across all keys and teams. Leave empty for no limit">
+                          <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
+                        </SimpleTooltip>
+                      </span>
+                    }
+                    name="rpm"
+                  >
+                    {(control) => (
+                      <Input
+                        {...numberControl(control, 0)}
+                        min={0}
+                        step={1}
+                        placeholder="e.g. 60"
                         className="w-full rounded-lg"
                       />
                     )}

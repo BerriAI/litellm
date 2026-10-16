@@ -11,7 +11,7 @@ import time
 import uuid as uuid_module
 from collections.abc import Coroutine
 from functools import partial
-from typing import Any, Final, Literal, cast
+from typing import Final, Literal, cast
 
 import httpx
 from openai import AsyncOpenAI, OpenAI
@@ -30,9 +30,6 @@ FileCreateProvider = Literal[
     "mistral",
     "xai",
 ]
-FileRetrieveProvider = Literal[
-    "openai", "azure", "gemini", "vertex_ai", "hosted_vllm", "litellm_proxy", "manus", "anthropic", "mistral", "xai"
-]
 FileDeleteProvider = Literal[
     "openai", "azure", "gemini", "bedrock", "litellm_proxy", "manus", "anthropic", "mistral", "xai"
 ]
@@ -40,7 +37,7 @@ FileListProvider = Literal["openai", "azure", "litellm_proxy", "manus", "anthrop
 import litellm
 from litellm import get_secret_str
 from litellm.files.streaming import FileContentStreamingResponse
-from litellm.files.types import FileContentProvider, FileContentStreamingResult
+from litellm.files.types import FileContentProvider, FileContentStreamingResult, FileRetrieveProvider
 from litellm.litellm_core_utils.get_litellm_params import add_trusted_model_credentials_to_litellm_params
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -166,7 +163,7 @@ def create_file(
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
     **kwargs,
-) -> OpenAIFileObject | Coroutine[Any, Any, OpenAIFileObject]:
+) -> OpenAIFileObject | Coroutine[object, None, OpenAIFileObject]:
     """
     Files are used to upload documents that can be used with features like Assistants, Fine-tuning, and Batch API.
 
@@ -331,7 +328,7 @@ async def afile_retrieve(
         else:
             response = init_response
 
-        return OpenAIFileObject(**response.model_dump())
+        return OpenAIFileObject.model_validate(response.model_dump())
     except Exception as e:
         raise e
 
@@ -369,7 +366,15 @@ def file_retrieve(
 
         _is_async: Final = kwargs.pop("is_async", False) is True
 
-        if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
+        if custom_llm_provider == LlmProviders.XAI.value and is_xai_batch_results_id(file_id):
+            response = xai_batch_results_instance.batch_results_file(  # rebind-ok: shares the result slot with the provider branches below
+                _is_async=_is_async,
+                batch_id=file_id,
+                api_base=optional_params.api_base,
+                api_key=optional_params.api_key,
+                timeout=timeout,
+            )
+        elif custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
             openai_creds: Final = get_openai_credentials(
                 api_base=optional_params.api_base,
                 api_key=optional_params.api_key,
@@ -862,8 +867,8 @@ def file_content(
 ) -> (
     HttpxBinaryResponseContent
     | FileContentStreamingResult
-    | Coroutine[Any, Any, HttpxBinaryResponseContent]
-    | Coroutine[Any, Any, FileContentStreamingResult]
+    | Coroutine[object, None, HttpxBinaryResponseContent]
+    | Coroutine[object, None, FileContentStreamingResult]
 ):
     """
     Returns the contents of the specified file.

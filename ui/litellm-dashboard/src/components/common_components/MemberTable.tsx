@@ -38,7 +38,7 @@ export interface MemberTableProps {
   extraColumns?: MemberTableColumn[];
   showDeleteForMember?: (member: Member) => boolean;
   onResetSpend?: (member: Member) => void;
-  showResetSpendForMember?: (member: Member) => boolean;
+  resetSpendDisabledReason?: (member: Member) => string | null;
   emptyText?: string;
 }
 
@@ -66,6 +66,19 @@ function RoleHeaderTitle({ title, tooltip }: { title: string; tooltip?: string }
   );
 }
 
+function ResetSpendAction({ disabledReason, onClick }: { disabledReason: string | null; onClick: () => void }) {
+  return (
+    <TableIconActionButton
+      variant="Reset"
+      tooltipText="Reset spend"
+      disabled={disabledReason !== null}
+      disabledTooltipText={disabledReason ?? undefined}
+      dataTestId="reset-member-spend"
+      onClick={onClick}
+    />
+  );
+}
+
 const ACTIONS_COLUMN_WIDTH = 120;
 
 interface MemberColumnDeps {
@@ -77,7 +90,7 @@ interface MemberColumnDeps {
   extraColumns: MemberTableColumn[];
   showDeleteForMember?: (member: Member) => boolean;
   onResetSpend?: (member: Member) => void;
-  showResetSpendForMember?: (member: Member) => boolean;
+  resetSpendDisabledReason?: (member: Member) => string | null;
 }
 
 const extraColumnDef = (column: MemberTableColumn): ColumnDef<Member> => {
@@ -113,7 +126,7 @@ const buildColumns = ({
   extraColumns,
   showDeleteForMember,
   onResetSpend,
-  showResetSpendForMember,
+  resetSpendDisabledReason,
 }: MemberColumnDeps): ColumnDef<Member>[] => [
   {
     id: "user_alias",
@@ -182,11 +195,9 @@ const buildColumns = ({
             dataTestId="edit-member"
             onClick={() => onEdit(row.original)}
           />
-          {onResetSpend && (showResetSpendForMember?.(row.original) ?? true) && (
-            <TableIconActionButton
-              variant="Reset"
-              tooltipText="Reset spend"
-              dataTestId="reset-member-spend"
+          {onResetSpend && (
+            <ResetSpendAction
+              disabledReason={resetSpendDisabledReason?.(row.original) ?? null}
               onClick={() => onResetSpend(row.original)}
             />
           )}
@@ -214,7 +225,7 @@ export default function MemberTable({
   extraColumns = [],
   showDeleteForMember,
   onResetSpend,
-  showResetSpendForMember,
+  resetSpendDisabledReason,
   emptyText,
 }: MemberTableProps) {
   const [globalFilter, setGlobalFilter] = useState("");
@@ -230,7 +241,7 @@ export default function MemberTable({
     extraColumns,
     showDeleteForMember,
     onResetSpend,
-    showResetSpendForMember,
+    resetSpendDisabledReason,
   };
   const columns = buildColumns(columnDeps);
   const roleFilterItems = [

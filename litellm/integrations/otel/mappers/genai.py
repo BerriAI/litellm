@@ -174,7 +174,7 @@ class GenAIMapper:
                 return {}
 
     def _llm_call(self, data: LLMCallSpanData) -> AttributeMap:
-        attrs: Final = collect(self._LLM_CALL_ATTRS, data)
+        attrs: Final = {**collect(self._LLM_CALL_ATTRS, data), **data.routing_attributes}
         if data.tools:
             attrs[LiteLLM.TOOLS_DECLARED] = len(data.tools)
             attrs.update(

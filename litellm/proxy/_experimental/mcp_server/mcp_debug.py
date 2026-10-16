@@ -244,7 +244,7 @@ class MCPDebug:
     def mask_secret(value: str | None) -> str:
         if not value:
             return "(none)"
-        return MCPDebug._masker._mask_value(value)
+        return MCPDebug._masker.mask_value(value)
 
     @staticmethod
     def is_debug_enabled(headers: dict[str, str]) -> bool:
@@ -390,7 +390,7 @@ class MCPDebug:
                 server_auth_type = server.auth_type
                 break
 
-        scope_headers: Final = MCPRequestHandler._safe_get_headers_from_scope(scope)
+        scope_headers: Final = MCPRequestHandler.safe_get_headers_from_scope(scope)
         litellm_key: Final = MCPRequestHandler.get_litellm_api_key_from_headers(scope_headers)
 
         return MCPDebug.build_debug_headers(

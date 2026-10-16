@@ -1,6 +1,6 @@
 import { toast } from "@/lib/toast";
 import { Model, modelCreateCall } from "../networking";
-import { provider_map } from "../provider_info_helpers";
+import { resolveLitellmProviderSlug } from "../provider_info_helpers";
 import { ptuPickerToUtcIso } from "../../utils/ptuDatetime";
 
 export const prepareModelAddRequest = async (formValues: Record<string, any>, accessToken: string, form: any) => {
@@ -14,9 +14,7 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
     // Handle wildcard case
     if (formValues["model"] && formValues["model"].includes("all-wildcard")) {
       const customProviderKey = formValues["custom_llm_provider"] as string;
-      const mappedProvider =
-        provider_map[customProviderKey as keyof typeof provider_map] ?? customProviderKey.toLowerCase();
-      const litellm_custom_provider = mappedProvider;
+      const litellm_custom_provider = resolveLitellmProviderSlug(customProviderKey);
       const wildcardModel = litellm_custom_provider + "/*";
       formValues["model_name"] = wildcardModel;
       modelMappings.push({
@@ -101,9 +99,7 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
         if (key == "model_name") {
           litellmParamsObj["model"] = value;
         } else if (key == "custom_llm_provider") {
-          const providerKey = value as string;
-          const mappingResult = provider_map[providerKey as keyof typeof provider_map] ?? providerKey.toLowerCase();
-          litellmParamsObj["custom_llm_provider"] = mappingResult;
+          litellmParamsObj["custom_llm_provider"] = resolveLitellmProviderSlug(value as string);
         } else if (key == "model") {
           continue;
         }

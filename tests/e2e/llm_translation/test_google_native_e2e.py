@@ -13,6 +13,7 @@ from typing import Literal
 import pytest
 from e2e_config import unique_marker
 from e2e_http import StreamingResponse, require_successful_call
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
@@ -85,6 +86,15 @@ def _streamed_text(result: StreamingResponse) -> str:
 
 class TestGoogleNativeGenerateContent:
     @pytest.mark.covers("llm.google_native.gemini.basic.nonstream.cost_logged")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.GOOGLE_GENAI,
+            providers=(Provider.GEMINI,),
+            models=(UPSTREAM_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_generate_content_returns_response_cost_header(
         self,
         proxy: ProxyClient,
@@ -104,6 +114,15 @@ class TestGoogleNativeGenerateContent:
         assert result.response_cost > 0, f"x-litellm-response-cost must be a real cost, got {result.response_cost}"
 
     @pytest.mark.covers("llm.google_native.gemini.basic.stream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.GOOGLE_GENAI,
+            providers=(Provider.GEMINI,),
+            models=(UPSTREAM_MODEL,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_stream_generate_content_frames_sse_the_way_google_sdks_expect(
         self,
         proxy: ProxyClient,

@@ -11,7 +11,9 @@ import hashlib
 from enum import Enum
 from typing import Annotated, Final, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import ConfigDict, Field, TypeAdapter
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 _REF_HASH_HEX_LENGTH: Final = 16
 _MAX_TTL_SECONDS: Final = 3600
@@ -23,7 +25,7 @@ class AnthropicIdentitySourceKind(str, Enum):
     keycloak = "keycloak"
 
 
-class InternalIssuerSource(BaseModel):
+class InternalIssuerSource(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
 
     kind: Literal[AnthropicIdentitySourceKind.internal_issuer] = AnthropicIdentitySourceKind.internal_issuer
@@ -34,7 +36,7 @@ class InternalIssuerSource(BaseModel):
     signing_key_ref: str
 
 
-class KeycloakSource(BaseModel):
+class KeycloakSource(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
 
     kind: Literal[AnthropicIdentitySourceKind.keycloak] = AnthropicIdentitySourceKind.keycloak

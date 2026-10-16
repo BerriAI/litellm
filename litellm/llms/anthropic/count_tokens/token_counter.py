@@ -4,11 +4,13 @@ Anthropic Token Counter implementation using the CountTokens API.
 
 from typing import Any, Final
 
+from pydantic import JsonValue
+
 from litellm._logging import verbose_logger
 from litellm.exceptions import AuthenticationError
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
-from litellm.types.utils import LlmProviders, TokenCountResponse
+from litellm.types.utils import LlmProviders, TokenCountMessagesFormat, TokenCountResponse
 
 # Global handler instance - reuse across all token counting requests
 anthropic_count_tokens_handler: Final = AnthropicCountTokensHandler()
@@ -26,12 +28,14 @@ class AnthropicTokenCounter(BaseTokenCounter):
     async def count_tokens(
         self,
         model_to_use: str,
-        messages: list[dict[str, Any]] | None,
-        contents: list[dict[str, Any]] | None,
+        messages: list[dict[str, JsonValue]] | None,
+        contents: list[dict[str, object]] | None,
         deployment: dict[str, Any] | None = None,
         request_model: str = "",
-        tools: list[dict[str, Any]] | None = None,
-        system: Any | None = None,
+        tools: list[dict[str, JsonValue]] | None = None,
+        system: JsonValue = None,
+        messages_format: TokenCountMessagesFormat = "anthropic",
+        output_format: JsonValue = None,
     ) -> TokenCountResponse | None:
         """
         Count tokens using Anthropic's CountTokens API.

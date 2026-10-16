@@ -111,6 +111,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     source_url: str | None = None
     timeout: float | None = None
     max_concurrent_requests: int | None = None
+    rpm: int | None = None
     approval_status: str | None = Field(
         default="active",
         description="Approval status: 'pending_review', 'active', 'rejected'",

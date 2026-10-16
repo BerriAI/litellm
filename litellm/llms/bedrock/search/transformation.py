@@ -37,6 +37,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from typing import Final
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
@@ -80,6 +81,8 @@ _GATEWAY_HOST_PATTERN: Final = re.compile(r"[a-z0-9-]+\.gateway\.bedrock-agentco
 _SSE_EVENT_SEPARATOR: Final = re.compile(r"\r?\n[ \t]*\r?\n")
 
 _SSE_LINE_PREFIXES: Final = ("event:", "data:", ":", "id:", "retry:")
+
+_JSON_VALUE: Final = TypeAdapter(object)
 
 
 def _gateway_host_match(api_base: str) -> re.Match[str] | None:
@@ -128,7 +131,7 @@ def _parse_result_items(raw_text: object) -> tuple[Mapping[str, object], ...]:
     if not isinstance(raw_text, str):
         return ()
     try:
-        parsed: Final = json.loads(raw_text)
+        parsed: Final = _JSON_VALUE.validate_python(json.loads(raw_text))
     except json.JSONDecodeError:
         return ()
     return _result_items(parsed)
@@ -147,7 +150,7 @@ def _iter_sse_events(text: str) -> Iterator[Mapping[str, object]]:
         if not payload:
             continue
         try:
-            parsed = json.loads(payload)
+            parsed = _JSON_VALUE.validate_python(json.loads(payload))
         except json.JSONDecodeError:
             continue
         if isinstance(parsed, dict):

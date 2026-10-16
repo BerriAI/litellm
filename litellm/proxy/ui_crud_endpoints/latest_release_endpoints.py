@@ -8,11 +8,12 @@ from typing import Annotated, Final, Literal, Protocol, TypeAlias
 
 import httpx
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.types.llms.base import LiteLLMBaseModel
 
 router: Final = APIRouter()
 
@@ -29,7 +30,7 @@ _Bucket: TypeAlias = Literal["new_features", "bug_fixes", "other_updates"]
 _PREFIX_BUCKETS: Final[Mapping[str, _Bucket]] = MappingProxyType({"feat": "new_features", "fix": "bug_fixes"})
 
 
-class LatestReleaseInfo(BaseModel):
+class LatestReleaseInfo(LiteLLMBaseModel):
     version: str
     new_features: int
     bug_fixes: int
@@ -42,7 +43,7 @@ class LatestReleaseUnavailable:
     reason: str
 
 
-class _GitHubRelease(BaseModel):
+class _GitHubRelease(LiteLLMBaseModel):
     tag_name: str
     html_url: str
     body: str
