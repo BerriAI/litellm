@@ -3789,62 +3789,161 @@ async def test_output_parse_pii_numbered_tokens_across_chunks():
     assert pii_tokens["<CREDIT_CARD_2>"] == CHUNK_MARKER_TWO
 
 
-def test_finalize_presidio_anonymize_numbered_tokens_overlapping_spans():
-    from litellm.proxy.guardrails.guardrail_hooks.presidio import (
-        _OPTIONAL_PresidioPIIMasking,
+@pytest.mark.parametrize(
+    ("text", "analyze_results", "expected_text", "expected_tokens", "expected_counts"),
+    [
+        pytest.param(
+            "Repeat exactly: my number is 4251234567",
+            [
+                {"entity_type": "PHONE_NUMBER", "start": 29, "end": 39, "score": 0.75},
+                {"entity_type": "US_BANK_NUMBER", "start": 29, "end": 39, "score": 0.05},
+                {"entity_type": "US_DRIVER_LICENSE", "start": 29, "end": 39, "score": 0.01},
+            ],
+            "Repeat exactly: my number is <PHONE_NUMBER_1>",
+            {"<PHONE_NUMBER_1>": "4251234567"},
+            {"PHONE_NUMBER": 1},
+            id="same-span",
+        ),
+        pytest.param(
+            "contact john.smith@example.com today",
+            [
+                {"entity_type": "EMAIL_ADDRESS", "start": 8, "end": 30, "score": 1.0},
+                {"entity_type": "DATE_TIME", "start": 31, "end": 36, "score": 0.85},
+                {"entity_type": "URL", "start": 8, "end": 15, "score": 0.5},
+                {"entity_type": "URL", "start": 19, "end": 30, "score": 0.5},
+            ],
+            "contact <EMAIL_ADDRESS_1> <DATE_TIME_2>",
+            {"<EMAIL_ADDRESS_1>": "john.smith@example.com", "<DATE_TIME_2>": "today"},
+            {"EMAIL_ADDRESS": 1, "DATE_TIME": 1},
+            id="nested",
+        ),
+        pytest.param(
+            "her phone is +33 1 42 68 53 00.",
+            [
+                {"entity_type": "DATE_TIME", "start": 25, "end": 30, "score": 0.85},
+                {"entity_type": "PHONE_NUMBER", "start": 13, "end": 30, "score": 0.75},
+            ],
+            "her phone is <PHONE_NUMBER_1>.",
+            {"<PHONE_NUMBER_1>": "+33 1 42 68 53 00"},
+            {"PHONE_NUMBER": 1},
+            id="container-outranks-higher-scored-fragment",
+        ),
+        pytest.param(
+            "ids ab0123456789 and cd0123456789",
+            [
+                {"entity_type": "AAA", "start": 4, "end": 16, "score": 0.5},
+                {"entity_type": "BBB", "start": 21, "end": 29, "score": 0.5},
+                {"entity_type": "CCC", "start": 25, "end": 33, "score": 0.9},
+            ],
+            "ids <AAA_1> and <CCC_2>",
+            {"<AAA_1>": "ab0123456789", "<CCC_2>": "cd0123456789"},
+            {"AAA": 1, "CCC": 1},
+            id="partial-overlap-in-second-run",
+        ),
+        pytest.param(
+            "id ab0123456789",
+            [
+                {"entity_type": "AAA", "start": 3, "end": 15, "score": 0.5},
+                {"entity_type": "BBB", "start": 3, "end": 8, "score": 0.9},
+            ],
+            "id <AAA_1>",
+            {"<AAA_1>": "ab0123456789"},
+            {"AAA": 1},
+            id="container-sharing-start-outranks-fragment",
+        ),
+        pytest.param(
+            "id ab0123456789",
+            [
+                {"entity_type": "AAA", "start": 3, "end": 10, "score": 0.9},
+                {"entity_type": "BBB", "start": 7, "end": 15, "score": 0.5},
+            ],
+            "id <AAA_1>",
+            {"<AAA_1>": "ab0123456789"},
+            {"AAA": 1},
+            id="earlier-higher-scored-detection-labels-the-whole-run",
+        ),
+        pytest.param(
+            "id ab0123456789",
+            [
+                {"entity_type": "AAA", "start": 6, "end": 15, "score": 0.5},
+                {"entity_type": "BBB", "start": 3, "end": 8, "score": 0.5},
+            ],
+            "id <AAA_1>",
+            {"<AAA_1>": "ab0123456789"},
+            {"AAA": 1},
+            id="score-tie-goes-to-the-longer-detection",
+        ),
+        pytest.param(
+            "id ab0123456789",
+            [
+                {"entity_type": "AAA", "start": 3, "end": 9, "score": 0.5},
+                {"entity_type": "BBB", "start": 9, "end": 15, "score": 0.5},
+            ],
+            "id <AAA_1><BBB_2>",
+            {"<AAA_1>": "ab0123", "<BBB_2>": "456789"},
+            {"AAA": 1, "BBB": 1},
+            id="touching-detections-stay-separate",
+        ),
+        pytest.param(
+            "id ab0123456789",
+            [
+                {"entity_type": "AAA", "start": 3, "end": 15, "score": 0.5},
+                {"entity_type": "BBB", "start": 3, "end": 15, "score": 0.5},
+            ],
+            "id <BBB_1>",
+            {"<BBB_1>": "ab0123456789"},
+            {"BBB": 1},
+            id="identical-spans-with-equal-scores-label-the-same-in-any-order",
+        ),
+        pytest.param(
+            "My name is John Smith, phone +1 415 555 2671, please check the order.",
+            [
+                {"entity_type": "EMPTY", "start": 25, "end": 25, "score": 0.99},
+                {"entity_type": "INVERTED", "start": 40, "end": 30, "score": 0.99},
+                {"entity_type": "PERSON", "start": 11, "end": 21, "score": 0.9},
+                {"entity_type": "PHONE_NUMBER", "start": 29, "end": 44, "score": 0.85},
+                {"entity_type": "UK_NHS", "start": 32, "end": 44, "score": 0.6},
+            ],
+            "My name is <PERSON_1>, phone <PHONE_NUMBER_2>, please check the order.",
+            {"<PERSON_1>": "John Smith", "<PHONE_NUMBER_2>": "+1 415 555 2671"},
+            {"PERSON": 1, "PHONE_NUMBER": 1},
+            id="empty-and-inverted-spans-are-ignored",
+        ),
+        pytest.param(
+            "Code ABC-12345-XYZ is valid.",
+            [
+                {"entity_type": "GENERIC_ID", "start": 5, "end": 14, "score": 0.5},
+                {"entity_type": "SECRET_KEY", "start": 9, "end": 18, "score": 0.95},
+            ],
+            "Code <SECRET_KEY_1> is valid.",
+            {"<SECRET_KEY_1>": "ABC-12345-XYZ"},
+            {"SECRET_KEY": 1},
+            id="later-higher-scored-detection-labels-the-whole-run",
+        ),
+    ],
+)
+@pytest.mark.parametrize("order", ["analyzer", "reversed"])
+def test_numbered_tokens_collapse_overlapping_detections_into_one_token_per_run(
+    text: str,
+    analyze_results: list[PresidioAnalyzeResponseItem],
+    expected_text: str,
+    expected_tokens: dict[str, str],
+    expected_counts: dict[str, int],
+    order: Literal["analyzer", "reversed"],
+) -> None:
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(mock_testing=True)
+    request_data: Final = {"metadata": {}}
+    masked_entity_count: Final = {}
+    ordered: Final = analyze_results if order == "analyzer" else analyze_results[::-1]
+
+    masked: Final = guardrail._finalize_presidio_anonymize_numbered_tokens(
+        text, ordered, request_data, masked_entity_count
     )
 
-    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
-
-    # 1. Empty analyze_results returns text untouched
-    assert (
-        guardrail._finalize_presidio_anonymize_numbered_tokens(
-            text="Hello world",
-            analyze_results=[],
-            request_data={"metadata": {}},
-            masked_entity_count={},
-        )
-        == "Hello world"
-    )
-
-    # 2. Inverted/zero-length spans (s >= e) are ignored, and overlapping lower-score span is suppressed
-    text = "My name is John Smith, phone +1 415 555 2671, please check the order."
-    analyze_results = [
-        {"entity_type": "INVALID", "start": 25, "end": 25, "score": 0.99},
-        {"entity_type": "PERSON", "start": 11, "end": 21, "score": 0.9},
-        {"entity_type": "PHONE_NUMBER", "start": 29, "end": 44, "score": 0.85},
-        {"entity_type": "UK_NHS", "start": 32, "end": 44, "score": 0.6},
-    ]
-    request_data = {"metadata": {}}
-    masked_entity_count = {}
-    result = guardrail._finalize_presidio_anonymize_numbered_tokens(
-        text=text,
-        analyze_results=analyze_results,
-        request_data=request_data,
-        masked_entity_count=masked_entity_count,
-    )
-    assert result == "My name is <PERSON_1>, phone <PHONE_NUMBER_2>, please check the order."
-    pii_tokens = request_data["metadata"]["pii_tokens"]
-    assert pii_tokens["<PERSON_1>"] == "John Smith"
-    assert pii_tokens["<PHONE_NUMBER_2>"] == "+1 415 555 2671"
-    assert "<UK_NHS_" not in pii_tokens
-    assert "<INVALID_" not in pii_tokens
-
-    # 3. Overlapping span where subsequent candidate has higher score and extends boundary
-    higher_score_text = "Code ABC-12345-XYZ is valid."
-    higher_score_results = [
-        {"entity_type": "GENERIC_ID", "start": 5, "end": 14, "score": 0.5},
-        {"entity_type": "SECRET_KEY", "start": 9, "end": 18, "score": 0.95},
-    ]
-    req_data2 = {"metadata": {}}
-    result2 = guardrail._finalize_presidio_anonymize_numbered_tokens(
-        text=higher_score_text,
-        analyze_results=higher_score_results,
-        request_data=req_data2,
-        masked_entity_count={},
-    )
-    assert result2 == "Code <SECRET_KEY_1> is valid."
-    assert req_data2["metadata"]["pii_tokens"]["<SECRET_KEY_1>"] == "ABC-12345-XYZ"
+    assert masked == expected_text
+    assert request_data["metadata"]["pii_tokens"] == expected_tokens
+    assert masked_entity_count == expected_counts
+    assert OPTIONAL_PresidioPIIMasking._unmask_pii_text(masked, expected_tokens) == text
 
 
 @pytest.mark.asyncio

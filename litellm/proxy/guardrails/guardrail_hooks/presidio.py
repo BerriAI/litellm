@@ -16,6 +16,7 @@ from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaita
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
+from itertools import accumulate, pairwise
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, cast
 
 import aiohttp
@@ -180,6 +181,59 @@ async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGener
     yield pending
     async for chunk in stream:
         yield chunk
+
+
+@dataclass(frozen=True, slots=True)
+class _Detection:
+    entity_type: str
+    start: int
+    end: int
+    score: float
+
+
+def _strictly_contains(outer: _Detection, inner: _Detection) -> bool:
+    return (
+        outer.start <= inner.start and inner.end <= outer.end and (outer.start, outer.end) != (inner.start, inner.end)
+    )
+
+
+def _collapse_run(run: Sequence[_Detection]) -> _Detection:
+    label: Final = max(
+        (detection for detection in run if not any(_strictly_contains(other, detection) for other in run)),
+        key=lambda detection: (detection.score, detection.end - detection.start, detection.entity_type),
+    )
+    return _Detection(label.entity_type, run[0].start, max(detection.end for detection in run), label.score)
+
+
+def _to_detection(item: PresidioAnalyzeResponseItem) -> _Detection:
+    return _Detection(
+        str(item.get("entity_type")),
+        int(item.get("start") or 0),
+        int(item.get("end") or 0),
+        float(item.get("score") or 0.0),
+    )
+
+
+def _resolve_overlapping_spans(analyze_results: Sequence[PresidioAnalyzeResponseItem]) -> tuple[_Detection, ...]:
+    """
+    Collapse each run of overlapping detections into one detection covering the whole run.
+
+    The run takes its entity type from its highest-scoring detection that no other
+    detection in the run strictly contains, the same containment rule Presidio's
+    anonymizer applies, so a phone number with a date-shaped fragment inside it stays
+    a PHONE_NUMBER. Runs come back sorted by start and never overlap.
+    """
+    detections: Final = sorted(
+        (detection for detection in map(_to_detection, analyze_results) if detection.start < detection.end),
+        key=lambda detection: detection.start,
+    )
+    run_ends: Final = tuple(accumulate((detection.end for detection in detections), max))
+    boundaries: Final = (
+        0,
+        *(index for index in range(1, len(detections)) if detections[index].start >= run_ends[index - 1]),
+        len(detections),
+    )
+    return tuple(_collapse_run(detections[first:last]) for first, last in pairwise(boundaries) if first < last)
 
 
 class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
@@ -799,53 +853,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 masked_entity_count[entity_type] = masked_entity_count.get(entity_type, 0) + 1
         return redacted_text["text"]
 
-    @staticmethod
-    def _resolve_overlapping_spans(
-        analyze_results: Sequence[PresidioAnalyzeResponseItem],
-    ) -> Any:  # noqa: ANN401  # presidio return schema is dynamic
-        if not analyze_results:
-            return ()
-
-        sorted_by_span: Final = sorted(
-            analyze_results,
-            key=lambda x: (
-                int(x.get("start") or 0),
-                -int(x.get("end") or 0),
-                -float(x.get("score") or 0.0),
-            ),
-        )
-
-        merged: Final[list[PresidioAnalyzeResponseItem]] = []  # mutable-ok: required for sequential boundary merge
-        for item in sorted_by_span:
-            s = int(item.get("start") or 0)
-            e = int(item.get("end") or 0)
-            if s >= e:
-                continue
-            item_copy: PresidioAnalyzeResponseItem = {
-                "entity_type": item.get("entity_type"),
-                "start": s,
-                "end": e,
-                "score": float(item.get("score") or 0.0),
-            }
-            if not merged:
-                merged.append(item_copy)
-                continue
-
-            prev = merged[-1]
-            prev_e = int(prev.get("end") or 0)
-
-            if s < prev_e:
-                curr_score = float(item.get("score") or 0.0)
-                prev_score = float(prev.get("score") or 0.0)
-                prev["end"] = max(prev_e, e)
-                if curr_score > prev_score:
-                    prev["entity_type"] = item.get("entity_type")
-                    prev["score"] = curr_score
-            else:
-                merged.append(item_copy)
-
-        return tuple(merged)
-
     def _finalize_presidio_anonymize_numbered_tokens(
         self,
         text: str,
@@ -871,31 +878,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             request_data["metadata"]["pii_tokens"] = {}
         pii_tokens: Final = request_data["metadata"]["pii_tokens"]
 
-        valid_analyze_results: Final = self._resolve_overlapping_spans(analyze_results)
+        runs: Final = _resolve_overlapping_spans(analyze_results)
 
-        # Assign sequence numbers in forward (left-to-right) order so
-        # that <PERSON_1> is the first entity in the text, etc.
-        sorted_forward: Final = sorted(valid_analyze_results, key=lambda x: int(x.get("start") or 0))
-        seq_map: Final = {}
-        for idx, ar in enumerate(sorted_forward, start=1):
-            seq_map[(ar["start"], ar["end"])] = idx
-
-        # Apply replacements in reverse order by start position so
-        # that replacing later spans first does not shift earlier
-        # coordinates in the original text.
-        for ar in reversed(sorted_forward):
-            start = ar["start"]
-            end = ar["end"]
-            entity_type = ar["entity_type"]
-            replacement = f"<{entity_type}>"
-            seq = seq_map[(start, end)]
-            if replacement.endswith(">"):
-                replacement = f"{replacement[:-1]}_{seq}>"
-            else:
-                replacement = f"{replacement}_{seq}"
-            pii_tokens[replacement] = text[start:end]
-            new_text = new_text[:start] + replacement + new_text[end:]
-            masked_entity_count[entity_type] = masked_entity_count.get(entity_type, 0) + 1
+        # Replace right to left so the original offsets of earlier runs stay valid
+        for seq, run in reversed(tuple(enumerate(runs, start=1))):
+            replacement = f"<{run.entity_type}_{seq}>"
+            pii_tokens[replacement] = text[run.start : run.end]
+            new_text = new_text[: run.start] + replacement + new_text[run.end :]
+            masked_entity_count[run.entity_type] = masked_entity_count.get(run.entity_type, 0) + 1
         return new_text
 
     async def anonymize_text(
