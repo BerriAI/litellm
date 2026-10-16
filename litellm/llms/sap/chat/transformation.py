@@ -9,7 +9,7 @@ from functools import cached_property
 from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 import litellm
 from litellm.types.llms.openai import AllMessageValues
@@ -54,6 +54,21 @@ _SAP_MODEL_PARAMS_EXCLUDED_KEYS: Final[frozenset[str]] = frozenset(
         "model_version",
     }
 )
+
+
+class _DeploymentUrlOverride(BaseModel):
+    """The deployment_url a caller can pass in optional_params to skip discovery"""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+    deployment_url: str | None = None
+
+
+class _OrchestrationConfiguration(BaseModel):
+    """The fields discovery reads from an AI Core /lm/configurations/{id} response"""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+    executable_id: str = Field(default="", alias="executableId")
+    name: str = ""
 
 
 def validate_dict(
@@ -190,12 +205,14 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         valid: Final[list[tuple[str, str, str]]] = []
         for dep in deployments.get("resources", []):
             if dep.get("scenarioId") == "orchestration":
-                cfg = client.get(
-                    f"{self.base_url}/lm/configurations/{dep['configurationId']}",
-                    headers=self.headers,
-                ).json()
-                if cfg.get("executableId") == "orchestration":
-                    valid.append((dep["deploymentUrl"], dep["createdAt"], cfg.get("name", "")))
+                cfg = _OrchestrationConfiguration.model_validate(
+                    client.get(
+                        f"{self.base_url}/lm/configurations/{dep['configurationId']}",
+                        headers=self.headers,
+                    ).json()
+                )
+                if cfg.executable_id == "orchestration":
+                    valid.append((dep["deploymentUrl"], dep["createdAt"], cfg.name))
         if not valid:
             raise GenAIHubOrchestrationError(
                 status_code=400,
@@ -284,10 +301,9 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ):
+        explicit_url: Final = _DeploymentUrlOverride.model_validate(optional_params).deployment_url
         deployment_url: Final = (
-            optional_params.get("deployment_url")
-            or os.environ.get("AICORE_ORCHESTRATION_DEPLOYMENT_URL")
-            or self.deployment_url
+            explicit_url or os.environ.get("AICORE_ORCHESTRATION_DEPLOYMENT_URL") or self.deployment_url
         )
         return f"{deployment_url.rstrip('/')}/v2/completion"
 
