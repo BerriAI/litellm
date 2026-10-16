@@ -273,7 +273,6 @@ class SamlPair:
 def saml_pair(
     saml_idp: SamlIdp, gateway_module: Gateway, tmp_path_factory: pytest.TempPathFactory
 ) -> Iterator[SamlPair]:
-    """Two proxies sharing one database and one coordination Redis, with enable_redis_auth_cache left unset"""
     environment: Final = {
         "SAML_IDP_METADATA_XML": saml_idp.metadata(),
         "SAML_SP_ENTITY_ID": SAML_SP_ENTITY,
