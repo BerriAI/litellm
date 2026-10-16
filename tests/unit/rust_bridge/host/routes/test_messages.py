@@ -60,7 +60,7 @@ def test_request_timeout_carries_only_a_configured_global_timeout(
     monkeypatch.setattr(litellm, "request_timeout", timeout)
     monkeypatch.setattr(litellm, "request_timeout_explicitly_set", explicitly_set)
 
-    assert route_host.settings({})["request_timeout"] == expected
+    assert messages_host.settings({})["request_timeout"] == expected
 
 
 @pytest.mark.parametrize(
