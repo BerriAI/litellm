@@ -647,6 +647,9 @@ fal_ai_models: Set = set()
 fireworks_ai_models: Set = set()
 fireworks_ai_embedding_models: Set = set()
 deepinfra_models: Set = set()
+compactifai_models: Final[frozenset[str]] = frozenset(
+    key for key, value in model_cost.items() if value.get("litellm_provider") == "compactifai"
+)
 perplexity_models: Set = set()
 watsonx_models: Set = set()
 gemini_models: Set = set()
@@ -1029,8 +1032,14 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
     then refresh `models_by_provider` from those sets so the additions reach wildcard expansion.
     The refresh updates the dict in place, so references captured before a reload stay live.
     """
-    _populate_provider_model_sets(model_cost_map if model_cost_map is not None else model_cost)
+    model_cost_map_to_add: Final = model_cost_map if model_cost_map is not None else model_cost
+    existing_compactifai_models: Final = frozenset(models_by_provider.get("compactifai", ()))
+    compactifai_models_to_add: Final = frozenset(
+        key for key, value in model_cost_map_to_add.items() if value.get("litellm_provider") == "compactifai"
+    )
+    _populate_provider_model_sets(model_cost_map_to_add)
     models_by_provider.update(_build_models_by_provider())
+    models_by_provider["compactifai"] = existing_compactifai_models | compactifai_models_to_add
 
 
 _populate_provider_model_sets(model_cost)
@@ -1084,6 +1093,7 @@ model_list = list(
     | set(ollama_models)
     | bedrock_models
     | deepinfra_models
+    | compactifai_models
     | perplexity_models
     | set(maritalk_models)
     | runwayml_models
@@ -1191,6 +1201,7 @@ def _build_models_by_provider() -> dict:
         "ollama": ollama_models,
         "ollama_chat": ollama_models,
         "deepinfra": deepinfra_models,
+        "compactifai": compactifai_models,
         "perplexity": perplexity_models,
         "maritalk": maritalk_models,
         "watsonx": watsonx_models,
