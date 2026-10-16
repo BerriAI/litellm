@@ -10231,6 +10231,7 @@ async def async_data_generator(
     stream_completed = False
     client_disconnected = False
     error_state: Final = ResponsesStreamErrorState() if responses_stream_errors else None
+    ends_with_openai_done: Final = not request_data.get("_litellm_skip_openai_stream_done")
     needs_iterator_wrap: Final = proxy_logging_obj.needs_iterator_wrap()
     stream_iterator: Final = _object_stream(
         proxy_logging_obj.async_post_call_streaming_iterator_hook(
@@ -10242,6 +10243,7 @@ async def async_data_generator(
         else response
     )
     stream_source: AsyncIterator[object] | None = None  # rebind-ok: bound once the keepalive policy resolves
+    stream_started: bool = False  # rebind-ok: flips once the first item arrives, after which errors go in-band
     try:
         error_message: str | None = None
         requested_model_from_client: Final = _get_client_requested_model_for_streaming(request_data=request_data)
@@ -10290,6 +10292,7 @@ async def async_data_generator(
         )
 
         async for item in stream_source:
+            stream_started = True
             if item is _STREAM_KEEPALIVE:
                 yield ": ping\n\n"
                 continue
@@ -10407,7 +10410,7 @@ async def async_data_generator(
         if error_message is not None:
             yield error_message
         # OpenAI-compatible streams terminate with data: [DONE]; Google GenAI (?alt=sse) does not.
-        if not request_data.get("_litellm_skip_openai_stream_done"):
+        if ends_with_openai_done:
             yield _OPENAI_STREAM_DONE_FRAME
     except (asyncio.CancelledError, GeneratorExit):
         # Client disconnected mid-stream. CancelledError / GeneratorExit are
@@ -10426,11 +10429,12 @@ async def async_data_generator(
         raise
     except Exception as e:  # noqa: BLE001  # stream boundary: any failure must end the SSE body as an error event
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.async_data_generator(): Exception occured - %s", e)
-        await proxy_logging_obj.post_call_failure_hook(
+        replacement: Final = await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,
             request_data=request_data,
         )
+        client_error: Final[Exception] = e if replacement is None else replacement
         verbose_proxy_logger.debug(
             "\x1b[1;31mAn error occurred: %s\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`",
             e,
@@ -10441,24 +10445,28 @@ async def async_data_generator(
             error_frame: Final = error_state.format_failure(e)
             if error_frame is not None:
                 yield error_frame
-            if not request_data.get("_litellm_skip_openai_stream_done"):
+            if ends_with_openai_done:
                 yield _OPENAI_STREAM_DONE_FRAME
             return
+        if isinstance(e, HTTPException) and (not stream_started or not ends_with_openai_done):
+            raise client_error
         error_returned: Final = json.dumps(
             {
-                "error": sse_error_payload(e)[1]
-                if isinstance(e, HTTPException)
+                "error": sse_error_payload(client_error)[1]
+                if isinstance(client_error, HTTPException)
                 else ProxyException(
-                    message=getattr(e, "message", str(e)),
-                    type=getattr(e, "type", "None"),
-                    param=getattr(e, "param", "None"),
-                    code=getattr(e, "status_code", 500),
+                    message=getattr(client_error, "message", str(client_error)),
+                    type=getattr(client_error, "type", "None"),
+                    param=getattr(client_error, "param", "None"),
+                    code=getattr(client_error, "status_code", 500),
                 ).to_dict()
             },
             default=str,
         )
         stream_completed = True
         yield f"data: {error_returned}\n\n"
+        if ends_with_openai_done:
+            yield _OPENAI_STREAM_DONE_FRAME
     finally:
         await ProxyBaseLLMRequestProcessing.finalize_streaming_generator_cleanup(
             request=request,

@@ -7664,7 +7664,7 @@ async def test_async_data_generator_errors_when_raw_sse_frame_exceeds_buffer_lim
     mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
     mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
     mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
-    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
 
     with (
         patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj),

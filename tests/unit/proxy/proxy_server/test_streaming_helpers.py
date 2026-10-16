@@ -31,7 +31,9 @@ from pydantic import BaseModel
 import litellm
 import litellm.proxy.proxy_server as ps
 from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_request_processing import create_response
 from litellm.proxy.proxy_server import (
     _apply_streaming_chunk_hooks,
     _fast_serialize_simple_model_response_stream,
@@ -905,39 +907,151 @@ async def test_async_data_generator_mid_stream_exception_yields_error_payload(
     assert any(isinstance(item, str) and item.startswith('data: {"error":') for item in out)
 
 
+_BLOCK_MESSAGE: Final = "Content blocked: keyword 'keeper' detected"
+_UNSERIALIZABLE_SPAN: Final = object()
+
+
+async def _blocked_after(chunks: int, detail: dict[str, object]) -> AsyncIterator[ModelResponseStream]:
+    for _ in range(chunks):
+        yield _simple_chunk(content="partial")
+    raise HTTPException(status_code=400, detail=detail)
+
+
+async def _served(
+    upstream: AsyncIterator[ModelResponseStream], request_data: dict[str, object] | None = None
+) -> tuple[int, str | None, tuple[str, ...]]:
+    response: Final = await create_response(
+        generator=async_data_generator(
+            response=upstream, user_api_key_dict=_user_auth(), request_data=dict(request_data or {})
+        ),
+        media_type="text/event-stream",
+        headers={},
+    )
+    assert isinstance(response, StreamingResponse)
+    body: Final = "".join(
+        [part if isinstance(part, str) else bytes(part).decode() async for part in response.body_iterator]
+    )
+    return response.status_code, response.media_type, tuple(frame for frame in body.split("\n\n") if frame)
+
+
+def _error_of(frame: str) -> dict[str, object]:
+    return json.loads(frame.removeprefix("data: "))["error"]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "detail",
+    "detail,expected_message,expected_fields",
     [
-        {"error": "Content blocked: keyword 'keeper' detected", "guardrail": "block-keeper-word"},
-        {"error": "Content blocked: keyword 'keeper' detected", "matched_span": object()},
+        pytest.param(
+            {"error": _BLOCK_MESSAGE, "guardrail": "block-keeper-word"},
+            _BLOCK_MESSAGE,
+            {"error": _BLOCK_MESSAGE, "guardrail": "block-keeper-word"},
+            id="json_detail",
+        ),
+        pytest.param(
+            {"error": _BLOCK_MESSAGE, "matched_span": _UNSERIALIZABLE_SPAN},
+            _BLOCK_MESSAGE,
+            {"error": _BLOCK_MESSAGE, "matched_span": str(_UNSERIALIZABLE_SPAN)},
+            id="non_json_detail",
+        ),
+        pytest.param(
+            {"matched_span": _UNSERIALIZABLE_SPAN},
+            json.dumps({"matched_span": str(_UNSERIALIZABLE_SPAN)}),
+            {"matched_span": str(_UNSERIALIZABLE_SPAN)},
+            id="non_json_detail_without_message",
+        ),
     ],
-    ids=["json_detail", "non_json_detail"],
 )
-async def test_async_data_generator_mid_stream_guardrail_block_ends_with_error_event(monkeypatch, detail):
-    _patch_logging_flags(monkeypatch)
+async def test_guardrail_block_after_the_first_chunk_ends_the_stream_with_an_error_event(
+    detail: dict[str, object], expected_message: str, expected_fields: dict[str, str]
+) -> None:
+    status_code, _, frames = await _served(_blocked_after(1, detail))
 
-    async def _noop_failure(*args, **kwargs):
-        return None
+    assert status_code == 200
+    assert len(frames) == 3
+    assert json.loads(frames[0].removeprefix("data: "))["choices"][0]["delta"]["content"] == "partial"
+    assert _error_of(frames[1]) == {
+        "message": expected_message,
+        "type": "invalid_request_error",
+        "param": None,
+        "code": "400",
+        "provider_specific_fields": expected_fields,
+    }
+    assert frames[2] == "data: [DONE]"
 
-    monkeypatch.setattr(ps.proxy_logging_obj, "post_call_failure_hook", _noop_failure)
 
-    out: Final = [
-        line
-        async for line in async_data_generator(
-            response=_async_iter_raises(HTTPException(status_code=400, detail=detail)),
+@pytest.mark.asyncio
+async def test_guardrail_block_mid_stream_on_a_gemini_stream_sends_no_openai_error_event() -> None:
+    response: Final = await create_response(
+        generator=async_data_generator(
+            response=_blocked_after(1, {"error": _BLOCK_MESSAGE}),
             user_api_key_dict=_user_auth(),
-            request_data={},
-        )
-    ]
+            request_data={"_litellm_skip_openai_stream_done": True},
+        ),
+        media_type="text/event-stream",
+        headers={},
+    )
+    assert isinstance(response, StreamingResponse)
+    parts: Final = aiter(response.body_iterator)
+    first: Final = await anext(parts)
 
-    assert len(out) == 2
-    assert out[-1].startswith("data: ") and out[-1].endswith("\n\n")
-    error: Final = json.loads(out[-1].removeprefix("data: "))["error"]
-    assert error["message"] == detail["error"]
-    assert error["type"] == "invalid_request_error"
-    assert error["code"] == "400"
-    assert error["provider_specific_fields"].keys() == detail.keys()
+    with pytest.raises(HTTPException):
+        await anext(parts)
+    assert '"error"' not in (first if isinstance(first, str) else bytes(first).decode())
+
+
+async def _upstream_fails_after_one_chunk() -> AsyncIterator[ModelResponseStream]:
+    yield _simple_chunk(content="partial")
+    raise RuntimeError("upstream reset")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_data,closing_frames",
+    [
+        pytest.param({}, ("data: [DONE]",), id="openai_stream"),
+        pytest.param({"_litellm_skip_openai_stream_done": True}, (), id="gemini_stream"),
+    ],
+)
+async def test_upstream_failure_mid_stream_ends_with_an_error_event(
+    request_data: dict[str, object], closing_frames: tuple[str, ...]
+) -> None:
+    status_code, _, frames = await _served(_upstream_fails_after_one_chunk(), request_data)
+
+    assert status_code == 200
+    assert _error_of(frames[1])["message"] == "upstream reset"
+    assert frames[2:] == closing_frames
+
+
+class _ReplacesClientErrors(CustomLogger):
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict,
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: str | None = None,
+    ) -> HTTPException:
+        return HTTPException(status_code=403, detail="Request blocked by policy")
+
+
+@pytest.mark.asyncio
+async def test_guardrail_block_mid_stream_sends_the_failure_hook_replacement(monkeypatch) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_ReplacesClientErrors()])
+
+    _, _, frames = await _served(_blocked_after(1, {"error": _BLOCK_MESSAGE}))
+
+    assert _BLOCK_MESSAGE not in "".join(frames)
+    assert _error_of(frames[1])["message"] == "Request blocked by policy"
+    assert _error_of(frames[1])["code"] == "403"
+
+
+@pytest.mark.asyncio
+async def test_guardrail_block_before_the_first_chunk_keeps_its_http_status() -> None:
+    status_code, media_type, frames = await _served(_blocked_after(0, {"error": _BLOCK_MESSAGE}))
+
+    assert (status_code, media_type) == (400, "text/event-stream")
+    assert frames[-1] == "data: [DONE]"
+    assert _error_of(frames[0])["message"] == _BLOCK_MESSAGE
 
 
 _UPSTREAM_BODY: Final = {

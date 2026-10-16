@@ -629,7 +629,7 @@ def serialize_http_exception_detail(
         msg: Final = detail.get("message")
         if isinstance(msg, str):
             return msg, detail
-        return json.dumps(detail), detail
+        return json.dumps(detail, default=str), detail
     return str(detail), None
 
 
