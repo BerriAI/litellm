@@ -47,6 +47,7 @@ __all__ = ("anthropic_messages", "anthropic_messages_handler")
 
 _SAFEGUARD_KWARGS: Final = TypeAdapter(Mapping[str, object])
 _SAFEGUARD_MESSAGES: Final = TypeAdapter(Sequence[Mapping[str, object]])
+_THINKING_PARAM: Final = TypeAdapter(Mapping[str, object])
 
 
 async def _with_native_safeguard_results(
@@ -522,6 +523,8 @@ def anthropic_messages_handler(
         model_info=kwargs.get("model_info"),
         compaction_requested=kwargs.get("compaction") is not None,
         force_chat_completions=bool(litellm.use_chat_completions_url_for_anthropic_messages),
+        thinking_enabled=isinstance(thinking, dict)
+        and _THINKING_PARAM.validate_python(thinking).get("type") == "enabled",
     )
     if isinstance(route, NativeResponses):
         return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(

@@ -1,5 +1,7 @@
 import pytest
 
+import litellm
+
 from litellm.llms.anthropic.pass_through.messages.transformation import AnthropicMessagesConfig
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.llms.openai_like.messages.transformation import OpenAILikeAnthropicMessagesConfig
@@ -23,6 +25,7 @@ def _plan(
     model_info: object = None,
     compaction_requested: bool = False,
     force_chat_completions: bool = False,
+    thinking_enabled: bool = False,
 ) -> RoutePlan:
     return plan_messages_route(
         requested_model=f"{provider}/{model}",
@@ -31,6 +34,7 @@ def _plan(
         model_info=model_info,
         compaction_requested=compaction_requested,
         force_chat_completions=force_chat_completions,
+        thinking_enabled=thinking_enabled,
     )
 
 
@@ -48,12 +52,25 @@ def test_a_provider_that_speaks_messages_gets_its_own_messages_config():
         ("gpt-5.5", "openai", {"force_chat_completions": True}, NativeChat()),
         ("gpt-5.5", "openai", {"compaction_requested": True}, NativeChat()),
         ("my-model", "hosted_vllm", {}, NativeChat()),
+        ("gpt-5.5", "openai", {"force_chat_completions": True, "thinking_enabled": True}, NativeResponses()),
+        ("gpt-5.5", "openai", {"compaction_requested": True, "thinking_enabled": True}, NativeChat()),
+        ("my-model", "hosted_vllm", {"force_chat_completions": True, "thinking_enabled": True}, NativeChat()),
+        ("lit-unmapped-model", "openai", {"force_chat_completions": True, "thinking_enabled": True}, NativeResponses()),
     ],
 )
 def test_messages_without_a_native_config_bridge_to_responses_only_for_openai(
     model: str, provider: str, kwargs: dict[str, bool], expected: RoutePlan
 ):
     assert _plan(model, provider, **kwargs) == expected
+
+
+def test_forced_chat_keeps_thinking_on_chat_for_a_model_that_cannot_reason(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost})
+    litellm.register_model({"openai/lit-plain-model": {"litellm_provider": "openai", "supports_reasoning": False}})
+
+    plan = _plan("lit-plain-model", "openai", force_chat_completions=True, thinking_enabled=True)
+
+    assert plan == NativeChat()
 
 
 @pytest.mark.parametrize("cache_control_ttl", [True, False])

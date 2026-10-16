@@ -6,7 +6,7 @@ from typing import Final, TypeAlias
 from litellm.llms.base_llm.anthropic_messages.transformation import BaseAnthropicMessagesConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.types.utils import LlmProviders
-from litellm.utils import ProviderConfigManager
+from litellm.utils import ProviderConfigManager, get_model_info
 
 __all__ = (
     "NativeChat",
@@ -101,11 +101,34 @@ def _responses_mode_is_lost_by_prefix_strip(
     )
 
 
+def _model_may_reason(model: str, custom_llm_provider: str) -> bool:
+    try:
+        return (
+            get_model_info(model=model, custom_llm_provider=custom_llm_provider).get("supports_reasoning") is not False
+        )
+    except Exception:  # noqa: BLE001  # an unmapped model is assumed to reason, as the chat bridge assumed
+        return True
+
+
+def _thinking_needs_responses(custom_llm_provider: str | None, resolved_model: str, thinking_enabled: bool) -> bool:
+    """OpenAI returns reasoning text only on the Responses API, so enabled thinking goes there even when chat is forced."""
+    return (
+        thinking_enabled
+        and custom_llm_provider is not None
+        and custom_llm_provider in _MESSAGES_TO_RESPONSES_PROVIDERS
+        and _model_may_reason(resolved_model, custom_llm_provider)
+    )
+
+
 def _messages_bridge_to_responses(
-    custom_llm_provider: str | None, requested_model: str, resolved_model: str, force_chat_completions: bool
+    custom_llm_provider: str | None,
+    requested_model: str,
+    resolved_model: str,
+    force_chat_completions: bool,
+    thinking_enabled: bool,
 ) -> bool:
     if force_chat_completions:
-        return False
+        return _thinking_needs_responses(custom_llm_provider, resolved_model, thinking_enabled)
     if custom_llm_provider in _MESSAGES_TO_RESPONSES_PROVIDERS:
         return True
     if custom_llm_provider is None:
@@ -121,13 +144,14 @@ def plan_messages_route(
     model_info: object,
     compaction_requested: bool,
     force_chat_completions: bool,
+    thinking_enabled: bool,
 ) -> RoutePlan:
     """``force_chat_completions`` is ``litellm.use_chat_completions_url_for_anthropic_messages``."""
     config: Final = native_messages_config(resolved_model, custom_llm_provider, model_info)
     if config is not None:
         return NativeMessages(config)
     if not compaction_requested and _messages_bridge_to_responses(
-        custom_llm_provider, requested_model, resolved_model, force_chat_completions
+        custom_llm_provider, requested_model, resolved_model, force_chat_completions, thinking_enabled
     ):
         return NativeResponses()
     return NativeChat()
