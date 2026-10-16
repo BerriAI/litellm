@@ -1483,6 +1483,17 @@ async def get_guardrail_info(guardrail_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _undeclared_logging_only(
+    guardrail_class: type[CustomGuardrail], hooks: Sequence[GuardrailEventHooks]
+) -> tuple[GuardrailEventHooks, ...]:
+    """logging_only when the class accepts it at save time without declaring it in its hooks."""
+    return (
+        (GuardrailEventHooks.logging_only,)
+        if guardrail_class.accepts_logging_only_mode() and GuardrailEventHooks.logging_only not in hooks
+        else ()
+    )
+
+
 @router.get(
     "/guardrails/ui/add_guardrail_settings",
     tags=["Guardrails"],
@@ -1515,7 +1526,7 @@ async def get_guardrail_ui_settings() -> GuardrailUIAddGuardrailSettings:
     ]
 
     supported_modes_by_provider: Final = {
-        provider: [hook.value for hook in hooks]
+        provider: [hook.value for hook in (*hooks, *_undeclared_logging_only(guardrail_class, hooks))]
         for provider, guardrail_class in guardrail_class_registry.items()
         if (hooks := guardrail_class.get_supported_event_hooks()) is not None
     } | MappingProxyType(
