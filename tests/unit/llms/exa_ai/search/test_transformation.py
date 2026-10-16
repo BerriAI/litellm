@@ -437,3 +437,51 @@ def test_exa_missing_or_invalid_total_uses_estimate(reported: object) -> None:
         )
         == estimate
     )
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_exa_estimate_adds_each_result_above_the_included_ten() -> None:
+    from litellm.llms.exa_ai.search.cost_calculator import EXA_AI_ADDITIONAL_RESULT_COST
+    from litellm.search.cost_calculator import search_provider_cost_per_query
+
+    base, _ = search_provider_cost_per_query("exa_ai/search", "exa_ai")
+
+    assert base > 0.0
+    assert search_provider_cost_per_query("exa_ai/search", "exa_ai", optional_params={"max_results": 5}) == (base, 0.0)
+    assert search_provider_cost_per_query(
+        "exa_ai/search", "exa_ai", optional_params={"max_results": 25}
+    ) == pytest.approx((base + 15 * EXA_AI_ADDITIONAL_RESULT_COST, 0.0))
+    assert search_provider_cost_per_query(
+        "exa_ai/search", "exa_ai", optional_params={"numResults": 12}
+    ) == pytest.approx((base + 2 * EXA_AI_ADDITIONAL_RESULT_COST, 0.0))
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_exa_estimate_prices_one_request_however_many_queries_it_joins() -> None:
+    from litellm.search.cost_calculator import search_provider_cost_per_query
+
+    assert search_provider_cost_per_query(
+        "exa_ai/search", "exa_ai", number_of_queries=3
+    ) == search_provider_cost_per_query("exa_ai/search", "exa_ai")
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("search_type", "pricing_model"),
+    [
+        ("auto", "exa_ai/search"),
+        ("fast", "exa_ai/search"),
+        ("deep-lite", "exa_ai/search-deep"),
+        ("deep", "exa_ai/search-deep"),
+        ("deep-reasoning", "exa_ai/search-deep-reasoning"),
+    ],
+)
+def test_exa_estimate_uses_the_price_of_its_search_type(search_type: str, pricing_model: str) -> None:
+    from litellm.search.cost_calculator import search_provider_cost_per_query
+
+    model_info: Final = litellm.get_model_info(model=pricing_model, custom_llm_provider="exa_ai")
+
+    assert search_provider_cost_per_query("exa_ai/search", "exa_ai", optional_params={"type": search_type}) == (
+        model_info["input_cost_per_query"],
+        0.0,
+    )

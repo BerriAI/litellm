@@ -42,7 +42,7 @@ def search_provider_cost_per_query(
     Calculate cost for search-only providers.
 
     Returns (input_cost, output_cost) where input_cost = queries * cost_per_query
-    Uses Exa response cost when available, otherwise tiered pricing based on max_results.
+    Uses Exa's reported cost when available, otherwise its list price; other providers use tiered pricing based on max_results.
 
     Args:
         model: Model name (e.g., "exa_ai/search", "tavily/search")
@@ -65,6 +65,10 @@ def search_provider_cost_per_query(
         if isinstance(total, (int, float)) and not isinstance(total, bool) and math.isfinite(total) and total >= 0:
             return (float(total), 0.0)
 
+        from litellm.llms.exa_ai.search.cost_calculator import exa_ai_list_price
+
+        return (exa_ai_list_price(optional_params if optional_params is not None else EMPTY_OPTIONAL_PARAMS), 0.0)
+
     if custom_llm_provider == "parallel_ai":
         from litellm.llms.parallel_ai.search.cost_calculator import (
             PARALLEL_AI_USAGE_PARAM,
@@ -79,7 +83,7 @@ def search_provider_cost_per_query(
 
     model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
 
-    # Check for tiered pricing (e.g., Exa AI based on max_results)
+    # Check for tiered pricing based on max_results
     tiered_pricing: Final = model_info.get("tiered_pricing")
     if tiered_pricing and isinstance(tiered_pricing, list):
         max_results: Final = (optional_params or {}).get("max_results", 10)  # default 10 results

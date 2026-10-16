@@ -23885,24 +23885,28 @@
         "output_vector_size": 2560
     },
     "exa_ai/search": {
+        "input_cost_per_query": 0.007,
         "litellm_provider": "exa_ai",
-        "mode": "search",
-        "tiered_pricing": [
-            {
-                "input_cost_per_query": 0.005,
-                "max_results_range": [
-                    0,
-                    25
-                ]
-            },
-            {
-                "input_cost_per_query": 0.025,
-                "max_results_range": [
-                    26,
-                    100
-                ]
-            }
-        ]
+        "metadata": {
+            "notes": "Base price per /search request, covering up to 10 results. Each result above 10 adds $0.001. Exa's reported costDollars.total takes precedence when present. Source: https://exa.ai/pricing (2026-10-15)"
+        },
+        "mode": "search"
+    },
+    "exa_ai/search-deep": {
+        "input_cost_per_query": 0.012,
+        "litellm_provider": "exa_ai",
+        "metadata": {
+            "notes": "Base price per /search request with type deep or deep-lite, covering up to 10 results. Source: https://exa.ai/pricing (2026-10-15)"
+        },
+        "mode": "search"
+    },
+    "exa_ai/search-deep-reasoning": {
+        "input_cost_per_query": 0.015,
+        "litellm_provider": "exa_ai",
+        "metadata": {
+            "notes": "Base price per /search request with type deep-reasoning, covering up to 10 results. Source: https://exa.ai/pricing (2026-10-15)"
+        },
+        "mode": "search"
     },
     "firecrawl/search": {
         "litellm_provider": "firecrawl",
