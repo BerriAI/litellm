@@ -788,7 +788,7 @@ def _anthropic_completed_stream_tail() -> tuple[bytes, ...]:
     )
 
 
-async def _settle(recorded: list) -> None:
+async def _settle(recorded: list[dict[str, object]]) -> None:
     for _ in range(300):
         if recorded:
             return
