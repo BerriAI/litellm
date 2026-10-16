@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Final
 from unittest.mock import Mock, patch
 
@@ -13,7 +14,7 @@ import litellm
 from litellm import Router
 from litellm.litellm_core_utils import get_llm_provider_logic
 from litellm.router import Deployment, LiteLLM_Params
-from litellm.router_utils.pattern_match_deployments import PatternMatchRouter, PatternUtils
+from litellm.router_utils.pattern_match_deployments import PatternMatchRouter, PatternUtils, matches_from_start
 from litellm.types.router import ModelInfo
 import json
 from unittest.mock import MagicMock
@@ -387,14 +388,64 @@ def test_pattern_matching_router_uses_default_wildcard_for_unmatched_model() -> 
         ("openai/gpt-4o", "team/*", False),
     ],
 )
-def test_is_shadowed_only_when_a_more_specific_registered_pattern_serves_the_request(
+def test_shadowing_regex_only_when_a_more_specific_registered_pattern_serves_the_request(
     request_model: str, wildcard: str, shadowed: bool
 ) -> None:
     pattern_router: Final = PatternMatchRouter()
     pattern_router.add_pattern("*", _wildcard_deployment("*"))
     pattern_router.add_pattern("openai/*", _wildcard_deployment("openai/*"))
 
-    assert pattern_router.is_shadowed(request_model, wildcard) is shadowed
+    assert (pattern_router.shadowing_regex(request_model, wildcard) is not None) is shadowed
+
+
+@pytest.mark.parametrize(
+    ("pattern", "request_model"),
+    [
+        ("openai/*", "openai/gpt-4o"),
+        ("openai/*", "azure/gpt-4o"),
+        ("a*b", "axxbyy"),
+        ("a*b", "ayy"),
+        ("stars/*******!", "stars/abc!"),
+        ("stars/*******!", "stars/abc"),
+        ("odd?[name]/*", "odd?[name]/x"),
+        ("odd?[name]/*", "oddX[name]/x"),
+    ],
+)
+def test_matches_from_start_agrees_with_the_routing_regex(pattern: str, request_model: str) -> None:
+    regex: Final = PatternMatchRouter().pattern_to_regex(pattern)
+
+    assert matches_from_start(regex, request_model) is (re.match(regex, request_model) is not None)
+
+
+@pytest.mark.timeout(10)
+def test_shadowing_regex_answers_promptly_beside_a_route_with_many_stars() -> None:
+    pattern_router: Final = PatternMatchRouter()
+    pattern_router.add_pattern("stars/*", _wildcard_deployment("stars/*"))
+    pattern_router.add_pattern("stars/*******!", _wildcard_deployment("stars/*******!"))
+    long_id: Final = "stars/" + "x" * 200
+
+    assert pattern_router.shadowing_regex(long_id, "stars/*") is None
+    assert pattern_router.shadowing_regex(f"{long_id}!", "stars/*") == pattern_router.pattern_to_regex("stars/*******!")
+
+
+@pytest.mark.parametrize(
+    ("request_model", "wildcard", "routed_model", "routes_elsewhere"),
+    [
+        ("openai/gpt-4.1-mini", "openai/*", "openai/gpt-4.1-mini", False),
+        ("openai/gpt-oss-120b", "*", "groq/openai/gpt-oss-120b", True),
+        ("llama-3-8b", "*", "groq/llama-3-8b", False),
+        ("openai/gpt-4.1-mini", "openai/gpt-4.1*", "openai/gpt-4.1-mini", False),
+    ],
+)
+def test_routes_elsewhere_only_when_the_serving_route_sends_another_model(
+    request_model: str, wildcard: str, routed_model: str, routes_elsewhere: bool
+) -> None:
+    pattern_router: Final = PatternMatchRouter()
+    pattern_router.add_pattern("*", {"model_name": "*", "litellm_params": {"model": "groq/*"}})
+    pattern_router.add_pattern("openai/*", _wildcard_deployment("openai/*"))
+    pattern_router.add_pattern("openai/gpt-4.1*", _wildcard_deployment("openai/gpt-4.1*"))
+
+    assert pattern_router.routes_elsewhere(request_model, wildcard, routed_model) is routes_elsewhere
 
 
 def test_sorted_patterns():

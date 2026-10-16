@@ -345,7 +345,25 @@ def _listings_served_by_route(
     listings: Final = _wildcard_listings(wildcard_model, litellm_params)
     if pattern_router is None:
         return listings
-    return tuple(listing for listing in listings if not pattern_router.is_shadowed(listing.listed_id, wildcard_model))
+    return tuple(
+        listing
+        for listing in listings
+        if not pattern_router.routes_elsewhere(listing.listed_id, wildcard_model, listing.routed_model)
+    )
+
+
+def _rows_served_by_route(
+    wildcard_model: str,
+    litellm_params: LiteLLM_Params | None,
+    pattern_router: PatternMatchRouter | None,
+    exact_model_names: frozenset[str],
+) -> tuple[_WildcardListing, ...]:
+    return tuple(
+        listing
+        for listing in _wildcard_listings(wildcard_model, litellm_params)
+        if listing.listed_id not in exact_model_names
+        and not (pattern_router is not None and pattern_router.shadowing_regex(listing.listed_id, wildcard_model))
+    )
 
 
 def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_Params | None = None) -> list[str]:
@@ -363,6 +381,8 @@ def expand_wildcard_deployments_for_model_info(
     on top of that: a wildcard deployment like model_name="*" / litellm_params.model="openai/*"
     becomes one entry per known openai model, matching /v1/models behaviour.
     """
+    model_names: Final = tuple(str(deployment.get("model_name") or "") for deployment in deployments)
+    exact_model_names: Final = frozenset(name for name in model_names if not _check_wildcard_routing(name))
     expanded: Final[list[dict[str, object]]] = []
     for deployment in deployments:
         model_name = str(deployment.get("model_name") or "")
@@ -378,7 +398,7 @@ def expand_wildcard_deployments_for_model_info(
         except Exception:
             expanded.append(deployment)
             continue
-        listings = _listings_served_by_route(model_name, litellm_params, pattern_router)
+        listings = _rows_served_by_route(model_name, litellm_params, pattern_router, exact_model_names)
         if not listings:
             expanded.append(deployment)
             continue

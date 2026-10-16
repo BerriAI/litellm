@@ -4,6 +4,7 @@ Class to handle llm wildcard routing and regex pattern matching
 
 import copy
 import re
+from fnmatch import fnmatchcase
 from re import Match
 from typing import Final
 
@@ -21,6 +22,15 @@ class _RoutedDeployment(BaseModel):
 
 
 _ROUTED_DEPLOYMENTS: Final = TypeAdapter(tuple[_RoutedDeployment, ...])
+_ESCAPED_CHARACTER: Final = re.compile(r"\\(.)", re.DOTALL)
+_GLOB_LITERALS: Final = str.maketrans({"?": "[?]", "[": "[[]"})
+
+
+def matches_from_start(regex: str, request: str) -> bool:
+    literals: Final = (
+        _ESCAPED_CHARACTER.sub(r"\1", segment).translate(_GLOB_LITERALS) for segment in regex.split("(.*)")
+    )
+    return fnmatchcase(request, "*".join(literals) + "*")
 
 
 class PatternUtils:
@@ -172,10 +182,23 @@ class PatternMatchRouter:
 
         return None  # No matching pattern found
 
-    def is_shadowed(self, request: str, wildcard: str) -> bool:
+    def shadowing_regex(self, request: str, wildcard: str) -> str | None:
         own_regex: Final = self.pattern_to_regex(wildcard)
-        first_match: Final = next((regex for regex in self.patterns if re.match(regex, request)), own_regex)
-        return own_regex in self.patterns and first_match != own_regex
+        if own_regex not in self.patterns:
+            return None
+        serving_regex: Final = next((regex for regex in self.patterns if matches_from_start(regex, request)), own_regex)
+        return None if serving_regex == own_regex else serving_regex
+
+    def routes_elsewhere(self, request: str, wildcard: str, routed_model: str) -> bool:
+        serving_regex: Final = self.shadowing_regex(request, wildcard)
+        matched: Final = re.match(serving_regex, request) if serving_regex is not None else None
+        if serving_regex is None or matched is None:
+            return False
+        deployments: Final = _ROUTED_DEPLOYMENTS.validate_python(self.patterns[serving_regex])
+        return all(
+            self.set_deployment_model_name(matched, deployment.litellm_params.model) != routed_model
+            for deployment in deployments
+        )
 
     def routes_to_provider(self, request: str, custom_llm_provider: str) -> bool:
         deployments: Final = _ROUTED_DEPLOYMENTS.validate_python(self.route(request) or ())

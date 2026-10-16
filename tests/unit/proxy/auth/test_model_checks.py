@@ -1164,6 +1164,67 @@ def test_expand_wildcard_deployments_openai_wildcard(monkeypatch: pytest.MonkeyP
     assert all(r["litellm_params"]["model"] in fake_models for r in result)
 
 
+def test_expand_wildcard_lists_each_id_once_under_the_deployment_that_serves_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info
+    from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", False)
+    monkeypatch.setitem(litellm.models_by_provider, "openai", ["gpt-4o", "gpt-4o-mini", "gpt-4.1-mini"])
+    wide: Final = {"model_name": "openai/*", "litellm_params": {"model": "openai/*"}, "model_info": {"id": "wide"}}
+    narrow: Final = {
+        "model_name": "openai/gpt-4.1*",
+        "litellm_params": {"model": "openai/gpt-4.1*"},
+        "model_info": {"id": "narrow"},
+    }
+    exact: Final = {
+        "model_name": "openai/gpt-4o-mini",
+        "litellm_params": {"model": "openai/gpt-4o-mini"},
+        "model_info": {"id": "exact"},
+    }
+    pattern_router: Final = PatternMatchRouter()
+    pattern_router.add_pattern("openai/*", wide)
+    pattern_router.add_pattern("openai/gpt-4.1*", narrow)
+
+    rows: Final = expand_wildcard_deployments_for_model_info([wide, narrow, exact], pattern_router=pattern_router)
+
+    assert sorted((row["model_name"], row["model_info"]["id"]) for row in rows) == [
+        ("openai/gpt-4.1-mini", "narrow"),
+        ("openai/gpt-4o", "wide"),
+        ("openai/gpt-4o-mini", "exact"),
+    ]
+
+
+def test_key_scoped_to_a_wide_route_lists_ids_a_narrower_route_sends_to_the_same_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", False)
+    monkeypatch.setitem(litellm.models_by_provider, "openai", ["gpt-4o", "gpt-4.1-mini", "gpt-4.1-nano"])
+    router: Final = Router(
+        model_list=[
+            {"model_name": "openai/*", "litellm_params": {"model": "openai/*"}},
+            {"model_name": "openai/gpt-4.1*", "litellm_params": {"model": "openai/gpt-4.1*"}},
+        ]
+    )
+
+    listed: Final = get_complete_model_list(
+        key_models=["openai/*"],
+        team_models=[],
+        proxy_model_list=["openai/*", "openai/gpt-4.1*"],
+        user_model=None,
+        infer_model_from_keys=False,
+        llm_router=router,
+    )
+
+    assert sorted(listed) == ["openai/gpt-4.1-mini", "openai/gpt-4.1-nano", "openai/gpt-4o"]
+
+
 def test_expand_wildcard_concrete_model_name_with_wildcard_litellm_params():
     """Concrete model_name must not be overwritten when only litellm_params.model is wildcard."""
     from litellm.proxy.auth.model_checks import (
