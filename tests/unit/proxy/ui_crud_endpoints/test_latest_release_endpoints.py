@@ -16,6 +16,7 @@ from litellm.proxy.ui_crud_endpoints.latest_release_endpoints import (
     LATEST_RELEASE_CACHE_TTL_SECONDS,
     LATEST_RELEASE_UNAVAILABLE_CACHE_TTL_SECONDS,
     LATEST_RELEASE_URL,
+    RECENT_RELEASES_URL,
     LatestReleaseInfo,
     LatestReleaseUnavailable,
     _default_cache,
@@ -231,6 +232,59 @@ class TestGetLatestReleaseInfo:
         results = await asyncio.gather(*tasks)
         assert all(isinstance(result, LatestReleaseUnavailable) for result in results)
         assert len(client.calls) == 1
+
+
+def _release(tag: str, body: str, *, prerelease: bool = False) -> dict[str, object]:
+    return {
+        "tag_name": tag,
+        "html_url": f"https://github.com/BerriAI/litellm/releases/tag/{tag}",
+        "body": body,
+        "prerelease": prerelease,
+        "draft": False,
+    }
+
+
+PATCH_RELEASE: Final = _release("v1.102.1", "* fix(proxy): backport by @k in https://x/pull/9\n")
+RECENT_RELEASES: Final = [
+    _release("v1.103.0-rc.1", "* feat: next minor rc\n", prerelease=True),
+    PATCH_RELEASE,
+    _release("v1.102.0-rc.2", "* feat: rc bullet that also shipped in v1.102.0\n", prerelease=True),
+    SAMPLE_RELEASE,
+    _release("v1.101.4", "* fix: older line backport\n"),
+]
+
+
+class TestPatchReleaseAggregatesMinorLine:
+    @pytest.mark.asyncio
+    async def test_patch_release_counts_include_the_minor_releases_before_it(self):
+        client = _RecordingClient([_github_response(payload=PATCH_RELEASE), _github_response(payload=RECENT_RELEASES)])
+        result = await get_latest_release_info(client=client, cache=_fresh_cache(), fetch_lock=asyncio.Lock())
+        assert isinstance(result, LatestReleaseInfo)
+        assert result.model_dump() == {
+            "version": "1.102.1",
+            "new_features": 2,
+            "bug_fixes": 3,
+            "other_updates": 4,
+            "release_url": PATCH_RELEASE["html_url"],
+        }
+        assert client.calls == [(LATEST_RELEASE_URL, 5), (RECENT_RELEASES_URL, 5)]
+
+    @pytest.mark.asyncio
+    async def test_minor_release_does_not_fetch_the_release_list(self):
+        client = _RecordingClient([_github_response()])
+        await get_latest_release_info(client=client, cache=_fresh_cache(), fetch_lock=asyncio.Lock())
+        assert client.calls == [(LATEST_RELEASE_URL, 5)]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "outcome",
+        [httpx.ConnectError("boom"), _github_response(status=403, payload={"message": "rate limited"})],
+        ids=["unreachable", "rate_limited"],
+    )
+    async def test_release_list_failure_is_unavailable(self, outcome: httpx.Response | Exception):
+        client = _RecordingClient([_github_response(payload=PATCH_RELEASE), outcome])
+        result = await get_latest_release_info(client=client, cache=_fresh_cache(), fetch_lock=asyncio.Lock())
+        assert isinstance(result, LatestReleaseUnavailable)
 
 
 class TestLatestReleaseInfoEndpoint:
