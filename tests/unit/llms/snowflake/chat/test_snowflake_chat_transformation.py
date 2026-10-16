@@ -8,7 +8,7 @@ import os
 import copy
 import uuid
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, Final, List
 
 from unittest.mock import AsyncMock, patch, Mock, MagicMock
 
@@ -596,7 +596,7 @@ class TestSnowflakeCortexClaudeFixes:
         assert [b["type"] for b in blocks] == ["thinking", "tool_use"]
 
     def test_signed_thinking_blocks_replay_without_their_stream_index(self):
-        body = self._transform(
+        body: Final = self._transform(
             [
                 {"role": "user", "content": "hi"},
                 {
@@ -609,7 +609,7 @@ class TestSnowflakeCortexClaudeFixes:
                 },
             ]
         )
-        blocks = body["messages"][1]["content"]
+        blocks: Final = body["messages"][1]["content"]
         assert blocks[:2] == [
             {"type": "thinking", "thinking": "391", "signature": "Eto"},
             {"type": "redacted_thinking", "data": "opaque"},
