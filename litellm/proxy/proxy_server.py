@@ -171,6 +171,7 @@ from litellm.router_utils.routing_groups import parse_routing_groups
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import (
     PRICING_OVERRIDES_KEY,
+    CountContextManagement,
     ModelResponse,
     ModelResponseStream,
     StreamingChoices,
@@ -14456,6 +14457,7 @@ async def _try_provider_token_count(
     system: str | None = None,
     messages_format: TokenCountMessagesFormat = "openai",
     output_format: JsonValue = None,
+    context_management: CountContextManagement | None = None,
 ) -> Optional["TokenCountResponse"]:
     """Attempt provider-specific token counting. Returns result on success, None to fall through to local counting."""
     if not provider_counter.should_use_token_counting_api(custom_llm_provider=custom_llm_provider):
@@ -14471,6 +14473,7 @@ async def _try_provider_token_count(
             system=system,
             messages_format=messages_format,
             output_format=output_format,
+            context_management=context_management,
         )
     except httpx.HTTPStatusError as e:
         error_message: Final = getattr(e, "message", None) or str(e)
@@ -14499,6 +14502,39 @@ _PROVIDERS_COUNTING_WITHOUT_MESSAGES: Final = frozenset(
 def _drops_params(deployment: Mapping[str, object] | None) -> bool:
     litellm_params: Final = as_str_mapping(None if deployment is None else deployment.get("litellm_params"))
     return litellm.drop_params is True or (litellm_params is not None and litellm_params.get("drop_params") is True)
+
+
+def _router_default_litellm_params(router: Router) -> Mapping[str, object]:
+    defaults: Final[Mapping[str, object] | None] = getattr(router, "default_litellm_params", None)
+    if defaults is None:
+        return {}
+    return {key: value for key, value in defaults.items() if value is not None}
+
+
+def _count_context_management(
+    context_management: JsonValue, model: str, request_litellm_params: Mapping[str, JsonValue]
+) -> CountContextManagement | None:
+    from litellm.llms.anthropic.pass_through.adapters.handler import context_management_explicitly_dropped
+
+    if context_management is None or llm_router is None:
+        return None
+    inference_model: Final = resolve_inference_model(
+        model, general_settings_view(), user_model if isinstance(user_model, str) else None
+    )
+    router_defaults: Final = _router_default_litellm_params(llm_router)
+    sent_params: Final = tuple(
+        {**deployment["litellm_params"], **router_defaults, **request_litellm_params}
+        for deployment in llm_router.get_routable_deployments(
+            inference_model if isinstance(inference_model, str) else model
+        )
+    )
+    if any(context_management_explicitly_dropped(params.get("additional_drop_params")) for params in sent_params):
+        return None
+    return CountContextManagement(
+        spec=context_management,
+        drop_invalid_edits=litellm.drop_params is True
+        or any(params.get("drop_params") is True for params in sent_params),
+    )
 
 
 def _system_message(system: object) -> ChatCompletionSystemMessage | None:
@@ -14531,6 +14567,8 @@ async def count_request_tokens(
     call_endpoint: bool = False,
     messages_format: TokenCountMessagesFormat = "openai",
     output_format: JsonValue = None,
+    context_management: JsonValue = None,
+    request_litellm_params: Mapping[str, JsonValue] = MappingProxyType({}),
 ) -> TokenCountResponse:
     prompt: Final = request.prompt
     messages: Final = request.messages
@@ -14602,6 +14640,7 @@ async def count_request_tokens(
             system=system,
             messages_format=messages_format,
             output_format=output_format,
+            context_management=_count_context_management(context_management, request.model, request_litellm_params),
         )
         if result is not None:
             return result
