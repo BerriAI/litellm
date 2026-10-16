@@ -4,9 +4,14 @@ import pytest
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.authz_code_refresher import (
     AuthorizationCodeRefresher,
+    classify_token_endpoint_refusal,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
     OAuthToken,
+)
+from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error, Ok
+from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_refresher import (
+    RefreshFailure,
 )
 
 
@@ -45,9 +50,25 @@ def _endpoint(body, sink=None):
     async def post(url, form, headers):
         if sink is not None:
             sink.append((url, form, headers))
-        return body
+        if body is None:
+            return Error(RefreshFailure.of_unavailable("token endpoint down"))
+        return Ok(body)
 
     return post
+
+
+def _failing_endpoint(failure):
+    async def post(url, form, headers):
+        return Error(failure)
+
+    return post
+
+
+def _recording_purge(sink):
+    async def purge(user_id, server_id, refresh_token):
+        sink.append((user_id, server_id, refresh_token))
+
+    return purge
 
 
 def _recording_persist(sink):
@@ -62,12 +83,13 @@ def _recording_persist(sink):
 
 
 def _refresher(
-    server=None, body=None, *, post_sink=None, persist_sink=None, clock=lambda: 1000.0
+    server=None, body=None, *, post_sink=None, persist_sink=None, purge_sink=None, clock=lambda: 1000.0
 ):
     return AuthorizationCodeRefresher(
         _lookup(server if server is not None else _Server()),
         _endpoint(body, post_sink),
         _recording_persist(persist_sink if persist_sink is not None else []),
+        purge=_recording_purge(purge_sink if purge_sink is not None else []),
         clock=clock,
     )
 
@@ -182,6 +204,55 @@ async def test_grant_failure_does_not_persist():
         await refresher.refresh("a", "s", OAuthToken("old", refresh_token="rt")) is None
     )
     assert persisted == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error_code", ["invalid_grant", "invalid_token"])
+@pytest.mark.parametrize("status_code", [400, 401])
+async def test_revoked_refresh_token_purges_the_credential_that_holds_it(status_code, error_code):
+    persisted = []
+    purged = []
+    refresher = AuthorizationCodeRefresher(
+        _lookup(_Server()),
+        _failing_endpoint(classify_token_endpoint_refusal(status_code, error_code)),
+        _recording_persist(persisted),
+        purge=_recording_purge(purged),
+    )
+    assert await refresher.refresh("alice", "srv", OAuthToken("old", refresh_token="revoked-rt")) is None
+    assert purged == [("alice", "srv", "revoked-rt")]
+    assert persisted == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status_code, error_code",
+    [
+        (503, "temporarily_unavailable"),
+        (500, "invalid_grant"),
+        (429, "slow_down"),
+        (400, "invalid_client"),
+        (400, "invalid_request"),
+        (400, None),
+    ],
+)
+async def test_transient_or_non_grant_refusal_keeps_the_credential(status_code, error_code):
+    purged = []
+    refresher = AuthorizationCodeRefresher(
+        _lookup(_Server()),
+        _failing_endpoint(classify_token_endpoint_refusal(status_code, error_code)),
+        _recording_persist([]),
+        purge=_recording_purge(purged),
+    )
+    assert await refresher.refresh("alice", "srv", OAuthToken("old", refresh_token="rt")) is None
+    assert purged == []
+
+
+@pytest.mark.asyncio
+async def test_unreachable_token_endpoint_keeps_the_credential():
+    purged = []
+    refresher = _refresher(body=None, purge_sink=purged)
+    assert await refresher.refresh("alice", "srv", OAuthToken("old", refresh_token="rt")) is None
+    assert purged == []
 
 
 @pytest.mark.asyncio
@@ -304,6 +375,7 @@ async def test_identity_rejection_never_persists_or_returns_refreshed_token():
         _lookup(_Server()),
         _endpoint({"access_token": "foreign-token", "id_token": "foreign-identity"}),
         persist,
+        purge=_recording_purge([]),
         identity_validator=validator,
     )
     assert await refresher.refresh("alice", "srv", OAuthToken(access_token="old", refresh_token="old-rt")) is None
@@ -320,6 +392,7 @@ async def test_verified_refresh_preserves_binding_proof_in_storage():
         _lookup(_Server()),
         _endpoint({"access_token": "new", "refresh_token": "rotated"}),
         persist,
+        purge=_recording_purge([]),
         identity_validator=validator,
     )
     token = await refresher.refresh("alice", "srv", OAuthToken(access_token="old", refresh_token="old-rt"))
@@ -394,7 +467,7 @@ async def test_saved_cimd_identity_refreshes_without_discovery(monkeypatch):
         assert form["client_id"] == identity
         assert "client_secret" not in form
         assert "Authorization" not in headers
-        return {"access_token": "new", "refresh_token": "rotated"}
+        return Ok({"access_token": "new", "refresh_token": "rotated"})
 
     server = MCPServer(
         server_id="srv", name="srv", transport="http", auth_type="oauth2", oauth2_flow="authorization_code",
@@ -402,7 +475,9 @@ async def test_saved_cimd_identity_refreshes_without_discovery(monkeypatch):
     )
     token = await V2PerUserTokenStore(read_credential).fetch("alice", "srv")
     assert token is not None
-    refreshed = await AuthorizationCodeRefresher(lambda _: server, post, persist).refresh("alice", "srv", token)
+    refreshed = await AuthorizationCodeRefresher(
+        lambda _: server, post, persist, purge=_recording_purge([])
+    ).refresh("alice", "srv", token)
     assert refreshed is not None
     assert refreshed.access_token == "new"
     assert refreshed.refresh_token == "rotated"
