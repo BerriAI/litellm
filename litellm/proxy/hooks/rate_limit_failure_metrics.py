@@ -49,7 +49,7 @@ class _RateLimiterFailureCounterRegistry:
 _registry: Final[_RateLimiterFailureCounterRegistry] = _RateLimiterFailureCounterRegistry()
 
 
-def get_counter() -> Counter | None:
+def get_counter() -> Counter | None:  # mutable-ok: Prometheus Counter is inherently mutable; callers inc() it
     return _registry.get_counter()
 
 
