@@ -27,7 +27,7 @@ from litellm.llms.xai.chat.transformation import XAIChatConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import GenericStreamingChunk, ModelResponse, ModelResponseStream, ProviderField
+from litellm.types.utils import ModelResponse, ModelResponseStream, ProviderField
 from litellm.utils import add_path_to_api_base, supports_tool_choice
 
 if TYPE_CHECKING:
@@ -47,11 +47,11 @@ NON_OPENAI_SPEC_MESSAGE_FIELDS: Final = (
 
 
 class AzureAIChatCompletionResponseIterator(OpenAIChatCompletionResponseIterator):
-    def _handle_string_chunk(self, str_line: str) -> GenericStreamingChunk | ModelResponseStream:
-        parsed: Final = super()._handle_string_chunk(str_line)
-        if isinstance(parsed, ModelResponseStream):
-            XAIChatConfig.fold_reasoning_tokens_into_completion(getattr(parsed, "usage", None))
-        return parsed
+    def chunk_parser(self, chunk: dict[str, object]) -> ModelResponseStream:  # mutable-ok: mirrors override contract
+        usage: Final = chunk.get("usage")
+        if isinstance(usage, dict):
+            XAIChatConfig.fold_reasoning_tokens_into_completion(usage)
+        return super().chunk_parser(chunk)
 
 
 class AzureAIGPT5Config(OpenAIGPT5Config):

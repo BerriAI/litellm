@@ -834,7 +834,7 @@ AZURE_AI_GPT_5_4_MINI_LATEST_STREAM: Final = CostTrackingTestCase(
 )
 
 
-# azure_ai/grok-4.6
+# azure_ai/grok-4.6 (Grok on Azure AI Foundry reports reasoning_tokens outside completion_tokens, like xai)
 AZURE_AI_GROK_4_6_REASONING_FOLDED_INTO_COMPLETION: Final = CostTrackingTestCase(
     name="azure-ai-grok-4.6-reasoning_folded_into_completion",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
