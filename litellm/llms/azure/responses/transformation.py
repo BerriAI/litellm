@@ -52,7 +52,13 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         return BaseAzureLLM.base_validate_azure_environment(headers=headers, litellm_params=litellm_params)
 
     def get_stripped_model_name(self, model: str) -> str:
-        return model.replace("responses/", "").replace("o_series/", "").replace("azure_ai/", "")
+        # gpt5_series/ is a litellm routing marker, not part of the Azure deployment name
+        return (
+            model.replace("responses/", "")
+            .replace("o_series/", "")
+            .replace("azure_ai/", "")
+            .replace(AzureOpenAIGPT5Config.GPT5_SERIES_ROUTE, "")
+        )
 
     def _handle_reasoning_item(self, item: dict[str, Any]) -> dict[str, Any]:
         """
