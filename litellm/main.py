@@ -1079,6 +1079,7 @@ from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the o
 )
 from litellm.responses.bridge_check import (
     bridge_reasoning_effort,
+    keep_registered_mode,
     str_keyed_mapping,
 )
 from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
@@ -1200,11 +1201,12 @@ def _register_custom_pricing_for_request(
     Router-originated requests (identified by the deployment id the router puts
     in metadata) get their full pricing registered under that unique id only;
     the shared ``{provider}/{model}`` key receives the entry with pricing fields
-    and ``mode`` stripped, since Router._create_deployment already registered the
-    shared row's mode. This keeps one deployment's pricing overrides (e.g. a
-    zero-cost wildcard) or ``mode`` pin from changing the pricing and routing of
-    sibling deployments of the same backend model. Direct SDK calls keep the
-    legacy behavior of registering the shared key with pricing.
+    stripped, mirroring Router._create_deployment. This keeps one deployment's
+    pricing overrides (e.g. a zero-cost wildcard) from clobbering built-in
+    pricing used by sibling deployments of the same backend model. Direct SDK
+    calls keep the legacy behavior of registering the shared key with pricing.
+    Either way the shared key's ``mode`` follows ``keep_registered_mode``, as on
+    deployment registration, since a call routes by its own ``model_info``.
     """
     entry: Final = _build_custom_pricing_entry(
         custom_llm_provider=custom_llm_provider,
@@ -1214,13 +1216,11 @@ def _register_custom_pricing_for_request(
     shared_key: Final = f"{custom_llm_provider}/{model}"
     deployment_id: Final = _get_router_deployment_id(kwargs)
     if deployment_id is None:
-        litellm.register_model({shared_key: entry}, persist_across_reloads=False)
+        litellm.register_model({shared_key: keep_registered_mode(shared_key, entry)}, persist_across_reloads=False)
         return
-    shared_entry: Final = {
-        key: value
-        for key, value in CustomPricingLiteLLMParams.strip_custom_pricing_fields(entry).items()
-        if key != "mode"
-    }
+    shared_entry: Final = keep_registered_mode(
+        shared_key, CustomPricingLiteLLMParams.strip_custom_pricing_fields(entry)
+    )
     litellm.register_model(
         {deployment_id: entry, shared_key: shared_entry},
         persist_across_reloads=False,

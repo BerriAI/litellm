@@ -138,7 +138,7 @@ from litellm.llms.openai_like.model_info import (
     MODEL_INFO_REFRESH_SECONDS,
     get_openai_compatible_model_info,
 )
-from litellm.responses.bridge_check import RESPONSES_ONLY_PROVIDERS, ROUTABLE_MODES
+from litellm.responses.bridge_check import keep_registered_mode
 from litellm.router_strategy.base_routing_strategy import BaseRoutingStrategy
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_strategy.complexity_router.context_compaction import (
@@ -398,7 +398,6 @@ from litellm.utils import (
     get_utc_datetime,
     is_generalized_model_info,
     is_region_allowed,
-    model_cost_registration_key,
     provider_rejectable_params,
     set_live_deployment_replay,
 )
@@ -10979,45 +10978,9 @@ class Router:
         # its unique model_id above.
         shared_model_info: Final = shared_backend_model_info(model_info)
         litellm.register_model(
-            model_cost={_key: Router._keep_registered_mode(_key, shared_model_info) for _key in backend_keys},
+            model_cost={_key: keep_registered_mode(_key, shared_model_info) for _key in backend_keys},
             persist_across_reloads=False,
         )
-
-    @staticmethod
-    def _keep_registered_mode(backend_key: str, shared_model_info: Mapping[str, object]) -> Mapping[str, object]:
-        """A deployment's ``chat`` or ``responses`` pin routes only that deployment, so it never replaces the
-        routing mode registered for its shared backend row, which the SDK and every sibling deployment route by,
-        and no other mode replaces a registered ``responses`` mode either.
-
-        A ``responses`` pin still marks a row that has no routing mode, since that is how a model missing from
-        the cost map opts into the Responses API. A ``chatgpt`` or ``github_copilot`` row takes any mode until it
-        is ``responses``, since those providers read it by name to pick their endpoint. Elsewhere a ``chat`` pin
-        never marks a row, so the outcome does not depend on which deployment registers first. A ``mode`` that
-        is not a string names no mode, so it never reaches the row."""
-        deployment_mode: Final = shared_model_info.get("mode")
-        without_mode: Final = {key: value for key, value in shared_model_info.items() if key != "mode"}
-        if not isinstance(deployment_mode, str):
-            return without_mode
-        registration_key: Final = model_cost_registration_key(
-            backend_key, shared_model_info.get("litellm_provider", ""), custom_llm_provider=None
-        )
-        registered_row: Final = cast(Mapping[str, object] | None, litellm.model_cost.get(registration_key)) or {}
-        registered_mode: Final = registered_row.get("mode")
-        if registered_mode != "responses" and (
-            deployment_mode not in ROUTABLE_MODES or backend_key.split("/", 1)[0] in RESPONSES_ONLY_PROVIDERS
-        ):
-            return shared_model_info
-        if registered_mode is None and deployment_mode == "chat":
-            return without_mode
-        if registered_mode is None or registered_mode == deployment_mode:
-            return shared_model_info
-        verbose_router_logger.debug(
-            "Router: keeping mode=%s on shared backend key %s; the deployment's mode=%s routes only that deployment.",
-            registered_mode,
-            registration_key,
-            deployment_mode,
-        )
-        return {**shared_model_info, "mode": registered_mode}
 
     def replay_model_cost_registrations(self) -> None:
         """Re-assert this router's deployments onto a freshly fetched catalog.

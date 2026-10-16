@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 import logging
 from typing import Final
@@ -670,6 +671,36 @@ async def test_run_model_health_check_probes_the_api_a_mantle_gpt_deployment_sen
         "chat": int(probed_api == "chat"),
         "responses": int(probed_api == "responses"),
     }
+
+
+@pytest.mark.asyncio
+async def test_a_health_probe_of_a_custom_priced_chat_pin_leaves_plain_calls_on_responses(monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    params: Final = {
+        "model": "bedrock_mantle/openai.gpt-5.6-terra",
+        "api_key": "test-bearer",
+        "aws_region_name": "us-east-2",
+    }
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        chat_route: Final = respx_mock.post(
+            url__regex=r"^https://bedrock-mantle\.us-east-2\.api\.aws/.*/chat/completions$"
+        ).respond(json=_MANTLE_GPT_CHAT_REPLY)
+        responses_route: Final = respx_mock.post(
+            url__regex=r"^https://bedrock-mantle\.us-east-2\.api\.aws/.*/responses$"
+        ).respond(json=_MANTLE_GPT_RESPONSES_REPLY)
+        result: Final = await hc_module._run_model_health_check(
+            {
+                "litellm_params": {**params, "input_cost_per_token": 2e-05, "output_cost_per_token": 8e-05},
+                "model_info": {"mode": "chat"},
+            }
+        )
+        await litellm.acompletion(messages=[{"role": "user", "content": "Say ok"}], **params)
+
+    assert "error" not in result, result
+    assert (chat_route.call_count, responses_route.call_count) == (1, 1)
 
 
 def test_autodetected_embedding_skips_reasoning_effort():
