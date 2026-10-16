@@ -1,10 +1,13 @@
 package litellm
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"maps"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -66,6 +69,119 @@ func secretFromResource(d *schema.ResourceData, attr string) string {
 		return v
 	}
 	return d.Get(attr).(string)
+}
+
+const additionalDropParamsKey = "additional_drop_params"
+
+func parseAdditionalDropParams(raw string) ([]string, error) {
+	var items []interface{}
+	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+		return nil, fmt.Errorf("additional_litellm_params.%s must be a JSON list of parameter names, such as jsonencode([\"store\"]): %w", additionalDropParamsKey, err)
+	}
+	names := []string{}
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		name, ok := item.(string)
+		if !ok {
+			return nil, fmt.Errorf("additional_litellm_params.%s entries must be parameter names, got %v", additionalDropParamsKey, item)
+		}
+		names = append(names, name)
+	}
+	return names, nil
+}
+
+func validateAdditionalDropParams(_ context.Context, d *schema.ResourceDiff, _ interface{}) error {
+	params, _ := d.Get("additional_litellm_params").(map[string]interface{})
+	raw, set := params[additionalDropParamsKey].(string)
+	if !set {
+		return nil
+	}
+	_, err := parseAdditionalDropParams(raw)
+	return err
+}
+
+func suppressEquivalentDropParams(key, oldValue, newValue string, _ *schema.ResourceData) bool {
+	if key != "additional_litellm_params."+additionalDropParamsKey {
+		return false
+	}
+	oldNames, oldErr := parseAdditionalDropParams(oldValue)
+	newNames, newErr := parseAdditionalDropParams(newValue)
+	return oldErr == nil && newErr == nil && slices.Equal(oldNames, newNames)
+}
+
+var attributeSentAsLiteLLMParam = map[string]string{
+	"custom_llm_provider":                "custom_llm_provider",
+	"tpm":                                "tpm",
+	"rpm":                                "rpm",
+	"input_cost_per_token":               "input_cost_per_million_tokens",
+	"output_cost_per_token":              "output_cost_per_million_tokens",
+	"api_key":                            "model_api_key",
+	"api_base":                           "model_api_base",
+	"api_version":                        "api_version",
+	"input_cost_per_pixel":               "input_cost_per_pixel",
+	"output_cost_per_pixel":              "output_cost_per_pixel",
+	"input_cost_per_second":              "input_cost_per_second",
+	"output_cost_per_second":             "output_cost_per_second",
+	"aws_access_key_id":                  "aws_access_key_id",
+	"aws_secret_access_key":              "aws_secret_access_key",
+	"aws_region_name":                    "aws_region_name",
+	"aws_session_name":                   "aws_session_name",
+	"aws_role_name":                      "aws_role_name",
+	"vertex_project":                     "vertex_project",
+	"vertex_location":                    "vertex_location",
+	"vertex_credentials":                 "vertex_credentials",
+	"reasoning_effort":                   "reasoning_effort",
+	"thinking":                           "thinking_enabled",
+	"merge_reasoning_content_in_choices": "merge_reasoning_content_in_choices",
+}
+
+func refreshAdditionalDropParams(d *schema.ResourceData, stored interface{}) {
+	params, _ := d.Get("additional_litellm_params").(map[string]interface{})
+	raw, managed := params[additionalDropParamsKey].(string)
+	if !managed {
+		return
+	}
+	refreshed := maps.Clone(params)
+	if stored != nil {
+		encoded, _ := json.Marshal(stored)
+		refreshed[additionalDropParamsKey] = string(encoded)
+		d.Set("additional_litellm_params", refreshed)
+		return
+	}
+	delete(refreshed, additionalDropParamsKey)
+	listed, _ := parseAdditionalDropParams(raw)
+	for _, key := range listed {
+		delete(refreshed, key)
+		if attribute, ok := attributeSentAsLiteLLMParam[key]; ok {
+			d.Set(attribute, nil)
+		}
+	}
+	d.Set("additional_litellm_params", refreshed)
+}
+
+func coerceAdditionalParamValue(strValue string) interface{} {
+	trimmedValue := strings.TrimSpace(strValue)
+	if strings.HasPrefix(trimmedValue, "[") || strings.HasPrefix(trimmedValue, "{") {
+		var parsedValue interface{}
+		if err := json.Unmarshal([]byte(strValue), &parsedValue); err == nil {
+			return parsedValue
+		}
+	}
+	switch strValue {
+	case "true":
+		return true
+	case "false":
+		return false
+	}
+	if intValue, err := strconv.Atoi(strValue); err == nil {
+		return intValue
+	}
+	if floatValue, err := strconv.ParseFloat(strValue, 64); err == nil {
+		return floatValue
+	}
+	return strValue
 }
 
 func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) error {
@@ -175,76 +291,17 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 		litellmParams["thinking"] = thinking
 	}
 
-	// Add additional parameters if provided
 	if additionalParams, ok := d.GetOk("additional_litellm_params"); ok {
-		var dropParams []string
-
 		for key, value := range additionalParams.(map[string]interface{}) {
-			// Convert string values to appropriate types where possible
-			if strValue, ok := value.(string); ok {
-				// Check if it's JSON (starts with [ or {)
-				trimmedValue := strings.TrimSpace(strValue)
-				if strings.HasPrefix(trimmedValue, "[") || strings.HasPrefix(trimmedValue, "{") {
-					var parsedValue interface{}
-					if err := json.Unmarshal([]byte(strValue), &parsedValue); err == nil {
-						// Successfully parsed JSON
-						if key == "additional_drop_params" {
-							// Handle drop params specially
-							if dropList, ok := parsedValue.([]interface{}); ok {
-								for _, item := range dropList {
-									if paramStr, ok := item.(string); ok {
-										dropParams = append(dropParams, paramStr)
-									}
-								}
-							}
-							continue // Don't add to litellmParams
-						} else {
-							litellmParams[key] = parsedValue
-						}
-					} else {
-						// Not valid JSON, apply existing conversion logic
-						if strValue == "true" {
-							litellmParams[key] = true
-						} else if strValue == "false" {
-							litellmParams[key] = false
-						} else {
-							// Try to convert numeric strings
-							if intValue, err := strconv.Atoi(strValue); err == nil {
-								litellmParams[key] = intValue
-							} else if floatValue, err := strconv.ParseFloat(strValue, 64); err == nil {
-								litellmParams[key] = floatValue
-							} else {
-								// Keep as string
-								litellmParams[key] = strValue
-							}
-						}
-					}
-				} else {
-					// Apply existing conversion logic for non-JSON strings
-					if strValue == "true" {
-						litellmParams[key] = true
-					} else if strValue == "false" {
-						litellmParams[key] = false
-					} else {
-						// Try to convert numeric strings
-						if intValue, err := strconv.Atoi(strValue); err == nil {
-							litellmParams[key] = intValue
-						} else if floatValue, err := strconv.ParseFloat(strValue, 64); err == nil {
-							litellmParams[key] = floatValue
-						} else {
-							// Keep as string
-							litellmParams[key] = strValue
-						}
-					}
-				}
-			} else {
-				litellmParams[key] = value
+			if key != additionalDropParamsKey {
+				litellmParams[key] = coerceAdditionalParamValue(value.(string))
+				continue
 			}
-		}
-
-		// Apply drop params at the end
-		for _, paramToDrop := range dropParams {
-			delete(litellmParams, paramToDrop)
+			dropParams, err := parseAdditionalDropParams(value.(string))
+			if err != nil {
+				return err
+			}
+			litellmParams[key] = dropParams
 		}
 	}
 
@@ -419,6 +476,7 @@ func resourceLiteLLMModelRead(d *schema.ResourceData, m interface{}) error {
 	if _, ok := d.GetOk("additional_litellm_params"); ok {
 		d.Set("additional_litellm_params", d.Get("additional_litellm_params"))
 	}
+	refreshAdditionalDropParams(d, modelResp.LiteLLMParams.AdditionalDropParams)
 
 	return nil
 }
