@@ -185,6 +185,15 @@ def _logging_params(logging_obj: LiteLLMLoggingObj) -> Mapping[str, object]:
     return _STR_MAPPING.validate_python(logging_obj.litellm_params)
 
 
+def _request_logging_params(
+    logging_obj: LiteLLMLoggingObj, request_kwargs: Mapping[str, object]
+) -> Mapping[str, object]:
+    logged_metadata: Final = (
+        request_kwargs["litellm_metadata"] if "litellm_metadata" in request_kwargs else request_kwargs.get("metadata")
+    )
+    return {**_logging_params(logging_obj), **request_kwargs, "metadata": logged_metadata}
+
+
 def _request_trace_id(request_kwargs: Mapping[str, object]) -> str | None:
     logging_obj: Final = request_kwargs.get("litellm_logging_obj")
     if isinstance(logging_obj, LiteLLMLoggingObj):
@@ -200,7 +209,7 @@ def _langfuse_request_trace_id(request_kwargs: Mapping[str, object], standard_tr
     logging_obj: Final = request_kwargs.get("litellm_logging_obj")
     if not isinstance(logging_obj, LiteLLMLoggingObj):
         return None
-    litellm_params: Final = {**_logging_params(logging_obj), **request_kwargs}
+    litellm_params: Final = _request_logging_params(logging_obj, request_kwargs)
     trace_id: Final = langfuse_trace_id(
         metadata=langfuse_trace_metadata(litellm_params.get("metadata"), litellm_params.get("proxy_server_request")),
         standard_trace_id=standard_trace_id,
@@ -215,7 +224,7 @@ def _listing_trace_id(request_kwargs: Mapping[str, object], *, bridged_first_tur
     logging_obj: Final = request_kwargs.get("litellm_logging_obj")
     if bridged_first_turn and isinstance(logging_obj, LiteLLMLoggingObj):
         return StandardLoggingPayloadSetup.get_standard_logging_payload_trace_id(
-            logging_obj=logging_obj, litellm_params={**_logging_params(logging_obj), **request_kwargs}
+            logging_obj=logging_obj, litellm_params=_request_logging_params(logging_obj, request_kwargs)
         )
     return _request_trace_id(request_kwargs)
 

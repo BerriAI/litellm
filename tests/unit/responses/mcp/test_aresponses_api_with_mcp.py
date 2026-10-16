@@ -2024,8 +2024,13 @@ def _langfuse_trace_of(logged: Mapping[str, object]) -> object:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body_metadata",
+    [None, {"trace_id": "client-trace", "session_id": "client-session"}],
+    ids=["no_body_metadata", "body_metadata_with_its_own_trace_and_session"],
+)
 async def test_auto_execute_mcp_logs_join_the_langfuse_trace_of_a_session_header_request(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, body_metadata: dict[str, str] | None
 ):
     _serve_rounds(respx_mock, monkeypatch, (_ROUND_ONE_BODY, _ROUND_TWO_BODY))
     listing_recorder: Final = _serve_the_demo_mcp_listing(monkeypatch)
@@ -2042,6 +2047,7 @@ async def test_auto_execute_mcp_logs_join_the_langfuse_trace_of_a_session_header
         litellm_call_id="mcp-session-trace",
         litellm_trace_id=session_id,
         litellm_session_id=session_id,
+        metadata=body_metadata,
         litellm_metadata={"trace_id": session_id, "session_id": session_id},
         proxy_server_request={"headers": {"x-litellm-session-id": session_id}},
     )
