@@ -28,7 +28,9 @@ fix in the test and not a deletion. Needs no network, proxy, DB or Redis: `tests
 
 CircleCI's integration groups run every file here except the OCI and sandbox tests, which no CI runs,
 and the files in `GITHUB_FILES` in `run.py`. CircleCI runs on main, not on pull requests, so a new file
-here first runs after its PR merges. `GITHUB_FILES` is only for a file that needs what CircleCI's groups
+here first runs after its PR merges. Wanting a file to run before merge is no reason to change CI, and a
+new dedicated workflow for it is the same mistake as a shared shard. Write the file, leave `GITHUB_FILES`
+and every workflow alone, and tell the user it first runs on main. `GITHUB_FILES` is only for a file that needs what CircleCI's groups
 cannot give it, like the images `image-scan.yml` builds or the plain pytest run CircleCI's `roi-database`
 job gives `test_roi_observed.py`. Add a file there only in that case, together with its dedicated job,
 and list a new dedicated GitHub workflow in `DEDICATED_INTEGRATION_WORKFLOWS` in
