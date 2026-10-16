@@ -1659,7 +1659,7 @@ class TestBedrockRealtimeUserEventsAndUsage:
             ({"voice": {"id": "voice_123"}}, "session.voice"),
         ],
     )
-    def test_malformed_number_setting_is_rejected_without_drop_params(self, session, param):
+    def test_malformed_setting_is_rejected_without_drop_params(self, session, param):
         rejection: Final = BedrockRealtimeConfig().session_update_rejection(
             {"type": "session.update", "session": session}
         )
