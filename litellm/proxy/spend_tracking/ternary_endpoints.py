@@ -31,7 +31,7 @@ from litellm.types.proxy.ternary_endpoints import (
 
 if TYPE_CHECKING:
     from litellm.integrations.ternary.export_engine import FocusFrame
-    from litellm.integrations.ternary.ternary_logger import TernaryLogger
+    from litellm.integrations.ternary.ternary_logger import SettingsTernaryLogger, TernaryLogger
     from litellm.repositories.config_repository import ConfigParam
 
 router: Final = APIRouter()
@@ -41,9 +41,16 @@ TERNARY_SETTINGS_PARAM_NAME: Final = "ternary_settings"
 _DRY_RUN_SAMPLE_ROWS: Final = 50
 _NOT_CONFIGURED: Final = "Ternary settings not found. Initialize them first with /ternary/init"
 _RESTART_NOTE: Final = "Restart the proxy to apply the change to scheduled exports"
+_CONFIG_FILE_OWNS: Final = (
+    'Ternary is configured in the proxy config file (callbacks: ["ternary"]). Change or remove it there'
+)
 
 _sensitive_masker: Final = SensitiveDataMasker()
 _rows_adapter: Final = TypeAdapter(Sequence[Mapping[str, JsonValue]])
+
+
+class _ConfigTable(Protocol):
+    async def delete(self, *, where: Mapping[str, str]) -> object: ...
 
 
 class _ConfigStore(Protocol):
@@ -51,7 +58,8 @@ class _ConfigStore(Protocol):
 
     async def set_param(self, param_name: str, param_value: object) -> ConfigParam: ...
 
-    async def delete_param(self, param_name: str) -> bool: ...
+    @property
+    def table(self) -> _ConfigTable: ...
 
 
 class _ColumnValues(Protocol):
@@ -72,9 +80,9 @@ class _UsageSource(Protocol):
 class _Exporter(Protocol):
     def scheduled_window(self, now: datetime) -> _Window: ...
 
-    async def export_usage_data(
-        self, *, limit: int | None, start_time_utc: datetime | None, end_time_utc: datetime | None
-    ) -> None: ...
+    async def export_days(
+        self, *, start_time_utc: datetime, end_time_utc: datetime, limit: int | None
+    ) -> Sequence[str]: ...
 
 
 class _Window(Protocol):
@@ -113,7 +121,8 @@ class TernarySettingsStore:
     async def delete(self) -> bool:
         if await self._config.get_param(TERNARY_SETTINGS_PARAM_NAME) is None:
             return False
-        return await self._config.delete_param(TERNARY_SETTINGS_PARAM_NAME)
+        await self._config.table.delete(where={"param_name": TERNARY_SETTINGS_PARAM_NAME})
+        return True
 
 
 def ternary_settings_store() -> TernarySettingsStore:
@@ -130,17 +139,29 @@ def ternary_usage_source() -> _UsageSource:
     return FocusLiteLLMDatabase()
 
 
-def _registered_ternary_logger() -> TernaryLogger | None:
-    from litellm.integrations.ternary.ternary_logger import TernaryLogger
+def _config_file_logger() -> TernaryLogger | None:
+    from litellm.integrations.ternary.ternary_logger import SettingsTernaryLogger, TernaryLogger
 
     registered: Final = litellm.logging_callback_manager.get_custom_loggers_for_type(callback_type=TernaryLogger)
-    return next((cb for cb in registered if isinstance(cb, TernaryLogger)), None)
+    return next(
+        (cb for cb in registered if isinstance(cb, TernaryLogger) and not isinstance(cb, SettingsTernaryLogger)),
+        None,
+    )
 
 
-def _logger_from_settings(settings: TernarySettings) -> TernaryLogger:
-    from litellm.integrations.ternary.ternary_logger import TernaryLogger
+def is_ternary_setup_in_config() -> bool:
+    return "ternary" in litellm.callbacks or _config_file_logger() is not None
 
-    return TernaryLogger(
+
+def _require_settings_owned() -> None:
+    if is_ternary_setup_in_config():
+        raise _http_error(409, _CONFIG_FILE_OWNS)
+
+
+def _logger_from_settings(settings: TernarySettings) -> SettingsTernaryLogger:
+    from litellm.integrations.ternary.ternary_logger import SettingsTernaryLogger
+
+    return SettingsTernaryLogger(
         api_key=settings.api_key,
         connection_id=settings.connection_id,
         base_url=settings.ternary_base_url,
@@ -152,9 +173,9 @@ def _logger_from_settings(settings: TernarySettings) -> TernaryLogger:
 async def ternary_exporter(
     store: Annotated[TernarySettingsStore, Depends(ternary_settings_store)],
 ) -> _Exporter | None:
-    registered: Final = _registered_ternary_logger()
-    if registered is not None:
-        return registered
+    config_logger: Final = _config_file_logger()
+    if config_logger is not None:
+        return config_logger
     settings: Final = await store.get()
     return _logger_from_settings(settings) if settings is not None else None
 
@@ -197,6 +218,8 @@ async def get_ternary_settings(
     if not user_api_key_has_admin_view(user_api_key_dict):
         raise _http_error(403, CommonProxyErrors.not_allowed_access.value)
 
+    if is_ternary_setup_in_config():
+        return TernarySettingsView(status="config_file")
     settings: Final = await store.get()
     if settings is None:
         return TernarySettingsView()
@@ -219,6 +242,7 @@ async def init_ternary_settings(
 ) -> TernaryMessageResponse:
     """Store the Ternary export settings, with the API key encrypted. Proxy Admin only."""
     _require_proxy_admin(user_api_key_dict)
+    _require_settings_owned()
     await _save_validated(store, request)
     verbose_proxy_logger.info("Ternary settings initialized")
     return TernaryMessageResponse(message=f"Ternary settings saved. {_RESTART_NOTE}", status="success")
@@ -232,6 +256,7 @@ async def update_ternary_settings(
 ) -> TernaryMessageResponse:
     """Update some of the Ternary export settings. Omitted fields keep their stored value. Proxy Admin only."""
     _require_proxy_admin(user_api_key_dict)
+    _require_settings_owned()
     changes: Final = request.model_dump(exclude_unset=True, exclude_none=True)
     if not changes:
         raise _http_error(400, "At least one field must be provided for update")
@@ -239,6 +264,8 @@ async def update_ternary_settings(
     current: Final = await store.get()
     if current is None:
         raise _http_error(404, _NOT_CONFIGURED)
+    if request.ternary_base_url not in (None, current.ternary_base_url) and request.api_key is None:
+        raise _http_error(400, "Enter the API key again when changing ternary_base_url")
 
     try:
         updated: Final = TernarySettings.model_validate({**current.model_dump(), **changes})
@@ -257,13 +284,19 @@ async def delete_ternary_settings(
 ) -> TernaryMessageResponse:
     """Delete the stored Ternary export settings. Proxy Admin only."""
     _require_proxy_admin(user_api_key_dict)
-    if not await store.delete():
+    _require_settings_owned()
+    try:
+        deleted: Final = await store.delete()
+    except Exception as e:
+        verbose_proxy_logger.error("Failed to delete Ternary settings: %s", e)
+        raise _http_error(500, f"Failed to delete Ternary settings: {e}") from e
+    if not deleted:
         raise _http_error(404, "Ternary settings not found")
 
-    from litellm.integrations.ternary.ternary_logger import TernaryLogger
+    from litellm.integrations.ternary.ternary_logger import SettingsTernaryLogger
 
     litellm.logging_callback_manager.remove_callbacks_by_type(  # pyright: ignore[reportUnknownMemberType]  # untyped shared callback-manager method
-        litellm.callbacks, TernaryLogger
+        litellm.callbacks, SettingsTernaryLogger
     )
     verbose_proxy_logger.info("Ternary settings deleted")
     return TernaryMessageResponse(message=f"Ternary settings deleted. {_RESTART_NOTE}", status="success")
@@ -345,19 +378,19 @@ async def ternary_export(
     end: Final = request.end_time_utc or scheduled.end_time
 
     try:
-        await exporter.export_usage_data(limit=request.limit, start_time_utc=start, end_time_utc=end)
+        days: Final = await exporter.export_days(start_time_utc=start, end_time_utc=end, limit=request.limit)
     except (RuntimeError, ValueError) as e:
         verbose_proxy_logger.error("Ternary export failed: %s", e)
         raise _http_error(502, str(e)) from e
 
-    verbose_proxy_logger.info("Ternary export completed for %s..%s", start, end)
+    verbose_proxy_logger.info("Ternary export for %s..%s uploaded %d day(s)", start, end, len(days))
     return TernaryExportResponse(
-        message="Ternary export completed", status="success", start_time_utc=start, end_time_utc=end
+        message=f"Ternary export uploaded {len(days)} day(s)" if days else "No usage to upload in this window",
+        status="success",
+        start_time_utc=start,
+        end_time_utc=end,
+        days_uploaded=tuple(days),
     )
-
-
-def is_ternary_setup_in_config() -> bool:
-    return "ternary" in litellm.callbacks or _registered_ternary_logger() is not None
 
 
 async def register_ternary_logger_from_db(store: TernarySettingsStore) -> None:

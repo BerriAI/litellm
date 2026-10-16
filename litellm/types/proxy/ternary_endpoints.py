@@ -12,6 +12,7 @@ from litellm.types.llms.base import LiteLLMBaseModel
 TERNARY_DEFAULT_BASE_URL: Final = "https://api.ternary.app"
 
 TernaryExportFrequency: TypeAlias = Literal["daily", "interval"]
+TernarySettingsStatus: TypeAlias = Literal["configured", "config_file"]
 
 
 def _reject_blank(value: str | None) -> str | None:
@@ -66,7 +67,10 @@ class TernarySettingsView(_Frozen):
     ternary_base_url: str | None = Field(default=None, description="Ternary API base URL")
     frequency: TernaryExportFrequency | None = Field(default=None, description="Export cadence")
     interval_seconds: int | None = Field(default=None, description="Seconds between exports for 'interval'")
-    status: str | None = Field(default=None, description="Configuration status")
+    status: TernarySettingsStatus | None = Field(
+        default=None,
+        description="'configured' for settings stored here, 'config_file' when the proxy config sets the callback",
+    )
 
 
 class TernaryMessageResponse(_Frozen):
@@ -133,3 +137,4 @@ class TernaryExportResponse(_Frozen):
     status: str
     start_time_utc: datetime
     end_time_utc: datetime
+    days_uploaded: Sequence[str] = Field(description="UTC days that had usage and were uploaded, one file each")

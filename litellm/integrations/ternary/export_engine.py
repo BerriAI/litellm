@@ -26,6 +26,8 @@ _TOKEN_TAG_KEYS: Final = (
 _SESSION_TIMEZONE_MARGIN: Final = timedelta(days=1)
 _TAGS: Final = TypeAdapter(Mapping[str, object])
 
+_DayOutcome: TypeAlias = Literal["uploaded", "empty", "failed"]
+
 
 class _Series(Protocol):
     def to_list(self) -> Sequence[object]: ...
@@ -227,8 +229,12 @@ class TernaryExportEngine(FocusExportEngine):
         self.database = FocusLiteLLMDatabase()
 
     async def export_window(self, *, window: FocusTimeWindow, limit: int | None) -> None:
+        await TernaryExportEngine.export_days(self, window=window, limit=limit)
+
+    async def export_days(self, *, window: FocusTimeWindow, limit: int | None) -> tuple[str, ...]:
+        """Upload each UTC day `window` touches and return the days that had rows to upload."""
         data: Final = await _read_usage(self._database, limit=limit, window=window)
-        await self._deliver_enriched(data, window)
+        return await self._deliver_enriched(data, window)
 
     async def export_all(self, *, limit: int | None) -> None:
         data: Final = await _read_usage(self._database, limit=limit, window=None)
@@ -240,38 +246,40 @@ class TernaryExportEngine(FocusExportEngine):
         )
         await self._deliver_enriched(data, window)
 
-    async def _deliver_enriched(self, data: _Frame, window: FocusTimeWindow) -> None:
+    async def _deliver_enriched(self, data: _Frame, window: FocusTimeWindow) -> tuple[str, ...]:
         if data.is_empty():
             verbose_logger.debug("Ternary export: no usage data for window %s", window)
-            return
-        failed: Final = tuple(
+            return ()
+        outcomes: Final = tuple(
             [
-                day
+                (day, await TernaryExportEngine._deliver_day_or_warn(self, day, day_data, window.frequency))
                 for day, day_data in _partition_by_day(data)
-                if not await TernaryExportEngine._deliver_day_or_warn(self, day, day_data, window.frequency)
             ]
         )
+        failed: Final = tuple(day for day, outcome in outcomes if outcome == "failed")
         if failed:
             raise RuntimeError(f"Ternary export: {len(failed)} day(s) failed to upload: {', '.join(failed)}")
+        return tuple(day for day, outcome in outcomes if outcome == "uploaded")
 
-    async def _deliver_day_or_warn(self, day: str, day_data: _Frame, frequency: str) -> bool:
+    async def _deliver_day_or_warn(self, day: str, day_data: _Frame, frequency: str) -> _DayOutcome:
         try:
-            await self._deliver_day(day_data, _day_window(day, frequency))
+            uploaded: Final = await self._deliver_day(day_data, _day_window(day, frequency))
         except Exception as e:  # noqa: BLE001  # one day's failure must not block the rest; logged and re-raised
             verbose_logger.warning("Ternary export: upload for %s failed: %s", day, e)
-            return False
-        return True
+            return "failed"
+        return "uploaded" if uploaded else "empty"
 
-    async def _deliver_day(self, data: _Frame, window: FocusTimeWindow) -> None:
+    async def _deliver_day(self, data: _Frame, window: FocusTimeWindow) -> bool:
         payload: Final = _day_payload(data, transformer=self._transformer, serializer=self._serializer)
         if not payload:
             verbose_logger.debug("Ternary export: nothing to upload for %s", window.start_time.date())
-            return
+            return False
         await self._destination.deliver(
             content=payload,
             time_window=window,
             filename=self._build_filename(window),
         )
+        return True
 
 
 __all__ = ("FocusFrame", "TernaryExportEngine", "focus_rows_for", "usage_days")
