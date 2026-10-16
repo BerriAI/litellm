@@ -1498,12 +1498,14 @@ def responses(
 
         # Get optional parameters for the responses API
         request_drop_params: Final = kwargs.get("drop_params")
-        responses_api_request_params: Final[Mapping[str, object]] = ResponsesAPIRequestUtils.get_optional_params_responses_api(
-            model=model,
-            responses_api_provider_config=responses_api_provider_config,
-            response_api_optional_params=response_api_optional_params,
-            allowed_openai_params=allowed_openai_params,
-            drop_params=normalize_drop_params(request_drop_params),
+        responses_api_request_params: Final[Mapping[str, object]] = (
+            ResponsesAPIRequestUtils.get_optional_params_responses_api(
+                model=model,
+                responses_api_provider_config=responses_api_provider_config,
+                response_api_optional_params=response_api_optional_params,
+                allowed_openai_params=allowed_openai_params,
+                drop_params=normalize_drop_params(request_drop_params),
+            )
         )
 
         litellm_logging_obj.update_from_kwargs(
@@ -2339,12 +2341,14 @@ def compact_responses(
 
         # Get optional parameters for the responses API
         request_drop_params: Final = kwargs.get("drop_params")
-        responses_api_request_params: Final[Mapping[str, object]] = ResponsesAPIRequestUtils.get_optional_params_responses_api(
-            model=model,
-            responses_api_provider_config=responses_api_provider_config,
-            response_api_optional_params=response_api_optional_params,
-            allowed_openai_params=None,
-            drop_params=normalize_drop_params(request_drop_params),
+        responses_api_request_params: Final[Mapping[str, object]] = (
+            ResponsesAPIRequestUtils.get_optional_params_responses_api(
+                model=model,
+                responses_api_provider_config=responses_api_provider_config,
+                response_api_optional_params=response_api_optional_params,
+                allowed_openai_params=None,
+                drop_params=normalize_drop_params(request_drop_params),
+            )
         )
 
         # Pre Call logging
