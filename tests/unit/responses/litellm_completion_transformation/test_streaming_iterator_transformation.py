@@ -978,6 +978,33 @@ def _reasoning_chunk(reasoning: str, finish_reason: str | None = None) -> ModelR
     )
 
 
+def _with_reasoning(chunk: ModelResponseStream, reasoning: str) -> ModelResponseStream:
+    choice: Final = chunk.choices[0]
+    delta: Final = Delta(**{**choice.delta.model_dump(), "reasoning_content": reasoning})
+    return chunk.model_copy(
+        update={"choices": [StreamingChoices(index=0, delta=delta, finish_reason=choice.finish_reason)]}
+    )
+
+
+def _reasoning_then_text_chunks() -> tuple[ModelResponseStream, ...]:
+    return (_reasoning_chunk("let me think"), _chunk("Hello"), _chunk("!", finish_reason="stop"))
+
+
+def _reasoning_and_text_in_one_chunk() -> tuple[ModelResponseStream, ...]:
+    return (_with_reasoning(_chunk("Hello!", finish_reason="stop"), "let me think"),)
+
+
+REASONING_THEN_TEXT_STREAMS: Final = pytest.mark.parametrize(
+    "stream_chunks",
+    [_reasoning_then_text_chunks, _reasoning_and_text_in_one_chunk],
+    ids=["reasoning_then_text_chunks", "reasoning_and_text_in_one_chunk"],
+)
+
+
+def _event_text(events: list[BaseLiteLLMOpenAIResponseObject], event_type: ResponsesAPIStreamEvents) -> str:
+    return "".join(event.delta for event in events if getattr(event, "type", None) == event_type)
+
+
 def _annotation_only_chunk() -> ModelResponseStream:
     citation: Final = {"start_index": 0, "end_index": 2, "url": "https://example.com", "title": "Example"}
     return ModelResponseStream(
@@ -1134,16 +1161,11 @@ async def test_signature_only_thinking_streams_a_replayable_reasoning_item(sync_
     assert json.loads(reasoning_items[0].encrypted_content)[0]["signature"] == "sig_only"
 
 
+@REASONING_THEN_TEXT_STREAMS
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_reasoning_then_text_announces_message_item_before_text_events(sync_mode: bool):
-    iterator: Final = _build_iterator(
-        [
-            _reasoning_chunk("let me think"),
-            _chunk("Hello"),
-            _chunk("!", finish_reason="stop"),
-        ]
-    )
+async def test_reasoning_then_text_announces_message_item_before_text_events(stream_chunks, sync_mode: bool):
+    iterator: Final = _build_iterator(stream_chunks())
 
     events: Final = await _collect_events(iterator, sync_mode)
 
@@ -1171,21 +1193,15 @@ async def test_reasoning_then_text_announces_message_item_before_text_events(syn
         elif event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE and _is_message_item(event):
             assert event.item.id in announced_message_ids
     assert saw_text_delta
-    assert "".join(
-        event.delta for event in events if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA
-    ) == "Hello!"
+    assert _event_text(events, ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA) == "Hello!"
+    assert _event_text(events, ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA) == "let me think"
     assert announced_indexes_by_item_type["message"] != announced_indexes_by_item_type["reasoning"]
 
 
+@REASONING_THEN_TEXT_STREAMS
 @pytest.mark.asyncio
-async def test_reasoning_item_closes_before_message_item_opens():
-    iterator: Final = _build_iterator(
-        [
-            _reasoning_chunk("let me think"),
-            _chunk("Hello"),
-            _chunk("!", finish_reason="stop"),
-        ]
-    )
+async def test_reasoning_item_closes_before_message_item_opens(stream_chunks):
+    iterator: Final = _build_iterator(stream_chunks())
 
     events: Final = await _collect_events(iterator, sync_mode=False)
 
@@ -1229,6 +1245,26 @@ async def test_tool_then_reasoning_then_text_gives_message_its_own_output_index(
 
     output_indexes_by_item_id: Final = {event.item.id: event.output_index for event in output_item_added_events}
     assert len(output_indexes_by_item_id) == len(set(output_indexes_by_item_id.values()))
+
+
+@pytest.mark.asyncio
+async def test_reasoning_item_closes_before_a_tool_call_from_the_same_chunk_opens():
+    iterator: Final = _build_iterator([_with_reasoning(_tool_call_chunk(finish_reason="tool_calls"), "let me think")])
+
+    events: Final = await _collect_events(iterator, sync_mode=False)
+
+    item_lifecycle: Final = [
+        (event.type, event.item.type)
+        for event in events
+        if getattr(event, "type", None)
+        in (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE)
+    ]
+    assert item_lifecycle == [
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, "reasoning"),
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, "reasoning"),
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, "function_call"),
+        (ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, "function_call"),
+    ]
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
