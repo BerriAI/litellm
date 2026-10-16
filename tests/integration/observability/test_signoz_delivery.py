@@ -948,7 +948,6 @@ def test_killing_one_of_two_workers_mid_burst_keeps_serving_and_never_duplicates
 def test_terminating_the_proxy_right_after_a_burst_flushes_every_span_before_exit(
     provider: Wire, operator_sink: Collector, tenant_sink: Collector, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
-    pytest.skip("BUG: spans still queued in the OTel batch processor at SIGTERM never reach the sink (4 of 10 lost)")
     factory: Final = RigFactory(
         provider,
         operator_sink,
