@@ -4180,7 +4180,7 @@ class ProxyBaseLLMRequestProcessing:
             )
 
             if isinstance(failure, HTTPException):
-                raise failure
+                raise failure from e
             stream_error_status: Final = error_status_code(failure, status.HTTP_500_INTERNAL_SERVER_ERROR)
             proxy_exception: Final = ProxyException(
                 message=redact_internal_details_from_client_message(getattr(failure, "message", str(failure))),

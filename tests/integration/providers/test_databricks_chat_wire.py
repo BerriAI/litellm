@@ -1439,7 +1439,8 @@ def test_databricks_one_block_burst_through_an_upstream_outage_reaches_upstream_
         json.dumps([{"role": "user", "content": prompt}]) for prompt in prompts
     )
     expected: Final = tuple(
-        (503, _OUTAGE_MESSAGE) if down else (200, _EXPECTED_JSON) for _endpoint, _stream, down in plan
+        (529 if endpoint == "messages" else 503, _OUTAGE_MESSAGE) if down else (200, _EXPECTED_JSON)
+        for endpoint, _stream, down in plan
     )
     assert tuple(_outcome(*result) for result in results) == expected
 

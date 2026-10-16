@@ -585,7 +585,7 @@ def test_concurrent_count_waves_recover_after_vertex_count_outage(gateway: Gatew
         body: Final = _messages(model, None, None)
         assert _count_wave(clients, body) == ((200, _COUNT), (200, _COUNT), (200, _COUNT))
         peer.set_status(503)
-        assert _count_wave(clients, body) == ((503, None), (503, None), (503, None))
+        assert _count_wave(clients, body) == ((529, None), (529, None), (529, None))
         peer.set_status(200)
         assert _count_wave(clients, body) == ((200, _COUNT), (200, _COUNT), (200, _COUNT))
         requests: Final = _count_requests(wire)
