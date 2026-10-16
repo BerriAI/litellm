@@ -42,13 +42,13 @@ from litellm.llms.black_forest_labs.image_generation.handler import bfl_image_ge
 from litellm.llms.openai.workload_identity import resolve_openai_workload_identity_config
 from litellm.main import (
     azure_chat_completions,
-    base_llm_aiohttp_handler,
     base_llm_http_handler,
     bedrock_image_edit,
     bedrock_image_generation,
     openai_chat_completions,
     openai_image_variations,
 )
+from litellm.native.chat_providers.handlers import base_llm_aiohttp_handler
 
 ###########################################
 from litellm.secret_managers.main import get_secret_str

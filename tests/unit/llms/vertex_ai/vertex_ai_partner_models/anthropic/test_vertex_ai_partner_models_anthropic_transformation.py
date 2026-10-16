@@ -538,7 +538,7 @@ async def test_vertex_ai_anthropic_prompt_caching_does_not_add_beta_header(
     monkeypatch: pytest.MonkeyPatch,
     sync_mode: bool,
 ) -> None:
-    from litellm.main import vertex_partner_models_chat_completion
+    from litellm.native.chat_providers.handlers import vertex_partner_models_chat_completion
 
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setitem(
