@@ -82,7 +82,7 @@ class LiteLLMCompletionTransformationHandler:
                 **kwargs,
             )
 
-        completion_args: Final = {**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True}
+        completion_args: Final = {**kwargs, **litellm_completion_request}
 
         from litellm.main import execute_planned_chat
 
@@ -133,7 +133,7 @@ class LiteLLMCompletionTransformationHandler:
                 previous_response_client_ids=previous_response_client_ids,
             )
 
-        acompletion_args: Final = {**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True}
+        acompletion_args: Final = {**kwargs, **litellm_completion_request}
 
         from litellm.main import aexecute_planned_chat
 
