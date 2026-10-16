@@ -46,14 +46,10 @@ NON_OPENAI_SPEC_MESSAGE_FIELDS: Final = (
 )
 
 
-def _is_grok_model(model: str) -> bool:
-    return "grok" in model
-
-
 class AzureAIChatCompletionResponseIterator(OpenAIChatCompletionResponseIterator):
     def chunk_parser(self, chunk: dict[str, object]) -> ModelResponseStream:  # mutable-ok: mirrors override contract
         usage: Final = chunk.get("usage")
-        if _is_grok_model(str(chunk.get("model") or "")) and isinstance(usage, dict):
+        if isinstance(usage, dict):
             XAIChatConfig.fold_reasoning_tokens_into_completion(usage)
         return super().chunk_parser(chunk)
 
@@ -127,7 +123,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         """
         Check if the model supports stop tokens.
         """
-        if _is_grok_model(model):
+        if "grok" in model:
             # Reuse Xai method for Grok model
             xai_config: Final = XAIChatConfig()
             return xai_config.supports_stop_reason(model)
@@ -345,8 +341,7 @@ class AzureAIStudioConfig(OpenAIConfig):
             api_key=api_key,
             json_mode=json_mode,
         )
-        if _is_grok_model(model):
-            XAIChatConfig.fold_reasoning_tokens_into_completion(response)
+        XAIChatConfig.fold_reasoning_tokens_into_completion(response)
         return response
 
     def get_model_response_iterator(
