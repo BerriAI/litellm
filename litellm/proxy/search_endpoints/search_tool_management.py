@@ -619,6 +619,7 @@ async def test_search_tool_connection(request: TestSearchToolConnectionRequest):
     ```
     """
     try:
+        from litellm.llms.base_llm.search.streaming_iterator import SearchStreamWrapper
         from litellm.search import asearch
 
         # Extract params from request
@@ -643,13 +644,16 @@ async def test_search_tool_connection(request: TestSearchToolConnectionRequest):
             timeout=10.0,  # 10 second timeout for test
         )
 
+        completed: Final = (
+            await response.aget_final_response() if isinstance(response, SearchStreamWrapper) else response
+        )
         verbose_proxy_logger.debug("Successfully tested connection to %s search provider", search_provider)
 
         return {
             "status": "success",
             "message": f"Successfully connected to {search_provider} search provider",
             "test_query": test_query,
-            "results_count": (len(response.results) if response and response.results else 0),
+            "results_count": (len(completed.results) if completed and completed.results else 0),
         }
 
     except Exception as e:
