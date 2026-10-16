@@ -1398,11 +1398,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                         yield error_item
         except (GeneratorExit, asyncio.CancelledError):
             translation_class: Final = None if call_type is None else mappings.get(CallTypes(call_type))
-            if (
-                chunks_yielded
-                and not verdict_settled
-                and translation_class is not None
-            ):
+            if chunks_yielded and not verdict_settled and translation_class is not None:
                 await self._scan_released_stream_after_disconnect(
                     endpoint_translation=translation_class(),
                     responses_released=responses_yielded,
