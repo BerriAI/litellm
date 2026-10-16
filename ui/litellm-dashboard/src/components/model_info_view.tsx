@@ -51,6 +51,9 @@ import { Tag } from "./tag_management/types";
 import { getDisplayModelName } from "./view_model/model_name_display";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
+const perTokenOrNull = (perMillion: string | number | null | undefined): number | null =>
+  perMillion === undefined || perMillion === null || perMillion === "" ? null : Number(perMillion) / 1_000_000;
+
 interface ModelInfoViewProps {
   modelId: string;
   onClose: () => void;
@@ -327,31 +330,13 @@ export default function ModelInfoView({
         }
       }
 
-      // Cache Write Cost: explicit value if provided, else explicit null so the
-      // backend removes the override and falls back to the model-level default.
-      // Sending 0 here would persist a zero rate even when the user intended to unset it.
+      // Cache write tiers: explicit value if provided, else explicit null so the backend removes the
+      // override. Sending 0 would persist a zero rate even when the user intended to unset it.
       if (isFieldTouched("cache_write_cost")) {
-        if (
-          values.cache_write_cost !== undefined &&
-          values.cache_write_cost !== null &&
-          values.cache_write_cost !== ""
-        ) {
-          updatedLitellmParams.cache_creation_input_token_cost = Number(values.cache_write_cost) / 1_000_000;
-        } else {
-          updatedLitellmParams.cache_creation_input_token_cost = null;
-        }
+        updatedLitellmParams.cache_creation_input_token_cost = perTokenOrNull(values.cache_write_cost);
       }
       if (isFieldTouched("cache_write_cost_1h")) {
-        if (
-          values.cache_write_cost_1h !== undefined &&
-          values.cache_write_cost_1h !== null &&
-          values.cache_write_cost_1h !== ""
-        ) {
-          updatedLitellmParams.cache_creation_input_token_cost_above_1hr =
-            Number(values.cache_write_cost_1h) / 1_000_000;
-        } else {
-          updatedLitellmParams.cache_creation_input_token_cost_above_1hr = null;
-        }
+        updatedLitellmParams.cache_creation_input_token_cost_above_1hr = perTokenOrNull(values.cache_write_cost_1h);
       }
 
       const storedCredentialName: string | null = localModelData?.litellm_params?.litellm_credential_name ?? null;
