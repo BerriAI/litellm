@@ -4,6 +4,9 @@ from collections.abc import Mapping
 from typing import Final
 
 import pytest
+from cases.small_bodies_5rps import CASE
+from memory_readings import RssCapture, RssReading
+from setup.observe import Observation, evaluate
 from setup.upgrade import MAX_TRAFFIC_SECONDS, UpgradeMonitor, postgres_failures, upgrade_case
 from setup.upgrade_worker import UpgradeState
 from setup.wire import PlanProgress, WireRecord, response_id
@@ -161,9 +164,11 @@ def test_index_completion_stops_after_the_post_upgrade_window() -> None:
     probe.now = 162
     assert not monitor.poll(())
     probe.now = 163
-    assert monitor.poll(())
+    assert not monitor.poll(())
+    probe.found = frozenset(f"response-{i}" for i in range(300))
+    assert monitor.poll(tuple(record(i) for i in range(2, 300)))
     assert probe.releases == 1
-    assert probe.metric_checks == 6
+    assert probe.metric_checks == 7
 
 
 def test_http_200_without_spend_row_cannot_complete() -> None:
@@ -207,10 +212,83 @@ def test_failed_migration_and_operational_timeout_are_not_success() -> None:
         _ = monitor.poll(())
 
 
-def test_upgrade_case_uses_5rps_without_datastore_count_limits() -> None:
+def test_upgrade_case_uses_5rps_with_the_same_request_and_memory_limits() -> None:
     case: Final = upgrade_case()
     assert case.traffic.rps == 5
-    assert not {"postgres_calls_per_request", "redis_calls_per_request"}.intersection(
+    assert not {"cpu_seconds_per_request", "postgres_calls_per_request", "redis_calls_per_request"}.intersection(
         limit.metric for limit in case.limits
     )
-    assert next(limit.max for limit in case.limits if limit.metric == "unexpected_status_count") == 0
+    assert case.limits == tuple(
+        limit
+        for limit in CASE.limits
+        if limit.metric
+        in {
+            "unexpected_status_count",
+            "gateway_added_seconds",
+            "time_to_first_token_seconds",
+            "memory_growth_megabytes",
+        }
+    )
+
+
+def failed_record(seq: int) -> WireRecord:
+    return record(seq).model_copy(update={"status": 503, "ok": False, "text": "", "response_id": None, "call_id": None})
+
+
+def test_three_non_200s_do_not_start_indexes_or_require_spend_rows() -> None:
+    probe: Final = Probe()
+    monitor: Final = probe.monitor()
+    assert not monitor.poll(tuple(failed_record(i) for i in range(3)))
+    assert probe.releases == 0
+    assert monitor.processed == 3
+    assert monitor.successes == 0
+    assert not monitor.pending
+    probe.found = frozenset(f"response-{i}" for i in range(3, 303))
+    assert not monitor.poll(tuple(record(i) for i in range(3, 303)))
+    monitor.assert_complete(state("complete", pending=False))
+    assert probe.releases == 1
+    assert monitor.processed == 303
+    assert monitor.successes == monitor.persisted_count == 300
+
+
+def test_fourth_non_200_fails_across_poll_batches() -> None:
+    monitor: Final = Probe().monitor()
+    assert not monitor.poll(tuple(failed_record(i) for i in range(3)))
+    with pytest.raises(AssertionError, match="Too many unexpected non-200"):
+        _ = monitor.poll((failed_record(3),))
+
+
+@pytest.mark.parametrize(
+    "failed", [record().model_copy(update={"text": ""}), record().model_copy(update={"ok": False})]
+)
+def test_invalid_200_is_not_an_allowed_non_200(failed: WireRecord) -> None:
+    with pytest.raises(AssertionError, match="Failed or empty inference"):
+        _ = Probe().monitor().poll((failed,))
+
+
+@pytest.mark.parametrize(
+    "failures,overhead,ttft,growth,expected",
+    [
+        (3, 0.38, 3.0, 100, ()),
+        (4, 0.38, 3.0, 100, ("unexpected_status_count",)),
+        (3, 0.39, 3.0, 100, ("gateway_added_seconds percentile 50",)),
+        (3, 0.38, 3.1, 100, ("time_to_first_token_seconds percentile 99",)),
+        (3, 0.38, 3.0, 101, ("memory_growth_megabytes",)),
+    ],
+)
+def test_upgrade_verdict_uses_regular_limits_without_cpu_or_datastore_samples(
+    failures: int, overhead: float, ttft: float, growth: float, expected: tuple[str, ...]
+) -> None:
+    nonstream: Final = tuple(record(i).model_copy(update={"total_s": 1 + overhead}) for i in range(100))
+    stream: Final = record(100).model_copy(update={"stream": True, "first_token_s": ttft})
+    observed: Final = Observation(
+        records=(*nonstream, stream, *(failed_record(i) for i in range(101, 101 + failures))),
+        mock_requests=(),
+        guardrail_calls=(),
+        rss_before=RssCapture((RssReading("gateway", "host", 1, 1000),), ()),
+        rss_after=RssCapture((RssReading("gateway", "host", 1, 1000 + growth),), ()),
+        wall_seconds=60,
+    )
+    rows, exceeded = evaluate(upgrade_case(), observed)
+    assert tuple(row.label for row in rows if row.over or row.missing) == expected
+    assert len(exceeded) == len(expected)

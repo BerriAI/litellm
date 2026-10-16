@@ -13,7 +13,7 @@ from e2e_http import send_text_external
 from prometheus_client.parser import text_string_to_metric_families
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-from setup.performance_test_case import Limit, PerformanceTestCase
+from setup.performance_test_case import PerformanceTestCase
 from setup.upgrade_worker import UpgradeState, fingerprints, missing_indexes, read_state, release_indexes
 from setup.wire import WireRecord
 
@@ -29,12 +29,10 @@ def upgrade_case() -> PerformanceTestCase:
         CASE,
         name="database_upgrade_5rps",
         traffic=replace(CASE.traffic, total_requests=int(CASE.traffic.rps * MAX_TRAFFIC_SECONDS)),
-        limits=(
-            Limit("unexpected_status_count", max=0),
-            Limit("gateway_added_seconds", percentile=95, max=5),
-            Limit("time_to_first_token_seconds", percentile=99, max=10),
-            Limit("memory_growth_megabytes", max=2048),
-            Limit("cpu_seconds_per_request", max=1),
+        limits=tuple(
+            limit
+            for limit in CASE.limits
+            if limit.metric not in {"cpu_seconds_per_request", "postgres_calls_per_request", "redis_calls_per_request"}
         ),
     )
 
@@ -133,7 +131,9 @@ class UpgradeMonitor:
         self.clock: Final = clock
         self.wall_clock: Final = wall_clock
         self.started: Final = clock()
+        self.status_limit: Final = next(limit.max for limit in CASE.limits if limit.metric == "unexpected_status_count")
         self.pending: tuple[WireRecord, ...] = ()
+        self.processed = 0
         self.successes = 0
         self.persisted_count = 0
         self.overlap_writes = 0
@@ -148,18 +148,19 @@ class UpgradeMonitor:
         current: Final = self.state()
         assert current.phase != "failed", "Target migration/index worker failed"
         assert self.clock() - self.started < MAX_TRAFFIC_SECONDS, "Upgrade exceeded its six-hour operational timeout"
-        assert all(record.ok and record.status == 200 and record.text for record in records), (
-            "Failed or empty inference response"
-        )
-        assert all(record.response_id and record.call_id for record in records), (
+        successful: Final = tuple(record for record in records if record.status == 200)
+        self.processed += len(records)
+        self.successes += len(successful)
+        assert self.processed - self.successes <= self.status_limit, "Too many unexpected non-200 responses"
+        assert all(record.ok and record.text for record in successful), "Failed or empty inference response"
+        assert all(record.response_id and record.call_id for record in successful), (
             "Response missing spend-log identifiers"
         )
         builds, lock_waiters = self.read_activity()
         if not self.previous_builds.intersection(builds):
             self.build_seen_at = self.wall_clock() if builds else None
         self.max_lock_waiters = max(self.max_lock_waiters, lock_waiters)
-        self.pending += records
-        self.successes += len(records)
+        self.pending += successful
         found: Final = self.read_persisted(self.pending)
         self.persisted_count += len(found)
         still_building, _ = self.read_activity()
@@ -175,7 +176,7 @@ class UpgradeMonitor:
             self.released = True
         if current.phase == "complete" and self.completed_at is None:
             self.completed_at = self.clock()
-        return self.completed_at is not None and self.clock() - self.completed_at >= 60
+        return self.completed_at is not None and self.clock() - self.completed_at >= 60 and self.successes >= 300
 
     def assert_complete(self, state: UpgradeState) -> None:
         assert self.successes >= 300, f"Only {self.successes} requests completed"

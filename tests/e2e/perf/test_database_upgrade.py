@@ -41,7 +41,7 @@ def test_database_upgrade(proxy: ProxyClient, idp: Keycloak, resources: Resource
         with gateway_cpu_sampler() as cpu:
             outcome: Final = run_plan(case, build_plan(case), setup, stop_when=monitor.poll, request_timeout=30)
         assert outcome.locust_exit == 0, outcome.locust_output
-        remaining: Final = outcome.records[monitor.successes :]
+        remaining: Final = outcome.records[monitor.processed :]
         _ = monitor.poll(remaining)
         deadline: Final = time.monotonic() + 120
         while monitor.pending and time.monotonic() < deadline:
