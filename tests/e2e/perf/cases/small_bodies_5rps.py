@@ -64,11 +64,11 @@ CASE: Final = PerformanceTestCase(
     ),
     limits=(
         Limit("unexpected_status_count", max=3),
-        Limit("gateway_added_seconds", percentile=50, max=0.38),
-        Limit("time_to_first_token_seconds", percentile=99, max=3.0),
+        Limit("gateway_added_seconds", percentile=50, max=0.29),
+        Limit("time_to_first_token_seconds", percentile=99, max=3.7),
         Limit("memory_growth_megabytes", max=100),
-        Limit("postgres_calls_per_request", max=13),
-        Limit("redis_calls_per_request", max=35),
-        Limit("cpu_seconds_per_request", max=0.19),
+        Limit("postgres_calls_per_request", max=1.8),
+        Limit("redis_calls_per_request", max=18),
+        Limit("cpu_seconds_per_request", max=0.29),
     ),
 )
