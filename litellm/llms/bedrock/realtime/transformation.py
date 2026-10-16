@@ -131,9 +131,21 @@ def requested_modalities(session_config: Mapping[str, JsonValue]) -> list[str] |
     return names if len(names) == len(modalities) else None
 
 
+_OPENAI_VOICES: Final = frozenset(
+    ("alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse", "marin", "cedar")
+)
+
+
+def _openai_voice(session_config: Mapping[str, JsonValue]) -> str | None:
+    voice: Final = session_config.get("voice")
+    return voice if isinstance(voice, str) and voice in _OPENAI_VOICES else None
+
+
 def _malformed_settings(session_config: Mapping[str, JsonValue]) -> tuple[tuple[str, str], ...]:
     instructions: Final = session_config.get("instructions")
     voice: Final = session_config.get("voice")
+    input_audio_format: Final = session_config.get("input_audio_format")
+    output_audio_format: Final = session_config.get("output_audio_format")
     modalities: Final = session_config.get("modalities")
     temperature: Final = session_config.get("temperature")
     max_output_tokens: Final = session_config.get("max_response_output_tokens")
@@ -144,6 +156,16 @@ def _malformed_settings(session_config: Mapping[str, JsonValue]) -> tuple[tuple[
         ("instructions", "a string", instructions is not None and not isinstance(instructions, str)),
         ("voice", "a string", voice is not None and not isinstance(voice, str)),
         ("tools", "a list", tools is not None and not isinstance(tools, list)),
+        (
+            "input_audio_format",
+            "a string",
+            input_audio_format is not None and not isinstance(input_audio_format, str),
+        ),
+        (
+            "output_audio_format",
+            "a string",
+            output_audio_format is not None and not isinstance(output_audio_format, str),
+        ),
         (
             "modalities",
             "a list of strings",
@@ -173,7 +195,7 @@ def _malformed_settings(session_config: Mapping[str, JsonValue]) -> tuple[tuple[
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class BedrockSessionUpdateRejection:
-    code: Literal["invalid_type", "session_update_not_applied"]
+    code: Literal["invalid_type", "invalid_value", "session_update_not_applied"]
     message: str
     param: str
 
@@ -370,9 +392,9 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             self.output_sample_rate_hertz = locked_settings.output_sample_rate_hertz
 
         # Update audio input configuration from session if provided
-        if "input_audio_format" in session_config:
-            input_format: Final = session_config["input_audio_format"]
-            self.input_sample_rate_hertz = self._map_audio_format_to_sample_rate(str(input_format), is_output=False)
+        input_format: Final = session_config.get("input_audio_format")
+        if isinstance(input_format, str):
+            self.input_sample_rate_hertz = self._map_audio_format_to_sample_rate(input_format, is_output=False)
 
         # Allow direct override of the input sample rate if provided (custom extension)
         requested_input_rate: Final = _integer_setting(session_config.get("input_sample_rate_hertz"))
@@ -481,11 +503,11 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             else base.tools_json
         )
         system_prompt: Final = instructions if isinstance(instructions, str) else base.system_prompt
-        voice_id: Final = voice if isinstance(voice, str) else base.voice_id
+        voice_id: Final = voice if isinstance(voice, str) and _openai_voice(session_config) is None else base.voice_id
         format_sample_rate: Final = (
-            base.output_sample_rate_hertz
-            if output_audio_format is None
-            else self._map_audio_format_to_sample_rate(str(output_audio_format), is_output=True)
+            self._map_audio_format_to_sample_rate(output_audio_format, is_output=True)
+            if isinstance(output_audio_format, str)
+            else base.output_sample_rate_hertz
         )
         requested_output_rate: Final = _integer_setting(session_config.get("output_sample_rate_hertz"))
         output_sample_rate_hertz: Final = (
@@ -521,6 +543,16 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                     "Set drop_params to drop it instead"
                 ),
                 param=f"session.{name}",
+            )
+        unplayable_voice: Final = None if self.drop_params else _openai_voice(session_config)
+        if unplayable_voice is not None:
+            return BedrockSessionUpdateRejection(
+                code="invalid_value",
+                message=(
+                    f"Invalid value for 'session.voice': '{unplayable_voice}' is an OpenAI voice that Bedrock Nova "
+                    "Sonic cannot play. Set drop_params to drop it instead"
+                ),
+                param="session.voice",
             )
         if not self.prompt_started:
             return None

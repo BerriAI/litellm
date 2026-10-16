@@ -1661,6 +1661,8 @@ class TestBedrockRealtimeUserEventsAndUsage:
             ({"modalities": ["text", 1]}, "session.modalities"),
             ({"input_sample_rate_hertz": "16000"}, "session.input_sample_rate_hertz"),
             ({"tools": {"type": "function", "name": "lookup"}}, "session.tools"),
+            ({"input_audio_format": {"type": "audio/pcm"}}, "session.input_audio_format"),
+            ({"output_audio_format": {"type": "audio/pcmu"}}, "session.output_audio_format"),
         ],
     )
     def test_malformed_setting_is_rejected_without_drop_params(self, session, param):
@@ -1696,6 +1698,33 @@ class TestBedrockRealtimeUserEventsAndUsage:
         assert config.session_update_rejection({"type": "session.update", "session": session}) is None
         sent: Final = self._voice_and_system_prompt(config, session)
         assert sent == self._voice_and_system_prompt(BedrockRealtimeConfig(), {})
+
+    @pytest.mark.parametrize("voice", ["alloy", "marin"])
+    def test_openai_voice_is_rejected_without_drop_params(self, voice):
+        rejection: Final = BedrockRealtimeConfig().session_update_rejection(
+            {"type": "session.update", "session": {"voice": voice}}
+        )
+        assert rejection is not None
+        assert (rejection.code, rejection.param) == ("invalid_value", "session.voice")
+        assert voice in rejection.message
+
+    def test_openai_voice_is_dropped_with_drop_params(self):
+        config: Final = BedrockRealtimeConfig(drop_params=True)
+        session: Final = {"voice": "alloy", "instructions": "Answer as a pirate."}
+        assert config.session_update_rejection({"type": "session.update", "session": session}) is None
+        voice, system_prompt = self._voice_and_system_prompt(config, session)
+        assert voice == self._voice_and_system_prompt(BedrockRealtimeConfig(), {})[0]
+        assert system_prompt == "Answer as a pirate."
+
+    def test_nova_voice_is_applied(self):
+        session: Final = {"voice": "tiffany"}
+        assert BedrockRealtimeConfig().session_update_rejection({"type": "session.update", "session": session}) is None
+        assert self._voice_and_system_prompt(BedrockRealtimeConfig(), session)[0] == "tiffany"
+
+    def test_g711_input_audio_format_sets_the_input_sample_rate(self):
+        config: Final = BedrockRealtimeConfig()
+        config.transform_session_update_event({"type": "session.update", "session": {"input_audio_format": "g711_ulaw"}})
+        assert config.input_sample_rate_hertz == 8000
 
     @staticmethod
     def _voice_and_system_prompt(config: BedrockRealtimeConfig, session: dict[str, object]) -> tuple[object, object]:
