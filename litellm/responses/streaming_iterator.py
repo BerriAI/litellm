@@ -12,7 +12,18 @@ from datetime import datetime
 from functools import lru_cache
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Protocol, cast, overload, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    Literal,
+    NoReturn,
+    Protocol,
+    TypeAlias,
+    cast,
+    overload,
+    runtime_checkable,
+)
 
 import httpx
 from openai._streaming import SSEDecoder
@@ -1933,7 +1944,7 @@ class GuardedResponsesWsFrame:
     guardrail_information: tuple[Mapping[str, object], ...] = ()
 
 
-ResponsesWsFrameGuard = Callable[[str], Awaitable[GuardedResponsesWsFrame]]
+ResponsesWsFrameGuard: TypeAlias = Callable[[str], Awaitable[GuardedResponsesWsFrame]]
 
 _RESPONSES_WS_TERMINAL_EVENT_TYPES: Final = _HISTORY_TERMINAL_EVENT_TYPES | _RESPONSES_WS_FAILURE_EVENT_TYPES
 
@@ -1977,12 +1988,15 @@ def _set_turn_guardrail_information(
     if litellm_params is None:
         return
     for key in _PER_TURN_METADATA_KEYS:
-        bucket: Final = litellm_params.get(key)
-        if not _is_json_object(bucket):
-            continue
-        bucket.pop(_GUARDRAIL_INFORMATION_KEY, None)
-        if guardrail_information:
-            bucket[_GUARDRAIL_INFORMATION_KEY] = [dict(entry) for entry in guardrail_information]
+        _replace_guardrail_information(litellm_params.get(key), guardrail_information)
+
+
+def _replace_guardrail_information(bucket: object, guardrail_information: tuple[Mapping[str, object], ...]) -> None:
+    if not _is_json_object(bucket):
+        return
+    bucket.pop(_GUARDRAIL_INFORMATION_KEY, None)
+    if guardrail_information:
+        bucket[_GUARDRAIL_INFORMATION_KEY] = [dict(entry) for entry in guardrail_information]
 
 
 def _logged_user_messages(client_frame: object) -> tuple[Mapping[str, object], ...]:

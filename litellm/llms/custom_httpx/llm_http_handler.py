@@ -204,7 +204,6 @@ def _rust_responses_websocket_enabled(
 from .http_handler import get_shared_realtime_ssl_context, realtime_ssl_for_url
 
 if TYPE_CHECKING:
-    from litellm.responses.streaming_iterator import ResponsesWsFrameGuard
     from aiohttp import ClientSession
     from websockets.asyncio.client import ClientConnection
 
@@ -216,6 +215,7 @@ if TYPE_CHECKING:
         FakeAnthropicMessagesStreamIterator,
     )
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
+    from litellm.responses.streaming_iterator import ResponsesWsFrameGuard
     from litellm.types.google_genai.main import GenerateContentResponse
     from litellm.types.llms.openai_evals import (
         CancelEvalResponse,

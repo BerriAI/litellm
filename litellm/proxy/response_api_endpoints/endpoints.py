@@ -1814,11 +1814,23 @@ async def _enforce_responses_ws_first_frame_model_auth(
 
 _WS_FRAME: Final = TypeAdapter(dict[str, object])
 _GUARDRAIL_INFORMATION: Final = TypeAdapter(list[dict[str, object]])
+_GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
 _GUARDED_FRAME_FIELDS: Final = ("input", "instructions")
 
 
+class _PreCallGuardrailWalk(Protocol):
+    async def pre_call_hook(
+        self,
+        *,
+        user_api_key_dict: UserAPIKeyAuth,
+        data: dict[str, object],
+        call_type: Literal["aresponses"],
+        guardrails_only: bool,
+    ) -> dict[str, object]: ...
+
+
 def _responses_ws_frame_guard(
-    admitted: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth, proxy_logging_obj: "ProxyLogging"
+    admitted: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth, proxy_logging_obj: _PreCallGuardrailWalk
 ) -> ResponsesWsFrameGuard:
     """Socket admission skips guardrails (the first frame's ``input`` is not part of the admitted request), so every
     ``response.create`` frame gets the pre_call guardrail walk the HTTP ``/v1/responses`` path runs on its body."""
@@ -1826,28 +1838,32 @@ def _responses_ws_frame_guard(
     admitted_bucket: Final = admitted.get(metadata_key)
     bucket: Final = {
         key: value
-        for key, value in (admitted_bucket.items() if isinstance(admitted_bucket, dict) else ())
-        if key != "standard_logging_guardrail_information"
+        for key, value in (
+            _WS_FRAME.validate_python(admitted_bucket) if isinstance(admitted_bucket, dict) else {}
+        ).items()
+        if key != _GUARDRAIL_INFORMATION_KEY
     }
     model: Final = admitted.get("model")
 
     async def guard(frame: str) -> GuardedResponsesWsFrame:
         frame_obj: Final = _WS_FRAME.validate_json(frame)
-        frame_data: Final = {
+        frame_data: Final[dict[str, object]] = {
             **{key: value for key, value in frame_obj.items() if key != "type"},
             "model": model,
             metadata_key: copy.deepcopy(bucket),
         }
-        guarded: Final = await proxy_logging_obj.pre_call_hook(
+        guarded_data: Final = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict, data=frame_data, call_type="aresponses", guardrails_only=True
         )
-        guarded_bucket: Final = guarded.get(metadata_key)
+        guarded_bucket: Final = guarded_data.get(metadata_key)
         recorded: Final = (
-            guarded_bucket.get("standard_logging_guardrail_information") if isinstance(guarded_bucket, dict) else None
+            _WS_FRAME.validate_python(guarded_bucket).get(_GUARDRAIL_INFORMATION_KEY)
+            if isinstance(guarded_bucket, dict)
+            else None
         )
-        rewritten: Final = {
+        rewritten: Final[dict[str, object]] = {
             **frame_obj,
-            **{key: guarded[key] for key in _GUARDED_FRAME_FIELDS if key in guarded},
+            **{key: guarded_data[key] for key in _GUARDED_FRAME_FIELDS if key in guarded_data},
         }
         return GuardedResponsesWsFrame(
             frame=json.dumps(rewritten),
