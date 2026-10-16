@@ -40,6 +40,8 @@ const chatRequest = vi.mocked(makeOpenAIChatCompletionRequest);
 
 const responsesRequest = vi.mocked(makeOpenAIResponsesRequest);
 
+const credentialPost = fetchClient.POST as unknown as ReturnType<typeof vi.fn>;
+
 type ChatArgs = Parameters<typeof makeOpenAIChatCompletionRequest>;
 
 type ResponsesArgs = Parameters<typeof makeOpenAIResponsesRequest>;
@@ -91,9 +93,7 @@ describe("PlaygroundChat", () => {
     chatRequest.mockReset();
     responsesRequest.mockReset();
     vi.mocked(callMCPTool).mockReset();
-    vi.mocked(fetchClient.POST)
-      .mockReset()
-      .mockResolvedValue({ data: {}, response: new Response() } as never);
+    credentialPost.mockReset().mockResolvedValue({ data: {}, response: new Response() });
     vi.mocked(fetchMCPServers).mockReset().mockResolvedValue([]);
     vi.mocked(fetchMCPToolsets).mockReset().mockResolvedValue([]);
     vi.mocked(listMCPTools).mockReset().mockResolvedValue({ tools: [] });
@@ -509,8 +509,8 @@ describe("PlaygroundChat", () => {
     await user.type(await screen.findByLabelText("Linear API key"), "lin-key-1");
     await user.click(screen.getByRole("button", { name: "Connect" }));
 
-    await waitFor(() => expect(fetchClient.POST).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(fetchClient.POST).mock.calls[0]?.[1]).toMatchObject({
+    await waitFor(() => expect(credentialPost).toHaveBeenCalledTimes(1));
+    expect(credentialPost.mock.calls[0]?.[1]).toMatchObject({
       params: { path: { server_id: "srv-byok" } },
       body: { credential: "lin-key-1" },
     });
@@ -532,8 +532,8 @@ describe("PlaygroundChat", () => {
     await user.type(await screen.findByLabelText("Linear API key"), "lin-key-2");
     await user.click(screen.getByRole("button", { name: "Connect" }));
 
-    await waitFor(() => expect(fetchClient.POST).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(fetchClient.POST).mock.calls[0]?.[1]).toMatchObject({ body: { credential: "lin-key-2" } });
+    await waitFor(() => expect(credentialPost).toHaveBeenCalledTimes(1));
+    expect(credentialPost.mock.calls[0]?.[1]).toMatchObject({ body: { credential: "lin-key-2" } });
     await waitFor(() =>
       expect(vi.mocked(listMCPTools).mock.calls.filter(([, server]) => server === "srv-byok").length).toBeGreaterThan(
         1,
