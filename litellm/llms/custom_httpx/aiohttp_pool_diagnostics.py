@@ -9,6 +9,7 @@ limits, and how long the request waited for a connection slot.
 """
 
 import time
+from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
@@ -32,7 +33,9 @@ async def _on_connection_queued_start(session: "ClientSession", ctx: SimpleNames
     ctx.pool_wait_started_at = time.monotonic()
 
 
-def _make_on_connection_queued_end(threshold_seconds: float):
+def _make_on_connection_queued_end(
+    threshold_seconds: float,
+) -> Callable[["ClientSession", SimpleNamespace, object], Awaitable[None]]:
     async def _on_connection_queued_end(session: "ClientSession", ctx: SimpleNamespace, params: object) -> None:
         started_at = getattr(ctx, "pool_wait_started_at", None)
         if started_at is None:
