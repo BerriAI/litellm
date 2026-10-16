@@ -1,0 +1,36 @@
+Vendor adds the first tool to a Converse request with no toolConfig (Greptile P1 'Adding the first tool fails')
+
+Integration file tests/integration/observability/test_bedrock_converse_guardrail_rewrites.py, real proxy at two workers, real Postgres and Redis, scripted Bedrock and Generic Guardrail API vendor
+Cell test_tool_the_guardrail_added_to_a_request_without_tools_reaches_bedrock: request {"messages":[user "Card 4111 1111 1111 1111 please."]}, vendor masks the card and returns tool retrieve
+
+red53 start 0a7aa7be37  M tests/integration/observability/test_bedrock_converse_guardrail_rewrites.py 
+red53 end 0a7aa7be37  M tests/integration/observability/test_bedrock_converse_guardrail_rewrites.py 
+red53: ================== 1 failed, 30 passed, 2 warnings in 31.87s ===================
+base53 start b5870df967 ?? tests/integration/observability/test_bedrock_converse_guardrail_rewrites.py 
+base53 end b5870df967 ?? tests/integration/observability/test_bedrock_converse_guardrail_rewrites.py 
+base53: ============= 23 failed, 8 passed, 2 warnings in 88.11s (0:01:28) ==============
+head53-1 start 0a7aa7be37  M litellm/llms/bedrock/passthrough/guardrail_translation/handler.py  M tests/integration/observability/test_bedrock_converse_guardrail_rewrites.py  M tests/unit/llms/bedrock/passthrough/guardrail_translation/test_handler.py 
+head53-1 end 0a7aa7be37  M litellm/llms/bedrock/passthrough/guardrail_translation/handler.py  M tests/integration/observability/test_bedrock_converse_guardrail_rewrites.py  M tests/unit/llms/bedrock/passthrough/guardrail_translation/test_handler.py 
+head53-1: ======================= 31 passed, 2 warnings in 24.67s ========================
+head53-2 start 0a7aa7be37  M litellm/llms/bedrock/passthrough/guardrail_translation/handler.py  M tests/integration/observability/test_bedrock_converse_guardrail_rewrites.py  M tests/unit/llms/bedrock/passthrough/guardrail_translation/test_handler.py 
+head53-2 end 0a7aa7be37  M litellm/llms/bedrock/passthrough/guardrail_translation/handler.py  M tests/integration/observability/test_bedrock_converse_guardrail_rewrites.py  M tests/unit/llms/bedrock/passthrough/guardrail_translation/test_handler.py 
+head53-2: ======================= 31 passed, 2 warnings in 18.36s ========================
+
+== previous head 0a7aa7be37 (red53), the new cell
+E   AssertionError: {"error":{"message":"Guardrail 'gga-adds-a-tool' rewrote the request in a way this endpoint cannot apply, so the request was rejected rather than sent unrewritten","type":"internal_server_error","param":null,"code":"500"}}
+E   assert 500 == 200
+E    +  where 500 = <Response [500 Internal Server Error]>.status_code
+
+== main b5870df967 (base53), the new cell: 200, mask applied, vendor tool ignored
+E   AssertionError: assert {'messages': [{'role': 'user', 'content': [{'text': 'Card **** please.'}]}]} == {'messages': [{'role': 'user', 'content': [{'text': 'Card **** please.'}]}], 'toolConfig': {'tools': [{'toolSpec': {'name': 'retrieve', 'description': 'retrieve', 'inputSchema': {'json': {'type': 'object', 'properties': {}, 'required': []}}}}]}}
+E   AssertionError: assert {'tools': [{'toolSpec': {'name': 'lookup_card', 'description': 'Looks up cards like 4111 1111 1111 1111', 'inputSchema': {'json': {'type': 'object', 'properties': {'card': {'type': 'string', 'description': 'for example 4111 1111 1111 1111'}}}}}}, {'cachePoint': {'type': 'default'}}, {'toolSpec': {'name': 'refund', 'description': 'Refunds an order', 'inputSchema': {'json'
+E   AssertionError: assert {'tools': [{'toolSpec': {'name': 'lookup_card', 'description': 'Looks up cards like 4111 1111 1111 1111', 'inputSchema': {'json': {'type': 'object', 'properties': {'card': {'type': 'string', 'description': 'for example 4111 1111 1111 1111'}}}}}}, {'cachePoint': {'type': 'default'}}, {'toolSpec': {'name': 'refund', 'description': 'Refunds an order', 'inputSchema': {'json'
+E   AssertionError: assert [{'role': 'user', 'content': [{'text': 'Order details below.'}, {'text': ''}]}] == [{'role': 'user', 'content': [{'text': 'Order details below.'}]}]
+E   AssertionError: {"output": {"message": {"role": "assistant", "content": [{"text": "guarded reply"}]}}, "stopReason": "end_turn", "usage": {"inputTokens": 7, "outputTokens": 2, "totalTokens": 9}, "metrics": {"latencyMs": 1}}
+E   AssertionError: State did not converge: 200
+E   AssertionError: assert {'tools': [{'toolSpec': {'name': 'github-create_issue', 'inputSchema': {'json': {'type': 'object'}}}}, {'toolSpec': {'name': 'slack-post_message', 'inputSchema': {'json': {'type': 'object'}}}}, {'toolSpec': {'name': 'get_weather', 'inputSchema': {'json': {'type': 'object'}}}}]} == {'tools': [{'toolSpec': {'name': 'github-create_issue', 'inputSchema': {'json': {'type': 'o
+
+== e1892f5354 (head53-1, head53-2): 31 passed twice, Bedrock got
+{"messages":[{"role":"user","content":[{"text":"Card **** please."}]}],"toolConfig":{"tools":[{"toolSpec":{"name":"retrieve","description":"retrieve","inputSchema":{"json":{"type":"object","properties":{},"required":[]}}}}]}}
+
+Unit: TestConverseGuardrailsThatReadFlatTextsOnly::test_tool_added_to_a_request_without_tools_reaches_bedrock_only_from_guardrails_that_get_tools fails both cells on 0a7aa7be37 and passes on e1892f5354
