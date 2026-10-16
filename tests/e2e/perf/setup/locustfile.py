@@ -18,8 +18,9 @@ from typing import Final, cast
 import gevent
 from locust import FastHttpUser, constant_throughput, task
 from locust.contrib.fasthttp import FastResponse, ResponseContextManager
-from setup.wire import Endpoint, WireRecord, WireRequest, request_body
 from pydantic import TypeAdapter
+
+from setup.wire import Endpoint, PlanProgress, WireRecord, WireRequest, request_body, response_id
 
 _PLAN_ADAPTER: Final = TypeAdapter(list[WireRequest])
 _JSON: Final = TypeAdapter[object](object)
@@ -29,7 +30,8 @@ _RPS: Final = float(os.environ["PERF_RPS"])
 _USERS: Final = int(os.environ["PERF_USERS"])
 _NEXT: Final[Iterator[WireRequest]] = iter(_PLAN)
 _RECORDS: Final = _RECORDS_PATH.open("a", encoding="utf-8")
-_written = 0
+_PROGRESS: Final = PlanProgress(len(_PLAN))
+_STOP_FILE: Final = os.environ.get("PERF_STOP_FILE")
 BLOCK_REASON: Final = "perf-test-block"
 _TOKEN_MAX_AGE_S: Final = 240.0
 _tokens: dict[str, tuple[str, float]] = {}
@@ -125,10 +127,9 @@ def _judge(item: WireRequest, status: int, body_text: str) -> tuple[bool, str | 
 
 
 def _record(record: WireRecord) -> None:
-    global _written
     _ = _RECORDS.write(record.model_dump_json() + "\n")
     _RECORDS.flush()
-    _written += 1
+    _PROGRESS.completed += 1
 
 
 def _authorization(user: FastHttpUser, item: WireRequest) -> str:
@@ -172,14 +173,15 @@ class PlanUser(FastHttpUser):
     """One simulated client; all users share the plan and together hold the planned rate."""
 
     wait_time = constant_throughput(_RPS / _USERS)
-    network_timeout = 120.0
+    network_timeout = float(os.environ.get("PERF_REQUEST_TIMEOUT", "120"))
     connection_timeout = 30.0
 
     @task
     def send(self) -> None:
-        item: Final = next(_NEXT, None)
+        take: Final = _PROGRESS.take(stop=_STOP_FILE is not None and Path(_STOP_FILE).exists())
+        item: Final = next(_NEXT, None) if take else None
         if item is None:
-            if _written >= len(_PLAN):
+            if _PROGRESS.drained:
                 _quit(self)
             return
         started_at: Final = time.time()
@@ -193,6 +195,7 @@ class PlanUser(FastHttpUser):
         error: str | None = None
         header_s = 0.0
         response: FastResponse | None = None
+        identifier: str | None = None  # rebind-ok: the ID arrives in a JSON body or the first SSE event
         try:
             headers: Final = {"Authorization": _authorization(self, item), "Content-Type": "application/json"}
             context: ResponseContextManager
@@ -221,6 +224,7 @@ class PlanUser(FastHttpUser):
                         buffer += line
                         events, buffer = _events(buffer)
                         for event in events:
+                            identifier = identifier or response_id(event)
                             delta = delta_of_event(item.endpoint, event)
                             if delta:
                                 if first_token_s is None:
@@ -230,7 +234,9 @@ class PlanUser(FastHttpUser):
                     body_text = context.text or ""
                     first_byte_s = time.perf_counter() - started
                     if status == 200:
-                        text = text_of_json(item.endpoint, _as_dict(_JSON.validate_json(body_text)))
+                        payload: Final = _as_dict(_JSON.validate_json(body_text))
+                        identifier = response_id(payload)
+                        text = text_of_json(item.endpoint, payload)
                 ok, error = _judge(item, status, body_text)
                 if ok:
                     context.success()
@@ -260,7 +266,8 @@ class PlanUser(FastHttpUser):
                 mock_delay_s=float(delay_header) if delay_header else None,
                 call_id=_header(response, "x-litellm-call-id") if response is not None else None,
                 error=error,
+                response_id=identifier,
             )
         )
-        if _written >= len(_PLAN):
+        if _PROGRESS.drained:
             _quit(self)
