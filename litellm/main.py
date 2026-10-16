@@ -52,6 +52,7 @@ from litellm.utils import (
     get_litellm_params,
     get_optional_params,
     peek_reasoning_summary_aliases,
+    reasoning_effort_with_summary_alias,
     strip_reasoning_summary_aliases_from_optional_params,
 )
 
@@ -4124,6 +4125,7 @@ def _complete_sagemaker(ctx: CompletionDispatchContext) -> _CompletionDispatchRe
 
 _ADDITIONAL_DROP_PARAMS_ADAPTER: Final = TypeAdapter(list[str])
 _OPTIONAL_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
+_REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
 _BASE_URL_HINT: Final = TypeAdapter(BaseUrlRoutingHint)
 
@@ -5680,7 +5682,15 @@ def completion(
             "allowed_openai_params": allowed_openai_params,
             "base_model": base_model,
         }
-        optional_params = get_optional_params(**optional_param_args, **non_default_params)
+        provider_reasoning_effort: Final = reasoning_effort_with_summary_alias(
+            reasoning_effort,
+            non_default_params,
+            accepts_summary=provider_config is not None
+            and provider_config.accepts_reasoning_summary_in_reasoning_effort,
+        )
+        optional_params = get_optional_params(
+            **{**optional_param_args, "reasoning_effort": provider_reasoning_effort}, **non_default_params
+        )
         processed_non_default_params: Final = pre_process_non_default_params(
             model=model,
             passed_params=optional_param_args,
@@ -5698,7 +5708,15 @@ def completion(
             functions_unsupported_model: Final[list[object]] = TypeAdapter(list[object]).validate_python(
                 optional_params.pop("functions_unsupported_model")
             )
-            messages = function_call_prompt(messages=messages, functions=functions_unsupported_model)
+            request_kwargs: Final = _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
+            messages = function_call_prompt(
+                messages=messages,
+                functions=functions_unsupported_model,
+                model=model,
+                llm_provider=custom_llm_provider,
+                drop_params=litellm.drop_params is True
+                or normalize_drop_params(request_kwargs.get("drop_params")) is True,
+            )
 
         # For logging - save the values of the litellm-specific params passed in
         requested_litellm_params: Final = get_litellm_params(
@@ -6834,7 +6852,7 @@ def embedding(
             response = huggingface_embed.embedding(
                 model=model,
                 input=input,
-                encoding=sys.modules[__name__].encoding,
+                encoding=_load_module_encoding(),
                 api_key=api_key,
                 api_base=api_base,
                 logging_obj=logging,
@@ -9064,9 +9082,9 @@ _encoding_cache: Tokenizer | None = None
 
 
 def _load_module_encoding() -> Tokenizer:
-    import sys
+    from litellm import main as litellm_main
 
-    return sys.modules[__name__].encoding
+    return litellm_main.encoding
 
 
 def _get_encoding() -> Tokenizer:
@@ -9089,8 +9107,6 @@ def __getattr__(name: str) -> Tokenizer:
     if name == "encoding":
         _encoding: Final = _load_default_encoding()
         # Cache it in the module's __dict__ for subsequent accesses
-        import sys
-
         sys.modules[__name__].__dict__["encoding"] = _encoding
         global _encoding_cache
         _encoding_cache = _encoding

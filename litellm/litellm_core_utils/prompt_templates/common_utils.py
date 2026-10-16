@@ -1894,6 +1894,11 @@ def strip_litellm_internal_message_fields(message: AllMessageValues) -> AllMessa
     return _message_without_fields(message, LITELLM_INTERNAL_MESSAGE_FIELDS)
 
 
+def strip_prefill_prefix_field(message: AllMessageValues) -> AllMessageValues:
+    """Drop the ``prefix`` flag Mistral and DeepSeek read off a prefill, for endpoints that reject unknown keys."""
+    return _message_without_fields(message, frozenset({"prefix"}))
+
+
 def filter_value_from_dict(dictionary: dict, key: str, depth: int = 0) -> Any:
     """
     Filters a value from a dictionary
@@ -2539,6 +2544,9 @@ def merge_consecutive_system_messages(
     ]
 
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
 def _attempt_json_repair(s: str) -> object | None:
     """
     Attempt to repair truncated JSON produced by LLM tool calls.
@@ -2590,7 +2598,7 @@ def _attempt_json_repair(s: str) -> object | None:
     candidate += "".join(reversed(opener_stack))
 
     try:
-        return json.loads(candidate)
+        return _DECODED_JSON.validate_python(json.loads(candidate))
     except json.JSONDecodeError:
         pass
 
@@ -2629,7 +2637,7 @@ def parse_tool_call_arguments(
         return {}
 
     try:
-        return json.loads(arguments)
+        return _DECODED_JSON.validate_python(json.loads(arguments))
     except json.JSONDecodeError as original_error:
         repaired: Final = _attempt_json_repair(arguments)
         if repaired is not None:

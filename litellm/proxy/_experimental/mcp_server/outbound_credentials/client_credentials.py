@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Generator
 from dataclasses import dataclass
@@ -352,11 +353,20 @@ class ClientCredentialsBearerAuth(httpx2.Auth):
         access_token: str,
         refetch: Callable[[str], Awaitable[str | None]],
         carrier: HeaderCarrier,
+        *,
+        granted_scopes: tuple[str, ...] | None = None,
     ) -> None:
         self._carrier = carrier
         self.header_name = carrier.header_name
         self._access_token = SecretStr(access_token)
         self._refetch = refetch
+        self.subscription_identity: str | None = (
+            hashlib.sha256(
+                json.dumps((_identity_key(carrier), sorted(set(granted_scopes)), carrier.value_prefix)).encode()
+            ).hexdigest()
+            if isinstance(carrier, ClientCredentialsConfig) and granted_scopes is not None
+            else None
+        )
 
     async def async_auth_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request, httpx2.Response]:
         token: Final = self._access_token.get_secret_value()
