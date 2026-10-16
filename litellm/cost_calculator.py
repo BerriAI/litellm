@@ -3613,7 +3613,7 @@ def _transcription_rate(keys: tuple[str, ...], override: ModelInfo | None, base:
 
 
 def _transcription_usage_cost(
-    usage: dict,
+    usage: Mapping[str, object],
     model_info: ModelInfo | None,
     override_info: ModelInfo | None = None,
 ) -> float:
@@ -3622,13 +3622,13 @@ def _transcription_usage_cost(
 
     usage_type: Final = usage.get("type")
     if usage_type == "duration":
-        seconds: Final = usage.get("seconds") or 0.0
+        seconds: Final = normalized_audio_duration_seconds(usage.get("seconds")) or 0.0
         return float(seconds) * _transcription_rate(("input_cost_per_second",), override_info, model_info)
     if usage_type == "tokens":
-        input_token_details: Final = usage.get("input_token_details") or {}
-        audio_tokens: Final = input_token_details.get("audio_tokens") or 0
-        text_tokens: Final = input_token_details.get("text_tokens") or 0
-        output_tokens: Final = usage.get("output_tokens") or 0
+        input_token_details: Final = as_str_mapping(usage.get("input_token_details")) or {}
+        audio_tokens: Final = normalized_audio_duration_seconds(input_token_details.get("audio_tokens")) or 0.0
+        text_tokens: Final = normalized_audio_duration_seconds(input_token_details.get("text_tokens")) or 0.0
+        output_tokens: Final = normalized_audio_duration_seconds(usage.get("output_tokens")) or 0.0
         audio_cost: Final = float(audio_tokens) * _transcription_rate(
             ("input_cost_per_audio_token", "input_cost_per_token"), override_info, model_info
         )

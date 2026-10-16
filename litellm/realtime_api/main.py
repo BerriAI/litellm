@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, cast
 
 import httpx
+from openai import AsyncOpenAI
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
@@ -44,7 +45,7 @@ from ..litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ..llms.azure.common_utils import get_azure_ad_token
 from ..llms.azure.realtime.handler import AzureOpenAIRealtime, azure_realtime_protocol_for_client
 from ..llms.bedrock.realtime.handler import BedrockRealtime
-from ..llms.custom_httpx.http_handler import realtime_ssl_for_url
+from ..llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, realtime_ssl_for_url
 from ..llms.openai.live.handler import OpenAILiveSessions
 from ..llms.openai.realtime.handler import OpenAIRealtime
 from ..llms.vertex_ai.audio_transcription.realtime_transformation import is_vertex_speech_to_text_model
@@ -251,7 +252,7 @@ async def acreate_realtime_translation_client_secret(
     session: Mapping[str, Any] | None = None,
     expires_after: Mapping[str, Any] | None = None,
     timeout: float | None = None,
-    **kwargs,  # noqa: ANN003  # kwargs-ok: public client wrapper forwards provider-specific options
+    **kwargs: object,  # kwargs-ok: public API preserves provider-specific request options
 ) -> httpx.Response:
     requested_model_name: Final = model or (session or {}).get("model") or "gpt-realtime-translate"
     session_config: Final = RealtimeSessionConfig.model_validate(
@@ -269,7 +270,7 @@ async def acreate_realtime_translation_client_secret(
     litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
     if not isinstance(litellm_logging_obj, LiteLLMLogging):
         raise TypeError("litellm_logging_obj must be a LiteLLM Logging instance")
-    litellm_params: Final = GenericLiteLLMParams(**kwargs)
+    litellm_params: Final = GenericLiteLLMParams.model_validate(kwargs)
 
     model_name, custom_llm_provider, dynamic_api_key, dynamic_api_base = get_llm_provider(
         model=requested_model_name,
@@ -286,7 +287,7 @@ async def acreate_realtime_translation_client_secret(
         provider_config=provider_config,
         litellm_params=litellm_params,
         resolved_api_key=resolved_api_key,
-        extra_headers=kwargs.get("extra_headers"),
+        extra_headers=as_str_mapping(kwargs.get("extra_headers")),
     )
     litellm_logging_obj.update_from_kwargs(
         kwargs=kwargs,
@@ -313,7 +314,9 @@ async def acreate_realtime_translation_client_secret(
         provider_config=provider_config,
         model=model_name,
         extra_headers=resolved_extra_headers,
-        client=kwargs.get("client"),
+        client=client
+        if isinstance(client := kwargs.get("client"), (HTTPHandler, AsyncHTTPHandler, AsyncOpenAI))
+        else None,
         api_version=litellm_params.api_version,
         use_openai_sdk=custom_llm_provider == "openai",
     )
@@ -460,13 +463,13 @@ async def arealtime_translation_calls(
     model: str | None = None,
     session: Mapping[str, Any] | None = None,
     timeout: float | None = None,
-    **kwargs,  # noqa: ANN003  # kwargs-ok: public client wrapper forwards provider-specific options
+    **kwargs: object,  # kwargs-ok: public API preserves provider-specific request options
 ) -> httpx.Response:
     requested_model_name: Final = model or "gpt-realtime-translate"
     litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
     if not isinstance(litellm_logging_obj, LiteLLMLogging):
         raise TypeError("litellm_logging_obj must be a LiteLLM Logging instance")
-    litellm_params: Final = GenericLiteLLMParams(**kwargs)
+    litellm_params: Final = GenericLiteLLMParams.model_validate(kwargs)
 
     model_name, custom_llm_provider, dynamic_api_key, dynamic_api_base = get_llm_provider(
         model=requested_model_name,
@@ -506,8 +509,10 @@ async def arealtime_translation_calls(
         provider_config=provider_config,
         model=model_name,
         session_config=session_config,
-        extra_headers=kwargs.get("extra_headers"),
-        client=kwargs.get("client"),
+        extra_headers=as_str_mapping(kwargs.get("extra_headers")),
+        client=client
+        if isinstance(client := kwargs.get("client"), (HTTPHandler, AsyncHTTPHandler, AsyncOpenAI))
+        else None,
         api_version=litellm_params.api_version,
         translation=True,
         use_openai_sdk=custom_llm_provider == "openai",

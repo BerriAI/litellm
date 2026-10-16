@@ -682,10 +682,9 @@ class RealTimeStreaming:
         for event in self.messages:
             if event.get("type") != "session.closed":
                 continue
-            if (
-                isinstance(event_usage := event.get("usage"), dict)
-                and normalized_audio_duration_seconds(event_usage.get("output_seconds")) is not None
-            ):
+            if (event_usage := as_str_mapping(event.get("usage"))) is not None and normalized_audio_duration_seconds(
+                event_usage.get("output_seconds")
+            ) is not None:
                 self._translation_usage_finalized = True
                 return
         if self._translation_output_seconds == 0 and self._translation_input_seconds == 0:

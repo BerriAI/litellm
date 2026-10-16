@@ -905,9 +905,9 @@ def convert_to_model_response_object(
 
             if "languages" in response_object and response_object["languages"] is not None:
                 transcription_response: Final = model_response_object
-                transcription_response.languages = tuple(
-                    TranscriptionDetectedLanguage.model_validate(language) for language in response_object["languages"]
-                )
+                transcription_response.languages = TypeAdapter(
+                    tuple[TranscriptionDetectedLanguage, ...]
+                ).validate_python(response_object["languages"])
 
             if "usage" in response_object and response_object["usage"] is not None:
                 tr_usage_object: TranscriptionUsageDurationObject | TranscriptionUsageTokensObject | None = None

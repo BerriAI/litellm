@@ -770,7 +770,7 @@ def _model_response_from_cached_dict(cached_response_dict: Mapping[str, object])
 
 
 def _transcription_response_from_cached_dict(cached_response_dict: Mapping[str, object]) -> TranscriptionResponse:
-    return TranscriptionResponse(**cached_response_dict)
+    return TranscriptionResponse.model_validate(cached_response_dict)
 
 
 async def _async_streaming(response, model, custom_llm_provider, args):

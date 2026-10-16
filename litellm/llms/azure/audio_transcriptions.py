@@ -1,14 +1,22 @@
 from collections.abc import Coroutine, Mapping
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final, cast
 
-from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
+from openai import AsyncAzureOpenAI, AsyncOpenAI, AsyncStream, AzureOpenAI, OpenAI, Stream
+from openai.types.audio import TranscriptionStreamEvent
+from openai.types.audio.transcription_create_params import (
+    TranscriptionCreateParamsBase,
+    TranscriptionCreateParamsStreaming,
+)
 from pydantic import BaseModel
 
 import litellm
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.audio_utils.utils import get_audio_file_name
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
-from litellm.llms.base_llm.audio_transcription.transformation import sdk_compatible_transcription_request_data
+from litellm.llms.base_llm.audio_transcription.transformation import (
+    sdk_compatible_transcription_request_data,
+    sdk_compatible_transcription_response,
+)
 from litellm.types.utils import FileTypes
 from litellm.utils import (
     TranscriptionResponse,
@@ -41,7 +49,11 @@ class AzureAudioTranscription(AzureChatCompletion):
         atranscription: bool = False,
         litellm_params: dict | None = None,
         custom_llm_provider: str = "azure",
-    ) -> TranscriptionResponse | Coroutine[Any, Any, TranscriptionResponse]:
+    ) -> (
+        TranscriptionResponse
+        | Stream[TranscriptionStreamEvent]
+        | Coroutine[object, object, TranscriptionResponse | AsyncStream[TranscriptionStreamEvent]]
+    ):
         data: Final = {"model": model, "file": audio_file, **optional_params}
         sdk_data: Final = sdk_compatible_transcription_request_data(data)
         model_info: Final = as_str_mapping(litellm.model_cost.get(f"azure/{model}"))
@@ -101,13 +113,23 @@ class AzureAudioTranscription(AzureChatCompletion):
             },
         )
 
-        response: Final = azure_client.audio.transcriptions.create(  # pyright: ignore[reportCallIssue]  # SDK overloads cannot model dynamic transcription options
-            **sdk_data,  # pyright: ignore[reportArgumentType]  # SDK TypedDict lags accepted transcription options
-            timeout=timeout,
-        )
-
         if data.get("stream") is True:
-            return response
+            return azure_client.audio.transcriptions.create(
+                **cast(  # cast-ok: SDK file handles have no runtime validation schema
+                    TranscriptionCreateParamsStreaming, sdk_data
+                ),
+                timeout=timeout,
+            )
+
+        response: Final = sdk_compatible_transcription_response(
+            azure_client.audio.transcriptions.create(
+                **cast(  # cast-ok: SDK file handles have no runtime validation schema
+                    TranscriptionCreateParamsBase, {key: value for key, value in sdk_data.items() if key != "stream"}
+                ),
+                stream=False,
+                timeout=timeout,
+            )
+        )
 
         if isinstance(response, BaseModel):
             stringified_response = response.model_dump()
@@ -145,7 +167,7 @@ class AzureAudioTranscription(AzureChatCompletion):
         max_retries=None,
         litellm_params: dict | None = None,
         custom_llm_provider: str = "azure",
-    ) -> TranscriptionResponse:
+    ) -> TranscriptionResponse | AsyncStream[TranscriptionStreamEvent]:
         response = None
         try:
             async_azure_client: Final = self.get_azure_openai_client(
@@ -176,18 +198,23 @@ class AzureAudioTranscription(AzureChatCompletion):
             )
 
             if data.get("stream") is True:
-                return await async_azure_client.audio.transcriptions.create(  # pyright: ignore[reportCallIssue]  # SDK overloads cannot model dynamic transcription options
-                    **data,  # pyright: ignore[reportArgumentType]  # SDK TypedDict lags accepted transcription options
+                return await async_azure_client.audio.transcriptions.create(
+                    **cast(  # cast-ok: SDK file handles have no runtime validation schema
+                        TranscriptionCreateParamsStreaming, data
+                    ),
                     timeout=timeout,
                 )
 
-            raw_response: Final = await async_azure_client.audio.transcriptions.with_raw_response.create(  # pyright: ignore[reportCallIssue]  # SDK overloads cannot model dynamic transcription options
-                **data,  # pyright: ignore[reportArgumentType]  # SDK TypedDict lags accepted transcription options
+            raw_response: Final = await async_azure_client.audio.transcriptions.with_raw_response.create(
+                **cast(  # cast-ok: SDK file handles have no runtime validation schema
+                    TranscriptionCreateParamsBase, {key: value for key, value in data.items() if key != "stream"}
+                ),
+                stream=False,
                 timeout=timeout,
             )
 
             headers: Final = dict(raw_response.headers)
-            response = raw_response.parse()
+            response = sdk_compatible_transcription_response(raw_response.parse())
 
             if isinstance(response, BaseModel):
                 stringified_response = response.model_dump()

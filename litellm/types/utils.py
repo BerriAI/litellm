@@ -2866,9 +2866,9 @@ class TranscriptionResponse(OpenAIObject):
     def __init__(
         self,
         text: str | None = None,
-        usage: TranscriptionUsageDurationObject | TranscriptionUsageTokensObject | None = None,
-        languages: Sequence[TranscriptionDetectedLanguage] | None = None,
-        **kwargs: object,
+        usage: TranscriptionUsageDurationObject | TranscriptionUsageTokensObject | Mapping[str, object] | None = None,
+        languages: Sequence[TranscriptionDetectedLanguage | Mapping[str, object]] | None = None,
+        **kwargs: object,  # kwargs-ok: OpenAI-compatible responses preserve provider extension fields
     ) -> None:
         super().__init__(text=text, usage=usage, languages=languages, **kwargs)
 
