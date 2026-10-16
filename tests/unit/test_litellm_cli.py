@@ -108,6 +108,61 @@ from litellm import *
 print(json.dumps({"before": before, "completion": callable(globals().get("completion")), "acompletion": callable(globals().get("acompletion"))}))
 """
 
+_SDK_WHOSE_SUBMODULE_READS_IT_WHILE_LOADING: Final = {
+    "sdk_sync.py": """
+import threading
+initializing = threading.Event()
+submodule_loading = threading.Event()
+""",
+    "litellm/__init__.py": """
+import sdk_sync
+sdk_sync.initializing.set()
+sdk_sync.submodule_loading.wait(2)
+from litellm import submodule
+ready = True
+""",
+    "litellm/submodule.py": """
+import litellm
+import sdk_sync
+sdk_sync.submodule_loading.set()
+ready_when_loaded = getattr(litellm, "ready", False)
+""",
+    "litellm/_process_defaults.py": "def apply_process_defaults() -> None: ...\n",
+    "litellm/proxy/__init__.py": "",
+    "litellm/proxy/client/__init__.py": "",
+    "litellm/proxy/client/cli/__init__.py": "",
+    "litellm/proxy/client/cli/main.py": """
+import json, threading
+import litellm
+import sdk_sync
+
+def cli():
+    def initialize_sdk():
+        litellm.ready
+
+    def import_submodule_once_initialization_starts():
+        sdk_sync.initializing.wait()
+        import litellm.submodule
+
+    threads = [threading.Thread(target=initialize_sdk, daemon=True),
+               threading.Thread(target=import_submodule_once_initialization_starts, daemon=True)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(10)
+    print(json.dumps({"finished": [not thread.is_alive() for thread in threads]}))
+
+litellm_proxy_cli = cli
+""",
+}
+
+_RUN_LITE_AGAINST_SDK_AT: Final = """
+import sys
+sys.path.insert(0, sys.argv[1])
+from litellm_cli.main import cli
+cli()
+"""
+
 _COMMAND_MODULES_LOADED_BY: Final = """
 import json, sys
 from litellm_cli.main import cli
@@ -224,6 +279,15 @@ def test_threads_that_use_the_sdk_at_once_all_wait_for_one_initialization(tmp_pa
     used: Final = _run(_FIRST_USE_FROM_THREADS, (), tmp_path)
 
     assert used == {"seen": [True, True, True, True]}
+
+
+def test_importing_sdk_code_while_another_thread_initializes_the_sdk_does_not_hang(tmp_path: Path):
+    sdk_root: Final = tmp_path / "sdk"
+    for relative_path, source in _SDK_WHOSE_SUBMODULE_READS_IT_WHILE_LOADING.items():
+        (sdk_root / relative_path).parent.mkdir(parents=True, exist_ok=True)
+        (sdk_root / relative_path).write_text(source)
+
+    assert _run(_RUN_LITE_AGAINST_SDK_AT, (str(sdk_root),), tmp_path) == {"finished": [True, True]}
 
 
 def test_lite_keeps_an_sdk_that_was_already_imported(

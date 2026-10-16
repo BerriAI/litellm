@@ -47,7 +47,7 @@ class _SDKInitializing(types.ModuleType):
 
 
 def _become(sdk: types.ModuleType, state: type[types.ModuleType]) -> None:
-    sdk.__class__ = state
+    sdk.__class__ = state  # rebind-ok: every holder of the litellm module must see its state change in place
 
 
 def _restore_interpreter_imports() -> None:
@@ -65,11 +65,11 @@ def _initialize(sdk: types.ModuleType) -> None:
         if spec is None or spec.loader is None:
             raise ModuleNotFoundError(f"No module named {SDK_PACKAGE!r}", name=SDK_PACKAGE)
         _become(sdk, _SDKInitializing)
-        _restore_interpreter_imports()
         try:
             spec.loader.exec_module(sdk)
         finally:
             _become(sdk, types.ModuleType)
+            _restore_interpreter_imports()
 
 
 def _in_package(target: str, package: str) -> bool:
