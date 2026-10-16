@@ -36,7 +36,7 @@ from litellm.llms.anthropic.pass_through.utils import (
     proxy_sub_call_logging_kwargs,
     proxy_sub_call_trace_id,
 )
-from litellm.main import aexecute_planned_chat, execute_planned_chat, plan_chat
+from litellm.native.chat_plan import aexecute_planned_chat, execute_planned_chat, plan_chat
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
