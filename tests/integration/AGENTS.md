@@ -25,3 +25,7 @@ By the domain a user would name: `pricing`, `spend`, `routing`, `mcp`. A file on
 directory that a `GROUPS` entry in `run.py` selects. There is no manifest and no `covers` marker on new
 tests. A product bug the test exposes is `pytest.skip("BUG: <symptom>")` at the top of the body, not a
 fix in the test and not a deletion. Needs no network, proxy, DB or Redis: `tests/unit`
+
+CircleCI runs every file here. Never add one to a GitHub Actions workflow or to `GITHUB_FILES` in `run.py`,
+which only lists files a dedicated job runs on its own, like the image tests that need the images
+`image-scan.yml` builds (#46780)

@@ -29,7 +29,7 @@ A test must only fail when litellm code changes. Never pin facts we don't own (a
 
 `tests/unit/` mirrors `litellm/` in a parallel path (see `tests/unit/AGENTS.md`). Name tests `test_<filename>.py`, but always match the existing test file in the directory you touch — many provider dirs use longer descriptive names (e.g. `test_anthropic_chat_transformation.py`) to avoid ambiguity across sibling folders. For bug fixes, extend the existing mapped test file rather than creating a new one. Only create a new test file for a new feature (provider, endpoint, or transformation module) that has no mapped test yet, following that directory's naming convention (or `test_<filename>.py` if you're the first test there). One focused regression test beats many shallow ones
 
-End-to-end tests belong in `tests/e2e/` and must follow the harness conventions documented in that directory's `AGENTS.md`
+End-to-end tests belong in `tests/e2e/`. A rule about one directory's files, like its harness or which CI runs it, goes in that directory's `AGENTS.md`, never only in a README or here, since agents load it when they read a file there
 
 When creating PRs, target the repository's current default branch for both internal and external / OSS contributions. Check it with `python3 scripts/default_branch.py --branch` instead of assuming a branch name or relying on cached `origin/HEAD`
 
@@ -72,7 +72,7 @@ When referencing or running models (coding, QA'ing, writing docs, writing tests,
 
 Always pull before starting any work. The checkout or worktree may be sitting on a stale branch
 
-If you're an internal contributor, when creating a new PR, the typical flow is to branch off the repository's current default branch and create a branch prefixed with litellm_. Do not create a branch prefixed with claude/ and generally do not have / in your branch names
+Internal contributors branch a new PR off the repository's current default branch, with a branch name prefixed with litellm_
 
 Do not add `Co-Authored-By: Claude` or any Claude attribution to commit messages. Never use a `claude/` prefix or put a `/` in a branch name. Do not add "Generated with Claude Code" (or any similar attribution) to PR descriptions or comments. Do not create a new PR/branch off the existing PR to fix/add something that is related and could've just been committed directly to the existing PR's branch
 
