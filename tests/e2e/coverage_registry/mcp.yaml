@@ -39,6 +39,14 @@
   assertions: [denied_without_permission]
   source: "rest_endpoints.py:305-386"
   rationale: Tool-level permission guard; multi-tenant safety
+- id: mcp.tool_search.api_key.oversized_description_omitted
+  module: mcp
+  tier: P0
+  operation: tool_search
+  auth_family: api_key
+  assertions: [oversized_description_omitted]
+  source: "test_mcp_tool_search_e2e.py"
+  rationale: Native semantic search omits tools whose descriptions exceed the embedding input limit
 - id: mcp.list_tools.bearer.succeeds
   module: mcp
   tier: P1

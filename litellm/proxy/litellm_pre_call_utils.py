@@ -31,6 +31,7 @@ from litellm.constants import (
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
+    MANAGED_BACKGROUND_RESPONSE_METADATA_KEY,
     OTEL_SERVICE_NAME_METADATA_KEYS,
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
     ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
@@ -38,6 +39,7 @@ from litellm.constants import (
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
     SESSION_ID_GENERATED_METADATA_KEY,
     SESSION_ID_OMITTED_METADATA_KEY,
+    TYPESAFE_DANGER_ZONE_HEADER_PREFIX,
     X_LITELLM_DISABLE_CALLBACKS,
 )
 from litellm.integrations.custom_guardrail import without_server_streaming_classification
@@ -85,6 +87,7 @@ from litellm.types.integrations.anthropic_cache_control_hook import GATEWAY_INJE
 _SPECIAL_HEADERS_CACHE: Final = frozenset(str(v.value).lower() for v in SpecialHeaders)
 
 _REDACTED_HEADER_VALUE: Final = "***REDACTED***"
+_DECODED_JSON: Final = TypeAdapter(object)
 _CREDENTIAL_HEADER_NAMES: Final = SpecialHeaders.litellm_credential_header_names() | frozenset(
     {"cookie", "proxy-authorization"}
 )
@@ -377,6 +380,7 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    MANAGED_BACKGROUND_RESPONSE_METADATA_KEY,
     "standard_logging_object",
     "litellm_roi_estimator",
     "proxy_server_request",
@@ -500,7 +504,7 @@ def _normalized_metadata_object(field: str, value: object) -> Mapping[str, objec
     """
     if isinstance(value, dict):
         return value
-    if isinstance(value, str) and isinstance((parsed := safe_json_loads(value)), dict):
+    if isinstance(value, str) and isinstance((parsed := _DECODED_JSON.validate_python(safe_json_loads(value))), dict):
         return parsed
     raise _invalid_metadata_type_error(field=field, value=value)
 
@@ -582,13 +586,17 @@ def _key_or_team_allows_client_pricing_override(
     )
 
 
+def _opts_out_of_message_redaction(fields: Mapping[str, object]) -> bool:
+    return "turn_off_message_logging" in fields and _is_false_like(fields["turn_off_message_logging"])
+
+
 def _strip_client_message_redaction_opt_out(data: dict[str, object]) -> None:
     stripped: Final[list[str]] = []
-    if "turn_off_message_logging" in data and _is_false_like(data["turn_off_message_logging"]):
+    if _opts_out_of_message_redaction(data):
         stripped.append("turn_off_message_logging")
         data.pop("turn_off_message_logging", None)
     for slot_label, metadata in iter_client_callback_metadata_dicts(data):
-        if "turn_off_message_logging" in metadata and _is_false_like(metadata["turn_off_message_logging"]):
+        if _opts_out_of_message_redaction(metadata):
             stripped.append(f"{slot_label}.turn_off_message_logging")
             metadata.pop("turn_off_message_logging", None)
     if stripped:
@@ -2732,11 +2740,7 @@ def _per_user_oauth_configured() -> bool:
     )
 
     return any(
-        isinstance(values := getattr(credential, "credential_values", None), Mapping)
-        and cast("Mapping[object, object]", values).get(  # cast-ok: credential_values is a plain dict at runtime
-            GITHUB_COPILOT_AUTH_TYPE_KEY
-        )
-        == GITHUB_COPILOT_PER_USER_AUTH_TYPE
+        credential.credential_values.get(GITHUB_COPILOT_AUTH_TYPE_KEY) == GITHUB_COPILOT_PER_USER_AUTH_TYPE
         for credential in (litellm.credential_list or ())
     )
 
@@ -2753,12 +2757,8 @@ def _all_per_user_credential_names() -> tuple[str, ...]:
     return tuple(
         credential.credential_name
         for credential in (litellm.credential_list or ())
-        if getattr(credential, "credential_name", None)
-        and isinstance(values := getattr(credential, "credential_values", None), Mapping)
-        and cast("Mapping[object, object]", values).get(  # cast-ok: credential_values is a plain dict at runtime
-            GITHUB_COPILOT_AUTH_TYPE_KEY
-        )
-        == GITHUB_COPILOT_PER_USER_AUTH_TYPE
+        if credential.credential_name
+        and credential.credential_values.get(GITHUB_COPILOT_AUTH_TYPE_KEY) == GITHUB_COPILOT_PER_USER_AUTH_TYPE
     )
 
 
@@ -4033,7 +4033,7 @@ _ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS: Final = ",".join(sorted(ANTHROPIC_OAUTH_F
 
 def add_provider_specific_headers_to_request(
     data: dict,
-    headers: dict,
+    headers: Mapping[str, str],
 ) -> bool:
     from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
 
@@ -4043,12 +4043,18 @@ def add_provider_specific_headers_to_request(
         for header, value in headers.items()
         if header.lower() == "authorization" and is_anthropic_oauth_key(value)
     }
+    typesafe_danger_zone_headers: Final = {
+        header: value
+        for header, value in headers.items()
+        if header.lower().startswith(TYPESAFE_DANGER_ZONE_HEADER_PREFIX)
+    }
 
     scoped_headers: Final = [
         ProviderSpecificHeader(custom_llm_provider=providers, extra_headers=extra_headers)
         for providers, extra_headers in (
             (_ANTHROPIC_API_HEADER_PROVIDERS, anthropic_api_headers),
             (_ANTHROPIC_OAUTH_CREDENTIAL_PROVIDERS, anthropic_oauth_credential_headers),
+            (LlmProviders.TYPESAFE.value, typesafe_danger_zone_headers),
         )
         if extra_headers
     ]

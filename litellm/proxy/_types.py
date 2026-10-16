@@ -62,6 +62,7 @@ from litellm.types.mcp import (
     MCPAuth,
     MCPAuthType,
     MCPCredentials,
+    MCPDisabledCapabilities,
     MCPTransport,
     MCPTransportType,
     MCPUpstreamProtocol,
@@ -826,6 +827,8 @@ class LiteLLMRoutes(enum.Enum):
     self_managed_routes = [
         "/lens",
         "/lens/{path:path}",
+        "/telemetry/ui_events",
+        "/telemetry/ui_events/enabled",
         # update_team resolves proxy/org/team admin itself and filters team admins
         # through the team_admin_editable_team_fields setting
         "/team/update",
@@ -947,6 +950,7 @@ class LiteLLMRoutes(enum.Enum):
     # updating this list — the default-allow behavior covers it automatically.
     admin_viewer_routes = (
         [
+            "/telemetry/ui_events",
             "/lens/traces/findings",
             "/lens/traces/signals",
             "/lens/feedback/summary",
@@ -2789,6 +2793,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, stores request messages and responses in spend logs. Default is False.",
     )
+    disable_requester_ip_address_logging: bool | None = Field(
+        None,
+        description="If True, new spend log rows store requester_ip_address as null in the column, the metadata and the stored request. The stored request also drops client-IP forwarding headers such as x-forwarded-for, and IP addresses in its other header values and in stored error messages are masked. Guardrails, metrics and callbacks that read the standard logging payload still receive the IP. Default is False.",
+    )
     spend_logs_metadata_fields: SpendLogsMetadataFields | None = Field(
         None,
         description="Which keys of LiteLLM_SpendLogs.metadata are written to the database. Set exactly one of 'include' (write only these keys) or 'exclude' (drop these keys). 'status' and 'cold_storage_object_key' are always written. Daily spend tables, budgets and logging callbacks still see every key. Unset writes every key",
@@ -2878,9 +2886,20 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description="MCP revisions enabled by the gateway. Defaults to all completed legacy revisions. "
         "Modern protocol serving requires explicit opt-in. Apps/Tasks remain disabled.",
     )
+    mcp_disabled_capabilities: MCPDisabledCapabilities | None = Field(
+        None,
+        description="MCP capabilities the gateway stops serving on every route, any of 'prompts' and 'resources'. "
+        "A disabled capability is left out of the initialize and server/discover responses, its list operations "
+        "return an empty list without contacting any upstream MCP server, and its get/read operations answer "
+        "METHOD_NOT_FOUND. Unset means prompts and resources stay advertised.",
+    )
     mcp_allowed_clients: list[MCPAllowedClient] | None = Field(
         None,
         description="MCP client applications admitted by the gateway, each an {alias, value} pair where alias is the name shown in the dashboard and logs and value is the identity that must match exactly. When set, every MCP request must carry a client identity equal to one of the values: a JWT caller is identified by the claim named in litellm_jwtauth.mcp_client_id_jwt_field, any other caller by the header named in mcp_client_id_header. A request with no resolvable identity, or an unlisted one, is rejected with 403. Unset means every client is admitted.",
+    )
+    mcp_require_explicit_server_scope: bool = Field(
+        default=False,
+        description="Require aggregate MCP requests to include x-mcp-servers unless a toolset or gateway OAuth session already scopes the server. Off by default.",
     )
     mcp_client_id_header: str | None = Field(
         None,
@@ -3006,6 +3025,13 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "where a team-scoped key is governed only by the team and team-member "
             "budgets and the key owner's personal max_budget does not apply "
             "(see GitHub issue #12905)."
+        ),
+    )
+    agent_access_default_deny: bool = Field(
+        False,
+        description=(
+            "When true, a key with no agent grants on itself or its team can reach no agents instead of all agents. "
+            "Proxy admins are exempt."
         ),
     )
     user_url_validation: bool | None = Field(
@@ -3352,31 +3378,14 @@ class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
 
     @model_validator(mode="after")
     def mask_api_keys(self):
-        from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+        from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker, mask_credentials_in_payload
 
         masker: Final = SensitiveDataMasker(sensitive_patterns={"key"})
 
         if self.before_value is not None:
-            json_before_value: dict | None = None
-            if isinstance(self.before_value, str):
-                json_before_value = json.loads(self.before_value)
-            elif isinstance(self.before_value, dict):
-                json_before_value = self.before_value
-
-            if json_before_value is not None:
-                json_before_value = masker.mask_dict(json_before_value)
-                self.before_value = json.dumps(json_before_value, default=str)
-
+            self.before_value = json.dumps(mask_credentials_in_payload(self.before_value, masker), default=str)
         if self.updated_values is not None:
-            json_updated_values: dict | None = None
-            if isinstance(self.updated_values, str):
-                json_updated_values = json.loads(self.updated_values)
-            elif isinstance(self.updated_values, dict):
-                json_updated_values = self.updated_values
-
-            if json_updated_values is not None:
-                json_updated_values = masker.mask_dict(json_updated_values)
-                self.updated_values = json.dumps(json_updated_values, default=str)
+            self.updated_values = json.dumps(mask_credentials_in_payload(self.updated_values, masker), default=str)
 
         return self
 
@@ -3803,6 +3812,16 @@ class ModelAccessDeniedProxyException(ProxyException):
 
     def sanitized_internal_message(self) -> str:
         return self.internal_message.replace("\r", "").replace("\n", "")
+
+
+class AwsErrorTypeProxyException(Exception):
+    """A ProxyException answered to an AWS SDK, which reads the error code from the ``x-amzn-errortype`` header and
+    the message from a top-level ``message`` field."""
+
+    def __init__(self, error: ProxyException, aws_error_type: str) -> None:
+        super().__init__(error.message)
+        self.error: Final = error
+        self.aws_error_type: Final = aws_error_type
 
 
 from litellm.types.proxy.common_proxy_errors import (  # noqa: E402  # public re-export
@@ -4257,6 +4276,7 @@ class TeamAccessGroupModelGrant(LiteLLMPydanticObjectBase):
     models: tuple[str, ...]
     mcp_server_ids: tuple[str, ...] = ()
     agent_ids: tuple[str, ...] = ()
+    skill_names: tuple[str, ...] = ()
 
 
 class TeamInfoMember(Member):
@@ -4271,6 +4291,7 @@ class TeamEditAsTeamAdmin(LiteLLMBaseModel):
     kind: Literal["team_admin"] = "team_admin"
     editable_fields: tuple[str, ...]
     may_raise_max_budget: bool = False
+    proxy_controlled_metadata_keys: tuple[str, ...] = ()
 
 
 class TeamEditAsTeamAdminDisabled(LiteLLMBaseModel):
@@ -4294,6 +4315,9 @@ class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     access_group_models: list[str] | None = None
     access_group_mcp_server_ids: list[str] | None = None
     access_group_agent_ids: list[str] | None = None
+    access_group_skill_names: tuple[str, ...] | None = None
+    # Listed group ids with no row; skill grants are suspended while this is non-empty.
+    unresolved_access_group_ids: tuple[str, ...] | None = None
     access_group_details: tuple[TeamAccessGroupModelGrant, ...] | None = None
     # Parent org's model ceiling, reported only to callers who can manage the team.
     # None = no org or not a manager; [] or ["all-proxy-models"] = no ceiling.
