@@ -1293,11 +1293,12 @@ async def test_count_tokens_without_a_count_api_rejects_a_non_string_tool_result
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("model", ("mistral-tool-result", "model-not-in-the-router"))
 async def test_count_tokens_without_a_count_api_counts_a_non_string_tool_result_text_under_drop_params(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, model: str
 ) -> None:
     response: Final = await _count_on_a_model_without_a_count_api(
-        monkeypatch, {"model": "mistral-tool-result", "drop_params": True, "messages": _build_log_messages(None)}
+        monkeypatch, {"model": model, "drop_params": True, "messages": _build_log_messages(None)}
     )
 
     assert isinstance(response, dict)

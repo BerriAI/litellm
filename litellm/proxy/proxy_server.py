@@ -14437,10 +14437,11 @@ def _deployment_with_request_drop_params(
     deployment: dict[str, object] | None,  # mutable-ok: BaseTokenCounter.count_tokens takes a dict deployment
     drop_params: JsonValue,
 ) -> dict[str, object] | None:  # mutable-ok: BaseTokenCounter.count_tokens takes a dict deployment
-    if deployment is None or drop_params is None:
+    if drop_params is None:
         return deployment
-    litellm_params: Final = _DEPLOYMENT_LITELLM_PARAMS.validate_python(deployment.get("litellm_params") or {})
-    return {**deployment, "litellm_params": {**litellm_params, "drop_params": drop_params}}
+    resolved_deployment: Final = deployment or {}
+    litellm_params: Final = _DEPLOYMENT_LITELLM_PARAMS.validate_python(resolved_deployment.get("litellm_params") or {})
+    return {**resolved_deployment, "litellm_params": {**litellm_params, "drop_params": drop_params}}
 
 
 def _local_count_tool_result_error(
