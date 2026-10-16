@@ -1,3 +1,4 @@
+import datetime
 import json
 from collections.abc import Mapping, Sequence
 from itertools import chain
@@ -10,6 +11,7 @@ import respx
 from pydantic import BaseModel
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
@@ -86,8 +88,8 @@ async def test_aresponses_forwards_timeout_to_acompletion():
     and similar providers, with calls falling back to the provider SDK default
     (~600s for Anthropic).
     """
-    with patch("litellm.acompletion", new_callable=AsyncMock) as mock_acompletion:
-        mock_acompletion.return_value = ModelResponse(
+    with patch("litellm.main.aexecute_planned_chat", new_callable=AsyncMock) as mock_chat:
+        mock_chat.return_value = ModelResponse(
             id="id",
             created=0,
             model="anthropic/claude-sonnet-4-5",
@@ -102,8 +104,8 @@ async def test_aresponses_forwards_timeout_to_acompletion():
             api_key="sk-ant-fake",
         )
 
-    assert mock_acompletion.call_count == 1
-    forwarded_timeout = mock_acompletion.call_args.kwargs.get("timeout")
+    assert mock_chat.call_count == 1
+    forwarded_timeout = mock_chat.call_args.args[0].named.get("timeout")
     assert forwarded_timeout == 42, (
         f"timeout was not forwarded to acompletion (got {forwarded_timeout!r}); "
         "this means Router(timeout=N) silently fails for providers on the "
@@ -541,3 +543,153 @@ def test_streamed_responses_over_anthropic_emit_the_responses_event_sequence(res
     assert deltas == "Argentina won."
     assert completed.response.status == "completed"
     assert completed.response.output[0].content[0].text == "Argentina won."
+
+
+class _DeploymentHookCounter(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    async def async_pre_call_deployment_hook(self, kwargs: Mapping[str, object], call_type: object) -> None:
+        self.calls += 1
+
+
+@pytest.mark.asyncio
+async def test_bridged_responses_call_runs_deployment_hooks_once(monkeypatch: pytest.MonkeyPatch):
+    counter: Final = _DeploymentHookCounter()
+    monkeypatch.setattr(litellm, "callbacks", [counter])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=False) as upstream:
+        messages_route: Final = upstream.post("http://anthropic.test/v1/messages").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "msg_bridge",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-bridge",
+                    "content": [{"type": "text", "text": "from upstream"}],
+                    "stop_reason": "end_turn",
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 10, "output_tokens": 5},
+                },
+            )
+        )
+        response: Final = await litellm.aresponses(
+            model="anthropic/claude-bridge", input="hi", api_base="http://anthropic.test", api_key="sk-test"
+        )
+
+    assert response.output[0].content[0].text == "from upstream"
+    assert messages_route.call_count == 1
+    assert counter.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_bridged_responses_call_is_billed_like_the_chat_call_for_one_hour_cache_writes_and_web_searches(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    usage: Final = {
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "cache_creation_input_tokens": 2000,
+        "cache_read_input_tokens": 3000,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 2000},
+        "server_tool_use": {"web_search_requests": 2},
+    }
+    upstream_message: Final = {
+        "id": "msg_bridge_cost",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5",
+        "content": [{"type": "text", "text": "searched"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": usage,
+    }
+    credentials: Final = {"api_base": "http://anthropic.test", "api_key": "sk-test"}
+
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.post("http://anthropic.test/v1/messages").mock(return_value=httpx.Response(200, json=upstream_message))
+        chat: Final = await litellm.acompletion(
+            model="anthropic/claude-sonnet-4-5", messages=[{"role": "user", "content": "hi"}], **credentials
+        )
+        bridged: Final = await litellm.aresponses(model="anthropic/claude-sonnet-4-5", input="hi", **credentials)
+
+    chat_cost: Final = chat._hidden_params["response_cost"]
+    assert isinstance(chat_cost, float) and chat_cost > 0
+    assert bridged._hidden_params["response_cost"] == pytest.approx(chat_cost)
+
+
+_ANTHROPIC_MESSAGE: Final = {
+    "id": "msg_bridge_headers",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-sonnet-4-5",
+    "content": [{"type": "text", "text": "hi"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 10, "output_tokens": 5},
+}
+
+
+@pytest.mark.asyncio
+async def test_bridged_responses_call_names_the_provider_request_id_in_its_headers(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.post("http://anthropic.test/v1/messages").mock(
+            return_value=httpx.Response(200, json=_ANTHROPIC_MESSAGE, headers={"x-request-id": "req-upstream-1"})
+        )
+        bridged: Final = await litellm.aresponses(
+            model="anthropic/claude-sonnet-4-5", input="hi", api_base="http://anthropic.test", api_key="sk-test"
+        )
+
+    assert bridged._hidden_params["additional_headers"]["llm_provider-request-id"] == "req-upstream-1"
+
+
+@pytest.mark.asyncio
+async def test_bridged_responses_stream_opens_with_the_cost_breakdown_headers(monkeypatch: pytest.MonkeyPatch):
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.common_request_processing import cost_headers
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    logging_obj: Final = Logging(
+        model="anthropic/claude-sonnet-4-5",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="aresponses",
+        start_time=datetime.datetime.now(datetime.timezone.utc),
+        litellm_call_id="bridge-stream-headers-0000-4000-8000-000000000001",
+        function_id="1234",
+    )
+    events: Final = (
+        {"type": "message_start", "message": {**_ANTHROPIC_MESSAGE, "content": [], "stop_reason": None}},
+        {"type": "message_stop"},
+    )
+    sse: Final = "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
+
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.post("http://anthropic.test/v1/messages").mock(
+            return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, text=sse)
+        )
+        stream: Final = await litellm.aresponses(
+            model="anthropic/claude-sonnet-4-5",
+            input="hi",
+            stream=True,
+            api_base="http://anthropic.test",
+            api_key="sk-test",
+            litellm_logging_obj=logging_obj,
+        )
+        headers: Final = cost_headers(None, logging_obj)
+        async for _ in stream:
+            pass
+
+    assert headers["x-litellm-response-cost-output"] == "0.0"
+    assert headers["x-litellm-response-cost-discount-amount"] == "0.0"
+    assert headers["x-litellm-response-cost-margin-amount"] == "0.0"
