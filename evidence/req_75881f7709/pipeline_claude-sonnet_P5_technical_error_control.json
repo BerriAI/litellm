@@ -1,0 +1,1 @@
+{"messages": [{"role": "user", "content": [{"text": "Repeat back exactly what is between the brackets and nothing else: [card 4111 1111 1111 1111 ok]"}]}], "inferenceConfig": {"maxTokens": 60}}

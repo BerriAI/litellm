@@ -1,0 +1,268 @@
+  - guardrail_name: gg-none
+    litellm_params:
+      guardrail: generic_guardrail_api
+      mode: [pre_call, post_call]
+      api_base: http://127.0.0.1:__GG__/none
+      default_on: false
+      unreachable_fallback: fail_closed
+  - guardrail_name: gg-mask
+    litellm_params:
+      guardrail: generic_guardrail_api
+      mode: [pre_call, post_call]
+      api_base: http://127.0.0.1:__GG__/mask
+      default_on: false
+      unreachable_fallback: fail_closed
+  - guardrail_name: gg-masksm
+    litellm_params:
+      guardrail: generic_guardrail_api
+      mode: [pre_call, post_call]
+      api_base: http://127.0.0.1:__GG__/masksm
+      default_on: false
+      unreachable_fallback: fail_closed
+  - guardrail_name: gg-masksm-flat
+    litellm_params:
+      guardrail: generic_guardrail_api
+      mode: [pre_call, post_call]
+      api_base: http://127.0.0.1:__GG__/masksm_flat
+      default_on: false
+      unreachable_fallback: fail_closed
+  - guardrail_name: gg-masksm-blank
+    litellm_params:
+      guardrail: generic_guardrail_api
+      mode: [pre_call, post_call]
+      api_base: http://127.0.0.1:__GG__/masksm_blank
+      default_on: false
+      unreachable_fallback: fail_closed
+  - guardrail_name: gg-smonly
+    litellm_params:
+      guardrail: generic_guardrail_api
+      mode: [pre_call, post_call]
+      api_base: http://127.0.0.1:__GG__/smonly
+      default_on: false
+      unreachable_fallback: fail_closed
+  - guardrail_name: gg-echo-sm
+    litellm_params:
+      guardrail: generic_guardrail_api
+      mode: [pre_call, post_call]
+      api_base: http://127.0.0.1:__GG__/echo_sm
+      default_on: false
+      unreachable_fallback: fail_closed
+  - guardrail_name: gg-block
+    litellm_params:
+      guardrail: generic_guardrail_api
+      mode: [pre_call, post_call]
+      api_base: http://127.0.0.1:__GG__/block
+      default_on: false
+      unreachable_fallback: fail_closed
+  - guardrail_name: gg-blockword
+    litellm_params:
+      guardrail: generic_guardrail_api
+      mode: [pre_call, post_call]
+      api_base: http://127.0.0.1:__GG__/blockword
+      default_on: false
+      unreachable_fallback: fail_closed
+  - guardrail_name: gg-slow8
+    litellm_params:
+      guardrail: generic_guardrail_api
+      mode: [pre_call, post_call]
+      api_base: http://127.0.0.1:__GG__/slow8
+      default_on: false
+      unreachable_fallback: fail_closed
+  - guardrail_name: gg-mask-skiptool
+    litellm_params:
+      guardrail: generic_guardrail_api
+      mode: [pre_call, post_call]
+      api_base: http://127.0.0.1:__GG__/mask
+      default_on: false
+      skip_tool_message_in_guardrail: true
+  - guardrail_name: gg-mask-skipsys
+    litellm_params:
+      guardrail: generic_guardrail_api
+      mode: [pre_call, post_call]
+      api_base: http://127.0.0.1:__GG__/mask
+      default_on: false
+      skip_system_message_in_guardrail: true
+  - guardrail_name: gg-masksm-deep
+    litellm_params:
+      guardrail: generic_guardrail_api
+      mode: [pre_call, post_call]
+      api_base: http://127.0.0.1:__GG__/masksm_deep
+      default_on: false
+  - guardrail_name: gg-block-skiptool
+    litellm_params:
+      guardrail: generic_guardrail_api
+      mode: [pre_call, post_call]
+      api_base: http://127.0.0.1:__GG__/block
+      default_on: false
+      skip_tool_message_in_guardrail: true
+  - guardrail_name: oai-mod
+    litellm_params:
+      guardrail: openai_moderation
+      mode: [pre_call, post_call]
+      api_key: os.environ/OPENAI_API_KEY
+      api_base: http://127.0.0.1:__OAI__/v1
+      model: omni-moderation-latest
+      default_on: false
+  - guardrail_name: akto
+    litellm_params:
+      guardrail: akto
+      mode: [pre_call]
+      akto_base_url: http://127.0.0.1:__AKTO__
+      akto_vxlan_id: "policy:AGENTIC"
+      unreachable_fallback: fail_closed
+      default_on: false
+  - guardrail_name: bedrock-ssn
+    litellm_params:
+      guardrail: bedrock
+      mode: [pre_call, post_call]
+      guardrailIdentifier: 164nbov72q77
+      guardrailVersion: DRAFT
+      aws_region_name: us-east-1
+      aws_bedrock_runtime_endpoint: http://127.0.0.1:__REC__
+      mask_request_content: true
+      mask_response_content: true
+      default_on: false
+  - guardrail_name: bedrock-ssn-latest
+    litellm_params:
+      guardrail: bedrock
+      mode: [pre_call, post_call]
+      guardrailIdentifier: 164nbov72q77
+      guardrailVersion: DRAFT
+      aws_region_name: us-east-1
+      aws_bedrock_runtime_endpoint: http://127.0.0.1:__REC__
+      mask_request_content: true
+      mask_response_content: true
+      experimental_use_latest_role_message_only: true
+      default_on: false
+  - guardrail_name: bedrock-ssn-post
+    litellm_params:
+      guardrail: bedrock
+      mode: [post_call]
+      guardrailIdentifier: 164nbov72q77
+      guardrailVersion: DRAFT
+      aws_region_name: us-east-1
+      aws_bedrock_runtime_endpoint: http://127.0.0.1:__REC__
+      mask_response_content: true
+      default_on: false
+  - guardrail_name: bedrock-ssn-latest-post
+    litellm_params:
+      guardrail: bedrock
+      mode: [post_call]
+      guardrailIdentifier: 164nbov72q77
+      guardrailVersion: DRAFT
+      aws_region_name: us-east-1
+      aws_bedrock_runtime_endpoint: http://127.0.0.1:__REC__
+      mask_response_content: true
+      experimental_use_latest_role_message_only: true
+      default_on: false
+  - guardrail_name: gg-mask-post
+    litellm_params:
+      guardrail: generic_guardrail_api
+      mode: [post_call]
+      api_base: http://127.0.0.1:__GG__/mask
+      default_on: false
+  - guardrail_name: gg-sm-partial
+    litellm_params:
+      guardrail: generic_guardrail_api
+      mode: [pre_call]
+      api_base: http://127.0.0.1:__GG__/sm_partial
+      default_on: false
+  - guardrail_name: gg-mask-toolonly
+    litellm_params:
+      guardrail: generic_guardrail_api
+      mode: [pre_call]
+      api_base: http://127.0.0.1:__GG__/mask
+      default_on: false
+      scan_only_tool_results: true
+  - guardrail_name: gg-masksm-toolonly
+    litellm_params:
+      guardrail: generic_guardrail_api
+      mode: [pre_call]
+      api_base: http://127.0.0.1:__GG__/masksm
+      default_on: false
+      scan_only_tool_results: true
+  - guardrail_name: gg-pglike
+    litellm_params:
+      guardrail: generic_guardrail_api
+      mode: [pre_call]
+      api_base: http://127.0.0.1:__GG__/pglike
+      default_on: false
+  - guardrail_name: gg-masktools
+    litellm_params:
+      guardrail: generic_guardrail_api
+      mode: [pre_call]
+      api_base: http://127.0.0.1:__GG__/masktools
+      default_on: false
+  - guardrail_name: gg-addtool
+    litellm_params:
+      guardrail: generic_guardrail_api
+      mode: [pre_call]
+      api_base: http://127.0.0.1:__GG__/addtool
+      default_on: false
+  - guardrail_name: gg-droptools
+    litellm_params:
+      guardrail: generic_guardrail_api
+      mode: [pre_call]
+      api_base: http://127.0.0.1:__GG__/droptools
+      default_on: false
+  - guardrail_name: headroom
+    litellm_params:
+      guardrail: headroom
+      mode: pre_call
+      api_base: http://127.0.0.1:__HDR__
+      default_on: false
+  - guardrail_name: singulr
+    litellm_params:
+      guardrail: singulr
+      mode: pre_call
+      singulr_api_key: os.environ/SINGULR_API_KEY
+      singulr_api_base: http://127.0.0.1:__SGL__
+      singulr_application_id: os.environ/SINGULR_APPLICATION_ID
+      singulr_guardrail_id: os.environ/SINGULR_GUARDRAIL_ID
+      default_on: false
+  - guardrail_name: conduct
+    litellm_params:
+      guardrail: conduct
+      mode: pre_call
+      api_base: http://127.0.0.1:__CND__
+      api_key: cond_agt_rig
+      unreachable_fallback: fail_closed
+      default_on: false
+  - guardrail_name: airia
+    litellm_params:
+      guardrail: airia
+      mode: pre_call
+      api_base: http://127.0.0.1:__AIRIA__
+      api_key: os.environ/AIRIA_API_KEY
+      default_on: false
+  - guardrail_name: ovalix
+    litellm_params:
+      guardrail: ovalix
+      mode: pre_call
+      tracker_api_base: http://127.0.0.1:__OVX__
+      tracker_api_key: ovx_rig
+      application_id: rig-application
+      pre_checkpoint_id: rig-checkpoint
+      default_on: false
+  - guardrail_name: judge
+    litellm_params:
+      guardrail: llm_as_a_judge
+      mode: pre_call
+      judge_model: gpt-judge
+      criteria:
+        - name: no_violence
+          description: "The text under review must not contain threats or violence against people"
+          weight: 100
+      overall_threshold: 50
+      on_failure: block
+      default_on: false
+  - guardrail_name: tool-policy
+    litellm_params:
+      guardrail: tool_policy
+      mode: pre_call
+      default_on: false
+  - guardrail_name: mcp-end-user
+    litellm_params:
+      guardrail: mcp_end_user_permission
+      mode: pre_call
+      default_on: false

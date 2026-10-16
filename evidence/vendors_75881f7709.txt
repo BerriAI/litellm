@@ -1,0 +1,64 @@
+Vendor cells at head 75881f7709, merge ea643328b4, base b5870df967
+Airia's real gateway answered 503 Service Unavailable to every call during this run, checked directly outside litellm too, so the Airia cells show the same 400 on every tree
+
+== Conduct (real conduct-litellm-guard 0.2.7 plugin, scripted guard_check)
+C1_tool_result_injection     base  st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+C1_tool_result_injection     head  st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+C1_tool_result_injection     merge st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+C2_benign_tool_loop          base  st=200 conduct=1 verdicts=['ok'] inj_in_prompt=[False] bedrock=1
+C2_benign_tool_loop          head  st=200 conduct=1 verdicts=['ok'] inj_in_prompt=[False] bedrock=1
+C2_benign_tool_loop          merge st=200 conduct=1 verdicts=['ok'] inj_in_prompt=[False] bedrock=1
+C3_system_injection          base  st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+C3_system_injection          head  st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+C3_system_injection          merge st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+C4_assistant_injection       base  st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+C4_assistant_injection       head  st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+C4_assistant_injection       merge st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+C5_user_injection            base  st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+C5_user_injection            head  st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+C5_user_injection            merge st=400 conduct=1 verdicts=['BLOCKED'] inj_in_prompt=[True] bedrock=0
+
+== Ovalix (real class, scripted Tracker checkpoint)
+V1_field_injection_main_lists_last     base  st=400 ovalix_checked=['INJ'] bedrock=0 fields_to_bedrock=[]
+V1_field_injection_main_lists_last     head  st=400 ovalix_checked=['INJ'] bedrock=0 fields_to_bedrock=[]
+V1_field_injection_main_lists_last     merge st=400 ovalix_checked=['INJ'] bedrock=0 fields_to_bedrock=[]
+V2_field_injection_main_lists_first    base  st=200 ovalix_checked=['enabled', 'INJ', 'What is 2+2?'] bedrock=1 fields_to_bedrock=['{"thinking": {"type": "enabled", "budget_tokens": 1024}, "stop_sequenc']
+V2_field_injection_main_lists_first    head  st=200 ovalix_checked=['enabled', 'INJ', 'What is 2+2?'] bedrock=1 fields_to_bedrock=['{"thinking": {"type": "enabled", "budget_tokens": 1024}, "stop_sequenc']
+V2_field_injection_main_lists_first    merge st=200 ovalix_checked=['enabled', 'INJ', 'What is 2+2?'] bedrock=1 fields_to_bedrock=['{"thinking": {"type": "enabled", "budget_tokens": 1024}, "stop_sequenc']
+V3_single_field_injection              base  st=400 ovalix_checked=['INJ'] bedrock=0 fields_to_bedrock=[]
+V3_single_field_injection              head  st=400 ovalix_checked=['INJ'] bedrock=0 fields_to_bedrock=[]
+V3_single_field_injection              merge st=400 ovalix_checked=['INJ'] bedrock=0 fields_to_bedrock=[]
+V4_benign_fields                       base  st=200 ovalix_checked=['END', 'enabled', 'What is 2+2?'] bedrock=1 fields_to_bedrock=['{"stop_sequences": ["END"], "thinking": {"type": "enabled", "budget_to']
+V4_benign_fields                       head  st=200 ovalix_checked=['END', 'enabled', 'What is 2+2?'] bedrock=1 fields_to_bedrock=['{"stop_sequences": ["END"], "thinking": {"type": "enabled", "budget_to']
+V4_benign_fields                       merge st=200 ovalix_checked=['END', 'enabled', 'What is 2+2?'] bedrock=1 fields_to_bedrock=['{"stop_sequences": ["END"], "thinking": {"type": "enabled", "budget_to']
+V5_user_injection                      base  st=400 ovalix_checked=['INJ'] bedrock=0 fields_to_bedrock=[]
+V5_user_injection                      head  st=400 ovalix_checked=['INJ'] bedrock=0 fields_to_bedrock=[]
+V5_user_injection                      merge st=400 ovalix_checked=['INJ'] bedrock=0 fields_to_bedrock=[]
+
+== Airia (real gateway)
+A1_converse_email_user           base  st=400 bedrock=0 raw=False masked=False airia=1 rows=[[]] | '{"error":{"message":"Guardrail raised an exception, Guardrail: airia, Message: Airia guard'
+A1_converse_email_user           head  st=400 bedrock=0 raw=False masked=False airia=1 rows=[[]] | '{"error":{"message":"Guardrail raised an exception, Guardrail: airia, Message: Airia guard'
+A1_converse_email_user           merge st=400 bedrock=0 raw=False masked=False airia=1 rows=[[]] | '{"error":{"message":"Guardrail raised an exception, Guardrail: airia, Message: Airia guard'
+A2_converse_email_system         base  st=400 bedrock=0 raw=False masked=False airia=1 rows=[[]] | '{"error":{"message":"Guardrail raised an exception, Guardrail: airia, Message: Airia guard'
+A2_converse_email_system         head  st=400 bedrock=0 raw=False masked=False airia=1 rows=[[]] | '{"error":{"message":"Guardrail raised an exception, Guardrail: airia, Message: Airia guard'
+A2_converse_email_system         merge st=400 bedrock=0 raw=False masked=False airia=1 rows=[[]] | '{"error":{"message":"Guardrail raised an exception, Guardrail: airia, Message: Airia guard'
+A3_converse_email_earlier_turn   base  st=400 bedrock=0 raw=False masked=False airia=1 rows=[[]] | '{"error":{"message":"Guardrail raised an exception, Guardrail: airia, Message: Airia guard'
+A3_converse_email_earlier_turn   head  st=400 bedrock=0 raw=False masked=False airia=1 rows=[[]] | '{"error":{"message":"Guardrail raised an exception, Guardrail: airia, Message: Airia guard'
+A3_converse_email_earlier_turn   merge st=400 bedrock=0 raw=False masked=False airia=1 rows=[[]] | '{"error":{"message":"Guardrail raised an exception, Guardrail: airia, Message: Airia guard'
+A4_converse_benign               base  st=400 bedrock=0 raw=False masked=False airia=1 rows=[[]] | '{"error":{"message":"Guardrail raised an exception, Guardrail: airia, Message: Airia guard'
+A4_converse_benign               head  st=400 bedrock=0 raw=False masked=False airia=1 rows=[[]] | '{"error":{"message":"Guardrail raised an exception, Guardrail: airia, Message: Airia guard'
+A4_converse_benign               merge st=400 bedrock=0 raw=False masked=False airia=1 rows=[[]] | '{"error":{"message":"Guardrail raised an exception, Guardrail: airia, Message: Airia guard'
+A5_converse_stream_email_user    base  st=400 bedrock=0 raw=False masked=False airia=1 rows=[[]] | '{"error":{"message":"Guardrail raised an exception, Guardrail: airia, Message: Airia guard'
+A5_converse_stream_email_user    head  st=400 bedrock=0 raw=False masked=False airia=1 rows=[[]] | '{"error":{"message":"Guardrail raised an exception, Guardrail: airia, Message: Airia guard'
+A5_converse_stream_email_user    merge st=400 bedrock=0 raw=False masked=False airia=1 rows=[[]] | '{"error":{"message":"Guardrail raised an exception, Guardrail: airia, Message: Airia guard'
+A6_chat_email_user               base  st=400 bedrock=0 raw=False masked=False airia=1 rows=[[{"role": "user", "content": "Repeat back exactly what is between the brackets and nothin | '{"error":{"message":"Guardrail raised an exception, Guardrail: airia, Message: Airia guard'
+A6_chat_email_user               head  st=400 bedrock=0 raw=False masked=False airia=1 rows=[[{"role": "user", "content": "Repeat back exactly what is between the brackets and nothin | '{"error":{"message":"Guardrail raised an exception, Guardrail: airia, Message: Airia guard'
+A6_chat_email_user               merge st=400 bedrock=0 raw=False masked=False airia=1 rows=[[{"role": "user", "content": "Repeat back exactly what is between the brackets and nothin | '{"error":{"message":"Guardrail raised an exception, Guardrail: airia, Message: Airia guard'
+
+== Multi-block turn joined by the vendor (space vs newline)
+base texts_mask_join_space 200 bedrock 1 [[{"role": "user", "content": [{"text": "  Repeat the next line verbatim.  "}, {"text": "card **** ok"}]}]] {"metrics": {"latencyMs": 847}, "output": {"message": {"content": [{"text": "I can't repeat that lin
+head texts_mask_join_space 500 bedrock 0 [] {"error":{"message":"Guardrail 'gg-none' rewrote the request in a way this endpoint cannot apply, so
+merge texts_mask_join_space 500 bedrock 0 [] {"error":{"message":"Guardrail 'gg-none' rewrote the request in a way this endpoint cannot apply, so
+base texts_mask_join_nl 200 bedrock 1 [[{"role": "user", "content": [{"text": "  Repeat the next line verbatim.  "}, {"text": "card **** ok"}]}]] {"metrics": {"latencyMs": 930}, "output": {"message": {"content": [{"text": "I appreciate you testin
+head texts_mask_join_nl 200 bedrock 1 [[{"role": "user", "content": [{"text": "  Repeat the next line verbatim.  "}, {"text": "card **** ok"}]}]] {"metrics": {"latencyMs": 478}, "output": {"message": {"content": [{"text": "card **** ok"}], "role"
+merge texts_mask_join_nl 200 bedrock 1 [[{"role": "user", "content": [{"text": "  Repeat the next line verbatim.  "}, {"text": "card **** ok"}]}]] {"metrics": {"latencyMs": 924}, "output": {"message": {"content": [{"text": "I can't repeat that lin

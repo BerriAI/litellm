@@ -1,0 +1,77 @@
+Chaos at head 75881f7709, merge ea643328b4, base b5870df967, two workers per tree
+
+== burst (65 concurrent requests over 13 shapes per tree)
+head ('agent_loop', 'sk-lpr-gg-none-key', 'converse') [(200, False)] 5
+head ('card_request_fields', 'sk-lpr-gg-smonly', 'converse') [(200, False)] 5
+head ('card_tool_description', 'sk-lpr-gg-masktools', 'converse') [(200, False)] 5
+head ('card_toolresult_text', 'sk-lpr-gg-masksm', 'converse') [(200, False)] 5
+head ('card_tooluse_history', 'sk-lpr-gg-masksm-blank', 'converse') [(200, False)] 5
+head ('card_user', 'sk-lpr-gg-masksm-flat', 'converse') [(200, False)] 5
+head ('card_user', 'sk-lpr-gg-smonly', 'converse') [(200, False)] 5
+head ('hdr_old_tool_json', 'sk-lpr-headroom-key', 'converse') [(200, False)] 5
+head ('inject_request_fields', 'sk-lpr-akto-vendor-key', 'converse') [(503, False)] 5
+head ('parallel_tools', 'sk-lpr-gg-mask-key', 'converse-stream') [(200, False)] 5
+head ('toolresult_text_image_card', 'sk-lpr-gg-masksm', 'converse') [(200, False)] 5
+head ('two_part_user_card0', 'sk-lpr-gg-sm-partial', 'converse') [(200, False)] 5
+head ('two_tools_cachepoint', 'sk-lpr-gg-droptools', 'converse') [(200, False)] 5
+head bedrock model calls 60 with raw card 0
+merge ('agent_loop', 'sk-lpr-gg-none-key', 'converse') [(200, False)] 5
+merge ('card_request_fields', 'sk-lpr-gg-smonly', 'converse') [(200, False)] 5
+merge ('card_tool_description', 'sk-lpr-gg-masktools', 'converse') [(200, False)] 5
+merge ('card_toolresult_text', 'sk-lpr-gg-masksm', 'converse') [(200, False)] 5
+merge ('card_tooluse_history', 'sk-lpr-gg-masksm-blank', 'converse') [(200, False)] 5
+merge ('card_user', 'sk-lpr-gg-masksm-flat', 'converse') [(200, False)] 5
+merge ('card_user', 'sk-lpr-gg-smonly', 'converse') [(200, False)] 5
+merge ('hdr_old_tool_json', 'sk-lpr-headroom-key', 'converse') [(200, False)] 5
+merge ('inject_request_fields', 'sk-lpr-akto-vendor-key', 'converse') [(503, False)] 5
+merge ('parallel_tools', 'sk-lpr-gg-mask-key', 'converse-stream') [(200, False)] 5
+merge ('toolresult_text_image_card', 'sk-lpr-gg-masksm', 'converse') [(200, False)] 5
+merge ('two_part_user_card0', 'sk-lpr-gg-sm-partial', 'converse') [(200, False)] 5
+merge ('two_tools_cachepoint', 'sk-lpr-gg-droptools', 'converse') [(200, False)] 5
+merge bedrock model calls 60 with raw card 0
+base ('agent_loop', 'sk-lpr-gg-none-key', 'converse') [(200, False)] 5
+base ('card_request_fields', 'sk-lpr-gg-smonly', 'converse') [(200, False), (200, True)] 5
+base ('card_tool_description', 'sk-lpr-gg-masktools', 'converse') [(200, False)] 5
+base ('card_toolresult_text', 'sk-lpr-gg-masksm', 'converse') [(200, False)] 5
+base ('card_tooluse_history', 'sk-lpr-gg-masksm-blank', 'converse') [(200, False)] 5
+base ('card_user', 'sk-lpr-gg-masksm-flat', 'converse') [(200, False)] 5
+base ('card_user', 'sk-lpr-gg-smonly', 'converse') [(200, True)] 5
+base ('hdr_old_tool_json', 'sk-lpr-headroom-key', 'converse') [(200, False)] 5
+base ('inject_request_fields', 'sk-lpr-akto-vendor-key', 'converse') [(403, False)] 5
+base ('parallel_tools', 'sk-lpr-gg-mask-key', 'converse-stream') [(200, False)] 5
+base ('toolresult_text_image_card', 'sk-lpr-gg-masksm', 'converse') [(200, False)] 5
+base ('two_part_user_card0', 'sk-lpr-gg-sm-partial', 'converse') [(200, False)] 5
+base ('two_tools_cachepoint', 'sk-lpr-gg-droptools', 'converse') [(200, False)] 5
+base bedrock model calls 60 with raw card 15
+
+== slow vendor and Postgres paused
+slow guardrail (gg-slow8, pre+post)
+  base (200, 16.9, '{"metrics": {"latencyMs": 508}, "output": {"message": {"content": [{"text": "card 4111 1111 1111 1111 ok"}], "role": "as')
+  head (200, 16.9, '{"metrics": {"latencyMs": 525}, "output": {"message": {"content": [{"text": "card 4111 1111 1111 1111 ok"}], "role": "as')
+  merge (200, 16.9, '{"metrics": {"latencyMs": 520}, "output": {"message": {"content": [{"text": "card 4111 1111 1111 1111 ok"}], "role": "as')
+fix874-pg
+postgres paused
+  base (503, 10.1, '{"error":{"message":"Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly."') (503, 10.0, '{"error":{"message":"Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly."')
+  head (503, 2.9, '{"error":{"message":"Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly."') (503, 3.5, '{"error":{"message":"Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly."')
+  merge (503, 4.5, '{"error":{"message":"Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly."') (503, 4.5, '{"error":{"message":"Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly."')
+fix874-pg
+after unpause
+  base (503, 2.5, '{"error":{"message":"Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly."')
+  head (200, 2.8, '{"metrics": {"latencyMs": 497}, "output": {"message": {"content": [{"text": "card **** ok"}], "role": "assistant"}}, "st')
+  merge (503, 3.1, '{"error":{"message":"Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly."')
+
+== Postgres pause recovery
+fix874-pg
+fix874-pg
+paused base 200 200
+paused head 200 200
+paused merge 503 503
+recovered base 1.0 s, statuses before 200: []
+recovered head 1.7 s, statuses before 200: []
+recovered merge 2.6 s, statuses before 200: []
+
+== Headroom paused
+headroom paused base 200 1.1 {"metrics":{"latencyMs":650},"output":{"message":{"content":[{"text":"Item IDs 13 and 77 have status \"failed\"."}],"role":"assistant"}},"stopReason":"end_turn"
+headroom paused head 200 1.1 {"metrics":{"latencyMs":680},"output":{"message":{"content":[{"text":"Items with IDs 13 and 77 have status \"failed\"."}],"role":"assistant"}},"stopReason":"end
+headroom paused merge 200 1.0 {"metrics":{"latencyMs":700},"output":{"message":{"content":[{"text":"Item IDs 13 and 77 have status \"failed\"."}],"role":"assistant"}},"stopReason":"end_turn"
+DONE

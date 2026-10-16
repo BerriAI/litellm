@@ -1,0 +1,32 @@
+model_list:
+  - model_name: claude-sonnet
+    litellm_params:
+      model: bedrock/us.anthropic.claude-sonnet-4-6
+      aws_region_name: us-east-1
+      api_base: http://127.0.0.1:__REC__
+  - model_name: claude-haiku
+    litellm_params:
+      model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
+      aws_region_name: us-east-1
+      api_base: http://127.0.0.1:__REC__
+  - model_name: claude-haiku-b
+    litellm_params:
+      model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
+      aws_region_name: us-east-1
+      api_base: http://127.0.0.1:__REC__
+  - model_name: gpt-judge
+    litellm_params:
+      model: openai/gpt-4.1-mini
+      api_key: os.environ/OPENAI_API_KEY
+      api_base: http://127.0.0.1:__OAI__/v1
+
+guardrails:
+__GUARDRAILS__
+
+litellm_settings:
+  num_retries: 0
+
+general_settings:
+  master_key: <master key>
+  store_model_in_db: false
+  store_prompts_in_spend_logs: true

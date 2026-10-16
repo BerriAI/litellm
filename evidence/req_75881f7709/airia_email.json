@@ -1,0 +1,1 @@
+{"system": [{"text": "Customer contact: ada@example.com"}], "messages": [{"role": "user", "content": [{"text": "My address is ada@example.com."}]}, {"role": "assistant", "content": [{"text": "Noted."}]}, {"role": "user", "content": [{"text": "Repeat back exactly what is between the brackets and nothing else: [mail ada@example.com ok]"}]}], "inferenceConfig": {"maxTokens": 60}}

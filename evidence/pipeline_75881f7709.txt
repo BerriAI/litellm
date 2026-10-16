@@ -1,0 +1,82 @@
+Pipeline cells at head 75881f7709, merge ea643328b4, base b5870df967. claude-haiku runs on_fail block / on_error allow, claude-sonnet on_fail next / on_error block, claude-haiku-b on_fail allow / on_error block
+base claude-haiku P0_mask_control 200 bedrock 1 raw False ['mask'] {"metrics":{"latencyMs":481},"output":{"message":{"content":[{"text":"card **** ok"}],"rol
+head claude-haiku P0_mask_control 200 bedrock 1 raw False ['mask'] {"metrics":{"latencyMs":466},"output":{"message":{"content":[{"text":"card **** ok"}],"rol
+merge claude-haiku P0_mask_control 200 bedrock 1 raw False ['mask'] {"metrics":{"latencyMs":475},"output":{"message":{"content":[{"text":"card **** ok"}],"rol
+base claude-haiku P1_turn_cleared 400 bedrock 1 raw False ['file:texts_emptyturn'] {"message":"The text field in the ContentBlock object at messages.0.content.0 is blank. Ad
+head claude-haiku P1_turn_cleared 500 bedrock 0 raw False ['file:texts_emptyturn'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+merge claude-haiku P1_turn_cleared 500 bedrock 0 raw False ['file:texts_emptyturn'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+base claude-haiku P2_rows_drop_text_mask 200 bedrock 1 raw False ['masksm'] {"metrics":{"latencyMs":1169},"output":{"message":{"content":[{"text":"I apologize for the
+head claude-haiku P2_rows_drop_text_mask 500 bedrock 0 raw False ['masksm'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+merge claude-haiku P2_rows_drop_text_mask 500 bedrock 0 raw False ['masksm'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+base claude-haiku P3_drop_row_texts_masked 200 bedrock 1 raw False ['droprow'] {"metrics":{"latencyMs":991},"output":{"message":{"content":[{"text":"I can't help with th
+head claude-haiku P3_drop_row_texts_masked 500 bedrock 0 raw False ['droprow'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+merge claude-haiku P3_drop_row_texts_masked 500 bedrock 0 raw False ['droprow'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+base claude-haiku P4_tool_choice_removed 200 bedrock 1 raw False ['droptools'] {"metrics":{"latencyMs":511},"output":{"message":{"content":[{"toolUse":{"input":{"region"
+head claude-haiku P4_tool_choice_removed 500 bedrock 0 raw False ['droptools'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+merge claude-haiku P4_tool_choice_removed 500 bedrock 0 raw False ['droptools'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+base claude-haiku P5_technical_error_control 200 bedrock 1 raw True ['file:badreply'] {"metrics":{"latencyMs":567},"output":{"message":{"content":[{"text":"card 4111 1111 1111 
+head claude-haiku P5_technical_error_control 200 bedrock 1 raw True ['file:badreply'] {"metrics":{"latencyMs":569},"output":{"message":{"content":[{"text":"card 4111 1111 1111 
+merge claude-haiku P5_technical_error_control 200 bedrock 1 raw True ['file:badreply'] {"metrics":{"latencyMs":544},"output":{"message":{"content":[{"text":"card 4111 1111 1111 
+base claude-haiku Q1_chat 200 bedrock 1 raw True ['file:texts_more_flat'] {"id":"chatcmpl-1ef90e5d-5cc9-49d8-bf13-c3482cc8cea7","created":1792129746,"model":"claude
+head claude-haiku Q1_chat 500 bedrock 0 raw False ['file:texts_more_flat'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+merge claude-haiku Q1_chat 500 bedrock 0 raw False ['file:texts_more_flat'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+base claude-haiku Q2_messages 200 bedrock 1 raw True ['file:texts_more_flat'] {"model":"claude-haiku","id":"msg_bdrk_xtykjaovcpsjlg5cb4d6fw3e475nq3u56lmdxn3vfo2vtiy7jdq
+head claude-haiku Q2_messages 500 bedrock 0 raw False ['file:texts_more_flat'] {"type":"error","error":{"type":"api_error","message":"Guardrail 'gg-pipe' rewrote the req
+merge claude-haiku Q2_messages 500 bedrock 0 raw False ['file:texts_more_flat'] {"type":"error","error":{"type":"api_error","message":"Guardrail 'gg-pipe' rewrote the req
+base claude-haiku Q3_responses 200 bedrock 1 raw True ['file:texts_more_flat'] {"id":"resp_2QYssk7xWrlJgn387X1X8PdcvSTqIa3Kp55mLyCbbii_M6ujRzYd9jZM2W3eXPscZFmvkufnNCP9MM
+head claude-haiku Q3_responses 500 bedrock 0 raw False ['file:texts_more_flat'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+merge claude-haiku Q3_responses 500 bedrock 0 raw False ['file:texts_more_flat'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+base claude-sonnet P0_mask_control 200 bedrock 1 raw False ['mask'] {"metrics":{"latencyMs":615},"output":{"message":{"content":[{"text":"card **** ok"}],"rol
+head claude-sonnet P0_mask_control 200 bedrock 1 raw False ['mask'] {"metrics":{"latencyMs":727},"output":{"message":{"content":[{"text":"card **** ok"}],"rol
+merge claude-sonnet P0_mask_control 200 bedrock 1 raw False ['mask'] {"metrics":{"latencyMs":575},"output":{"message":{"content":[{"text":"card **** ok"}],"rol
+base claude-sonnet P1_turn_cleared 400 bedrock 1 raw False ['file:texts_emptyturn'] {"message":"The text field in the ContentBlock object at messages.0.content.0 is blank. Ad
+head claude-sonnet P1_turn_cleared 500 bedrock 0 raw False ['file:texts_emptyturn'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+merge claude-sonnet P1_turn_cleared 500 bedrock 0 raw False ['file:texts_emptyturn'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+base claude-sonnet P2_rows_drop_text_mask 200 bedrock 1 raw False ['masksm'] {"metrics":{"latencyMs":1274},"output":{"message":{"content":[{"text":"I searched for the 
+head claude-sonnet P2_rows_drop_text_mask 500 bedrock 0 raw False ['masksm'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+merge claude-sonnet P2_rows_drop_text_mask 500 bedrock 0 raw False ['masksm'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+base claude-sonnet P3_drop_row_texts_masked 200 bedrock 1 raw False ['droprow'] {"metrics":{"latencyMs":1482},"output":{"message":{"content":[{"text":"I don't actually ha
+head claude-sonnet P3_drop_row_texts_masked 500 bedrock 0 raw False ['droprow'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+merge claude-sonnet P3_drop_row_texts_masked 500 bedrock 0 raw False ['droprow'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+base claude-sonnet P4_tool_choice_removed 200 bedrock 1 raw False ['droptools'] {"metrics":{"latencyMs":741},"output":{"message":{"content":[{"toolUse":{"input":{"region"
+head claude-sonnet P4_tool_choice_removed 500 bedrock 0 raw False ['droptools'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+merge claude-sonnet P4_tool_choice_removed 500 bedrock 0 raw False ['droptools'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+base claude-sonnet P5_technical_error_control 400 bedrock 0 raw False ['file:badreply'] {"error":{"message":"Invalid request format: Generic Guardrail API failed: 'list' object h
+head claude-sonnet P5_technical_error_control 400 bedrock 0 raw False ['file:badreply'] {"error":{"message":"Invalid request format: Generic Guardrail API failed: 'list' object h
+merge claude-sonnet P5_technical_error_control 400 bedrock 0 raw False ['file:badreply'] {"error":{"message":"Invalid request format: Generic Guardrail API failed: 'list' object h
+base claude-sonnet Q1_chat 500 bedrock 0 raw False ['file:texts_more_flat'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+head claude-sonnet Q1_chat 500 bedrock 0 raw False ['file:texts_more_flat'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+merge claude-sonnet Q1_chat 500 bedrock 0 raw False ['file:texts_more_flat'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+base claude-sonnet Q2_messages 500 bedrock 0 raw False ['file:texts_more_flat'] {"type":"error","error":{"type":"api_error","message":"Guardrail 'gg-pipe' rewrote the req
+head claude-sonnet Q2_messages 500 bedrock 0 raw False ['file:texts_more_flat'] {"type":"error","error":{"type":"api_error","message":"Guardrail 'gg-pipe' rewrote the req
+merge claude-sonnet Q2_messages 500 bedrock 0 raw False ['file:texts_more_flat'] {"type":"error","error":{"type":"api_error","message":"Guardrail 'gg-pipe' rewrote the req
+base claude-sonnet Q3_responses 500 bedrock 0 raw False ['file:texts_more_flat'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+head claude-sonnet Q3_responses 500 bedrock 0 raw False ['file:texts_more_flat'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+merge claude-sonnet Q3_responses 500 bedrock 0 raw False ['file:texts_more_flat'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+base claude-haiku-b P0_mask_control 200 bedrock 1 raw False ['mask'] {"metrics":{"latencyMs":485},"output":{"message":{"content":[{"text":"card **** ok"}],"rol
+head claude-haiku-b P0_mask_control 200 bedrock 1 raw False ['mask'] {"metrics":{"latencyMs":491},"output":{"message":{"content":[{"text":"card **** ok"}],"rol
+merge claude-haiku-b P0_mask_control 200 bedrock 1 raw False ['mask'] {"metrics":{"latencyMs":464},"output":{"message":{"content":[{"text":"card **** ok"}],"rol
+base claude-haiku-b P1_turn_cleared 400 bedrock 1 raw False ['file:texts_emptyturn'] {"message":"The text field in the ContentBlock object at messages.0.content.0 is blank. Ad
+head claude-haiku-b P1_turn_cleared 500 bedrock 0 raw False ['file:texts_emptyturn'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+merge claude-haiku-b P1_turn_cleared 500 bedrock 0 raw False ['file:texts_emptyturn'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+base claude-haiku-b P2_rows_drop_text_mask 200 bedrock 1 raw False ['masksm'] {"metrics":{"latencyMs":1117},"output":{"message":{"content":[{"text":"I apologize for the
+head claude-haiku-b P2_rows_drop_text_mask 500 bedrock 0 raw False ['masksm'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+merge claude-haiku-b P2_rows_drop_text_mask 500 bedrock 0 raw False ['masksm'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+base claude-haiku-b P3_drop_row_texts_masked 200 bedrock 1 raw False ['droprow'] {"metrics":{"latencyMs":1206},"output":{"message":{"content":[{"text":"I can't provide tha
+head claude-haiku-b P3_drop_row_texts_masked 500 bedrock 0 raw False ['droprow'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+merge claude-haiku-b P3_drop_row_texts_masked 500 bedrock 0 raw False ['droprow'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+base claude-haiku-b P4_tool_choice_removed 200 bedrock 1 raw False ['droptools'] {"metrics":{"latencyMs":512},"output":{"message":{"content":[{"toolUse":{"input":{"region"
+head claude-haiku-b P4_tool_choice_removed 500 bedrock 0 raw False ['droptools'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+merge claude-haiku-b P4_tool_choice_removed 500 bedrock 0 raw False ['droptools'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+base claude-haiku-b P5_technical_error_control 400 bedrock 0 raw False ['file:badreply'] {"error":{"message":"Invalid request format: Generic Guardrail API failed: 'list' object h
+head claude-haiku-b P5_technical_error_control 400 bedrock 0 raw False ['file:badreply'] {"error":{"message":"Invalid request format: Generic Guardrail API failed: 'list' object h
+merge claude-haiku-b P5_technical_error_control 400 bedrock 0 raw False ['file:badreply'] {"error":{"message":"Invalid request format: Generic Guardrail API failed: 'list' object h
+base claude-haiku-b Q1_chat 500 bedrock 0 raw False ['file:texts_more_flat'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+head claude-haiku-b Q1_chat 500 bedrock 0 raw False ['file:texts_more_flat'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+merge claude-haiku-b Q1_chat 500 bedrock 0 raw False ['file:texts_more_flat'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+base claude-haiku-b Q2_messages 500 bedrock 0 raw False ['file:texts_more_flat'] {"type":"error","error":{"type":"api_error","message":"Guardrail 'gg-pipe' rewrote the req
+head claude-haiku-b Q2_messages 500 bedrock 0 raw False ['file:texts_more_flat'] {"type":"error","error":{"type":"api_error","message":"Guardrail 'gg-pipe' rewrote the req
+merge claude-haiku-b Q2_messages 500 bedrock 0 raw False ['file:texts_more_flat'] {"type":"error","error":{"type":"api_error","message":"Guardrail 'gg-pipe' rewrote the req
+base claude-haiku-b Q3_responses 500 bedrock 0 raw False ['file:texts_more_flat'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+head claude-haiku-b Q3_responses 500 bedrock 0 raw False ['file:texts_more_flat'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
+merge claude-haiku-b Q3_responses 500 bedrock 0 raw False ['file:texts_more_flat'] {"error":{"message":"Guardrail 'gg-pipe' rewrote the request in a way this endpoint cannot
