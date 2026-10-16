@@ -123,6 +123,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     mask_sensitive_structure,
 )
 from litellm.litellm_core_utils.token_counter import offload_token_count
+from litellm.litellm_core_utils.tool_fields import TOOL_FIELDS, drop_policy
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo, anthropic_error_frame_exception
 from litellm.llms.base_llm.passthrough.transformation import replace_path_segment
 from litellm.llms.base_llm.vector_store.transformation import (
@@ -537,6 +538,7 @@ def _stream_chunks_have_generated_content(chunks: Sequence[ModelResponseStream])
 
 
 _NO_SESSION_KWARGS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType({})
+_NO_DEFAULT_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 _SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
@@ -571,6 +573,21 @@ def _deployment_that_just_failed(request_metadata: object) -> str | None:
         return None
     model_id: Final = model_info.get("id")
     return model_id if isinstance(model_id, str) else None
+
+
+def _drops_malformed_request_tools(
+    deployment_params: Mapping[str, object], defaults: Mapping[str, object], request: Mapping[str, object]
+) -> bool:
+    if isinstance(request.get("tools") or [], (list, tuple)) or not deployment_params.get("tools"):
+        return False
+    set_defaults: Final = {name: value for name, value in defaults.items() if value is not None}
+    return drop_policy({**deployment_params, **set_defaults, **request}).drops("tools")
+
+
+def _merged_tools(deployment_tools: Sequence[object], request_tools: object) -> list[object] | None:
+    if not isinstance(request_tools, (list, tuple)):
+        return None
+    return [*deployment_tools, *request_tools] if deployment_tools or request_tools else None
 
 
 def _deployment_pick_attributes(model: str, request_kwargs: Mapping[str, object] | None) -> Mapping[str, str | int]:
@@ -4507,7 +4524,9 @@ class Router:
         return deployment_pydantic_obj
 
     @staticmethod
-    def _merge_tools_from_deployment(deployment: dict, kwargs: dict) -> None:
+    def _merge_tools_from_deployment(
+        deployment: dict, kwargs: dict, defaults: Mapping[str, object] = _NO_DEFAULT_PARAMS
+    ) -> None:
         """
         Merge tools from deployment litellm_params with request kwargs.
         When both have tools, concatenate them (deployment tools first, then request tools).
@@ -4518,11 +4537,12 @@ class Router:
             dep_params = dep_params_raw
         else:
             dep_params = dep_params_raw.model_dump(exclude_none=True)
-        dep_tools: Final = dep_params.get("tools") or []
-        req_tools: Final = kwargs.get("tools") or []
-        if dep_tools or req_tools:
-            merged: Final = list(dep_tools) + list(req_tools)
-            kwargs["tools"] = merged
+        if _drops_malformed_request_tools(dep_params, defaults, kwargs):
+            for name in TOOL_FIELDS:
+                kwargs.pop(name, None)
+        merged_tools: Final = _merged_tools(dep_params.get("tools") or [], kwargs.get("tools") or [])
+        if merged_tools is not None:
+            kwargs["tools"] = merged_tools
         if "tool_choice" not in kwargs and dep_params.get("tool_choice") is not None:
             kwargs["tool_choice"] = dep_params["tool_choice"]
 
@@ -4543,7 +4563,7 @@ class Router:
             deployment=deployment, forwarded_keys=kwargs.pop(_ALIAS_MARKER_FORWARDED_PARAMS_KWARG, ())
         ):
             kwargs.pop(key, None)
-        self._merge_tools_from_deployment(deployment=deployment, kwargs=kwargs)
+        self._merge_tools_from_deployment(deployment=deployment, kwargs=kwargs, defaults=self.default_litellm_params)
 
         model_info = deployment.get("model_info", {}).copy()
         deployment_litellm_model_name = deployment["litellm_params"]["model"]
@@ -6035,6 +6055,7 @@ class Router:
         """
         from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
             aclose_if_supported,
+            aclose_superseded_attempt,
             parse_anthropic_error_event,
             parse_anthropic_refusal_stop_details,
         )
@@ -6043,6 +6064,14 @@ class Router:
         )
 
         source_iterator: Final = response
+
+        async def close_source() -> None:
+            with anyio.CancelScope(shield=True), contextlib.suppress(BaseException):
+                await aclose_if_supported(source_iterator)
+
+        async def close_superseded() -> None:
+            with anyio.CancelScope(shield=True), contextlib.suppress(BaseException):
+                await aclose_superseded_attempt(source_iterator)
 
         async def stream_with_fallbacks() -> AsyncGenerator[bytes, None]:
             from litellm.exceptions import MidStreamFallbackError
@@ -6130,11 +6159,11 @@ class Router:
                     model,
                     initial_kwargs,
                     wrapper,
+                    close_superseded,
                 ):
                     yield item
             finally:
-                with anyio.CancelScope(shield=True), contextlib.suppress(BaseException):
-                    await aclose_if_supported(source_iterator)
+                await close_source()
 
         # Referenced by stream_with_fallbacks via closure - assigned here, before
         # the generator body ever runs, so the reference resolves fine despite
@@ -6150,6 +6179,7 @@ class Router:
         model: str,
         initial_kwargs: dict[str, Any],  # mutable-ok: handed to _aanthropic_messages_fallback_attempt, which mutates it
         wrapper: "FallbackAwareAnthropicMessagesStream",
+        close_superseded: Callable[[], Awaitable[None]],
     ) -> AsyncGenerator[bytes, None]:
         """Turns a source-iterator failure into a fallback attempt or the error reaching the caller."""
         from litellm.exceptions import MidStreamFallbackError
@@ -6169,6 +6199,7 @@ class Router:
         )
         if fallback_error is None:
             raise stream_error
+        await close_superseded()
         outcome: Final = await self._astream_retry_same_group(
             fallback_error,
             initial_kwargs,

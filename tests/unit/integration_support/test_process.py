@@ -379,48 +379,47 @@ def test_a_replacing_block_that_never_kills_its_worker_fails_and_leaves_it_servi
         assert owned.worker_pids() == frozenset((worker,))
 
 
-def _kill_of(owned: OwnedProxy, worker: int) -> WorkerKill:
-    return WorkerKill(psutil.Process(worker), psutil.Process(owned.process.pid), 5, threading.Event())
+@contextmanager
+def _unreaped_child() -> Iterator[psutil.Process]:
+    with subprocess.Popen((sys.executable, "-I", "-c", "import time; time.sleep(60)")) as child:
+        try:
+            yield psutil.Process(child.pid)
+        finally:
+            child.kill()
 
 
-def test_a_worker_kill_returns_once_the_supervisor_reaped_the_victim_and_cannot_fire_twice(tmp_path: Path) -> None:
-    with _supervised(tmp_path, WorkerHealthcheck.STRICT) as (owned, worker):
-        kill: Final = _kill_of(owned, worker)
+def test_a_worker_kill_returns_once_the_victim_is_dead_before_anything_reaps_it_and_cannot_fire_twice() -> None:
+    with _unreaped_child() as victim:
+        kill: Final = WorkerKill(victim, threading.Event())
         kill()
-        assert not psutil.pid_exists(worker)
+        assert victim.status() == psutil.STATUS_ZOMBIE
         assert kill.fired.is_set()
         with pytest.raises(AssertionError, match="already killed"):
             kill()
 
 
-def test_a_frozen_victim_stays_stopped_until_the_kill(tmp_path: Path) -> None:
-    with _supervised(tmp_path, WorkerHealthcheck.STRICT) as (owned, worker):
-        kill: Final = _kill_of(owned, worker)
+def test_a_frozen_victim_stays_stopped_until_the_kill() -> None:
+    with _unreaped_child() as victim:
+        kill: Final = WorkerKill(victim, threading.Event())
         assert kill.freeze().status() == psutil.STATUS_STOPPED
         kill()
-        assert not psutil.pid_exists(worker)
+        assert victim.status() == psutil.STATUS_ZOMBIE
 
 
-def test_a_kill_under_a_suspended_supervisor_returns_with_the_victim_left_unreaped(tmp_path: Path) -> None:
-    with _supervised(tmp_path, WorkerHealthcheck.LENIENT) as (owned, worker):
-        kill: Final = _kill_of(owned, worker)
-        with owned.suspended(owned.process.pid):
-            kill()
-            assert psutil.Process(worker).status() == psutil.STATUS_ZOMBIE
-        eventually(lambda: psutil.pid_exists(worker), lambda exists: not exists, seconds=5)
+def _kill_after_freezing_the_supervisor(owned: OwnedProxy, worker: int, supervisor: psutil.Process) -> None:
+    with owned.replacing_worker(worker) as kill:
+        supervisor.suspend()
+        kill()
 
 
-def test_a_kill_fails_when_the_supervisor_never_reaps_the_victim(tmp_path: Path) -> None:
+def test_a_replacing_block_fails_when_the_supervisor_never_reaps_the_killed_worker(tmp_path: Path) -> None:
     with _supervised(tmp_path, WorkerHealthcheck.STRICT) as (owned, worker):
         unreaping: Final = psutil.Process(owned.process.pid)
-        kill: Final = WorkerKill(psutil.Process(worker), psutil.Process(os.getpid()), 0.5, threading.Event())
-        unreaping.suspend()
         try:
             with pytest.raises(AssertionError, match="did not reap"):
-                kill()
+                _kill_after_freezing_the_supervisor(owned, worker, unreaping)
         finally:
             unreaping.resume()
-        assert not kill.fired.is_set()
 
 
 def test_a_strict_healthcheck_proxy_refuses_suspension_before_stopping_anything(tmp_path: Path) -> None:
