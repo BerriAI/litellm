@@ -2,7 +2,7 @@
 
 PARITY pairs the streamed case with its plain twin where both bill the same row."""
 
-from typing import Final
+from typing import Final, cast
 
 from integration.cost_calculation.cost_tracking_case import (
     with_response_usage,
@@ -21,6 +21,20 @@ from integration.cost_calculation.cost_tracking_case import (
 )
 from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase, bridge_pairs
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase, sse_frames
+
+
+def _response_for_model(response: JsonResponse, model: str) -> JsonResponse:
+    return response.model_copy(update={"body": {**response.body, "model": model}})
+
+
+def _stream_for_model(response: SseResponse, model: str) -> SseResponse:
+    return response.model_copy(
+        update={
+            "frames": tuple(
+                frame.replace("gpt-6-luna-2026-09-22", model).replace("gpt-6-luna", model) for frame in response.frames
+            )
+        }
+    )
 
 
 # azure/gpt-5.4-mini
@@ -6174,6 +6188,152 @@ AZURE_GPT_6_LUNA_CACHE_WRITE_5M: Final = with_response_usage(
         "content_filter_result": {"error": {"code": "content_filter_error", "message": "The contents are not filtered"}}
     },
 )
+
+AZURE_GPT_5_6_TERRA_INPUT_TEXT: Final = AZURE_GPT_6_LUNA_INPUT_TEXT.model_copy(
+    update={
+        "name": "azure-gpt-5.6-terra-input_text",
+        "model": "azure/gpt-5.6-terra",
+        "response": _response_for_model(
+            cast(JsonResponse, AZURE_GPT_6_LUNA_INPUT_TEXT.response), "gpt-5.6-terra-2026-07-09"
+        ),
+        "expected": ExactExpected(
+            spend=0.0094864,
+            input_cost=0.004048,
+            output_cost=0.0054384,
+            prompt_tokens=1840,
+            completion_tokens=412,
+        ),
+    }
+)
+AZURE_GPT_5_6_TERRA_STREAM: Final = AZURE_GPT_6_LUNA_STREAM.model_copy(
+    update={
+        "name": "azure-gpt-5.6-terra-stream",
+        "model": "azure/gpt-5.6-terra",
+        "response": _stream_for_model(
+            cast(SseResponse, AZURE_GPT_6_LUNA_STREAM.response), "gpt-5.6-terra-2026-07-09"
+        ),
+        "expected": ExactExpected(
+            spend=0.0094864,
+            input_cost=0.004048,
+            output_cost=0.0054384,
+            prompt_tokens=1840,
+            completion_tokens=412,
+        ),
+    }
+)
+AZURE_GPT_5_6_TERRA_SERVICE_TIER_FLEX: Final = AZURE_GPT_6_LUNA_SERVICE_TIER_FLEX.model_copy(
+    update={
+        "name": "azure-gpt-5.6-terra-service_tier_flex",
+        "model": "azure/gpt-5.6-terra",
+        "response": _response_for_model(
+            cast(JsonResponse, AZURE_GPT_6_LUNA_SERVICE_TIER_FLEX.response), "gpt-5.6-terra-2026-07-09"
+        ),
+        "expected": ExactExpected(
+            spend=0.0047432,
+            input_cost=0.002024,
+            output_cost=0.0027192,
+            prompt_tokens=1840,
+            completion_tokens=412,
+        ),
+    }
+)
+AZURE_GPT_5_6_TERRA_SERVICE_TIER_PRIORITY: Final = AZURE_GPT_6_LUNA_SERVICE_TIER_PRIORITY.model_copy(
+    update={
+        "name": "azure-gpt-5.6-terra-service_tier_priority",
+        "model": "azure/gpt-5.6-terra",
+        "response": _response_for_model(
+            cast(JsonResponse, AZURE_GPT_6_LUNA_SERVICE_TIER_PRIORITY.response), "gpt-5.6-terra-2026-07-09"
+        ),
+        "expected": ExactExpected(
+            spend=0.0189728,
+            input_cost=0.008096,
+            output_cost=0.0108768,
+            prompt_tokens=1840,
+            completion_tokens=412,
+        ),
+        "known_bug": "Azure GPT Terra priority service tier is billed at the base rate",
+    }
+)
+AZURE_GPT_5_6_TERRA_MESSAGES_BRIDGED_JSON: Final = AZURE_GPT_6_LUNA_MESSAGES_BRIDGED_JSON.model_copy(
+    update={
+        "name": "azure-gpt-5.6-terra-messages_bridged_json",
+        "model": "azure/gpt-5.6-terra",
+        "response": _response_for_model(
+            cast(JsonResponse, AZURE_GPT_6_LUNA_MESSAGES_BRIDGED_JSON.response), "gpt-5.6-terra-2026-07-09"
+        ),
+        "expected": ExactExpected(
+            spend=0.0094864,
+            input_cost=0.004048,
+            output_cost=0.0054384,
+            prompt_tokens=1840,
+            completion_tokens=412,
+        ),
+    }
+)
+AZURE_GPT_5_6_TERRA_CACHE_READ: Final = AZURE_GPT_6_LUNA_CACHE_READ.model_copy(
+    update={
+        "name": "azure/gpt-5.6-terra-cache_read",
+        "model": "azure/gpt-5.6-terra",
+        "response": _response_for_model(
+            cast(JsonResponse, AZURE_GPT_6_LUNA_CACHE_READ.response), "gpt-5.6-terra-2026-07-09"
+        ),
+        "expected": ExactExpected(
+            spend=0.00912736,
+            input_cost=0.00411136,
+            output_cost=0.005016,
+            prompt_tokens=12928,
+            completion_tokens=380,
+        ),
+    }
+)
+AZURE_GPT_5_6_TERRA_CACHE_WRITE_5M: Final = AZURE_GPT_6_LUNA_CACHE_WRITE_5M.model_copy(
+    update={
+        "name": "azure/gpt-5.6-terra-cache_write_5m",
+        "model": "azure/gpt-5.6-terra",
+        "response": _response_for_model(
+            cast(JsonResponse, AZURE_GPT_6_LUNA_CACHE_WRITE_5M.response), "gpt-5.6-terra-2026-07-09"
+        ),
+        "expected": ExactExpected(
+            spend=0.040216,
+            input_cost=0.0352,
+            output_cost=0.005016,
+            prompt_tokens=12928,
+            completion_tokens=380,
+        ),
+    }
+)
+AZURE_GPT_5_6_TERRA_REASONING: Final = AZURE_GPT_6_LUNA_REASONING.model_copy(
+    update={
+        "name": "azure/gpt-5.6-terra-reasoning",
+        "model": "azure/gpt-5.6-terra",
+        "response": _response_for_model(
+            cast(JsonResponse, AZURE_GPT_6_LUNA_REASONING.response), "gpt-5.6-terra-2026-07-09"
+        ),
+        "expected": ExactExpected(
+            spend=0.056056,
+            input_cost=0.002728,
+            output_cost=0.053328,
+            prompt_tokens=1240,
+            completion_tokens=4040,
+        ),
+    }
+)
+AZURE_GPT_5_6_TERRA_TOOL_CALL: Final = AZURE_GPT_6_LUNA_TOOL_CALL.model_copy(
+    update={
+        "name": "azure/gpt-5.6-terra-tool_call",
+        "model": "azure/gpt-5.6-terra",
+        "response": _response_for_model(
+            cast(JsonResponse, AZURE_GPT_6_LUNA_TOOL_CALL.response), "gpt-5.6-terra-2026-07-09"
+        ),
+        "expected": ExactExpected(
+            spend=0.0094864,
+            input_cost=0.004048,
+            output_cost=0.0054384,
+            prompt_tokens=1840,
+            completion_tokens=412,
+        ),
+    }
+)
 AZURE_GPT_6_ASTRA_CACHE_WRITE_5M: Final = with_response_usage(
     AZURE_GPT_6_ASTRA_CACHE_READ,
     "azure/gpt-6-astra-cache_write_5m",
@@ -6304,6 +6464,15 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     AZURE_GPT_6_1_SOL_CACHE_WRITE_5M,
     AZURE_GPT_6_LUNA_CACHE_WRITE_5M,
     AZURE_GPT_6_ASTRA_CACHE_WRITE_5M,
+    AZURE_GPT_5_6_TERRA_INPUT_TEXT,
+    AZURE_GPT_5_6_TERRA_STREAM,
+    AZURE_GPT_5_6_TERRA_SERVICE_TIER_FLEX,
+    AZURE_GPT_5_6_TERRA_SERVICE_TIER_PRIORITY,
+    AZURE_GPT_5_6_TERRA_MESSAGES_BRIDGED_JSON,
+    AZURE_GPT_5_6_TERRA_CACHE_READ,
+    AZURE_GPT_5_6_TERRA_CACHE_WRITE_5M,
+    AZURE_GPT_5_6_TERRA_REASONING,
+    AZURE_GPT_5_6_TERRA_TOOL_CALL,
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
@@ -6316,6 +6485,7 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(plain=AZURE_GPT_6_LUNA_INPUT_TEXT, streamed=AZURE_GPT_6_LUNA_STREAM),
     StreamParityTestCase(plain=AZURE_GPT_6_ASTRA_INPUT_TEXT, streamed=AZURE_GPT_6_ASTRA_STREAM),
     StreamParityTestCase(plain=AZURE_GPT_6_1_SOL_INPUT_TEXT, streamed=AZURE_GPT_6_1_SOL_STREAM),
+    StreamParityTestCase(plain=AZURE_GPT_5_6_TERRA_INPUT_TEXT, streamed=AZURE_GPT_5_6_TERRA_STREAM),
 )
 
 BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
@@ -6327,4 +6497,7 @@ BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
     BridgeCostParityTestCase(native=AZURE_GPT_6_LUNA_INPUT_TEXT, bridged=AZURE_GPT_6_LUNA_MESSAGES_BRIDGED_JSON),
     BridgeCostParityTestCase(native=AZURE_GPT_6_ASTRA_INPUT_TEXT, bridged=AZURE_GPT_6_ASTRA_MESSAGES_BRIDGED_JSON),
     BridgeCostParityTestCase(native=AZURE_GPT_6_1_SOL_INPUT_TEXT, bridged=AZURE_GPT_6_1_SOL_MESSAGES_BRIDGED_JSON),
+    BridgeCostParityTestCase(
+        native=AZURE_GPT_5_6_TERRA_INPUT_TEXT, bridged=AZURE_GPT_5_6_TERRA_MESSAGES_BRIDGED_JSON
+    ),
 )

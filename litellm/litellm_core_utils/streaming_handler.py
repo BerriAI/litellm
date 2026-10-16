@@ -242,6 +242,7 @@ class CustomStreamWrapper:
         self.completion_stream = completion_stream
         self.sent_first_chunk = False
         self.sent_last_chunk = False
+        self._failure_logging: asyncio.Task[None] | None = None
         self._closed = False
         self._stream_created_time: float = time.time()
 
@@ -269,6 +270,7 @@ class CustomStreamWrapper:
         self.holding_chunk = ""
         self.complete_response = ""
         self.response_uptil_now = ""
+        self._emitted_disqualifying_content = False
         _model_info: Final[dict] = litellm_params.model_info or {}
 
         _api_base: Final = get_api_base(
@@ -1126,31 +1128,24 @@ class CustomStreamWrapper:
 
 
         """
-        if self.merge_reasoning_content_in_choices is True:
-            reasoning_content: Final = getattr(model_response.choices[0].delta, "reasoning_content", None)
-            if reasoning_content:
-                if self.sent_first_thinking_block is False:
-                    # Ensure content is not None before concatenation
-                    if model_response.choices[0].delta.content is None:
-                        model_response.choices[0].delta.content = ""
-                    model_response.choices[0].delta.content += "<think>" + reasoning_content
-                    self.sent_first_thinking_block = True
-                elif (
-                    self.sent_first_thinking_block is True
-                    and hasattr(model_response.choices[0].delta, "reasoning_content")
-                    and model_response.choices[0].delta.reasoning_content
-                ):
-                    model_response.choices[0].delta.content = reasoning_content
-            elif (
-                self.sent_first_thinking_block is True
-                and not self.sent_last_thinking_block
-                and model_response.choices[0].delta.content
-            ):
-                model_response.choices[0].delta.content = "</think>" + (model_response.choices[0].delta.content or "")
-                self.sent_last_thinking_block = True
+        if self.merge_reasoning_content_in_choices is not True:
+            return
+        delta: Final = model_response.choices[0].delta
+        reasoning_content: Final = getattr(delta, "reasoning_content", None)
+        content: Final = delta.content or ""
+        if reasoning_content:
+            self._emitted_disqualifying_content = True
+            closes_thinking: Final = bool(content) and not self.sent_last_thinking_block
+            opening: Final = "" if self.sent_first_thinking_block else "<think>"
+            delta.content = opening + reasoning_content + ("</think>" + content if closes_thinking else "")
+            self.sent_first_thinking_block = True
+            self.sent_last_thinking_block = self.sent_last_thinking_block or closes_thinking
+        elif self.sent_first_thinking_block and not self.sent_last_thinking_block and content:
+            delta.content = "</think>" + content
+            self.sent_last_thinking_block = True
 
-            if hasattr(model_response.choices[0].delta, "reasoning_content"):
-                del model_response.choices[0].delta.reasoning_content
+        if hasattr(delta, "reasoning_content"):
+            del delta.reasoning_content
 
     def _dispatch_provider_chunk(
         self,
@@ -1865,9 +1860,7 @@ class CustomStreamWrapper:
                     if response.choices:
                         choice = response.choices[0]
                         if isinstance(choice, StreamingChoices):
-                            self.response_uptil_now += choice.delta.get("content", "") or ""
-                        else:
-                            self.response_uptil_now += ""
+                            self._accumulate_streamed_delta(choice.delta)
                     self.rules.post_call_rules(input=self.response_uptil_now, model=self.model)
                     # HANDLE STREAM OPTIONS
                     self.chunks.append(response)
@@ -2084,9 +2077,7 @@ class CustomStreamWrapper:
                     if processed_chunk.choices:
                         choice = processed_chunk.choices[0]
                         if isinstance(choice, StreamingChoices):
-                            self.response_uptil_now += choice.delta.get("content", "") or ""
-                        else:
-                            self.response_uptil_now += ""
+                            self._accumulate_streamed_delta(choice.delta)
                     self.rules.post_call_rules(input=self.response_uptil_now, model=self.model)
                     # Add mcp_list_tools to first chunk if present
                     if not self.sent_first_chunk and processed_chunk.choices:
@@ -2156,9 +2147,7 @@ class CustomStreamWrapper:
 
                         choice = processed_chunk.choices[0]
                         if isinstance(choice, StreamingChoices):
-                            self.response_uptil_now += choice.delta.get("content", "") or ""
-                        else:
-                            self.response_uptil_now += ""
+                            self._accumulate_streamed_delta(choice.delta)
                         self.rules.post_call_rules(input=self.response_uptil_now, model=self.model)
                         # RETURN RESULT
                         self.chunks.append(processed_chunk)
@@ -2172,7 +2161,7 @@ class CustomStreamWrapper:
             if self.logging_obj is not None:
                 self._record_partial_usage_for_failure()
                 ## LOGGING
-                asyncio.create_task(
+                self._failure_logging = asyncio.create_task(
                     self.logging_obj.dispatch_failure_handlers(e, traceback_exception, prefer_async_handlers=True)
                 )
             await self.aclose()
@@ -2305,10 +2294,16 @@ class CustomStreamWrapper:
         if self.logging_obj is not None:
             self._record_partial_usage_for_failure()
             ## LOGGING
-            asyncio.create_task(
+            self._failure_logging = asyncio.create_task(
                 self.logging_obj.dispatch_failure_handlers(e, traceback_exception, prefer_async_handlers=True)
             )
         self._handle_stream_fallback_error(e)
+
+    async def wait_for_failure_logging(self, timeout: float) -> None:
+        """Let this stream's failure log read its own deployment before a fallback reuses the logging object."""
+        if self._failure_logging is None:
+            return
+        await asyncio.wait((self._failure_logging,), timeout=timeout)
 
     def _record_partial_usage_for_failure(self) -> None:
         """
@@ -2346,6 +2341,35 @@ class CustomStreamWrapper:
                 recover_error,
             )
 
+    # Delta fields a text-only prefill continuation cannot carry, so a stream
+    # that emitted any of them is not eligible for mid-stream continuation.
+    _CONTINUATION_DISQUALIFYING_DELTA_FIELDS: Final = (
+        "tool_calls",
+        "function_call",
+        "reasoning_content",
+        "thinking_blocks",
+        "reasoning_items",
+        "audio",
+        "images",
+        "annotations",
+    )
+
+    @classmethod
+    def _delta_disqualifies_continuation(cls, delta: object) -> bool:
+        get: Final = getattr(delta, "get", None)
+        if not callable(get):
+            return False
+        return any(get(field) for field in cls._CONTINUATION_DISQUALIFYING_DELTA_FIELDS)
+
+    def _accumulate_streamed_delta(self, delta: object) -> None:
+        # Shared by the sync, async, and non-aiohttp iteration sites so answer
+        # text and the disqualifying-content latch stay in step across all three.
+        get: Final = getattr(delta, "get", None)
+        content: Final = get("content") if callable(get) else None
+        self.response_uptil_now += content if isinstance(content, str) else ""
+        if not self._emitted_disqualifying_content and self._delta_disqualifies_continuation(delta):
+            self._emitted_disqualifying_content = True
+
     def _handle_stream_fallback_error(self, e: Exception) -> "NoReturn":
         """
         Common error handling for both __next__ and __anext__.
@@ -2377,6 +2401,7 @@ class CustomStreamWrapper:
                 original_exception=e.original_exception,
                 generated_content=self.response_uptil_now,
                 is_pre_first_chunk=not self.sent_first_chunk,
+                emitted_disqualifying_content=self._emitted_disqualifying_content or e.emitted_disqualifying_content,
             )
 
         # Map to OpenAI exception format. Some providers' mappers (e.g.
@@ -2437,6 +2462,7 @@ class CustomStreamWrapper:
             original_exception=mapped_exception,
             generated_content=self.response_uptil_now,
             is_pre_first_chunk=not self.sent_first_chunk,
+            emitted_disqualifying_content=self._emitted_disqualifying_content,
         )
 
     @staticmethod

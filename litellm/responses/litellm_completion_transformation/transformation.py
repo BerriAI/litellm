@@ -39,7 +39,11 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.caching import InMemoryCache
-from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
+from litellm.constants import (
+    CALLER_SESSION_ID_METADATA_KEY,
+    REDACTED_BY_LITELLM,
+    REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER,
+)
 from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS, AnthropicCacheControlHook
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
 from litellm.litellm_core_utils.get_supported_openai_params import (
@@ -559,6 +563,14 @@ class ChatCompletionSession(TypedDict, total=False):
 ########### End of Initialize Classes used for Responses API  ###########
 
 
+def _chain_session_metadata(chain_session: str, request_kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    key: Final = "litellm_metadata" if request_kwargs.get("litellm_metadata") else "metadata"
+    metadata: Final = request_kwargs.get(key)
+    if not isinstance(metadata, dict):
+        return MappingProxyType({})
+    return {key: {**_STR_KEY_DICT_ADAPTER.validate_python(metadata), CALLER_SESSION_ID_METADATA_KEY: chain_session}}
+
+
 class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def get_supported_openai_params(model: str) -> list:
@@ -992,6 +1004,7 @@ class LiteLLMCompletionResponsesConfig:
         instructions: str | None,
         session_lookup: Callable[[str], Awaitable[ChatCompletionSession]] | None = None,
         request_kwargs: Mapping[str, object] = MappingProxyType({}),
+        previous_response_client_ids: tuple[str, ...] = (),
     ) -> dict:
         """
         Async hook to get the chain of previous input and output pairs and return a list of Chat Completion messages
@@ -1006,6 +1019,7 @@ class LiteLLMCompletionResponsesConfig:
         lookup: Final = session_lookup or partial(
             ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id,
             item_cache_control=keeps_item_marks,
+            client_response_ids=previous_response_client_ids,
         )
         chat_completion_session: Final = (
             await lookup(previous_response_id)
@@ -1074,8 +1088,6 @@ class LiteLLMCompletionResponsesConfig:
             else:
                 # Both are empty - this likely means function_call_output had empty/invalid call_id
                 # Provide a helpful error message
-                import litellm
-
                 raise litellm.BadRequestError(
                     message=(
                         f"Unable to create messages for completion request. "
@@ -1090,8 +1102,14 @@ class LiteLLMCompletionResponsesConfig:
                 )
 
         litellm_completion_request["messages"] = combined_messages
-        litellm_completion_request["litellm_trace_id"] = chat_completion_session.get("litellm_session_id")
-        return litellm_completion_request
+        chain_session: Final = chat_completion_session.get("litellm_session_id")
+        litellm_completion_request["litellm_trace_id"] = chain_session
+        chain_session_metadata: Final[Mapping[str, object]] = (
+            _chain_session_metadata(chain_session, request_kwargs)
+            if chain_session and litellm.request_correlation_in_logs
+            else MappingProxyType({})
+        )
+        return {**litellm_completion_request, **chain_session_metadata}
 
     @staticmethod
     def _transform_response_input_param_to_chat_completion_message(
