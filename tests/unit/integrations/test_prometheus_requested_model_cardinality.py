@@ -293,3 +293,70 @@ async def test_fallback_event_requested_model_is_bounded(router):
     assert _requested_model_values(logger.litellm_deployment_successful_fallbacks) == {
         UNRECOGNIZED_REQUESTED_MODEL_LABEL
     }
+
+
+def _model_label_values(metric) -> set[str]:
+    index = metric._labelnames.index("model")
+    return {sample_key[index] for sample_key in metric._metrics}
+
+
+async def _fire_llm_api_failure(logger: PrometheusLogger, model: str, model_id: str = "") -> None:
+    await logger.async_log_failure_event(
+        kwargs={
+            "model": model,
+            "litellm_params": {"metadata": {}},
+            "exception": _ClientSideError("model not allowed for this key"),
+            "standard_logging_object": {
+                "model_id": model_id,
+                "model_group": model,
+                "metadata": {
+                    "user_api_key_user_id": "user-1",
+                    "user_api_key_hash": "hashed-key-1",
+                    "user_api_key_alias": None,
+                    "user_api_key_team_id": None,
+                    "user_api_key_team_alias": None,
+                },
+            },
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_denied_model_names_collapse_to_one_series_on_llm_api_failed_requests_metric(router):
+    logger = PrometheusLogger()
+
+    with patch(
+        "litellm.proxy.proxy_server.llm_router", router, create=True
+    ):  # test-quality-ok: production reads proxy_server.llm_router lazily, no injection seam
+        for index in range(25):
+            await _fire_llm_api_failure(logger, f"denied-model-{index}")
+
+    metric = logger.litellm_llm_api_failed_requests_metric
+    assert _model_label_values(metric) == {UNRECOGNIZED_REQUESTED_MODEL_LABEL}
+    assert _series_count(metric) == 1
+    assert _total_value(metric) == 25
+
+
+@pytest.mark.asyncio
+async def test_deployment_model_names_keep_their_label_on_llm_api_failed_requests_metric(router):
+    logger = PrometheusLogger()
+
+    with patch(
+        "litellm.proxy.proxy_server.llm_router", router, create=True
+    ):  # test-quality-ok: production reads proxy_server.llm_router lazily, no injection seam
+        await _fire_llm_api_failure(logger, "openai/gpt-4o-mini", model_id="deployment-1")
+
+    assert _model_label_values(logger.litellm_llm_api_failed_requests_metric) == {"openai/gpt-4o-mini"}
+
+
+@pytest.mark.asyncio
+async def test_sdk_failures_without_proxy_router_keep_their_model_label_on_llm_api_failed_requests_metric():
+    logger = PrometheusLogger()
+
+    with patch("litellm.proxy.proxy_server.llm_router", None, create=True):  # test-quality-ok: production reads proxy_server.llm_router lazily, no injection seam
+        await _fire_llm_api_failure(logger, "gpt-4o-mini")
+
+    assert _model_label_values(logger.litellm_llm_api_failed_requests_metric) == {"gpt-4o-mini"}

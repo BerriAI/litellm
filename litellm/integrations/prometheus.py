@@ -2601,6 +2601,23 @@ class PrometheusLogger(CustomLogger):
                 _labels,
             )
 
+    @staticmethod
+    def _bounded_failed_request_model_label(
+        model: object, standard_logging_payload: dict | StandardLoggingPayload
+    ) -> object:
+        """
+        Bound the legacy ``model`` label on the failed-request metric.
+
+        When no deployment served the call (no ``model_id``), ``model`` is the
+        raw name the caller sent, e.g. a model the key is not allowed to use.
+        Collapse unrecognized names into the shared ``other`` bucket so callers
+        cannot mint unlimited series. Names of real deployments keep their label,
+        and with no proxy router (plain SDK use) nothing is collapsed.
+        """
+        if standard_logging_payload.get("model_id"):
+            return model
+        return _bounded_requested_model_label(model, router_originated=True)
+
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         verbose_logger.debug(
             "prometheus Logging - Enters failure logging function (kwargs keys: %s)",
@@ -2612,7 +2629,10 @@ class PrometheusLogger(CustomLogger):
         if self._should_skip_metrics_for_invalid_key(kwargs=kwargs, standard_logging_payload=standard_logging_payload):
             return
 
-        model: Final = kwargs.get("model", "")
+        model: Final = self._bounded_failed_request_model_label(
+            model=kwargs.get("model", ""),
+            standard_logging_payload=standard_logging_payload,
+        )
 
         litellm_params: Final = kwargs.get("litellm_params", {}) or {}
         get_end_user_id_for_cost_tracking: Final = get_cached_end_user_id_for_cost_tracking()
