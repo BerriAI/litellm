@@ -1429,6 +1429,78 @@ def test_vertex_responses_native_folds_output_format(gateway: Gateway) -> None:
         assert _folded_format(_one_delivery(wire, marker_hex)) == _OUTPUT_FORMAT
 
 
+def _native_deployment(gateway: Gateway, scenario: Scenario, api_base: str, provider: str) -> str:
+    match provider:
+        case "vertex_ai":
+            return _vertex_deployment(gateway, scenario, api_base, _NATIVE_MODEL)
+        case "anthropic":
+            return scenario.model(model=f"anthropic/{_NATIVE_MODEL}", api_base=api_base, api_key=_ANTHROPIC_KEY)
+        case "azure_ai":
+            return scenario.model(model=f"azure_ai/{_NATIVE_MODEL}", api_base=api_base, api_key=_AZURE_KEY)
+        case _:
+            raise AssertionError(provider)
+
+
+@pytest.mark.parametrize("provider", ["vertex_ai", "anthropic", "azure_ai"])
+def test_native_model_json_schema_with_an_open_object_takes_the_json_tool_and_keeps_the_object_open(
+    gateway: Gateway, provider: str
+) -> None:
+    marker, marker_hex = _marker("values")
+    response_format: Final[dict[str, JsonValue]] = {
+        "type": "json_schema",
+        "json_schema": {"name": "valued", "schema": _VALUES_SCHEMA},
+    }
+    with wire_server(_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _native_deployment(gateway, scenario, wire.url, provider)
+        response: Final = gateway.request(
+            "POST", "/v1/chat/completions", _chat_body(model, marker, response_format=response_format)
+        )
+        assert _chat_content(response) == _tool_input("values", marker_hex), response.text
+        sent: Final = _one_delivery(wire, marker_hex)
+        assert not _structured(sent.body), sent.body
+        assert _json_tool_schema(sent)["properties"] == _VALUES_SCHEMA["properties"], sent.body
+
+
+def test_vertex_chat_native_schema_keeps_min_items_one_and_closes_a_nullable_object(gateway: Gateway) -> None:
+    marker, marker_hex = _marker("native")
+    schema: Final[dict[str, JsonValue]] = {
+        "type": "object",
+        "properties": {
+            "summary": {"type": "string"},
+            "tags": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+            "backup": {"type": ["object", "null"], "properties": {"name": {"type": "string"}}, "required": ["name"]},
+        },
+        "required": ["summary", "tags", "backup"],
+        "additionalProperties": False,
+    }
+    expected: Final[dict[str, JsonValue]] = {
+        **schema,
+        "properties": {
+            "summary": {"type": "string"},
+            "tags": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+            "backup": {
+                "type": ["object", "null"],
+                "properties": {"name": {"type": "string"}},
+                "required": ["name"],
+                "additionalProperties": False,
+            },
+        },
+    }
+    response_format: Final[dict[str, JsonValue]] = {
+        "type": "json_schema",
+        "json_schema": {"name": "tagged", "schema": schema},
+    }
+    with wire_server(_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _vertex_deployment(gateway, scenario, wire.url, _NATIVE_MODEL)
+        response: Final = gateway.request(
+            "POST", "/v1/chat/completions", _chat_body(model, marker, response_format=response_format)
+        )
+        assert _chat_content(response) == _payload(marker_hex), response.text
+        sent: Final = _one_delivery(wire, marker_hex)
+        assert _folded_format(sent) == {"type": "json_schema", "schema": expected}, sent.body
+        assert "tools" not in sent.body, sent.body
+
+
 @pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
 def test_vertex_messages_folds_output_format_into_output_config(gateway: Gateway, stream: bool) -> None:
     marker, marker_hex = _marker("native")

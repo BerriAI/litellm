@@ -1252,7 +1252,9 @@ async def test_transform_request_replays_redacted_thinking_only_to_claude(
     """A model id that names its model decides on its own. An application inference profile ARN hides its model,
     so the deployment's ``base_model`` is what marks it as Claude, and without one the redacted block is dropped
     the way it is for every non-Claude target."""
-    redacted_data: Final = base64.b64encode(b"EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpP").decode()
+    redacted_data: Final = base64.b64encode(
+        b"EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpP"
+    ).decode()
     messages: Final = [
         {"role": "user", "content": "hi"},
         {
@@ -4920,8 +4922,18 @@ def test_json_schema_shape_follows_each_inference_profile_own_native_output_flag
         ("bedrock", {"thinking": ADAPTIVE_THINKING}, True),
         ("bedrock", {"thinking": {"type": "enabled", "budget_tokens": 1024}}, True),
         ("bedrock", {"reasoning_effort": "low"}, True),
+        ("bedrock", {"reasoning_effort": "none"}, False),
+        ("bedrock", {"thinking": {"type": "disabled"}}, False),
     ],
-    ids=["legacy-key", "bedrock-key-no-thinking", "bedrock-key-adaptive", "bedrock-key-enabled", "bedrock-key-effort"],
+    ids=[
+        "legacy-key",
+        "bedrock-key-no-thinking",
+        "bedrock-key-adaptive",
+        "bedrock-key-enabled",
+        "bedrock-key-effort",
+        "bedrock-key-effort-none",
+        "bedrock-key-thinking-disabled",
+    ],
 )
 def test_bedrock_native_output_key_applies_only_when_thinking_is_requested(
     set_native_structured_output, native_key, thinking_params, native
@@ -4979,7 +4991,10 @@ RECURSIVE_TREE_SCHEMA: Final = {
     "$defs": {
         "Node": {
             "type": "object",
-            "properties": {"name": {"type": "string"}, "children": {"type": "array", "items": {"$ref": "#/$defs/Node"}}},
+            "properties": {
+                "name": {"type": "string"},
+                "children": {"type": "array", "items": {"$ref": "#/$defs/Node"}},
+            },
             "required": ["name", "children"],
         }
     },
@@ -5165,7 +5180,10 @@ def _doubling_defs_schema(depth: int) -> Mapping[str, object]:
     levels: Final = {
         f"Level{index}": {
             "type": "object",
-            "properties": {"left": {"$ref": f"#/$defs/Level{index + 1}"}, "right": {"$ref": f"#/$defs/Level{index + 1}"}},
+            "properties": {
+                "left": {"$ref": f"#/$defs/Level{index + 1}"},
+                "right": {"$ref": f"#/$defs/Level{index + 1}"},
+            },
             "required": ["left", "right"],
         }
         for index in range(depth)
