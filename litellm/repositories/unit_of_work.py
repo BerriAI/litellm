@@ -97,11 +97,13 @@ class SpendResetUnitOfWork:
 
 @dataclass(frozen=True, slots=True)
 class BudgetCascadeUnitOfWork:
-    """Every write a budget-tier reset performs, bound to one batch.
+    """Every write a budget-tier reset performs in its final batch.
 
     The dependent spend rows and the budget rows' ``budget_reset_at`` advance
     must land together: advancing the window without zeroing the spend it
     gates leaves the dependents pinned at their cap until the next window.
+    End users are the exception, paged and committed ahead of this batch by
+    ``enduser_spend_reset_unit_of_work`` because one tier can gate millions.
     """
 
     team_memberships: LinkedSpendResetWrites
@@ -110,7 +112,6 @@ class BudgetCascadeUnitOfWork:
     tags: LinkedSpendResetWrites
     model_access_groups: LinkedSpendResetWrites
     projects: LinkedSpendResetWrites
-    endusers: LinkedSpendResetWrites
     budgets: BudgetWindowWrites
 
 
@@ -137,7 +138,17 @@ async def budget_cascade_unit_of_work(
         tags=LinkedSpendResetWrites(table=batch.litellm_tagtable),
         model_access_groups=LinkedSpendResetWrites(table=batch.litellm_modelaccessgroupbudgettable),
         projects=LinkedSpendResetWrites(table=batch.litellm_projecttable),
-        endusers=LinkedSpendResetWrites(table=batch.litellm_endusertable),
         budgets=BudgetWindowWrites(table=batch.litellm_budgettable),
     )
+    await batch.commit()
+
+
+@asynccontextmanager
+async def enduser_spend_reset_unit_of_work(
+    new_batch: Callable[[], PrismaBatch],
+) -> AsyncGenerator[LinkedSpendResetWrites, None]:
+    """One page of end-user spend resets, committed on its own so a statement
+    never grows with the end-user population."""
+    batch: Final = new_batch()
+    yield LinkedSpendResetWrites(table=batch.litellm_endusertable)
     await batch.commit()

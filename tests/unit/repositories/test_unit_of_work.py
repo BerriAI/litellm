@@ -7,6 +7,7 @@ import pytest
 from litellm.repositories.unit_of_work import (
     LinkedSpendResetWrites,
     budget_cascade_unit_of_work,
+    enduser_spend_reset_unit_of_work,
     spend_reset_unit_of_work,
 )
 
@@ -96,7 +97,6 @@ async def test_budget_cascade_dependents_and_window_advance_share_one_batch():
         uow.tags.queue_spend_zero(where=linked)
         uow.model_access_groups.queue_spend_zero(where=linked)
         uow.projects.queue_spend_zero(where=linked)
-        uow.endusers.queue_spend_zero(where={"user_id": {"in": ["enduser-1"]}})
         uow.budgets.queue_window_advance(budget_id="budget-1", budget_reset_at=reset_at)
         assert batch.commit_count == 0
 
@@ -108,8 +108,28 @@ async def test_budget_cascade_dependents_and_window_advance_share_one_batch():
         ("litellm_tagtable.update_many", linked, {"spend": 0}),
         ("litellm_modelaccessgroupbudgettable.update_many", linked, {"spend": 0}),
         ("litellm_projecttable.update_many", linked, {"spend": 0}),
-        ("litellm_endusertable.update_many", {"user_id": {"in": ["enduser-1"]}}, {"spend": 0}),
         ("litellm_budgettable.update_many", {"budget_id": "budget-1"}, {"budget_reset_at": reset_at}),
+    ]
+
+
+async def test_enduser_page_commits_on_its_own_batch():
+    """One tier can gate millions of end users, so a page of them lands in its
+    own transaction instead of riding the cascade's."""
+    batch = FakeBatch()
+
+    async with enduser_spend_reset_unit_of_work(lambda: batch) as writes:
+        writes.queue_spend_zero(where={"user_id": {"in": ["enduser-1", "enduser-2"]}, "spend": {"gt": 0}})
+        writes.queue_spend_decrement(where={"user_id": {"in": ["enduser-3"]}, "spend": {"gt": 5.0}}, amount=5.0)
+        assert batch.commit_count == 0
+
+    assert batch.commit_count == 1
+    assert batch.calls == [
+        (
+            "litellm_endusertable.update_many",
+            {"user_id": {"in": ["enduser-1", "enduser-2"]}, "spend": {"gt": 0}},
+            {"spend": 0},
+        ),
+        ("litellm_endusertable.update_many", {"user_id": {"in": ["enduser-3"]}, "spend": {"gt": 5.0}}, {"spend": {"decrement": 5.0}}),
     ]
 
 
