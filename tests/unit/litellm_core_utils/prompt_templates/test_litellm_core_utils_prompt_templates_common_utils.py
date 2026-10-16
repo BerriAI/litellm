@@ -4,6 +4,7 @@ import functools
 import json
 import os
 import sys
+from collections.abc import Mapping
 from typing import Final, cast
 
 import pytest
@@ -2388,7 +2389,7 @@ def test_schema_has_open_object_flags_any_node_that_accepts_unlisted_keys(schema
     assert schema_has_open_object(schema) is is_open
 
 
-def _object_with(properties: dict, **defs: dict) -> dict:
+def _object_with(properties: Mapping[str, object], **defs: Mapping[str, object]) -> Mapping[str, object]:
     return {"type": "object", "properties": properties, **defs}
 
 
@@ -2398,10 +2399,12 @@ def _object_with(properties: dict, **defs: dict) -> dict:
         (_object_with({"a": {"type": "string"}}), False),
         (_object_with({"a": {"$ref": "#/$defs/A"}, "b": {"$ref": "#/$defs/A"}}, **{"$defs": {"A": {"type": "string"}}}), False),
         (_object_with({"a": {"$ref": "#/definitions/A"}}, definitions={"A": {"$ref": "#/definitions/B"}, "B": {"type": "integer"}}), False),
+        (_object_with({"a": {"$ref": "/$defs/A"}}, **{"$defs": {"A": {"items": {"$ref": "/$defs/B"}}, "B": {"type": "string"}}}), False),
         (_object_with({"a": {"$ref": "#/$defs/Missing"}}, **{"$defs": {"A": {"type": "string"}}}), True),
         (_object_with({"a": {"$ref": "other.json#/A"}}), True),
         (_object_with({"parent": {"$ref": "#"}}), True),
         (_object_with({"a": {"$ref": "#/$defs/A"}}, **{"$defs": {"A": {"type": "array", "items": {"$ref": "#/$defs/A"}}}}), True),
+        (_object_with({"a": {"$ref": "/$defs/A"}}, **{"$defs": {"A": {"type": "array", "items": {"$ref": "/$defs/A"}}}}), True),
         (
             _object_with(
                 {"a": {"$ref": "#/$defs/A"}},
@@ -2410,7 +2413,7 @@ def _object_with(properties: dict, **defs: dict) -> dict:
             True,
         ),
     ],
-    ids=["no-refs", "shared-def", "chained-definitions", "missing-def", "external", "root", "self-cycle", "mutual-cycle"],
+    ids=["no-refs", "shared-def", "chained-definitions", "root-path-defs", "missing-def", "external", "root", "self-cycle", "root-path-self-cycle", "mutual-cycle"],
 )
 def test_schema_has_unresolvable_ref_flags_refs_that_cannot_be_inlined(schema, unresolvable):
     assert schema_has_unresolvable_ref(schema) is unresolvable

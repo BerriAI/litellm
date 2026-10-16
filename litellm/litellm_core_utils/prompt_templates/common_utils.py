@@ -1427,6 +1427,10 @@ def _schema_levels(schema: Mapping[str, object]) -> Iterator[tuple[Mapping[str, 
         frontier = tuple(child for node in frontier for child in _subschemas(node))
 
 
+def schema_fragment_ref(ref: str) -> str:
+    return f"#{ref}" if ref.startswith(("/$defs/", "/definitions/")) else ref
+
+
 def schema_has_unresolvable_ref(schema: Mapping[str, object]) -> bool:
     definitions: Final = MappingProxyType(dict(_root_definitions(schema)))
     if not _refs_in(schema) <= definitions.keys():
@@ -1498,7 +1502,9 @@ def _root_definitions(schema: Mapping[str, object]) -> Iterator[tuple[str, Mappi
 
 
 def _refs_in(schema: Mapping[str, object]) -> frozenset[str]:
-    return frozenset(ref for node in _schema_nodes(schema) if isinstance(ref := node.get("$ref"), str))
+    return frozenset(
+        schema_fragment_ref(ref) for node in _schema_nodes(schema) if isinstance(ref := node.get("$ref"), str)
+    )
 
 
 def _property_schemas(schema: Mapping[str, object]) -> Iterator[tuple[str, Mapping[str, object]]]:

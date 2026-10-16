@@ -3191,7 +3191,7 @@ def test_bedrock_messages_inlines_schema_for_a_profile_without_native_output(set
     assert json.loads(last_content[-1]["text"]) == schema
 
 
-def _bedrock_messages_request_with_schema(model: str, schema: dict) -> dict:
+def _bedrock_messages_request_with_schema(model: str, schema: Mapping[str, object]) -> Mapping[str, object]:
     from litellm.types.router import GenericLiteLLMParams
 
     return AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(

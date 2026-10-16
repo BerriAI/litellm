@@ -28,6 +28,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     DEFS_MAX_INLINED_BYTES,
     is_object_schema,
     sanitize_input_schema_for_anthropic,
+    schema_fragment_ref,
     schema_grammar_branch_count,
     schema_has_lookaround_pattern,
     schema_has_open_object,
@@ -888,6 +889,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 ]
             elif key == "allOf" and isinstance(value, list):
                 result[key] = [AnthropicConfig.filter_anthropic_output_schema(item) for item in value]
+            elif key == "$ref" and isinstance(value, str):
+                result[key] = schema_fragment_ref(value)
             elif key == "oneOf" and isinstance(value, list):
                 # Anthropic rejects oneOf ("Schema type 'oneOf' is not supported");
                 # the Anthropic SDK rewrites it to anyOf, so do the same.

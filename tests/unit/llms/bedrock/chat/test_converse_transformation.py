@@ -3,7 +3,7 @@ import copy
 import json
 import os
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from typing import Final
 from unittest.mock import MagicMock, Mock, patch
 
@@ -4865,8 +4865,8 @@ ADAPTIVE_THINKING: Final = {"type": "adaptive"}
 
 
 def _converse_request_for_json_schema(
-    model: str, stream: bool, thinking_params: dict | None = None
-) -> tuple[dict, dict]:
+    model: str, stream: bool, thinking_params: Mapping[str, object] | None = None
+) -> tuple[Mapping[str, object], RequestObject]:
     config = AmazonConverseConfig()
     optional_params = config.map_openai_params(
         non_default_params={"response_format": CAPITAL_RESPONSE_FORMAT, "stream": stream, **(thinking_params or {})},
@@ -5014,7 +5014,7 @@ def _schema_keys(node: object) -> frozenset[str]:
     return frozenset()
 
 
-def _converse_request_for_schema(model: str, schema: dict) -> dict:
+def _converse_request_for_schema(model: str, schema: Mapping[str, object]) -> RequestObject:
     config: Final = AmazonConverseConfig()
     optional_params: Final = config.map_openai_params(
         non_default_params={
@@ -5079,7 +5079,7 @@ def test_schema_native_output_cannot_hold_keeps_the_tool_path_on_a_native_profil
     assert kept_keyword in _schema_keys(tool_spec["inputSchema"]["json"])
 
 
-def _shared_defs_schema(defs_key: str) -> dict:
+def _shared_defs_schema(defs_key: str) -> Mapping[str, object]:
     party_ref: Final = {"$ref": f"#/{defs_key}/Party"}
     return {
         "type": "object",
@@ -5111,7 +5111,7 @@ def test_shared_defs_reach_native_output_once_instead_of_inlined_per_use(
     assert sent[defs_key]["Party"]["additionalProperties"] is False
 
 
-def _flat_schema(property_schema: dict, count: int, required: bool) -> dict:
+def _flat_schema(property_schema: Mapping[str, object], count: int, required: bool) -> Mapping[str, object]:
     names: Final = tuple(f"field_{index}" for index in range(count))
     return {
         "type": "object",
@@ -5120,7 +5120,7 @@ def _flat_schema(property_schema: dict, count: int, required: bool) -> dict:
     }
 
 
-def _optional_groups_schema(count: int, group_size: int = 6) -> dict:
+def _optional_groups_schema(count: int, group_size: int = 6) -> Mapping[str, object]:
     groups: Final = {
         f"group_{start}": _flat_schema({"type": "string"}, min(group_size, count - start), required=False)
         for start in range(0, count, group_size)
@@ -5161,7 +5161,7 @@ def test_schema_past_a_native_output_size_limit_keeps_the_tool_path(
     assert past_limit["toolConfig"]["tools"][0]["toolSpec"]["name"] == "json_tool_call"
 
 
-def _doubling_defs_schema(depth: int) -> dict:
+def _doubling_defs_schema(depth: int) -> Mapping[str, object]:
     levels: Final = {
         f"Level{index}": {
             "type": "object",

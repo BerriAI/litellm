@@ -3,11 +3,13 @@ import copy
 import json
 import uuid
 from types import SimpleNamespace
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from pydantic import BaseModel, ConfigDict
 
 # Ensure the project root is on the import path so `litellm` can be imported when
 # tests are executed from any working directory.
@@ -543,7 +545,9 @@ OPEN_OBJECT_SCHEMA: Final = {
 }
 
 
-def _invoke_params_for_schema(model: str, schema: dict, thinking_params: dict | None = None) -> dict:
+def _invoke_params_for_schema(
+    model: str, schema: Mapping[str, object], thinking_params: Mapping[str, object] | None = None
+) -> Mapping[str, object]:
     return AmazonAnthropicClaudeConfig().map_openai_params(
         non_default_params={
             "response_format": {"type": "json_schema", "json_schema": {"name": "out", "schema": schema}},
@@ -630,6 +634,43 @@ def test_shared_defs_reach_native_output_once_instead_of_inlined_per_use(set_nat
     assert json.dumps(sent).count('"anyOf"') == 1
     assert "tools" not in result
 
+
+
+class Relabel(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    box: str
+    new_label: str
+
+
+class PuzzleAnswer(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    relabels: list[Relabel]
+
+
+@pytest.mark.parametrize("native_key", ["legacy", "bedrock"])
+def test_nested_pydantic_response_format_reaches_native_output_with_refs_that_resolve(
+    set_native_structured_output, native_key
+):
+    model = "us.anthropic.claude-haiku-5-5"
+    set_native_structured_output(model, native_key)
+    config: Final = AmazonAnthropicClaudeConfig()
+
+    result: Final = config.map_openai_params(
+        non_default_params={
+            "response_format": config.get_json_schema_from_pydantic_object(PuzzleAnswer),
+            "thinking": {"type": "adaptive"},
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    sent: Final = result["output_format"]["schema"]
+    item_ref: Final = sent["properties"]["relabels"]["items"]["$ref"]
+    assert item_ref.removeprefix("#/$defs/") in sent["$defs"]
+    assert "tools" not in result
 
 def test_output_config_format_forwarded_for_bedrock_chat_invoke_request(local_model_cost_map):
     """Bedrock Invoke chat path forwards ``output_config.format`` alongside effort
