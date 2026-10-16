@@ -347,7 +347,10 @@ def filter_web_search_deployments(
 
     tools: Final[object] = request_kwargs.get("tools")
     is_web_search_request: Final = isinstance(tools, (list, tuple)) and any(
-        isinstance(tool, dict) and tool.get("type") in _WEB_SEARCH_TOOL_TYPES for tool in tools
+        isinstance(tool, dict)
+        and isinstance(tool_type := tool.get("type"), str)
+        and tool_type in _WEB_SEARCH_TOOL_TYPES
+        for tool in tools
     )
     if not is_web_search_request:
         return healthy_deployments

@@ -157,7 +157,7 @@ class TestExtractRequestToolNames:
         ],
         ids=["chat_tools", "chat_functions", "responses", "messages", "generate_content", "function_declarations"],
     )
-    def test_malformed_tool_lists_yield_no_names(self, route, data):
+    def test_malformed_tool_lists_yield_no_names(self, route: str, data: dict[str, object]) -> None:
         assert extract_request_tool_names(route, data) == []
 
 
