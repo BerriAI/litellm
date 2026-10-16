@@ -143,3 +143,22 @@ def test_writes_to_model_call_details_too():
         "standard_logging_guardrail_information"
     ) == [entry]
     assert old_lp["metadata"].get("standard_logging_guardrail_information") == [entry]
+
+
+def test_syncs_eval_information_to_logging_obj():
+    entry = _make_slg_entry()
+    eval_info = {"eval_name": "judge", "overall_score": 90.0, "passed": True}
+    request_data = {
+        "metadata": {
+            "standard_logging_guardrail_information": [entry],
+            "eval_information": eval_info,
+        }
+    }
+    logging_obj = _FakeLogging()
+
+    _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
+
+    assert logging_obj.litellm_params["metadata"]["eval_information"] == eval_info
+    assert (
+        logging_obj.model_call_details["litellm_params"]["metadata"]["eval_information"] == eval_info
+    )

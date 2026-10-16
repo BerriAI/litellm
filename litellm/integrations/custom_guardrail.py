@@ -1649,6 +1649,16 @@ def _append_slg_to_litellm_params(lp: object, entries: list) -> None:
             existing.append(entry)
 
 
+def _setdefault_eval_information(
+    lp: dict[str, object],  # mutable-ok: merges eval info into the caller's shared metadata dict
+    eval_info: object,
+) -> None:
+    metadata_bucket: Final = cast(  # cast-ok: litellm_params["metadata"] is a heterogeneous dict
+        dict[str, object], lp.setdefault("metadata", {})
+    )
+    metadata_bucket.setdefault("eval_information", eval_info)
+
+
 def _sync_guardrail_info_to_logging_obj(request_data: dict, logging_obj: object) -> None:
     """Copy standard_logging_guardrail_information from request_data into logging_obj.
 
@@ -1670,6 +1680,18 @@ def _sync_guardrail_info_to_logging_obj(request_data: dict, logging_obj: object)
     mcd: Final = getattr(logging_obj, "model_call_details", None) or {}
     _append_slg_to_litellm_params(getattr(logging_obj, "litellm_params", None), entries)
     _append_slg_to_litellm_params(mcd.get("litellm_params"), entries)
+
+    eval_info: Final = cast(dict[str, object], meta_src).get(  # cast-ok: the request metadata bucket is a heterogeneous dict
+        "eval_information"
+    )
+    if eval_info is None:
+        return
+    for lp in (getattr(logging_obj, "litellm_params", None), mcd.get("litellm_params")):
+        if isinstance(lp, dict):
+            _setdefault_eval_information(
+                cast(dict[str, object], lp),  # cast-ok: narrowed to dict by isinstance
+                eval_info,
+            )
 
 
 _PRE_CALL_CONTENT_KEYS: Final = frozenset(

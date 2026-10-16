@@ -7,6 +7,7 @@ from typing import Any, List, Optional, Tuple
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 import litellm
 import litellm.litellm_core_utils
@@ -178,3 +179,26 @@ def test_litellm_params_treats_blank_values_as_unset(blank: str) -> None:
     assert with_blank_values.model_dump() == omitted.model_dump()
 
     assert BaseLitellmParams(fail_on_error=blank).model_dump() == BaseLitellmParams().model_dump()
+
+
+@pytest.mark.parametrize("value", [0, 1, 0.5])
+def test_litellm_params_accepts_valid_sample_rate(value: float) -> None:
+    params = LitellmParams(guardrail="llm_as_a_judge", mode="pre_call", sample_rate=value)
+    assert params.sample_rate == float(value)
+
+
+@pytest.mark.parametrize("value", [-0.01, 1.01, "0.5", True])
+def test_litellm_params_rejects_invalid_sample_rate(value: object) -> None:
+    with pytest.raises(ValidationError):
+        LitellmParams(guardrail="llm_as_a_judge", mode="pre_call", sample_rate=value)
+
+
+@pytest.mark.parametrize("value", [0, -1, True, 2.5])
+def test_litellm_params_rejects_invalid_max_input_chars(value: object) -> None:
+    with pytest.raises(ValidationError):
+        LitellmParams(guardrail="llm_as_a_judge", mode="pre_call", max_input_chars=value)
+
+
+def test_litellm_params_accepts_max_input_chars() -> None:
+    params = LitellmParams(guardrail="llm_as_a_judge", mode="pre_call", max_input_chars=500)
+    assert params.max_input_chars == 500

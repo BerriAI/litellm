@@ -1186,7 +1186,18 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
     max_input_chars: int | None = Field(
         default=None,
         gt=0,
-        description="Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model'.",
+        description="Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model' and 'llm_as_a_judge'.",
+    )
+
+    sample_rate: float | None = Field(
+        default=None,
+        ge=0,
+        le=1,
+        description=(
+            "Fraction of requests the guardrail judges, decided deterministically per litellm_call_id "
+            "so pre_call and post_call agree. Default 1 judges every request. "
+            "Implemented by guardrail='llm_as_a_judge'."
+        ),
     )
 
     max_concurrent_decision_calls: int | None = Field(
@@ -1388,6 +1399,22 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
     mode: str | list[str] | Mode = Field(
         description="When to apply the guardrail (pre_call, post_call, during_call, logging_only)"
     )
+
+    @field_validator("sample_rate", mode="before", check_fields=False)
+    @classmethod
+    def reject_non_numeric_sample_rate(cls, v: object) -> object:
+        if v is None or v == "":
+            return None
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            raise ValueError(f"sample_rate must be a number between 0 and 1, got {v!r}")  # noqa: TRY004  # pydantic surfaces ValueError as 422, TypeError escapes as 500
+        return float(v)
+
+    @field_validator("max_input_chars", mode="before", check_fields=False)
+    @classmethod
+    def reject_bool_max_input_chars(cls, v: object) -> object:
+        if isinstance(v, bool):
+            raise ValueError(f"max_input_chars must be a positive integer, got {v!r}")  # noqa: TRY004  # pydantic surfaces ValueError as 422, TypeError escapes as 500
+        return v
 
     @field_validator("timeout", mode="before", check_fields=False)
     @classmethod

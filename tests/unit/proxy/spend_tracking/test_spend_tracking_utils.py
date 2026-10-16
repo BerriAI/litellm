@@ -6928,3 +6928,21 @@ def test_get_logging_payload_stores_end_user_only_while_end_user_cost_tracking_i
         end_time=datetime.datetime.now(timezone.utc),
     )
     assert payload["end_user"] == expected_end_user
+
+
+def test_get_spend_logs_metadata_carries_eval_information_from_metadata():
+    eval_info = {
+        "eval_name": "judge",
+        "overall_score": 90.0,
+        "passed": True,
+        "judge_model": "gpt-4o-mini",
+    }
+    result = _get_spend_logs_metadata(
+        metadata={"user_api_key": "test-key", "eval_information": eval_info},
+    )
+    assert result["eval_information"] == eval_info
+
+
+def test_get_spend_logs_metadata_eval_information_none_when_absent():
+    result = _get_spend_logs_metadata(metadata={"user_api_key": "test-key"})
+    assert result["eval_information"] is None

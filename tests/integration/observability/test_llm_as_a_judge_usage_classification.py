@@ -238,11 +238,11 @@ def test_sample_decision_depends_only_on_call_id(gateway: Gateway, tmp_path: Pat
                     _send(candidate, call_id, key=key)
                     _send(candidate, call_id, key=key)
                 rows: Final = eventually(
-                    lambda: read_rows(
+                    lambda call_id=call_id: read_rows(
                         'SELECT metadata FROM "LiteLLM_SpendLogs" WHERE litellm_call_id = %s',
                         (call_id,),
                     ),
-                    lambda values: len(values) == 4,
+                    lambda values: len(values) == 5,
                     seconds=120,
                 )
                 outcomes: Final = frozenset(bool(_eval_entries(_meta(row))) for row in rows)

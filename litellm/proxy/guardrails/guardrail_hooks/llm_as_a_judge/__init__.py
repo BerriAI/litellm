@@ -1,9 +1,20 @@
 """LLM-as-a-Judge guardrail: uses an LLM to score requests or responses against weighted criteria."""
 
+import hashlib
+import time
+import uuid
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Generic, Literal, Optional, TypeVar
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    Generic,
+    Literal,
+    Optional,
+    TypeVar,
+    cast,  # noqa: TID251  # retypes the bare dict from get_or_create_metadata_bucket
+)
 
 from fastapi import HTTPException
 from pydantic import ConfigDict, ValidationError
@@ -13,6 +24,9 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.core_helpers import (
+    get_or_create_metadata_bucket,  # pyright: ignore[reportUnknownVariableType]  # helper returns a bare dict
+)
 from litellm.litellm_core_utils.llm_judge import (
     default_router_provider,
     extract_text_from_content,
@@ -94,6 +108,11 @@ _default_router_provider: Final = default_router_provider
 _parse_judge_verdict: Final = parse_json_verdict
 _extract_text_from_content: Final = extract_text_from_content
 
+
+def _call_id_sample_draw(call_id: str) -> float:
+    """Deterministic uniform draw in [0, 1) for a litellm_call_id, stable across hooks and workers."""
+    return int.from_bytes(hashlib.sha256(call_id.encode()).digest()[:8], "big") / 2**64
+
 _ParamT = TypeVar("_ParamT")
 
 
@@ -156,26 +175,48 @@ def _text_under_review(inputs: GenericGuardrailAPIInputs, input_type: JudgeInput
     return latest_user_turn if latest_user_turn is not None else all_text
 
 
+def _cap_judged_context(
+    conversation: str,
+    text_under_review: str,
+    budget: int,
+) -> tuple[str, str]:
+    text_kept: Final = text_under_review[:budget]
+    remaining: Final = budget - len(text_kept)
+    conversation_kept: Final = conversation[-remaining:] if remaining > 0 else ""
+    return conversation_kept, text_kept
+
+
 def _build_judge_prompt(
     criteria: Sequence[JudgeCriterion],
     messages: Sequence[JudgeMessage],
     text_under_review: str,
     input_type: JudgeInputType = "response",
+    max_input_chars: int | None = None,
 ) -> str:
     criteria_block: Final = "\n".join(
         f"- {c.get('name', '')} (weight {c.get('weight', 0)}%): {c.get('description', '')}" for c in criteria
     )
-    conversation: Final = "\n".join(
+    rendered_conversation: Final = "\n".join(
         f"{m.get('role', 'user').upper()}: {_extract_text_from_content(m.get('content', ''))}"
         for m in messages
         if m.get("content") is not None
     )
-    conversation_block: Final = f"Conversation:\n{conversation}\n\n" if conversation or input_type == "response" else ""
-    return (
-        f"Criteria to evaluate:\n{criteria_block}\n\n"
-        f"{conversation_block}"
-        f"{_JUDGE_SUBJECT_LABELS[input_type]}:\n{text_under_review}"
+    prompt_head: Final = f"Criteria to evaluate:\n{criteria_block}\n\n"
+    subject: Final = f"{_JUDGE_SUBJECT_LABELS[input_type]}:\n"
+    if max_input_chars is not None:
+        conv_wrapper: Final = len("Conversation:\n") + 2
+        budget: Final = max(
+            0, max_input_chars - len(prompt_head) - len(subject) - conv_wrapper
+        )
+        conversation, capped_text = _cap_judged_context(rendered_conversation, text_under_review, budget)
+        capped_block: Final = (
+            f"Conversation:\n{conversation}\n\n" if conversation or input_type == "response" else ""
+        )
+        return f"{prompt_head}{capped_block}{subject}{capped_text}"
+    conversation_block: Final = (
+        f"Conversation:\n{rendered_conversation}\n\n" if rendered_conversation or input_type == "response" else ""
     )
+    return f"{prompt_head}{conversation_block}{subject}{text_under_review}"
 
 
 class _CustomGuardrailOptions(TypedDict, total=False):
@@ -207,6 +248,9 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
         on_failure: Literal["block", "log"] = "block",
         event_hook: JudgeModeParam = None,
         default_on: bool = False,
+        sample_rate: float = 1.0,
+        max_input_chars: int | None = None,
+        sampling_draw: Callable[[str], float] | None = None,
         router_provider: "Callable[[], Router | None] | None" = None,
         **kwargs: Unpack[_CustomGuardrailOptions],
     ) -> None:
@@ -221,6 +265,9 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
         self.criteria = criteria
         self.overall_threshold = overall_threshold
         self.on_failure = on_failure
+        self.sample_rate = sample_rate
+        self.max_input_chars = max_input_chars
+        self._sampling_draw = sampling_draw or _call_id_sample_draw
         self._router_provider = router_provider or _default_router_provider
 
     @classmethod
@@ -232,6 +279,13 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
             return False
         return super().should_run_guardrail(data, event_type)
 
+    def _sampled(self, request_data: Mapping[str, object]) -> bool:
+        if self.sample_rate >= 1:
+            return True
+        call_id: Final = request_data.get("litellm_call_id")
+        draw_input: Final = str(call_id) if call_id else uuid.uuid4().hex
+        return self._sampling_draw(draw_input) < self.sample_rate
+
     async def _run_judge(
         self,
         messages: Sequence[JudgeMessage],
@@ -242,7 +296,9 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
             {"role": "system", "content": JUDGE_SYSTEM_PROMPTS[input_type]},
             {
                 "role": "user",
-                "content": _build_judge_prompt(self.criteria, messages, text_under_review, input_type),
+                "content": _build_judge_prompt(
+                    self.criteria, messages, text_under_review, input_type, self.max_input_chars
+                ),
             },
         ]
         response: Final = await judge_acompletion(
@@ -265,6 +321,19 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
     ) -> GenericGuardrailAPIInputs:
         text_under_review: Final = _text_under_review(inputs, input_type)
         if not text_under_review:
+            return inputs
+
+        if not self._sampled(cast(Mapping[str, object], request_data)):  # cast-ok: request_data arrives as a bare dict
+            skipped_at: Final = time.time()
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_provider="llm_as_a_judge",
+                guardrail_json_response={"sampled": False, "sample_rate": self.sample_rate},
+                request_data=request_data,
+                guardrail_status="not_run",
+                start_time=skipped_at,
+                end_time=skipped_at,
+                event_type=self._event_type_for(input_type),
+            )
             return inputs
 
         start_time: Final = datetime.now()
@@ -301,14 +370,20 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
                 "threshold": self.overall_threshold,
                 "verdicts": judge_result.get("verdicts", []),
             }
-            _metadata: Final = request_data.setdefault("metadata", {})
-            existing: Final = _metadata.get("eval_information")
-            if isinstance(existing, list):
-                existing.append(eval_info)
-            elif existing is not None:
-                _metadata["eval_information"] = [existing, eval_info]
-            else:
-                _metadata["eval_information"] = eval_info
+            metadata_bucket: Final = cast(  # cast-ok: helper returns a bare dict
+                dict[str, object],
+                get_or_create_metadata_bucket(
+                    cast(dict[str, object], request_data)  # cast-ok: request_data arrives as a bare dict
+                )[1],
+            )
+            existing: Final = metadata_bucket.get("eval_information")
+            metadata_bucket["eval_information"] = (
+                [*cast(list[object], existing), eval_info]  # cast-ok: narrowed to list by isinstance
+                if isinstance(existing, list)
+                else [existing, eval_info]
+                if existing is not None
+                else eval_info
+            )
 
             if not passed:
                 status = "guardrail_intervened"
@@ -374,6 +449,11 @@ def initialize_guardrail(
 
     mode: Final[JudgeModeParam] = _get_litellm_param(litellm_params, guardrail, "mode", None)
 
+    sample_rate_param: Final = _get_litellm_param(litellm_params, guardrail, "sample_rate", None)
+    sample_rate: Final = float(sample_rate_param) if sample_rate_param is not None else 1.0
+    max_input_chars_param: Final = _get_litellm_param(litellm_params, guardrail, "max_input_chars", None)
+    max_input_chars: Final = int(max_input_chars_param) if max_input_chars_param is not None else None
+
     instance: Final = LLMAsAJudgeGuardrail(
         guardrail_name=guardrail_name,
         judge_model=judge_model,
@@ -382,6 +462,8 @@ def initialize_guardrail(
         on_failure=on_failure,
         event_hook=mode,
         default_on=bool(_get_litellm_param(litellm_params, guardrail, "default_on", False)),
+        sample_rate=sample_rate,
+        max_input_chars=max_input_chars,
     )
     litellm.logging_callback_manager.add_litellm_callback(instance)
     return instance
