@@ -49,6 +49,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     bedrock_proxy_route,
     create_pass_through_route,
     cursor_proxy_route,
+    eu_jev_proxy_route,
     fal_ai_proxy_route,
     get_azure_ai_search_index_from_endpoint,
     get_vertex_base_url,
@@ -8234,6 +8235,99 @@ class TestTypeSafePassthroughRoute:
             custom_llm_provider="typesafe",
             is_streaming_request=False,
         )
+
+
+class TestEuJevPassthroughRoute:
+    @staticmethod
+    def _request(body: object, query_params: Mapping[str, str] | None = None) -> MagicMock:
+        request = MagicMock(spec=Request)
+        request.method = "POST"
+        request.query_params = query_params or {}
+        request.json = AsyncMock(return_value=body)
+        return request
+
+    @pytest.fixture
+    def client(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+        from litellm.proxy.proxy_server import app
+
+        monkeypatch.setenv("EU_JEV_API_KEY", "eu-jev-test-key")
+        monkeypatch.setenv("EU_JEV_API_BASE", "https://eu-jev.example/base")
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual"))
+        yield TestClient(app)
+
+    def test_forwards_a_decision_upstream_with_the_eu_jev_key(self, client: TestClient) -> None:
+        body: Final = {"model": "eu-jeff-latest", "state": "x"}
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post("https://eu-jev.example/base/v1/systemone").mock(
+                return_value=httpx.Response(200, json={"id": "upstream_123"})
+            )
+            response = client.post("/eu_jev/v1/systemone", json=body)
+
+            assert (response.status_code, response.json()) == (200, {"id": "upstream_123"})
+            sent: Final = route.calls.last.request
+            assert sent.headers["authorization"] == "Bearer eu-jev-test-key"
+            assert json.loads(sent.content) == body
+
+    @pytest.mark.asyncio
+    async def test_forwards_target_auth_headers_provider_and_query(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("EU_JEV_API_KEY", "eu-jev-test-key")
+        monkeypatch.setenv("EU_JEV_API_BASE", "https://eu-jev.example/base")
+
+        async def fake_upstream(request, *_args):
+            target: Final = create_route.call_args.kwargs["target"]
+            upstream_url: Final = httpx.URL(target).copy_merge_params(request.query_params)
+            return Response(content=json.dumps({"upstream_query": parse_qs(upstream_url.query.decode())}))
+
+        endpoint_func = AsyncMock(side_effect=fake_upstream)
+        create_route = Mock(return_value=endpoint_func)
+        monkeypatch.setattr(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+            create_route,
+        )
+
+        result = await eu_jev_proxy_route(
+            endpoint="v1/systemone",
+            request=self._request({"state": "x"}, {"trace": "yes"}),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="virtual-key"),
+        )
+
+        assert json.loads(result.body) == {"upstream_query": {"trace": ["yes"]}}
+        endpoint_func.assert_awaited_once()
+        create_route.assert_called_once_with(
+            endpoint="v1/systemone",
+            target="https://eu-jev.example/base/v1/systemone",
+            custom_headers={
+                "Authorization": "Bearer eu-jev-test-key",
+                "Content-Type": "application/json",
+            },
+            custom_llm_provider="eu_jev",
+            is_streaming_request=False,
+        )
+
+    @pytest.mark.asyncio
+    async def test_uses_the_hosted_api_when_base_is_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("EU_JEV_API_KEY", "eu-jev-test-key")
+        monkeypatch.delenv("EU_JEV_API_BASE", raising=False)
+
+        endpoint_func = AsyncMock(return_value=Response())
+        create_route = Mock(return_value=endpoint_func)
+        monkeypatch.setattr(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+            create_route,
+        )
+
+        await eu_jev_proxy_route(
+            endpoint="v1/systemone",
+            request=self._request({"state": "x"}),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="virtual-key"),
+        )
+
+        assert create_route.call_args.kwargs["target"] == "https://jev.bevel.software/v1/systemone"
 
 
 @pytest.mark.parametrize("provider", ["laya", "bespoke"])

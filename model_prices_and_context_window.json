@@ -70896,6 +70896,28 @@
         "source": "https://docs.typesafe.ai/models",
         "supports_box_questions": true
     },
+    "eu_jev/eu-jeff-1.0.0": {
+        "input_cost_per_token": 4.15e-08,
+        "litellm_provider": "eu_jev",
+        "max_input_tokens": 32768,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://jev.bevel.software/docs",
+        "supported_endpoints": [
+            "/v1/systemone"
+        ]
+    },
+    "eu_jev/eu-jeff-latest": {
+        "input_cost_per_token": 4.15e-08,
+        "litellm_provider": "eu_jev",
+        "max_input_tokens": 32768,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://jev.bevel.software/docs",
+        "supported_endpoints": [
+            "/v1/systemone"
+        ]
+    },
     "wandb/deepseek-ai/DeepSeek-V4.1-Flash": {
         "cache_read_input_token_cost": 3e-08,
         "input_cost_per_token": 2e-07,

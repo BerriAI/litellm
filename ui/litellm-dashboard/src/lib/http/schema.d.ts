@@ -5333,6 +5333,42 @@ export interface paths {
         patch: operations["assemblyai_proxy_route_eu_assemblyai__endpoint__patch"];
         trace?: never;
     };
+    "/eu_jev/{endpoint}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Eu Jev Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)
+         */
+        get: operations["eu_jev_proxy_route_eu_jev__endpoint__get"];
+        /**
+         * Eu Jev Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)
+         */
+        put: operations["eu_jev_proxy_route_eu_jev__endpoint__put"];
+        /**
+         * Eu Jev Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)
+         */
+        post: operations["eu_jev_proxy_route_eu_jev__endpoint__post"];
+        /**
+         * Eu Jev Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)
+         */
+        delete: operations["eu_jev_proxy_route_eu_jev__endpoint__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Eu Jev Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)
+         */
+        patch: operations["eu_jev_proxy_route_eu_jev__endpoint__patch"];
+        trace?: never;
+    };
     "/fal_ai/{endpoint}": {
         parameters: {
             query?: never;
@@ -58787,6 +58823,161 @@ export interface operations {
         };
     };
     assemblyai_proxy_route_eu_assemblyai__endpoint__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    eu_jev_proxy_route_eu_jev__endpoint__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    eu_jev_proxy_route_eu_jev__endpoint__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    eu_jev_proxy_route_eu_jev__endpoint__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    eu_jev_proxy_route_eu_jev__endpoint__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    eu_jev_proxy_route_eu_jev__endpoint__patch: {
         parameters: {
             query?: never;
             header?: never;

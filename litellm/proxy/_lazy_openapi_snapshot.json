@@ -30372,6 +30372,228 @@
           ]
         }
       },
+      "/eu_jev/{endpoint}": {
+        "delete": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)",
+          "operationId": "eu_jev_proxy_route_eu_jev__endpoint__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Eu Jev Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "get": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)",
+          "operationId": "eu_jev_proxy_route_eu_jev__endpoint__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Eu Jev Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "patch": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)",
+          "operationId": "eu_jev_proxy_route_eu_jev__endpoint__patch",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Eu Jev Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "post": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)",
+          "operationId": "eu_jev_proxy_route_eu_jev__endpoint__post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Eu Jev Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        },
+        "put": {
+          "description": "[Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)",
+          "operationId": "eu_jev_proxy_route_eu_jev__endpoint__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "endpoint",
+              "required": true,
+              "schema": {
+                "title": "Endpoint",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Eu Jev Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
       "/fal_ai/{endpoint}": {
         "delete": {
           "operationId": "fal_ai_proxy_route_fal_ai__endpoint__delete",
