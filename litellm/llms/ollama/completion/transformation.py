@@ -97,6 +97,7 @@ class _OllamaGenerateResponse(TypedDict):
 
 
 _OLLAMA_GENERATE_RESPONSE: Final = TypeAdapter(_OllamaGenerateResponse)
+_JSON_VALUE: Final = TypeAdapter(object)
 _JSON_CODE_FENCE: Final = re.compile(r"^```(?:json)?\s*(.*?)\s*(?:```)?$", re.DOTALL)
 _JSON_OBJECT_START: Final = re.compile(r"(?:```(?:json)?\s*)?\{")
 _JSON_OBJECT_PARTIAL_START: Final = re.compile(r"`{0,3}|```(?:j|js|jso|json)?\s*")
@@ -334,7 +335,9 @@ class OllamaConfig(BaseConfig):
                 model_response.choices[0].finish_reason = "stop"
             else:
                 try:
-                    response_content: Final[object] = json.loads(_strip_json_code_fence(response_text))
+                    response_content: Final = _JSON_VALUE.validate_python(
+                        json.loads(_strip_json_code_fence(response_text))
+                    )
 
                     # Check if this is a function call format with name/arguments structure
                     if (
@@ -500,14 +503,10 @@ class OllamaConfig(BaseConfig):
 
         Some providers need `model` in `api_base`
         """
-        if api_base is None:
-            api_base = "http://localhost:11434"
-        if api_base.endswith("/api/generate"):
-            url = api_base
-        else:
-            url = f"{api_base}/api/generate"
-
-        return url
+        clean_api_base: Final = (api_base or "http://localhost:11434").rstrip("/")
+        if clean_api_base.endswith("/api/generate"):
+            return clean_api_base
+        return f"{clean_api_base}/api/generate"
 
     def get_model_response_iterator(
         self,

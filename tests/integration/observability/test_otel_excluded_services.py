@@ -30,6 +30,7 @@ from integration._support.otlp_sink import (
     spans_for_trace,
 )
 from integration._support.process import owned_proxy, owned_proxy_process
+from integration._support.redis_process import owned_redis
 from pydantic import JsonValue
 
 DB_SYSTEM_KEYS: Final = frozenset({"db.system.name", "db.system"})
@@ -40,6 +41,14 @@ TAIL_QUIET_SECONDS: Final = 5 * TENANT_EXPORT_INTERVAL_MILLISECONDS / 1000
 @pytest.fixture(autouse=True)
 def tenant_export_interval(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OTEL_BSP_SCHEDULE_DELAY", str(TENANT_EXPORT_INTERVAL_MILLISECONDS))
+
+
+@pytest.fixture(autouse=True)
+def private_redis(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    with owned_redis(tmp_path / "redis") as cache:
+        monkeypatch.setenv("REDIS_HOST", cache.host)
+        monkeypatch.setenv("REDIS_PORT", str(cache.port))
+        yield
 
 
 @pytest.fixture

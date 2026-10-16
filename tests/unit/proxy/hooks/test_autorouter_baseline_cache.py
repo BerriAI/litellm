@@ -499,12 +499,14 @@ async def test_native_count_finishing_after_quarter_worker_budget_keeps_plan_and
     from litellm.litellm_core_utils import logging_worker
     from litellm.litellm_core_utils.logging_worker import LoggingWorker
 
-    release: Final = asyncio.Event()
+    counted: Final = asyncio.Event()
+    loop: Final = asyncio.get_running_loop()
+    real_time: Final = loop.time
+    monkeypatch.setattr(loop, "time", lambda: real_time() + (2.05 if counted.is_set() else 0.0))
 
     async def count(model: str, api_key: str, body: Mapping[str, JsonValue]) -> int:
-        if not release.is_set():
-            asyncio.get_running_loop().call_later(2.05, release.set)
-            await release.wait()
+        counted.set()
+        await asyncio.sleep(0.001)
         return await _count(model, api_key, body)
 
     worker: Final = LoggingWorker(timeout=8.0)
@@ -519,7 +521,6 @@ async def test_native_count_finishing_after_quarter_worker_budget_keeps_plan_and
         assert observed.plan is not None and observed.plan.breakpoints[0].prefix_tokens == 5000
         assert payload["response_cost"] is not None and worker._timeout_total == 0
     finally:
-        release.set()
         await worker.stop()
 
 
