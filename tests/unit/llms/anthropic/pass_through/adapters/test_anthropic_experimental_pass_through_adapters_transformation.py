@@ -287,7 +287,7 @@ def test_translate_streaming_openai_chunk_to_anthropic_thinking_content_block():
     assert block_type == "thinking"
     assert content_block_start == {
         "type": "thinking",
-        "thinking": "I need to summar",
+        "thinking": "",
         "signature": "",
     }
 

@@ -1,5 +1,5 @@
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from typing import Final
 
 import httpx
@@ -10,6 +10,7 @@ from litellm.anthropic_beta_headers_manager import (
 )
 from litellm.litellm_core_utils.get_litellm_params import stored_control_options
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
+from litellm.llms.base_llm import base_model_iterator
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -21,7 +22,7 @@ from litellm.utils import CustomStreamWrapper
 
 from ..base_aws_llm import BaseAWSLLM, Credentials, bedrock_bearer_token, pop_aws_auth_params, run_aws_signing
 from ..common_utils import BedrockError, error_response_text, get_all_bedrock_regions
-from .invoke_handler import AWSEventStreamDecoder, MockResponseIterator, make_call
+from .invoke_handler import AWSEventStreamDecoder, make_call
 
 
 def make_sync_call(
@@ -36,7 +37,8 @@ def make_sync_call(
     fake_stream: bool = False,
     stream_chunk_size: int | None = None,
     timeout: float | httpx.Timeout | None = None,
-) -> tuple[MockResponseIterator | Iterator[object], httpx.Headers]:
+    optional_params: Mapping[str, object] | None = None,
+) -> tuple[base_model_iterator.MockResponseIterator | Iterator[object], httpx.Headers]:
     if client is None:
         client = get_httpx_client()  # Create a new client if none provided
 
@@ -64,14 +66,15 @@ def make_sync_call(
             model_response=litellm.ModelResponse(),
             stream=True,
             logging_obj=logging_obj,
-            optional_params={},
+            optional_params=dict(optional_params or {}),
             api_key="",
             data=data,
             messages=messages,
             encoding=litellm.encoding,
+            json_mode=json_mode,
         )
-        completion_stream: MockResponseIterator | Iterator[object] = MockResponseIterator(
-            model_response=model_response, json_mode=json_mode
+        completion_stream: base_model_iterator.MockResponseIterator | Iterator[object] = (
+            base_model_iterator.MockResponseIterator(model_response=model_response)
         )
     else:
         decoder: Final = AWSEventStreamDecoder(model=model, json_mode=json_mode)
@@ -158,6 +161,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             json_mode=json_mode,
             stream_chunk_size=stream_chunk_size,
             timeout=timeout,
+            optional_params=optional_params,
         )
         streaming_response: Final = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -290,7 +294,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         stream_chunk_size: Final = stored_control_options(litellm_params).stream_chunk_size if stream is True else None
         unencoded_model_id: Final = optional_params.pop("model_id", None)
         fake_stream = optional_params.pop("fake_stream", False)
-        json_mode: Final = optional_params.get("json_mode", False)
+        json_mode: Final = optional_params.get("json_mode") is True
         if unencoded_model_id is not None:
             modelId = self.encode_model_id(model_id=unencoded_model_id)
         else:
@@ -463,6 +467,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 fake_stream=fake_stream,
                 stream_chunk_size=stream_chunk_size,
                 timeout=timeout,
+                optional_params=optional_params,
             )
             streaming_response: Final = CustomStreamWrapper(
                 completion_stream=completion_stream,

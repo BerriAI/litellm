@@ -11,9 +11,9 @@ import httpx
 import pytest
 from pydantic import BaseModel
 
-from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
+from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator, convert_model_response_to_streaming
 from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
-from litellm.types.utils import GenericStreamingChunk
+from litellm.types.utils import Choices, GenericStreamingChunk, Message, ModelResponse
 
 
 class TestBaseModelResponseIterator:
@@ -314,3 +314,25 @@ def test_close_releases_the_attached_http_response():
     iterator.http_response = response
     iterator.close()
     assert response.is_closed
+
+
+def test_fake_stream_chunk_indexes_thinking_blocks_by_position_without_touching_the_response():
+    """The OpenAI SDK's `.stream()` accumulator merges streamed `thinking_blocks` entries by `index`, so a fake stream
+    numbers them the way a real stream does, redacted blocks included"""
+    thinking_blocks: Final = [
+        {"type": "thinking", "thinking": "Step 1.", "signature": "sig-a"},
+        {"type": "redacted_thinking", "data": "opaque"},
+        {"type": "thinking", "thinking": "Step 2.", "signature": "sig-b"},
+    ]
+    response: Final = ModelResponse(
+        choices=[Choices(message=Message(content="Paris", thinking_blocks=thinking_blocks), finish_reason="stop")]
+    )
+
+    chunk: Final = convert_model_response_to_streaming(response)
+
+    assert chunk.choices[0].delta.thinking_blocks == [
+        {"type": "thinking", "thinking": "Step 1.", "signature": "sig-a", "index": 0},
+        {"type": "redacted_thinking", "data": "opaque", "index": 1},
+        {"type": "thinking", "thinking": "Step 2.", "signature": "sig-b", "index": 2},
+    ]
+    assert [block.get("index") for block in response.choices[0].message.thinking_blocks] == [None, None, None]
