@@ -3579,7 +3579,11 @@ class Router:
             return False
         if request_kwargs.get("merge_reasoning_content_in_choices") is True:
             return False
-        if fallbacks_override_request_params(request_kwargs.get("fallbacks", self.fallbacks)):
+        requested_group: Final = request_kwargs.get("model")
+        lookup_groups: Final = fallback_lookup_groups(
+            request_kwargs, requested_group if isinstance(requested_group, str) else None
+        )
+        if fallbacks_override_request_params(request_kwargs.get("fallbacks", self.fallbacks), lookup_groups):
             return False
         return not any(
             isinstance(callback, CustomGuardrail)

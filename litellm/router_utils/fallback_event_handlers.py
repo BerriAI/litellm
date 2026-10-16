@@ -1,5 +1,4 @@
 import hashlib
-import itertools
 import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -616,19 +615,21 @@ def get_fallback_model_group(
     return fallback_model_group, generic_fallback_idx
 
 
-def _applied_fallback_targets(entry: object) -> tuple[object, ...]:
-    if not isinstance(entry, Mapping) or "model" in entry:
-        return (entry,)
-    group_chains: Final[Mapping[object, object]] = entry
-    chains: Final[tuple[Sequence[object], ...]] = tuple(
-        chain for chain in group_chains.values() if isinstance(chain, list)
+def _resolved_fallback_chain(entries: Sequence[object], lookup_groups: tuple[str, ...]) -> Sequence[object]:
+    group_entries: Final[Sequence[Mapping[str, list[str]]]] = tuple(  # mutable-ok: mirrors the fallbacks config shape
+        entry for entry in entries if isinstance(entry, Mapping)
     )
-    return tuple(itertools.chain.from_iterable(chains))
+    chain, _ = get_fallback_model_group_for_lookup_groups(fallbacks=group_entries, lookup_groups=lookup_groups)
+    return chain or ()
 
 
-def fallbacks_override_request_params(fallbacks: object) -> bool:
+def fallbacks_override_request_params(fallbacks: object, lookup_groups: tuple[str, ...]) -> bool:
     entries: Final[Sequence[object]] = fallbacks if isinstance(fallbacks, list) else ()
-    targets: Final = itertools.chain.from_iterable(map(_applied_fallback_targets, entries))
+    targets: Final = (
+        entries
+        if check_non_standard_fallback_format(fallbacks=entries)
+        else _resolved_fallback_chain(entries, lookup_groups)
+    )
     return any(isinstance(target, Mapping) and "model" in target and len(target) > 1 for target in targets)
 
 

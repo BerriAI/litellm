@@ -3710,15 +3710,16 @@ async def test_mid_stream_continuation_declines_while_an_output_guardrail_is_reg
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "fallback_entry,continues",
+    "fallbacks,continues",
     [
-        ({"model": "backup", "messages": [{"role": "user", "content": "Say hi"}]}, False),
-        ({"model": "backup", "stream": False}, False),
-        ({"model": "backup", "max_tokens": 300}, False),
-        ({"model": "backup"}, True),
-        ({"gpt-4": [{"model": "backup", "stream": False}]}, False),
-        ({"*": [{"model": "backup", "max_tokens": 300}]}, False),
-        ({"gpt-4": [{"model": "backup"}, "backup"]}, True),
+        ([{"model": "backup", "messages": [{"role": "user", "content": "Say hi"}]}], False),
+        ([{"model": "backup", "stream": False}], False),
+        ([{"model": "backup", "max_tokens": 300}], False),
+        ([{"model": "backup"}], True),
+        ([{"gpt-4": [{"model": "backup", "stream": False}]}], False),
+        ([{"*": [{"model": "backup", "max_tokens": 300}]}], False),
+        ([{"gpt-4": [{"model": "backup"}, "backup"]}], True),
+        ([{"gpt-4": ["backup"]}, {"other-group": [{"model": "backup", "stream": False}]}], True),
     ],
     ids=[
         "entry_with_its_own_messages",
@@ -3728,12 +3729,13 @@ async def test_mid_stream_continuation_declines_while_an_output_guardrail_is_reg
         "group_target_turning_off_streaming",
         "generic_group_target_with_its_own_max_tokens",
         "group_targets_with_model_only",
+        "override_only_in_another_groups_chain",
     ],
 )
 async def test_mid_stream_continuation_declines_a_request_fallback_that_overrides_request_params(
-    fallback_entry: dict[str, object], continues: bool
+    fallbacks: list[object], continues: bool
 ) -> None:
-    assert await _continues_after_content({"fallbacks": [fallback_entry]}) is continues
+    assert await _continues_after_content({"fallbacks": fallbacks}) is continues
 
 
 @pytest.mark.asyncio
