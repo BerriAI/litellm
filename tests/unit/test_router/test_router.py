@@ -11,6 +11,7 @@ import threading
 import warnings
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -26840,7 +26841,7 @@ def test_pre_call_checks_context_window_check_is_skipped_but_not_fatal_when_toke
     assert len(filtered) == 1
 
 
-def test_pre_call_checks_keeps_unsupported_param_filter_when_token_counting_fails(monkeypatch):
+def test_pre_call_checks_keeps_unsupported_param_filter_when_token_counting_fails(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "drop_params", False)
     no_json_mode_model: Final = "gpt-3.5-turbo-16k"
     assert "response_format" not in (
@@ -26894,7 +26895,9 @@ async def test_async_get_healthy_deployments_keeps_region_check_when_token_count
     [_PRE_CALL_CHECK_UNPARSEABLE_MESSAGES, [{"role": "user", "content": "hi"}]],
     ids=["uncountable", "countable"],
 )
-def test_completion_answers_400_when_no_deployment_supports_the_requested_param(monkeypatch, messages):
+def test_completion_answers_400_when_no_deployment_supports_the_requested_param(
+    monkeypatch: pytest.MonkeyPatch, messages: list[dict[str, object]]
+):
     monkeypatch.setattr(litellm, "drop_params", False)
     router: Final = Router(
         model_list=[
@@ -26932,7 +26935,7 @@ def test_completion_answers_400_when_no_deployment_supports_the_requested_param(
     ids=["request-allowlist", "request-drop", "request-additional-drop", "deployment-allowlist", "deployment-drop"],
 )
 def test_pre_call_checks_keeps_deployment_whose_unsupported_param_is_allowed_or_dropped(
-    monkeypatch, deployment_params, request_kwargs
+    monkeypatch: pytest.MonkeyPatch, deployment_params: Mapping[str, object], request_kwargs: Mapping[str, object]
 ):
     monkeypatch.setattr(litellm, "drop_params", False)
     model_list: Final = [
@@ -26954,7 +26957,7 @@ def test_pre_call_checks_keeps_deployment_whose_unsupported_param_is_allowed_or_
     assert [d["model_info"]["id"] for d in filtered] == ["only"]
 
 
-def test_pre_call_checks_keeps_retryable_429_when_a_cooling_down_deployment_supports_the_param(monkeypatch):
+def test_pre_call_checks_keeps_retryable_429_when_a_cooling_down_deployment_supports_the_param(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "drop_params", False)
     model_list: Final = [
         {
@@ -26977,7 +26980,7 @@ def test_pre_call_checks_keeps_retryable_429_when_a_cooling_down_deployment_supp
     assert filtered == []
 
 
-def test_completion_uses_context_window_fallback_when_the_small_deployment_also_lacks_the_param(monkeypatch):
+def test_completion_uses_context_window_fallback_when_the_small_deployment_also_lacks_the_param(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "drop_params", False)
     router: Final = Router(
         model_list=[
@@ -27019,7 +27022,7 @@ def test_completion_uses_context_window_fallback_when_the_small_deployment_also_
     ids=["request-allowlist", "request-drop", "request-additional-drop", "deployment-drop", "deployment-allowlist"],
 )
 def test_pre_call_checks_prefers_a_deployment_that_takes_the_param_over_dropping_it(
-    monkeypatch, deployment_params, request_kwargs
+    monkeypatch: pytest.MonkeyPatch, deployment_params: Mapping[str, object], request_kwargs: Mapping[str, object]
 ):
     monkeypatch.setattr(litellm, "drop_params", False)
     model_list: Final = [
@@ -27046,7 +27049,7 @@ def test_pre_call_checks_prefers_a_deployment_that_takes_the_param_over_dropping
     assert [d["model_info"]["id"] for d in filtered] == ["gpt-4o"]
 
 
-def test_pre_call_checks_drops_the_param_when_the_capable_deployment_is_outside_the_region(monkeypatch):
+def test_pre_call_checks_drops_the_param_when_the_capable_deployment_is_outside_the_region(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "drop_params", False)
     model_list: Final = [
         {
@@ -27072,10 +27075,12 @@ def test_pre_call_checks_drops_the_param_when_the_capable_deployment_is_outside_
     assert [d["model_info"]["id"] for d in filtered] == ["eu-without-json-mode"]
 
 
-def test_pre_call_checks_filters_an_authenticating_provider_deployment_that_lacks_the_param(monkeypatch, tmp_path):
+def test_pre_call_checks_filters_an_authenticating_provider_deployment_that_lacks_the_param(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     monkeypatch.setattr(litellm, "drop_params", False)
     monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
-    (tmp_path / "api-key.json").write_text(json.dumps({"token": "tid=test", "expires_at": int(time.time()) + 3600}))
+    (tmp_path / "api-key.json").write_text(json.dumps({"token": "tid=test", "expires_at": 4102444800}))
     model_list: Final = [
         {
             "model_name": "mixed-json-mode",
@@ -27100,7 +27105,7 @@ def test_pre_call_checks_filters_an_authenticating_provider_deployment_that_lack
     assert [d["model_info"]["id"] for d in filtered] == ["gpt-4o"]
 
 
-def test_pre_call_checks_answers_400_when_the_group_name_lists_no_deployments(monkeypatch):
+def test_pre_call_checks_answers_400_when_the_group_name_lists_no_deployments(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "drop_params", False)
     model_list: Final = [
         {
@@ -27118,6 +27123,36 @@ def test_pre_call_checks_answers_400_when_the_group_name_lists_no_deployments(mo
             messages=[{"role": "user", "content": "hi"}],
             request_kwargs={"response_format": {"type": "json_object"}},
         )
+
+
+def test_pre_call_checks_lets_a_request_setting_replace_the_deployment_setting(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    model_list: Final = [
+        {
+            "model_name": "no-json-mode",
+            "litellm_params": {"model": "openai/gpt-3.5-turbo-16k", "api_key": "my-fake-key", "drop_params": True},
+            "model_info": {"id": "drops-it", "max_input_tokens": 100},
+        },
+        {
+            "model_name": "no-json-mode",
+            "litellm_params": {
+                "model": "openai/gpt-4",
+                "api_key": "my-fake-key",
+                "allowed_openai_params": ["response_format"],
+            },
+            "model_info": {"id": "allows-it", "max_input_tokens": 100},
+        },
+    ]
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
+
+    filtered: Final = router._pre_call_checks(
+        model="no-json-mode",
+        healthy_deployments=model_list,
+        messages=[{"role": "user", "content": "hi"}],
+        request_kwargs={"response_format": {"type": "json_object"}, "drop_params": False},
+    )
+
+    assert [d["model_info"]["id"] for d in filtered] == ["allows-it"]
 
 
 async def _select_team_json_deployment(router: Router, entrypoint: str, selection: Mapping[str, object]) -> object:
@@ -27138,7 +27173,11 @@ async def _select_team_json_deployment(router: Router, entrypoint: str, selectio
 )
 @pytest.mark.asyncio
 async def test_team_public_model_name_answers_400_only_when_no_team_deployment_takes_the_param(
-    monkeypatch, entrypoint, deployment_models, cooled_down, expected_error
+    monkeypatch: pytest.MonkeyPatch,
+    entrypoint: str,
+    deployment_models: tuple[str, str],
+    cooled_down: tuple[str, ...],
+    expected_error: type[Exception],
 ):
     monkeypatch.setattr(litellm, "drop_params", False)
     router: Final = Router(
@@ -27176,7 +27215,7 @@ async def test_team_public_model_name_answers_400_only_when_no_team_deployment_t
         await _select_team_json_deployment(router, entrypoint, selection)
 
 
-def test_pre_call_checks_ignores_an_image_response_format_string(monkeypatch):
+def test_pre_call_checks_ignores_an_image_response_format_string(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "drop_params", False)
     model_list: Final = [
         {

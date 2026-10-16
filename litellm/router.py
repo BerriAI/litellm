@@ -13215,7 +13215,8 @@ class Router:
             )
         except Exception as e:
             verbose_router_logger.error(
-                "litellm.router.py::_pre_call_checks: failed to count tokens. Skipping the context-window check only; RPM/region/param checks still apply. Got - %s",
+                "litellm.router.py::_pre_call_checks: failed to count tokens. "
+                "Skipping the context-window check only; RPM/region/param checks still apply. Got - %s",
                 e,
             )
             return None
@@ -13240,11 +13241,10 @@ class Router:
     def _deployment_rejects_params(
         deployment: DeploymentTypedDict, group: str, params: frozenset[str], request_kwargs: Mapping[str, object]
     ) -> bool:
-        kept_by_request: Final = Router._params_neither_dropped_nor_allowed(request_kwargs, params)
-        kept: Final = Router._params_neither_dropped_nor_allowed(
-            deployment.get("litellm_params") or {}, kept_by_request
+        call_settings: Final[Mapping[str, object]] = {**(deployment.get("litellm_params") or {}), **request_kwargs}
+        return Router._deployment_lacks_params(
+            deployment, group, Router._params_neither_dropped_nor_allowed(call_settings, params)
         )
-        return Router._deployment_lacks_params(deployment, group, kept)
 
     @staticmethod
     def _pre_call_check_requested_chat_params(request_kwargs: Mapping[str, object]) -> frozenset[str]:
@@ -13413,7 +13413,11 @@ class Router:
                 )
             ):
                 raise litellm.UnsupportedParamsError(
-                    message=f"no deployment of model={model} supports {sorted(requested_params)}. To drop these, set `litellm.drop_params=True` or for proxy `litellm_settings: drop_params: true`, or send allowed_openai_params={sorted(requested_params)} to pass them through",
+                    message=(
+                        f"no deployment of model={model} supports {sorted(requested_params)}. "
+                        "To drop these, set `litellm.drop_params=True` or for proxy `litellm_settings: drop_params: true`, "
+                        f"or send allowed_openai_params={sorted(requested_params)} to pass them through"
+                    ),
                     model=model,
                 )
             if _rate_limit_error is True:  # allow generic fallback logic to take place
