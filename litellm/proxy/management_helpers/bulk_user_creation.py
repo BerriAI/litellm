@@ -40,6 +40,7 @@ from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.common_utils import validate_budget_duration
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     _update_internal_new_user_params,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # /user/new defaults; result validated below
+    _validate_user_mcp_grants,  # pyright: ignore[reportPrivateUsage]  # shared user-grant validator
     check_if_default_team_set,
 )
 from litellm.proxy.management_endpoints.key_management_endpoints import (  # noqa: F401  # legacy module exports
@@ -340,11 +341,24 @@ def _db_failure(
     return None
 
 
-async def _prepare_user(user: _PendingUser, prisma_client: PrismaClient) -> _PreparedUser | _RowFailure:
+async def _prepare_user(
+    user: _PendingUser,
+    prisma_client: PrismaClient,
+    user_api_key_cache: "UserApiKeyCache",
+    is_proxy_admin: bool,
+) -> _PreparedUser | _RowFailure:
     try:
         dumped: Final = user.request.model_dump(exclude={"user_id"})
         data: Final = {**dumped, "user_id": user.user_id}
         data_json: Final = _JSON_OBJECT.validate_python(_update_internal_new_user_params(data, user.request))
+        await _validate_user_mcp_grants(
+            object_permission=data_json.get("object_permission"),
+            team_ids=tuple(team.team_id for team in user.teams),
+            existing_object_permission_id=None,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            is_proxy_admin=is_proxy_admin,
+        )
         with_permission: Final = _JSON_OBJECT.validate_python(
             await set_object_permission(data_json=data_json, prisma_client=prisma_client)
         )
@@ -783,6 +797,7 @@ async def bulk_create_users(
     pending, request_failures = _partition_rows(users, user_api_key_dict)
     existing_ids, existing_emails = await _existing_user_conflicts(prisma_client, pending)
     teams, team_errors = await _unusable_teams(prisma_client, pending, user_api_key_dict)
+    is_proxy_admin: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
     db_failures: Final = tuple(
         failure
         for user in pending
@@ -802,7 +817,17 @@ async def bulk_create_users(
             )
         )
 
-    prepared_outcomes: Final = tuple([await _prepare_user(user, prisma_client) for user in creatable])
+    prepared_outcomes: Final = tuple(
+        [
+            await _prepare_user(
+                user,
+                prisma_client,
+                user_api_key_cache,
+                is_proxy_admin=is_proxy_admin,
+            )
+            for user in creatable
+        ]
+    )
     prepare_failures: Final = tuple(o for o in prepared_outcomes if isinstance(o, _RowFailure))
     created, insert_failures = await _insert_users(
         prisma_client, tuple(o for o in prepared_outcomes if isinstance(o, _PreparedUser))
