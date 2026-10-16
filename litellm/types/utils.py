@@ -3900,6 +3900,7 @@ class MirroredPricingParams(LiteLLMBaseModel):
     output_cost_per_character: float | None = None
     cache_read_input_token_cost: float | None = None
     cache_creation_input_token_cost: float | None = None
+    cache_creation_input_token_cost_above_1hr: float | None = None
     tiered_pricing: list[dict[str, Any]] | None = None
 
 
@@ -3927,7 +3928,6 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     input_cost_per_token_priority: float | None = None
     input_cost_per_token_balanced: float | None = None
     input_cost_per_token_ultrafast: float | None = None
-    cache_creation_input_token_cost_above_1hr: float | None = None
     cache_creation_input_token_cost_above_100k_tokens: float | None = None
     cache_creation_input_token_cost_above_1hr_above_100k_tokens: float | None = None
     cache_creation_input_token_cost_above_200k_tokens: float | None = None

@@ -52,6 +52,17 @@ describe("AdvancedSettings", () => {
     });
   });
 
+  it("offers both cache write tiers once custom pricing is on", async () => {
+    renderAdvancedSettings();
+    act(() => {
+      fireEvent.click(screen.getByText("Advanced Settings"));
+    });
+    fireEvent.click(await screen.findByRole("switch", { name: "Custom Pricing" }));
+
+    expect(await screen.findByLabelText(/^Cache Write Cost \(per 1M tokens\)/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Cache Write Cost \(1 hour, per 1M tokens\)/)).toBeInTheDocument();
+  });
+
   it("hides every PTU field when PTU cost attribution is disabled", async () => {
     renderAdvancedSettings();
     act(() => {
