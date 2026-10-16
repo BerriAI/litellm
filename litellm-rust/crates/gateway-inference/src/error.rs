@@ -77,6 +77,9 @@ impl Error {
     }
 
     pub fn openai_response(self) -> Response {
+        if let Self::Auth(error) = self {
+            return error.into_response();
+        }
         (self.status(), Json(self.openai_body())).into_response()
     }
 
@@ -106,6 +109,10 @@ impl Error {
     /// The Anthropic error envelope Python's `AnthropicExceptionMapping` builds: an upstream
     /// body already in that shape passes through, any other has its message extracted.
     pub fn body(&self, request_id: Option<&str>) -> Value {
+        // Auth runs before the provider call, where the proxy answers with its own error shape.
+        if let Self::Auth(error) = self {
+            return error.body();
+        }
         let raw = match self {
             Self::Route(RouteError::Transport(TransportError::Http { body, .. })) => body.clone(),
             other => other.to_string(),

@@ -10,6 +10,16 @@ pub enum Error {
     Routing(#[from] litellm_gateway_inference::RoutingError),
     #[error(transparent)]
     Mcp(#[from] litellm_gateway_mcp::ConnectError),
+    #[error("virtual key database unavailable")]
+    Database(#[from] litellm_db::Error),
+    #[error(
+        "virtual keys cannot be enabled while guardrails, policies or policy_attachments are configured: this gateway does not run them on inference, so virtual-key requests would bypass them"
+    )]
+    GuardedVirtualKeys,
+    #[error("database_url references {0}, which is not set")]
+    DatabaseUrl(String),
+    #[error("reading a gateway setting from the secret source failed")]
+    Secret(#[from] litellm_secrets::Error),
     #[error("MCP requires a configured master key")]
     Auth(#[from] litellm_gateway_auth::Error),
 }

@@ -19,6 +19,7 @@ litellm-gateway-auth.workspace = true
 litellm-gateway-ui.workspace = true
 litellm-auth-types.workspace = true
 litellm-config.workspace = true
+litellm-db.workspace = true
 litellm-http = { workspace = true, features = ["mcp"] }
 litellm-llms.workspace = true
 litellm-secrets.workspace = true

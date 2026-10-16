@@ -46,6 +46,7 @@ async fn handle(
     headers: &HeaderMap,
     JsonBody { object, raw }: JsonBody,
 ) -> Result<Response, Error> {
+    gateway.check_body(&object)?;
     let group = request::resolve_group(gateway, &object)?;
     let name = request::model_name(&object)?.to_owned();
     let (body, cache_options) = crate::caching::prepare(identity, object)?;
@@ -65,8 +66,9 @@ async fn handle(
     let mut body = Some(body);
     let routed = gateway
         .models
-        .route(
+        .route_where(
             group,
+            request::usable(identity),
             |attempt| {
                 // Every attempt hands its body to the provider. The first takes the parsed
                 // body and a retry parses the request again, so no request clones a body
@@ -88,7 +90,8 @@ async fn handle(
             },
             Error::failure,
         )
-        .await?;
+        .await
+        .ok_or_else(|| Error::UnknownModel(name.clone()))??;
     Ok(cache_headers.apply(request::hold(routed)))
 }
 

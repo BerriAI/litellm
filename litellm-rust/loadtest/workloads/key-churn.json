@@ -5,7 +5,7 @@
   "warmup_s": 30,
   "new_conn_fraction": 0.3,
   "keys": {"file": "out/keys.txt", "zipf_s": 0},
-  "models": {"chat": {"prefix": "gpt-6-astra-", "count": 10}, "messages": {"prefix": "claude-opus-5-5-", "count": 10}},
+  "models": {"chat": {"prefix": "gpt-6-astra-", "count": 4}, "messages": {"prefix": "claude-opus-5-5-", "count": 4}},
   "classes": [
     {"name": "tiny-chat", "weight": 1, "endpoint": "chat", "stream_fraction": 0.5,
      "context_tokens": {"dist": "const", "min": 10000},

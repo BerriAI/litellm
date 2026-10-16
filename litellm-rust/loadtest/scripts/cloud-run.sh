@@ -3,8 +3,7 @@
 # samples come back to results/<run>/, and the summary is printed.
 #
 #   scripts/cloud-run.sh realistic-ramp            # workloads/realistic-ramp.json
-#   KEY=sk-loadtest-master scripts/cloud-run.sh smoke   # one key for all requests (until the
-#                                                         # gateway reads virtual keys)
+#   KEY=sk-loadtest-master scripts/cloud-run.sh smoke   # one key for all requests, no database
 #   MESSAGES_AUTH=x-api-key scripts/cloud-run.sh smoke  # Anthropic SDK style auth
 #
 # Reads addresses from `terraform output` in terraform/aws. Needs ssh access as ec2-user.

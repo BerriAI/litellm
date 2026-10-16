@@ -3695,8 +3695,13 @@ dependencies = [
 name = "litellm-db"
 version = "0.1.0"
 dependencies = [
+ "litellm-db-testing",
+ "rstest",
  "serde",
+ "serde_json",
  "sqlx",
+ "thiserror 2.0.19",
+ "tokio",
 ]
 
 [[package]]
@@ -3737,6 +3742,7 @@ dependencies = [
  "http-body-util",
  "litellm-auth-types",
  "litellm-config",
+ "litellm-db",
  "litellm-gateway-auth",
  "litellm-gateway-inference",
  "litellm-gateway-mcp",
@@ -3770,14 +3776,18 @@ dependencies = [
  "litellm-auth-types",
  "litellm-config",
  "litellm-secrets",
+ "moka",
  "rstest",
  "serde",
+ "serde_json",
  "sha2 0.10.9",
+ "strum",
  "subtle",
  "thiserror 2.0.19",
  "tokio",
  "tower",
  "tower-sessions",
+ "tracing",
  "veil",
 ]
 

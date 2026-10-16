@@ -41,6 +41,7 @@ impl Principal {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AuthenticationMethod {
     MasterKey,
+    VirtualKey,
     Session,
     External(String),
 }

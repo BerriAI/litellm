@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, sync::Mutex};
 
-use litellm_gateway_auth::keys::KeyStatus;
+use litellm_gateway_auth::keys::{KeyStatus, ModelAccess};
 use litellm_gateway_auth::{
     KeyError,
     keys::{KeyHash, KeyLookup, LookupFuture},
@@ -22,9 +22,7 @@ impl KeyStore for MemoryStore {
                 std::collections::btree_map::Entry::Vacant(entry) => {
                     entry.insert(KeyRecord {
                         hash: key.hash,
-                        status: KeyStatus::Active {
-                            expires_at: key.expires_at,
-                        },
+                        status: KeyStatus::active(key.expires_at, ModelAccess::default()),
                     });
                     Ok(())
                 }

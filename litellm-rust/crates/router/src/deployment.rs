@@ -15,6 +15,9 @@ pub struct Deployment {
     pub timeout: Option<Duration>,
     pub stream_timeout: Option<Duration>,
     pub shaping: MessagesShaping,
+    /// `model_info.team_id`: the team that owns this deployment, which only that team's keys
+    /// may use. `None` for a deployment every caller shares.
+    pub team_id: Option<String>,
 }
 
 impl Deployment {
@@ -38,6 +41,7 @@ impl Deployment {
             stream_timeout: timeout("litellm_params.stream_timeout", &params.stream_timeout)?,
             litellm_params: params.clone(),
             shaping: MessagesShaping::default(),
+            team_id: None,
         })
     }
 

@@ -178,6 +178,7 @@ mod tests {
                 .authorize(AccessRequest::Model {
                     name: "model".into(),
                     deployment: "provider/model".into(),
+                    team_id: None,
                 })
                 .await,
             Err(crate::Error::Forbidden)

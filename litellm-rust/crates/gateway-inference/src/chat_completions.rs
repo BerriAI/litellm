@@ -53,6 +53,7 @@ async fn handle(
     model: Option<&str>,
 ) -> Result<Response, Error> {
     let body = with_model(object, model);
+    gateway.check_body(&body)?;
     let group = request::resolve_group(gateway, &body)?;
     let name = request::model_name(&body)?.to_owned();
     let (body, cache_options) = crate::caching::prepare(identity, body)?;
@@ -73,8 +74,9 @@ async fn handle(
     let mut body = Some(body);
     let routed = gateway
         .models
-        .route(
+        .route_where(
             group,
+            request::usable(identity),
             |attempt| {
                 // Every attempt hands its body to the provider. The first takes the parsed
                 // body and a retry parses the request again, so no request clones a body
@@ -117,7 +119,8 @@ async fn handle(
             },
             Error::failure,
         )
-        .await?;
+        .await
+        .ok_or_else(|| Error::UnknownModel(name.clone()))??;
     Ok(cache_headers.apply(request::hold(routed)))
 }
 

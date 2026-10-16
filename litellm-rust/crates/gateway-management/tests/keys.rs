@@ -10,7 +10,7 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use litellm_auth_types::SecretValue;
 use litellm_gateway_auth::{
     KeyError, hash_token,
-    keys::{KeyHash, KeyLookup, KeyStatus, verify_key},
+    keys::{KeyHash, KeyLookup, KeyStatus, ModelAccess, verify_key},
 };
 use litellm_gateway_management::{
     Error,
@@ -46,7 +46,10 @@ async fn generated_key_can_be_retrieved_verified_and_revoked(
     let hash = &generated.record.hash;
 
     assert_eq!(hash.as_str(), hash_token(generated.token.expose()));
-    assert_eq!(generated.record.status, KeyStatus::Active { expires_at });
+    assert_eq!(
+        generated.record.status,
+        KeyStatus::active(expires_at, ModelAccess::default())
+    );
     assert_eq!(
         keys.get(hash).await.unwrap(),
         Some(generated.record.clone())
@@ -54,7 +57,8 @@ async fn generated_key_can_be_retrieved_verified_and_revoked(
     assert_eq!(
         verify_key(lookup.as_ref(), &generated.token, || now)
             .await
-            .unwrap(),
+            .unwrap()
+            .hash,
         *hash
     );
     assert!(!format!("{generated:?}").contains(generated.token.expose()));
@@ -91,7 +95,8 @@ async fn generates_independent_credentials(store: Arc<MemoryStore>, now: SystemT
     assert_eq!(
         verify_key(store.as_ref(), &second.token, || now)
             .await
-            .unwrap(),
+            .unwrap()
+            .hash,
         second.record.hash
     );
 }
