@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -15,6 +16,7 @@ from litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching import (
 )
 
 _MODULE: Final = "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching"
+_SCOPE: Final = ("https://vertex.test/v1/projects/p/locations/us/cachedContents", "")
 
 
 @pytest.fixture(autouse=True)
@@ -197,6 +199,49 @@ async def test_concurrent_requests_for_one_prefix_list_and_create_once():
 
 
 @pytest.mark.asyncio
+async def test_async_created_cache_is_reused_by_a_later_request():
+    client: Final = MagicMock(spec=AsyncHTTPHandler)
+    client.get = AsyncMock(return_value=_response({}))
+    client.post = AsyncMock(return_value=_response(_created("cachedContents/1", _expire_time(60))))
+
+    first: Final = await _async_call(client)
+    client.get = AsyncMock(side_effect=AssertionError("a known cache must not be listed again"))
+    second: Final = await _async_call(client)
+
+    assert (first[2], second[2]) == ("cachedContents/1", "cachedContents/1")
+
+
+@pytest.mark.asyncio
+async def test_async_listed_cache_about_to_expire_is_not_used():
+    client: Final = MagicMock(spec=AsyncHTTPHandler)
+    key: Final = vertex_ai_context_caching.local_cache_obj.get_cache_key(
+        messages=_messages()[:1], tools=None, tool_choice=None, model="gemini-3.1-pro"
+    )
+    client.get = AsyncMock(
+        return_value=_response(
+            {"cachedContents": [{"name": "cachedContents/stale", "displayName": key, "expireTime": _expire_time(3)}]}
+        )
+    )
+    client.post = AsyncMock(return_value=_response(_created("cachedContents/fresh", _expire_time(60))))
+
+    assert (await _async_call(client))[2] == "cachedContents/fresh"
+
+
+@pytest.mark.asyncio
+async def test_async_create_http_error_surfaces_its_status_code():
+    client: Final = MagicMock(spec=AsyncHTTPHandler)
+    client.get = AsyncMock(return_value=_response({}))
+    request: Final = httpx.Request("POST", "https://vertex.test/v1/projects/p/locations/us/cachedContents")
+    failed: Final = httpx.Response(429, request=request, text="RESOURCE_EXHAUSTED")
+    client.post = AsyncMock(return_value=failed)
+
+    with pytest.raises(VertexAIError) as raised:
+        await _async_call(client)
+
+    assert raised.value.status_code == 429
+
+
+@pytest.mark.asyncio
 async def test_waiters_resolve_on_their_own_when_the_first_request_fails():
     client: Final = MagicMock(spec=AsyncHTTPHandler)
 
@@ -229,10 +274,20 @@ def test_parse_expire_time_accepts_nanosecond_precision():
     assert _parse_expire_time(None) is None
 
 
+def test_parse_expire_time_reads_a_missing_offset_as_utc():
+    assert _parse_expire_time("2026-10-14T18:06:21") == datetime(2026, 10, 14, 18, 6, 21, tzinfo=timezone.utc).timestamp()
+
+
+def test_cache_expiring_within_the_margin_is_not_remembered():
+    known_cached_contents.remember(_SCOPE, "key", "cachedContents/soon", _expire_time(3))
+
+    assert known_cached_contents.get(_SCOPE, "key") is None
+
+
 def test_registry_is_bounded():
     with patch(f"{_MODULE}.MAX_KNOWN_CACHED_CONTENTS", 3):
         for index in range(5):
-            known_cached_contents.remember("scope", f"key-{index}", f"cachedContents/{index}", _expire_time(60))
+            known_cached_contents.remember(_SCOPE, f"key-{index}", f"cachedContents/{index}", _expire_time(60))
 
-    assert known_cached_contents.get("scope", "key-0") is None
-    assert known_cached_contents.get("scope", "key-4") == "cachedContents/4"
+    assert known_cached_contents.get(_SCOPE, "key-0") is None
+    assert known_cached_contents.get(_SCOPE, "key-4") == "cachedContents/4"
