@@ -63,8 +63,8 @@ if TYPE_CHECKING:
 else:
     ResponseText = str  # Fallback for ResponseText import
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+from litellm.litellm_core_utils.get_llm_provider_logic import is_openai_compatible_endpoint
 from litellm.llms.openai.data_residency import infer_openai_data_residency
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.responses.main import *
 from litellm.types.responses.streaming_websocket import ResponsesWebSocketRequestDefaults
 from litellm.types.router import GenericLiteLLMParams
@@ -300,9 +300,7 @@ async def aresponses_api_with_mcp(
             served_tools=original_mcp_tools,
             **kwargs,
         )
-        await mcp_streaming_response._create_initial_response_iterator()
-        if mcp_streaming_response._initial_creation_error is not None:
-            raise mcp_streaming_response._initial_creation_error
+        await mcp_streaming_response.start_initial_response()
         return mcp_streaming_response
 
     # Determine if we should auto-execute tools
@@ -1436,7 +1434,7 @@ def responses(
         current_reasoning: Final = cast(  # cast-ok: prompt-managed reasoning arrives as a plain dict
             Reasoning | None, local_vars.get("reasoning")
         )
-        reasoning_effort: Final = local_vars.get("reasoning_effort")
+        reasoning_effort: Final[object] = local_vars.get("reasoning_effort")
         request_reasoning: Final = (
             LiteLLMResponsesTransformationHandler().map_reasoning_effort(reasoning_effort)
             if current_reasoning is None and reasoning_effort is not None
@@ -2480,6 +2478,13 @@ def _build_responses_websocket_request_defaults(kwargs: Mapping[str, object]) ->
     )
 
 
+def _websocket_custom_llm_provider(custom_llm_provider: str | None, api_base: str | None) -> str | None:
+    is_openai_on_known_provider_host: Final = (
+        custom_llm_provider == "openai" and api_base is not None and is_openai_compatible_endpoint(api_base)
+    )
+    return None if is_openai_on_known_provider_host else custom_llm_provider
+
+
 @client
 async def _aresponses_websocket(
     model: str,
@@ -2510,6 +2515,7 @@ async def _aresponses_websocket(
         dynamic_api_base,
     ) = litellm.get_llm_provider(
         model=model,
+        custom_llm_provider=_websocket_custom_llm_provider(litellm_params.custom_llm_provider, api_base),
         api_base=api_base,
         api_key=api_key,
         litellm_params=litellm_params,
@@ -2531,21 +2537,17 @@ async def _aresponses_websocket(
     )
 
     resolved_api_base: Final = dynamic_api_base or litellm_params.api_base or litellm.api_base or None
-    responses_api_provider_config: BaseResponsesAPIConfig | None = None
-    if _custom_llm_provider is not None:
-        responses_api_provider_config = ProviderConfigManager.get_provider_responses_api_config(
+    responses_api_provider_config: Final = (
+        None
+        if _custom_llm_provider is None
+        else ProviderConfigManager.get_provider_responses_api_config(
             model=resolved_model,
             provider=litellm.LlmProviders(_custom_llm_provider),
             api_base=resolved_api_base,
         )
-
-    resolved_api_key: Final = (
-        dynamic_api_key
-        or litellm_params.api_key
-        or litellm.api_key
-        or litellm.openai_key
-        or get_secret_str("OPENAI_API_KEY")
     )
+
+    resolved_api_key: Final = api_key or dynamic_api_key
 
     # Extract params that we're passing explicitly to avoid duplicates in **kwargs
     _explicit_keys: Final = {

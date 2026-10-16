@@ -9,7 +9,7 @@ import asyncio
 import contextvars
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from functools import partial
-from typing import Any, Final, cast
+from typing import Final, cast
 
 from pydantic import TypeAdapter
 
@@ -144,7 +144,9 @@ def _with_deployment_output_effort(
 ) -> Mapping[str, object]:
     deployment_model_info: Final = kwargs.get("model_info")
     translated: Final = (
-        with_adaptive_thinking_as_effort(params, model=model, custom_llm_provider=custom_llm_provider)
+        with_adaptive_thinking_as_effort(
+            params, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
+        )
         if deployment_rounds_reasoning_effort(deployment_model_info)
         else params
     )
@@ -348,7 +350,7 @@ async def anthropic_messages(
     client: AsyncHTTPHandler | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> AnthropicMessagesResponse | Iterator[bytes] | AsyncIterator[Any]:
+) -> AnthropicMessagesResponse | Iterator[bytes] | AsyncIterator[object]:
     """
     Async: Make llm api request in Anthropic /messages API spec.
 
@@ -525,8 +527,8 @@ def anthropic_messages_handler(
 ) -> (
     AnthropicMessagesResponse
     | Iterator[bytes]
-    | AsyncIterator[Any]
-    | Coroutine[Any, Any, AnthropicMessagesResponse | AsyncIterator[Any] | Iterator[bytes]]
+    | AsyncIterator[object]
+    | Coroutine[object, None, AnthropicMessagesResponse | AsyncIterator[object] | Iterator[bytes]]
 ):
     """
     Makes Anthropic `/v1/messages` API calls In the Anthropic API Spec

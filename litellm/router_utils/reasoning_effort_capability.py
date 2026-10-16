@@ -176,11 +176,11 @@ def deployment_rounds_thinking_budget(deployment_model_info: object, custom_llm_
 
 
 def with_adaptive_thinking_as_effort(
-    params: Mapping[str, object], *, model: str, custom_llm_provider: str
+    params: Mapping[str, object], *, model: str, custom_llm_provider: str, drop_params: bool
 ) -> Mapping[str, object]:
     translated: Final = dict(params)
     AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
-        model=model, optional_params=translated, custom_llm_provider=custom_llm_provider
+        model=model, optional_params=translated, custom_llm_provider=custom_llm_provider, drop_params=drop_params
     )
     return translated
 
@@ -190,7 +190,7 @@ def thinking_budget_effort(thinking: object, *, model: str, custom_llm_provider:
         return reasoning_effort_from_thinking(thinking, drop_params=drop_params)
     adaptive_config: Final = as_str_mapping(
         with_adaptive_thinking_as_effort(
-            {"thinking": thinking}, model=model, custom_llm_provider=custom_llm_provider
+            {"thinking": thinking}, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
         ).get("output_config")
     )
     if adaptive_config is not None:
@@ -201,23 +201,28 @@ def thinking_budget_effort(thinking: object, *, model: str, custom_llm_provider:
     return reasoning_effort_from_thinking(thinking, drop_params=drop_params)
 
 
-def provider_reads_thinking(thinking: object, *, model: str, custom_llm_provider: str) -> bool:
+def provider_reads_thinking(thinking: object, *, model: str, custom_llm_provider: str, drop_params: bool) -> bool:
     if custom_llm_provider in _PROVIDERS_SENDING_THINKING_AS_EFFORT:
         return False
     if "output_config" in with_adaptive_thinking_as_effort(
-        {"thinking": thinking}, model=model, custom_llm_provider=custom_llm_provider
+        {"thinking": thinking}, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
     ):
         return True
     return "thinking" in (get_supported_openai_params(model=model, custom_llm_provider=custom_llm_provider) or ())
 
 
 def adaptive_thinking_beside_effort(
-    thinking: AnthropicThinkingParam | None, effort: object, *, model: str, custom_llm_provider: str
+    thinking: AnthropicThinkingParam | None,
+    effort: object,
+    *,
+    model: str,
+    custom_llm_provider: str,
+    drop_params: bool,
 ) -> AnthropicThinkingParam | None:
     if effort is None or effort == "none":
         return None
     translated: Final = with_adaptive_thinking_as_effort(
-        {"thinking": thinking}, model=model, custom_llm_provider=custom_llm_provider
+        {"thinking": thinking}, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
     )
     return thinking if "output_config" in translated else None
 

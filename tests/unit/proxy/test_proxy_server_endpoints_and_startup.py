@@ -33,6 +33,7 @@ from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import (
+    AwsErrorTypeProxyException,
     LitellmUserRoles,
     ModelAccessDeniedProxyException,
     ProxyErrorTypes,
@@ -43,7 +44,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.login_throttle import LoginThrottle
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import RequestRateLimiterStash
-from litellm.proxy.proxy_server import app, initialize, openai_exception_handler
+from litellm.proxy.proxy_server import app, aws_error_type_exception_handler, initialize, openai_exception_handler
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._master_key import MASTER_KEY
 
@@ -11859,6 +11860,29 @@ async def test_openai_exception_handler_no_denial_log_for_plain_proxy_exception(
 
 
 @pytest.mark.asyncio
+async def test_aws_error_type_exception_handler_adds_the_aws_message_and_header():
+    error: Final = ProxyException(
+        message="synthetic policy says no",
+        type="invalid_request_error",
+        param=None,
+        code=400,
+        headers={"x-litellm-call-id": "call-1"},
+    )
+
+    response: Final = await aws_error_type_exception_handler(
+        _http_request_scope(), AwsErrorTypeProxyException(error, "ValidationException")
+    )
+
+    assert response.status_code == 400
+    assert response.headers["x-amzn-errortype"] == "ValidationException"
+    assert response.headers["x-litellm-call-id"] == "call-1"
+    assert json.loads(response.body) == {
+        "message": "synthetic policy says no",
+        "error": {"message": "synthetic policy says no", "type": "invalid_request_error", "param": None, "code": "400"},
+    }
+
+
+@pytest.mark.asyncio
 async def test_realtime_model_access_denial_logs_sanitized_internal_message(caplog):
     reservation = {"reserved_cost": 0.0, "input_cost": 0.0, "finalized": False, "entries": []}
 
@@ -12588,6 +12612,7 @@ def test_dump_redacted_config_serializes_non_json_native_values():
 async def test_update_config_general_settings_emits_audit_log(monkeypatch):
     import litellm.proxy.proxy_server as proxy_server_module
     from litellm.proxy._types import ConfigFieldUpdate
+    from litellm.proxy.management_helpers.audit_logs import drain_audit_tasks
     from litellm.proxy.proxy_server import update_config_general_settings
 
     existing = {"max_parallel_requests": 5, "some_api_key": "sk-stored-secret"}
@@ -12611,6 +12636,7 @@ async def test_update_config_general_settings_emits_audit_log(monkeypatch):
     )
     # Audit is scheduled via asyncio.create_task; yield so it runs.
     await asyncio.sleep(0)
+    await drain_audit_tasks()
 
     fake.db.litellm_auditlog.create.assert_awaited_once()
     written = fake.db.litellm_auditlog.create.call_args.kwargs["data"]
@@ -12980,6 +13006,7 @@ async def test_update_config_general_settings_applies_ssrf_globals(monkeypatch):
 async def test_delete_config_general_settings_emits_deleted_audit_log(monkeypatch):
     import litellm.proxy.proxy_server as proxy_server_module
     from litellm.proxy._types import ConfigFieldDelete
+    from litellm.proxy.management_helpers.audit_logs import drain_audit_tasks
     from litellm.proxy.proxy_server import delete_config_general_settings
 
     existing = {"max_parallel_requests": 5}
@@ -12999,6 +13026,7 @@ async def test_delete_config_general_settings_emits_deleted_audit_log(monkeypatc
     )
     # Audit is scheduled via asyncio.create_task; yield so it runs.
     await asyncio.sleep(0)
+    await drain_audit_tasks()
 
     fake.db.litellm_auditlog.create.assert_awaited_once()
     written = fake.db.litellm_auditlog.create.call_args.kwargs["data"]
