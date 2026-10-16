@@ -37,7 +37,11 @@ def reasoning_effort_from_thinking(thinking: object, *, drop_params: bool) -> Op
         return reasoning_effort_from_thinking_budget(budget)
     if drop_params:
         return None
-    raise UnsupportedParamsError(
+    raise non_numeric_thinking_budget_error(budget)
+
+
+def non_numeric_thinking_budget_error(budget: object) -> UnsupportedParamsError:
+    return UnsupportedParamsError(
         message=(
             f"thinking.budget_tokens must be a number, got {type(budget).__name__}. To drop it, set "
             "`litellm.drop_params=True`, or `drop_params: true` under `litellm_settings` on the proxy"

@@ -8796,6 +8796,122 @@ def test_a_default_effort_beside_a_thinking_budget_sends_no_effort_on_a_declarin
     assert defaulted == adaptive_alone
 
 
+def _bedrock_invoke_body_sent(
+    respx_mock: respx.MockRouter, model_info: Mapping[str, object] | None, **params: object
+) -> Mapping[str, object]:
+    route: Final = respx_mock.post(
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/us.anthropic.claude-opus-5-5/invoke"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-opus-5-5",
+                "content": [{"type": "text", "text": "hi"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+    )
+    completion(
+        model="bedrock/invoke/us.anthropic.claude-opus-5-5",
+        messages=_HELLO,
+        model_info=model_info,
+        max_tokens=4096,
+        api_key="test-bedrock-token",
+        aws_region_name="us-west-2",
+        **params,
+    )
+    return json.loads(route.calls.last.request.content)
+
+
+@pytest.mark.parametrize("display", ["updates", "summarized"])
+@pytest.mark.parametrize(
+    "body_sent", [_anthropic_chat_body_sent, _bedrock_converse_request_fields_sent, _bedrock_invoke_body_sent]
+)
+def test_an_output_config_effort_beside_a_thinking_budget_reaches_a_declaring_claude_deployment_unchanged(
+    respx_mock: respx.MockRouter, body_sent: Callable[..., Mapping[str, object]], display: str
+) -> None:
+    params: Final = {
+        "thinking": {"type": "enabled", "budget_tokens": 2048, "display": display},
+        "output_config": {"effort": "high"},
+    }
+
+    declared: Final = body_sent(respx_mock, _OPUS_DECLARING_LOW_AND_HIGH, **params)
+    undeclared: Final = body_sent(respx_mock, None, **params)
+
+    assert undeclared["output_config"] == {"effort": "high"}
+    assert declared == undeclared
+
+
+@pytest.mark.parametrize("dropped_effort", ["none", "HIGH"])
+@pytest.mark.parametrize("body_sent", [_anthropic_chat_body_sent, _bedrock_converse_request_fields_sent])
+def test_drop_params_leaves_the_thinking_budget_to_set_the_effort_beside_a_dropped_level(
+    respx_mock: respx.MockRouter, body_sent: Callable[..., Mapping[str, object]], dropped_effort: str
+) -> None:
+    budget: Final = {"type": "enabled", "budget_tokens": 2048}
+
+    dropped: Final = body_sent(
+        respx_mock, _OPUS_DECLARING_LOW_AND_HIGH, thinking=budget, reasoning_effort=dropped_effort, drop_params=True
+    )
+    budget_alone: Final = body_sent(respx_mock, _OPUS_DECLARING_LOW_AND_HIGH, thinking=budget, drop_params=True)
+
+    assert budget_alone["output_config"] == {"effort": "high"}
+    assert dropped == budget_alone
+
+
+@pytest.mark.parametrize(
+    "model_info, effort",
+    [(None, {}), (_OPUS_DECLARING_LOW_AND_HIGH, {}), (_OPUS_DECLARING_LOW_AND_HIGH, {"reasoning_effort": "default"})],
+)
+@pytest.mark.parametrize("body_sent", [_anthropic_chat_body_sent, _bedrock_converse_request_fields_sent])
+def test_a_non_numeric_thinking_budget_on_adaptive_claude_is_rejected_with_a_400(
+    respx_mock: respx.MockRouter,
+    body_sent: Callable[..., Mapping[str, object]],
+    model_info: Mapping[str, object] | None,
+    effort: Mapping[str, str],
+) -> None:
+    with pytest.raises(litellm.BadRequestError, match=r"thinking\.budget_tokens must be a number") as rejected:
+        body_sent(respx_mock, model_info, thinking={"type": "enabled", "budget_tokens": "lots"}, **effort)
+
+    assert rejected.value.status_code == 400
+
+
+@pytest.mark.parametrize("model_info", [None, _OPUS_DECLARING_LOW_AND_HIGH])
+@pytest.mark.parametrize("body_sent", [_anthropic_chat_body_sent, _bedrock_converse_request_fields_sent])
+def test_drop_params_drops_a_non_numeric_thinking_budget_on_adaptive_claude(
+    respx_mock: respx.MockRouter,
+    body_sent: Callable[..., Mapping[str, object]],
+    model_info: Mapping[str, object] | None,
+) -> None:
+    dropped: Final = body_sent(
+        respx_mock, model_info, thinking={"type": "enabled", "budget_tokens": "lots"}, drop_params=True
+    )
+    adaptive_alone: Final = body_sent(respx_mock, model_info, thinking={"type": "adaptive"}, drop_params=True)
+
+    assert "output_config" not in adaptive_alone
+    assert dropped == adaptive_alone
+
+
+def test_an_output_config_effort_replaces_a_thinking_budget_the_provider_cannot_read(
+    respx_mock: respx.MockRouter,
+) -> None:
+    sent: Final = _chat_body_sent(
+        respx_mock,
+        "azure_ai/my-kimi",
+        None,
+        _KIMI_DEPLOYMENT,
+        thinking={"type": "enabled", "budget_tokens": 2048},
+        output_config={"effort": "medium"},
+    )
+
+    assert sent["output_config"] == {"effort": "high"}
+    assert "reasoning_effort" not in sent
+    assert "thinking" not in sent
+
+
 @pytest.mark.parametrize("model", ["azure_ai/my-kimi", "hosted_vllm/my-kimi"])
 def test_a_thinking_budget_reaches_a_declaring_deployment_as_its_rounded_effort(
     respx_mock: respx.MockRouter, model: str

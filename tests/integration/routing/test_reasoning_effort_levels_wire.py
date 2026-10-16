@@ -54,6 +54,9 @@ _EMPTY_BUDGET: Final[dict[str, JsonValue]] = {"type": "enabled", "budget_tokens"
 _LONG_BUDGET: Final[dict[str, JsonValue]] = {"type": "enabled", "budget_tokens": "9" * 5000}
 _MISSING_BUDGET: Final[dict[str, JsonValue]] = {"type": "enabled"}
 _DISABLED: Final[dict[str, JsonValue]] = {"type": "disabled"}
+_BUDGET_WITH_UNKNOWN_KEY: Final[dict[str, JsonValue]] = {**_BUDGET, "not_a_thinking_key": True}
+_ADAPTIVE_WITH_UNKNOWN_KEY: Final[dict[str, JsonValue]] = {**_ADAPTIVE, "not_a_thinking_key": True}
+_GEMINI_HIGH_ONLY: Final[Mapping[str, JsonValue]] = MappingProxyType({"reasoning_effort_levels": ["high"]})
 _KIMI_INFO: Final[Mapping[str, JsonValue]] = MappingProxyType({"reasoning_effort_levels": list(KIMI_LEVELS)})
 _CLAUDE_INFO: Final[Mapping[str, JsonValue]] = MappingProxyType({"reasoning_effort_levels": list(CLAUDE_LEVELS)})
 _GPT_INFO: Final[Mapping[str, JsonValue]] = MappingProxyType({"reasoning_effort_levels": list(GPT_LEVELS)})
@@ -120,6 +123,15 @@ def _converse_chat(effort: str, thinking: Mapping[str, JsonValue]) -> Expected:
         "messages": [{"role": "user", "content": [{"text": prompt(marker)}]}],
         "inferenceConfig": {},
         "additionalModelRequestFields": {"thinking": dict(thinking), "output_config": {"effort": effort}},
+        "additionalModelResponseFieldPaths": ["/usage/output_tokens_details"],
+    }
+
+
+def _converse_chat_without_effort(thinking: Mapping[str, JsonValue]) -> Expected:
+    return lambda marker: {
+        "messages": [{"role": "user", "content": [{"text": prompt(marker)}]}],
+        "inferenceConfig": {},
+        "additionalModelRequestFields": {"thinking": dict(thinking)},
         "additionalModelResponseFieldPaths": ["/usage/output_tokens_details"],
     }
 
@@ -202,6 +214,13 @@ def _gemini_messages(level: str | None) -> Expected:
         }
 
     return expected
+
+
+def _gemini_chat(level: str) -> Expected:
+    return lambda marker: {
+        "contents": [{"role": "user", "parts": [{"text": prompt(marker)}]}],
+        "generationConfig": {"thinkingConfig": {"thinkingLevel": level, "includeThoughts": True}},
+    }
 
 
 def _responses_bridged_messages_without_effort() -> Expected:
@@ -1502,6 +1521,102 @@ CELLS: Final[Mapping[str, Cell]] = MappingProxyType(
             {"reasoning_effort": "medium", "thinking": _LONG_BUDGET},
             _openai_compatible("high"),
             _VLLM_CHAT,
+        ),
+        "chat-anthropic-default-effort-beside-budget-sends-no-effort": Cell(
+            CHAT,
+            "anthropic",
+            _CLAUDE_INFO,
+            {"reasoning_effort": "default", "thinking": _BUDGET},
+            _anthropic_chat_without_effort(_ADAPTIVE),
+            _ANTHROPIC,
+        ),
+        "chat-anthropic-output-config-default-beside-budget-sends-no-effort": Cell(
+            CHAT,
+            "anthropic",
+            _CLAUDE_INFO,
+            {"output_config": {"effort": "default"}, "thinking": _BUDGET},
+            _anthropic_chat_without_effort(_ADAPTIVE),
+            _ANTHROPIC,
+        ),
+        "chat-anthropic-output-config-low-beside-xhigh-budget-keeps-low": Cell(
+            CHAT,
+            "anthropic",
+            _CLAUDE_INFO,
+            {"output_config": {"effort": "low"}, "thinking": _XHIGH_BUDGET},
+            _anthropic_chat("low", _ADAPTIVE),
+            _ANTHROPIC,
+        ),
+        "chat-anthropic-unknown-effort-drop-params-beside-budget-keeps-the-budget-effort": Cell(
+            CHAT,
+            "anthropic",
+            _CLAUDE_INFO,
+            {"reasoning_effort": "turbo", "thinking": _BUDGET, "drop_params": True},
+            _anthropic_chat("high", _ADAPTIVE),
+            _ANTHROPIC,
+        ),
+        "chat-anthropic-default-beside-budget-drops-unknown-thinking-key-under-drop-params": Cell(
+            CHAT,
+            "anthropic",
+            _CLAUDE_INFO,
+            {"reasoning_effort": "default", "thinking": _BUDGET_WITH_UNKNOWN_KEY, "drop_params": True},
+            _anthropic_chat_without_effort(_ADAPTIVE),
+            _ANTHROPIC,
+        ),
+        "chat-anthropic-default-beside-budget-keeps-unknown-thinking-key": Cell(
+            CHAT,
+            "anthropic",
+            _CLAUDE_INFO,
+            {"reasoning_effort": "default", "thinking": _BUDGET_WITH_UNKNOWN_KEY},
+            _anthropic_chat_without_effort(_ADAPTIVE_WITH_UNKNOWN_KEY),
+            _ANTHROPIC,
+        ),
+        "chat-converse-default-effort-beside-budget-sends-no-effort": Cell(
+            CHAT,
+            "bedrock_converse",
+            _CLAUDE_INFO,
+            {"reasoning_effort": "default", "thinking": _BUDGET},
+            _converse_chat_without_effort(_ADAPTIVE),
+            _CONVERSE,
+        ),
+        "messages-anthropic-budget-drops-unknown-thinking-key-under-drop-params": Cell(
+            MESSAGES,
+            "anthropic",
+            _CLAUDE_INFO,
+            {"thinking": _BUDGET_WITH_UNKNOWN_KEY, "drop_params": True},
+            _native_messages({"effort": "high"}, _ADAPTIVE),
+            _ANTHROPIC,
+        ),
+        "messages-anthropic-budget-keeps-unknown-thinking-key": Cell(
+            MESSAGES,
+            "anthropic",
+            _CLAUDE_INFO,
+            {"thinking": _BUDGET_WITH_UNKNOWN_KEY},
+            _native_messages({"effort": "high"}, _ADAPTIVE_WITH_UNKNOWN_KEY),
+            _ANTHROPIC,
+        ),
+        "messages-anthropic-output-config-default-beside-budget-sends-no-effort": Cell(
+            MESSAGES,
+            "anthropic",
+            _CLAUDE_INFO,
+            {"thinking": _BUDGET, "output_config": {"effort": "default"}},
+            _native_messages(None, _ADAPTIVE),
+            _ANTHROPIC,
+        ),
+        "chat-gemini-declared-low-with-summary-rounds-up": Cell(
+            CHAT,
+            "gemini",
+            _GEMINI_HIGH_ONLY,
+            {"reasoning_effort": "low", "reasoning_summary": "auto"},
+            _gemini_chat("high"),
+            _GEMINI,
+        ),
+        "responses-gemini-declared-low-with-summary-rounds-up": Cell(
+            RESPONSES,
+            "gemini",
+            _GEMINI_HIGH_ONLY,
+            {"reasoning": {"effort": "low", "summary": "auto"}},
+            _gemini_chat("high"),
+            _GEMINI,
         ),
     }
 )

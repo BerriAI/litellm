@@ -237,8 +237,14 @@ def adaptive_thinking_without_effort(
     return thinking if adaptive is None else adaptive
 
 
-def clears_effort(requested: RequestedReasoningEffort, resolved: RequestedReasoningEffort) -> bool:
-    return _requested_level(requested) is not None and _requested_level(resolved) is None
+def _keeps_effort(requested: RequestedReasoningEffort, resolved: RequestedReasoningEffort) -> bool:
+    """A level dropped under drop_params counts as never sent, like any dropped param, so a thinking
+    budget beside it still decides the effort. default is kept even though it resolves to no level,
+    since the caller asked for the provider's own default in place of the budget's."""
+    requested_level: Final = _requested_level(requested)
+    return requested_level is not None and (
+        requested_level == _DEFAULT_EFFORT or _requested_level(resolved) is not None
+    )
 
 
 def _rounding(value: object) -> ReasoningEffortRounding | None:
@@ -337,6 +343,7 @@ def resolve_deployment_reasoning_effort(
 class ChatReasoning:
     effort: DeploymentReasoningEffort
     thinking: Mapping[object, object] | AnthropicThinkingParam | None
+    output_config: RequestedReasoningEffort
 
 
 def resolve_chat_reasoning(
@@ -350,44 +357,51 @@ def resolve_chat_reasoning(
     model_group: str | None,
     drop_params: bool,
 ) -> ChatReasoning:
-    rounds_onto_levels: Final = thinking is not None and deployment_rounds_thinking_budget(
-        deployment_model_info, custom_llm_provider
-    )
-    read_natively: Final = rounds_onto_levels and provider_reads_thinking(
-        thinking, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
-    )
-    output_effort_requested: Final = (
-        read_natively and output_config is not None and output_config.get(_EFFORT_KEY) is not None
-    )
-    budget_effort: Final = (
-        thinking_budget_effort(thinking, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params)
-        if reasoning_effort is None and not output_effort_requested and rounds_onto_levels
-        else None
-    )
-    effort: Final = resolve_deployment_reasoning_effort(
-        reasoning_effort if reasoning_effort is not None else budget_effort,
-        model=model,
-        custom_llm_provider=custom_llm_provider,
-        deployment_model_info=deployment_model_info,
-        model_group=model_group,
-        drop_params=drop_params,
-    )
-    if reasoning_effort is not None and rounds_onto_levels and not read_natively:
-        return ChatReasoning(effort=effort, thinking=None)
-    if output_effort_requested or (read_natively and clears_effort(reasoning_effort, effort.value)):
-        return ChatReasoning(
-            effort=effort,
-            thinking=adaptive_thinking_without_effort(
-                thinking, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
-            ),
+    def resolve(requested: RequestedReasoningEffort) -> DeploymentReasoningEffort:
+        return resolve_deployment_reasoning_effort(
+            requested,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            deployment_model_info=deployment_model_info,
+            model_group=model_group,
+            drop_params=drop_params,
         )
-    if budget_effort is None:
-        return ChatReasoning(effort=effort, thinking=thinking)
+
+    explicit: Final = resolve(reasoning_effort)
+    output: Final = resolve(output_config).value
+    if thinking is None or not deployment_rounds_thinking_budget(deployment_model_info, custom_llm_provider):
+        return ChatReasoning(effort=explicit, thinking=thinking, output_config=output)
+    explicit_kept: Final = _keeps_effort(reasoning_effort, explicit.value)
+    if not explicit_kept and not _keeps_effort(output_config, output):
+        budget_level: Final = thinking_budget_effort(
+            thinking, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
+        )
+        budget_effort: Final = resolve(budget_level)
+        return ChatReasoning(
+            effort=budget_effort,
+            thinking=thinking
+            if budget_level is None
+            else adaptive_thinking_beside_effort(
+                thinking,
+                budget_effort.value,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                drop_params=drop_params,
+            ),
+            output_config=output,
+        )
+    if not provider_reads_thinking(
+        thinking, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
+    ):
+        return ChatReasoning(effort=explicit, thinking=None, output_config=output)
+    if _requested_level(reasoning_effort if explicit_kept else output_config) != _DEFAULT_EFFORT:
+        return ChatReasoning(effort=explicit, thinking=thinking, output_config=output)
     return ChatReasoning(
-        effort=effort,
-        thinking=adaptive_thinking_beside_effort(
-            thinking, effort.value, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
+        effort=explicit,
+        thinking=adaptive_thinking_without_effort(
+            thinking, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
         ),
+        output_config=output,
     )
 
 

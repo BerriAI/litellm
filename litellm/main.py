@@ -136,7 +136,6 @@ from litellm.router_utils.reasoning_effort_capability import (
     model_group_from_metadata,
     reasoning_effort_needs_allowing,
     resolve_chat_reasoning,
-    resolve_deployment_reasoning_effort,
 )
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.types.completion import (
@@ -5558,14 +5557,7 @@ def completion(
             drop_params=drop_unsupported_reasoning,
         )
         resolved_reasoning_effort: Final = chat_reasoning.effort.value
-        resolved_output_config: Final = resolve_deployment_reasoning_effort(
-            requested_output_config,
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            deployment_model_info=routing_kwargs.get("model_info"),
-            model_group=reasoning_model_group,
-            drop_params=drop_unsupported_reasoning,
-        ).value
+        resolved_output_config: Final = chat_reasoning.output_config
         provider_params: Final = (
             non_default_params
             if resolved_output_config is requested_output_config
