@@ -295,6 +295,35 @@ describe("ModelInfoView", () => {
     expect(modelInfoArg.id).toBe("123");
   });
 
+  it("does not echo the displayed mode into the test connection request", async () => {
+    // /model/info fills model_info.mode in from the cost map for display. Sending that
+    // value back would pin the probe to it and skip the mode the provider requires,
+    // so the page forwards only the row's id and lets the proxy resolve the mode.
+    const user = userEvent.setup();
+    const displayedModel = {
+      ...defaultModelData,
+      litellm_params: { ...defaultModelData.litellm_params, model: "bedrock_mantle/anthropic.claude-haiku-4-5" },
+      model_info: { ...defaultModelData.model_info, mode: "chat", key: "anthropic.claude-haiku-4-5" },
+    };
+    mockUseModelsInfo.mockReturnValue({ data: { data: [displayedModel] }, isLoading: false, error: null });
+    mockModelInfoV1Call.mockResolvedValue({ data: [displayedModel] });
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByText("Model Settings")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /test connection/i }));
+
+    await waitFor(() => {
+      expect(mockTestConnectionRequest).toHaveBeenCalled();
+    });
+
+    const [, , modelInfoArg, modeArg] = mockTestConnectionRequest.mock.calls[0];
+    expect(modelInfoArg).toEqual({ id: "123" });
+    expect(modeArg).toBeUndefined();
+  });
+
   it("should display error notification when connection test fails", async () => {
     const user = userEvent.setup();
     mockTestConnectionRequest.mockRejectedValue(new Error("Connection failed"));
@@ -1513,6 +1542,27 @@ describe("ModelInfoView", () => {
       expect(screen.getByTestId("reuse-credentials-button")).toBeInTheDocument();
     });
 
+    it("names the attached credential by its display name in the re-use dialog", async () => {
+      mockCredentialListCall.mockResolvedValue({
+        credentials: [
+          {
+            credential_name: "selected-credential",
+            display_name: "Selected Label",
+            credential_values: {},
+            credential_info: {},
+          },
+        ],
+      } as never);
+      const user = userEvent.setup();
+      render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+      await user.click(await screen.findByTestId("reuse-credentials-button"));
+
+      const dialog = await screen.findByRole("dialog", { name: "Using Existing Credential" });
+      await vi.waitFor(() => expect(dialog).toHaveTextContent("Selected Label"));
+      expect(dialog).toHaveTextContent("selected-credential");
+    });
+
     it.each([["auto_router/adaptive_router"], ["auto_router/quality_router"]])(
       "offers no Test Connection for %s, whose targets it cannot build",
       async (model) => {
@@ -1548,13 +1598,13 @@ describe("ModelInfoView", () => {
     const openCredentialSelect = async (user: ReturnType<typeof userEvent.setup>, triggerText?: string) => {
       const trigger = screen
         .getAllByRole("combobox")
-        .filter((element) => element.getAttribute("data-slot") === "select-trigger")
-        .find((element) => triggerText === undefined || element.textContent?.includes(triggerText));
+        .filter((element) => element.getAttribute("placeholder") === "Select or search for existing credentials")
+        .find((element) => triggerText === undefined || (element as HTMLInputElement).value.includes(triggerText));
       if (trigger === undefined) {
         throw new Error(`Could not find credential selector${triggerText ? ` with ${triggerText}` : ""}`);
       }
       await user.click(trigger);
-      await screen.findByRole("combobox", { expanded: true });
+      await screen.findByRole("option", { name: "None" });
     };
 
     const save = async (user: ReturnType<typeof userEvent.setup>) => {
@@ -1645,13 +1695,54 @@ describe("ModelInfoView", () => {
       const [cacheRead, cacheWrite] = screen.getAllByPlaceholderText("Defaults to Input Cost if blank");
       await user.type(cacheRead, "5");
       await user.type(cacheWrite, "9");
+      await user.type(screen.getByPlaceholderText("Defaults to the cost map 1 hour rate, else Cache Write Cost"), "15");
 
       const payload = await save(user);
 
-      expect(payload.litellm_params).toMatchObject({
+      const expectedPricing = {
         output_cost_per_token: 0.000012,
         cache_read_input_token_cost: 0.000005,
         cache_creation_input_token_cost: 0.000009,
+        cache_creation_input_token_cost_above_1hr: 0.000015,
+      };
+      expect(payload.litellm_params).toMatchObject(expectedPricing);
+    });
+
+    describe("1 hour cache write tier", () => {
+      const withCacheWriteTiers = {
+        ...defaultModelData,
+        litellm_params: {
+          ...defaultModelData.litellm_params,
+          cache_creation_input_token_cost: 0.00000375,
+          cache_creation_input_token_cost_above_1hr: 0.000006,
+        },
+      };
+
+      beforeEach(() => {
+        mockUseModelsInfo.mockReturnValue({ data: { data: [withCacheWriteTiers] }, isLoading: false, error: null });
+        mockModelInfoV1Call.mockResolvedValue({ data: [withCacheWriteTiers] });
+      });
+
+      it("shows both configured cache write rates per million tokens", async () => {
+        render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+        expect(await screen.findByText("Cache Write Cost (1 hour, per 1M tokens)")).toBeInTheDocument();
+        expect(screen.getByText("3.7500")).toBeInTheDocument();
+        expect(screen.getByText("6.0000")).toBeInTheDocument();
+      });
+
+      it("clearing the 1 hour rate sends an explicit null and keeps the 5 minute rate", async () => {
+        const user = userEvent.setup();
+        await enterEditMode(user);
+
+        const oneHour = screen.getByPlaceholderText("Defaults to the cost map 1 hour rate, else Cache Write Cost");
+        expect(oneHour).toHaveValue(6);
+        await user.clear(oneHour);
+
+        const payload = await save(user);
+
+        expect(payload.litellm_params.cache_creation_input_token_cost_above_1hr).toBeNull();
+        expect(payload.litellm_params.cache_creation_input_token_cost).toBe(0.00000375);
       });
     });
 
@@ -1808,8 +1899,8 @@ describe("ModelInfoView", () => {
       const user = userEvent.setup();
       await enterEditMode(user);
 
-      await openSelect(user, "selected-credential");
-      await user.click(await screen.findByText("other-credential"));
+      await openCredentialSelect(user, "selected-credential");
+      await user.click(await screen.findByRole("option", { name: "other-credential" }));
 
       const payload = await save(user);
 
@@ -1873,11 +1964,10 @@ describe("ModelInfoView", () => {
       await user.click(screen.getByRole("button", { name: /cancel/i }));
       await user.click(await screen.findByRole("button", { name: /edit settings/i }));
 
-      const credentialTrigger: HTMLElement = screen
+      const credentialTrigger = screen
         .getAllByRole("combobox")
-        .filter((element) => element.getAttribute("data-slot") === "select-trigger")
-        .at(0) as HTMLElement;
-      expect(credentialTrigger).toHaveTextContent("selected-credential");
+        .find((element) => element.getAttribute("placeholder") === "Select or search for existing credentials");
+      expect(credentialTrigger).toHaveValue("selected-credential");
     });
 
     it("shows Manual in read mode after saving None", async () => {

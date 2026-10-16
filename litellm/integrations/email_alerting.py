@@ -8,9 +8,9 @@ from typing import Final
 
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.models.team import LiteLLM_TeamTable
-from litellm.proxy._types import WebhookEvent
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
+from litellm.types.integrations.slack_alerting import WebhookEvent
 
 # we use this for the email header, please send a test email if you change this. verify it looks good on email
 LITELLM_LOGO_URL: Final = "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
@@ -73,11 +73,7 @@ async def get_team_admin_emails(team: LiteLLM_TeamTable, prisma_client: object) 
     admins: Final = tuple(member for member in team.members_with_roles if member.role == "admin")
     admin_ids: Final = frozenset(member.user_id for member in admins if member.user_id)
     rows: Final = (
-        await UserRepository(prisma_client).find_many(
-            where={"user_id": {"in": sorted(admin_ids)}}  # mutable-ok: prisma filter payloads are plain dict/list
-        )
-        if admin_ids
-        else ()
+        await UserRepository(prisma_client).find_many(where={"user_id": {"in": sorted(admin_ids)}}) if admin_ids else ()
     )
     record_emails: Final = MappingProxyType({row.user_id: row.user_email for row in rows if row.user_email})
     inline_emails: Final = tuple(

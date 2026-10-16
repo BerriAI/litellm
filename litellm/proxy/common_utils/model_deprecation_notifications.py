@@ -11,7 +11,7 @@ from datetime import date
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import EMAIL_MODEL_DEPRECATION_LOCK_ID
@@ -106,11 +106,15 @@ def _reached(
 
 
 class _TeamScope(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     team_id: str | None = None
     team_public_model_name: str | None = None
 
 
 class _OwnedDeployment(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     model_name: str
     model_info: _TeamScope = Field(default_factory=_TeamScope)
 

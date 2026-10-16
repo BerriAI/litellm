@@ -16,16 +16,18 @@ than as a GitHub Action or on a dedicated VM. Trade-offs:
   clone of litellm plus a cold `uv sync`. That adds a few minutes on
   top of the ~10 minute test run; the job's 12 hour ceiling is nowhere
   near.
-- ⚠️ The Claude Code CLI version under test is pinned in the
-  `Dockerfile` (`CLAUDE_CODE_VERSION` + its checksum). Bumping it is a
-  PR, see the gotchas below.
+- ✅ The Claude Code CLI under test is chosen on every run (the newest
+  npm release published at least 3 days ago) and downloaded
+  checksum-verified, so the matrix follows CLI releases without a PR;
+  see the gotchas for pinning a run.
 
 ## Layout
 
 | File | Purpose |
 | --- | --- |
-| `Dockerfile` | The image Render builds: Debian bookworm-slim plus pinned, checksum-verified `gh`, `uv`, and the Claude Code CLI, with this `tests/e2e/` tree copied to `/opt/litellm/tests/e2e/`. Runs as the non-root user `populator` (uid/gid 1000, which is what Render's secret files are readable by). |
-| `run_daily.sh` | The actual cron job. Resolves versions, clones the worktree, boots the proxy, runs pytest, builds the JSON, opens (or updates) a docs PR, sweeps stale compat-matrix PRs. |
+| `Dockerfile` | The image Render builds: Debian bookworm-slim plus pinned, checksum-verified `gh` and `uv`, with this `tests/e2e/` tree copied to `/opt/litellm/tests/e2e/`. Runs as the non-root user `populator` (uid/gid 1000, which is what Render's secret files are readable by). |
+| `run_daily.sh` | The actual cron job. Resolves versions, clones the worktree, installs the Claude Code CLI under test, boots the proxy, runs pytest, builds the JSON, opens (or updates) a docs PR, sweeps stale compat-matrix PRs. |
+| `install_claude_code.sh` | Downloads one Claude Code release (`<version> <dest-dir>`) from the vendor's native release channel, verifies it against the sha256 in that release's `manifest.json`, and refuses a binary whose `--version` disagrees. Run by the cron and by the `compat-matrix-image` GitHub workflow. |
 | `build_matrix.py` | Tiny Python CLI that wraps `claude_code.matrix_builder.build_from_paths`. Exists only because the bash script needs *some* way to render the per-cell aggregation, and the builder is already Python. |
 | `check_regressions.py` | Tiny Python CLI that wraps `claude_code.matrix_builder.find_regressions`. Diffs the freshly built matrix against the currently-published one and exits `3` if any cell flipped green→red, which gates auto-merge. |
 | `litellm-compat-matrix.env.example` | The service's env vars, one per line, with what each is for. |
@@ -35,10 +37,7 @@ than as a GitHub Action or on a dedicated VM. Trade-offs:
 1. **Resolves the latest LiteLLM final release tag** (newest bare
    `vX.Y.Z`, skipping `-rc.N`/`-dev.N` pre-releases) by paging the
    GitHub Releases API (`curl | jq`).
-2. **Reads the Claude Code CLI version** via `claude --version`. That
-   is whatever the `Dockerfile` pins; the job never upgrades it on its
-   own.
-3. **Clones the worktree** at `~/litellm-cron-worktree/` (a
+2. **Clones the worktree** at `~/litellm-cron-worktree/` (a
    `--filter=blob:none` clone, so only the checked-out tag's blobs are
    fetched), `git checkout --force <tag>`, then `uv sync --frozen
    --no-install-project` against a uv-managed CPython 3.12 followed by
@@ -52,12 +51,20 @@ than as a GitHub Action or on a dedicated VM. Trade-offs:
    `claude_code/` so the tree's EKS-harness `conftest.py` (whose imports
    the stable venv doesn't install) is never loaded. The tag's own
    `tests/e2e/` is deliberately not used.
+3. **Resolves and installs the Claude Code CLI under test**:
+   `pr_gate_version_resolver.py` (run on the venv, the image has no
+   Python of its own) picks the newest `@anthropic-ai/claude-code` npm
+   release published at least 3 days ago, the same buffer the PR gate
+   uses, unless `CLAUDE_CODE_VERSION` pins one, and
+   `install_claude_code.sh` downloads that release's `linux-x64` binary
+   into the run's scratch dir, verified against the release manifest.
 4. **Boots the proxy** as a `setsid` background process on port `4100`
    bound to loopback, then polls `/health/liveliness` until it's up.
-5. **Runs pytest** on `tests/e2e/claude_code/` with `LITELLM_PROXY_URL`
-   pointed at the proxy and `COMPAT_RESULTS_PATH` set so the conftest
-   hook writes the per-test results artifact. Test failures become
-   `fail` cells in the JSON, not script errors.
+5. **Runs pytest** on `tests/e2e/claude_code/` with that CLI first on
+   `PATH`, `LITELLM_PROXY_URL` pointed at the proxy, and
+   `COMPAT_RESULTS_PATH` set so the conftest hook writes the per-test
+   results artifact. Test failures become `fail` cells in the JSON, not
+   script errors.
 6. **Builds `compatibility-matrix.json`** by handing the artifact +
    manifest to `build_matrix.py`.
 7. **Opens or updates a docs PR**: `gh repo clone` of `litellm-docs`
@@ -70,7 +77,8 @@ than as a GitHub Action or on a dedicated VM. Trade-offs:
    branch ... already exists" is treated as success). If the JSON is
    byte-identical to what `main` already publishes, the push is skipped
    entirely. These PRs are not gated on a second human review.
-8. **Gates auto-merge on a regression check**: before enabling
+
+   **Auto-merge is gated on a regression check**: before enabling
    auto-merge, `check_regressions.py` diffs the new matrix against the
    one currently on `main`. Auto-merge (`gh pr merge --auto --squash`)
    is only enabled when **no cell flipped green→red** — i.e. every
@@ -82,7 +90,7 @@ than as a GitHub Action or on a dedicated VM. Trade-offs:
    auto-merge a prior same-day run enabled is explicitly disabled — so a
    human reviews before it lands on the public table. The check fails
    *closed*: if it errors, auto-merge is withheld.
-9. **Sweeps stale compat-matrix PRs**: once today's PR exists, every
+8. **Sweeps stale compat-matrix PRs**: once today's PR exists, every
    other open `compat-matrix/*` PR that the publishing account opened
    from a branch on the docs repo itself is closed (and its bot-owned
    branch deleted), so at most one compat-matrix PR is ever open — the
@@ -165,7 +173,8 @@ curl -fsS -X POST "https://api.render.com/v1/services/${CRON_ID}/deploys" \
 curl -fsS "https://api.render.com/v1/services/${CRON_ID}/deploys?limit=1" \
   -H "Authorization: Bearer ${RENDER_API_KEY}"
 
-# A run that does NOT open a PR (first-time validation, CLI bumps):
+# A run that does NOT open a PR (first-time validation, a CLI pinned
+# with CLAUDE_CODE_VERSION):
 # set SKIP_PUBLISH=1 on the service, trigger a run, then remove it.
 # The matrix JSON is printed at the end of the run's log (nothing on
 # the container's disk outlives the run) and saved to
@@ -217,21 +226,25 @@ docker run --rm --platform linux/amd64 \
   or fine-grained Contents:RW + Pull requests:RW). It is delivered as
   a file, not an env var, so pytest, the proxy, and the claude CLI
   never inherit it; manual runs export `GITHUB_TOKEN` instead.
-- **Bumping the Claude Code CLI is a PR.** Change `CLAUDE_CODE_VERSION`
-  in the `Dockerfile` and set `CLAUDE_CODE_SHA256` to the `linux-x64`
-  checksum from
-  `https://downloads.claude.ai/claude-code-releases/<version>/manifest.json`.
-  The first run on a new CLI is the riskiest one: if the new CLI
-  changes its wire format the matrix run can produce systematic
-  failures, so trigger a `SKIP_PUBLISH=1` run before the next scheduled
-  fire. `gh` and `uv` bump the same way, with the checksum from the
-  release's `gh_<version>_checksums.txt` and the tarball's `.sha256`
-  sidecar respectively.
+- **The Claude Code CLI is chosen per run, not pinned.** Each run
+  tests the newest `@anthropic-ai/claude-code` npm release published
+  at least 3 days ago, downloaded from
+  `https://downloads.claude.ai/claude-code-releases/<version>/linux-x64/claude`
+  and verified against the sha256 in that release's `manifest.json`.
+  A CLI release that breaks a cell shows up as a green→red flip, which
+  withholds auto-merge on that day's docs PR for review. To rerun the
+  matrix on one specific CLI, set `CLAUDE_CODE_VERSION` on the run.
+  `gh` and `uv` stay pinned in the `Dockerfile`; bump them in a PR with
+  the checksum from the release's `gh_<version>_checksums.txt` and the
+  tarball's `.sha256` sidecar respectively.
 - **A local build on Apple silicon only proves the image assembles.**
   Under QEMU the Claude Code binary (a Bun executable) dies with
-  `CPU lacks AVX support` and `gh` panics in the Go runtime, so
-  `claude --version` and a full run are verified with a
-  `SKIP_PUBLISH=1` run on Render, not locally.
+  `CPU lacks AVX support` and `gh` panics in the Go runtime, so the CLI
+  download and `claude --version` are verified by the
+  `compat-matrix-image` GitHub workflow (an x86 runner that builds the
+  image and runs `install_claude_code.sh` in it on every PR touching
+  this directory) and a full run with a `SKIP_PUBLISH=1` run on Render,
+  not locally.
 - **Nothing persists between runs.** A failed run leaves no
   half-installed venv behind, but also no cache: don't expect a rerun
   to be faster than the first one.

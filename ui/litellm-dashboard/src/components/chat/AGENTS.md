@@ -13,7 +13,7 @@ This directory has drifted from its own spec before — a hand-rolled `<button>`
 3. **Does it need a color for "selected" / "active" / "hover"?** Before picking a class:
    - Read the actual values in `src/app/globals.css` for the classes you're about to use. Don't assume `accent` ≠ `secondary` ≠ `muted` — in this theme they're identical. Confirm contrast against the _actual container_ background, not the general Tailwind palette in your head.
    - If the element lives inside the sidebar, use the `sidebar-*` token family (`bg-sidebar`, `bg-sidebar-accent`, `text-sidebar-accent-foreground`), not the generic tokens.
-4. **Is the shadcn primitive you want to use not in `src/components/ui/`?** Check the "Known gaps" list in `design.md` first — if it's `Card`, `Textarea`, `sonner`, or a `Sidebar` block, use the documented substitute. If it's something else entirely missing, stop and flag it; don't hand-write a parallel implementation inside a chat component.
+4. **Is the shadcn primitive you want to use not in `src/components/ui/`?** Check the "Known gaps" list in `design.md` first — if it's `Card`, `Textarea`, `sonner`, or a `Sidebar` block, use the documented substitute. If it's something else entirely missing, stop and flag it. Don't hand-write a parallel implementation inside a chat component.
 5. **Still unsure?** Grep this directory and `src/app/(dashboard)/` for an existing instance of the same UI idea (e.g. "how does the rest of the dashboard render a data table") before inventing a new pattern for chat specifically. The chat UI should look like the rest of the app, not like its own product.
 
 ## Decision tree: "I'm fixing a bug in an existing component"
@@ -34,7 +34,7 @@ Never deviate silently. If you improvise, the next agent (or you, in six months)
 
 Run through this before considering a chat UI change done:
 
-- [ ] Every clickable element is a `Button` variant, not a raw `<button>` — search your diff for `<button` and justify any that remain (the chat composer's textarea-adjacent icon buttons and similar truly-custom controls are the only accepted exceptions; nav items and dialog actions are not).
+- [ ] Every clickable element is a `Button` variant, not a raw `<button>` — search your diff for `<button` and justify any that remain (the chat composer's textarea-adjacent icon buttons and similar truly-custom controls are the only accepted exceptions, nav items and dialog actions are not).
 - [ ] Every color class you added actually contrasts against its container — checked in `globals.css`, not assumed.
 - [ ] Sidebar-scoped elements use `sidebar-*` tokens, not generic `accent`/`secondary`/`muted`.
 - [ ] No new `text-foreground/NN` opacity hacks — use `text-muted-foreground`.

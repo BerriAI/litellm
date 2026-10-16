@@ -1,13 +1,11 @@
 use std::{collections::BTreeMap, time::SystemTime};
 
+use crate::{
+    AwsAuthService, AwsCredentialSource, Error, aws_signature_headers, is_sigv4_computed_header,
+    sign_post,
+};
 use aws_credential_types::Credentials;
 use litellm_http::outbound::{RequestSigner, UnsignedRequest};
-use serde_json::{Map, Value};
-
-use crate::{
-    Error, aws_auth_config, aws_signature_headers, host_supplied_credentials,
-    is_sigv4_computed_header, resolve_credentials, sign_post,
-};
 
 #[derive(Clone, Debug)]
 pub struct SigV4Signer {
@@ -32,19 +30,17 @@ impl SigV4Signer {
     }
 
     pub async fn resolve(
+        auth: &AwsAuthService,
         region: String,
         service: &'static str,
-        optional_params: &Map<String, Value>,
+        credentials: AwsCredentialSource,
         env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
     ) -> Result<Self, Error> {
-        let credentials = match host_supplied_credentials(optional_params) {
-            Some(credentials) => credentials,
-            None => {
-                resolve_credentials(aws_auth_config(optional_params, env_lookup), env_lookup)
-                    .await?
-            }
-        };
-        Ok(Self::new(region, service, credentials))
+        Ok(Self::new(
+            region,
+            service,
+            credentials.resolve(auth, env_lookup).await?,
+        ))
     }
 }
 
@@ -80,7 +76,7 @@ mod tests {
     use std::time::{Duration, UNIX_EPOCH};
 
     use litellm_http::outbound::OutboundRequest;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::*;
 

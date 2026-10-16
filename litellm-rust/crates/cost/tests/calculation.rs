@@ -2,6 +2,7 @@ use litellm_cost::{
     OffPeakRates, Pricing, PricingError, PromptConvention, Rate, Rates, Request, ServiceTier,
     ThresholdPolicy, ThresholdRates, TierRates, Usage, calculate, compile,
 };
+use rstest::rstest;
 
 fn rates(input: Rate, output: Rate) -> Rates {
     Rates {
@@ -54,27 +55,24 @@ fn breakdown_and_total_agree() {
     assert_eq!(result.rates.cache_read, 0.5);
 }
 
-#[test]
-fn absent_null_and_zero_cache_rates_are_distinct() {
+#[rstest]
+#[case::missing(Rate::Missing, Rate::Missing, 200.0)]
+#[case::null(Rate::Null, Rate::Missing, 200.0)]
+#[case::zero(Rate::Value(0.0), Rate::Value(0.0), 130.0)]
+fn absent_null_and_zero_cache_rates_are_distinct(
+    #[case] cache_read: Rate,
+    #[case] cache_write: Rate,
+    #[case] expected_input: f64,
+) {
     let base = rates(Rate::Value(2.0), Rate::Value(4.0));
-    for read in [Rate::Missing, Rate::Null] {
-        let standard = Rates {
-            cache_read: read,
-            ..base
-        };
-        assert_eq!(
-            calculate(&pricing(standard), &request()).unwrap().input(),
-            200.0
-        );
-    }
     let standard = Rates {
-        cache_read: Rate::Value(0.0),
-        cache_write: Rate::Value(0.0),
+        cache_read,
+        cache_write,
         ..base
     };
     assert_eq!(
         calculate(&pricing(standard), &request()).unwrap().input(),
-        130.0
+        expected_input
     );
 }
 
@@ -203,6 +201,85 @@ fn threshold_tiers_and_boundaries() {
         700.0
     );
     assert_eq!(calculate(&specification, &flex).unwrap().input(), 600.0);
+}
+
+#[rstest]
+#[case::ultrafast_above_threshold(ServiceTier::Ultrafast, 300_000, 9_301_000.0, 37_000.0)]
+#[case::ultrafast_at_threshold(ServiceTier::Ultrafast, 272_000, 544_500.0, 5_000.0)]
+#[case::standard_above_threshold(ServiceTier::Standard, 300_000, 3_300_600.0, 13_000.0)]
+#[case::priority_above_threshold(ServiceTier::Priority, 300_000, 5_701_000.0, 23_000.0)]
+fn tiered_long_context_rates_are_selected_by_service_tier(
+    #[case] service_tier: ServiceTier,
+    #[case] prompt_tokens: u64,
+    #[case] expected_input: f64,
+    #[case] expected_output: f64,
+) {
+    let standard = Rates {
+        cache_read: Rate::Value(3.0),
+        ..rates(Rate::Value(1.0), Rate::Value(2.0))
+    };
+    let tiers = [
+        TierRates {
+            tier: ServiceTier::Priority,
+            rates: Rates {
+                cache_read: Rate::Value(5.0),
+                ..rates(Rate::Value(3.0), Rate::Value(4.0))
+            },
+        },
+        TierRates {
+            tier: ServiceTier::Ultrafast,
+            rates: Rates {
+                cache_read: Rate::Value(7.0),
+                ..rates(Rate::Value(2.0), Rate::Value(5.0))
+            },
+        },
+    ];
+    let threshold_tiers = [
+        TierRates {
+            tier: ServiceTier::Priority,
+            rates: Rates {
+                cache_read: Rate::Value(29.0),
+                ..rates(Rate::Value(19.0), Rate::Value(23.0))
+            },
+        },
+        TierRates {
+            tier: ServiceTier::Ultrafast,
+            rates: Rates {
+                cache_read: Rate::Value(41.0),
+                ..rates(Rate::Value(31.0), Rate::Value(37.0))
+            },
+        },
+    ];
+    let thresholds = [ThresholdRates {
+        above_prompt_tokens: 272_000,
+        standard: Rates {
+            cache_read: Rate::Value(17.0),
+            ..rates(Rate::Value(11.0), Rate::Value(13.0))
+        },
+        tiers: &threshold_tiers,
+    }];
+    let pricing = Pricing {
+        standard,
+        tiers: &tiers,
+        thresholds: &thresholds,
+        off_peak: None,
+    };
+    let base = request();
+    let long_context_request = Request {
+        usage: Usage {
+            prompt_tokens,
+            completion_tokens: 1_000,
+            cache_read_tokens: 100,
+            cache_write_tokens: 0,
+            ..base.usage
+        },
+        service_tier,
+        ..base
+    };
+    let cost = calculate(&pricing, &long_context_request).unwrap();
+
+    assert_eq!(cost.input(), expected_input);
+    assert_eq!(cost.output(), expected_output);
 }
 
 #[test]

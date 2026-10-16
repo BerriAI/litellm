@@ -4,7 +4,9 @@ from collections.abc import Sequence
 from datetime import date, datetime
 from typing import Final, Literal, Protocol
 
-from pydantic import BaseModel, Field
+from pydantic import Field
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 DEFAULT_DEPRECATION_WARN_DAYS: Final = 30
 
@@ -24,7 +26,7 @@ class EmailSender(Protocol):
         """Deliver one HTML email to the given recipients"""
 
 
-class ModelDeprecationInfo(BaseModel):
+class ModelDeprecationInfo(LiteLLMBaseModel):
     model_name: str = Field(description="The public name of the model on the proxy (model_group).")
     litellm_model: str | None = Field(
         default=None,
@@ -40,9 +42,13 @@ class ModelDeprecationInfo(BaseModel):
         ),
     )
     litellm_provider: str | None = Field(default=None, description="The provider this model belongs to.")
+    successor_model: str | None = Field(
+        default=None,
+        description=("The model to migrate to, as set in model_info.successor_model on the deployment."),
+    )
 
 
-class ModelDeprecationResponse(BaseModel):
+class ModelDeprecationResponse(LiteLLMBaseModel):
     deprecated: list[ModelDeprecationInfo] = Field(
         default_factory=list,
         description="Models whose deprecation date has already passed.",

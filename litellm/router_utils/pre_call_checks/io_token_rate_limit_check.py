@@ -19,9 +19,11 @@ import httpx
 
 import litellm
 from litellm import token_counter
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.litellm_core_utils.token_counter import offload_token_count
+from litellm.router_utils.routing_read_batch import ROUTER_USAGE_TARGET
 from litellm.types.router import RouterCacheEnum, RouterErrors
 from litellm.utils import get_utc_datetime
 
@@ -343,6 +345,7 @@ def _rate_limit_error(limit_label: str, limit: int, current: float) -> litellm.R
     )
 
 
+@with_service_target(ROUTER_USAGE_TARGET)
 def _sync_increment_with_rollback(
     dual_cache: DualCache,
     key: str,
@@ -367,6 +370,7 @@ def _sync_increment_with_rollback(
         raise _rate_limit_error(limit_label, limit, current)
 
 
+@with_service_target(ROUTER_USAGE_TARGET)
 async def _increment_with_rollback(
     dual_cache: DualCache,
     key: str,
@@ -394,6 +398,7 @@ async def _increment_with_rollback(
         raise _rate_limit_error(limit_label, limit, current)
 
 
+@with_service_target(ROUTER_USAGE_TARGET)
 def io_token_pre_call_check(
     dual_cache: DualCache,
     deployment: dict,
@@ -456,6 +461,7 @@ def io_token_pre_call_check(
     return deployment
 
 
+@with_service_target(ROUTER_USAGE_TARGET)
 async def async_io_token_pre_call_check(
     dual_cache: DualCache,
     deployment: dict,
@@ -525,6 +531,7 @@ async def async_io_token_pre_call_check(
     return deployment
 
 
+@with_service_target(ROUTER_USAGE_TARGET)
 def io_token_reconcile_success(
     dual_cache: DualCache,
     kwargs: Mapping[str, object] | None,
@@ -576,6 +583,7 @@ def io_token_reconcile_success(
     )
 
 
+@with_service_target(ROUTER_USAGE_TARGET)
 async def async_io_token_reconcile_success(
     dual_cache: DualCache,
     kwargs: Mapping[str, object] | None,
@@ -637,6 +645,7 @@ async def async_io_token_reconcile_success(
     )
 
 
+@with_service_target(ROUTER_USAGE_TARGET)
 def io_token_refund_failure(
     dual_cache: DualCache,
     kwargs: Mapping[str, object] | None,
@@ -688,6 +697,7 @@ def refund_stale_reservation_before_retry(dual_cache: DualCache, kwargs: Mapping
     io_token_refund_failure(dual_cache, kwargs)
 
 
+@with_service_target(ROUTER_USAGE_TARGET)
 async def async_io_token_refund_failure(
     dual_cache: DualCache,
     kwargs: Mapping[str, object] | None,

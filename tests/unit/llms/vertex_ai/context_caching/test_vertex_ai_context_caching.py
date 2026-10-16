@@ -1,4 +1,4 @@
-from typing import List
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -40,6 +40,7 @@ class TestContextCachingEndpoints:
         """Setup for each test method"""
         self.context_caching = ContextCachingEndpoints()
         self.mock_logging = MagicMock(spec=Logging)
+        self.mock_logging.model_call_details = {}
         self.mock_client = MagicMock(spec=HTTPHandler)
         self.mock_async_client = MagicMock(spec=AsyncHTTPHandler)
 
@@ -1503,6 +1504,134 @@ class TestContextCachingEndpoints:
         # Restart the patcher so teardown_method can stop it cleanly
         self._token_check_patcher.start()
 
+    @pytest.mark.parametrize("is_async", [False, True])
+    @pytest.mark.parametrize(
+        "custom_llm_provider", ["gemini", "vertex_ai"]
+    )
+    @pytest.mark.asyncio
+    async def test_check_and_create_cache_considers_tools_for_min_tokens(
+        self, custom_llm_provider, is_async
+    ):
+        """Test that context caching accounts for tools when validating minimum token count.
+
+        Fixes #42804: When messages alone are below the threshold, but tools push the total
+        over the minimum token count, context caching must proceed and include tools.
+        """
+        self._token_check_patcher.stop()
+
+        short_cached_messages = [
+            {
+                "role": "system",
+                "content": "Short system instruction.",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        non_cached_messages = [
+            {"role": "user", "content": "Hello world"},
+        ]
+        all_messages = short_cached_messages + non_cached_messages
+
+        openai_large_tools: Final = [
+            {
+                "type": "function",
+                "function": {
+                    "name": f"synthetic_tool_{i}",
+                    "description": "A very descriptive explanation of a synthetic tool designed to add tokens to the prompt cache prefix " * 8,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            f"arg_{j}": {"type": "string", "description": "Argument description for caching verification " * 4}
+                            for j in range(10)
+                        },
+                        "required": [f"arg_{j}" for j in range(5)],
+                    },
+                },
+            }
+            for i in range(12)
+        ]
+        large_tools: Final = litellm.utils.get_optional_params(
+            model="gemini-1.5-pro",
+            custom_llm_provider="gemini",
+            tools=openai_large_tools,
+        )["tools"]
+
+        optional_params = {
+            **self.sample_optional_params,
+            "tools": large_tools,
+        }
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "name": "cachedContents/test_cache_id",
+            "model": "gemini-1.5-pro",
+        }
+        mock_response.status_code = 200
+        self.mock_client.post.return_value = mock_response
+        self.mock_async_client.post = AsyncMock(return_value=mock_response)
+
+        with patch.object(
+            self.context_caching,
+            "_get_token_and_url_context_caching",
+            return_value=("fake_token", "https://fake.url/cachedContents"),
+        ), patch.object(
+            self.context_caching,
+            "check_cache",
+            return_value=None,
+        ), patch.object(
+            self.context_caching,
+            "async_check_cache",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            if is_async:
+                result = await self.context_caching.async_check_and_create_cache(
+                    messages=all_messages,
+                    optional_params=optional_params,
+                    api_key="test_key",
+                    api_base=None,
+                    model="gemini-1.5-pro",
+                    client=self.mock_async_client,
+                    timeout=30.0,
+                    logging_obj=self.mock_logging,
+                    cached_content=None,
+                    custom_llm_provider=custom_llm_provider,
+                    vertex_project="test_project",
+                    vertex_location="us-central1",
+                    vertex_auth_header="test_token",
+                )
+            else:
+                result = self.context_caching.check_and_create_cache(
+                    messages=all_messages,
+                    optional_params=optional_params,
+                    api_key="test_key",
+                    api_base=None,
+                    model="gemini-1.5-pro",
+                    client=self.mock_client,
+                    timeout=30.0,
+                    logging_obj=self.mock_logging,
+                    cached_content=None,
+                    custom_llm_provider=custom_llm_provider,
+                    vertex_project="test_project",
+                    vertex_location="us-central1",
+                    vertex_auth_header="test_token",
+                )
+
+        messages, returned_params, returned_cache = result
+        assert messages == non_cached_messages
+        assert returned_cache == "cachedContents/test_cache_id"
+        assert "tools" not in returned_params
+
+        post_mock = self.mock_async_client.post if is_async else self.mock_client.post
+        post_mock.assert_called_once()
+        call_kwargs = post_mock.call_args.kwargs
+        assert call_kwargs["json"]["tools"] == large_tools
+        assert call_kwargs["json"]["contents"] == [
+            {"role": "user", "parts": [{"text": "Short system instruction."}]}
+        ]
+
+        self._token_check_patcher.start()
+
+
     def _model_turn_final_messages(self, final_cached_role):
         tool_call = {
             "id": "call_abc123",
@@ -1662,6 +1791,7 @@ class TestCheckCachePagination:
         """Setup for each test method"""
         self.context_caching = ContextCachingEndpoints()
         self.mock_logging = MagicMock(spec=Logging)
+        self.mock_logging.model_call_details = {}
         self.mock_client = MagicMock(spec=HTTPHandler)
         self.mock_async_client = MagicMock(spec=AsyncHTTPHandler)
 
@@ -2161,3 +2291,135 @@ class TestContextCachingMultiRegionUrls:
 
         assert url.startswith("https://aiplatform.googleapis.com/")
         assert "/locations/global/cachedContents" in url
+
+
+def _created_cache_body(total_token_count: int) -> dict:
+    return {
+        "name": "cachedContents/created",
+        "model": "models/gemini-3.1-pro",
+        "usageMetadata": {"totalTokenCount": total_token_count},
+    }
+
+
+def _cacheable_messages() -> list:
+    return [
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "cacheable prefix " * 1200, "cache_control": {"type": "ephemeral"}}
+            ],
+        },
+        {"role": "user", "content": "question"},
+    ]
+
+
+@patch.object(ContextCachingEndpoints, "check_cache", return_value=None)
+@patch.object(ContextCachingEndpoints, "_get_token_and_url_context_caching", return_value=("token", "https://u"))
+def test_check_and_create_cache_records_creation_tokens_for_billing(mock_url, mock_check):
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+    client = MagicMock(spec=HTTPHandler)
+    client.post.return_value = MagicMock(json=lambda: _created_cache_body(1280))
+
+    _, _, cache_name = ContextCachingEndpoints().check_and_create_cache(
+        messages=_cacheable_messages(),
+        optional_params={},
+        api_key="k",
+        api_base=None,
+        model="gemini-3.1-pro",
+        client=client,
+        timeout=30.0,
+        logging_obj=logging_obj,
+        custom_llm_provider="gemini",
+        vertex_project=None,
+        vertex_location=None,
+        vertex_auth_header=None,
+    )
+
+    assert cache_name == "cachedContents/created"
+    assert logging_obj.vertex_ai_cache_creation_input_tokens == 1280
+
+
+@patch.object(ContextCachingEndpoints, "check_cache", return_value="cachedContents/existing")
+@patch.object(ContextCachingEndpoints, "_get_token_and_url_context_caching", return_value=("token", "https://u"))
+def test_check_and_create_cache_records_no_creation_tokens_when_cache_exists(mock_url, mock_check):
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+    logging_obj.vertex_ai_cache_creation_input_tokens = 0
+    client = MagicMock(spec=HTTPHandler)
+
+    _, _, cache_name = ContextCachingEndpoints().check_and_create_cache(
+        messages=_cacheable_messages(),
+        optional_params={},
+        api_key="k",
+        api_base=None,
+        model="gemini-3.1-pro",
+        client=client,
+        timeout=30.0,
+        logging_obj=logging_obj,
+        custom_llm_provider="gemini",
+        vertex_project=None,
+        vertex_location=None,
+        vertex_auth_header=None,
+    )
+
+    assert cache_name == "cachedContents/existing"
+    client.post.assert_not_called()
+    assert logging_obj.vertex_ai_cache_creation_input_tokens == 0
+
+
+@pytest.mark.asyncio
+@patch.object(ContextCachingEndpoints, "async_check_cache", return_value=None)
+@patch.object(ContextCachingEndpoints, "_get_token_and_url_context_caching", return_value=("token", "https://u"))
+async def test_async_check_and_create_cache_records_creation_tokens_for_billing(mock_url, mock_check):
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+    client = MagicMock(spec=AsyncHTTPHandler)
+    client.post = AsyncMock(return_value=MagicMock(json=lambda: _created_cache_body(2048)))
+
+    _, _, cache_name = await ContextCachingEndpoints().async_check_and_create_cache(
+        messages=_cacheable_messages(),
+        optional_params={},
+        api_key="k",
+        api_base=None,
+        model="gemini-3.1-pro",
+        client=client,
+        timeout=30.0,
+        logging_obj=logging_obj,
+        custom_llm_provider="gemini",
+        vertex_project=None,
+        vertex_location=None,
+        vertex_auth_header=None,
+    )
+
+    assert cache_name == "cachedContents/created"
+    assert logging_obj.vertex_ai_cache_creation_input_tokens == 2048
+
+
+def test_check_and_create_cache_clamps_negative_creation_tokens() -> None:
+    logging_obj = MagicMock(spec=Logging)
+    logging_obj.model_call_details = {}
+    client = MagicMock(spec=HTTPHandler)
+    client.post.return_value = MagicMock(json=lambda: _created_cache_body(-500))
+
+    with (
+        patch.object(ContextCachingEndpoints, "check_cache", return_value=None),
+        patch.object(ContextCachingEndpoints, "_get_token_and_url_context_caching", return_value=("token", "https://u")),
+    ):
+        _, _, cache_name = ContextCachingEndpoints().check_and_create_cache(
+            messages=_cacheable_messages(),
+            optional_params={},
+            api_key="k",
+            api_base=None,
+            model="gemini-3.1-pro",
+            client=client,
+            timeout=30.0,
+            logging_obj=logging_obj,
+            custom_llm_provider="gemini",
+            vertex_project=None,
+            vertex_location=None,
+            vertex_auth_header=None,
+        )
+
+    assert cache_name == "cachedContents/created"
+    assert logging_obj.vertex_ai_cache_creation_input_tokens == 0
