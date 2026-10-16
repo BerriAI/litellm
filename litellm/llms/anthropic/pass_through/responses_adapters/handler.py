@@ -5,14 +5,11 @@ Used when the target model is an OpenAI or Azure model.
 """
 
 from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
-from typing import Final, NoReturn, TypeAlias
+from typing import Final, TypeAlias
 
-import httpx
-from aiohttp import ClientSession
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
-from litellm.constants import request_timeout
 from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
     supports_openai_prompt_cache_breakpoint,
@@ -20,18 +17,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.common_utils import cache_control_as_prompt_cache_breakpoint
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.native.responses import execute_responses
-from litellm.responses.main import (
-    apply_managed_file_id_mapping,
-    base_llm_http_handler,
-    requested_reasoning,
-    resolve_model_provider_for_responses,
-    resolve_responses_api_provider_config,
-    with_provider_affinity_header,
-)
-from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
-from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.responses.bridge_executor import anative_responses, native_logging_obj, native_responses
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
     AllAnthropicMessageValues,
@@ -44,7 +30,6 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes
 from litellm.utils import ProviderConfigManager
 
@@ -59,9 +44,6 @@ BlockRewrite: TypeAlias = Callable[[Mapping[str, object]], Mapping[str, object]]
 _BLOCK_LIST: Final = TypeAdapter(list[dict[str, object]])
 
 _ADAPTER: Final = LiteLLMAnthropicToResponsesAPIAdapter()
-_STRING_KEYED_DICT: Final = TypeAdapter(dict[str, object])
-_CLIENT_HEADERS: Final = TypeAdapter(dict[str, str])
-_STRINGS: Final = TypeAdapter(tuple[str, ...])
 
 
 _NEVER_FORWARDED: Final = CONVERTED_STREAM_KEYS | {"anthropic_messages"}
@@ -245,178 +227,12 @@ def _build_responses_request(
     return responses_request
 
 
-def _optional_str(value: object) -> str | None:
-    return value if isinstance(value, str) else None
-
-
-def _string_keyed_dict(value: object) -> dict[str, object] | None:
-    try:
-        return _STRING_KEYED_DICT.validate_python(value) if value is not None else None
-    except ValidationError:
-        return None
-
-
-def _client_headers(value: object) -> Mapping[str, str] | None:
-    try:
-        return _CLIENT_HEADERS.validate_python(value) if isinstance(value, dict) else None
-    except ValidationError:
-        return None
-
-
-def _shared_session(value: object) -> ClientSession | None:
-    return value if isinstance(value, ClientSession) else None
-
-
-def _http_client(value: object) -> HTTPHandler | AsyncHTTPHandler | None:
-    return value if isinstance(value, (HTTPHandler, AsyncHTTPHandler)) else None
-
-
-def _timeout(value: object) -> float | httpx.Timeout:
-    return value if isinstance(value, (float, int, httpx.Timeout)) and value else request_timeout
-
-
-def _allowed_openai_params(value: object) -> Sequence[str] | None:
-    try:
-        return _STRINGS.validate_python(value) if value is not None else None
-    except ValidationError:
-        return None
-
-
-def _native_responses_call(
-    request: Mapping[str, object],
-    model: str,
-    forwarded_kwargs: Mapping[str, object],
-    logging_obj: LiteLLMLoggingObj,
-    is_async: bool,
-) -> (
-    ResponsesAPIResponse
-    | BaseResponsesAPIStreamingIterator
-    | Coroutine[object, object, ResponsesAPIResponse | BaseResponsesAPIStreamingIterator]
-):
-    """Resolve the deployment and hand the translated request to the native Responses executor."""
-    litellm_params: Final = GenericLiteLLMParams(**forwarded_kwargs)
-    provider_model, custom_llm_provider = resolve_model_provider_for_responses(
-        model=model,
-        custom_llm_provider=_optional_str(forwarded_kwargs.get("custom_llm_provider")),
-        litellm_params=litellm_params,
-        local_vars={},
-    )
-    if custom_llm_provider is None:
-        raise ValueError(f"No provider resolved for {model}")
-    provider_config: Final = resolve_responses_api_provider_config(
-        provider_model, custom_llm_provider, forwarded_kwargs.get("model_info"), litellm_params.api_base
-    )
-    if provider_config is None:
-        raise ValueError(f"{custom_llm_provider} has no Responses API config for {provider_model}")
-    request_input, request_tools = apply_managed_file_id_mapping(
-        input=request["input"],
-        tools=request.get("tools"),
-        kwargs=dict(forwarded_kwargs),
-        local_vars={},
-    )
-    params: Final = {
-        **forwarded_kwargs,
-        **request,
-        "input": request_input,
-        "tools": request_tools,
-        "custom_llm_provider": custom_llm_provider,
-    }
-    reasoning: Final = requested_reasoning(params)
-    return execute_responses(
-        http_handler=base_llm_http_handler,
-        model=provider_model,
-        input=request_input,
-        provider_config=provider_config,
-        requested_params=ResponsesAPIRequestUtils.get_requested_response_api_optional_param(
-            {key: value for key, value in {**params, "reasoning": reasoning}.items() if key != "reasoning_effort"}
-        ),
-        allowed_openai_params=_allowed_openai_params(forwarded_kwargs.get("allowed_openai_params")),
-        custom_llm_provider=custom_llm_provider,
-        litellm_params=litellm_params,
-        logging_obj=logging_obj,
-        user=_optional_str(request.get("user")),
-        extra_headers=with_provider_affinity_header(
-            ResponsesAPIRequestUtils.merge_client_forwarded_headers(
-                extra_headers=_string_keyed_dict(forwarded_kwargs.get("extra_headers")),
-                client_headers=_client_headers(forwarded_kwargs.get("headers")),
-            ),
-            litellm_params,
-            _string_keyed_dict(request.get("metadata")),
-            forwarded_kwargs,
-            provider_model,
-            custom_llm_provider,
-        ),
-        extra_body=_string_keyed_dict(forwarded_kwargs.get("extra_body")),
-        timeout=_timeout(forwarded_kwargs.get("timeout")),
-        is_async=is_async,
-        stream=request.get("stream") is True,
-        client=_http_client(forwarded_kwargs.get("client")),
-        shared_session=_shared_session(forwarded_kwargs.get("shared_session")),
-        litellm_metadata=_string_keyed_dict(forwarded_kwargs.get("litellm_metadata")) or {},
-        request_kwargs=dict(forwarded_kwargs),
-    )
-
-
-def _native_logging_obj(
-    logging_obj: LiteLLMLoggingObj | None, forwarded_kwargs: Mapping[str, object], request: Mapping[str, object]
-) -> LiteLLMLoggingObj | None:
-    """The logging object when the native executor can serve the call, None when only `aresponses` can.
-
-    The executor skips the prompt management hooks `aresponses` runs, so a call that needs them re-enters it.
-    """
-    if logging_obj is None:
-        return None
-    params: Final = {**forwarded_kwargs, **request}
-    if logging_obj.should_run_prompt_management_hooks(
-        non_default_params=params, prompt_id=_optional_str(params.get("prompt_id"))
-    ):
-        return None
-    return logging_obj
-
-
 def _reentrant_kwargs(
     forwarded_kwargs: Mapping[str, object], request: Mapping[str, object], logging_obj: LiteLLMLoggingObj | None
 ) -> dict[str, object]:
     if logging_obj is not None:
         setattr(logging_obj, "call_type", CallTypes.anthropic_messages.value)
     return {**forwarded_kwargs, **request}
-
-
-def _raise_mapped(error: Exception, model: str, forwarded_kwargs: Mapping[str, object]) -> NoReturn:
-    raise litellm.exception_type(
-        model=model,
-        custom_llm_provider=_optional_str(forwarded_kwargs.get("custom_llm_provider")),
-        original_exception=error,
-        extra_kwargs=dict(forwarded_kwargs),
-    ) from error
-
-
-def _native_responses(
-    request: Mapping[str, object],
-    model: str,
-    forwarded_kwargs: Mapping[str, object],
-    logging_obj: LiteLLMLoggingObj,
-) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
-    try:
-        response: Final = _native_responses_call(request, model, forwarded_kwargs, logging_obj, is_async=False)
-    except Exception as e:  # noqa: BLE001  # every provider failure maps to the litellm exception aresponses would raise
-        _raise_mapped(e, model, forwarded_kwargs)
-    if isinstance(response, Coroutine):
-        raise TypeError("The sync Responses executor returned a coroutine")
-    return response
-
-
-async def _native_aresponses(
-    request: Mapping[str, object],
-    model: str,
-    forwarded_kwargs: Mapping[str, object],
-    logging_obj: LiteLLMLoggingObj,
-) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
-    try:
-        response: Final = _native_responses_call(request, model, forwarded_kwargs, logging_obj, is_async=True)
-        return await response if isinstance(response, Coroutine) else response
-    except Exception as e:  # noqa: BLE001  # every provider failure maps to the litellm exception aresponses would raise
-        _raise_mapped(e, model, forwarded_kwargs)
 
 
 class LiteLLMMessagesToResponsesAPIHandler:
@@ -469,11 +285,11 @@ class LiteLLMMessagesToResponsesAPIHandler:
         logging_obj: Final = litellm_logging_obj_from_kwargs(kwargs)
 
         safeguards_evaluator: Final = request_safeguards_evaluator(kwargs, messages)
-        native_logging_obj: Final = _native_logging_obj(logging_obj, forwarded_kwargs, request)
+        native_logging: Final = native_logging_obj(logging_obj, forwarded_kwargs, request)
         result: Final = (
             await litellm.aresponses(**_reentrant_kwargs(forwarded_kwargs, request, logging_obj))
-            if native_logging_obj is None
-            else await _native_aresponses(request, model, forwarded_kwargs, native_logging_obj)
+            if native_logging is None
+            else await anative_responses(request, model, forwarded_kwargs, native_logging)
         )
 
         if stream:
@@ -557,11 +373,11 @@ class LiteLLMMessagesToResponsesAPIHandler:
         )
         forwarded_kwargs: Final = _forwarded_kwargs(kwargs)
         logging_obj: Final = litellm_logging_obj_from_kwargs(kwargs)
-        native_logging_obj: Final = _native_logging_obj(logging_obj, forwarded_kwargs, request)
+        native_logging: Final = native_logging_obj(logging_obj, forwarded_kwargs, request)
         result: Final = (
             litellm.responses(**_reentrant_kwargs(forwarded_kwargs, request, logging_obj))
-            if native_logging_obj is None
-            else _native_responses(request, model, forwarded_kwargs, native_logging_obj)
+            if native_logging is None
+            else native_responses(request, model, forwarded_kwargs, native_logging)
         )
 
         if stream:

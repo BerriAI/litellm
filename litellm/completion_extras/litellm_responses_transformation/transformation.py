@@ -1119,10 +1119,6 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         api_model: Final = model
 
-        from litellm.types.utils import CallTypes
-
-        setattr(litellm_logging_obj, "call_type", CallTypes.responses.value)
-
         sanitized_litellm_params: Final = self._build_sanitized_litellm_params(litellm_params)
 
         request_data: Final = {
