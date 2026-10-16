@@ -287,6 +287,25 @@ def test_hosted_vllm_responses_passes_string_input_and_instructions_through() ->
     assert request["instructions"] == CODEX_INSTRUCTIONS
 
 
+def test_hosted_vllm_compact_request_sends_developer_items_as_system() -> None:
+    url, data = HostedVLLMResponsesAPIConfig().transform_compact_response_api_request(
+        model="kimi-k3",
+        input=[
+            {"type": "message", "role": "developer", "content": CODEX_INSTRUCTIONS},
+            {"type": "message", "role": "user", "content": "summarize the session"},
+        ],
+        response_api_optional_request_params={},
+        api_base=f"{VLLM_API_BASE}/responses",
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert url == f"{VLLM_API_BASE}/responses/compact"
+    assert data["input"] == [
+        {"type": "message", "role": "system", "content": CODEX_INSTRUCTIONS},
+        {"type": "message", "role": "user", "content": "summarize the session"},
+    ]
+
+
 @pytest.fixture
 def vllm_responses_route(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch) -> respx.Route:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)

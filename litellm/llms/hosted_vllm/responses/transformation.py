@@ -93,21 +93,8 @@ class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         return f"{api_base}/v1/responses"
 
-    def transform_responses_api_request(
-        self,
-        model: str,
-        input: str | ResponseInputParam,
-        response_api_optional_request_params: dict,  # mutable-ok: overrides the base class signature
-        litellm_params: GenericLiteLLMParams,
-        headers: dict,  # mutable-ok: overrides the base class signature
-    ) -> dict:  # mutable-ok: overrides the base class signature
-        return super().transform_responses_api_request(
-            model=model,
-            input=_developer_items_as_system(self._validate_input_param(input)),
-            response_api_optional_request_params=response_api_optional_request_params,
-            litellm_params=litellm_params,
-            headers=headers,
-        )
+    def _validate_input_param(self, input: str | ResponseInputParam) -> str | ResponseInputParam:
+        return _developer_items_as_system(super()._validate_input_param(input))
 
     def supports_native_websocket(self) -> bool:
         """Hosted vLLM does not support native WebSocket for Responses API"""
