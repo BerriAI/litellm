@@ -14,6 +14,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from dotenv import load_dotenv
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
 from pydantic import BaseModel, ConfigDict, JsonValue
 
 load_dotenv()
@@ -1605,7 +1607,7 @@ async def _kimi_count_status() -> str:
 
 
 @pytest.mark.asyncio
-async def test_hanging_tokenizer_download_answers_the_provider_error_after_the_wait_with_one_download_per_worker(
+async def test_hanging_tokenizer_download_answers_the_provider_error_after_the_wait_with_one_download_while_it_runs(
     monkeypatch: pytest.MonkeyPatch,
 ):
     _framed_kimi_with_custom_tokenizer(monkeypatch, "lit-tests/hanging-tokenizer")
@@ -1619,7 +1621,7 @@ async def test_hanging_tokenizer_download_answers_the_provider_error_after_the_w
 
     monkeypatch.setattr(litellm.utils, "select_tokenizer", hanging_download)
     monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_WAIT_SECONDS", 0.5)
-    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_RETRY_SECONDS", 1e9)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_RETRY_SECONDS", 1e-9)
     try:
         started: Final = time.monotonic()
         burst: Final = await asyncio.wait_for(asyncio.gather(*(_kimi_count_status() for _ in range(60))), 5)
@@ -1657,6 +1659,82 @@ async def test_failed_tokenizer_download_is_reused_until_the_retry_window_passes
     assert within_window == ["400", "400", "400"]
     assert after_window == "local_estimate"
     assert len(downloads) == 2
+
+
+def _framed_kimi(monkeypatch: pytest.MonkeyPatch) -> None:
+    counter: Final = _ScriptedCounter({"us.moonshotai.kimi-k3": _provider_reply("kimi", status_code=400)})
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(model_list=[{"model_name": "kimi", "litellm_params": {"model": "bedrock/us.moonshotai.kimi-k3"}}]),
+    )
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "_get_provider_token_counter", lambda deployment, model: (counter, model, "bedrock")
+    )
+
+
+@pytest.mark.asyncio
+async def test_local_count_loads_the_tokenizer_again_after_a_failed_load(monkeypatch: pytest.MonkeyPatch):
+    _framed_kimi_with_custom_tokenizer(monkeypatch, "lit-tests/local-route-tokenizer")
+    real_select_tokenizer: Final = litellm.utils.select_tokenizer
+    downloads: Final[list[str]] = []
+
+    def hub_down_once(model: str, custom_tokenizer: object = None):
+        downloads.append(model)
+        if len(downloads) == 1:
+            raise OSError("hub unreachable")
+        return real_select_tokenizer(model="gpt-5.4-mini")
+
+    monkeypatch.setattr(litellm.utils, "select_tokenizer", hub_down_once)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_RETRY_SECONDS", 1e9)
+    request: Final = TokenCountRequest(model="kimi", messages=[{"role": "user", "content": "What is new?"}])
+
+    with pytest.raises(OSError, match="hub unreachable"):
+        await token_counter(request=request)
+    retried: Final = await token_counter(request=request)
+
+    assert retried.count_source == "local_estimate" and retried.total_tokens > 0
+
+
+@pytest.mark.asyncio
+async def test_framed_count_loads_the_tokenizer_again_after_a_load_that_fell_back(monkeypatch: pytest.MonkeyPatch):
+    _framed_kimi(monkeypatch)
+    real_select_tokenizer: Final = litellm.utils.select_tokenizer
+    hub_tokenizer: Final = litellm.utils.create_tokenizer(
+        Tokenizer(WordLevel({"[UNK]": 0}, unk_token="[UNK]")).to_str()
+    )
+    loads: Final[list[str]] = []
+
+    def hub_up_on_the_second_load(model: str, custom_tokenizer: object = None):
+        loads.append(model)
+        return real_select_tokenizer(model="gpt-5.4-mini") if len(loads) == 1 else hub_tokenizer
+
+    monkeypatch.setattr(litellm.utils, "select_tokenizer", hub_up_on_the_second_load)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_RETRY_SECONDS", 1e9)
+    request: Final = TokenCountRequest(model="kimi", messages=[{"role": "user", "content": "What is new?"}])
+
+    first: Final = await token_counter(request=request, call_endpoint=True)
+    second: Final = await token_counter(request=request, call_endpoint=True)
+
+    assert (first.tokenizer_type, second.tokenizer_type) == ("openai_tokenizer", "huggingface_tokenizer")
+
+
+@pytest.mark.asyncio
+async def test_fork_guard_error_while_loading_the_tokenizer_is_never_answered_as_the_provider_error(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _framed_kimi(monkeypatch)
+
+    def forked_load(model: str, custom_tokenizer: object = None) -> NoReturn:
+        raise ForkedAfterNativeRuntimeStarted("native runtime started before fork")
+
+    monkeypatch.setattr(litellm.utils, "select_tokenizer", forked_load)
+
+    with pytest.raises(ForkedAfterNativeRuntimeStarted):
+        await token_counter(
+            request=TokenCountRequest(model="kimi", messages=[{"role": "user", "content": "What is new?"}]),
+            call_endpoint=True,
+        )
 
 
 @pytest.mark.asyncio
