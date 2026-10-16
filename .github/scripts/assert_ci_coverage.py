@@ -32,6 +32,7 @@ IGNORE_ARG_RE: Final = re.compile(r"--ignore(?:-glob)?[= ](\S+)")
 DOCKERFILE_TOKEN_RE = re.compile(r"[A-Za-z0-9_./-]*Dockerfile[A-Za-z0-9_.-]*")
 COMMENT_RE = re.compile(r"^\s*#.*$", re.MULTILINE)
 GLOB_CHARS = frozenset("*?")
+DEDICATED_INTEGRATION_WORKFLOWS: Final = frozenset({"image-scan.yml"})
 
 # Trees whose jobs are sharded with no catch-all bucket, so every child that holds
 # tests has to be named by some shard or it runs nowhere. A child listed here is
@@ -616,9 +617,10 @@ def _integration_ownership(repo_root: pathlib.Path = REPO_ROOT) -> tuple[frozens
         for path in (repo_root / ".github/workflows").glob("*.y*ml")
         for scalar in _scalars(yaml.safe_load(path.read_text()), path.name)
     )
-    unit_shard_tokens: Final = _invoked_test_tokens(
+    shared_workflow_tokens: Final = _invoked_test_tokens(
         scalar
-        for path in (repo_root / ".github/workflows").glob("test-unit.y*ml")
+        for path in (repo_root / ".github/workflows").glob("*.y*ml")
+        if path.name not in DEDICATED_INTEGRATION_WORKFLOWS
         for scalar in _scalars(yaml.safe_load(path.read_text()), path.name)
     )
     findings: Final = (
@@ -638,9 +640,9 @@ def _integration_ownership(repo_root: pathlib.Path = REPO_ROOT) -> tuple[frozens
             if not (repo_root / path).is_file()
         )
         + tuple(
-            Finding(path, "GitHub-owned integration contract runs on a shared unit-test shard")
+            Finding(path, "GitHub-owned integration contract runs outside a dedicated integration workflow")
             for path in sorted(github_files)
-            if any(_token_covers(token, path) for token in unit_shard_tokens)
+            if any(_token_covers(token, path) for token in shared_workflow_tokens)
         )
     )
     browser_commands: Final = tuple(
@@ -721,7 +723,9 @@ def main() -> int:
         _report(
             "integration contracts with the wrong CI owner",
             ownership_findings,
-            "Follow tests/integration/AGENTS.md, which says which CI job owns each integration file.",
+            "Follow tests/integration/AGENTS.md, which says which CI job owns each integration file. CircleCI's "
+            "browser group owns the integrationCritical Playwright contracts, so no GitHub workflow may select them "
+            "and the default Playwright config must exclude them.",
         )
     if dockerfile_findings:
         _report(

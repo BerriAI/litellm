@@ -27,7 +27,10 @@ tests. A product bug the test exposes is `pytest.skip("BUG: <symptom>")` at the 
 fix in the test and not a deletion. Needs no network, proxy, DB or Redis: `tests/unit`
 
 CircleCI's integration groups run every file here except the OCI and sandbox tests, which no CI runs,
-and the files in `GITHUB_FILES` in `run.py`. That list is only for a file a dedicated job must run on its
-own, like CircleCI's `roi-database` job or the image tests that need the images `image-scan.yml` builds.
-Add a file there, and to that job, only in that case. Never put one on a shared GitHub Actions shard like
-`test-unit.yml` (#46780)
+and the files in `GITHUB_FILES` in `run.py`. CircleCI runs on main, not on pull requests, so a new file
+here first runs after its PR merges. `GITHUB_FILES` is only for a file that needs what CircleCI's groups
+cannot give it, like the images `image-scan.yml` builds or the plain pytest run CircleCI's `roi-database`
+job gives `test_roi_observed.py`. Add a file there only in that case, together with its dedicated job,
+and list a new dedicated GitHub workflow in `DEDICATED_INTEGRATION_WORKFLOWS` in
+`.github/scripts/assert_ci_coverage.py`. The `ci-coverage` check fails a `GITHUB_FILES` file that any
+other workflow runs, like a shared `test-unit.yml` shard (#46780)

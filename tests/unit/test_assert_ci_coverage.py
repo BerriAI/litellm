@@ -9,6 +9,8 @@ the question neither covers: whether the job that globs a file then deselects it
 """
 
 import importlib.util
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Final
@@ -77,18 +79,20 @@ def test_integration_groups_require_exclusive_scheduled_circleci_owner(tmp_path:
     (tmp_path / github_path).write_text("def test_contract(): pass\n")
     runner: Final = tmp_path / "tests/integration/run.py"
     runner.write_text(runner.read_text() + f"GITHUB_FILES: Final = frozenset({{{github_path!r}}})\n")
-    workflow.write_text(yaml.safe_dump({"jobs": {"tests": {"steps": [{"run": f"pytest {github_path}"}]}}}))
+    workflow.unlink()
+    dedicated: Final = tmp_path / ".github/workflows/image-scan.yml"
+    dedicated.write_text(yaml.safe_dump({"jobs": {"tests": {"steps": [{"run": f"pytest {github_path}"}]}}}))
     github_owned, github_findings = coverage._integration_ownership(tmp_path)
     assert github_owned == frozenset({test_path, github_path})
     assert github_findings == ()
-    unit_shards: Final = tmp_path / ".github/workflows/test-unit.yml"
-    unit_shards.write_text(yaml.safe_dump({"jobs": {"mcp": {"steps": [{"run": f"pytest {github_path}"}]}}}))
-    _, shard_findings = coverage._integration_ownership(tmp_path)
-    assert [(finding.subject, finding.detail) for finding in shard_findings] == [
-        (github_path, "GitHub-owned integration contract runs on a shared unit-test shard")
+    per_pr: Final = tmp_path / ".github/workflows/test-mcp-interactions.yml"
+    per_pr.write_text(yaml.safe_dump({"jobs": {"mcp": {"steps": [{"run": f"pytest {github_path}"}]}}}))
+    _, shared_findings = coverage._integration_ownership(tmp_path)
+    assert [(finding.subject, finding.detail) for finding in shared_findings] == [
+        (github_path, "GitHub-owned integration contract runs outside a dedicated integration workflow")
     ]
-    unit_shards.unlink()
-    workflow.write_text(yaml.safe_dump({"jobs": {}}))
+    per_pr.unlink()
+    dedicated.write_text(yaml.safe_dump({"jobs": {}}))
     _, missing_invocation = coverage._integration_ownership(tmp_path)
     assert [(finding.subject, finding.detail) for finding in missing_invocation] == [
         (github_path, "GitHub-owned integration contract has no invoking job")
@@ -99,6 +103,44 @@ def test_integration_groups_require_exclusive_scheduled_circleci_owner(tmp_path:
     circle.write_text(yaml.safe_dump(circle_config))
     _, circle_invocation = coverage._integration_ownership(tmp_path)
     assert circle_invocation == ()
+
+
+@pytest.mark.parametrize(("workflow_name", "exit_code"), [("image-scan.yml", 0), ("test-unit.yml", 1)])
+def test_census_fails_when_a_github_owned_contract_runs_from_a_shared_workflow(
+    tmp_path: Path, workflow_name: str, exit_code: int
+) -> None:
+    script: Final = tmp_path / ".github/scripts/assert_ci_coverage.py"
+    script.parent.mkdir(parents=True)
+    shutil.copy(_MODULE_PATH, script)
+    github_path: Final = "tests/integration/management/test_github_contract.py"
+    contracts: Final = tmp_path / "tests/integration/management"
+    contracts.mkdir(parents=True)
+    (contracts / "test_contract.py").write_text("def test_contract(): pass\n")
+    (tmp_path / github_path).write_text("def test_contract(): pass\n")
+    (tmp_path / "tests/integration/run.py").write_text(
+        "from types import MappingProxyType\nfrom typing import Final\n"
+        'GROUPS: Final = MappingProxyType({"management": ("management",)})\n'
+        f"GITHUB_FILES: Final = frozenset({{{github_path!r}}})\n"
+    )
+    (tmp_path / ".circleci").mkdir()
+    (tmp_path / ".circleci/config.yml").write_text(
+        yaml.safe_dump(
+            {
+                "jobs": {
+                    "integration_contracts": {
+                        "steps": [{"run": {"command": "bash .circleci/scripts/run_integration.sh management"}}]
+                    }
+                },
+                "workflows": {"integration": {"jobs": [{"integration_contracts": {"suite": "management"}}]}},
+            }
+        )
+    )
+    (tmp_path / ".github/workflows").mkdir()
+    (tmp_path / ".github/workflows" / workflow_name).write_text(
+        yaml.safe_dump({"jobs": {"tests": {"steps": [{"run": f"pytest {github_path}"}]}}})
+    )
+    result: Final = subprocess.run([sys.executable, "-I", str(script)], capture_output=True, text=True, check=False)
+    assert result.returncode == exit_code, result.stdout
 
 
 def test_circleci_postgres_suites_count_their_test_path_as_invoked() -> None:
