@@ -99,7 +99,7 @@ class ContextCachingEndpoints(VertexBase):
         Returns
             token, url
         """
-        auth_header: str | dict[str, str | None] | None
+        auth_header: str | Mapping[str, str | None] | None
         if custom_llm_provider == "gemini":
             auth_header = {"x-goog-api-key": gemini_api_key}
             endpoint = "cachedContents"
@@ -400,7 +400,7 @@ class ContextCachingEndpoints(VertexBase):
             client = client
 
         ## CHECK IF CACHED ALREADY
-        cache_key_kwargs: Final[dict[str, object]] = {
+        cache_key_kwargs: Final[Mapping[str, object]] = {
             "messages": cached_messages,
             "tools": tools,
             "tool_choice": tool_choice,
@@ -571,7 +571,7 @@ class ContextCachingEndpoints(VertexBase):
             client = client
 
         ## CHECK IF CACHED ALREADY
-        cache_key_kwargs: Final[dict[str, object]] = {
+        cache_key_kwargs: Final[Mapping[str, object]] = {
             "messages": cached_messages,
             "tools": tools,
             "tool_choice": tool_choice,

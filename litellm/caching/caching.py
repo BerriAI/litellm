@@ -854,7 +854,10 @@ class Cache:
                 else:
                     cache_key = self.get_cache_key(**kwargs)  # rebind-ok: derive caller key
                 if cache_key is not None:
-                    cache_control_args: Final[DynamicCacheControl] = cast(DynamicCacheControl, kwargs.get("cache", {}))
+                    cache_control_value: Final[object] = kwargs.get("cache", {})
+                    cache_control_args: Final[Mapping[str, object]] = (
+                        cache_control_value if isinstance(cache_control_value, Mapping) else {}
+                    )
                     max_age = cache_control_args.get("s-maxage") or cache_control_args.get("s-max-age") or float("inf")
                     cache_lookup_kwargs: Final = self._get_safe_cache_lookup_kwargs(kwargs)
                     if dynamic_cache_object is not None:
@@ -889,7 +892,10 @@ class Cache:
                 else:
                     cache_key = self.get_cache_key(**kwargs)  # rebind-ok: derive caller key
                 if cache_key is not None:
-                    cache_control_args: Final[DynamicCacheControl] = cast(DynamicCacheControl, kwargs.get("cache", {}))
+                    cache_control_value: Final[object] = kwargs.get("cache", {})
+                    cache_control_args: Final[Mapping[str, object]] = (
+                        cache_control_value if isinstance(cache_control_value, Mapping) else {}
+                    )
                     max_age: Final = cache_control_args.get(
                         "s-max-age", cache_control_args.get("s-maxage", float("inf"))
                     )
@@ -1157,7 +1163,7 @@ class Cache:
     def _embedding_cache_entries(
         self,
         result: object,
-        kwargs: dict[str, Any],
+        kwargs: dict[str, Any],  # mutable-ok: helper adds each generated cache_key before cache writeback
     ) -> tuple[list[tuple[str, Any]], dict[str, Any]] | None:
         cache_list: list[tuple[str, Any]] = []
         inputs = kwargs["input"]

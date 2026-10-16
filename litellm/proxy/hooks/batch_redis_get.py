@@ -4,7 +4,8 @@
 ### [BETA] this is in Beta. And might change.
 
 import traceback
-from typing import Final, Literal, cast  # noqa: TID251  # typed cache kwargs boundary
+from collections.abc import Mapping
+from typing import Final, Literal
 
 from fastapi import HTTPException
 
@@ -13,7 +14,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache, InMemoryCache, RedisCache, response_cache_phase
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.caching import DynamicCacheControl
 
 
 class _PROXY_BatchRedisRequests(CustomLogger):
@@ -107,7 +107,10 @@ class _PROXY_BatchRedisRequests(CustomLogger):
                 )  # returns "<cache_key_name>:<hash>" - we pass redis_namespace in async_pre_call_hook. Done to avoid rewriting the async_set_cache logic
 
             if cache_key is not None and self.in_memory_cache is not None:
-                cache_control_args: Final[DynamicCacheControl] = cast(DynamicCacheControl, kwargs.get("cache", {}))
+                cache_control_value: Final[object] = kwargs.get("cache", {})
+                cache_control_args: Final[Mapping[str, object]] = (
+                    cache_control_value if isinstance(cache_control_value, Mapping) else {}
+                )
                 max_age: Final = cache_control_args.get("s-max-age", cache_control_args.get("s-maxage", float("inf")))
                 cached_result = self.in_memory_cache.get_cache(cache_key, *args, **kwargs)
                 if cached_result is None:

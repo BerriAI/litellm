@@ -315,14 +315,14 @@ def _cost_row_request_id_suffix(call_type: str, metadata: Mapping[str, object]) 
 
 def get_spend_logs_id(
     call_type: str,
-    response_obj: dict,
-    kwargs: dict,
+    response_obj: Mapping[str, object],
+    kwargs: Mapping[str, object],
     metadata: Mapping[str, object] = EMPTY_MAPPING,
 ) -> str | None:
     standard_logging_payload = kwargs.get("standard_logging_object")
     candidate_ids: Final = (
         response_obj.get("id"),
-        standard_logging_payload.get("id") if isinstance(standard_logging_payload, dict) else None,
+        standard_logging_payload.get("id") if isinstance(standard_logging_payload, Mapping) else None,
         kwargs.get("litellm_call_id"),
     )
     resolved_id: Final = next(
@@ -558,8 +558,8 @@ def get_logging_payload(
         response_obj = {"result": str(response_obj)}
     # standardize this function to be used across, s3, dynamoDB, langfuse logging
     litellm_params_value: Final[object] = kwargs.get("litellm_params", {})
-    litellm_params: Final[dict[str, object]] = (
-        cast(dict[str, object], litellm_params_value) if isinstance(litellm_params_value, Mapping) else {}
+    litellm_params: Final[Mapping[str, object]] = (
+        litellm_params_value if isinstance(litellm_params_value, Mapping) else EMPTY_MAPPING
     )
     metadata: Final = get_litellm_metadata_from_kwargs(kwargs)
     completion_start_time: Final = kwargs.get("completion_start_time", end_time)
@@ -1582,7 +1582,7 @@ def _convert_to_json_serializable_dict(obj: object, visited: set[int] | None = N
 
 def _convert_mapping_to_json_serializable(
     obj: Mapping[str, object],
-) -> dict[str, object]:
+) -> Mapping[str, object]:
     converted: Final = _convert_to_json_serializable_dict(obj)
     if isinstance(converted, dict):
         return converted
