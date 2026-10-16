@@ -5055,19 +5055,13 @@ async def trigger_spend_report_email(
     from litellm.proxy.spend_tracking.spend_report_email import send_spend_report_email
 
     clean_team_id: Final = (
-        request.team_id.strip().replace("\r", "").replace("\n", "")
-        if request.team_id is not None
-        else None
+        request.team_id.strip().replace("\r", "").replace("\n", "") if request.team_id is not None else None
     )
     clean_start_date: Final = (
-        request.start_date.strip().replace("\r", "").replace("\n", "")
-        if request.start_date is not None
-        else None
+        request.start_date.strip().replace("\r", "").replace("\n", "") if request.start_date is not None else None
     )
     clean_end_date: Final = (
-        request.end_date.strip().replace("\r", "").replace("\n", "")
-        if request.end_date is not None
-        else None
+        request.end_date.strip().replace("\r", "").replace("\n", "") if request.end_date is not None else None
     )
     clean_recipients: Final = (
         tuple(r.strip().replace("\r", "").replace("\n", "") for r in request.recipient_emails)
