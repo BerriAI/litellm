@@ -6260,7 +6260,9 @@ async def test_tag_cache_update_multiple_tags():
             tags=["tag1", "tag2"],
         )
 
-        mock_get_cache.assert_awaited_once_with(keys=["tag:tag1", "tag:tag2"], parent_otel_span=None, throttle_redis=False)
+        mock_get_cache.assert_awaited_once_with(
+            keys=["tag:tag1", "tag:tag2"], parent_otel_span=None, throttle_redis=False
+        )
         assert cache.in_memory_cache.get_cache("tag:tag1")["spend"] == 15.0
         assert cache.in_memory_cache.get_cache("tag:tag2")["spend"] == 25.0
 
