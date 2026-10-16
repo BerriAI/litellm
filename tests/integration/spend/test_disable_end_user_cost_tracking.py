@@ -695,6 +695,7 @@ def test_flag_on_burst_lands_each_row_once_through_sink_outage_and_worker_kill(r
         before_kill: Final = _burst(rig, models, key, calls[: len(_SURFACES) * 2])
         _assert_burst_landed_once(rig, models, before_kill)
         assert not rig.lens.outages.acquire(blocking=False), "the Lens sink outage was never hit"
+        _team_requests_flushed(team, len(before_kill))
         victim: Final = min(rig.proxy.worker_pids())
         replacement: Final = rig.proxy.kill_worker(victim)
         assert replacement != victim, (victim, replacement)

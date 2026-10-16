@@ -2,8 +2,8 @@ import asyncio
 import re
 import threading
 from collections.abc import Callable, Iterator
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass, replace
 from pathlib import Path
 from queue import SimpleQueue
 from types import MappingProxyType
@@ -15,7 +15,7 @@ import psutil
 import pytest
 from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment
 from integration._support.database import read_rows
-from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
+from integration._support.process import OwnedProxy, WorkerHealthcheck, graceful_stop_seconds, owned_proxy_process
 from integration._support.responses_vendor import newest_marker
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration.providers._cache_control_marks_support import owned_config
@@ -27,6 +27,7 @@ from integration.providers._mantle_gpt_prompt_cache_support import (
     SYSTEM_POINT,
     TOKEN,
     Outcome,
+    Step,
     assert_answered,
     assert_burst_landed,
     assert_wire,
@@ -60,7 +61,6 @@ _CELL_TIMEOUT: Final = int(2 * graceful_stop_seconds() + 120)
 _RESTART_TIMEOUT: Final = int(4 * graceful_stop_seconds() + 240)
 _HELD_BURST: Final = 20
 _SPREAD_BURST: Final = 12
-_SPREAD_ATTEMPTS: Final = 20
 _MANTLE_NAME: Final = "mantle-gpt-cache-owned"
 
 
@@ -122,7 +122,9 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
     release.set()
     held: Final[SimpleQueue[str]] = SimpleQueue()
     with gateway_from_environment() as environment, wire_server(_peer(release, held)) as wire:
-        with owned_proxy_process(environment, directory, _overrides(wire), workers=2) as owned:
+        with owned_proxy_process(
+            environment, directory, _overrides(wire), workers=2, healthcheck=WorkerHealthcheck.LENIENT
+        ) as owned:
             eventually(lambda: len(_started_workers(owned.log)), lambda count: count == 2, seconds=60)
             wire.drain()
             yield _Rig(owned.gateway, wire, owned, release, held)
@@ -204,38 +206,48 @@ def test_b11_foundry_gpt6_chat_stays_on_the_plain_chat_wire(rig: _Rig) -> None:
         success_row(name, marker)
 
 
-def _spread_burst(rig: _Rig, name: str, workers: tuple[int, ...]) -> dict[int, int]:
-    plan: Final = plan_burst(_SPREAD_BURST)
-    _drain(rig.held)
-    rig.wire.drain()
-    rig.release.clear()
-    with ThreadPoolExecutor(max_workers=_SPREAD_BURST) as pool:
-        futures: Final = tuple(
-            pool.submit(send, rig.gateway, endpoint, request_body(endpoint, name, prompt_text(marker), stream=stream))
-            for endpoint, stream, marker in plan
-        )
-        eventually(rig.held.qsize, lambda size: size == _SPREAD_BURST, seconds=60)
-        held_by: Final = {pid: _open_peer_connections(pid, rig.wire.url) for pid in workers}
-        rig.release.set()
-        outcomes: Final = tuple(future.result() for future in futures)
-    assert sum(held_by.values()) == _SPREAD_BURST, held_by
-    assert_burst_landed(
-        rig.wire, name, tuple((marker, outcome) for (_, _, marker), outcome in zip(plan, outcomes)), marked=True
-    )
-    return held_by
-
-
 @pytest.mark.timeout(_CELL_TIMEOUT)
 def test_e6_every_worker_of_a_two_worker_proxy_marks_the_mantle_request(rig: _Rig) -> None:
-    with rig.gateway.scenario() as scenario:
+    plan: Final = plan_burst(_SPREAD_BURST)
+    half: Final = len(plan) // 2
+    with (
+        rig.gateway.scenario() as scenario,
+        httpx.Client(
+            base_url=str(rig.gateway.client.base_url),
+            timeout=60,
+            trust_env=False,
+            limits=httpx.Limits(max_keepalive_connections=0),
+        ) as unpooled,
+        ThreadPoolExecutor(max_workers=len(plan)) as pool,
+    ):
         name: Final = mantle_deployment(rig.gateway, scenario, rig.wire)
-        workers: Final = _live_workers(rig.owned.log)
-        assert len(workers) == 2, workers
-        for _ in range(_SPREAD_ATTEMPTS):
-            if all(count > 0 for count in _spread_burst(rig, name, workers).values()):
-                break
-        else:
-            raise AssertionError("One worker never took a marked request")
+        first, second = sorted(_live_workers(rig.owned.log))
+        gateway: Final = replace(rig.gateway, client=unpooled)
+        _drain(rig.held)
+        rig.wire.drain()
+        rig.release.clear()
+
+        def submit(part: tuple[Step, ...]) -> tuple[Future[Outcome], ...]:
+            return tuple(
+                pool.submit(send, gateway, endpoint, request_body(endpoint, name, prompt_text(marker), stream=stream))
+                for endpoint, stream, marker in part
+            )
+
+        try:
+            with rig.owned.suspended(second):
+                on_first: Final = submit(plan[:half])
+                eventually(rig.held.qsize, lambda size: size == half, seconds=60)
+            with rig.owned.suspended(first):
+                on_second: Final = submit(plan[half:])
+                eventually(rig.held.qsize, lambda size: size == len(plan), seconds=60)
+            held_by: Final = {pid: _open_peer_connections(pid, rig.wire.url) for pid in (first, second)}
+        finally:
+            rig.release.set()
+        outcomes: Final = tuple(future.result() for future in (*on_first, *on_second))
+        assert held_by == {first: half, second: len(plan) - half}, held_by
+        assert_burst_landed(
+            rig.wire, name, tuple((marker, outcome) for (_, _, marker), outcome in zip(plan, outcomes)), marked=True
+        )
 
 
 def _mantle_config(wire: Wire, directory: Path, **litellm_params: JsonValue) -> Path:

@@ -529,7 +529,7 @@ def _marked_posts(received: tuple[Request, ...], marker: str) -> tuple[Request, 
 
 
 @pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
-def test_a_previous_response_id_turn_replays_the_function_call_without_the_search_call(owned_rig: _OwnedRig) -> None:
+def test_a_previous_response_id_turn_replays_the_search_call_beside_the_function_call(owned_rig: _OwnedRig) -> None:
     marker: Final = uuid.uuid4().hex
     owned_rig.wire.drain()
     proxy: Final = owned_rig.proxy.gateway
@@ -566,11 +566,8 @@ def test_a_previous_response_id_turn_replays_the_function_call_without_the_searc
         _assert_forwarded_with_tool_search(opening)
         _assert_forwarded_with_tool_search(replay)
         messages: Final = rv.ITEMS.validate_python(rv.JSON_OBJECT.validate_json(replay.body)["messages"])
-        assert "srvtoolu_" not in json.dumps(messages) and "tool_search" not in json.dumps(messages), messages
         (assistant,) = [turn for turn in messages if turn["role"] == "assistant"]
-        blocks: Final = rv.ITEMS.validate_python(assistant["content"])
-        tool_uses: Final = [(block["type"], block.get("id")) for block in blocks if block["type"] == "tool_use"]
-        assert tool_uses == [("tool_use", f"toolu_{marker}")], blocks
+        assert assistant["content"] == _message(marker)["content"], assistant
         assert [block["tool_use_id"] for block in _tool_results(messages)] == [f"toolu_{marker}"], messages
 
 
