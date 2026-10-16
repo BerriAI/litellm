@@ -106,6 +106,9 @@ litellm_py_files=$(scope_match "$litellm_py_pattern")
 if [ -n "$(scope_match '^(litellm/proxy/_experimental/mcp_server/|scripts/check_mcp_operation_boundary\.py)')" ]; then
     uv run --no-sync python scripts/check_mcp_operation_boundary.py || exit 1
 fi
+if [ -n "$(scope_match '^(litellm/native/|scripts/check_native_imports\.py)')" ]; then
+    uv run --no-sync python scripts/check_native_imports.py || exit 1
+fi
 e2e_py_files=$(scope_match "$e2e_py_pattern")
 test_tree_files=$(scope_match "$test_tree_pattern")
 # ruff format (and CI's format step) skip enterprise; the rest of make lint covers it.
