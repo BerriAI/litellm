@@ -4,7 +4,7 @@ from typing import Final
 import pytest
 
 import litellm
-from litellm.rust_bridge.chat_completions.route_host import connection_defaults, response
+from litellm.rust_bridge.host.routes.chat_completions import connection_defaults, response
 from litellm.types.utils import ModelResponse
 
 

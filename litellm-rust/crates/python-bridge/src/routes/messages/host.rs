@@ -26,7 +26,7 @@ use crate::{
     routes::RequestView,
 };
 
-const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.messages.route_host";
+const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.host.routes.messages";
 const REQUEST_ERROR_MARKER: &str = "messages_request_error";
 
 const BODY_FIELDS: [&str; 22] = [
