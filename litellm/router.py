@@ -13399,8 +13399,10 @@ class Router:
             - First check for rate limit errors (if this is true, it means the model passed the context window check but failed the rate limit check)
             """
 
-            group_deployments: Final = tuple(
-                self.get_all_deployments(model_name=model) if request_deployments is None else request_deployments
+            group_deployments: Final = (
+                tuple(request_deployments)
+                if request_deployments is not None
+                else (tuple(self.get_all_deployments(model_name=model)) or typed_deployments)
             )
             if (
                 not _context_window_error

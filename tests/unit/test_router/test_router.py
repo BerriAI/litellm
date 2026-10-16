@@ -27100,6 +27100,26 @@ def test_pre_call_checks_filters_an_authenticating_provider_deployment_that_lack
     assert [d["model_info"]["id"] for d in filtered] == ["gpt-4o"]
 
 
+def test_pre_call_checks_answers_400_when_the_group_name_lists_no_deployments(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    model_list: Final = [
+        {
+            "model_name": "no-json-mode",
+            "litellm_params": {"model": "openai/gpt-3.5-turbo-16k", "api_key": "my-fake-key"},
+            "model_info": {"id": "only", "max_input_tokens": 100},
+        }
+    ]
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
+
+    with pytest.raises(litellm.UnsupportedParamsError):
+        router._pre_call_checks(
+            model="team-public-name",
+            healthy_deployments=model_list,
+            messages=[{"role": "user", "content": "hi"}],
+            request_kwargs={"response_format": {"type": "json_object"}},
+        )
+
+
 async def _select_team_json_deployment(router: Router, entrypoint: str, selection: Mapping[str, object]) -> object:
     if entrypoint == "async":
         return await router.async_get_available_deployment(**selection)
