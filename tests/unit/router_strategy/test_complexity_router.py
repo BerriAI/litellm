@@ -36,11 +36,12 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import (
+    CLIENT_OUTPUT_CEILING_METADATA_KEY,
     OUTPUT_TOKEN_CEILING_PARAMS,
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
     SESSION_ID_GENERATED_METADATA_KEY,
 )
-from litellm.router import as_output_cap
+from litellm.router import as_output_cap, stamped_client_ceiling
 from litellm.router_strategy.complexity_router.complexity_router import (
     _CLASSIFICATION_CURRENT_MESSAGE_ONLY,
     _CLASSIFICATION_WITH_CONVERSATION,
@@ -13581,7 +13582,7 @@ def test_tier_model_params_are_used_by_pools_and_savings_baseline(mock_router_in
 
     assert router._tier_pools() == {"SIMPLE": ["mini"], "REASONING": ["opus", "abc"]}
     assert router._hardest_tier_models() == ("opus", "abc")
-    assert router._litellm_params_for_model(ComplexityTier.REASONING, "opus") == {"reasoning_effort": "xhigh"}
+    assert router._litellm_params_for_model(ComplexityTier.REASONING, "opus", {}) == {"reasoning_effort": "xhigh"}
 
 
 @pytest.mark.asyncio
@@ -16765,7 +16766,7 @@ class TestMaxTokensFromTierModel:
     @staticmethod
     def _router(
         tier_litellm_params: dict | None = None,
-        max_tokens_from_tier_model: bool | None = None,
+        max_tokens_from_tier_model: bool | Literal["clamp"] | None = None,
         simple_deployments: list[dict] | None = None,
         extra_config: dict | None = None,
     ) -> Router:
@@ -16865,6 +16866,69 @@ class TestMaxTokensFromTierModel:
         assert sent["max_tokens"] == 8192
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "prompt, client_kwargs, expected",
+        [
+            (COMPLEX_PROMPT, {"max_tokens": 2000}, ("anthropic/claude-sonnet-5", 2000)),
+            ("hi", {"max_tokens": 100000}, ("anthropic/claude-haiku-4-5", 8192)),
+            (COMPLEX_PROMPT, {}, ("anthropic/claude-sonnet-5", 64000)),
+            (COMPLEX_PROMPT, {"max_tokens": 0}, ("anthropic/claude-sonnet-5", 64000)),
+            (COMPLEX_PROMPT, {"max_completion_tokens": 2000}, ("anthropic/claude-sonnet-5", 2000)),
+            (COMPLEX_PROMPT, {"max_tokens": 3000, "max_completion_tokens": 2000}, ("anthropic/claude-sonnet-5", 2000)),
+        ],
+        ids=["below-ceiling", "above-ceiling", "omitted", "zero", "other-carrier", "smallest-carrier"],
+    )
+    async def test_clamp_keeps_the_smaller_of_the_client_value_and_the_ceiling(
+        self, prompt: str, client_kwargs: dict[str, int], expected: tuple[str, int]
+    ):
+        sent = await self._routed(self._router(max_tokens_from_tier_model="clamp"), prompt, **client_kwargs)
+
+        assert (sent["model"], sent["max_tokens"]) == expected
+        assert not (OUTPUT_TOKEN_CEILING_PARAMS - {"max_tokens"}) & sent.keys()
+
+    @pytest.mark.asyncio
+    async def test_clamp_on_the_responses_surface_keeps_its_own_name(self):
+        router = self._router(max_tokens_from_tier_model="clamp")
+
+        sent = await self._routed_responses(router, self.COMPLEX_PROMPT, max_output_tokens=2000)
+
+        assert (sent["model"], sent["max_output_tokens"]) == ("anthropic/claude-sonnet-5", 2000)
+        assert "max_tokens" not in sent
+
+    @pytest.mark.asyncio
+    async def test_clamp_leaves_the_operators_own_tier_ceiling_in_charge(self):
+        router = self._router(tier_litellm_params={"max_tokens": 4321}, max_tokens_from_tier_model="clamp")
+
+        sent = await self._routed(router, max_tokens=100)
+
+        assert sent["max_tokens"] == 4321
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "callers_original, expected",
+        [({"max_tokens": 2000}, 2000), ({}, 64000)],
+        ids=["caller-sent-a-value", "caller-sent-nothing"],
+    )
+    async def test_clamp_on_a_rerouted_request_uses_the_callers_original_value(
+        self, callers_original: dict[str, int], expected: int
+    ):
+        """A retry re-enters routing with kwargs an earlier pass already rewrote; the stamp holds
+        what the caller actually sent."""
+        router = self._router(max_tokens_from_tier_model="clamp")
+        rewritten: dict[str, object] = {
+            "max_tokens": 8192,
+            "metadata": {CLIENT_OUTPUT_CEILING_METADATA_KEY: callers_original},
+        }
+
+        sent = await self._routed(router, self.COMPLEX_PROMPT, **rewritten)
+
+        assert sent["max_tokens"] == expected
+
+    def test_an_unknown_mode_is_rejected(self):
+        with pytest.raises(ValidationError):
+            ComplexityRouterConfig(tiers={"SIMPLE": "small"}, max_tokens_from_tier_model="sometimes")
+
+    @pytest.mark.asyncio
     async def test_a_tier_model_with_an_unknown_ceiling_keeps_the_client_value(self):
         unmapped: dict = {"model_name": "small", "litellm_params": {"model": "openai/not-in-any-map", "api_key": "k"}}
 
@@ -16960,7 +17024,7 @@ class TestMaxTokensFromTierModel:
             complexity_router_config={"tiers": {"SIMPLE": "small"}, "default_model": "big"},
         )
 
-        assert dict(strategy._litellm_params_for_model(None, "big")) == {"max_tokens": 64000}
+        assert dict(strategy._litellm_params_for_model(None, "big", {})) == {"max_tokens": 64000}
 
     @pytest.mark.asyncio
     async def test_a_fallback_into_a_plain_group_gets_the_callers_ceiling_back(self):
@@ -17075,6 +17139,27 @@ class TestMaxTokensFromTierModel:
     )
     def test_a_client_cap_is_read_as_an_integer_or_ignored(self, value, expected):
         assert as_output_cap(value) == expected
+
+    @pytest.mark.parametrize(
+        "request_kwargs, expected",
+        [
+            ({"max_tokens": 8192}, None),
+            ({"metadata": {CLIENT_OUTPUT_CEILING_METADATA_KEY: {}}}, {}),
+            ({"litellm_metadata": {CLIENT_OUTPUT_CEILING_METADATA_KEY: {"max_tokens": "2000"}}}, {"max_tokens": 2000}),
+            (
+                {"metadata": {CLIENT_OUTPUT_CEILING_METADATA_KEY: {"max_output_tokens": 5, "api_key": "x", "max_tokens": True}}},
+                {"max_output_tokens": 5},
+            ),
+            ({"metadata": {CLIENT_OUTPUT_CEILING_METADATA_KEY: "not-a-dict"}}, None),
+        ],
+        ids=["no-stamp", "empty-stamp", "litellm-metadata-bucket", "only-integer-carriers", "malformed-stamp"],
+    )
+    def test_the_stamp_reads_back_only_the_callers_integer_carriers(
+        self, request_kwargs: dict[str, object], expected: dict[str, int] | None
+    ):
+        stamped = stamped_client_ceiling(request_kwargs)
+
+        assert (None if stamped is None else dict(stamped)) == expected
 
     def test_restoring_the_callers_ceiling_reads_the_stamp_and_replaces_every_carrier(self):
         stamped: dict = {"max_output_tokens": 500, "metadata": {"_client_output_ceiling": {"max_tokens": 8192}}}

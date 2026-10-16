@@ -1,5 +1,6 @@
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from functools import partial
 from typing import Final
 
 import pytest
@@ -148,7 +149,7 @@ async def _select(
     return await select_cached_model(
         router=router,
         config=config,
-        params_for_model=complexity._litellm_params_for_model,
+        params_for_model=partial(complexity._litellm_params_for_model, request_kwargs=request_kwargs),
         response=response,
         body=body,
         request_kwargs=request_kwargs,
@@ -234,7 +235,9 @@ async def test_disabled_setting_does_not_access_prediction_services() -> None:
         await choose_cached_model(
             router=_router(),
             config=config,
-            params_for_model=ComplexityRouter("smart", _router(), config.model_dump())._litellm_params_for_model,
+            params_for_model=partial(
+                ComplexityRouter("smart", _router(), config.model_dump())._litellm_params_for_model, request_kwargs={}
+            ),
             response=_response(),
             request_kwargs={},
             messages=None,
@@ -348,6 +351,7 @@ def test_repeated_model_in_multiple_tiers_is_only_considered_once() -> None:
         (True, "custom_endpoint", "cheap"),
         (True, "compaction", "cheap"),
         (True, "guardrail", "cheap"),
+        (True, "clamp", "strong"),
     ],
 )
 async def test_router_applies_opt_in_and_preserves_failure_semantics(
@@ -368,7 +372,9 @@ async def test_router_applies_opt_in_and_preserves_failure_semantics(
     from litellm.router_strategy.complexity_router.context_compaction import initialize_compaction_state
 
     config: Final = _config(
-        cache_aware_routing=enabled, cache_aware_routing_timeout_ms=1 if behavior == "deadline" else 2000
+        cache_aware_routing=enabled,
+        cache_aware_routing_timeout_ms=1 if behavior == "deadline" else 2000,
+        max_tokens_from_tier_model="clamp" if behavior == "clamp" else True,
     )
     models: Final = _router(
         strong_output_rate=0.000048 if behavior == "tier_cost" else 0.000015,
@@ -423,6 +429,7 @@ async def test_router_applies_opt_in_and_preserves_failure_semantics(
         body: Final = {
             **_body(),
             **({"max_tokens": 1000} if behavior in ("tier_cost", "tier_context") else {}),
+            **({"max_tokens": 100} if behavior == "clamp" else {}),
             **({"thinking": {"type": "enabled", "budget_tokens": 10000}} if behavior == "unsupported_shape" else {}),
         }
         kwargs: Final = {
@@ -437,6 +444,7 @@ async def test_router_applies_opt_in_and_preserves_failure_semantics(
                 else {}
             ),
             **({"guardrails": ["test-guardrail"]} if behavior == "guardrail" else {}),
+            **({"max_tokens": 100} if behavior == "clamp" else {}),
         }
         if expected is None:
             with pytest.raises(asyncio.CancelledError):
@@ -458,6 +466,10 @@ async def test_router_applies_opt_in_and_preserves_failure_semantics(
         if enabled and behavior == "success":
             assert requests.qsize() == 4
         assert response.routing_decision is not None
+        if behavior == "clamp":
+            assert "cache-aware:estimated-cost=0.01950000;original-cost=0.06390000" in (
+                response.routing_decision["signals"] or ()
+            ), "both arms must be estimated at the caller's 100 output tokens, not the 1024 default"
         assert response.routing_decision["cause"] == (
             "prompt_cache_cost" if expected == "strong" else "heuristic_scorer"
         )
