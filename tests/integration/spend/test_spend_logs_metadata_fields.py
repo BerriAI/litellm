@@ -21,6 +21,98 @@ from pydantic import JsonValue
 CACHED_PROMPT_TOKENS: Final = 4
 
 
+def _ollama_fixed_id_reply(request: Request) -> Reply:
+    body: Final = JSON_OBJECT.validate_json(request.body)
+    assert request.target == "/v1/chat/completions", request.target
+    assert body["model"] == "gpt-oss:20b", body
+    common: Final = {
+        "id": "chatcmpl-0",
+        "model": "gpt-oss:20b",
+        "created": 1,
+        "system_fingerprint": "fp_ollama",
+    }
+    usage: Final = {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6}
+    if body.get("stream") is True:
+        chunks: Final = (
+            {"choices": [{"index": 0, "delta": {"role": "assistant", "content": "h"}, "finish_reason": None}]},
+            {"choices": [{"index": 0, "delta": {"content": "i"}, "finish_reason": None}]},
+            {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+            {"choices": [], "usage": usage},
+        )
+        return Reply(
+            content_type="text/event-stream",
+            chunks=tuple(
+                ("data: " + json.dumps({**common, "object": "chat.completion.chunk", **chunk}) + "\n\n").encode()
+                for chunk in chunks
+            )
+            + (b"data: [DONE]\n\n",),
+        )
+    return Reply(
+        body=json.dumps(
+            {
+                **common,
+                "object": "chat.completion",
+                "usage": usage,
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+            }
+        ).encode()
+    )
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_reused_ollama_response_ids_keep_every_spend_row(gateway: Gateway, stream: bool) -> None:
+    with wire_server(_ollama_fixed_id_reply) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="openai/gpt-oss:20b",
+            api_base=wire.url + "/v1",
+            api_key="synthetic-key",
+            input_cost_per_token=0.001,
+            output_cost_per_token=0.002,
+        )
+        key: Final = scenario.key(models=[model])
+        responses: Final = tuple(
+            gateway.request(
+                "POST",
+                "/v1/chat/completions",
+                {
+                    "model": model,
+                    "messages": [{"role": "user", "content": f"hi {index}"}],
+                    "stream": stream,
+                    **({"stream_options": {"include_usage": True}} if stream else {}),
+                },
+                key=key,
+            )
+            for index in range(3)
+        )
+        assert tuple(response.status_code for response in responses) == (200, 200, 200)
+        returned: Final = tuple(
+            tuple(
+                JSON_OBJECT.validate_json(line[6:])
+                for line in response.text.splitlines()
+                if line.startswith("data: ") and line != "data: [DONE]"
+            )
+            if stream
+            else (JSON_OBJECT.validate_json(response.content),)
+            for response in responses
+        )
+        ids: Final = tuple(string_value(chunks[0]["id"]) for chunks in returned)
+        for chunks, response_id in zip(returned, ids, strict=True):
+            assert {chunk["id"] for chunk in chunks} == {response_id}
+            assert object_value(chunks[0]["provider_specific_fields"])["original_response_id"] == "chatcmpl-0"
+            assert object_value(chunks[-1]["usage"])["total_tokens"] == 6
+        rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT request_id, spend FROM "LiteLLM_SpendLogs" WHERE api_key=%s',
+                (sha256(key.encode()).hexdigest(),),
+            ),
+            lambda values: len(values) == 3,
+            seconds=70,
+        )
+        assert len(set(ids)) == 3
+        assert {row["request_id"] for row in rows} == set(ids)
+        assert tuple(float(str(row["spend"])) for row in rows) == pytest.approx((0.007, 0.007, 0.007))
+
+
 def _config(
     tmp_path: Path,
     spend_logs_metadata_fields: Mapping[str, JsonValue] | None,

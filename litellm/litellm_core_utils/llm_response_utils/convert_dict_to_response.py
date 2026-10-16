@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_reasoning_content,
 )
+from litellm.llms.ollama.common_utils import OllamaResponseIdNormalizer
 from litellm.types.llms.databricks import DatabricksTool
 from litellm.types.llms.openai import (
     ChatCompletionReasoningItem,
@@ -833,7 +834,9 @@ def convert_to_model_response_object(
                 if k not in _MODEL_RESPONSE_FIELDS:
                     setattr(model_response_object, k, v)
 
-            return model_response_object
+            ollama_ids: Final = OllamaResponseIdNormalizer()
+            ollama_ids.observe(model_response_object)
+            return ollama_ids.apply(model_response_object)
         elif response_type == "embedding" and (
             model_response_object is None or isinstance(model_response_object, EmbeddingResponse)
         ):
