@@ -75218,5 +75218,18 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
+    },
+    "together_ai/reflection/Beam-1.0-501B-A23B": {
+        "cache_read_input_token_cost": 4e-08,
+        "input_cost_per_token": 4e-07,
+        "litellm_provider": "together_ai",
+        "max_input_tokens": 1048576,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
+        "source": "https://api.together.ai/v1/models",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     }
 }
