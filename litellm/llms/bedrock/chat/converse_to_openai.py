@@ -290,22 +290,31 @@ def _system_rows(blocks: Sequence[_ContentBlock]) -> tuple[ConverseRow, ...]:
     )
 
 
-def _request_field_rows(value: object) -> tuple[ConverseRow, ...]:
+def _user_row(slots: Sequence[Slot]) -> ConverseRow:
+    parts: Final = [ChatCompletionTextObject(type="text", text=_slot_text(slot)) for slot in slots]
+    return ConverseRow(ChatCompletionUserMessage(role="user", content=parts), tuple(slots))
+
+
+def _with_request_fields(rows: tuple[ConverseRow, ...], value: object) -> tuple[ConverseRow, ...]:
+    """
+    ``rows`` with the ``additionalModelRequestFields`` strings after the text of the latest user row, so a guardrail
+    that judges only the latest user message reads both. They get a user row of their own when there is none.
+    """
     slots: Final = _string_leaves(("additionalModelRequestFields",), value)
-    return (
-        (ConverseRow(ChatCompletionUserMessage(role="user", content=list(_text_parts(slots))), slots),) if slots else ()
-    )
+    if not slots:
+        return rows
+    latest: Final = next((index for index in reversed(range(len(rows))) if rows[index].message["role"] == "user"), None)
+    if latest is None:
+        return (*rows, _user_row(slots))
+    return (*rows[:latest], _user_row((*rows[latest].content, *slots)), *rows[latest + 1 :])
 
 
 def converse_rows(request: ConverseRequest, include_tool_calls: bool) -> tuple[ConverseRow, ...]:
     messages: Final = (
         _message_rows(index, message, include_tool_calls) for index, message in enumerate(request.messages)
     )
-    return (
-        *_system_rows(request.system),
-        *chain.from_iterable(messages),
-        *_request_field_rows(request.additional_model_request_fields),
-    )
+    rows: Final = (*_system_rows(request.system), *chain.from_iterable(messages))
+    return _with_request_fields(rows, request.additional_model_request_fields)
 
 
 @dataclass(frozen=True, slots=True)

@@ -173,7 +173,7 @@ def _extract_converse_texts(
     contract, while ``additionalModelRequestFields`` is free-form and defined by
     the target model, so what it carries cannot be classified without knowing
     that model. Scanning it stays the fail-closed default. Its strings come
-    last, in the same order as in the row built from them.
+    last, in the same order as they follow the latest user message in the rows.
     """
     system_holders: Final = list[_StringHolder]()
     if not skip_system and not scan_only_tool_results:

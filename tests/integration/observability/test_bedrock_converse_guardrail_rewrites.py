@@ -84,6 +84,7 @@ class _Vendor(str, Enum):
     ADDS_A_TOOL = "adds-a-tool"
     RENAMES_A_TOOL = "renames-a-tool"
     ECHOES_TOOLS_AS_NOT_STRICT = "echoes-tools-as-not-strict"
+    JUDGES_LATEST_USER_MESSAGE = "judges-latest-user-message"
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +140,12 @@ def _compacted(row: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
 
 def _content_masked(row: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
     return {**row, "content": _masked(row.get("content"))}
+
+
+def _latest_user_message(body: Mapping[str, JsonValue]) -> JsonValue:
+    rows: Final = tuple(object_value(row) for row in list_value(body.get("structured_messages") or []))
+    users: Final = tuple(row for row in rows if row.get("role") == "user")
+    return users[-1] if users else body.get("texts")
 
 
 def _verdict(vendor: _Vendor, body: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
@@ -214,6 +221,10 @@ def _verdict(vendor: _Vendor, body: Mapping[str, JsonValue]) -> dict[str, JsonVa
                     {**tool, "function": {**object_value(tool.get("function")), "strict": False}} for tool in echoed
                 ],
             }
+        case _Vendor.JUDGES_LATEST_USER_MESSAGE:
+            if _CARD_PATTERN.search(json.dumps(_latest_user_message(body))) is None:
+                return {"action": "NONE"}
+            return {"action": "BLOCKED", "blocked_reason": "card number"}
 
 
 def _vendor(request: Request) -> Reply:
@@ -434,6 +445,22 @@ def test_compacted_tool_result_reaches_bedrock_as_one_text_block_with_the_image_
         _assistant(_tool_use("last four 1111")),
         _user(_tool_result({"text": compacted}, image)),
     ]
+
+
+@pytest.mark.parametrize(
+    ("user_text", "request_fields"),
+    [
+        (f"Card {_CARD} please.", {"thinking": {"type": "enabled", "budget_tokens": 1024}}),
+        (f"Card {_CARD} please.", {"anthropic_beta": ["interleaved-thinking-2025-05-14"]}),
+        ("Hello.", {"system": f"Card {_CARD} please."}),
+    ],
+    ids=["card-next-to-thinking", "card-next-to-anthropic-beta", "card-in-a-request-field"],
+)
+def test_guardrail_judging_the_latest_user_message_reads_it_with_the_request_fields(
+    rig: _Rig, user_text: str, request_fields: Mapping[str, JsonValue]
+) -> None:
+    body: Final = {"messages": [_user({"text": user_text})], "additionalModelRequestFields": dict(request_fields)}
+    assert "card number" in _refused(rig, _converse(rig, _generic(_Vendor.JUDGES_LATEST_USER_MESSAGE), body))
 
 
 def test_dropped_message_is_refused_before_bedrock(rig: _Rig) -> None:
