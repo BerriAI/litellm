@@ -3749,6 +3749,7 @@ dependencies = [
  "rstest",
  "serde",
  "serde_json",
+ "strum",
  "tempfile",
  "thiserror 2.0.19",
  "tokio",

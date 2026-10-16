@@ -25,6 +25,7 @@ litellm-secrets.workspace = true
 litellm-tracing.workspace = true
 serde_json.workspace = true
 serde.workspace = true
+strum.workspace = true
 tracing.workspace = true
 tokio = { workspace = true, features = ["signal"] }
 uuid.workspace = true
@@ -34,5 +35,5 @@ tower-sessions-moka-store = "0.15.0"
 base64.workspace = true
 rstest.workspace = true
 tempfile.workspace = true
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, features = ["sync", "io-util"] }
 tower = { version = "0.5", features = ["util"] }

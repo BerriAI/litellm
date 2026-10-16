@@ -18,8 +18,11 @@ resource "aws_lb_target_group" "gateway" {
   protocol    = "TCP"
   vpc_id      = aws_vpc.this.id
   target_type = "instance"
+  # Readiness turns 503 as soon as a gateway starts draining, before it stops accepting.
   health_check {
-    protocol = "TCP"
+    protocol = "HTTP"
+    path     = "/health/readiness"
+    matcher  = "200"
     interval = 10
   }
   deregistration_delay = 900

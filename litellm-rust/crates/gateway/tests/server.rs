@@ -287,3 +287,57 @@ async fn ui_routes_are_absent_when_not_mounted(
         .unwrap();
     assert_eq!(response.status().as_u16(), 404);
 }
+
+#[rstest]
+#[case::metrics_default_without_token("", "/metrics", None, 401)]
+#[case::metrics_default_wrong_token("", "/metrics", Some("Bearer wrong"), 401)]
+#[case::metrics_default_master_key("", "/metrics", Some("Bearer gateway-key"), 200)]
+#[case::metrics_required("true", "/metrics", None, 401)]
+#[case::metrics_required_by_string_false("'false'", "/metrics", None, 401)]
+#[case::metrics_public("false", "/metrics", None, 200)]
+#[case::liveliness_while_metrics_required("true", "/health/liveliness", None, 200)]
+#[case::readiness_while_metrics_required("true", "/health/readiness", None, 200)]
+#[tokio::test]
+async fn metrics_endpoint_requires_auth_unless_explicitly_disabled(
+    inference: Arc<Gateway>,
+    #[case] require_auth: &str,
+    #[case] path: &str,
+    #[case] authorization: Option<&str>,
+    #[case] status: u16,
+) {
+    let setting = match require_auth {
+        "" => String::new(),
+        value => format!("litellm_settings:\n  require_auth_for_metrics_endpoint: {value}\n"),
+    };
+    let config = Config::from_yaml(&format!(
+        "model_list: []\ngeneral_settings:\n  master_key: gateway-key\n{setting}"
+    ))
+    .unwrap();
+    let draining = litellm_gateway::health::Draining::default();
+    let metrics = litellm_gateway::metrics::Metrics::new(&config, draining.flag());
+    let metrics_auth = litellm_gateway::metrics_auth(&config, inference.secrets.clone());
+    let app = litellm_gateway::with_ops(
+        litellm_gateway::router(inference, &config, None, None),
+        metrics,
+        draining,
+        metrics_auth,
+    );
+    let request = Request::get(path);
+    let request = match authorization {
+        Some(value) => request.header("authorization", value),
+        None => request,
+    };
+
+    let response = app
+        .oneshot(request.body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(response.status().as_u16(), status);
+    if path == "/metrics" && status == 200 {
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("litellm_in_flight_requests"));
+    }
+}

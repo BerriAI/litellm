@@ -1,6 +1,7 @@
-use std::ffi::OsString;
+use std::{ffi::OsString, time::Duration};
 
 use litellm_auth_types::SecretValue;
+use litellm_gateway::drain::DrainSettings;
 use litellm_tracing::Level;
 use serde::{Deserialize, de::DeserializeOwned};
 
@@ -11,6 +12,11 @@ pub(super) struct Settings {
     pub port: u16,
     pub litellm_config: String,
     rust_log: Option<String>,
+    /// Seconds in-flight requests get to finish after a shutdown signal. The default matches a
+    /// typical load balancer deregistration delay.
+    litellm_drain_seconds: u64,
+    /// Seconds readiness reports 503 before the listener closes.
+    litellm_unready_delay_seconds: u64,
 }
 
 impl Default for Settings {
@@ -20,6 +26,8 @@ impl Default for Settings {
             port: 4000,
             litellm_config: "config.yaml".into(),
             rust_log: None,
+            litellm_drain_seconds: 900,
+            litellm_unready_delay_seconds: 0,
         }
     }
 }
@@ -30,6 +38,13 @@ impl Settings {
             .as_deref()
             .and_then(|value| value.parse().ok())
             .unwrap_or(Level::INFO)
+    }
+
+    pub fn drain(&self) -> DrainSettings {
+        DrainSettings {
+            unready_delay: Duration::from_secs(self.litellm_unready_delay_seconds),
+            window: Duration::from_secs(self.litellm_drain_seconds),
+        }
     }
 }
 
@@ -82,6 +97,8 @@ mod tests {
         assert_eq!(settings.port, 4000);
         assert_eq!(settings.litellm_config, "config.yaml");
         assert_eq!(settings.log_level(), Level::INFO);
+        assert_eq!(settings.drain().window, Duration::from_secs(900));
+        assert_eq!(settings.drain().unready_delay, Duration::ZERO);
     }
 
     #[rstest]
@@ -92,6 +109,8 @@ mod tests {
             ("LITELLM_CONFIG", "/tmp/custom.yaml"),
             ("RUST_LOG", "debug"),
             ("LITELLM_UI_SECURE_COOKIES", "invalid-but-ui-disabled"),
+            ("LITELLM_DRAIN_SECONDS", "30"),
+            ("LITELLM_UNREADY_DELAY_SECONDS", "5"),
         ])
         .unwrap();
 
@@ -99,6 +118,8 @@ mod tests {
         assert_eq!(settings.port, 8080);
         assert_eq!(settings.litellm_config, "/tmp/custom.yaml");
         assert_eq!(settings.log_level(), Level::DEBUG);
+        assert_eq!(settings.drain().window, Duration::from_secs(30));
+        assert_eq!(settings.drain().unready_delay, Duration::from_secs(5));
     }
 
     #[rstest]
