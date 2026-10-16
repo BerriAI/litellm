@@ -78,11 +78,15 @@ def test_together_completion_cost_keeps_unregistered_model_size_fallback(monkeyp
     ) == pytest.approx(100 * input_rate + 20 * output_rate)
 
 
-@pytest.mark.parametrize("bare_provider", ["openai", None, "together_ai"])
+@pytest.mark.parametrize(
+    ("bare_provider", "declares_provider"),
+    [("openai", True), (None, False), (None, True), ("together_ai", True)],
+)
 @pytest.mark.parametrize("provider_scoped", [False, True])
 def test_together_completion_cost_ignores_other_provider_bare_prices(
     monkeypatch: pytest.MonkeyPatch,
     bare_provider: str | None,
+    declares_provider: bool,
     provider_scoped: bool,
 ) -> None:
     model: Final = "example/colliding-3B"
@@ -104,7 +108,7 @@ def test_together_completion_cost_ignores_other_provider_bare_prices(
         {
             "input_cost_per_token": bare_rates[0],
             "output_cost_per_token": bare_rates[1],
-            **({"litellm_provider": bare_provider} if bare_provider is not None else {}),
+            **({"litellm_provider": bare_provider} if declares_provider else {}),
         },
     )
     if provider_scoped:

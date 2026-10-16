@@ -28,7 +28,7 @@ def has_together_registry_pricing(model: str, cost_map: Mapping[str, object]) ->
     return (
         isinstance(bare_entry, Mapping)
         and "input_cost_per_token" in bare_entry
-        and bare_entry.get("litellm_provider") in (None, "together_ai")
+        and ("litellm_provider" not in bare_entry or bare_entry["litellm_provider"] in (None, "together_ai"))
     )
 
 
