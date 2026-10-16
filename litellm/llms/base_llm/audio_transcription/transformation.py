@@ -1,9 +1,12 @@
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -11,18 +14,21 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import FileTypes, ModelResponse, TranscriptionResponse
 
+_TRANSCRIPTION_REQUEST: Final = TypeAdapter(Mapping[str, object])
 
-def sdk_compatible_transcription_request_data(data: dict) -> dict:
+
+def sdk_compatible_transcription_request_data(data: object) -> Mapping[str, object]:
+    request_data: Final = _TRANSCRIPTION_REQUEST.validate_python(data)
     extension_keys: Final = ("keywords", "languages")
-    extension_body: Final = {key: data[key] for key in extension_keys if key in data}
+    extension_body: Final = {key: request_data[key] for key in extension_keys if key in request_data}
     if not extension_body:
-        return data
+        return request_data
 
-    existing_extra_body: Final = data.get("extra_body")
+    existing_extra_body: Final = request_data.get("extra_body")
     return {
-        **{key: value for key, value in data.items() if key not in extension_keys},
+        **{key: value for key, value in request_data.items() if key not in extension_keys},
         "extra_body": {
-            **(existing_extra_body if isinstance(existing_extra_body, dict) else {}),
+            **(as_str_mapping(existing_extra_body) or {}),
             **extension_body,
         },
     }

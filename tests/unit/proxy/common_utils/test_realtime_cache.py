@@ -47,7 +47,7 @@ def test_realtime_request_body_preserves_default_model_authorization(is_translat
     from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_inference_request
     from litellm.proxy.common_utils.http_parsing_utils import resolve_realtime_route_model
 
-    body: Final = TypeAdapter(Mapping[str, object]).validate_json(_realtime_request_body(None))
+    body: Final = TypeAdapter(Mapping[str, object]).validate_json(realtime_request_body(None))
     route: Final = "/v1/realtime/translations" if is_translation else "/v1/realtime"
     intent: Final = None if is_translation else "transcription"
     admitted: Final = managed_inference_request(route, body, {}, None, intent=intent)
@@ -58,7 +58,7 @@ def test_realtime_request_body_preserves_default_model_authorization(is_translat
 
 @pytest.mark.parametrize("model", (None, "requested", 'model"with\\quotes', "model\nwith-newline"))
 def test_realtime_request_body_preserves_model_names(model: str | None) -> None:
-    body: Final = TypeAdapter(Mapping[str, object]).validate_json(_realtime_request_body(model))
+    body: Final = TypeAdapter(Mapping[str, object]).validate_json(realtime_request_body(model))
 
     assert body["model"] == model
 

@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
+
 from litellm.llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 from litellm.types.realtime import RealtimeQueryParams
 
@@ -517,7 +519,7 @@ async def test_translation_websocket_uses_direct_transport(beta_client: bool) ->
         )
     )
     websocket.close = AsyncMock()
-    logging_obj: Final = MagicMock()
+    logging_obj: Final = MagicMock(dispatch_success_handlers=AsyncMock(), dispatch_failure_handlers=AsyncMock())
     handler: Final = OpenAIRealtime()
     expected_url: Final = "wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate"
     assert (

@@ -302,7 +302,6 @@ class OpenAIRealtime(OpenAIChatCompletion):
                     ),
                     event_normalizer=self._make_event_normalizer(),
                     usage_meter=self._make_usage_meter(),
-
                     translation_session=realtime_mode == "translation",
                 )
                 await realtime_streaming.bidirectional_forward()

@@ -13,6 +13,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.custom_openapi_spec import inline_request_body
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
@@ -47,6 +48,20 @@ _NON_BILLABLE_REALTIME_PROTOCOL_MESSAGE: Final = (
     "Realtime WebRTC endpoints are disabled because provider usage bypasses LiteLLM billing. "
     "Set general_settings.allow_non_billable_realtime_protocols to true to opt in"
 )
+
+
+_TRANSLATION_SECRET_BODY: Final = {
+    "requestBody": inline_request_body(
+        RealtimeClientSecretRequest,
+        {"model": "gpt-realtime-translate", "session": {"type": "translation", "model": "gpt-realtime-translate"}},
+    )
+}
+_TRANSLATION_SDP_BODY: Final = {
+    "requestBody": {"required": True, "content": {"application/sdp": {"schema": {"type": "string"}}}}
+}
+_TRANSLATION_SDP_RESPONSES: Final = {
+    200: {"description": "WebRTC SDP answer", "content": {"application/sdp": {"schema": {"type": "string"}}}}
+}
 
 
 def _enforce_non_billable_realtime_protocol_gate(general_settings: Mapping[str, object]) -> None:
@@ -289,16 +304,19 @@ def _decode_realtime_token_payload(
 )
 @router.post(
     "/v1/realtime/translations/client_secrets",
+    openapi_extra=_TRANSLATION_SECRET_BODY,
     dependencies=[Depends(user_api_key_auth)],
     tags=["realtime"],
 )
 @router.post(
     "/realtime/translations/client_secrets",
+    openapi_extra=_TRANSLATION_SECRET_BODY,
     dependencies=[Depends(user_api_key_auth)],
     tags=["realtime"],
 )
 @router.post(
     "/openai/v1/realtime/translations/client_secrets",
+    openapi_extra=_TRANSLATION_SECRET_BODY,
     dependencies=[Depends(user_api_key_auth)],
     tags=["realtime"],
 )
@@ -307,6 +325,7 @@ async def create_realtime_client_secret(
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> RealtimeClientSecretResponse:
+    """Create a short-lived client token for a Realtime conversation, transcription, or translation session"""
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
@@ -453,20 +472,27 @@ async def create_realtime_client_secret(
 )
 @router.post(
     "/v1/realtime/translations/calls",
+    openapi_extra=_TRANSLATION_SDP_BODY,
+    responses=_TRANSLATION_SDP_RESPONSES,
     tags=["realtime"],
 )
 @router.post(
     "/realtime/translations/calls",
+    openapi_extra=_TRANSLATION_SDP_BODY,
+    responses=_TRANSLATION_SDP_RESPONSES,
     tags=["realtime"],
 )
 @router.post(
     "/openai/v1/realtime/translations/calls",
+    openapi_extra=_TRANSLATION_SDP_BODY,
+    responses=_TRANSLATION_SDP_RESPONSES,
     tags=["realtime"],
 )
 async def proxy_realtime_calls(
     request: Request,
     fastapi_response: Response,
 ) -> Response:
+    """Exchange a WebRTC SDP offer for an answer using the ephemeral token from client_secrets"""
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
