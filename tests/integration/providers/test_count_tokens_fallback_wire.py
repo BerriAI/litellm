@@ -8,8 +8,8 @@ import pytest
 from anthropic.types import MessageCountTokensToolParam, MessageTokensCount
 from integration._support.bedrock_runtime_peer import target_of
 from integration._support.client import Gateway, Scenario, gateway_from_environment
+from integration._support.ports import allocate_port
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
-from integration._support.redis_process import free_loopback_port
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
@@ -138,12 +138,12 @@ def _litellm_params(model: str, api_base: str) -> dict[str, JsonValue]:
 
 @pytest.fixture(scope="module")
 def runtime_port() -> int:
-    return free_loopback_port()
+    return allocate_port()
 
 
 @pytest.fixture(scope="module")
 def mantle_port() -> int:
-    return free_loopback_port()
+    return allocate_port()
 
 
 @pytest.fixture(scope="module")
