@@ -3493,6 +3493,7 @@ class ProxyLogging:
         Is triggered when self._is_proxy_only_error() returns True
         """
         litellm_logging_obj: Logging | None = request_data.get("litellm_logging_obj", None)
+        set_up_by_request: Final = litellm_logging_obj is not None
         if litellm_logging_obj is None:
             from litellm._uuid import uuid
 
@@ -3557,7 +3558,9 @@ class ProxyLogging:
                 input = request_data["input"]
                 litellm_logging_obj.model_call_details["input"] = input
                 body_shape_call_type = CallTypes.aembedding.value
-            resolved_call_type: Final = _call_type_for_route(route) or body_shape_call_type
+            resolved_call_type: Final = _call_type_for_route(route) or (
+                None if set_up_by_request else body_shape_call_type
+            )
             if resolved_call_type is not None and litellm_logging_obj.call_type != CallTypes.pass_through.value:
                 litellm_logging_obj.call_type = resolved_call_type
                 litellm_logging_obj.model_call_details["call_type"] = resolved_call_type

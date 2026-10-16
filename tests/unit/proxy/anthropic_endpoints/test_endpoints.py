@@ -5,13 +5,16 @@ Test for anthropic_endpoints/endpoints.py, focusing on handling dictionary objec
 import json
 import logging
 import unittest
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
+from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.types.utils import TokenCountResponse
 
 
 class TestAnthropicEndpoints(unittest.TestCase):
@@ -465,6 +468,151 @@ class TestErrorLogCarriesCallId:
         record = self._error_record(caplog)
         assert record.litellm_call_id == call_id
         assert call_id in record.getMessage()
+
+
+def _claude_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "claude-sonnet",
+                "litellm_params": {"model": "anthropic/claude-sonnet-5-5", "api_key": "sk-test"},
+            }
+        ]
+    )
+
+
+_MALFORMED_TOOL_ENTRY: Final = [{"name": "get_weather", "input_schema": "object"}]
+_SEVEN_TOKENS: Final = TokenCountResponse(
+    total_tokens=7, request_model="claude-sonnet", model_used="claude-sonnet", tokenizer_type="test"
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "tools"),
+    [
+        ("claude-sonnet", 5),
+        ("claude-sonnet", ""),
+        ("claude-sonnet", ["get_weather"]),
+        ("claude-sonnet", _MALFORMED_TOOL_ENTRY),
+        ("team-public-name", 5),
+    ],
+    ids=["int", "empty_string", "list_of_strings", "input_schema_string", "unnamed_model_int"],
+)
+async def test_count_tokens_answers_400_for_malformed_tools_without_counting(model: str, tools: object) -> None:
+    import litellm.proxy.anthropic_endpoints.endpoints as ep
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    request: Final = MagicMock()
+    request.headers = {}
+    counter: Final = AsyncMock()
+    body: Final = {"model": model, "messages": [{"role": "user", "content": "hi"}], "tools": tools}
+
+    with (
+        patch.object(ep, "read_request_body", new=AsyncMock(return_value=body)),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+        patch.object(proxy_server, "count_request_tokens", new=counter),  # test-quality-ok: module global imported at call time; the test asserts it is never reached
+        patch.object(proxy_server, "llm_router", new=_claude_router()),  # test-quality-ok: module global imported at call time; no injection seam on this route
+    ):
+        response: Final = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+
+    assert response.status_code == 400
+    assert json.loads(response.body)["error"]["type"] == "invalid_request_error"
+    counter.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_count_tokens_counts_malformed_tool_entries_for_a_model_the_router_cannot_name() -> None:
+    import litellm.proxy.anthropic_endpoints.endpoints as ep
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    request: Final = MagicMock()
+    request.headers = {}
+    counter: Final = AsyncMock(return_value=_SEVEN_TOKENS)
+    body: Final = {"model": "team-public-name", "messages": [{"role": "user", "content": "hi"}], "tools": _MALFORMED_TOOL_ENTRY}
+
+    with (
+        patch.object(ep, "read_request_body", new=AsyncMock(return_value=body)),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+        patch.object(proxy_server, "count_request_tokens", new=counter),  # test-quality-ok: module global imported at call time; the test asserts what it receives
+        patch.object(proxy_server, "llm_router", new=_claude_router()),  # test-quality-ok: module global imported at call time; no injection seam on this route
+    ):
+        response: Final = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+
+    assert response == {"input_tokens": 7}
+    assert counter.await_args.kwargs["request"].tools == _MALFORMED_TOOL_ENTRY
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("dropping", "headers"),
+    [
+        ({"drop_params": True}, {}),
+        ({"additional_drop_params": ["tools"]}, {}),
+        ({}, {"user-agent": "claude-cli/2.1.0 (external, cli)"}),
+    ],
+    ids=["drop_params", "additional_drop_params", "claude_code_user_agent"],
+)
+async def test_count_tokens_drops_malformed_tools_when_drop_params_is_set(
+    dropping: dict[str, object], headers: dict[str, str]
+) -> None:
+    import litellm.proxy.anthropic_endpoints.endpoints as ep
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    request: Final = MagicMock()
+    request.headers = headers
+    counter: Final = AsyncMock(return_value=_SEVEN_TOKENS)
+    messages: Final = [{"role": "user", "content": "hi"}]
+    body: Final = {"model": "claude-sonnet", "messages": messages, "tools": 5, **dropping}
+
+    with (
+        patch.object(ep, "read_request_body", new=AsyncMock(return_value=body)),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+        patch.object(proxy_server, "count_request_tokens", new=counter),  # test-quality-ok: module global imported at call time; the test asserts what it receives
+    ):
+        response: Final = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+
+    assert response == {"input_tokens": 7}
+    counted: Final = counter.await_args.kwargs["request"]
+    assert counted.tools is None
+    assert counted.messages == messages
+
+
+@pytest.mark.asyncio
+async def test_count_tokens_drops_malformed_tools_the_counted_deployment_drops_even_with_fallbacks() -> None:
+    import litellm.proxy.anthropic_endpoints.endpoints as ep
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm import Router
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude-sonnet",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-5-5",
+                    "api_key": "sk-test",
+                    "additional_drop_params": ["tools"],
+                },
+            },
+            {"model_name": "backup", "litellm_params": {"model": "anthropic/claude-haiku-5-5", "api_key": "sk-test"}},
+        ],
+        fallbacks=[{"claude-sonnet": ["backup"]}],
+    )
+    request: Final = MagicMock()
+    request.headers = {}
+    counter: Final = AsyncMock(return_value=_SEVEN_TOKENS)
+    body: Final = {"model": "claude-sonnet", "messages": [{"role": "user", "content": "hi"}], "tools": 5}
+
+    with (
+        patch.object(ep, "read_request_body", new=AsyncMock(return_value=body)),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+        patch.object(proxy_server, "count_request_tokens", new=counter),  # test-quality-ok: module global imported at call time; the test asserts what it receives
+        patch.object(proxy_server, "llm_router", new=router),  # test-quality-ok: module global imported at call time; no injection seam on this route
+    ):
+        response: Final = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+
+    assert response == {"input_tokens": 7}
+    assert counter.await_args.kwargs["request"].tools is None
 
 
 class TestEventLoggingBatchEndpoint:

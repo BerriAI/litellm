@@ -4,6 +4,7 @@ and ``_handle_logging_proxy_only_error``."""
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from datetime import datetime
 from types import MappingProxyType
 from typing import Final
@@ -919,6 +920,48 @@ async def test_post_call_failure_hook_falls_back_to_body_shape_without_a_route(p
         error_type=ProxyErrorTypes.auth_error,
     )
     assert request_data["call_type"] == "acompletion"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call_type, body",
+    [
+        ("anthropic_messages", {"model": "m", "messages": [{"role": "user", "content": "hi"}]}),
+        ("aresponses", {"model": "m", "input": [{"role": "user", "content": "hi"}]}),
+        ("acompact_responses", {"model": "m", "input": [{"role": "user", "content": "hi"}]}),
+    ],
+)
+async def test_post_call_failure_hook_keeps_the_call_type_request_setup_logged(
+    proxy_logging: ProxyLogging,
+    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
+    call_type: str,
+    body: dict[str, object],
+) -> None:
+    """A request rejected after request setup already carries its endpoint's call type, so the body
+    shape must not relabel a /v1/messages rejection as a chat completion or a list-input /v1/responses
+    rejection as an embedding."""
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    proxy_logging.alert_types = []
+    request_data: Final = {
+        **body,
+        "litellm_logging_obj": LiteLLMLoggingObj(
+            model="m",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type=call_type,
+            start_time=datetime.now(),
+            litellm_call_id=f"test_keeps_{call_type}",
+            function_id=f"test_keeps_{call_type}",
+        ),
+        "metadata": {},
+    }
+    await proxy_logging.post_call_failure_hook(
+        request_data=request_data,
+        original_exception=HTTPException(status_code=400, detail="tools must be a list"),
+        user_api_key_dict=make_user_api_key_auth(request_route="/v1/messages"),
+    )
+    assert request_data["call_type"] == call_type
 
 
 @pytest.mark.asyncio
