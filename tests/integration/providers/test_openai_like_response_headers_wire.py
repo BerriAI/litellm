@@ -1,4 +1,6 @@
+import itertools
 import json
+import math
 import uuid
 from collections.abc import Callable, Mapping
 from hashlib import sha256
@@ -13,17 +15,29 @@ from integration._support.database import read_rows
 from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
-from pydantic import JsonValue, TypeAdapter
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
-Endpoint: TypeAlias = Literal["chat", "responses"]
+Endpoint: TypeAlias = Literal["chat", "responses", "messages"]
 Deploy: TypeAlias = Callable[[Gateway, Scenario, Wire], str]
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _PROJECT: Final = "scripted-project"
 _REPLY_TEXT: Final = "header probe reply"
-_USAGE: Final = {"prompt_tokens": 13, "completion_tokens": 4, "total_tokens": 17}
+_USAGE: Final[JsonValue] = {"prompt_tokens": 13, "completion_tokens": 4, "total_tokens": 17}
 _UPSTREAM_COST: Final = "0.0421"
 _SPEND_SELECT: Final = 'SELECT spend FROM "LiteLLM_SpendLogs" WHERE api_key=%s'
+_KEY_SPEND_SELECT: Final = 'SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=%s'
+_PATHS: Final[Mapping[Endpoint, str]] = MappingProxyType(
+    {"chat": "/v1/chat/completions", "responses": "/v1/responses", "messages": "/v1/messages"}
+)
+_LATIN1_CALLS: Final[tuple[tuple[Endpoint, str, bool], ...]] = (
+    ("chat", "bedrock_mantle", False),
+    ("chat", "bedrock_mantle", True),
+    ("responses", "groq", False),
+    ("responses", "groq", True),
+    ("messages", "groq", False),
+    ("messages", "groq", True),
+)
 
 
 def _keyed(model: str, **extra: JsonValue) -> Deploy:
@@ -51,6 +65,7 @@ _MEMBERS: Final[Mapping[str, Deploy]] = MappingProxyType(
     {
         "bedrock_mantle": _keyed("bedrock_mantle/google.gemma-4-31b", aws_region_name="us-west-2"),
         "groq": _keyed("groq/openai/gpt-oss-20b"),
+        "openai": _keyed("openai/gpt-5.4-mini"),
         "watsonx": _keyed("watsonx/ibm/granite-3-8b-instruct", zen_api_key="synthetic-zen-key", project_id=_PROJECT),
         "vertex_model_garden": _vertex("xai/grok-4.20-non-reasoning", "global"),
         "maritalk": _keyed("maritalk/sabia-3"),
@@ -113,32 +128,78 @@ def _request_id_headers(request_id: str) -> Mapping[str, str]:
     return MappingProxyType({"x-request-id": request_id, "x-amzn-requestid": request_id})
 
 
-def _send(gateway: Gateway, endpoint: Endpoint, model: str, key: str, *, stream: bool = False) -> httpx.Response:
+def _body(endpoint: Endpoint, model: str, stream: bool) -> dict[str, JsonValue]:
     prompt: Final = f"header probe {uuid.uuid4().hex}"
-    body: Final[dict[str, JsonValue]] = (
-        {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "stream": stream,
-            "cache": {"no-cache": True},
-            **({"stream_options": {"include_usage": True}} if stream else {}),
-        }
-        if endpoint == "chat"
-        else {"model": model, "input": prompt, "stream": stream}
-    )
-    return gateway.request("POST", f"/v1/{'chat/completions' if endpoint == 'chat' else 'responses'}", body, key=key)
+    match endpoint:
+        case "chat":
+            return {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": stream,
+                "cache": {"no-cache": True},
+                **({"stream_options": {"include_usage": True}} if stream else {}),
+            }
+        case "responses":
+            return {"model": model, "input": prompt, "stream": stream}
+        case "messages":
+            return {
+                "model": model,
+                "max_tokens": 64,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": stream,
+            }
+
+
+def _send(gateway: Gateway, endpoint: Endpoint, model: str, key: str, *, stream: bool = False) -> httpx.Response:
+    return gateway.request("POST", _PATHS[endpoint], _body(endpoint, model, stream), key=key)
+
+
+class _Reply(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+
+class _Text(_Reply):
+    text: str = ""
+
+
+class _ChatMessage(_Reply):
+    content: str = ""
+
+
+class _ChatChoice(_Reply):
+    message: _ChatMessage
+
+
+class _ChatReply(_Reply):
+    choices: tuple[_ChatChoice, ...]
+
+
+class _ResponsesItem(_Reply):
+    content: tuple[_Text, ...] = ()
+
+
+class _ResponsesReply(_Reply):
+    output: tuple[_ResponsesItem, ...]
+
+
+class _MessagesReply(_Reply):
+    content: tuple[_Text, ...]
 
 
 def _text(endpoint: Endpoint, response: httpx.Response) -> str:
-    body: Final = _JSON_OBJECT.validate_json(response.content)
-    if endpoint == "chat":
-        return str(body["choices"][0]["message"]["content"])
-    return "".join(
-        str(part.get("text") or "")
-        for item in body["output"]
-        for part in item.get("content") or []  # comprehension-ok: output item then content part
-        if isinstance(part, dict)
-    )
+    match endpoint:
+        case "chat":
+            return _ChatReply.model_validate_json(response.content).choices[0].message.content
+        case "responses":
+            items: Final = _ResponsesReply.model_validate_json(response.content).output
+            return "".join(part.text for part in itertools.chain.from_iterable(item.content for item in items))
+        case "messages":
+            return "".join(block.text for block in _MessagesReply.model_validate_json(response.content).content)
+
+
+def _header_cost(response: httpx.Response) -> float:
+    values: Final = response.headers.get_list("x-litellm-response-cost")
+    return float(values[0]) if values else math.nan
 
 
 def _llm_provider_request_ids(response: httpx.Response) -> dict[str, str | None]:
@@ -152,6 +213,12 @@ def _spend(key: str) -> float:
     spend: Final = rows[0]["spend"]
     assert isinstance(spend, (int, float)), rows
     return float(spend)
+
+
+def _key_spend(key: str) -> float | None:
+    rows: Final = read_rows(_KEY_SPEND_SELECT, (sha256(key.encode()).hexdigest(),))
+    spend: Final = rows[0]["spend"] if rows else None
+    return float(spend) if isinstance(spend, (int, float)) else None
 
 
 @pytest.mark.parametrize(
@@ -225,8 +292,45 @@ def test_non_stream_spend_matches_stream_spend_under_an_upstream_cost_header(
         assert _text(endpoint, whole) == _REPLY_TEXT, whole.text
         stream_spend: Final = _spend(stream_key)
         assert stream_spend > 0
-        assert _spend(non_stream_key) == pytest.approx(stream_spend)
+        non_stream_spend: Final = _spend(non_stream_key)
+        assert math.isclose(non_stream_spend, stream_spend), (non_stream_spend, stream_spend)
         assert len(wire.drain()) == 2
+
+
+@pytest.mark.parametrize("member", ["openai", "groq"])
+@pytest.mark.parametrize("upstream_cost", ["-5", "abc", "nan", "inf"], ids=["negative", "garbage", "nan", "infinite"])
+def test_an_invalid_upstream_cost_header_bills_the_price_map(gateway: Gateway, member: str, upstream_cost: str) -> None:
+    with (
+        wire_server(_peer({"x-litellm-response-cost": upstream_cost})) as invalid_wire,
+        wire_server(_peer({})) as plain_wire,
+        gateway.scenario() as scenario,
+    ):
+        invalid_model: Final = _MEMBERS[member](gateway, scenario, invalid_wire)
+        plain_model: Final = _MEMBERS[member](gateway, scenario, plain_wire)
+        budget_key: Final = scenario.key(models=[invalid_model], max_budget=1)
+        reference_key: Final = scenario.key(models=[plain_model])
+        billed: Final = _send(gateway, "chat", invalid_model, budget_key)
+        reference: Final = _send(gateway, "chat", plain_model, reference_key)
+        assert (billed.status_code, reference.status_code) == (200, 200), (billed.text, reference.text)
+        reference_spend: Final = _spend(reference_key)
+        assert reference_spend > 0
+        key_spend: Final = eventually(
+            lambda: _key_spend(budget_key),
+            lambda spend: spend is not None and math.isclose(spend, reference_spend),
+            70,
+            return_last_on_timeout=True,
+        )
+        billed_costs: Final = {
+            "response_header": _header_cost(billed),
+            "spend_log": _spend(budget_key),
+            "key": key_spend if key_spend is not None else math.nan,
+        }
+        assert {name: math.isclose(cost, reference_spend) for name, cost in billed_costs.items()} == dict.fromkeys(
+            billed_costs, True
+        ), (billed_costs, reference_spend)
+        followup: Final = _send(gateway, "chat", invalid_model, budget_key)
+        assert followup.status_code == 200, followup.text
+        assert (len(invalid_wire.drain()), len(plain_wire.drain())) == (2, 1)
 
 
 @pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
@@ -239,18 +343,28 @@ def test_provider_header_outside_latin1_does_not_fail_the_call(gateway: Gateway,
         owned_proxy(gateway, tmp_path, {"DISABLE_AIOHTTP_TRANSPORT": "True"}) as httpx_transport,
         httpx_transport.scenario() as scenario,
     ):
-        model: Final = _MEMBERS["bedrock_mantle"](httpx_transport, scenario, wire)
-        key: Final = scenario.key(models=[model])
-        whole: Final = _send(httpx_transport, "chat", model, key)
-        streamed: Final = _send(httpx_transport, "chat", model, key, stream=True)
-        assert {"non_stream": whole.status_code, "stream": streamed.status_code} == {
-            "non_stream": 200,
-            "stream": 200,
-        }, (whole.text, streamed.text)
-        assert _text("chat", whole) == _REPLY_TEXT, whole.text
-        assert _REPLY_TEXT in streamed.text, streamed.text
-        assert _llm_provider_request_ids(whole) == {
-            "llm_provider-x-request-id": request_id,
-            "llm_provider-x-amzn-requestid": request_id,
-        }, dict(whole.headers)
-        assert len(wire.drain()) == 2
+        models: Final = {
+            member: _MEMBERS[member](httpx_transport, scenario, wire) for member in ("bedrock_mantle", "groq")
+        }
+        key: Final = scenario.key(models=list(models.values()))
+        replies: Final = {
+            f"{endpoint}-{'stream' if stream else 'whole'}": _send(
+                httpx_transport, endpoint, models[member], key, stream=stream
+            )
+            for endpoint, member, stream in _LATIN1_CALLS
+        }
+        assert {call: reply.status_code for call, reply in replies.items()} == dict.fromkeys(replies, 200), {
+            call: reply.text for call, reply in replies.items()
+        }
+        assert {call: reply.headers.get("llm_provider-x-provider-region") for call, reply in replies.items()} == (
+            dict.fromkeys(replies, None)
+        )
+        assert {call: _REPLY_TEXT in reply.text for call, reply in replies.items()} == dict.fromkeys(replies, True)
+        assert {endpoint: _text(endpoint, replies[f"{endpoint}-whole"]) for endpoint in _PATHS} == dict.fromkeys(
+            _PATHS, _REPLY_TEXT
+        )
+        forwarding: Final = ("chat-whole", "chat-stream", "responses-whole")
+        assert {call: _llm_provider_request_ids(replies[call]) for call in forwarding} == dict.fromkeys(
+            forwarding, {"llm_provider-x-request-id": request_id, "llm_provider-x-amzn-requestid": request_id}
+        )
+        assert len(wire.drain()) == len(_LATIN1_CALLS)
