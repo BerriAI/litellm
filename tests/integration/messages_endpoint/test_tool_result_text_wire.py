@@ -1,12 +1,15 @@
 import json
 import uuid
 from collections.abc import Mapping, Sequence
+from email.parser import BytesParser
+from email.policy import HTTP
 from types import MappingProxyType
 from typing import Final
 
 import anthropic
+import httpx
 import pytest
-from integration._support.client import Gateway, Scenario, string_value
+from integration._support.client import Gateway, Scenario, eventually, string_value
 from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
@@ -405,11 +408,23 @@ def _redacted_row(row: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
     return {**row, "content": _redacted(row["content"])} if "content" in row else dict(row)
 
 
+def _joined_tool_row(row: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    redacted: Final = _redacted_row(row)
+    content: Final = redacted.get("content")
+    if row.get("role") != "tool" or not isinstance(content, list):
+        return redacted
+    texts: Final = (
+        part["text"] for part in _JSON_OBJECTS.validate_python(content) if isinstance(part.get("text"), str)
+    )
+    return {**redacted, "content": " | ".join(str(text) for text in texts)}
+
+
 def _guardrail_peer(request: Request) -> Reply:
-    if request.target.startswith("/none/"):
+    rows: Final = _JSON_OBJECTS.validate_python(_json(request).get("structured_messages") or [])
+    if request.target.startswith("/none/") or not rows:
         return Reply(body=json.dumps({"action": "NONE"}).encode())
-    rows: Final = _JSON_OBJECTS.validate_python(_json(request)["structured_messages"])
-    verdict: Final = {"action": "GUARDRAIL_INTERVENED", "structured_messages": [_redacted_row(row) for row in rows]}
+    rewrite: Final = _joined_tool_row if request.target.startswith("/join/") else _redacted_row
+    verdict: Final = {"action": "GUARDRAIL_INTERVENED", "structured_messages": [rewrite(row) for row in rows]}
     return Reply(body=json.dumps(verdict).encode())
 
 
@@ -483,6 +498,179 @@ def test_rewriting_guardrail_forwards_the_malformed_text_to_anthropic_unchanged(
         first_turn: Final = _first_turn(forwarded["messages"])
         assert _REDACTED_CITY in first_turn and _CITY not in first_turn, first_turn
         assert _forwarded_tool_result(forwarded) == [{"type": "text", "text": 5}, {"type": "text", "text": _WEATHER}]
+
+
+_MORNING: Final = f"{_CITY} morning: sunny"
+_EVENING: Final = f"{_CITY} evening: 18C"
+_TOMORROW: Final = f"{_CITY} tomorrow: rain"
+_WEEKEND: Final = f"{_CITY} weekend: clear"
+
+
+def _text(value: JsonValue) -> dict[str, JsonValue]:
+    return {"type": "text", "text": value}
+
+
+def _tool_use(tool_use_id: str) -> dict[str, JsonValue]:
+    return {"type": "tool_use", "id": tool_use_id, "name": "get_weather", "input": {"city": _CITY}}
+
+
+def _tool_result(tool_use_id: str, *parts: JsonValue) -> dict[str, JsonValue]:
+    return {"type": "tool_result", "tool_use_id": tool_use_id, "content": [_text(part) for part in parts]}
+
+
+_SEVERAL_TOOL_RESULTS: Final[list[JsonValue]] = [
+    {"role": "user", "content": f"What is the weather in {_CITY}?"},
+    {"role": "assistant", "content": [_tool_use("toolu_01"), _tool_use("toolu_02"), _tool_use("toolu_03")]},
+    {
+        "role": "user",
+        "content": [
+            _tool_result("toolu_01", None, _MORNING, 5, _EVENING),
+            _tool_result("toolu_02", _TOMORROW, 7.5),
+            _tool_result("toolu_03", _WEEKEND),
+        ],
+    },
+]
+
+
+def _forwarded_tool_results(body: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    last: Final = _JSON_OBJECTS.validate_python(body["messages"])[-1]
+    return {
+        string_value(block["tool_use_id"]): block["content"]
+        for block in _JSON_OBJECTS.validate_python(last["content"])
+        if block.get("type") == "tool_result"
+    }
+
+
+def _texts(content: JsonValue) -> tuple[JsonValue, ...]:
+    if isinstance(content, str):
+        return (content,)
+    return tuple(part.get("text") for part in _JSON_OBJECTS.validate_python(content))
+
+
+_RESTORED_TOOL_RESULTS: Final = MappingProxyType(
+    {
+        "rows": [
+            _text(None),
+            _text(_redacted(_MORNING)),
+            _text(5),
+            _text(_redacted(_EVENING)),
+        ],
+        "join": [_text(None), _text(f"{_redacted(_MORNING)} | {_redacted(_EVENING)}"), _text(5)],
+    }
+)
+
+
+@pytest.mark.parametrize("mode", sorted(_RESTORED_TOOL_RESULTS))
+def test_rewriting_guardrail_puts_each_malformed_text_back_in_its_own_tool_result(gateway: Gateway, mode: str) -> None:
+    with (
+        wire_server(_anthropic_peer) as provider,
+        wire_server(_guardrail_peer) as guard,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _anthropic_model(scenario, provider)
+        guardrail: Final = _guardrail(gateway, scenario, guard, mode)
+        body: Final = _body(model, _SEVERAL_TOOL_RESULTS, max_tokens=64, guardrails=[guardrail])
+        created: Final = gateway.request("POST", "/v1/messages", body)
+        assert created.status_code == 200, created.text
+        forwarded: Final = _only(provider.drain(), "/v1/messages")
+        first_turn: Final = _first_turn(forwarded["messages"])
+        assert _REDACTED_CITY in first_turn and _CITY not in first_turn, first_turn
+        tool_results: Final = _forwarded_tool_results(forwarded)
+        assert _CITY not in json.dumps(tool_results), tool_results
+        assert tool_results["toolu_01"] == _RESTORED_TOOL_RESULTS[mode], tool_results
+        assert tool_results["toolu_02"] == [_text(_redacted(_TOMORROW)), _text(7.5)], tool_results
+        assert _texts(tool_results["toolu_03"]) == (_redacted(_WEEKEND),), tool_results
+
+
+def test_rewriting_guardrail_leaves_the_rejection_to_the_chat_bridge(gateway: Gateway) -> None:
+    with (
+        wire_server(_chat_peer) as provider,
+        wire_server(_guardrail_peer) as guard,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _mistral_model(scenario, provider)
+        guardrail: Final = _guardrail(gateway, scenario, guard, "rows")
+        messages: Final[list[JsonValue]] = [
+            {"role": "user", "content": f"What is the weather in {_CITY}?"},
+            {"role": "assistant", "content": [_tool_use("toolu_01")]},
+            {"role": "user", "content": [_tool_result("toolu_01", None)]},
+        ]
+        body: Final = _body(model, messages, max_tokens=64, guardrails=[guardrail])
+        response: Final = gateway.request("POST", "/v1/messages", body)
+        message: Final = _anthropic_error_message(response.status_code, response.text, response.content)
+        assert "content.0.text: Input should be a valid string" in message, message
+        assert provider.drain() == ()
+
+
+def _files_peer(request: Request) -> Reply:
+    if request.method == "POST" and request.target.endswith("/files"):
+        uploaded: Final = {
+            "id": f"file-{uuid.uuid4().hex}",
+            "object": "file",
+            "bytes": len(request.body),
+            "created_at": 1789788253,
+            "filename": "batch.jsonl",
+            "purpose": "batch",
+            "status": "processed",
+        }
+        return Reply(body=json.dumps(uploaded).encode())
+    if request.target.endswith("/models"):
+        return Reply(body=json.dumps({"object": "list", "data": []}).encode())
+    return Reply(status=404, body=json.dumps({"error": request.target}).encode())
+
+
+def _uploaded_records(request: Request) -> tuple[dict[str, JsonValue], ...]:
+    envelope: Final = f"content-type: {request.headers['content-type']}\r\n\r\n".encode() + request.body
+    parts: Final = BytesParser(policy=HTTP).parsebytes(envelope).iter_parts()
+    files: Final = tuple(part.get_payload(decode=True) for part in parts if part.get_filename() is not None)
+    assert len(files) == 1, request.headers
+    payload: Final = files[0]
+    assert isinstance(payload, bytes), payload
+    return tuple(_JSON_OBJECT.validate_json(line) for line in payload.splitlines() if line.strip())
+
+
+def _listed_models(gateway: Gateway) -> frozenset[str]:
+    with httpx.Client(base_url=gateway.client.base_url, timeout=15, trust_env=False) as client:
+        listed: Final = client.get("/v1/models", headers={"Authorization": f"Bearer {gateway.key}"})
+    assert listed.status_code == 200, listed.text
+    entries: Final = _JSON_OBJECTS.validate_python(_JSON_OBJECT.validate_json(listed.content)["data"])
+    return frozenset(string_value(entry["id"]) for entry in entries)
+
+
+def test_batch_upload_behind_a_rewriting_guardrail_keeps_the_malformed_text(gateway: Gateway) -> None:
+    with (
+        wire_server(_files_peer) as provider,
+        wire_server(_guardrail_peer) as guard,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _openai_model(scenario, provider)
+        key: Final = scenario.key(metadata={"guardrails": [_guardrail(gateway, scenario, guard, "rows")]})
+        eventually(
+            lambda: tuple(_listed_models(gateway) for _ in range(8)),
+            lambda listings: all(model in listing for listing in listings),
+            seconds=90,
+        )
+        record: Final = {
+            "custom_id": f"weather-{uuid.uuid4().hex}",
+            "method": "POST",
+            "url": "/v1/messages",
+            "body": _body(model, _NUMBER_THEN_WEATHER, max_tokens=64),
+        }
+        uploaded: Final = gateway.request_multipart(
+            "/v1/files",
+            {"purpose": "batch", "model": model},
+            {"file": ("batch.jsonl", json.dumps(record).encode() + b"\n", "application/jsonl")},
+            key=key,
+        )
+        assert uploaded.status_code == 200, uploaded.text
+        uploads: Final = tuple(request for request in provider.drain() if request.target.endswith("/files"))
+        assert len(uploads) == 1, [request.target for request in uploads]
+        (forwarded,) = _uploaded_records(uploads[0])
+        assert forwarded["custom_id"] == record["custom_id"], forwarded
+        forwarded_body: Final = _JSON_OBJECT.validate_python(forwarded["body"])
+        first_turn: Final = _first_turn(forwarded_body["messages"])
+        assert _REDACTED_CITY in first_turn and _CITY not in first_turn, first_turn
+        assert _forwarded_tool_result(forwarded_body) == [_text(5), _text(_WEATHER)], forwarded_body
 
 
 def test_guardrail_that_rewrites_nothing_forwards_a_null_tool_result_text_unchanged(gateway: Gateway) -> None:
