@@ -1,7 +1,13 @@
+from collections.abc import Coroutine, Mapping
 from typing import TYPE_CHECKING, Final, Optional, cast
 
 import httpx
-from openai import AsyncOpenAI, OpenAI
+from openai import AsyncOpenAI, AsyncStream, OpenAI, Stream
+from openai.types.audio import TranscriptionStreamEvent
+from openai.types.audio.transcription_create_params import (
+    TranscriptionCreateParamsBase,
+    TranscriptionCreateParamsStreaming,
+)
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
@@ -11,6 +17,8 @@ from litellm.litellm_core_utils.core_helpers import set_provider_response_header
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.audio_transcription.transformation import (
     BaseAudioTranscriptionConfig,
+    sdk_compatible_transcription_request_data,
+    sdk_compatible_transcription_response,
 )
 from litellm.types.utils import FileTypes
 from litellm.utils import (
@@ -27,28 +35,58 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
     async def make_openai_audio_transcriptions_request(
         self,
         openai_aclient: AsyncOpenAI,
-        data: dict,
+        data: Mapping[str, object],
         timeout: float | httpx.Timeout,
     ):
         try:
-            raw_response = await openai_aclient.audio.transcriptions.with_raw_response.create(**data, timeout=timeout)
+            sdk_data: Final = sdk_compatible_transcription_request_data(data)
+            if data.get("stream") is True:
+                stream_response: Final = await openai_aclient.audio.transcriptions.create(
+                    **cast(  # cast-ok: SDK file handles have no runtime validation schema
+                        TranscriptionCreateParamsStreaming, sdk_data
+                    ),
+                    timeout=timeout,
+                )
+                return {}, stream_response
+            raw_response: Final = await openai_aclient.audio.transcriptions.with_raw_response.create(
+                **cast(  # cast-ok: SDK file handles have no runtime validation schema
+                    TranscriptionCreateParamsBase, {key: value for key, value in sdk_data.items() if key != "stream"}
+                ),
+                stream=False,
+                timeout=timeout,
+            )
             headers: Final = dict(raw_response.headers)
-            response: Final = raw_response.parse()
+            parsed_response: Final = sdk_compatible_transcription_response(raw_response.parse())
 
-            return headers, response
+            return headers, parsed_response
         except Exception as e:
             raise e
 
     def make_sync_openai_audio_transcriptions_request(
         self,
         openai_client: OpenAI,
-        data: dict,
+        data: Mapping[str, object],
         timeout: float | httpx.Timeout,
     ):
         try:
-            raw_response: Final = openai_client.audio.transcriptions.with_raw_response.create(**data, timeout=timeout)
+            sdk_data: Final = sdk_compatible_transcription_request_data(data)
+            if data.get("stream") is True:
+                stream_response: Final = openai_client.audio.transcriptions.create(
+                    **cast(  # cast-ok: SDK file handles have no runtime validation schema
+                        TranscriptionCreateParamsStreaming, sdk_data
+                    ),
+                    timeout=timeout,
+                )
+                return {}, stream_response
+            raw_response: Final = openai_client.audio.transcriptions.with_raw_response.create(
+                **cast(  # cast-ok: SDK file handles have no runtime validation schema
+                    TranscriptionCreateParamsBase, {key: value for key, value in sdk_data.items() if key != "stream"}
+                ),
+                stream=False,
+                timeout=timeout,
+            )
             headers: Final = dict(raw_response.headers)
-            response: Final = raw_response.parse()
+            response: Final = sdk_compatible_transcription_response(raw_response.parse())
             return headers, response
         except Exception as e:
             raise e
@@ -69,7 +107,11 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         atranscription: bool = False,
         provider_config: BaseAudioTranscriptionConfig | None = None,
         shared_session: Optional["ClientSession"] = None,
-    ) -> TranscriptionResponse:
+    ) -> (
+        TranscriptionResponse
+        | Stream[TranscriptionStreamEvent]
+        | Coroutine[object, object, TranscriptionResponse | AsyncStream[TranscriptionStreamEvent]]
+    ):
         """
         Handle audio transcription request
         """
@@ -125,6 +167,9 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         )
         logging_obj.model_call_details["response_headers"] = headers
 
+        if isinstance(response, Stream):
+            return response
+
         if isinstance(response, BaseModel):
             stringified_response = response.model_dump()
         else:
@@ -150,7 +195,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
     async def async_audio_transcriptions(
         self,
         audio_file: FileTypes,
-        data: dict,
+        data: Mapping[str, object],
         model_response: TranscriptionResponse,
         timeout: float,
         logging_obj: LiteLLMLoggingObj,
@@ -187,6 +232,8 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
                 timeout=timeout,
             )
             logging_obj.model_call_details["response_headers"] = headers
+            if isinstance(response, AsyncStream):
+                return response
             if isinstance(response, BaseModel):
                 stringified_response = response.model_dump()
             else:

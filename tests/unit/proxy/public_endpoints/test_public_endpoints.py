@@ -101,29 +101,20 @@ def test_get_litellm_model_cost_map_catalog_only_excludes_runtime_registered_ent
     )
 
 
-def test_get_litellm_model_cost_map_returns_cost_map():
-    app = FastAPI()
+def test_get_litellm_model_cost_map_returns_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
+    model_cost: Final = {
+        "audio-model": {"input_cost_per_second": 0.1, "mode": "audio_transcription"},
+        "token-model": {"input_cost_per_token": 0.01, "mode": "chat"},
+    }
+    monkeypatch.setattr(litellm, "model_cost", model_cost)
+    app: Final = FastAPI()
     app.include_router(router)
-    client = TestClient(app)
+    client: Final = TestClient(app)
 
-    response = client.get("/public/litellm_model_cost_map")
+    response: Final = client.get("/public/litellm_model_cost_map")
 
     assert response.status_code == 200
-    payload = response.json()
-    assert isinstance(payload, dict)
-    assert len(payload) > 0, "Expected model cost map to contain at least one model"
-
-    # Verify the structure contains expected keys for at least one model
-    # Check for a common model like gpt-4 or gpt-3.5-turbo
-    model_keys = list(payload.keys())
-    assert len(model_keys) > 0
-
-    # Verify at least one model has expected cost fields
-    sample_model = model_keys[0]
-    sample_model_data = payload[sample_model]
-    assert isinstance(sample_model_data, dict)
-    # Check for common cost fields that should be present
-    assert "input_cost_per_token" in sample_model_data or "output_cost_per_token" in sample_model_data
+    assert response.json() == model_cost
 
 
 def test_public_ai_hub_info_is_public_by_default(monkeypatch):

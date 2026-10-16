@@ -1,15 +1,39 @@
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import BaseModel, TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIAudioTranscriptionOptionalParams,
 )
 from litellm.types.utils import FileTypes, ModelResponse, TranscriptionResponse
+
+_TRANSCRIPTION_REQUEST: Final = TypeAdapter(Mapping[str, object])
+_TRANSCRIPTION_TEXT: Final = TypeAdapter(str)
+
+
+def sdk_compatible_transcription_request_data(data: object) -> Mapping[str, object]:
+    request_data: Final = _TRANSCRIPTION_REQUEST.validate_python(data)
+    extension_keys: Final = ("keywords", "languages")
+    extension_body: Final = {key: request_data[key] for key in extension_keys if key in request_data}
+    if not extension_body:
+        return request_data
+
+    existing_extra_body: Final = request_data.get("extra_body")
+    return {
+        **{key: value for key, value in request_data.items() if key not in extension_keys},
+        "extra_body": {
+            **(as_str_mapping(existing_extra_body) or {}),
+            **extension_body,
+        },
+    }
+
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -18,6 +42,12 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+def sdk_compatible_transcription_response(response: object) -> BaseModel | str:
+    if isinstance(response, BaseModel):
+        return response
+    return _TRANSCRIPTION_TEXT.validate_python(response, strict=True)
 
 
 @dataclass

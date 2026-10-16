@@ -26,8 +26,8 @@ class OpenAIGPTAudioTranscriptionConfig(OpenAIWhisperAudioTranscriptionConfig):
         self,
         model: str,
         audio_file: FileTypes,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
     ) -> AudioTranscriptionRequestData:
         """
         Transform the audio transcription request
@@ -37,3 +37,29 @@ class OpenAIGPTAudioTranscriptionConfig(OpenAIWhisperAudioTranscriptionConfig):
         return AudioTranscriptionRequestData(
             data=data,
         )
+
+
+class OpenAIGPTTranscribeAudioTranscriptionConfig(OpenAIGPTAudioTranscriptionConfig):
+    def get_supported_openai_params(self, model: str) -> list[OpenAIAudioTranscriptionOptionalParams]:
+        return [
+            "prompt",
+            "response_format",
+            "keywords",
+            "languages",
+            "stream",
+        ]
+
+    def transform_audio_transcription_request(
+        self,
+        model: str,
+        audio_file: FileTypes,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+    ) -> AudioTranscriptionRequestData:
+        data: Final = {
+            "model": model,
+            "file": audio_file,
+            "response_format": "json",
+            **optional_params,
+        }
+        return AudioTranscriptionRequestData(data=data)

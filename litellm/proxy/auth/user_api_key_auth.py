@@ -1182,7 +1182,7 @@ async def user_api_key_auth_websocket(websocket: WebSocket) -> UserAPIKeyAuth:
 
 
 async def user_api_key_auth_live_websocket(websocket: WebSocket) -> UserAPIKeyAuth:
-    return await user_api_key_auth_websocket_for_model(websocket, model=None)
+    return await user_api_key_auth_websocket_for_model(websocket, model="")
 
 
 async def user_api_key_auth_websocket_for_model(
@@ -4048,6 +4048,7 @@ async def _authorize_authenticated_request(
                 user_model,
                 request.path_params.get("model") or request.path_params.get("model_name"),
                 request.query_params.get("model"),
+                intent=request.query_params.get("intent"),
             )
             if user_api_key_auth_obj.managed_agent_policy is not None
             else request_data
