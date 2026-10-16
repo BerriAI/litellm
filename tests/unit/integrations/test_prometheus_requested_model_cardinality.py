@@ -360,3 +360,14 @@ async def test_sdk_failures_without_proxy_router_keep_their_model_label_on_llm_a
         await _fire_llm_api_failure(logger, "gpt-4o-mini")
 
     assert _model_label_values(logger.litellm_llm_api_failed_requests_metric) == {"gpt-4o-mini"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", [123, 4.5, ["gpt-4o-mini"], {"name": "gpt-4o-mini"}])
+async def test_non_string_denied_models_collapse_to_other_on_llm_api_failed_requests_metric(router, model: object):
+    logger = PrometheusLogger()
+
+    with patch("litellm.proxy.proxy_server.llm_router", router, create=True):  # test-quality-ok: production reads proxy_server.llm_router lazily, no injection seam
+        await _fire_llm_api_failure(logger, model)  # type: ignore[arg-type]
+
+    assert _model_label_values(logger.litellm_llm_api_failed_requests_metric) == {UNRECOGNIZED_REQUESTED_MODEL_LABEL}

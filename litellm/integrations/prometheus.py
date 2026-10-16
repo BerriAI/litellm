@@ -2617,9 +2617,9 @@ class PrometheusLogger(CustomLogger):
         # With no deployment behind the call, the name is whatever the caller sent (for example a model the
         # key may not use). Bound it like ``requested_model`` so unknown names share one series.
         model: Final = (
-            _bounded_requested_model_label(requested_name, router_originated=True)
-            if not deployment_model_id and isinstance(requested_name, str)
-            else requested_name
+            requested_name
+            if deployment_model_id
+            else _bounded_requested_model_label(requested_name, router_originated=True)  # pyright: ignore[reportUnknownArgumentType]  # caller-supplied value, the helper type-checks it
         )
 
         litellm_params: Final = kwargs.get("litellm_params", {}) or {}
