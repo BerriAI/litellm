@@ -117,6 +117,8 @@ ignored_function_names = [
     "_register_continuation_prefill_check",  # Tested through the continuation tests in test_router.py
     "_set_mid_stream_fallback_continuation",  # Tested through the update_settings continuation test in test_router.py
     "_is_flag_enabled",  # Tested through the string-flag continuation tests in test_router.py
+    "_params_sent_to_deployment",  # Tested through the configured-constraint continuation tests in test_router.py
+    "_names_deployment_without_prefill",  # Tested through the deployment-id continuation tests in test_router.py
     "_set_retry_policy",  # Tested through update_settings in test_router_retry_policy_update.py
     "_exact_base_model_max_input_tokens",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
     "_base_model_widened_window",  # Tested through get_router_model_info in test_router_model_cost_isolation.py

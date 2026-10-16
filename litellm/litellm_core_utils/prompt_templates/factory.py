@@ -4261,7 +4261,14 @@ def _assistant_turn_rstripped(message: BedrockMessageBlock) -> BedrockMessageBlo
     """Claude on Converse rejects a final assistant turn that ends in whitespace, as the Anthropic path strips it."""
     if message["role"] != "assistant":
         return message
-    return BedrockMessageBlock(role="assistant", content=[_rstrip_text_block(block) for block in message["content"]])
+    blocks: Final = message["content"]
+    last_text_index: Final = max((index for index, block in enumerate(blocks) if "text" in block), default=None)
+    return BedrockMessageBlock(
+        role="assistant",
+        content=[
+            _rstrip_text_block(block) if index == last_text_index else block for index, block in enumerate(blocks)
+        ],
+    )
 
 
 def _ensure_document_messages_have_text(

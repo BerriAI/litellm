@@ -660,6 +660,32 @@ async def test_bedrock_converse_strips_trailing_whitespace_from_a_final_assistan
     ]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_keeps_whitespace_between_text_blocks_of_a_final_claude_assistant_turn(
+    use_async: bool,
+):
+    messages: Final = [
+        {"role": "user", "content": "Write a haiku."},
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Leaves fall "}, {"type": "text", "text": "softly \n"}],
+        },
+    ]
+
+    result: Final = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages, model="us.anthropic.claude-sonnet-4-6", llm_provider="bedrock"
+        )
+        if use_async
+        else _bedrock_converse_messages_pt(
+            messages=messages, model="us.anthropic.claude-sonnet-4-6", llm_provider="bedrock"
+        )
+    )
+
+    assert result[-1]["content"] == [{"text": "Leaves fall "}, {"text": "softly"}]
+
+
 def test_translate_thinking_blocks_keeps_dropping_redacted_data_when_called_the_old_way():
     """Outside callers that only pass the thinking blocks keep the old behavior, with no redactedContent sent."""
     assert BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(

@@ -6,7 +6,7 @@ from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
     MID_STREAM_CONTINUATION_MARKER,
     ContinuationOutput,
     ContinuationPrefillDeploymentCheck,
-    _deployment_supports_prefill,
+    deployment_supports_prefill,
 )
 
 PREFILL_MODEL = "anthropic/prefill-capable-test-model"
@@ -31,29 +31,29 @@ def _deployment(model: str, dep_id: str) -> dict[str, object]:
 
 
 def test_deployment_supports_prefill_reads_capability():
-    assert _deployment_supports_prefill(_deployment(PREFILL_MODEL, "a")) is True
-    assert _deployment_supports_prefill(_deployment(NON_PREFILL_MODEL, "b")) is False
-    assert _deployment_supports_prefill({"litellm_params": {"model": PREFILL_MODEL}}) is True
-    assert _deployment_supports_prefill({"litellm_params": {"model": PREFILL_MODEL}, "model_info": "bogus"}) is True
+    assert deployment_supports_prefill(_deployment(PREFILL_MODEL, "a")) is True
+    assert deployment_supports_prefill(_deployment(NON_PREFILL_MODEL, "b")) is False
+    assert deployment_supports_prefill({"litellm_params": {"model": PREFILL_MODEL}}) is True
+    assert deployment_supports_prefill({"litellm_params": {"model": PREFILL_MODEL}, "model_info": "bogus"}) is True
 
 
 def test_deployment_model_info_override_wins_over_cost_map():
     # model_info True opts in a model that is not in the cost map
     assert (
-        _deployment_supports_prefill(
+        deployment_supports_prefill(
             {"litellm_params": {"model": "vendor/custom-model"}, "model_info": {"supports_assistant_prefill": True}}
         )
         is True
     )
     # model_info False opts out a model the cost map would otherwise allow
     assert (
-        _deployment_supports_prefill(
+        deployment_supports_prefill(
             {"litellm_params": {"model": PREFILL_MODEL}, "model_info": {"supports_assistant_prefill": False}}
         )
         is False
     )
     # model_info without the key falls through to the cost map
-    assert _deployment_supports_prefill(_deployment(PREFILL_MODEL, "z")) is True
+    assert deployment_supports_prefill(_deployment(PREFILL_MODEL, "z")) is True
 
 
 @pytest.mark.parametrize(
@@ -83,14 +83,14 @@ def test_deployment_model_info_override_wins_over_cost_map():
         "base_model_wins_over_model",
     ],
 )
-def test_deployment_supports_prefill_reads_the_cost_map_key_of_the_base_model(deployment, expected):
-    assert _deployment_supports_prefill(deployment) is expected
+def testdeployment_supports_prefill_reads_the_cost_map_key_of_the_base_model(deployment, expected):
+    assert deployment_supports_prefill(deployment) is expected
 
 
-def test_deployment_supports_prefill_rejects_malformed_deployments():
-    assert _deployment_supports_prefill({}) is False
-    assert _deployment_supports_prefill({"litellm_params": {}}) is False
-    assert _deployment_supports_prefill("not-a-dict") is False
+def testdeployment_supports_prefill_rejects_malformed_deployments():
+    assert deployment_supports_prefill({}) is False
+    assert deployment_supports_prefill({"litellm_params": {}}) is False
+    assert deployment_supports_prefill("not-a-dict") is False
 
 
 @pytest.mark.asyncio

@@ -235,9 +235,11 @@ from litellm.router_utils.fallback_event_handlers import (
     check_non_standard_fallback_format,
     clear_pre_routing_selection,
     committed_retry_budget_for_request,
+    continuation_fallback_targets,
     fallback_lookup_groups,
+    fallback_target_name,
+    fallback_target_overrides_request_params,
     fallbacks_disabled_for_request,
-    fallbacks_override_request_params,
     get_fallback_model_group_for_lookup_groups,
     get_pre_routing_selection,
     has_unattempted_fallback_target,
@@ -3337,8 +3339,9 @@ class Router:
                     not e.is_pre_first_chunk
                     and (e.generated_content or _stream_chunks_have_generated_content(model_response.chunks))
                 )
+                cut_hidden_params: Final = get_hidden_params(model_response) or {}
                 continue_after_content: Final = committed and self._mid_stream_continuation_eligible(
-                    e=e, request_kwargs=initial_kwargs
+                    e=e, request_kwargs=initial_kwargs, cut_deployment_id=cut_hidden_params.get("model_id")
                 )
                 if committed and not continue_after_content:
                     self._raise_original_mid_stream_error(e)
@@ -3603,10 +3606,29 @@ class Router:
             raise e.original_exception from e
         raise e
 
+    def _params_sent_to_deployment(
+        self, request_kwargs: Mapping[str, object], deployment_id: object
+    ) -> Mapping[str, object]:
+        """The request as the deployment received it: its litellm_params under the router defaults and the caller's."""
+        deployment: Final = self.get_deployment(model_id=deployment_id) if isinstance(deployment_id, str) else None
+        deployment_params: Final = deployment.litellm_params.model_dump(exclude_none=True) if deployment else {}
+        defaults: Final = {key: value for key, value in self.default_litellm_params.items() if value is not None}
+        return MappingProxyType({**deployment_params, **defaults, **request_kwargs})
+
+    def _names_deployment_without_prefill(self, target: object) -> bool:
+        name: Final = fallback_target_name(target)
+        if name is None or name in self.model_names or not self.has_model_id(name):
+            return False
+        from litellm.router_utils.pre_call_checks.continuation_prefill_check import deployment_supports_prefill
+
+        deployment: Final = self.get_deployment(model_id=name)
+        return deployment is not None and not deployment_supports_prefill(deployment.model_dump(exclude_none=True))
+
     def _mid_stream_continuation_eligible(
         self,
         e: "MidStreamFallbackError",
         request_kwargs: Mapping[str, object],
+        cut_deployment_id: object = None,
     ) -> bool:
         """Whether a stream that broke after plain assistant text may continue via prefill."""
         if not self.enable_mid_stream_fallback_continuation:
@@ -3615,22 +3637,26 @@ class Router:
             return False
         if isinstance(e.original_exception, litellm.ContentPolicyViolationError):
             return False
-        choice_count: Final = request_kwargs.get("n")
+        sent_params: Final = self._params_sent_to_deployment(request_kwargs, cut_deployment_id)
+        choice_count: Final = sent_params.get("n")
         if isinstance(choice_count, int) and choice_count > 1:
             return False
-        response_format: Final = request_kwargs.get("response_format")
+        response_format: Final = sent_params.get("response_format")
         if response_format is not None and response_format != _UNCONSTRAINED_RESPONSE_FORMAT:
             return False
-        tool_choice: Final = request_kwargs.get("tool_choice")
+        tool_choice: Final = sent_params.get("tool_choice")
         if tool_choice == "required" or isinstance(tool_choice, Mapping):
             return False
-        if request_kwargs.get("merge_reasoning_content_in_choices") is True:
+        if sent_params.get("merge_reasoning_content_in_choices") is True:
             return False
         requested_group: Final = request_kwargs.get("model")
         lookup_groups: Final = fallback_lookup_groups(
             request_kwargs, requested_group if isinstance(requested_group, str) else None
         )
-        if fallbacks_override_request_params(request_kwargs.get("fallbacks", self.fallbacks), lookup_groups):
+        targets: Final = continuation_fallback_targets(request_kwargs.get("fallbacks", self.fallbacks), lookup_groups)
+        if any(fallback_target_overrides_request_params(target) for target in targets):
+            return False
+        if any(self._names_deployment_without_prefill(target) for target in targets):
             return False
         return not any(
             isinstance(callback, CustomGuardrail)

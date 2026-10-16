@@ -12,7 +12,7 @@ import threading
 import warnings
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -3656,17 +3656,36 @@ async def test_acompletion_streaming_iterator_raises_content_filter_instead_of_c
     mock_fallback.assert_not_awaited()
 
 
-async def _continues_after_content(initial_kwargs: dict[str, object]) -> bool:
+async def _continues_after_content(
+    initial_kwargs: dict[str, object],
+    primary_params: Mapping[str, object] = MappingProxyType({}),
+    default_litellm_params: dict[str, object] | None = None,
+) -> bool:
     from unittest.mock import AsyncMock, patch
 
     from litellm.exceptions import MidStreamFallbackError
 
     router: Final = litellm.Router(
         model_list=[
-            {"model_name": "gpt-4", "litellm_params": {"model": "gpt-4", "api_key": "k1"}},
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "k1", **primary_params},
+                "model_info": {"id": "primary-deployment"},
+            },
             {"model_name": "backup", "litellm_params": {"model": "anthropic/claude-3-opus-20240229", "api_key": "k2"}},
+            {
+                "model_name": "openai-backup",
+                "litellm_params": {"model": "gpt-4o", "api_key": "k3"},
+                "model_info": {"id": "no-prefill-deployment", "supports_assistant_prefill": False},
+            },
+            {
+                "model_name": "claude-backup",
+                "litellm_params": {"model": "anthropic/claude-3-opus-20240229", "api_key": "k4"},
+                "model_info": {"id": "prefill-deployment", "supports_assistant_prefill": True},
+            },
         ],
         fallbacks=[{"gpt-4": ["backup"]}],
+        default_litellm_params=default_litellm_params,
         enable_mid_stream_fallback_continuation=True,
     )
     error: Final = MidStreamFallbackError(
@@ -3674,13 +3693,15 @@ async def _continues_after_content(initial_kwargs: dict[str, object]) -> bool:
         is_pre_first_chunk=False, emitted_disqualifying_content=False,
     )
     fallback_chunk: Final = litellm.ModelResponseStream(choices=[{"index": 0, "delta": {"content": " world"}}])
+    cut_stream: Final = _make_midstream_source(error)
+    cut_stream._hidden_params = {"model_id": "primary-deployment"}
     with patch.object(
         router,
         "async_function_with_fallbacks_common_utils",
         new=AsyncMock(return_value=_FakeFallbackStream(fallback_chunk)),
     ) as mock_fallback:
         result: Final = await router._acompletion_streaming_iterator(
-            model_response=_make_midstream_source(error),
+            model_response=cut_stream,
             messages=[{"role": "user", "content": "Hi"}],
             initial_kwargs={"model": "gpt-4", "stream": True, **initial_kwargs},
         )
@@ -3740,6 +3761,58 @@ async def test_mid_stream_continuation_declines_a_request_fallback_that_override
     fallbacks: list[object], continues: bool
 ) -> None:
     assert await _continues_after_content({"fallbacks": fallbacks}) is continues
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fallbacks,continues",
+    [
+        ([{"gpt-4": ["no-prefill-deployment"]}], False),
+        ([{"gpt-4": ["backup", "no-prefill-deployment"]}], False),
+        ([{"model": "no-prefill-deployment"}], False),
+        ([{"gpt-4": ["prefill-deployment"]}], True),
+        ([{"gpt-4": ["openai-backup"]}], True),
+    ],
+    ids=[
+        "deployment_id_without_prefill",
+        "deployment_id_without_prefill_later_in_chain",
+        "flat_entry_naming_a_deployment_id_without_prefill",
+        "deployment_id_with_prefill",
+        "group_without_prefill_left_to_the_deployment_filter",
+    ],
+)
+async def test_mid_stream_continuation_declines_a_fallback_naming_a_deployment_without_prefill(
+    fallbacks: list[object], continues: bool
+) -> None:
+    assert await _continues_after_content({"fallbacks": fallbacks}) is continues
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "primary_params,default_litellm_params,continues",
+    [
+        ({"response_format": {"type": "json_object"}}, None, False),
+        ({"n": 2}, None, False),
+        ({"tool_choice": "required"}, None, False),
+        ({"merge_reasoning_content_in_choices": True}, None, False),
+        ({}, {"response_format": {"type": "json_object"}}, False),
+        ({"response_format": {"type": "text"}}, None, True),
+        ({"temperature": 0.2}, None, True),
+    ],
+    ids=[
+        "deployment_response_format",
+        "deployment_n",
+        "deployment_tool_choice",
+        "deployment_merged_reasoning",
+        "router_default_response_format",
+        "deployment_plain_text_format",
+        "deployment_unrelated_param",
+    ],
+)
+async def test_mid_stream_continuation_reads_constraints_configured_on_the_cut_deployment(
+    primary_params: Mapping[str, object], default_litellm_params: dict[str, object] | None, continues: bool
+) -> None:
+    assert await _continues_after_content({}, primary_params, default_litellm_params) is continues
 
 
 @pytest.mark.asyncio

@@ -35,7 +35,7 @@ def _str_keyed(value: object) -> Mapping[str, object]:
         return _NO_FIELDS
 
 
-def _deployment_supports_prefill(deployment: object) -> bool:
+def deployment_supports_prefill(deployment: object) -> bool:
     deployment_map: Final = _str_keyed(deployment)
     model_info: Final = _str_keyed(deployment_map.get("model_info"))
     declared: Final = model_info.get("supports_assistant_prefill")
@@ -59,7 +59,7 @@ class ContinuationPrefillDeploymentCheck(CustomLogger):
         marker: Final = (request_kwargs or {}).get(MID_STREAM_CONTINUATION_KWARG)
         if not isinstance(marker, _ContinuationMarker):
             return healthy_deployments
-        eligible: Final = (deployment for deployment in healthy_deployments if _deployment_supports_prefill(deployment))
+        eligible: Final = (deployment for deployment in healthy_deployments if deployment_supports_prefill(deployment))
         return list(eligible)
 
 

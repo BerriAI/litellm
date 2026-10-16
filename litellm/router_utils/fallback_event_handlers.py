@@ -623,14 +623,22 @@ def _resolved_fallback_chain(entries: Sequence[object], lookup_groups: tuple[str
     return chain if isinstance(chain, list) else ()
 
 
-def fallbacks_override_request_params(fallbacks: object, lookup_groups: tuple[str, ...]) -> bool:
+def continuation_fallback_targets(fallbacks: object, lookup_groups: tuple[str, ...]) -> Sequence[object]:
     entries: Final[Sequence[object]] = fallbacks if isinstance(fallbacks, list) else ()
-    targets: Final = (
+    return (
         entries
         if check_non_standard_fallback_format(fallbacks=entries)
         else _resolved_fallback_chain(entries, lookup_groups)
     )
-    return any(isinstance(target, Mapping) and "model" in target and len(target) > 1 for target in targets)
+
+
+def fallback_target_overrides_request_params(target: object) -> bool:
+    return isinstance(target, Mapping) and "model" in target and len(target) > 1
+
+
+def fallback_target_name(target: object) -> str | None:
+    name: Final = target.get("model") if isinstance(target, Mapping) else target
+    return name if isinstance(name, str) else None
 
 
 PROVIDER_SCOPED_RESOURCE_KEYS: Final = ("input_file_id", "training_file", "batch_id", "file_id", "fine_tuning_job_id")
