@@ -120,5 +120,5 @@ def test_ui_query_performance(ui_case_name: str, ui_fixture: UiFixture) -> None:
         _ = output.write_text(json.dumps(artifact, indent=2), encoding="utf-8")
         after: Final = _metrics(transport)
         _ = output.write_text(json.dumps({**artifact, "database_failures_after": after}, indent=2), encoding="utf-8")
-        assert after == 0, f"PostgreSQL failures after {case.name}: {after}"
+        assert before == after == 0, f"PostgreSQL failures for {case.name}: before={before}, after={after}"
         assert not any(sample.error for sample in samples), tuple(sample.error for sample in samples if sample.error)

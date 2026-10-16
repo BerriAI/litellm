@@ -19,6 +19,12 @@ def test_facet_dates_use_the_ui_bracketed_filter_names() -> None:
     }
 
 
+@pytest.mark.parametrize("invalid", ("not-a-number", True, float("nan"), float("inf")))
+def test_positive_row_does_not_hide_a_malformed_later_row(invalid: str | bool | float) -> None:
+    with pytest.raises(AssertionError, match=r"Expected (numeric|finite) spend"):
+        Contract(positive=("spend",)).count(Document([{"spend": 1}, {"spend": invalid}]))
+
+
 def test_session_cursor_is_reused_and_repeated_rows_rejected() -> None:
     case: Final = next(case for case in cases(datetime(2026, 1, 1, tzinfo=UTC), "key") if case.cursor == "session")
     first: Final = Document.model_validate_json('{"data":[{"request_id":"one"}],"next_session_cursor":"opaque"}')

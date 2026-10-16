@@ -59,14 +59,15 @@ class Contract:
                 assert isinstance(row, dict), "Expected object rows"
                 assert set(self.row_fields) <= row.keys(), f"Missing row fields {self.row_fields}"
         for name in self.positive:
-            assert any(_positive(row, name) for row in value), f"Expected positive {name}"
+            assert any(tuple(_positive(row, name) for row in value)), f"Expected positive {name}"
         return len(value)
 
 
 def _positive(row: JsonValue, name: str) -> bool:
     assert isinstance(row, dict), "Expected object row"
     number: Final = row.get(name)
-    assert isinstance(number, (int, float)), f"Expected numeric {name}"
+    assert isinstance(number, (int, float)) and not isinstance(number, bool), f"Expected numeric {name}"
+    assert math.isfinite(number), f"Expected finite {name}"
     return number > 0
 
 
