@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
+from hashlib import sha256
 from pathlib import Path
 from queue import SimpleQueue
 from types import MappingProxyType
@@ -547,6 +548,48 @@ def test_identical_requests_each_log_once_with_the_body_session(rigs: Rigs) -> N
 
     assert len({response.headers["x-litellm-call-id"] for response in responses}) == 3
     assert tuple(_session(response) for response in responses) == (session, session, session)
+
+
+def _pass_through_route(rig: Rig, target: str) -> str:
+    path: Final = f"/caller-session-{uuid.uuid4().hex}"
+    created: Final = rig.proxy.post("/config/pass_through_endpoint", {"path": path, "target": target, "auth": True})
+    endpoint_id: Final = string_value(object_value(list_value(created["endpoints"])[0])["id"])
+    rig.scenario.cleanups.callback(
+        lambda: rig.proxy.request("DELETE", "/config/pass_through_endpoint", params={"endpoint_id": endpoint_id})
+    )
+    return path
+
+
+@pytest.mark.parametrize("field", ["litellm_session_id", "metadata"])
+def test_pass_through_spend_log_session_is_the_body_session_beside_a_trace_header(rigs: Rigs, field: str) -> None:
+    marker: Final = _marker()
+    session: Final = _token("convo")
+    rig: Final = rigs.flag_on
+    path: Final = _pass_through_route(rig, f"{rig.upstream.url}/v1/chat/completions")
+    key: Final = rig.scenario.key(allowed_passthrough_routes=[path])
+    fields: Final[dict[str, JsonValue]] = (
+        {"litellm_session_id": session} if field == "litellm_session_id" else {"metadata": {"session_id": session}}
+    )
+
+    response: Final = rig.proxy.request(
+        "POST",
+        path,
+        rig.body("chat", marker, fields),
+        key=key,
+        headers={"x-litellm-trace-id": _token("trace")},
+    )
+
+    rows: Final = eventually(
+        lambda: read_rows(
+            'SELECT session_id FROM "LiteLLM_SpendLogs" WHERE api_key=%s', (sha256(key.encode()).hexdigest(),)
+        ),
+        lambda found: len(found) >= 1,
+        seconds=70,
+    )
+    assert response.status_code == 200, response.text
+    assert f"answer {marker}" in response.text
+    assert len(rig.upstream_bodies(marker)) == 1
+    assert rows == [{"session_id": session}]
 
 
 def _turn(
