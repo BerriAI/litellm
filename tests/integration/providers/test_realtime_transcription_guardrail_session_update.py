@@ -108,8 +108,6 @@ VOICE_UPDATE_GATED: Final[dict[str, JsonValue]] = {
     **VOICE_UPDATE,
     "audio": {"input": {"turn_detection": {"type": "server_vad", "create_response": False}}},
 }
-# The client's first update races the proxy's own gate, so it is gated as a first update or forwarded as a later one
-VOICE_UPDATE_FORWARDINGS: Final = (VOICE_UPDATE, VOICE_UPDATE_GATED)
 RE_ENABLE_UPDATE: Final[dict[str, JsonValue]] = {
     "type": "realtime",
     "audio": {"input": {"turn_detection": {"type": "server_vad", "create_response": True}}},
@@ -621,7 +619,7 @@ def _session_updates(observed: tuple[dict[str, JsonValue], ...]) -> tuple[JsonVa
 def _assert_voice_updates(observed: tuple[dict[str, JsonValue], ...], *later: dict[str, JsonValue]) -> None:
     updates: Final = _session_updates(observed)
     assert updates[0] == GA_INJECTED_UPDATE, updates
-    assert updates[1] in VOICE_UPDATE_FORWARDINGS, updates
+    assert updates[1] == VOICE_UPDATE_GATED, updates
     assert updates[2:] == later, updates
 
 

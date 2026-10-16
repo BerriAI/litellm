@@ -3928,7 +3928,9 @@ async def test_transcription_session_guardrail_block_only_reports_violation(
 
 
 async def _forwarded_ga_session_updates(
-    monkeypatch: pytest.MonkeyPatch, *client_sessions: dict[str, object]
+    monkeypatch: pytest.MonkeyPatch,
+    *client_sessions: dict[str, object],
+    event_normalizer: XAIRealtimeNormalizer | None = None,
 ) -> tuple[dict[str, object], ...]:
     """Run a GA client's session.updates through a transcript-guardrailed proxy and return the forwarded sessions."""
     monkeypatch.setattr(litellm, "callbacks", [_transcription_guardrail()])
@@ -3945,7 +3947,7 @@ async def _forwarded_ga_session_updates(
     logging_obj: Final = MagicMock()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
-    await RealTimeStreaming(client_ws, backend_ws, logging_obj).client_ack_messages()
+    await RealTimeStreaming(client_ws, backend_ws, logging_obj, event_normalizer=event_normalizer).client_ack_messages()
     return tuple(json.loads(call.args[0])["session"] for call in backend_ws.send.await_args_list)
 
 
@@ -4003,3 +4005,53 @@ async def test_later_ga_session_update_without_turn_detection_is_forwarded_witho
     assert len(forwarded) == 2
     assert forwarded[0]["audio"]["input"]["turn_detection"] == {"type": "server_vad", "create_response": False}
     assert forwarded[1] == {"type": "realtime", "instructions": "later"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "client_session",
+    [
+        pytest.param({"type": "realtime", "instructions": "hi"}, id="no-turn-detection"),
+        pytest.param({"type": "realtime", "audio": {"input": {"turn_detection": None}}}, id="push-to-talk"),
+    ],
+)
+async def test_xai_session_update_gate_leaves_out_the_vad_type(
+    monkeypatch: pytest.MonkeyPatch, client_session: dict[str, object]
+):
+    """xAI answers on its own under a typed turn_detection even with create_response off,
+    so the gate the proxy writes for xAI must not carry a type."""
+    forwarded: Final = await _forwarded_ga_session_updates(
+        monkeypatch, client_session, event_normalizer=XAIRealtimeNormalizer()
+    )
+
+    assert len(forwarded) == 1
+    assert forwarded[0]["audio"]["input"]["turn_detection"] == {"create_response": False}
+
+
+@pytest.mark.asyncio
+async def test_xai_session_created_gate_leaves_out_the_vad_type(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "callbacks", [_transcription_guardrail()])
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock()
+    backend_ws: Final = MagicMock()
+    backend_ws.send = AsyncMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[
+            json.dumps({"type": "session.created", "session": {"turn_detection": {"type": None}}}).encode(),
+            ConnectionClosed(None, None),
+        ]
+    )
+    logging_obj: Final = _mock_logging()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    streaming: Final = RealTimeStreaming(client_ws, backend_ws, logging_obj, event_normalizer=XAIRealtimeNormalizer())
+
+    await streaming.backend_to_client_send_messages()
+
+    sent: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+    assert sent == [
+        {
+            "type": "session.update",
+            "session": {"type": "realtime", "audio": {"input": {"turn_detection": {"create_response": False}}}},
+        }
+    ]
