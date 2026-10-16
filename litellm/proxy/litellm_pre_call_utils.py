@@ -945,7 +945,9 @@ def apply_missing_session_id_policy(
             )
 
 
-def should_auto_drop_params_for_agentic_cli(user_agent: str, data: dict, proxy_config: ProxyConfig) -> bool:
+def should_auto_drop_params_for_agentic_cli(
+    user_agent: str, caller_set_drop_params: bool, proxy_config: ProxyConfig
+) -> bool:
     """drop_params defaults to on for agentic CLIs so their client-specific
     params (e.g. Claude Code's thinking, Codex's service_tier) don't fail
     requests routed to providers that reject them. An explicit drop_params
@@ -955,7 +957,7 @@ def should_auto_drop_params_for_agentic_cli(user_agent: str, data: dict, proxy_c
 
     if not (is_claude_code_user_agent(user_agent) or is_codex_user_agent(user_agent)):
         return False
-    if "drop_params" in data:
+    if caller_set_drop_params:
         return False
     config: Final = getattr(proxy_config, "config", None)
     litellm_settings: Final = config.get("litellm_settings") if isinstance(config, dict) else None
@@ -2617,7 +2619,7 @@ async def add_litellm_data_to_request(
         user_agent = request.headers["user-agent"]
     data[_metadata_variable_name]["user_agent"] = user_agent
 
-    if should_auto_drop_params_for_agentic_cli(user_agent, data, proxy_config):
+    if should_auto_drop_params_for_agentic_cli(user_agent, "drop_params" in data, proxy_config):
         data["drop_params"] = True
 
     # Merge caller-supplied tags (x-litellm-tags header, data["tags"] root-level)
