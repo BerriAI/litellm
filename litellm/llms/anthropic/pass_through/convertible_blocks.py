@@ -1,5 +1,6 @@
 import json
 from collections.abc import Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from itertools import chain
 from types import MappingProxyType
 from typing import Final, TypeAlias
@@ -171,7 +172,13 @@ def malformed_tool_result_text_error(messages: Iterable[Mapping[str, object]]) -
     return next(chain.from_iterable(map(_tool_result_text_errors, blocks)), None)
 
 
-_KeptParts: TypeAlias = Mapping[int, object]
+@dataclass(frozen=True, slots=True)
+class _KeptPart:
+    block: object
+    scanned_text: str
+
+
+_KeptParts: TypeAlias = Mapping[int, _KeptPart]
 
 
 def _scannable_text(text: object) -> str:
@@ -225,9 +232,19 @@ def scannable_tool_result_request(request: object) -> object:
             return {**request_fields}
 
 
+def _kept_part(block: object) -> _KeptPart | None:
+    match as_str_mapping(block):
+        case {"type": "text", "text": str()}:
+            return None
+        case {"type": "text", "text": text}:
+            return _KeptPart(block=block, scanned_text=_scannable_text(text))
+        case _:
+            return None
+
+
 def _non_string_text_parts(content: object) -> _KeptParts:
     return MappingProxyType(
-        {index: block for index, block in enumerate(_list_items(content)) if _has_non_string_text(block)}
+        {index: part for index, block in enumerate(_list_items(content)) if (part := _kept_part(block)) is not None}
     )
 
 
@@ -256,12 +273,8 @@ def _text_of(block: object) -> str | None:
             return None
 
 
-def _restored_part(block: object, original: object) -> object:
-    match as_str_mapping(original):
-        case {"text": text} if _text_of(block) == _scannable_text(text):
-            return original
-        case _:
-            return block
+def _restored_part(block: object, kept: _KeptPart | None) -> object:
+    return kept.block if kept is not None and _text_of(block) == kept.scanned_text else block
 
 
 def _merged_content(blocks: tuple[object, ...], kept: _KeptParts) -> tuple[object, ...]:

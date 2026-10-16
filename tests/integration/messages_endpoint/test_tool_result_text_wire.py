@@ -344,18 +344,25 @@ def _forwarded_tool_result(body: Mapping[str, JsonValue]) -> JsonValue:
     return _JSON_OBJECTS.validate_python(last["content"])[0]["content"]
 
 
-def test_native_anthropic_forwards_a_null_tool_result_text_unchanged(gateway: Gateway) -> None:
+@pytest.mark.parametrize(
+    ("headers", "forwarded"),
+    ((MappingProxyType({}), [{"type": "text", "text": None}]), (_CLAUDE_CODE, [])),
+    ids=("no-drop-params", "claude-code-drop-params"),
+)
+def test_native_anthropic_forwards_a_null_tool_result_text_unless_drop_params_drops_it(
+    gateway: Gateway, headers: Mapping[str, str], forwarded: list[JsonValue]
+) -> None:
     with wire_server(_anthropic_peer) as wire, gateway.scenario() as scenario:
         model: Final = _anthropic_model(scenario, wire)
         body: Final = _body(model, _NULL_TEXT)
-        created: Final = gateway.request("POST", "/v1/messages", {**body, "max_tokens": 64}, headers=_CLAUDE_CODE)
-        counted: Final = gateway.request("POST", "/v1/messages/count_tokens", body, headers=_CLAUDE_CODE)
+        created: Final = gateway.request("POST", "/v1/messages", {**body, "max_tokens": 64}, headers=headers)
+        counted: Final = gateway.request("POST", "/v1/messages/count_tokens", body, headers=headers)
         assert created.status_code == 200, created.text
         assert counted.status_code == 200, counted.text
         assert _JSON_OBJECT.validate_json(counted.content)["input_tokens"] == _ANTHROPIC_COUNT, counted.text
         requests: Final = wire.drain()
-        assert _forwarded_tool_result(_only(requests, "/v1/messages")) == [{"type": "text", "text": None}]
-        assert _forwarded_tool_result(_only(requests, "/v1/messages/count_tokens")) == [{"type": "text", "text": None}]
+        assert _forwarded_tool_result(_only(requests, "/v1/messages")) == forwarded
+        assert _forwarded_tool_result(_only(requests, "/v1/messages/count_tokens")) == forwarded
 
 
 def test_bedrock_count_with_a_claude_code_user_agent_still_counts(gateway: Gateway) -> None:
@@ -483,21 +490,31 @@ def test_rewriting_guardrail_then_drop_params_drops_the_malformed_text(gateway: 
         assert _function_call_output(forwarded) == _WEATHER, forwarded
 
 
-def test_rewriting_guardrail_forwards_the_malformed_text_to_anthropic_unchanged(gateway: Gateway) -> None:
+@pytest.mark.parametrize(
+    ("deployment", "forwarded"),
+    (
+        (MappingProxyType({}), [{"type": "text", "text": 5}, {"type": "text", "text": _WEATHER}]),
+        (MappingProxyType({"drop_params": True}), [{"type": "text", "text": _WEATHER}]),
+    ),
+    ids=("no-drop-params", "deployment-drop-params"),
+)
+def test_rewriting_guardrail_forwards_the_malformed_text_to_anthropic_unless_drop_params_drops_it(
+    gateway: Gateway, deployment: Mapping[str, JsonValue], forwarded: list[JsonValue]
+) -> None:
     with (
         wire_server(_anthropic_peer) as provider,
         wire_server(_guardrail_peer) as guard,
         gateway.scenario() as scenario,
     ):
-        model: Final = _anthropic_model(scenario, provider, drop_params=True)
+        model: Final = _anthropic_model(scenario, provider, **deployment)
         guardrail: Final = _guardrail(gateway, scenario, guard, "rows")
         body: Final = _body(model, _NUMBER_THEN_WEATHER, max_tokens=64, guardrails=[guardrail])
         created: Final = gateway.request("POST", "/v1/messages", body)
         assert created.status_code == 200, created.text
-        forwarded: Final = _only(provider.drain(), "/v1/messages")
-        first_turn: Final = _first_turn(forwarded["messages"])
+        forwarded_body: Final = _only(provider.drain(), "/v1/messages")
+        first_turn: Final = _first_turn(forwarded_body["messages"])
         assert _REDACTED_CITY in first_turn and _CITY not in first_turn, first_turn
-        assert _forwarded_tool_result(forwarded) == [{"type": "text", "text": 5}, {"type": "text", "text": _WEATHER}]
+        assert _forwarded_tool_result(forwarded_body) == forwarded
 
 
 _MORNING: Final = f"{_CITY} morning: sunny"
@@ -549,19 +566,20 @@ def _texts(content: JsonValue) -> tuple[JsonValue, ...]:
 
 _RESTORED_TOOL_RESULTS: Final = MappingProxyType(
     {
-        "rows": [
-            _text(None),
-            _text(_redacted(_MORNING)),
-            _text(5),
-            _text(_redacted(_EVENING)),
-        ],
-        "join": [_text(None), _text(f"{_redacted(_MORNING)} | {_redacted(_EVENING)}"), _text(5)],
+        "rows": (
+            [_text(None), _text(_redacted(_MORNING)), _text(5), _text(_redacted(_EVENING))],
+            [_text(_redacted(_TOMORROW)), _text(7.5)],
+        ),
+        "join": (
+            [_text(f"null | {_redacted(_MORNING)} | 5 | {_redacted(_EVENING)}")],
+            [_text(f"{_redacted(_TOMORROW)} | 7.5")],
+        ),
     }
 )
 
 
 @pytest.mark.parametrize("mode", sorted(_RESTORED_TOOL_RESULTS))
-def test_rewriting_guardrail_puts_each_malformed_text_back_in_its_own_tool_result(gateway: Gateway, mode: str) -> None:
+def test_rewriting_guardrail_puts_back_each_malformed_text_it_left_unchanged(gateway: Gateway, mode: str) -> None:
     with (
         wire_server(_anthropic_peer) as provider,
         wire_server(_guardrail_peer) as guard,
@@ -577,8 +595,7 @@ def test_rewriting_guardrail_puts_each_malformed_text_back_in_its_own_tool_resul
         assert _REDACTED_CITY in first_turn and _CITY not in first_turn, first_turn
         tool_results: Final = _forwarded_tool_results(forwarded)
         assert _CITY not in json.dumps(tool_results), tool_results
-        assert tool_results["toolu_01"] == _RESTORED_TOOL_RESULTS[mode], tool_results
-        assert tool_results["toolu_02"] == [_text(_redacted(_TOMORROW)), _text(7.5)], tool_results
+        assert (tool_results["toolu_01"], tool_results["toolu_02"]) == _RESTORED_TOOL_RESULTS[mode], tool_results
         assert _texts(tool_results["toolu_03"]) == (_redacted(_WEEKEND),), tool_results
 
 
