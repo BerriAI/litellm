@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
 from openai.types.responses import ResponseReasoningItem
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
@@ -20,6 +21,8 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -345,7 +348,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         Transform the cancel response API response into a ResponsesAPIResponse
         """
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception:
             from litellm.llms.azure.chat.gpt_transformation import AzureOpenAIError
 

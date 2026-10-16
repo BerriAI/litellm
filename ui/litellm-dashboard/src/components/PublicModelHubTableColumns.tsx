@@ -7,6 +7,7 @@ import { CellTooltip, IdentityCell, StatusBadge, type StatusTone } from "@/compo
 import { Badge } from "@/components/ui/badge";
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
 import { PUBLIC_MODEL_HUB_SORTABLE_FIELDS } from "@/components/publicModelHub/publicModelHubFilters";
+import { displayMode } from "@/lib/decisionModels";
 import type { ModelCustomMetadataValue } from "@/components/AIHub/ModelCustomMetadata";
 
 export interface ModelGroupInfo {
@@ -206,7 +207,7 @@ export const getPublicModelHubColumns = ({ onModelClick }: PublicModelHubColumns
       cell: ({ row }) => (
         <span className="flex items-center gap-2 text-sm">
           <span>{getModeIcon(row.original.mode || "")}</span>
-          <span>{row.original.mode || "Chat"}</span>
+          <span>{row.original.mode ? displayMode(row.original.mode) : "Chat"}</span>
         </span>
       ),
     },

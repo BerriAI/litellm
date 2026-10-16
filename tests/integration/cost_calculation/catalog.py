@@ -9,7 +9,9 @@ from integration.cost_calculation.cases import (
     anthropic,
     azure,
     batch_realtime,
+    bedrock_chat_completions,
     bedrock_converse,
+    bedrock_mantle,
     decisions,
     fireworks_ai,
     gemini,
@@ -17,6 +19,7 @@ from integration.cost_calculation.cases import (
     openai,
     together_ai,
     vertex_ai,
+    xai,
 )
 from integration.cost_calculation.cost_tracking_case import (
     COST_MAP,
@@ -30,6 +33,7 @@ from integration.cost_calculation.cost_tracking_case import (
     RecountExpected,
     SseResponse,
 )
+from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase
 
 _PROVIDER_MODULES: Final = (
@@ -37,12 +41,15 @@ _PROVIDER_MODULES: Final = (
     anthropic,
     gemini,
     bedrock_converse,
+    bedrock_chat_completions,
+    bedrock_mantle,
     decisions,
     vertex_ai,
     azure,
     fireworks_ai,
     together_ai,
     misc,
+    xai,
 )
 CASES: Final[tuple[CostTrackingTestCase, ...]] = tuple(case for module in _PROVIDER_MODULES for case in module.CASES)
 PARITY_CASES: Final[tuple[StreamParityTestCase, ...]] = tuple(
@@ -50,7 +57,17 @@ PARITY_CASES: Final[tuple[StreamParityTestCase, ...]] = tuple(
 )
 BATCH_CASES: Final[tuple[BatchCostCase, ...]] = batch_realtime.BATCH_CASES
 REALTIME_CASES: Final[tuple[RealtimeCostCase, ...]] = batch_realtime.REALTIME_CASES
-_PARITY_LEGS: Final = frozenset(leg.name for pair in PARITY_CASES for leg in (pair.plain, pair.streamed))
+BRIDGE_COST_PARITY_CASES: Final[tuple[BridgeCostParityTestCase, ...]] = (
+    *openai.BRIDGE_COST_PARITY,
+    *bedrock_converse.BRIDGE_COST_PARITY,
+    *azure.BRIDGE_COST_PARITY,
+    *anthropic.BRIDGE_COST_PARITY,
+    *gemini.BRIDGE_COST_PARITY,
+    *vertex_ai.BRIDGE_COST_PARITY,
+)
+_PARITY_LEGS: Final = frozenset(leg.name for pair in PARITY_CASES for leg in (pair.plain, pair.streamed)) | frozenset(
+    leg.name for pair in BRIDGE_COST_PARITY_CASES for leg in (pair.native, pair.bridged)
+)
 STANDALONE_CASES: Final[tuple[CostTrackingTestCase, ...]] = tuple(
     case for case in CASES if case.name not in _PARITY_LEGS
 )

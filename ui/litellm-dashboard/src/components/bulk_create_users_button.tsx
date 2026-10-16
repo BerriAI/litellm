@@ -11,7 +11,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Download, FileText, FileWarning, Trash2, TriangleAlert, Upload } from "lucide-react";
-import { userCreateCall, invitationCreateCall, getProxyUISettings } from "./networking";
+import { userCreateCall, invitationCreateCall, getProxyUISettings, getUiPageUrl } from "./networking";
 import Papa from "papaparse";
 import { CheckCircleIcon, XCircleIcon, ExclamationIcon } from "@heroicons/react/outline";
 import { CopyToClipboard } from "react-copy-to-clipboard";
@@ -376,7 +376,9 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
             if (!uiSettings?.SSO_ENABLED) {
               // Regular invitation flow
               const invitationData = await invitationCreateCall(accessToken, user_id);
-              const invitationUrl = new URL(`/ui/onboarding?invitation_id=${invitationData.id}`, baseUrl).toString();
+              const invitationUrl = getUiPageUrl(
+                new URL(`/ui/onboarding?invitation_id=${invitationData.id}`, baseUrl).toString(),
+              );
 
               setParsedData((current) =>
                 current.map((u, i) =>

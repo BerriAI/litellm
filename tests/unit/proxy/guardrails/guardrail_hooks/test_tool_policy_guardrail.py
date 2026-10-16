@@ -186,3 +186,39 @@ async def test_response_tool_calls_as_objects(guardrail):
             await guardrail.apply_guardrail(
                 inputs=inputs, request_data={}, input_type="response"
             )
+
+
+@pytest.mark.asyncio
+async def test_blocked_tool_loaded_by_a_replayed_tool_search_raises_next_to_allowed_tools(guardrail):
+    request_data = {
+        "tools": [{"type": "function", "function": {"name": "get_weather"}}, {"type": "tool_search"}],
+        "messages": [
+            {"role": "user", "content": "clean up the disk"},
+            {
+                "role": "assistant",
+                "content": None,
+                "provider_specific_fields": {
+                    "tool_search_items": [
+                        {"type": "tool_search_call", "call_id": "ts_1", "execution": "client"},
+                        {
+                            "type": "tool_search_output",
+                            "call_id": "ts_1",
+                            "tools": [{"type": "function", "name": "run_shell", "parameters": {"type": "object"}}],
+                        },
+                    ]
+                },
+            },
+        ],
+    }
+    with patch(
+        "litellm.proxy.db.tool_registry_writer.get_tool_policy_registry",
+        return_value=_registry_mock({"get_weather": "untrusted", "run_shell": "blocked"}),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs=_tool_request_inputs(["get_weather"]),
+                request_data=request_data,
+                input_type="request",
+            )
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail["blocked_tools"] == ["run_shell"]

@@ -14,10 +14,12 @@ import { DataTable } from "@/components/shared/DataTable";
 import ModelFilters from "@/components/model_filters";
 import {
   fetchMCPServers,
+  getGatewayBaseUrl,
   getAgentsList,
   getConfigFieldSetting,
   getGlobalLitellmHeaderName,
   getProxyBaseUrl,
+  getUiPageUrl,
   getUiConfig,
   modelHubCall,
   modelHubPublicModelsCall,
@@ -44,7 +46,14 @@ import { checkTokenValidity } from "@/utils/jwtUtils";
 import { getCookie } from "@/utils/cookieUtils";
 import { getLoginUrl } from "@/utils/returnUrlUtils";
 import { uiHref } from "@/utils/uiHref";
-import { DECISIONS_DOCS_URL, SYSTEM_ONE_PLAYGROUND_ROUTE, displayMode, isDecisionMode } from "@/lib/decisionModels";
+import {
+  DECISIONS_DOCS_URL,
+  DECISIONS_MODE,
+  SYSTEM_ONE_PLAYGROUND_ROUTE,
+  displayMode,
+  isDecisionMode,
+} from "@/lib/decisionModels";
+import DecisionModelGarden from "@/components/AIHub/DecisionModelGarden";
 import { ModelCustomMetadata } from "./ModelCustomMetadata";
 
 interface ModelHubTableProps {
@@ -53,10 +62,27 @@ interface ModelHubTableProps {
   premiumUser: boolean;
   userRole: string | null;
   canOpenPlayground: boolean;
+  canAddModels: boolean;
 }
 
 function isMCPHubVisibilityDisabled(isLoading: boolean, servers: readonly MCPServerData[] | null): boolean {
   return isLoading || servers === null;
+}
+
+function modelTableEmptyState(
+  models: readonly ModelHubData[],
+  showsDecisionGarden: boolean,
+  selectedMode: string,
+): { title: string; body: string } {
+  if (showsDecisionGarden && selectedMode === DECISIONS_MODE && !models.some((model) => isDecisionMode(model.mode))) {
+    return {
+      title: "No model on this proxy uses the decisions mode",
+      body: "The decision models LiteLLM supports are listed below.",
+    };
+  }
+  return models.length > 0
+    ? { title: "No matching models", body: "Adjust the filters to see more models." }
+    : { title: "No models yet", body: "Models added to this proxy will appear here." };
 }
 
 function HubEmptyState({ title, body }: { title: string; body: string }) {
@@ -77,6 +103,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
   premiumUser,
   userRole,
   canOpenPlayground,
+  canAddModels,
 }) => {
   const syntaxTheme = useSyntaxTheme(prism);
   // Admin Viewer follows the read-parity rule: see the AI Hub catalog, but
@@ -89,6 +116,8 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [selectedModel, setSelectedModel] = useState<null | ModelHubData>(null);
   const [filteredData, setFilteredData] = useState<ModelHubData[]>([]);
+  const [selectedMode, setSelectedMode] = useState<string>("");
+  const showDecisionGarden = !publicPage && (selectedMode === "" || selectedMode === DECISIONS_MODE);
   const [isMakePublicModalVisible, setIsMakePublicModalVisible] = useState(false);
   // Agent Hub state
   const [agentHubData, setAgentHubData] = useState<AgentHubData[] | null>(null);
@@ -125,7 +154,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
 
       // If token is invalid, redirect to login
       if (!isTokenValid) {
-        window.location.replace(getLoginUrl(getProxyBaseUrl()));
+        window.location.replace(getUiPageUrl(getLoginUrl(getProxyBaseUrl())));
         return;
       }
     }
@@ -431,9 +460,9 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
             <div className="flex items-center space-x-4">
               <p>Model Hub URL:</p>
               <div className="flex items-center bg-border px-2 py-1 rounded-sm">
-                <p className="mr-2">{`${getProxyBaseUrl()}/ui/model_hub_table`}</p>
+                <p className="mr-2">{getUiPageUrl(`${getProxyBaseUrl()}/ui/model_hub_table`)}</p>
                 <button
-                  onClick={() => void copyToClipboard(`${getProxyBaseUrl()}/ui/model_hub_table`)}
+                  onClick={() => void copyToClipboard(getUiPageUrl(`${getProxyBaseUrl()}/ui/model_hub_table`))}
                   className="p-1 hover:bg-accent rounded-sm transition-colors"
                   title="Copy URL"
                 >
@@ -480,7 +509,12 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                   )}
 
                   {/* Filters */}
-                  <ModelFilters modelHubData={modelHubData || []} onFilteredDataChange={handleFilteredDataChange} />
+                  <ModelFilters
+                    modelHubData={modelHubData || []}
+                    onFilteredDataChange={handleFilteredDataChange}
+                    extraModes={publicPage ? [] : [DECISIONS_MODE]}
+                    onModeChange={setSelectedMode}
+                  />
 
                   {/* Model Table */}
                   <DataTable
@@ -494,14 +528,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                     isLoading={loading}
                     loadingMessage="Loading models…"
                     noDataMessage={
-                      <HubEmptyState
-                        title={modelHubData?.length ? "No matching models" : "No models yet"}
-                        body={
-                          modelHubData?.length
-                            ? "Adjust the filters to see more models."
-                            : "Models added to this proxy will appear here."
-                        }
-                      />
+                      <HubEmptyState {...modelTableEmptyState(modelHubData ?? [], showDecisionGarden, selectedMode)} />
                     }
                     size="compact"
                   />
@@ -512,6 +539,8 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                     Showing {filteredData.length} of {modelHubData?.length || 0} models
                   </p>
                 </div>
+
+                {showDecisionGarden && <DecisionModelGarden accessToken={accessToken} canAddModels={canAddModels} />}
               </TabsContent>
 
               {/* Agent Hub Tab */}
@@ -807,7 +836,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                 <SyntaxHighlighter language="python" className="text-sm" style={syntaxTheme}>
                   {modelUsageExample(
                     selectedModel.mode,
-                    getProxyBaseUrl(),
+                    getGatewayBaseUrl(),
                     selectedModel.model_group,
                     getGlobalLitellmHeaderName(),
                   )}
