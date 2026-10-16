@@ -1055,6 +1055,12 @@ def _loaded_catalog_entry(
     return loaded_catalog().get(catalog_key, MappingProxyType({}))
 
 
+def _json_temporal_default(value: object) -> str:
+    if isinstance(value, (datetime.datetime, datetime.date, datetime.time)):
+        return value.isoformat()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
 def update_db_model(
     db_model: Deployment,
     updated_patch: updateDeployment,
@@ -1154,7 +1160,8 @@ def update_db_model(
     prisma_compatible_model_dict: Final = PrismaCompatibleUpdateDBModel(
         model_name=merged_model_name,
         litellm_params=json.dumps(merged_litellm_params),
-        model_info=json.dumps(merged_model_info),
+        # date/time values nest inside model_info (e.g. access_windows start/end)
+        model_info=json.dumps(merged_model_info, default=_json_temporal_default),
     )
 
     if updated_patch.blocked is not None:
