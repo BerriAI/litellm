@@ -117,6 +117,24 @@ async def test_paid_target_refused_when_over_user_budget():
 
 
 @pytest.mark.asyncio
+async def test_paid_target_refused_when_over_team_member_overall_budget():
+    token = _token(user_id="u1", team_id="t1", max_budget_in_team=50.0, team_member_spend=100.0)
+    assert await is_token_within_budget_for_model(model="paid-model", valid_token=token, llm_router=_router()) is False
+
+
+@pytest.mark.asyncio
+async def test_paid_target_allowed_when_under_team_member_overall_budget():
+    token = _token(user_id="u1", team_id="t1", max_budget_in_team=50.0, team_member_spend=10.0)
+    assert await is_token_within_budget_for_model(model="paid-model", valid_token=token, llm_router=_router()) is True
+
+
+@pytest.mark.asyncio
+async def test_free_target_allowed_even_when_over_team_member_overall_budget():
+    token = _token(user_id="u1", team_id="t1", max_budget_in_team=50.0, team_member_spend=100.0)
+    assert await is_token_within_budget_for_model(model="free-model", valid_token=token, llm_router=_router()) is True
+
+
+@pytest.mark.asyncio
 async def test_team_member_budget_refuses_an_exhausted_paid_target() -> None:
     member_caps: Final = {"paid-model": {"max_budget": 5.0, "budget_duration": "1d"}}
     token: Final = _token(

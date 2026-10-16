@@ -2957,6 +2957,8 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                         now=datetime.now(timezone.utc),
                     )
                     if team_member_budget is not None and team_member_budget > 0:
+                        valid_token.max_budget_in_team = team_member_budget
+                        valid_token.team_member_max_budget = team_member_budget
                         # Read from cross-pod counter (Redis-first) if available
                         from litellm.proxy.proxy_server import get_current_spend
 

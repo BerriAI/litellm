@@ -6753,6 +6753,8 @@ async def _check_team_member_budget(
                     )
 
         if team_member_budget is not None:
+            valid_token.max_budget_in_team = team_member_budget
+            valid_token.team_member_max_budget = team_member_budget
             team_member_spend = (loaded_membership.spend if loaded_membership is not None else 0.0) or 0.0
 
             # Read from cross-pod counter (Redis-first) if available
