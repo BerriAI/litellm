@@ -671,6 +671,72 @@ def test_streamed_responses_over_anthropic_emit_the_compaction_item_and_send_it_
     assert _sent_assistant_content(route) == [_COMPACTION_BLOCK, {"type": "text", "text": "The."}]
 
 
+@pytest.mark.asyncio
+async def test_async_streamed_compaction_item_is_done_before_the_reasoning_that_follows_it() -> None:
+    anthropic: Final = httpx.MockTransport(
+        lambda _request: httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_anthropic_sse(
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_compacted_thinking",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-sonnet-5-5",
+                        "content": [],
+                        "usage": {"input_tokens": 9, "output_tokens": 1},
+                    },
+                },
+                {"type": "content_block_start", "index": 0, "content_block": {"type": "compaction", "content": None}},
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "compaction_delta", "content": _COMPACTION_BLOCK["content"]},
+                },
+                {"type": "content_block_stop", "index": 0},
+                {"type": "content_block_start", "index": 1, "content_block": {"type": "thinking", "thinking": ""}},
+                {"type": "content_block_delta", "index": 1, "delta": {"type": "thinking_delta", "thinking": "Recall."}},
+                {"type": "content_block_delta", "index": 1, "delta": {"type": "signature_delta", "signature": "sig"}},
+                {"type": "content_block_stop", "index": 1},
+                {"type": "content_block_start", "index": 2, "content_block": {"type": "text", "text": ""}},
+                {"type": "content_block_delta", "index": 2, "delta": {"type": "text_delta", "text": "The."}},
+                {"type": "content_block_stop", "index": 2},
+                {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 4}},
+                {"type": "message_stop"},
+            ),
+        )
+    )
+
+    stream: Final = await litellm.aresponses(
+        model=_MODEL,
+        input=list(_FIRST_INPUT),
+        context_management=list(_COMPACT_AT_50K),
+        stream=True,
+        api_key="mock_api_key",
+        client=AsyncHTTPHandler(transport=anthropic),
+    )
+    events: Final = [event async for event in stream]
+    done_items: Final = [
+        (event.output_index, event.item.type)
+        for event in events
+        if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
+    ]
+    reasoning_done: Final = next(
+        index
+        for index, event in enumerate(events)
+        if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE and event.item.type == "reasoning"
+    )
+    sequence_numbers: Final = [
+        event.sequence_number for event in events[: reasoning_done + 1] if getattr(event, "sequence_number", None)
+    ]
+
+    assert done_items == [(0, "compaction"), (1, "reasoning"), (2, "message")]
+    assert [item.type for item in events[-1].response.output] == ["compaction", "reasoning", "message"]
+    assert sequence_numbers == sorted(set(sequence_numbers))
+
+
 def _compaction_stream_events(*summaries: str) -> tuple[Mapping[str, object], ...]:
     return tuple(
         chain.from_iterable(

@@ -150,7 +150,13 @@ def _redacted_provider_specific_fields(fields: Mapping[str, object]) -> Mapping[
         **({"reasoning_content": REDACTED_BY_LITELLM} if fields.get("reasoning_content") is not None else {}),
         **{
             key: None
-            for key in ("thinking_blocks", "reasoningContentBlocks", "citations", "compaction_blocks")
+            for key in (
+                "thinking_blocks",
+                "reasoningContentBlocks",
+                "citations",
+                "compaction_blocks",
+                "compaction_delta",
+            )
             if key in fields
         },
     }

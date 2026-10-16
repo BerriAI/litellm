@@ -1170,6 +1170,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                                     or mint_reasoning_item_id()
                                 )
                                 reasoning_item_id = self._cached_reasoning_item_id
+                                self._queue_compaction_item_done()
 
                                 # Create text.done event first with its own sequence number
                                 self._sequence_number += 1

@@ -140,6 +140,13 @@ def compaction_summary(item: object) -> str | None:
     return None if block is None else block.summary
 
 
+def summary_only_compaction_item(item: object) -> str | None:
+    summary: Final = compaction_summary(item)
+    if summary is None:
+        return None
+    return json.dumps({"type": "compaction", "content": summary}, separators=(",", ":"))
+
+
 def with_compaction_summary(encrypted_content: str, summary: str) -> str:
     original: Final = _without_affinity_wrap(encrypted_content)
     block: Final = decode_compaction_item(original)
