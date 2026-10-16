@@ -596,7 +596,9 @@ def test_held_stream_block_returns_an_error_before_any_frame(rig: Rig) -> None:
     )
     outcome: Final = rig.invoke_stream(HELD, marker)
     assert outcome.events == () and outcome.rejected_before_stream is not None, outcome
-    assert "(400)" in outcome.rejected_before_stream, outcome
+    assert outcome.rejected_before_stream.endswith(
+        f"(ValidationException) when calling the InvokeModelWithResponseStream operation: {BLOCK_REASON}"
+    ), outcome
 
 
 def test_held_stream_the_upstream_breaks_off_still_scans_its_tool_input(rig: Rig) -> None:
@@ -629,7 +631,9 @@ def test_held_stream_the_upstream_breaks_off_still_scans_its_tool_input(rig: Rig
     )
     outcome: Final = rig.invoke_stream(HELD, marker)
     assert outcome.events == () and outcome.rejected_before_stream is not None, outcome
-    assert "(400)" in outcome.rejected_before_stream, outcome
+    assert outcome.rejected_before_stream.endswith(
+        f"(ValidationException) when calling the InvokeModelWithResponseStream operation: {BLOCK_REASON}"
+    ), outcome
 
 
 def test_bedrock_guardrail_holds_the_stream_and_anonymizes_it(rig: Rig) -> None:
@@ -722,7 +726,9 @@ def test_held_stream_released_on_scan_with_a_block_returns_an_error_before_any_e
     )
     outcome: Final = rig.invoke_stream(RELEASE_ON_SCAN, marker)
     assert outcome.events == () and outcome.rejected_before_stream is not None, outcome
-    assert "(400)" in outcome.rejected_before_stream, outcome
+    assert outcome.rejected_before_stream.endswith(
+        f"(ValidationException) when calling the InvokeModelWithResponseStream operation: {BLOCK_REASON}"
+    ), outcome
     assert rig.bedrock_scans(RELEASE_ON_SCAN, marker) == ((f"Release {marker} {BLOCKED_WORD} end",),)
 
 
@@ -733,7 +739,9 @@ def test_parallel_guardrail_scans_the_whole_invoke_stream_before_any_event(rig: 
     )
     outcome: Final = rig.invoke_stream(PARALLEL, marker)
     assert outcome.events == () and outcome.rejected_before_stream is not None, outcome
-    assert "(400)" in outcome.rejected_before_stream, outcome
+    assert outcome.rejected_before_stream.endswith(
+        f"(ValidationException) when calling the InvokeModelWithResponseStream operation: {BLOCK_REASON}"
+    ), outcome
     assert rig.scans(PARALLEL, marker) == ((f"Parallel {marker} {BLOCKED_WORD} end",),)
 
 
