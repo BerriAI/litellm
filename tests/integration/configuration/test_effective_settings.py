@@ -1243,6 +1243,60 @@ def test_removing_db_environment_variables_restores_process_and_config_file_valu
                 eventually(answers, lambda values: values == (from_process_and_config_file,) * 2, seconds=30)
 
 
+def test_a_proxy_that_pushes_its_own_schema_unsets_a_removed_db_environment_variable(
+    gateway: Gateway, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    alias: Final = "environment-variables-db-push-" + marker
+    process_key: Final = "process-key-" + marker
+    database_key: Final = "database-key-" + marker
+
+    with (
+        scratch_database() as database_url,
+        wire_server(_provider_echoing_its_key("config-file")) as config_file_provider,
+        wire_server(_provider_echoing_its_key("database")) as database_provider,
+    ):
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        config: Final = _environment_variables_proxy_config(tmp_path, gateway, alias, config_file_provider)
+        environment: Final = {
+            **_environment_variables_proxy_environment(database_url, process_key),
+            "DISABLE_SCHEMA_UPDATE": "false",
+        }
+        from_process_and_config_file: Final = f"config-file Bearer {process_key}"
+        with owned_proxy(
+            gateway,
+            tmp_path / "proxy",
+            environment,
+            config=config,
+            remove_environment=("DATABASE_URL_READ_REPLICA", "OPENAI_API_BASE", "OPENAI_BASE_URL"),
+        ) as proxy:
+            assert _chat_answer(proxy, alias) == from_process_and_config_file
+            stored: Final = proxy.request(
+                "POST",
+                "/config/update",
+                {
+                    "environment_variables": {
+                        "OPENAI_API_KEY": database_key,
+                        "OPENAI_BASE_URL": database_provider.url + "/v1",
+                    }
+                },
+            )
+            assert stored.status_code == 200, stored.text
+            eventually(
+                lambda: _chat_answer(proxy, alias), lambda value: value == f"database Bearer {database_key}", seconds=30
+            )
+
+            unset: Final = proxy.request(
+                "POST",
+                "/config/update",
+                {"environment_variables": {"OPENAI_API_KEY": None, "OPENAI_BASE_URL": None}},
+            )
+            assert unset.status_code == 200, unset.text
+            eventually(
+                lambda: _chat_answer(proxy, alias), lambda value: value == from_process_and_config_file, seconds=30
+            )
+
+
 def _environment_variables_row(database_url: str) -> dict[str, JsonValue]:
     return read_rows(
         'SELECT param_value, reload_revision FROM "LiteLLM_Config" WHERE param_name = %s',
@@ -1484,3 +1538,35 @@ def test_db_environment_variables_revision_keeps_rising_after_its_sequence_falls
 
         assert isinstance(before_the_sequence_restarts, int) and isinstance(after_the_sequence_restarts, int)
         assert after_the_sequence_restarts > before_the_sequence_restarts
+
+
+def test_db_environment_variables_saved_from_a_session_outside_the_tables_schema_still_get_a_revision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    schema: Final = "litellm_tenant"
+    table: Final = sql.SQL('{}."LiteLLM_Config"').format(sql.Identifier(schema))
+    with scratch_database() as database_url:
+        monkeypatch.setenv("DATABASE_URL", f"{database_url}?schema={schema}")
+        _push_schema_with_environment_variables_revision_trigger()
+
+        def save_and_read_revision(values: dict[str, str]) -> object:
+            with psycopg.connect(database_url, autocommit=True) as writer:
+                writer.execute(
+                    sql.SQL(
+                        "INSERT INTO {} (param_name, param_value) VALUES (%s, %s) "
+                        "ON CONFLICT (param_name) DO UPDATE SET param_value = EXCLUDED.param_value"
+                    ).format(table),
+                    ("environment_variables", Jsonb(values)),
+                )
+                row: Final = writer.execute(
+                    sql.SQL("SELECT reload_revision FROM {} WHERE param_name = %s").format(table),
+                    ("environment_variables",),
+                ).fetchone()
+            assert row is not None
+            return row[0]
+
+        first: Final = save_and_read_revision({"TENANT_SCHEMA_KEY": "stored"})
+        second: Final = save_and_read_revision({})
+
+        assert isinstance(first, int) and isinstance(second, int)
+        assert 0 < first < second

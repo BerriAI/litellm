@@ -4,13 +4,13 @@ CREATE SEQUENCE IF NOT EXISTS "litellm_environment_variables_revision_seq";
 GRANT USAGE ON SEQUENCE "litellm_environment_variables_revision_seq" TO PUBLIC;
 
 CREATE OR REPLACE FUNCTION litellm_bump_environment_variables_revision() RETURNS TRIGGER AS $$
+DECLARE
+  next_revision BIGINT := nextval(format('%I.litellm_environment_variables_revision_seq', TG_TABLE_SCHEMA)::regclass);
 BEGIN
   IF TG_OP = 'UPDATE' THEN
-    NEW."reload_revision" := GREATEST(
-      nextval('"litellm_environment_variables_revision_seq"'), OLD."reload_revision" + 1
-    );
+    NEW."reload_revision" := GREATEST(next_revision, OLD."reload_revision" + 1);
   ELSE
-    NEW."reload_revision" := nextval('"litellm_environment_variables_revision_seq"');
+    NEW."reload_revision" := next_revision;
   END IF;
   RETURN NEW;
 END;

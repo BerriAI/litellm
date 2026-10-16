@@ -2191,9 +2191,9 @@ class _UserTeamsRow(Protocol):
 _ProxyModelRow: TypeAlias = "prisma_models.LiteLLM_ProxyModelTable"
 
 
-def _config_param_table(client: PrismaClient | None) -> TableActions[_ConfigParamRow]:
+def _config_param_table(client: PrismaClient | None, *, use_writer: bool = False) -> TableActions[_ConfigParamRow]:
     return cast(  # cast-ok: this is prisma's LiteLLM_Config actions object, which parses its Json column to a mapping
-        "TableActions[_ConfigParamRow]", ConfigRepository(client).table
+        "TableActions[_ConfigParamRow]", ConfigRepository(client, use_writer=use_writer).table
     )
 
 
@@ -5989,7 +5989,7 @@ class ProxyConfig:
         if prisma_client is None or not (general_settings.get("store_model_in_db", False) is True or store_model_in_db):
             return
 
-        row: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client).find_first(
+        row: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client, use_writer=True).find_first(
             where={"param_name": "environment_variables"}
         )
         existing: Final[dict] = dict(row.param_value) if row is not None and row.param_value is not None else {}
@@ -8348,11 +8348,23 @@ class ProxyConfig:
         cached: Final = await get_config_param(prisma_client, section)
         if section != "environment_variables" or not self._is_behind_applied_environment_revision(cached):
             return cached
-        return await call_with_db_reconnect_retry(
-            prisma_client,
-            lambda: ConfigRepository(prisma_client, use_writer=True).table.find_unique(where={"param_name": section}),
-            reason="environment_variables_writer_read_failure",
-        )
+        try:
+            return await call_with_db_reconnect_retry(
+                prisma_client,
+                lambda: ConfigRepository(prisma_client, use_writer=True).table.find_unique(
+                    where={"param_name": section}
+                ),
+                reason="environment_variables_writer_read_failure",
+            )
+        except Exception as e:
+            if not PrismaDBExceptionHandler.is_database_transport_error(e):
+                raise
+            verbose_proxy_logger.warning(
+                "Could not read environment_variables from the writer database, keeping the current environment "
+                "variables until the next config sync: %s",
+                e,
+            )
+            return None
 
     def _is_behind_applied_environment_revision(self, row: object) -> bool:
         applied_revision: Final = self._db_environment_revision
@@ -18660,7 +18672,7 @@ async def update_config(
         proxy_config.reject_config_owned_writes(section_name="router_settings", changed_keys=router_settings_updates)
 
         async def _read_section(param_name: str) -> dict:
-            row: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client).find_first(
+            row: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client, use_writer=True).find_first(
                 where={"param_name": param_name}
             )
             if row is None or row.param_value is None:

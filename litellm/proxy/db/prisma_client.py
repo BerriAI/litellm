@@ -4,6 +4,7 @@ database token (AWS RDS IAM or Microsoft Entra ID) fresh.
 """
 
 import asyncio
+import importlib.resources
 import os
 import random
 import signal
@@ -33,6 +34,8 @@ from litellm.secret_managers.main import str_to_bool
 
 if TYPE_CHECKING:
     from prisma import Prisma
+
+_ENVIRONMENT_VARIABLES_REVISION_MIGRATION: Final = "20261015120000_add_environment_variables_revision_trigger"
 
 __all__ = (
     "IAMEndpoint",
@@ -975,6 +978,36 @@ class PrismaManager:
         ProxyExtrasDBManager.apply_replica_identity_full_if_requested()
 
     @staticmethod
+    def _apply_environment_variables_revision_trigger() -> None:
+        try:
+            from litellm_proxy_extras.prisma_toolchain import (
+                prisma_command_timeout,
+                run_prisma,
+            )
+        except ImportError:
+            return
+        migration: Final = (
+            importlib.resources.files("litellm_proxy_extras")
+            / "migrations"
+            / _ENVIRONMENT_VARIABLES_REVISION_MIGRATION
+            / "migration.sql"
+        )
+        if not migration.is_file():
+            return
+        try:
+            run_prisma(
+                ["prisma", "db", "execute", "--schema", "schema.prisma", "--file", str(migration)],
+                timeout=prisma_command_timeout(),
+                env=os.environ.copy(),
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+            verbose_proxy_logger.warning(
+                "Could not create the environment_variables revision trigger after prisma db push, so a removed "
+                "DB environment variable stays set on running proxies until they restart: %s",
+                e,
+            )
+
+    @staticmethod
     def _raise_if_partitioned_spend_logs() -> None:
         """`prisma db push` rewrites a doc-partitioned LiteLLM_SpendLogs
         primary key back to ("request_id"), which Postgres rejects. Fail fast
@@ -1050,6 +1083,7 @@ class PrismaManager:
                         stdout=None,
                         stderr=None,
                     )
+                    PrismaManager._apply_environment_variables_revision_trigger()
                     PrismaManager._apply_replica_identity_full_if_requested()
                     return True
             except subprocess.TimeoutExpired as e:

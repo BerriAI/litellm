@@ -22,6 +22,7 @@ from types import MappingProxyType, SimpleNamespace
 from typing import Any, Dict, Final
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
@@ -1408,21 +1409,24 @@ async def test_ProxyConfig_save_config_persists_unchanged_environment_variables_
     assert table.upserted_param_names == ["environment_variables"]
 
 
-def _install_fake_config_repo(monkeypatch, existing_row):
+def _install_fake_config_repo(monkeypatch, existing_row, replica_row=None):
     """Route ProxyConfig's ConfigRepository through an in-memory fake that
     records the value written to the environment_variables row."""
     captured: dict = {}
 
     class _FakeTable:
+        def __init__(self, row):
+            self.row = row
+
         async def find_first(self, where):
-            return SimpleNamespace(param_value=existing_row) if existing_row is not None else None
+            return SimpleNamespace(param_value=self.row) if self.row is not None else None
 
         async def upsert(self, where, data):
             captured["value"] = json.loads(data["update"]["param_value"])
 
     class _FakeRepo:
-        def __init__(self, client):
-            self.table = _FakeTable()
+        def __init__(self, client, *, use_writer=False):
+            self.table = _FakeTable(existing_row if use_writer or replica_row is None else replica_row)
 
     monkeypatch.setattr("litellm.proxy.proxy_server.ConfigRepository", _FakeRepo)
     monkeypatch.setattr("litellm.proxy.proxy_server.invalidate_config_param", AsyncMock())
@@ -1453,6 +1457,23 @@ async def test_ProxyConfig_save_environment_variables_merges_sets_and_deletes(mo
     assert "UI_LOGO_PATH" in written and written["UI_LOGO_PATH"] != "new-logo"
     # None-valued key deleted
     assert "LITELLM_FAVICON_URL" not in written
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_save_environment_variables_keeps_a_key_the_read_replica_has_not_caught_up_on(monkeypatch):
+    captured = _install_fake_config_repo(
+        monkeypatch,
+        existing_row={"SAVED_A_MOMENT_AGO": "ciphertext-new"},
+        replica_row={},
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-test-salt-key")
+
+    await ProxyConfig().save_environment_variables({"UI_LOGO_PATH": None})
+
+    assert captured["value"] == {"SAVED_A_MOMENT_AGO": "ciphertext-new"}
 
 
 @pytest.mark.asyncio
@@ -5139,6 +5160,33 @@ async def test_cached_environment_variables_row_older_than_the_stored_one_change
         ),
         stored=_environment_variables_row({"REVISION_TEST_KEPT": "newer"}, revision=5),
     )
+
+    assert (os.environ.get("REVISION_TEST_KEPT"), os.environ.get("REVISION_TEST_DB_ONLY")) == ("newer", None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("revision_test_environment")
+@pytest.mark.parametrize("cached_revision", [None, 4])
+async def test_unreachable_writer_keeps_the_applied_environment_variables_when_the_cached_row_is_behind(
+    monkeypatch, cached_revision
+):
+    pc: Final = ProxyConfig()
+    await _sync_environment_variables_row(monkeypatch, pc, {"REVISION_TEST_KEPT": "newer"}, revision=5)
+    cached: Final = _environment_variables_row(
+        {"REVISION_TEST_KEPT": "older", "REVISION_TEST_DB_ONLY": "older-only"}, revision=cached_revision
+    )
+
+    async def get_config_param(_prisma_client: object, param_name: str) -> SimpleNamespace | None:
+        return cached if param_name == "environment_variables" else None
+
+    prisma_client: Final = MagicMock()
+    prisma_client.writer_db.litellm_config.find_unique = AsyncMock(
+        side_effect=httpx.ConnectError("Can't reach database server")
+    )
+    prisma_client.attempt_db_reconnect = AsyncMock(return_value=False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.get_config_param", get_config_param)
+
+    await pc._update_config_from_db(prisma_client, {}, store_model_in_db=True)
 
     assert (os.environ.get("REVISION_TEST_KEPT"), os.environ.get("REVISION_TEST_DB_ONLY")) == ("newer", None)
 
