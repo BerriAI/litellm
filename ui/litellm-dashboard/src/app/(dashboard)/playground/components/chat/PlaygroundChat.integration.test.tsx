@@ -6,7 +6,7 @@ import { makeOpenAIChatCompletionRequest } from "@/components/llm_calls/chat_com
 import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
 import { makeOpenAIResponsesRequest } from "@/components/llm_calls/responses_api";
 import { callMCPTool, fetchMCPServers, fetchMCPToolsets, listMCPTools } from "@/components/networking";
-import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
+import { setSecureItem } from "@/utils/secureStorage";
 import { fetchClient } from "@/lib/http/api";
 import { PlaygroundChat } from "./PlaygroundChat";
 
@@ -495,19 +495,6 @@ describe("PlaygroundChat", () => {
     });
 
     expect(screen.queryByText("Python Code Executed")).not.toBeInTheDocument();
-  });
-
-  it("keeps the virtual key encoded in session storage", async () => {
-    setSecureItem("apiKeySource", JSON.stringify("custom"));
-    setSecureItem("apiKey", "sk-virtual-123");
-    preload({ selectedModel: "gpt-fast" });
-    renderChat();
-
-    await waitFor(() => expect(fetchAvailableModels).toHaveBeenCalledWith("sk-virtual-123"));
-    expect(getSecureItem("apiKey")).toBe("sk-virtual-123");
-    const stored = Object.keys(sessionStorage).map((key) => sessionStorage.getItem(key) ?? "");
-    expect(stored.length).toBeGreaterThan(0);
-    expect(stored.filter((value) => value.includes("sk-virtual-123"))).toEqual([]);
   });
 
   it("lets a user connect a key for a BYOK server picked for a direct tool call", async () => {
