@@ -1933,7 +1933,9 @@ def test_responses_gpt54_with_xhigh_reasoning():
     Ensure chat->responses bridge sends the correct request payload for
     openai/responses/gpt-5.4 with reasoning_effort="xhigh".
     """
-    with patch("litellm.responses") as mock_responses:
+    from litellm.responses import bridge_executor
+
+    with patch.object(bridge_executor, "native_responses") as mock_responses:
         mock_responses.side_effect = RuntimeError("stop_after_request_build")
 
         with pytest.raises(litellm.APIConnectionError):
@@ -1945,7 +1947,7 @@ def test_responses_gpt54_with_xhigh_reasoning():
             )
 
         mock_responses.assert_called_once()
-        request_body = mock_responses.call_args.kwargs
+        request_body = mock_responses.call_args.args[0]
 
         assert request_body["model"] == "openai/gpt-5.4"
 

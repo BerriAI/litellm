@@ -11,8 +11,10 @@ from typing import (
     cast,  # noqa: TID251  # optional_params reaches the bridge as an untyped dict
 )
 
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import TypedDict
 
+import litellm
 from litellm.types.llms.openai import ResponsesAPIResponse
 
 if TYPE_CHECKING:
@@ -34,6 +36,48 @@ class ResponsesToCompletionBridgeHandlerInputKwargs(TypedDict):
 def _restore_routing_prefix(model: str, custom_llm_provider: str) -> str:
     """`responses()` runs `get_llm_provider()` itself, so hand back the prefixed model `completion()` started from."""
     return f"{custom_llm_provider}/{model}"
+
+
+_TOOLS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+_BRIDGED_REQUEST: Final = TypeAdapter(dict[str, object])
+_TOOLS_ONLY_RESPONSES_SERVES: Final = frozenset({"mcp", "file_search"})
+
+
+def _needs_responses_surface(request_data: Mapping[str, object]) -> bool:
+    """`responses()` also checks the cache and dispatches MCP and emulated file_search tools, which the executor skips."""
+    if litellm.cache is not None or request_data.get("use_chat_completions_api"):
+        return True
+    model: Final = request_data.get("model")
+    if not isinstance(model, str) or model.startswith("openai/chat_completions/"):
+        return True
+    try:
+        tools: Final = _TOOLS.validate_python(request_data.get("tools") or ())
+    except ValidationError:
+        return True
+    return any(tool.get("type") in _TOOLS_ONLY_RESPONSES_SERVES for tool in tools)
+
+
+def _executor_logging_obj(
+    request_data: Mapping[str, object], logging_obj: "LiteLLMLoggingObj"
+) -> "LiteLLMLoggingObj | None":
+    from litellm.responses.bridge_executor import has_native_responses_config, native_logging_obj
+
+    model: Final = request_data.get("model")
+    if _needs_responses_surface(request_data) or not isinstance(model, str):
+        return None
+    if not has_native_responses_config(model, request_data):
+        return None
+    return native_logging_obj(logging_obj, request_data, request_data)
+
+
+def _retagged_as_responses(
+    request_data: Mapping[str, object], logging_obj: "LiteLLMLoggingObj"
+) -> Mapping[str, object]:
+    """`responses()` logs the Responses object it returns, so the shared logging object takes its call type."""
+    from litellm.types.utils import CallTypes
+
+    setattr(logging_obj, "call_type", CallTypes.responses.value)
+    return request_data
 
 
 class ResponsesToCompletionBridgeHandler:
@@ -172,6 +216,7 @@ class ResponsesToCompletionBridgeHandler:
 
         from litellm import responses
         from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+        from litellm.responses.bridge_executor import native_responses
 
         validated_kwargs: Final = self.validate_input_kwargs(kwargs)
         model: Final = validated_kwargs["model"]
@@ -199,11 +244,16 @@ class ResponsesToCompletionBridgeHandler:
         # `sanitized_litellm_params` already carries both, so passing them again
         # would raise a duplicate-keyword TypeError.
         request_data["custom_llm_provider"] = custom_llm_provider
-        request_data["model"] = _restore_routing_prefix(model, custom_llm_provider)
+        routed_model: Final = _restore_routing_prefix(model, custom_llm_provider)
+        request_data["model"] = routed_model
         if kwargs.get("cache") is not None:
             request_data["cache"] = kwargs["cache"]
-        result: Final = responses(
-            **request_data,
+        bridged_request: Final = _BRIDGED_REQUEST.validate_python(request_data)
+        executor_logging: Final = _executor_logging_obj(bridged_request, logging_obj)
+        result: Final = (
+            responses(**_retagged_as_responses(request_data, logging_obj))
+            if executor_logging is None
+            else native_responses(bridged_request, routed_model, bridged_request, executor_logging)
         )
 
         from litellm.types.utils import ModelResponse
@@ -272,6 +322,7 @@ class ResponsesToCompletionBridgeHandler:
     async def acompletion(self, *args, **kwargs) -> Union["ModelResponse", "CustomStreamWrapper"]:
         from litellm import aresponses
         from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+        from litellm.responses.bridge_executor import anative_responses
 
         validated_kwargs: Final = self.validate_input_kwargs(kwargs)
         model: Final = validated_kwargs["model"]
@@ -301,12 +352,16 @@ class ResponsesToCompletionBridgeHandler:
         # `sanitized_litellm_params` already carries both, so passing them again
         # would raise a duplicate-keyword TypeError.
         request_data["custom_llm_provider"] = custom_llm_provider
-        request_data["model"] = _restore_routing_prefix(model, custom_llm_provider)
+        routed_model: Final = _restore_routing_prefix(model, custom_llm_provider)
+        request_data["model"] = routed_model
         if kwargs.get("cache") is not None:
             request_data["cache"] = kwargs["cache"]
-        result: Final = await aresponses(
-            **request_data,
-            aresponses=True,
+        bridged_request: Final = _BRIDGED_REQUEST.validate_python(request_data)
+        executor_logging: Final = _executor_logging_obj(bridged_request, logging_obj)
+        result: Final = (
+            await aresponses(**_retagged_as_responses(request_data, logging_obj), aresponses=True)
+            if executor_logging is None
+            else await anative_responses(bridged_request, routed_model, bridged_request, executor_logging)
         )
 
         from litellm.types.utils import ModelResponse
