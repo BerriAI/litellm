@@ -1680,7 +1680,7 @@ def _set_eval_information(
     eval_info: object,
 ) -> None:
     if not isinstance(lp.get("metadata"), dict):
-        lp["metadata"] = {}  # rebind-ok: callers share this litellm_params dict, so the metadata bucket must be created in place
+        lp["metadata"] = {}  # rebind-ok: callers share this dict, so the bucket must be created in place
     metadata_bucket: Final = cast(  # cast-ok: litellm_params["metadata"] is a heterogeneous dict
         dict[str, object], lp["metadata"]
     )
