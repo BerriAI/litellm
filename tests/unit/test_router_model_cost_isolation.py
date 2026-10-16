@@ -3246,13 +3246,6 @@ def test_price_data_reload_refreshes_the_cached_model_group_and_deployment_info(
 
 
 def test_price_data_reload_keeps_geo_deployments_priced_while_requests_register_pricing(monkeypatch: pytest.MonkeyPatch) -> None:
-    """
-    Request threads register per-request pricing into litellm.model_cost while a price
-    data reload walks it. The walk raised "dictionary changed size during iteration",
-    which aborted the reload after the catalog swap or failed the built-in lookup of the
-    bedrock geo deployment being replayed; that deployment then registered its own raw
-    key with metadata only and priced every request at $0 until the next reload.
-    """
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     catalog: Final = litellm.get_model_cost_map(url="")
     monkeypatch.setattr(litellm, "model_cost", dict(catalog))

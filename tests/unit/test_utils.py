@@ -4806,14 +4806,6 @@ def test_reapply_runtime_registrations_drops_request_scoped_registrations(monkey
 
 
 def test_model_cost_walks_survive_a_registration_landing_mid_walk(monkeypatch: pytest.MonkeyPatch) -> None:
-    """
-    A price data reload rebuilds the lowercase lookup map and the provider model
-    sets by walking litellm.model_cost while request threads keep registering
-    per-request pricing into it. A key inserted mid-walk raised "dictionary
-    changed size during iteration", which aborted the reload between the
-    catalog swap and the deployment replay, or failed the built-in lookup of
-    the deployment being replayed. Both walks have to run over a snapshot.
-    """
     from litellm.utils import _invalidate_model_cost_lowercase_map, _rebuild_model_cost_lowercase_map
 
     class _KeyRegisteredMidWalk(str):
@@ -4849,12 +4841,6 @@ class _KeyWhoseLoweringLosesTheRace(str):
 
 
 def test_case_insensitive_model_cost_lookup_survives_an_invalidation_mid_lookup() -> None:
-    """
-    _get_model_cost_key read the module-level lowercase map after rebuilding it, so a
-    registration on another thread that invalidated the map in between turned the
-    lookup into an AttributeError on None, which the model info ladder reports as
-    "model isn't mapped yet" and register_model turns into a $0 shadow entry.
-    """
     from litellm.utils import _get_model_cost_key, _invalidate_model_cost_lowercase_map
 
     _invalidate_model_cost_lowercase_map()
@@ -7069,12 +7055,6 @@ def test_get_model_info_gemini(monkeypatch):
 
 
 def test_register_model_without_a_provider_never_inherits_another_providers_entry(monkeypatch: pytest.MonkeyPatch) -> None:
-    """
-    The router registers a deployment's shared ``{provider}/{model}`` key without
-    ``litellm_provider``. Matching the built-in entry as a wildcard then handed
-    ``azure/claude-sonnet-4-6`` Anthropic's whole entry, provider included, and
-    reading the key back under the provider its prefix names raised "isn't mapped".
-    """
     from litellm.utils import _invalidate_model_cost_lowercase_map
 
     key: Final = "azure/claude-sonnet-4-6"

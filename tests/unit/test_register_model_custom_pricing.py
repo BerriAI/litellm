@@ -802,15 +802,6 @@ def test_embedding_direct_sdk_custom_pricing_still_registers_shared_key():
 def test_register_model_prices_a_geo_alias_from_its_builtin_when_the_lookup_fails(
     monkeypatch: pytest.MonkeyPatch, route: str
 ) -> None:
-    """After a price data reload the deployment replay registers every bedrock
-    geo deployment (``bedrock/au.anthropic.<model>``, with or without a
-    ``converse/`` or ``invoke/`` route) with metadata only. When
-    ``get_model_info`` failed for a reason other than the model being unmapped
-    (a request thread registering pricing tripped its map rebuild), the
-    registration fell through to the unmapped path and wrote a raw-key entry
-    with no token pricing, which shadowed the canonical entry at $0 for every
-    request until the next reload happened to win the race.
-    """
     from litellm.types.utils import ModelResponse, Usage
 
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
@@ -848,11 +839,6 @@ def test_register_model_prices_a_geo_alias_from_its_builtin_when_the_lookup_fail
 
 
 def test_register_model_keeps_a_catalog_rows_own_prices_when_the_lookup_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A catalog row registered under its own key with no provider
-    (``au.anthropic.<model>`` from a config ``model_info``) must inherit from
-    itself when ``get_model_info`` trips, never from its region-stripped
-    sibling, whose prices are the base rate rather than the geo rate.
-    """
     geo_key: Final = "au.anthropic.lit-5853-geo-model"
     geo_row: Final = {
         "litellm_provider": "bedrock_converse",
@@ -900,9 +886,6 @@ def test_register_model_keeps_a_catalog_rows_own_prices_when_the_lookup_fails(mo
 def test_register_model_bills_a_catalog_rows_tier_rates_the_same_when_the_lookup_fails(
     monkeypatch: pytest.MonkeyPatch, key_prefix: str
 ) -> None:
-    """A custom flat price registered on a catalog row, under its own key or behind a provider prefix and
-    bedrock route, bills a long prompt the same whether or not ``get_model_info`` trips during the
-    registration, so a reload storm never flips the bill."""
     from litellm.types.utils import ModelResponse, Usage
 
     catalog_key: Final = "au.anthropic.lit-5853-tiered-geo-model"
@@ -954,8 +937,6 @@ def test_register_model_bills_a_catalog_rows_tier_rates_the_same_when_the_lookup
 
 
 def test_register_model_leaves_the_entry_a_lookup_is_walking_intact(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A request thread walking a catalog entry while another registers pricing on it must finish its walk,
-    since a registration that grows the entry in place makes the walk raise and the lookup fail."""
     catalog_key: Final = "lit-5853-live-entry-model"
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(
@@ -986,14 +967,11 @@ def test_register_model_leaves_the_entry_a_lookup_is_walking_intact(monkeypatch:
         _invalidate_model_cost_lowercase_map()
 
 
-@pytest.mark.parametrize("registered_key", ["lit-5853-canonical-model", "lit-5853-alias-model"])
-def test_register_model_prices_every_alias_of_the_registered_entry(
-    monkeypatch: pytest.MonkeyPatch, registered_key: str
-) -> None:
-    """A cost map entry declared with ``aliases`` is one model under several names, so a price registered on
-    any of them must bill under all of them."""
-    canonical_key: Final = "lit-5853-canonical-model"
-    alias_key: Final = "lit-5853-alias-model"
+_CANONICAL_KEY: Final = "lit-5853-canonical-model"
+_ALIAS_KEY: Final = "lit-5853-alias-model"
+
+
+def _install_aliased_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(
         litellm,
@@ -1001,8 +979,8 @@ def test_register_model_prices_every_alias_of_the_registered_entry(
         _expand_model_aliases(
             {
                 **litellm.get_model_cost_map(url=""),
-                canonical_key: {
-                    "aliases": [alias_key],
+                _CANONICAL_KEY: {
+                    "aliases": [_ALIAS_KEY],
                     "litellm_provider": "openai",
                     "mode": "chat",
                     "input_cost_per_token": 2e-06,
@@ -1013,23 +991,58 @@ def test_register_model_prices_every_alias_of_the_registered_entry(
     )
     _invalidate_model_cost_lowercase_map()
 
+
+def _token_prices(name: str) -> tuple[float | None, float | None]:
+    info: Final = litellm.get_model_info(name)
+    return info["input_cost_per_token"], info["output_cost_per_token"]
+
+
+@pytest.mark.parametrize("registered_key", [_CANONICAL_KEY, _ALIAS_KEY])
+def test_register_model_prices_every_alias_of_the_registered_entry(
+    monkeypatch: pytest.MonkeyPatch, registered_key: str
+) -> None:
+    _install_aliased_cost_map(monkeypatch)
+
     try:
         litellm.register_model(
             {registered_key: {"litellm_provider": "openai", "input_cost_per_token": 1e-06}},
             persist_across_reloads=False,
         )
-        assert {
-            name: (litellm.get_model_info(name)["input_cost_per_token"], litellm.get_model_info(name)["output_cost_per_token"])
-            for name in (canonical_key, alias_key)
-        } == {canonical_key: (1e-06, 8e-06), alias_key: (1e-06, 8e-06)}
+        litellm.register_model(
+            {registered_key: {"litellm_provider": "openai", "output_cost_per_token": 4e-06}},
+            persist_across_reloads=False,
+        )
+        assert {name: _token_prices(name) for name in (_CANONICAL_KEY, _ALIAS_KEY)} == {
+            _CANONICAL_KEY: (1e-06, 4e-06),
+            _ALIAS_KEY: (1e-06, 4e-06),
+        }
+    finally:
+        _invalidate_model_cost_lowercase_map()
+
+
+def test_register_model_leaves_an_alias_repointed_at_its_own_entry(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_aliased_cost_map(monkeypatch)
+    litellm.model_cost[_ALIAS_KEY] = {
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 6e-06,
+    }
+
+    try:
+        litellm.register_model(
+            {_CANONICAL_KEY: {"litellm_provider": "openai", "input_cost_per_token": 1e-06}},
+            persist_across_reloads=False,
+        )
+        assert {name: _token_prices(name) for name in (_CANONICAL_KEY, _ALIAS_KEY)} == {
+            _CANONICAL_KEY: (1e-06, 8e-06),
+            _ALIAS_KEY: (5e-06, 6e-06),
+        }
     finally:
         _invalidate_model_cost_lowercase_map()
 
 
 def test_register_model_inherits_builtin_token_pricing_for_unmapped_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A key shape ``get_model_info`` cannot resolve inherits the whole built-in
-    entry, not just its cache pricing, so ``get_model_info`` on the raw key
-    reports the built-in token prices instead of a synthesized $0."""
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
     _invalidate_model_cost_lowercase_map()
@@ -1107,9 +1120,6 @@ def test_register_model_keeps_custom_flat_prices_over_inherited_rate_variants(
     usage: dict[str, int],
     expected_cost: float,
 ) -> None:
-    """An unmapped alias inherits a built-in entry, but a direction the caller prices flat bills at that price
-    above a token threshold, in every tier, for reasoning tokens, and off-peak, while the other direction keeps
-    the built-in's own rates."""
     from litellm.types.utils import CompletionTokensDetailsWrapper, ModelResponse, Usage
 
     builtin_key: Final = "anthropic.lit-5853-tiered-model-v1:0"
@@ -1147,10 +1157,6 @@ def test_register_model_keeps_custom_flat_prices_over_inherited_rate_variants(
 
 
 def test_register_model_never_inherits_pricing_across_providers(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The built-in entry an unmapped key inherits must belong to a provider
-    ``get_model_info`` would accept for the registered one, exactly as a direct
-    lookup would, so a bedrock key that happens to share a name with an OpenAI
-    model registers without OpenAI's prices."""
     openai_key: Final = "lit-5853-openai-only-model"
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(

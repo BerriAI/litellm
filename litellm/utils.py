@@ -89,6 +89,7 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     match_capability_generalizations,
     match_fill_missing_generalizations,
 )
+from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
 from litellm.litellm_core_utils.model_param_helper import peek_reasoning_summary_aliases
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.litellm_core_utils.tokenizer import strip_special_tokens
@@ -3270,12 +3271,12 @@ def _builtin_cost_map() -> Mapping[str, dict[str, object]]:
 
 def _replace_cost_map_entry(key: str, entry: dict[str, object]) -> None:
     current: Final = _builtin_cost_map().get(key)
-    sharing_keys: Final = (
-        tuple(name for name, shared in (*_builtin_cost_map().items(),) if shared is current)
-        if current is not None
-        else ()
-    )
-    litellm.model_cost.update(dict.fromkeys((key, *sharing_keys), {**(current or {}), **entry}))
+    merged: Final = {**(current or {}), **entry}
+    if not isinstance(current, AliasedCostEntry):
+        litellm.model_cost.update({key: merged})
+        return
+    sharing_names: Final = tuple(name for name in current.names if _builtin_cost_map().get(name) is current)
+    litellm.model_cost.update(dict.fromkeys((key, *sharing_names), AliasedCostEntry(merged, current.names)))
 
 
 def _without_synthesized_costs(
