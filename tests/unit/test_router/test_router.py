@@ -8565,7 +8565,7 @@ def test_update_kwargs_with_deployment_keeps_deployment_tools_when_malformed_req
         ],
         default_litellm_params={**router_defaults},
     )
-    kwargs: Final[dict] = {"metadata": {}, "tools": 5, **request_params}
+    kwargs: Final[dict[str, object]] = {"metadata": {}, "tools": 5, **request_params}
     router._update_kwargs_with_deployment(
         deployment=router.get_deployment_by_model_group_name(model_group_name="o3-deep-research"), kwargs=kwargs
     )
@@ -8604,7 +8604,7 @@ def test_update_kwargs_with_deployment_drops_request_tool_settings_with_malforme
             },
         ],
     )
-    kwargs: Final[dict] = {
+    kwargs: Final[dict[str, object]] = {
         "metadata": {},
         "tools": 5,
         "tool_choice": _NAMED_REQUEST_TOOL_CHOICE,

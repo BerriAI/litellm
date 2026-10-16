@@ -1,4 +1,6 @@
 
+from typing import Final
+
 import pytest
 
 import litellm
@@ -50,7 +52,7 @@ def test_web_search_cost_high():
 
 
 def test_get_web_search_options_reads_tools_when_options_are_null() -> None:
-    options = StandardBuiltInToolCostTracking.get_web_search_options(
+    options: Final = StandardBuiltInToolCostTracking.get_web_search_options(
         {"web_search_options": None, "tools": [{"type": "web_search_preview"}]}
     )
 

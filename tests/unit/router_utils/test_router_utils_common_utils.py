@@ -288,7 +288,7 @@ class TestFilterWebSearchDeployments:
         assert "deployment-3" not in result_ids
 
     def test_web_search_in_a_tuple_filters_unsupported(self, sample_deployments: list[dict[str, object]]) -> None:
-        result = filter_web_search_deployments(sample_deployments, {"tools": ({"type": "web_search"},)})
+        result: Final = filter_web_search_deployments(sample_deployments, {"tools": ({"type": "web_search"},)})
         assert [d["model_info"]["id"] for d in result] == ["deployment-1", "deployment-2"]
 
     @pytest.mark.parametrize("tool_type", [{}, [], None, 5], ids=["object", "list", "null", "int"])
