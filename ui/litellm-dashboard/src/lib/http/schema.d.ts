@@ -4185,21 +4185,18 @@ export interface paths {
         put?: never;
         /**
          * Bulk Customer Update
-         * @description Update up to 500 customers independently using the same fields as `/customer/update`.
+         * @description Update up to 500 customers with the same fields as `/customer/update`. Only proxy admins can call it.
          *
-         *     Supply a `customers` array of customer updates. Each result contains the `user_id`,
-         *     `success`, and either `updated_customer` or `error`, in request order. A failed update
-         *     does not prevent the remaining customers from being updated. Object permission fields
-         *     omitted from an update retain their existing values, and supplied permission lists
-         *     replace that field. Null permission fields retain their stored values and explicit empty
-         *     lists or objects clear that field. Each item is a locked transaction, so failed items
-         *     roll back their permission, budget, and customer writes. Only proxy admins can update customers.
+         *     Each item runs in its own locked transaction, so a failed item rolls back only its own writes and
+         *     the rest still apply. Results come back in request order with `user_id`, `success`, and either
+         *     `updated_customer` or `error`.
          *
-         *     `max_budget` can update a budget used only by that customer. Shared budgets and default
-         *     budgets must be edited through the budget endpoints. Sending both `budget_id` and
-         *     `max_budget`, even with a null value, fails request validation with HTTP 422 before
-         *     any item is processed. A valid item rejected for sharing a budget does not prevent
-         *     the other items from succeeding.
+         *     Omitted or null permission fields keep their stored values, supplied lists replace that field,
+         *     and empty lists or objects clear it.
+         *
+         *     `max_budget` only updates a budget used by that customer alone. Shared and default budgets must be
+         *     edited through the budget endpoints. Sending both `budget_id` and `max_budget` in any item, even
+         *     as null, fails the whole request with HTTP 422.
          *
          *     Example request body:
          *     ```json
@@ -4908,21 +4905,18 @@ export interface paths {
         put?: never;
         /**
          * Bulk Customer Update
-         * @description Update up to 500 customers independently using the same fields as `/customer/update`.
+         * @description Update up to 500 customers with the same fields as `/customer/update`. Only proxy admins can call it.
          *
-         *     Supply a `customers` array of customer updates. Each result contains the `user_id`,
-         *     `success`, and either `updated_customer` or `error`, in request order. A failed update
-         *     does not prevent the remaining customers from being updated. Object permission fields
-         *     omitted from an update retain their existing values, and supplied permission lists
-         *     replace that field. Null permission fields retain their stored values and explicit empty
-         *     lists or objects clear that field. Each item is a locked transaction, so failed items
-         *     roll back their permission, budget, and customer writes. Only proxy admins can update customers.
+         *     Each item runs in its own locked transaction, so a failed item rolls back only its own writes and
+         *     the rest still apply. Results come back in request order with `user_id`, `success`, and either
+         *     `updated_customer` or `error`.
          *
-         *     `max_budget` can update a budget used only by that customer. Shared budgets and default
-         *     budgets must be edited through the budget endpoints. Sending both `budget_id` and
-         *     `max_budget`, even with a null value, fails request validation with HTTP 422 before
-         *     any item is processed. A valid item rejected for sharing a budget does not prevent
-         *     the other items from succeeding.
+         *     Omitted or null permission fields keep their stored values, supplied lists replace that field,
+         *     and empty lists or objects clear it.
+         *
+         *     `max_budget` only updates a budget used by that customer alone. Shared and default budgets must be
+         *     edited through the budget endpoints. Sending both `budget_id` and `max_budget` in any item, even
+         *     as null, fails the whole request with HTTP 422.
          *
          *     Example request body:
          *     ```json
