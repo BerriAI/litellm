@@ -3,6 +3,7 @@ from copy import deepcopy
 from typing import Final, Literal
 
 import pytest
+from openai.types.responses import ResponseFunctionToolCall
 from openai.types.responses.response_function_web_search import (
     ActionFind,
     ActionOpenPage,
@@ -5162,3 +5163,23 @@ async def test_bridge_rejects_untranslatable_tool_choice_with_a_400(stream: bool
         )
     assert exc_info.value.status_code == 400
     assert "tool_choice={'type': 'file_search'}" in str(exc_info.value)
+
+
+@pytest.mark.parametrize("index", [0, 1, 2])
+def test_convert_response_function_tool_call_keeps_the_index_it_is_given(index: int) -> None:
+    item: Final = ResponseFunctionToolCall(
+        id="fc_x",
+        type="function_call",
+        status="completed",
+        arguments='{"city":"Paris"}',
+        call_id="call_x",
+        name="get_weather",
+    )
+
+    tool_call: Final = (
+        LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call(
+            tool_call_item=item, index=index
+        )
+    )
+
+    assert tool_call["index"] == index
