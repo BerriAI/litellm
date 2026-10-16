@@ -4925,15 +4925,17 @@ def test_adaptive_thinking_is_kept_next_to_json_schema_on_a_native_output_profil
     assert "toolConfig" not in request
 
 
-NATIVE_OUTPUT_REJECTED_KEYWORDS: Final = frozenset({"minimum", "maximum", "minItems", "uniqueItems", "oneOf"})
+NATIVE_OUTPUT_REJECTED_KEYWORDS: Final = frozenset({"minimum", "maximum", "uniqueItems", "oneOf"})
 CONSTRAINED_PERSON_SCHEMA: Final = {
     "type": "object",
     "properties": {
         "age": {"type": "integer", "minimum": 0, "maximum": 150},
-        "tags": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": True},
+        "tags": {"type": "array", "items": {"type": "string"}, "minItems": 2, "uniqueItems": True},
+        "aliases": {"type": "array", "items": {"type": "string"}, "minItems": 1},
         "contact": {"oneOf": [{"type": "string"}, {"type": "integer"}]},
+        "address": {"type": ["object", "null"], "properties": {"city": {"type": "string"}}, "required": ["city"]},
     },
-    "required": ["age", "tags", "contact"],
+    "required": ["age", "tags", "aliases", "contact", "address"],
 }
 RECURSIVE_TREE_SCHEMA: Final = {
     "type": "object",
@@ -4951,6 +4953,16 @@ OPEN_OBJECT_SCHEMA: Final = {
     "type": "object",
     "properties": {"counts": {"type": "object", "additionalProperties": {"type": "integer"}}},
     "required": ["counts"],
+}
+LOOKAROUND_PATTERN_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"amount": {"type": "string", "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"}},
+    "required": ["amount"],
+}
+UNKNOWN_FORMAT_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"blob": {"type": "string", "format": "x-litellm-unlisted-format"}},
+    "required": ["blob"],
 }
 
 
@@ -4993,12 +5005,20 @@ def test_native_output_schema_drops_keywords_bedrock_rejects_and_closes_objects(
     assert sent["additionalProperties"] is False
     assert sent["properties"]["contact"]["anyOf"] == [{"type": "string"}, {"type": "integer"}]
     assert "minimum value: 0" in sent["properties"]["age"]["description"]
+    assert "minItems" not in sent["properties"]["tags"]
+    assert sent["properties"]["aliases"]["minItems"] == 1
+    assert sent["properties"]["address"]["additionalProperties"] is False
 
 
 @pytest.mark.parametrize(
     ("schema", "kept_keyword"),
-    [(RECURSIVE_TREE_SCHEMA, "$ref"), (OPEN_OBJECT_SCHEMA, "additionalProperties")],
-    ids=["recursive", "open-object"],
+    [
+        (RECURSIVE_TREE_SCHEMA, "$ref"),
+        (OPEN_OBJECT_SCHEMA, "additionalProperties"),
+        (LOOKAROUND_PATTERN_SCHEMA, "pattern"),
+        (UNKNOWN_FORMAT_SCHEMA, "format"),
+    ],
+    ids=["recursive", "open-object", "lookaround-pattern", "unlisted-format"],
 )
 def test_schema_native_output_cannot_hold_keeps_the_tool_path_on_a_bedrock_native_profile(
     set_native_structured_output, schema, kept_keyword
@@ -5026,6 +5046,28 @@ def test_schema_native_output_cannot_hold_still_goes_native_on_a_legacy_native_p
     sent: Final = json.loads(request["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"])
     assert sent["properties"] == schema["properties"]
     assert "toolConfig" not in request
+
+
+def test_union_typed_object_is_closed_in_the_raw_schema_a_legacy_native_profile_gets(set_native_structured_output):
+    model: Final = "us.anthropic.claude-sonnet-4-6"
+    set_native_structured_output(model, "legacy")
+    schema: Final = {
+        "type": "object",
+        "properties": {"root": {"$ref": "#/$defs/Node"}},
+        "required": ["root"],
+        "$defs": {
+            "Node": {
+                "type": ["object", "null"],
+                "properties": {"children": {"type": "array", "items": {"$ref": "#/$defs/Node"}}},
+                "required": ["children"],
+            }
+        },
+    }
+
+    request: Final = _converse_request_for_schema(model, schema)
+
+    sent: Final = json.loads(request["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"])
+    assert sent["$defs"]["Node"]["additionalProperties"] is False
 
 
 @pytest.mark.parametrize(

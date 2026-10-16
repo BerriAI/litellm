@@ -1434,6 +1434,22 @@ def schema_has_open_object(schema: Mapping[str, object]) -> bool:
     return any(_is_open_object(node) for node in _schema_nodes(schema))
 
 
+def schema_has_lookaround_pattern(schema: Mapping[str, object]) -> bool:
+    return any(
+        isinstance(pattern := node.get("pattern"), str) and _uses_regex_lookaround(pattern)
+        for node in _schema_nodes(schema)
+    )
+
+
+def schema_string_formats(schema: Mapping[str, object]) -> frozenset[str]:
+    return frozenset(value for node in _schema_nodes(schema) if isinstance(value := node.get("format"), str))
+
+
+def is_object_schema(node: Mapping[str, object]) -> bool:
+    node_type: Final = node.get("type")
+    return node_type == "object" or (isinstance(node_type, list) and "object" in node_type)
+
+
 def _schema_nodes(schema: Mapping[str, object]) -> Iterator[Mapping[str, object]]:
     return chain.from_iterable(islice(_schema_levels(schema), _MAX_SCHEMA_NESTING))
 
@@ -1442,9 +1458,7 @@ def _is_open_object(node: Mapping[str, object]) -> bool:
     additional_properties: Final = node.get("additionalProperties")
     if additional_properties is True or isinstance(additional_properties, dict) or "patternProperties" in node:
         return True
-    node_type: Final = node.get("type")
-    is_object: Final = node_type == "object" or (isinstance(node_type, list) and "object" in node_type)
-    return is_object and "properties" not in node and additional_properties is not False
+    return is_object_schema(node) and "properties" not in node and additional_properties is not False
 
 
 def _subschemas(node: Mapping[str, object]) -> Iterator[Mapping[str, object]]:

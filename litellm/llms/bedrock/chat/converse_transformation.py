@@ -29,6 +29,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     drop_lookaround_regex_patterns,
+    is_object_schema,
     native_redacted_thinking_data,
     parse_content_for_reasoning,
     tool_with_sanitized_parameters,
@@ -967,9 +968,9 @@ class AmazonConverseConfig(BaseConfig):
         if not isinstance(schema, dict):
             return schema
 
-        result: Final = dict(schema)
+        result: Final[dict[str, object]] = dict(schema)
 
-        if result.get("type") == "object" and "additionalProperties" not in result:
+        if is_object_schema(result) and "additionalProperties" not in result:
             result["additionalProperties"] = False
 
         # Recurse into nested schemas
@@ -980,13 +981,13 @@ class AmazonConverseConfig(BaseConfig):
         if "items" in result and isinstance(result["items"], dict):
             result["items"] = AmazonConverseConfig._add_additional_properties_to_schema(result["items"])
         for defs_key in ("$defs", "definitions"):
-            if defs_key in result and isinstance(result[defs_key], dict):
+            if isinstance(definitions := result.get(defs_key), dict):
                 result[defs_key] = {
-                    k: AmazonConverseConfig._add_additional_properties_to_schema(v) for k, v in result[defs_key].items()
+                    k: AmazonConverseConfig._add_additional_properties_to_schema(v) for k, v in definitions.items()
                 }
         for key in ("anyOf", "allOf", "oneOf"):
-            if key in result and isinstance(result[key], list):
-                result[key] = [AmazonConverseConfig._add_additional_properties_to_schema(item) for item in result[key]]
+            if isinstance(variants := result.get(key), list):
+                result[key] = [AmazonConverseConfig._add_additional_properties_to_schema(item) for item in variants]
 
         return result
 

@@ -26,9 +26,12 @@ from litellm.constants import (
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     DEFS_MAX_INLINED_BYTES,
+    is_object_schema,
     sanitize_input_schema_for_anthropic,
+    schema_has_lookaround_pattern,
     schema_has_open_object,
     schema_has_ref,
+    schema_string_formats,
     unpack_defs,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
@@ -155,6 +158,9 @@ _ANTHROPIC_TOOL_NAME_MAX_LEN: Final = 128
 _DEFER_LOADING_ADAPTER: Final = TypeAdapter(bool)
 _TOOL_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _TOOLS_ADAPTER: Final = TypeAdapter(list[object])
+_NATIVE_OUTPUT_STRING_FORMATS: Final = frozenset(
+    ("date-time", "time", "date", "duration", "email", "hostname", "uri", "ipv4", "ipv6", "uuid")
+)
 
 
 def _tool_type(tool: object) -> str | None:
@@ -758,7 +764,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         grammar Anthropic compiles the schema into, so the API rejects them with a
         400 ``invalid_request_error`` (e.g. "output_format.schema: For 'array' type,
         property 'uniqueItems' is not supported"):
-        - maxItems/minItems/uniqueItems/contains/minContains/maxContains/prefixItems: array constraints
+        - maxItems/minItems above 1/uniqueItems/contains/minContains/maxContains/prefixItems: array constraints
         - minimum/maximum/exclusiveMinimum/exclusiveMaximum/multipleOf: numeric constraints
         - minLength/maxLength: string constraints
         - minProperties/maxProperties/patternProperties/propertyNames: object constraints
@@ -815,7 +821,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "else": "conditional (else): {}",
             "not": "must not match: {}",
         }
-        unsupported_fields: Final = set(constraint_labels)
+        unsupported_fields: Final = set(constraint_labels) - (
+            {"minItems"} if schema.get("minItems") in (0, 1) else set()
+        )
 
         # Build description additions from removed constraints. Iterating
         # constraint_labels (not the set) keeps the note order deterministic across
@@ -823,7 +831,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # PYTHONHASHSEED and stay cache-friendly.
         constraint_descriptions: Final[list] = []
         for field, label in constraint_labels.items():
-            if field not in schema:
+            if field not in schema or field not in unsupported_fields:
                 continue
             value = schema[field]
             # A falsy boolean constraint (e.g. ``uniqueItems: false``) imposes no
@@ -881,7 +889,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         # Anthropic requires additionalProperties=false for object schemas
         # See: https://docs.anthropic.com/en/docs/build-with-claude/structured-outputs
-        if result.get("type") == "object":
+        if is_object_schema(result):
             result["additionalProperties"] = False
 
         return result
@@ -1644,7 +1652,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     @staticmethod
     def native_output_schema(json_schema: Mapping[str, object]) -> Mapping[str, object] | None:
         unpacked: Final = AnthropicConfig._defs_unpacked(json_schema)
-        if schema_has_ref(unpacked) or schema_has_open_object(unpacked):
+        if (
+            schema_has_ref(unpacked)
+            or schema_has_open_object(unpacked)
+            or schema_has_lookaround_pattern(unpacked)
+            or not schema_string_formats(unpacked) <= _NATIVE_OUTPUT_STRING_FORMATS
+        ):
             return None
         return AnthropicConfig.filter_anthropic_output_schema(dict(unpacked))
 

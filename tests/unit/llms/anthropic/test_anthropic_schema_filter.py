@@ -69,7 +69,7 @@ class TestFilterAnthropicOutputSchema:
         schema = {
             "type": "array",
             "items": {"type": "string"},
-            "minItems": 1,
+            "minItems": 2,
             "maxItems": 10,
         }
 
@@ -80,8 +80,17 @@ class TestFilterAnthropicOutputSchema:
         assert result["type"] == "array"
         assert result["items"] == {"type": "string"}
         # Description should contain constraint info
-        assert "minimum number of items: 1" in result["description"]
+        assert "minimum number of items: 2" in result["description"]
         assert "maximum number of items: 10" in result["description"]
+
+    def test_keeps_min_items_of_zero_or_one(self):
+        for min_items in (0, 1):
+            schema = {"type": "array", "items": {"type": "string"}, "minItems": min_items}
+
+            result = AnthropicConfig.filter_anthropic_output_schema(schema)
+
+            assert result["minItems"] == min_items
+            assert "description" not in result
 
     def test_handles_nested_schemas(self):
         """Test that nested schemas are also filtered."""
@@ -100,7 +109,7 @@ class TestFilterAnthropicOutputSchema:
                             }
                         },
                     },
-                    "minItems": 1,
+                    "minItems": 2,
                 }
             },
         }
@@ -336,7 +345,7 @@ class TestFilterAnthropicOutputSchema:
         schema = {
             "type": "array",
             "items": {"type": "string"},
-            "minItems": 1,
+            "minItems": 2,
             "maxItems": 10,
             "uniqueItems": True,
             "minContains": 2,
@@ -346,7 +355,7 @@ class TestFilterAnthropicOutputSchema:
         result = AnthropicConfig.filter_anthropic_output_schema(schema)
 
         assert result["description"] == (
-            "Note: minimum number of items: 1, maximum number of items: 10, "
+            "Note: minimum number of items: 2, maximum number of items: 10, "
             "all array items must be unique, minimum number of matching items: 2, "
             "maximum number of matching items: 3."
         )
