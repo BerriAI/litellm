@@ -1087,6 +1087,36 @@ def test_bedrock_chat_invoke_eager_input_streaming_beta_not_duplicated_with_clie
     assert result["anthropic_beta"] == [FINE_GRAINED_TOOL_STREAMING_BETA]
 
 
+
+DANGEROUS_TOOL_USE_BETA: Final = "dangerous-tool-use-2026-09-03"
+
+
+def _chat_invoke_betas(extra_optional_params: dict[str, object]) -> object:
+    config: Final = AmazonAnthropicClaudeConfig()
+    model: Final = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    optional_params: Final = config.map_openai_params(
+        non_default_params={"max_tokens": 64}, optional_params={}, model=model, drop_params=False
+    )
+    return config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={**optional_params, **extra_optional_params},
+        litellm_params={},
+        headers={"anthropic-beta": f"claude-code-20250219,{DANGEROUS_TOOL_USE_BETA}"},
+    ).get("anthropic_beta")
+
+
+def test_bedrock_chat_invoke_drops_client_dangerous_tool_use_beta_without_safeguards():
+    assert _chat_invoke_betas({}) == ["claude-code-20250219"]
+
+
+def test_bedrock_chat_invoke_keeps_client_dangerous_tool_use_beta_with_safeguards():
+    assert _chat_invoke_betas({"safeguards": [{"type": "dangerous_tool_use"}]}) == [
+        "claude-code-20250219",
+        DANGEROUS_TOOL_USE_BETA,
+    ]
+
+
 def _mid_conversation_system_conversation() -> list[dict]:
     return [
         {

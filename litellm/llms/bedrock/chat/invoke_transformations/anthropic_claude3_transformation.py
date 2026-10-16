@@ -32,6 +32,7 @@ from litellm.llms.bedrock.common_utils import (
     tools_without_eager_input_streaming,
 )
 from litellm.types.llms.anthropic import (
+    ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER,
     ANTHROPIC_TOOL_SEARCH_BETA_HEADER,
     AnthropicThinkingParam,
@@ -270,7 +271,12 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         is_mid_conversation_output_config_used: Final = self.is_mid_conversation_output_config_used(messages)
         is_thinking_display_updates_used: Final = self.is_thinking_display_updates_used(thinking)
 
-        user_beta_set: Final = set(get_anthropic_beta_from_headers(headers))
+        client_beta_set: Final = set(get_anthropic_beta_from_headers(headers))
+        user_beta_set: Final = (
+            client_beta_set
+            if "safeguards" in optional_params
+            else client_beta_set - {ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value}
+        )
         beta_set: Final = set(user_beta_set)
         auto_betas: Final = self.get_anthropic_beta_list(
             model=model,
