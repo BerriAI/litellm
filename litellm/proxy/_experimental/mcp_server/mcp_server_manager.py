@@ -1831,7 +1831,7 @@ async def _await_mcp_tool_call_tasks(
     during_hook_tasks: Sequence[asyncio.Task[object]],
     tool_call: Callable[[], Awaitable[object]],
     timeout: float,
-) -> list[object]:
+) -> tuple[object, ...]:
     """Run one MCP tool call beside the during-call hook tasks and await both.
 
     A cancelled asyncio.gather (or wait_for) re-delivers a native Task.cancel into its children
@@ -1844,7 +1844,7 @@ async def _await_mcp_tool_call_tasks(
     that shutdown before the caller's exception is raised. A tool task still unwinding past that
     window is left to finish detached rather than cancelled natively.
     """
-    tool_cancel_scopes: Final[list[anyio.CancelScope]] = []
+    tool_cancel_scopes: Final[list[anyio.CancelScope]] = []  # mutable-ok: scope slot shared with the abandon path
 
     async def _run_tool_call() -> object:
         with anyio.CancelScope() as scope:
@@ -1873,7 +1873,7 @@ async def _await_mcp_tool_call_tasks(
     if pending:
         await _abandon_tool_call()
         raise asyncio.TimeoutError
-    return [task.result() for task in (*during_hook_tasks, tool_task)]
+    return tuple(task.result() for task in (*during_hook_tasks, tool_task))
 
 
 class MCPServerManager:
@@ -6655,7 +6655,7 @@ class MCPServerManager:
         _timeout: Final = mcp_server.timeout if mcp_server.timeout is not None else MCP_CLIENT_TIMEOUT
         try:
             mcp_responses: Final = await _await_mcp_tool_call_tasks(
-                during_hook_tasks=tuple(cast("list[asyncio.Task[object]]", tasks)),
+                during_hook_tasks=tuple(cast("list[asyncio.Task[object]]", tasks)),  # cast-ok: bare-list tasks param
                 tool_call=lambda: tool_call_coro,
                 timeout=_timeout,
             )
