@@ -32,6 +32,24 @@ RECOVERS: Final = "provider-rejects-once"
 HEALTHY: Final = "provider-healthy"
 AGENT_365_GUARDRAIL: Final = f"agent-365-{RUN}"
 CALLER_OAUTH_TOKEN: Final = f"sk-ant-oat01-caller-{RUN}"
+AZURE_API_VERSION: Final = "2024-02-01"
+CALLER_AZURE_CELLS: Final = (
+    ("chat", False),
+    ("embeddings", False),
+    ("responses", False),
+    ("messages", False),
+    ("responses", True),
+)
+CALLER_CREDENTIAL_CELLS: Final = (
+    ("caller-watsonx-token", "token"),
+    ("caller-gigachat-access-token", "gigachat_access_token"),
+)
+TOKEN_EXCHANGE_CELLS: Final = ("token-exchange", "token-exchange-credential")
+TOKEN_EXCHANGE_SETTINGS: Final = {
+    "token_exchange_endpoint": "https://login.microsoftonline.com/00000000-0000-4000-8000-0000000c0b01/oauth2/v2.0/token",
+    "client_id": "synthetic-obo-client-id",
+    "client_secret": "synthetic-obo-client-secret",
+}
 
 FAILURES: Final = "litellm_deployment_failure_responses_total"
 TOTALS: Final = "litellm_deployment_total_requests_total"
@@ -106,7 +124,8 @@ class Provider:
         self._release: Final = release
 
     def __call__(self, request: Request) -> Reply:
-        model: Final = str(json.loads(request.body)["model"])
+        sent: Final = json.loads(request.body)
+        model: Final = str(sent.get("model") or sent["model_id"])
         with self._lock:
             self._seen[model] += 1
             attempt: Final = self._seen[model]
@@ -145,6 +164,49 @@ def anthropic_deployment(cell: str, api_base: str) -> dict[str, JsonValue]:
     }
 
 
+def azure_deployment(cell: str, api_base: str, credential: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    return {
+        "model_name": name(cell),
+        "litellm_params": {
+            "model": f"azure/{REJECTS}",
+            "api_base": api_base,
+            "api_version": AZURE_API_VERSION,
+            **credential,
+        },
+        "model_info": {"id": identity(cell)},
+    }
+
+
+def caller_credential_deployment(cell: str, field: str, api_base: str) -> dict[str, JsonValue]:
+    provider: Final = "watsonx" if field == "token" else "gigachat"
+    project: Final[dict[str, JsonValue]] = {"project_id": f"project-{RUN}"} if provider == "watsonx" else {}
+    return {
+        "model_name": name(cell),
+        "litellm_params": {
+            "model": f"{provider}/{REJECTS}",
+            "api_base": api_base,
+            field: f"deployment-credential-{cell}",
+            **project,
+        },
+        "model_info": {"id": identity(cell)},
+    }
+
+
+def token_exchange_deployment(cell: str) -> dict[str, JsonValue]:
+    settings: Final[dict[str, JsonValue]] = (
+        {"litellm_credential_name": f"m365-obo-{RUN}"} if cell.endswith("-credential") else {**TOKEN_EXCHANGE_SETTINGS}
+    )
+    return {
+        "model_name": name(cell),
+        "litellm_params": {"model": "microsoft_365_copilot/chat", **settings},
+        "model_info": {"id": identity(cell)},
+    }
+
+
+def caller_azure_cell(opt_in: str, route: str, inside_extra_body: bool) -> str:
+    return f"{opt_in}-caller-azure-token-{route}{'-extra-body' if inside_extra_body else ''}"
+
+
 def config(directory: Path, upstream: Wire) -> Path:
     api_base: Final = f"{upstream.url}/v1"
     configuration: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
@@ -158,6 +220,17 @@ def config(directory: Path, upstream: Wire) -> Path:
         deployment("recovers", RECOVERS, api_base),
         anthropic_deployment("anthropic-own-key", upstream.url),
         anthropic_deployment("caller-oauth", upstream.url),
+        azure_deployment("azure-own-token", upstream.url, {"azure_ad_token": "deployment-entra-token-azure-own-token"}),
+        *(
+            azure_deployment(
+                caller_azure_cell("deployment", route, inside_extra_body),
+                upstream.url,
+                {"configurable_clientside_auth_params": ["azure_ad_token"]},
+            )
+            for route, inside_extra_body in CALLER_AZURE_CELLS
+        ),
+        *(caller_credential_deployment(cell, field, upstream.url) for cell, field in CALLER_CREDENTIAL_CELLS),
+        *(token_exchange_deployment(cell) for cell in TOKEN_EXCHANGE_CELLS),
         {
             "model_name": name("caller-credential"),
             "litellm_params": {
@@ -167,6 +240,10 @@ def config(directory: Path, upstream: Wire) -> Path:
             },
             "model_info": {"id": identity("caller-credential")},
         },
+    ]
+    configuration["credential_list"] = [
+        *configuration.get("credential_list", []),
+        {"credential_name": f"m365-obo-{RUN}", "credential_values": {**TOKEN_EXCHANGE_SETTINGS}, "credential_info": {}},
     ]
     configuration["guardrails"] = [
         {
@@ -209,6 +286,36 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
         owned_proxy(
             shared, directory, {"PROXY_CONFIG_RELOAD_INTERVAL_SECONDS": "2"}, config=config(directory, upstream)
         ) as owned,
+    ):
+        yield Rig(owned, upstream)
+
+
+def opted_in_config(directory: Path, upstream: Wire) -> Path:
+    configuration: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    configuration["model_list"] = [
+        *configuration["model_list"],
+        *(
+            azure_deployment(caller_azure_cell("proxy-wide", route, inside_extra_body), upstream.url, {})
+            for route, inside_extra_body in CALLER_AZURE_CELLS
+        ),
+    ]
+    configuration["general_settings"]["allow_client_side_credentials"] = True
+    configuration["litellm_settings"]["callbacks"] = ["prometheus"]
+    configuration.setdefault("router_settings", {}).update({"num_retries": 0, "disable_cooldowns": True})
+    path: Final = directory / "prometheus-caller-credentials-opted-in.yaml"
+    path.write_text(yaml.safe_dump(configuration))
+    return path
+
+
+@pytest.fixture(scope="module")
+def opted_in(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
+    directory: Final = tmp_path_factory.mktemp("prometheus-caller-credentials-opted-in")
+    released: Final = threading.Event()
+    released.set()
+    with (
+        wire_server(Provider(released)) as upstream,
+        gateway_from_environment() as shared,
+        owned_proxy(shared, directory, {}, config=opted_in_config(directory, upstream)) as owned,
     ):
         yield Rig(owned, upstream)
 
@@ -462,6 +569,85 @@ def test_a_provider_401_on_an_anthropic_oauth_token_the_caller_sent_stays_out_of
         assert {metric: values(samples, metric, model_id=identity("caller-oauth")) for metric in DEPLOYMENT_SERIES} == {
             metric: [] for metric in DEPLOYMENT_SERIES
         }, recorded(samples, requested_model=name("caller-oauth"))
+
+
+def test_a_provider_401_on_an_azure_deployments_own_ad_token_is_recorded(rig: Rig) -> None:
+    rig.upstream.drain()
+    response: Final = send(rig.gateway, "azure-own-token")
+    assert response.status_code == 401, response.text
+    assert [request.headers.get("authorization") for request in rig.upstream.drain()] == [
+        "Bearer deployment-entra-token-azure-own-token"
+    ]
+    assert_recorded_as_a_deployment_failure(rig, "azure-own-token", "401")
+
+
+def caller_azure_request(cell: str, route: str, credential: dict[str, JsonValue]) -> tuple[str, dict[str, JsonValue]]:
+    if route == "embeddings":
+        return "/v1/embeddings", {"model": name(cell), "input": cell, **credential}
+    if route == "responses":
+        return "/v1/responses", {"model": name(cell), "input": cell, **credential}
+    if route == "messages":
+        return "/v1/messages", {"model": name(cell), "max_tokens": 16, "messages": messages(cell), **credential}
+    return "/v1/chat/completions", {"model": name(cell), "messages": messages(cell), **credential}
+
+
+@pytest.mark.parametrize(
+    ("route", "inside_extra_body"),
+    CALLER_AZURE_CELLS,
+    ids=[f"{route}{'-extra-body' if inside_extra_body else ''}" for route, inside_extra_body in CALLER_AZURE_CELLS],
+)
+@pytest.mark.parametrize("opt_in", ("deployment", "proxy-wide"))
+def test_a_provider_401_on_an_azure_ad_token_the_caller_sent_stays_out_of_the_deployment_metrics(
+    request: pytest.FixtureRequest, opt_in: str, route: str, inside_extra_body: bool
+) -> None:
+    opted: Final[Rig] = request.getfixturevalue("rig" if opt_in == "deployment" else "opted_in")
+    cell: Final = caller_azure_cell(opt_in, route, inside_extra_body)
+    token: Final = f"caller-entra-token-{uuid.uuid4().hex}"
+    credential: Final[dict[str, JsonValue]] = (
+        {"extra_body": {"azure_ad_token": token}} if inside_extra_body else {"azure_ad_token": token}
+    )
+    opted.upstream.drain()
+    response: Final = opted.gateway.request("POST", *caller_azure_request(cell, route, credential))
+    assert response.status_code == 401, response.text
+    assert [reached.headers.get("authorization") for reached in opted.upstream.drain()] == [
+        None if inside_extra_body else f"Bearer {token}"
+    ]
+    samples: Final = until(opted.gateway, PROXY_FAILED, requested_model=name(cell))
+    assert {metric: values(samples, metric, model_id=identity(cell)) for metric in DEPLOYMENT_SERIES} == {
+        metric: [] for metric in DEPLOYMENT_SERIES
+    }, recorded(samples, requested_model=name(cell))
+
+
+@pytest.mark.parametrize(("cell", "field"), CALLER_CREDENTIAL_CELLS, ids=[cell for cell, _ in CALLER_CREDENTIAL_CELLS])
+def test_a_provider_401_on_a_provider_credential_the_caller_sent_stays_out_of_the_deployment_metrics(
+    rig: Rig, cell: str, field: str
+) -> None:
+    caller_credential: Final = f"caller-credential-{uuid.uuid4().hex}"
+    rig.upstream.drain()
+    response: Final = rig.gateway.request(
+        "POST", "/v1/chat/completions", {"model": name(cell), "messages": messages(cell), field: caller_credential}
+    )
+    assert response.status_code == 401, response.text
+    assert [reached.headers.get("authorization") for reached in rig.upstream.drain()] == [f"Bearer {caller_credential}"]
+    samples: Final = until(rig.gateway, PROXY_FAILED, requested_model=name(cell))
+    assert {metric: values(samples, metric, model_id=identity(cell)) for metric in DEPLOYMENT_SERIES} == {
+        metric: [] for metric in DEPLOYMENT_SERIES
+    }, recorded(samples, requested_model=name(cell))
+
+
+@pytest.mark.parametrize("cell", TOKEN_EXCHANGE_CELLS)
+def test_a_token_exchange_deployment_rejecting_a_caller_without_an_identity_token_stays_out_of_the_deployment_metrics(
+    rig: Rig, cell: str
+) -> None:
+    rig.upstream.drain()
+    response: Final = send(rig.gateway, cell)
+    assert response.status_code == 401, response.text
+    assert "IdP-issued access token" in response.text, response.text
+    assert rig.upstream.drain() == ()
+    samples: Final = until(rig.gateway, PROXY_FAILED, requested_model=name(cell))
+    assert {metric: values(samples, metric, model_id=identity(cell)) for metric in DEPLOYMENT_SERIES} == {
+        metric: [] for metric in DEPLOYMENT_SERIES
+    }, recorded(samples, requested_model=name(cell))
 
 
 def _gated_key(scenario: Scenario, cell: str) -> str | None:

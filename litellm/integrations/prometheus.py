@@ -338,15 +338,57 @@ def _logged_fields(value: object) -> Mapping[str, object]:
         return MappingProxyType({})
 
 
+_CALLER_CREDENTIAL_FIELDS: Final = frozenset(
+    {
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+        "aws_web_identity_token",
+        "azure_ad_token",
+        "azure_password",
+        "azure_scope",
+        "azure_username",
+        "client_id",
+        "client_secret",
+        "gigachat_access_token",
+        "oci_fingerprint",
+        "oci_key",
+        "oci_key_file",
+        "oci_tenancy",
+        "oci_user",
+        "tenant_id",
+        "token",
+        "user_config",
+        "vertex_ai_credentials",
+        "vertex_credentials",
+        "watsonx_credentials",
+        "wx_credentials",
+        "zen_api_key",
+    }
+)
+
+
+def _sent_a_provider_credential(caller_body: Mapping[str, object]) -> bool:
+    """True when the caller's request body, or its ``extra_body``, carries a provider credential field."""
+    return not (
+        _CALLER_CREDENTIAL_FIELDS.isdisjoint(caller_body)
+        and _CALLER_CREDENTIAL_FIELDS.isdisjoint(_logged_fields(caller_body.get("extra_body")))
+    )
+
+
 def _used_a_caller_credential(logged_call: Mapping[str, object]) -> bool:
     """True when the provider was called with a credential that belongs to the caller rather than the
-    deployment: an api_key the caller sent with the request, the caller's own Anthropic OAuth token, or the
-    caller's own GitHub Copilot connection."""
+    deployment: an api_key or other provider credential field the caller sent with the request, the caller's own
+    Anthropic OAuth token, the caller's own GitHub Copilot connection, or the caller's identity token that a
+    token-exchange deployment trades in on every call."""
     litellm_params: Final = _logged_fields(logged_call.get("litellm_params"))
-    credential_fields: Final = _logged_fields(litellm_params.get("proxy_server_request")).get("credential_fields")
+    proxy_server_request: Final = _logged_fields(litellm_params.get("proxy_server_request"))
+    credential_fields: Final = proxy_server_request.get("credential_fields")
     logged_metadata: Final = _logged_fields(_logged_fields(logged_call.get("standard_logging_object")).get("metadata"))
     return (
         (isinstance(credential_fields, tuple) and "api_key" in credential_fields)
+        or _sent_a_provider_credential(_logged_fields(proxy_server_request.get("body")))
+        or bool(litellm_params.get("token_exchange_endpoint"))
         or logged_metadata.get("used_client_oauth_token") is True
         or github_copilot_user_session_from(litellm_params) is not None
     )

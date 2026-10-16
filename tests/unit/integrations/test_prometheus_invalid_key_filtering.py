@@ -19,6 +19,34 @@ from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 
 
+PROVIDER_CREDENTIAL_FIELDS = [
+    "aws_access_key_id",
+    "aws_secret_access_key",
+    "aws_session_token",
+    "aws_web_identity_token",
+    "azure_ad_token",
+    "azure_password",
+    "azure_scope",
+    "azure_username",
+    "client_id",
+    "client_secret",
+    "gigachat_access_token",
+    "oci_fingerprint",
+    "oci_key",
+    "oci_key_file",
+    "oci_tenancy",
+    "oci_user",
+    "tenant_id",
+    "token",
+    "user_config",
+    "vertex_ai_credentials",
+    "vertex_credentials",
+    "watsonx_credentials",
+    "wx_credentials",
+    "zen_api_key",
+]
+
+
 @pytest.fixture(scope="function")
 def prometheus_logger():
     """Create a PrometheusLogger instance for testing."""
@@ -193,6 +221,25 @@ class TestSkipMetricsValidation:
             ({"litellm_params": {"proxy_server_request": {"credential_fields": ("headers",)}}}, False),
             ({"litellm_params": {"proxy_server_request": {"credential_fields": "api_key"}}}, False),
             ({"standard_logging_object": {"metadata": {"used_client_oauth_token": False}}}, False),
+            ({"litellm_params": {"proxy_server_request": {"body": {"azure_ad_token": "caller-token"}}}}, True),
+            (
+                {
+                    "litellm_params": {
+                        "proxy_server_request": {"body": {"extra_body": {"azure_ad_token": "caller-token"}}}
+                    }
+                },
+                True,
+            ),
+            (
+                {
+                    "litellm_params": {
+                        "azure_ad_token": "deployment-token",
+                        "proxy_server_request": {"body": {"model": "azure-deployment"}},
+                    }
+                },
+                False,
+            ),
+            ({"litellm_params": {"proxy_server_request": {"body": {"extra_body": "azure_ad_token"}}}}, False),
         ],
         ids=[
             "caller-supplied-api-key",
@@ -201,6 +248,10 @@ class TestSkipMetricsValidation:
             "caller-supplied-headers-only",
             "malformed-credential-fields",
             "deployment-anthropic-key",
+            "caller-supplied-azure-ad-token",
+            "caller-supplied-azure-ad-token-in-extra-body",
+            "deployment-azure-ad-token",
+            "malformed-extra-body",
         ],
     )
     def test_skip_a_provider_401_on_a_credential_the_caller_owns(self, prometheus_logger, logged_call, expected):
@@ -210,6 +261,46 @@ class TestSkipMetricsValidation:
             model="gpt-4o-mini",
         )
         kwargs = {"exception": exception, **logged_call}
+        assert prometheus_logger._should_skip_metrics_for_invalid_key(kwargs=kwargs) is expected
+
+    @pytest.mark.parametrize("field", PROVIDER_CREDENTIAL_FIELDS)
+    @pytest.mark.parametrize("inside_extra_body", [False, True], ids=["body", "extra-body"])
+    def test_skip_a_provider_401_on_a_provider_credential_field_the_caller_sent(
+        self, prometheus_logger, field, inside_extra_body
+    ):
+        sent = {field: "caller-credential"}
+        body = {"model": "shared-deployment", **({"extra_body": sent} if inside_extra_body else sent)}
+        kwargs = {
+            "exception": litellm.AuthenticationError(message="Unauthorized", llm_provider="azure", model="gpt-4o"),
+            "litellm_params": {"proxy_server_request": {"body": body}},
+        }
+        assert prometheus_logger._should_skip_metrics_for_invalid_key(kwargs=kwargs) is True
+
+    @pytest.mark.parametrize("field", PROVIDER_CREDENTIAL_FIELDS)
+    def test_count_a_provider_401_on_a_provider_credential_field_the_deployment_owns(self, prometheus_logger, field):
+        kwargs = {
+            "exception": litellm.AuthenticationError(message="Unauthorized", llm_provider="azure", model="gpt-4o"),
+            "litellm_params": {
+                field: "deployment-credential",
+                "proxy_server_request": {"body": {"model": "shared-deployment"}},
+            },
+        }
+        assert prometheus_logger._should_skip_metrics_for_invalid_key(kwargs=kwargs) is False
+
+    @pytest.mark.parametrize(
+        "token_exchange_endpoint,expected",
+        [("https://login.example.com/oauth2/v2.0/token", True), ("", False), (None, False)],
+        ids=["token-exchange-deployment", "blank-endpoint", "no-endpoint"],
+    )
+    def test_skip_a_provider_401_on_a_token_exchange_deployment(
+        self, prometheus_logger, token_exchange_endpoint, expected
+    ):
+        kwargs = {
+            "exception": litellm.AuthenticationError(
+                message="Unauthorized", llm_provider="microsoft_365_copilot", model="copilot"
+            ),
+            "litellm_params": {"token_exchange_endpoint": token_exchange_endpoint, "client_secret": "deployment"},
+        }
         assert prometheus_logger._should_skip_metrics_for_invalid_key(kwargs=kwargs) is expected
 
     def test_no_skip_for_valid_request(self, prometheus_logger):
