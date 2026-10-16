@@ -815,15 +815,20 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             )
         # Vector store routes match the team deployment to the store's provider
         # instead of taking the team's first deployment.
-        team_model_provider: Final = (
-            data.get("custom_llm_provider")
+        custom_llm_provider: Final[object] = (
+            JSON_OBJECT_ADAPTER.validate_python(data).get("custom_llm_provider")
             if route_type
-            in [
+            in (
                 "avector_store_search",
                 "avector_store_retrieve",
                 "avector_store_update",
                 "avector_store_delete",
-            ]
+            )
+            else None
+        )
+        team_model_provider: Final[str | None] = (
+            custom_llm_provider
+            if isinstance(custom_llm_provider, str)
             else None
         )
         team_model_name: Final = (

@@ -12295,7 +12295,7 @@ class Router:
                     # can route to it and inject the BYOK API key.
                     if (
                         custom_llm_provider is not None
-                        and provider_for_generic_call(model.get("litellm_params", {})) != custom_llm_provider
+                        and provider_for_generic_call(model["litellm_params"]) != custom_llm_provider
                     ):
                         continue
                     return model.get("model_info", {}).get("team_public_model_name") or model.get("model_name")
