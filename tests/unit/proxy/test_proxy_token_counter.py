@@ -1383,7 +1383,6 @@ async def test_count_tokens_honors_router_default_drop_params_unless_the_body_ov
 async def test_anthropic_count_tokens_on_a_claude_deployment_drops_a_malformed_tool_result_text_under_drop_params(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
     import litellm.proxy.proxy_server as proxy_server
 
     router: Final = Router(
@@ -1398,10 +1397,9 @@ async def test_anthropic_count_tokens_on_a_claude_deployment_drops_a_malformed_t
             }
         ]
     )
-    request: Final = MagicMock(spec=Request)
-    request.headers = {"user-agent": "python-httpx/0.28.1"}
-    body: Final = {"model": "claude-native-drop", "messages": _build_log_messages(5)}
-    monkeypatch.setattr(anthropic_endpoints, "read_request_body", AsyncMock(return_value=body))
+    request: Final = _json_request(
+        {"model": "claude-native-drop", "messages": _build_log_messages(5)}, "python-httpx/0.28.1"
+    )
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server, "proxy_config", proxy_server.ProxyConfig())
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -1410,7 +1408,7 @@ async def test_anthropic_count_tokens_on_a_claude_deployment_drops_a_malformed_t
         route: Final = respx.post("https://api.anthropic.com/v1/messages/count_tokens").mock(
             return_value=httpx.Response(200, json={"input_tokens": 7})
         )
-        response: Final = await anthropic_count_tokens(request, MagicMock())
+        response: Final = await anthropic_count_tokens(request, UserAPIKeyAuth())
 
     assert response == {"input_tokens": 7}
     sent: Final = json.loads(route.calls.last.request.content)
