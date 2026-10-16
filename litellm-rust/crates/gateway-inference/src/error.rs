@@ -76,21 +76,30 @@ impl Error {
     }
 
     pub fn openai_response(self) -> Response {
+        (self.status(), Json(self.openai_body())).into_response()
+    }
+
+    /// An OpenAI error event, for a Chat Completions stream that fails after its headers
+    /// went out.
+    pub fn openai_sse_frame(&self) -> String {
+        format!("data: {}\n\n", self.openai_body())
+    }
+
+    fn openai_body(&self) -> Value {
         let status = self.status();
-        let message = match &self {
+        let message = match self {
             Self::UnknownModel(model) => format!("Invalid model name passed in model={model}"),
+            Self::Route(RouteError::Transport(TransportError::Http { body, .. })) => {
+                openai_error_message(body).unwrap_or_else(|| self.to_string())
+            }
             _ => self.to_string(),
         };
-        (
-            status,
-            Json(json!({"error": {
-                "message": message,
-                "type": error_type(status),
-                "param": null,
-                "code": status.as_u16(),
-            }})),
-        )
-            .into_response()
+        json!({"error": {
+            "message": message,
+            "type": error_type(status),
+            "param": null,
+            "code": status.as_u16(),
+        }})
     }
 
     /// The Anthropic error envelope Python's `AnthropicExceptionMapping` builds: an upstream
@@ -146,6 +155,14 @@ fn is_anthropic_error(object: &Map<String, Value>) -> bool {
             .get("error")
             .and_then(Value::as_object)
             .is_some_and(|error| error.contains_key("type") && error.contains_key("message"))
+}
+
+fn openai_error_message(body: &str) -> Option<String> {
+    let body: Value = serde_json::from_str(body).ok()?;
+    body.get("error")?
+        .get("message")?
+        .as_str()
+        .map(str::to_owned)
 }
 
 fn provider_message(object: &Map<String, Value>) -> Option<&str> {
@@ -221,6 +238,24 @@ mod tests {
         #[case] expected: Value,
     ) {
         assert_eq!(error.body(request_id), expected);
+    }
+
+    #[rstest]
+    #[case::openai_body(
+        upstream(429, r#"{"error":{"message":"slow down","type":"requests","code":"rate_limit"}}"#),
+        json!({"error": {"message": "slow down", "type": "rate_limit_error", "param": null, "code": 429}}),
+    )]
+    #[case::plain_text(
+        upstream(502, "bad gateway"),
+        json!({"error": {
+            "message": "upstream request failed with status 502: bad gateway",
+            "type": "api_error", "param": null, "code": 502,
+        }}),
+    )]
+    fn openai_errors_carry_the_provider_message(#[case] error: Error, #[case] expected: Value) {
+        let frame = error.openai_sse_frame();
+        assert_eq!(error.openai_body(), expected);
+        assert_eq!(frame, format!("data: {expected}\n\n"));
     }
 
     #[rstest]

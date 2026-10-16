@@ -1,3 +1,4 @@
 - Shared base and layering rules: [`../inference/AGENTS.md`](../inference/AGENTS.md)
 - This crate owns Chat Completions call orchestration. Payloads belong in `litellm-llms-types`, transformations in `llms/src/base_llm/chat` and `llms/src/<provider>/chat`
-- Chat Completions is currently non-streaming: the route returns its completed response, cached through `litellm_inference::caching::execute_unary`
+- Translated providers (`ChatCompletions` in `src/route.rs`) are non-streaming: the route returns its completed response, cached through `litellm_inference::caching::execute_unary`
+- OpenAI (`OpenAiChatCompletions` in `src/openai.rs`) is a passthrough machine: the provider's JSON body or SSE bytes go to the host as received, with no total timeout on a stream, only a per-read idle limit

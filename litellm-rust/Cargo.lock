@@ -3997,6 +3997,7 @@ dependencies = [
 name = "litellm-inference-chat"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "futures-util",
  "litellm-auth",
  "litellm-cache-memory",
@@ -4011,6 +4012,7 @@ dependencies = [
  "litellm-llms-types",
  "litellm-secrets",
  "litellm-tracing",
+ "reqwest 0.12.28",
  "rstest",
  "serde_json",
  "tokio",

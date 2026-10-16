@@ -31,7 +31,7 @@ func main() {
 	chatGroups := flag.Int("chat-groups", 4, "chat model groups")
 	messagesGroups := flag.Int("messages-groups", 4, "messages model groups")
 	deployments := flag.Int("deployments", 4, "deployments per model group")
-	chatProvider := flag.String("chat-provider", "openai", "provider prefix for chat deployments (openai_like until native openai lands in Rust)")
+	chatProvider := flag.String("chat-provider", "openai", "provider prefix for chat deployments (openai is served natively, streaming included; openai_like is non-streaming only)")
 	keys := flag.Int("keys", 1000, "virtual keys to generate")
 	keySeed := flag.String("key-seed", "", "derive keys from this seed so every machine generates the same set (default: random keys)")
 	masterKey := flag.String("master-key", "sk-loadtest-master", "gateway master key")

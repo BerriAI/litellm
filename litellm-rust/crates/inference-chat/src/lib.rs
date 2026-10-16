@@ -5,6 +5,7 @@ pub use litellm_inference::RouteError as Error;
 mod common_utils;
 pub mod constants;
 pub(crate) mod handler;
+pub mod openai;
 mod prepare;
 use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
 use prepare::{prepare_provider_request, resolve_request};

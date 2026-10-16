@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="640" viewBox="0 0 980 640" font-family="Helvetica, Arial, sans-serif" font-size="13">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#333"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="980" height="640" fill="#ffffff"/>
+  <text x="20" y="30" font-size="17" font-weight="bold" fill="#111">POST /v1/chat/completions to an openai/ deployment</text>
+
+  <!-- client -->
+  <rect x="20" y="60" width="150" height="56" rx="6" fill="#eef3fb" stroke="#4a6fa5"/>
+  <text x="95" y="84" text-anchor="middle" fill="#111" font-weight="bold">Client</text>
+  <text x="95" y="102" text-anchor="middle" fill="#333">OpenAI SDK body</text>
+
+  <!-- gateway handle -->
+  <rect x="220" y="50" width="300" height="76" rx="6" fill="#f5f5f5" stroke="#666"/>
+  <text x="370" y="72" text-anchor="middle" fill="#111" font-weight="bold">gateway-inference chat_completions::handle</text>
+  <text x="370" y="92" text-anchor="middle" fill="#333">virtual key auth, resolve deployment,</text>
+  <text x="370" y="110" text-anchor="middle" fill="#333">authorize model, caching::prepare</text>
+  <line x1="170" y1="88" x2="218" y2="88" stroke="#333" marker-end="url(#a)"/>
+
+  <!-- decision -->
+  <polygon points="370,150 490,190 370,230 250,190" fill="#fff8e6" stroke="#b8860b"/>
+  <text x="370" y="186" text-anchor="middle" fill="#111">serves_openai(model,</text>
+  <text x="370" y="202" text-anchor="middle" fill="#111">custom_llm_provider)?</text>
+  <line x1="370" y1="126" x2="370" y2="148" stroke="#333" marker-end="url(#a)"/>
+
+  <!-- no branch -->
+  <rect x="580" y="160" width="380" height="60" rx="6" fill="#f5f5f5" stroke="#999" stroke-dasharray="5,4"/>
+  <text x="770" y="184" text-anchor="middle" fill="#111">Existing ChatCompletions route (unchanged)</text>
+  <text x="770" y="202" text-anchor="middle" fill="#555">openai_like, anthropic, bedrock: non-stream, stream = 501</text>
+  <line x1="490" y1="190" x2="578" y2="190" stroke="#333" marker-end="url(#a)"/>
+  <text x="530" y="182" text-anchor="middle" fill="#555">no</text>
+
+  <!-- run_openai -->
+  <rect x="160" y="262" width="420" height="168" rx="6" fill="#eef7ee" stroke="#3c8d3c"/>
+  <text x="370" y="284" text-anchor="middle" fill="#111" font-weight="bold">inference-chat openai::run_openai (HostedMachine)</text>
+  <text x="176" y="308" fill="#333">1. api_key: deployment, else OPENAI_API_KEY (Bearer)</text>
+  <text x="176" y="328" fill="#333">2. api_base: deployment, else OPENAI_BASE_URL / OPENAI_API_BASE,</text>
+  <text x="194" y="346" fill="#333">else https://api.openai.com/v1, + /chat/completions</text>
+  <text x="176" y="366" fill="#333">3. body: merge extra_body, drop LiteLLM-owned keys</text>
+  <text x="194" y="384" fill="#333">(metadata, fallbacks, _litellm_*, ...), set model</text>
+  <text x="176" y="404" fill="#333">4. before_provider_request interceptor, then send</text>
+  <text x="176" y="422" fill="#555">every other field, incl. stream_options, passes verbatim</text>
+  <line x1="370" y1="230" x2="370" y2="260" stroke="#333" marker-end="url(#a)"/>
+  <text x="382" y="250" fill="#555">yes</text>
+
+  <!-- upstream -->
+  <rect x="680" y="300" width="280" height="90" rx="6" fill="#eef3fb" stroke="#4a6fa5"/>
+  <text x="820" y="326" text-anchor="middle" fill="#111" font-weight="bold">OpenAI (or api_base)</text>
+  <text x="820" y="346" text-anchor="middle" fill="#333">application/json or</text>
+  <text x="820" y="364" text-anchor="middle" fill="#333">text/event-stream</text>
+  <line x1="580" y1="330" x2="678" y2="330" stroke="#333" marker-end="url(#a)"/>
+  <line x1="678" y1="364" x2="580" y2="364" stroke="#333" marker-end="url(#a)"/>
+
+  <!-- timeouts -->
+  <rect x="20" y="460" width="440" height="160" rx="6" fill="#ffffff" stroke="#b8860b"/>
+  <text x="240" y="482" text-anchor="middle" fill="#111" font-weight="bold">stream: false</text>
+  <text x="36" y="506" fill="#333">reqwest total timeout = deployment timeout (default 600s)</text>
+  <text x="36" y="526" fill="#333">body read once, after_provider_response sees it</text>
+  <text x="36" y="546" fill="#333">CallOutput::Complete(bytes) sent as application/json,</text>
+  <text x="36" y="566" fill="#333">byte for byte</text>
+  <text x="36" y="594" fill="#333">upstream 4xx/5xx: same status, OpenAI error envelope</text>
+  <text x="36" y="612" fill="#333">carrying the provider's error.message</text>
+
+  <rect x="500" y="460" width="460" height="160" rx="6" fill="#ffffff" stroke="#3c8d3c"/>
+  <text x="730" y="482" text-anchor="middle" fill="#111" font-weight="bold">stream: true</text>
+  <text x="516" y="506" fill="#333">no total timeout; the timeout bounds the wait for the</text>
+  <text x="516" y="526" fill="#333">response head and each chunk read (idle limit)</text>
+  <text x="516" y="546" fill="#333">CallOutput::Stream: each reqwest chunk goes to the</text>
+  <text x="516" y="566" fill="#333">host-http Sse encoder as is, no buffering or re-framing</text>
+  <text x="516" y="594" fill="#333">upstream cut or idle past the limit after headers:</text>
+  <text x="516" y="612" fill="#333">a final data: {"error": ...} event, then close</text>
+  <line x1="300" y1="430" x2="240" y2="458" stroke="#333" marker-end="url(#a)"/>
+  <line x1="440" y1="430" x2="730" y2="458" stroke="#333" marker-end="url(#a)"/>
+</svg>
