@@ -1137,6 +1137,40 @@ def test_config_callback_delete_case_insensitive(
     assert saved == {"callbacks": ["otel"]}
 
 
+def test_config_callback_delete_saves_against_the_baseline_it_read(
+    client: TestClient,
+    auth_as: Callable[..., contextlib.AbstractContextManager[None]],
+    mock_prisma: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """save_config gets the object get_config returned, so it diffs against the
+    settings as they were read and writes only the edited callback list."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "store_model_in_db", True)
+
+    read_time: Final = {"litellm_settings": {"failure_callback": ["datadog", "sentry"], "max_budget": 10}}
+    loaded: Final = ps._ConfigWithBaseline(read_time)
+    fake_proxy_config: Final = MagicMock()
+    fake_proxy_config.get_config = AsyncMock(return_value=loaded)
+    fake_proxy_config.save_config = AsyncMock()
+    fake_proxy_config.add_deployment = AsyncMock()
+    fake_proxy_config.litellm_settings.owned_by_config = frozenset[str]().__contains__
+    monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response: Final = client.post("/config/callback/delete", json={"callback_name": "datadog"})
+
+    assert response.status_code == 200
+    saved: Final = fake_proxy_config.save_config.await_args.kwargs["new_config"]
+    assert saved is loaded
+    assert saved.baseline == read_time
+    assert saved["litellm_settings"] == {"failure_callback": ["sentry"], "max_budget": 10}
+
+
 # ---------------------------------------------------------------------------
 # GET /get/config/callbacks
 # ---------------------------------------------------------------------------

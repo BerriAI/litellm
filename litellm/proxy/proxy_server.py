@@ -19588,8 +19588,8 @@ async def delete_callback(
 
     try:
         # Get current configuration
-        config: Final[Mapping[str, object]] = cast(  # cast-ok: get_config returns an untyped config dict
-            Mapping[str, object],
+        config: Final = cast(  # cast-ok: get_config returns an untyped config dict
+            dict[str, object],
             await proxy_config.get_config(),
         )
         callback_name: Final = data.callback_name.lower()
@@ -19623,11 +19623,10 @@ async def delete_callback(
         )
         before_callbacks: Final[JsonValue] = {key: list(configured_lists[key]) for key in rewritten_keys}
         after_callbacks: Final[JsonValue] = {key: list(names) for key, names in remaining_lists.items()}
-        updated_settings: Final = {**litellm_settings, **after_callbacks}
-        updated_config: Final = {**config, "litellm_settings": updated_settings}
+        config["litellm_settings"] = {**litellm_settings, **after_callbacks}
 
         # Save the updated configuration
-        await proxy_config.save_config(new_config=updated_config)
+        await proxy_config.save_config(new_config=config)
 
         asyncio.create_task(
             create_config_audit_log(
