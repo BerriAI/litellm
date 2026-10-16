@@ -4024,6 +4024,9 @@ dependencies = [
 name = "litellm-inference-messages"
 version = "0.1.0"
 dependencies = [
+ "aws-smithy-eventstream",
+ "aws-smithy-types",
+ "base64 0.22.1",
  "bytes",
  "futures-util",
  "litellm-auth",

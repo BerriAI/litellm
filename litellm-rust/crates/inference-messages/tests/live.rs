@@ -6,3 +6,6 @@ mod edenai;
 
 #[path = "live/vertex_ai.rs"]
 mod vertex_ai;
+
+#[path = "live/bedrock.rs"]
+mod bedrock;

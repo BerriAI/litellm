@@ -26,6 +26,9 @@ serde_json = { workspace = true, features = ["preserve_order"] }
 tracing.workspace = true
 
 [dev-dependencies]
+aws-smithy-eventstream = "=0.61.4"
+aws-smithy-types = "1.6.1"
+base64.workspace = true
 litellm-framer = { workspace = true, features = ["sse"] }
 litellm-cache-memory.workspace = true
 litellm-host-native.workspace = true
