@@ -4,7 +4,7 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Final, Literal, cast
 
-from pydantic import ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.fields import FieldInfo
 from typing_extensions import ReadOnly, Required, TypedDict
 
@@ -47,6 +47,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.ibm import (
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     ContentFilterCategoryConfig,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.neuraltrust import (
+    NeuralTrustGuardrailConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.ovalix import (
     OvalixGuardrailConfigModel,
 )
@@ -87,7 +90,7 @@ Pydantic object defining how to set guardrails on litellm proxy
 guardrails:
   - guardrail_name: "bedrock-pre-guard"
     litellm_params:
-      guardrail: bedrock  # supported values: "akto", "aporia", "bedrock", "lakera", "zscaler_ai_guard"
+      guardrail: bedrock  # supported values: "akto", "aporia", "bedrock", "lakera", "neuraltrust", "zscaler_ai_guard"
       mode: "during_call"
       guardrailIdentifier: ff6ujrregl1q
       guardrailVersion: "DRAFT"
@@ -105,6 +108,7 @@ class SupportedGuardrailIntegrations(Enum):
     PRESIDIO = "presidio"
     HIDE_SECRETS = "hide-secrets"
     HIDDENLAYER = "hiddenlayer"
+    NEURALTRUST = "neuraltrust"
     AIM = "aim"
     CATO_NETWORKS = "cato_networks"
     PANGEA = "pangea"
@@ -1177,7 +1181,7 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         default="fail_closed",
         description=(
             "Behavior when a guardrail endpoint is unreachable due to network errors. "
-            "Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. "
+            "Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', 'typesafe', and 'neuraltrust'. "
             "'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed. "
             "Also implemented by guardrail='decision_model'."
         ),
@@ -1193,6 +1197,17 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         default=None,
         gt=0,
         description="Maximum decisions calls in flight at once on the guardrail in each proxy worker. Implemented by guardrail='decision_model'.",
+    )
+
+    streaming_transform_mode: Literal["block_only", "incremental_diff"] | None = Field(
+        default=None,
+        description=(
+            "Whether a guardrail's text rewrite reaches a streaming client. "
+            "Implemented by guardrail='prompt_security' and 'neuraltrust'; generic_guardrail_api takes the "
+            "same setting under optional_params. 'block_only' (default) streams the raw model chunks, so a "
+            "block still ends the stream but rewrites are dropped. 'incremental_diff' withholds those chunks "
+            "and streams the guardrail's rewritten text instead. OpenAI chat completions streaming only."
+        ),
     )
 
     extra_headers: list[str] | None = Field(
@@ -1367,6 +1382,7 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
     QualifireGuardrailConfigModel,
     BlockCodeExecutionGuardrailConfigModel,
     HiddenlayerGuardrailConfigModel,
+    NeuralTrustGuardrailConfigModel[BaseModel],
     QostodianNexusConfigModel,
     VigilGuardGuardrailConfigModel,
     SingulrGuardrailConfigModel,
