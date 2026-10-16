@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
+from litellm.litellm_core_utils.redact_messages import MESSAGE_REDACTION_ENABLE_HEADERS
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     get_key_object,
@@ -117,16 +118,24 @@ def _failure_snapshot_with_guardrails_recorded_after_it(
     return {**failure_snapshot, "guardrail_information": recorded_guardrail_information}
 
 
-def _failure_metadata_lifted_from_litellm_metadata(
+def _guardrail_info_lifted_from_litellm_metadata(
     litellm_metadata: ObjectMapping, *, guardrail_info_already_set: bool
 ) -> ObjectMapping:
     guardrail_info: Final = litellm_metadata.get("standard_logging_guardrail_information")
+    if guardrail_info is None or guardrail_info_already_set:
+        return {}
+    return {"standard_logging_guardrail_information": guardrail_info}
+
+
+def _redaction_opt_in_lifted_from_litellm_metadata(
+    litellm_metadata: ObjectMapping, *, caller_set_headers: bool
+) -> ObjectMapping:
     request_headers: Final = litellm_metadata.get("headers")
-    keeps_guardrail_info: Final = guardrail_info is not None and not guardrail_info_already_set
-    return {
-        **({"standard_logging_guardrail_information": guardrail_info} if keeps_guardrail_info else {}),
-        **({"headers": request_headers} if isinstance(request_headers, dict) else {}),
-    }
+    if caller_set_headers or not isinstance(request_headers, dict):
+        return {}
+    headers: Final = _OBJECT_MAPPING.validate_python(request_headers)
+    opt_in_headers: Final = {name: headers[name] for name in MESSAGE_REDACTION_ENABLE_HEADERS if name in headers}
+    return {"headers": opt_in_headers} if opt_in_headers else {}
 
 
 def _proxy_spend_writer() -> DBSpendUpdateWriter:
@@ -243,11 +252,14 @@ class _ProxyDBLogger(CustomLogger):
         existing_metadata.update(_metadata)
 
         litellm_metadata_bucket: Final = request_data.get("litellm_metadata")
+        litellm_metadata: Final[ObjectMapping] = (
+            _OBJECT_MAPPING.validate_python(litellm_metadata_bucket)
+            if isinstance(litellm_metadata_bucket, dict)
+            else {}
+        )
         existing_metadata.update(
-            _failure_metadata_lifted_from_litellm_metadata(
-                _OBJECT_MAPPING.validate_python(litellm_metadata_bucket)
-                if isinstance(litellm_metadata_bucket, dict)
-                else {},
+            _guardrail_info_lifted_from_litellm_metadata(
+                litellm_metadata,
                 guardrail_info_already_set="standard_logging_guardrail_information" in existing_metadata,
             )
         )
@@ -265,7 +277,12 @@ class _ProxyDBLogger(CustomLogger):
         request_data["litellm_params"]["proxy_server_request"] = (
             request_data.get("proxy_server_request") or existing_litellm_params.get("proxy_server_request") or {}
         )
-        request_data["litellm_params"]["metadata"] = existing_metadata
+        request_data["litellm_params"]["metadata"] = {
+            **existing_metadata,
+            **_redaction_opt_in_lifted_from_litellm_metadata(
+                litellm_metadata, caller_set_headers="headers" in existing_metadata
+            ),
+        }
 
         # Preserve model name and custom_llm_provider
         if "model" not in request_data:

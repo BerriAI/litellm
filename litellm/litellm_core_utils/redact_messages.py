@@ -40,6 +40,8 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObject = Any
 
+MESSAGE_REDACTION_ENABLE_HEADERS: Final = ("litellm-enable-message-redaction", "x-litellm-enable-message-redaction")
+
 
 def redact_message_input_output_from_custom_logger(
     litellm_logging_obj: LiteLLMLoggingObject, result, custom_logger: CustomLogger
@@ -458,13 +460,8 @@ def should_redact_message_logging(model_call_details: dict) -> bool:
         # User explicitly disabled redaction via header
         return False
 
-    possible_enable_headers: Final = [
-        "litellm-enable-message-redaction",  # old header. maintain backwards compatibility
-        "x-litellm-enable-message-redaction",  # new header
-    ]
-
     is_redaction_enabled_via_header = False
-    for header in possible_enable_headers:
+    for header in MESSAGE_REDACTION_ENABLE_HEADERS:
         if bool(request_headers.get(header, False)):
             is_redaction_enabled_via_header = True
             break
