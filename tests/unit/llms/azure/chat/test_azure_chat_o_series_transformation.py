@@ -1,6 +1,6 @@
 import json
 import traceback
-from typing import Callable, Optional
+from typing import Callable, Final, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -175,10 +175,12 @@ def test_azure_o_series_routing():
 def test_openai_o_series_max_retries_0(mock_get_openai_client):
     import litellm
 
-    mock_get_openai_client.return_value.post.return_value.headers = {}
-    mock_get_openai_client.return_value.post.return_value.parse.return_value = (
-        ModelResponse(choices=[{"message": {"role": "assistant", "content": "Hello"}}])
-    )
+    raw_response: Final = MagicMock()
+    raw_response.headers = {}
+    raw_response.parse.return_value = ModelResponse(choices=[{"message": {"role": "assistant", "content": "Hello"}}])
+    client_stub: Final = MagicMock()
+    client_stub.post.return_value = raw_response
+    mock_get_openai_client.return_value = client_stub
     litellm.set_verbose = True
     response = litellm.completion(
         model="azure/o1-preview",

@@ -5,7 +5,7 @@ import os
 from collections.abc import Mapping
 from types import ModuleType
 from typing import Final, Literal, Protocol
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import httpx
 import pytest
@@ -1700,10 +1700,12 @@ async def test_openai_prediction_param_mock():
 def test_openai_max_retries_0(mock_get_openai_client):
     import litellm
 
-    mock_get_openai_client.return_value.post.return_value.headers = {}
-    mock_get_openai_client.return_value.post.return_value.parse.return_value = (
-        ModelResponse(choices=[{"message": {"role": "assistant", "content": "Hello"}}])
-    )
+    raw_response: Final = MagicMock()
+    raw_response.headers = {}
+    raw_response.parse.return_value = ModelResponse(choices=[{"message": {"role": "assistant", "content": "Hello"}}])
+    client_stub: Final = MagicMock()
+    client_stub.post.return_value = raw_response
+    mock_get_openai_client.return_value = client_stub
     litellm.set_verbose = True
     response = litellm.completion(
         model="gpt-4o-mini",

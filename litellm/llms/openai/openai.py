@@ -516,13 +516,16 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         start_time: Final = time.time()
         try:
             body, options = _request_without_sdk_transform(data, timeout)
-            raw_response = await openai_aclient.post(
-                "/chat/completions",
-                body=body,
-                cast_to=ChatCompletion,
-                options=options,
-                stream=bool(data.get("stream")),
-                stream_cls=AsyncStream[ChatCompletionChunk],
+            raw_response = cast(  # cast-ok: the raw-response header makes post() return the wrapper
+                "LegacyAPIResponse[ChatCompletion]",
+                await openai_aclient.post(
+                    "/chat/completions",
+                    body=body,
+                    cast_to=ChatCompletion,
+                    options=options,
+                    stream=bool(data.get("stream")),
+                    stream_cls=AsyncStream[ChatCompletionChunk],
+                ),
             )
             end_time = time.time()
 
@@ -565,13 +568,16 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         raw_response = None
         try:
             body, options = _request_without_sdk_transform(data, timeout)
-            raw_response = openai_client.post(
-                "/chat/completions",
-                body=body,
-                cast_to=ChatCompletion,
-                options=options,
-                stream=bool(data.get("stream")),
-                stream_cls=Stream[ChatCompletionChunk],
+            raw_response = cast(  # cast-ok: the raw-response header makes post() return the wrapper
+                "LegacyAPIResponse[ChatCompletion]",
+                openai_client.post(
+                    "/chat/completions",
+                    body=body,
+                    cast_to=ChatCompletion,
+                    options=options,
+                    stream=bool(data.get("stream")),
+                    stream_cls=Stream[ChatCompletionChunk],
+                ),
             )
 
             if hasattr(raw_response, "headers"):
