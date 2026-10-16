@@ -8,9 +8,12 @@ import asyncio, importlib, importlib.resources as importlib_get_model, json, lit
 import os
 import sys
 import threading
+from collections.abc import Iterator
 from typing import Final
 
+from botocore.exceptions import ClientError
 import pytest
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.fallback_generalizations import (
     get_fallback_generalization_rules,
@@ -517,6 +520,111 @@ from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from unittest.mock import MagicMock, patch
+
+
+class _FakeS3Body:
+    def __init__(self, content: bytes) -> None:
+        self.content: Final = content
+
+    def read(self) -> bytes:
+        return self.content
+
+
+class _FakeS3GetObjectResponse(TypedDict):
+    Body: ReadOnly[_FakeS3Body]
+    ETag: NotRequired[ReadOnly[str]]
+
+
+class _FakeS3Client:
+    def __init__(self, outcomes: tuple[bytes | ClientError, ...]) -> None:
+        self._outcomes: Iterator[bytes | ClientError] = iter(outcomes)
+        self.calls: list[tuple[str, str]] = []
+
+    def get_object(self, *, Bucket: str, Key: str) -> _FakeS3GetObjectResponse:
+        self.calls.append((Bucket, Key))
+        outcome: Final = next(self._outcomes)
+        if isinstance(outcome, ClientError):
+            raise outcome
+        return {"Body": _FakeS3Body(outcome), "ETag": '"fake-etag"'}
+
+
+def _s3_client_error(code: str, status_code: int) -> ClientError:
+    return ClientError(
+        {
+            "Error": {"Code": code, "Message": "request failed"},
+            "ResponseMetadata": {"HTTPStatusCode": status_code},
+        },
+        "GetObject",
+    )
+
+
+def test_get_model_cost_map_fetches_s3_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.litellm_core_utils import get_model_cost_map as module
+
+    source_info = module._cost_map_source_info
+    for name in ("source", "url", "is_env_forced", "fallback_reason", "loaded_at", "source_revision", "etag"):
+        monkeypatch.setattr(source_info, name, getattr(source_info, name))
+
+    s3_client: Final = _FakeS3Client((_real_map_bytes(),))
+
+    cost_map: Final = get_model_cost_map(
+        url="s3://my-bucket/prices/model_prices.json",
+        s3_client=s3_client,
+    )
+
+    assert cost_map["gpt-5.4-mini"] == _load_root_cost_map()["gpt-5.4-mini"]
+    assert s3_client.calls == [("my-bucket", "prices/model_prices.json")]
+    assert get_model_cost_map_source_info()["source"] == "remote"
+
+
+@pytest.mark.asyncio
+async def test_refetch_s3_no_such_key_fails_without_retry() -> None:
+    s3_client: Final = _FakeS3Client((_s3_client_error("NoSuchKey", 404),))
+    sleeper: Final = _SleepRecorder()
+
+    result: Final = await refetch_model_cost_map(
+        url="s3://my-bucket/prices/model_prices.json",
+        sleep=sleeper,
+        rng=random.Random(0),
+        s3_client=s3_client,
+    )
+
+    assert isinstance(result, ModelCostMapReloadUnavailable)
+    assert s3_client.calls == [("my-bucket", "prices/model_prices.json")]
+    assert sleeper.waits == []
+
+
+@pytest.mark.asyncio
+async def test_refetch_retries_s3_slow_down() -> None:
+    s3_client: Final = _FakeS3Client((_s3_client_error("SlowDown", 503), _real_map_bytes()))
+    sleeper: Final = _SleepRecorder()
+
+    result: Final = await refetch_model_cost_map(
+        url="s3://my-bucket/prices/model_prices.json",
+        sleep=sleeper,
+        rng=random.Random(0),
+        s3_client=s3_client,
+    )
+
+    assert isinstance(result, ModelCostMapReloaded)
+    assert s3_client.calls == [
+        ("my-bucket", "prices/model_prices.json"),
+        ("my-bucket", "prices/model_prices.json"),
+    ]
+    assert len(sleeper.waits) == 1
+
+
+@pytest.mark.asyncio
+async def test_refetch_invalid_s3_url_fails_without_calling_client() -> None:
+    s3_client: Final = _FakeS3Client(())
+
+    result: Final = await refetch_model_cost_map(
+        url="s3://my-bucket",
+        s3_client=s3_client,
+    )
+
+    assert isinstance(result, ModelCostMapReloadUnavailable)
+    assert s3_client.calls == []
 
 
 class _SyncSleepRecorder:

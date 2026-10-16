@@ -17,6 +17,7 @@ import random
 import sys
 import threading
 import time
+import urllib.parse
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -24,11 +25,11 @@ from importlib.resources import files
 from itertools import chain
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Protocol
+from typing import Final, Protocol, cast  # noqa: TID251  # adapts boto3 and botocore's dynamic client responses
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm import verbose_logger
 from litellm.constants import (
@@ -43,6 +44,9 @@ FALLBACK_GENERALIZATIONS_KEY: Final = "fallback_generalizations"
 _CATALOG_ADAPTER: Final = TypeAdapter(dict[str, dict[str, object]])
 _BUNDLED_CATALOG_ADAPTER: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 _CLI_ENTRYPOINT_NAMES: Final = frozenset({"lite", "litellm-proxy"})
+_RETRYABLE_S3_ERROR_CODES: Final = frozenset(
+    {"SlowDown", "Throttling", "ThrottlingException", "RequestTimeout", "InternalError", "ServiceUnavailable"}
+)
 
 
 def _is_cli_process() -> bool:
@@ -266,6 +270,32 @@ class _SyncGetClient(Protocol):
     def get(self, url: str, *, timeout: float | None = None) -> httpx.Response: ...
 
 
+class _S3Body(Protocol):
+    def read(self) -> bytes: ...
+
+
+class _S3GetObjectResponse(TypedDict):
+    Body: ReadOnly[_S3Body]
+    ETag: NotRequired[ReadOnly[str]]
+
+
+class _S3ClientErrorDetails(TypedDict):
+    Code: ReadOnly[str]
+
+
+class _S3ResponseMetadata(TypedDict):
+    HTTPStatusCode: NotRequired[ReadOnly[int]]
+
+
+class _S3ClientErrorResponse(TypedDict):
+    Error: ReadOnly[_S3ClientErrorDetails]
+    ResponseMetadata: NotRequired[ReadOnly[_S3ResponseMetadata]]
+
+
+class _S3Client(Protocol):
+    def get_object(self, *, Bucket: str, Key: str) -> _S3GetObjectResponse: ...
+
+
 _FetchAttemptOutcome = ModelCostMapReloaded | ModelCostMapReloadUnavailable | _FetchAttemptRetryable
 
 
@@ -276,6 +306,20 @@ def _default_reload_client() -> _AsyncGetClient:
     return get_async_httpx_client(llm_provider=httpxSpecialProvider.ModelCostMap)
 
 
+def _default_s3_client(timeout: int) -> _S3Client:
+    import boto3
+    from botocore.config import Config
+
+    return cast(  # cast-ok: boto3's generic client factory does not expose its generated S3 response type
+        _S3Client,
+        boto3.client(  # pyright: ignore[reportUnknownMemberType]  # generic factory returns Unknown service clients
+            "s3",
+            region_name=os.getenv("AWS_REGION_NAME") or None,
+            config=Config(connect_timeout=timeout, read_timeout=timeout, retries={"total_max_attempts": 1}),
+        ),
+    )
+
+
 def _classify_fetch_error(error: httpx.HTTPError | httpx.InvalidURL, url: str) -> _FetchAttemptOutcome:
     reason: Final = f"{type(error).__name__} fetching {url}: {error}"
     if isinstance(error, (httpx.InvalidURL, httpx.UnsupportedProtocol)):
@@ -283,7 +327,72 @@ def _classify_fetch_error(error: httpx.HTTPError | httpx.InvalidURL, url: str) -
     return _FetchAttemptRetryable(reason=reason, retry_after_seconds=None)
 
 
-async def _attempt_fetch(client: _AsyncGetClient, url: str, timeout: int) -> _FetchAttemptOutcome:
+def _classify_s3_error(error: Exception, url: str) -> _FetchAttemptOutcome:
+    from botocore.exceptions import (
+        BotoCoreError,
+        ClientError,
+        HTTPClientError,
+    )
+    from botocore.exceptions import (
+        ConnectionError as BotocoreConnectionError,
+    )
+
+    reason: Final = f"S3 {type(error).__name__} fetching {url}: {error}"
+    if isinstance(error, ClientError):
+        response: Final = cast(  # cast-ok: botocore ClientError responses have an operation-specific shape
+            _S3ClientErrorResponse, error.response
+        )
+        code: Final = response["Error"]["Code"]
+        metadata: Final = response.get("ResponseMetadata")
+        status_code: Final = metadata.get("HTTPStatusCode") if metadata is not None else None
+        client_error_reason: Final = f"S3 {code} fetching {url}: {error}"
+        if code in _RETRYABLE_S3_ERROR_CODES or status_code in RETRYABLE_FETCH_STATUS_CODES:
+            return _FetchAttemptRetryable(reason=client_error_reason, retry_after_seconds=None)
+        return ModelCostMapReloadUnavailable(reason=client_error_reason)
+    if isinstance(error, (BotocoreConnectionError, HTTPClientError)):
+        return _FetchAttemptRetryable(reason=reason, retry_after_seconds=None)
+    if isinstance(error, BotoCoreError):
+        return ModelCostMapReloadUnavailable(reason=reason)
+    return ModelCostMapReloadUnavailable(reason=reason)
+
+
+def _classify_fetch_content(content: bytes, url: str, etag: str | None) -> _FetchAttemptOutcome:
+    try:
+        parsed: Final[object] = json.loads(content)
+    except ValueError as e:
+        return ModelCostMapReloadUnavailable(reason=f"invalid JSON from {url}: {e}")
+    if not isinstance(parsed, dict):
+        return ModelCostMapReloadUnavailable(reason=f"expected a JSON object from {url}, got {type(parsed).__name__}")
+    model_cost_map: Final = cast(  # cast-ok: JSON object keys are strings by definition
+        dict[str, object], parsed
+    )
+    return ModelCostMapReloaded(model_cost_map=model_cost_map, revision=git_blob_id(content), etag=etag)
+
+
+def _attempt_fetch_s3(s3_client: _S3Client | None, url: str, timeout: int) -> _FetchAttemptOutcome:
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    parts: Final = urllib.parse.urlsplit(url)
+    bucket: Final = parts.netloc
+    key: Final = parts.path.lstrip("/")
+    if not bucket or not key:
+        return ModelCostMapReloadUnavailable(reason=f"invalid S3 URL {url}: expected s3://bucket/key")
+
+    try:
+        client: Final = s3_client if s3_client is not None else _default_s3_client(timeout)
+        response: Final = client.get_object(Bucket=bucket, Key=key)
+        content: Final = response["Body"].read()
+    except (BotoCoreError, ClientError) as error:
+        return _classify_s3_error(error, url)
+    return _classify_fetch_content(content, url, response.get("ETag"))
+
+
+async def _attempt_fetch(
+    client: _AsyncGetClient, url: str, timeout: int, s3_client: _S3Client | None = None
+) -> _FetchAttemptOutcome:
+    parts: Final = urllib.parse.urlsplit(url)
+    if parts.scheme == "s3":
+        return await asyncio.to_thread(_attempt_fetch_s3, s3_client, url, timeout)
     try:
         response: Final = await client.get(url, timeout=timeout)
     except (httpx.HTTPError, httpx.InvalidURL) as e:
@@ -291,7 +400,12 @@ async def _attempt_fetch(client: _AsyncGetClient, url: str, timeout: int) -> _Fe
     return _classify_fetch_response(response, url)
 
 
-def _attempt_fetch_sync(client: _SyncGetClient, url: str, timeout: int) -> _FetchAttemptOutcome:
+def _attempt_fetch_sync(
+    client: _SyncGetClient, url: str, timeout: int, s3_client: _S3Client | None = None
+) -> _FetchAttemptOutcome:
+    parts: Final = urllib.parse.urlsplit(url)
+    if parts.scheme == "s3":
+        return _attempt_fetch_s3(s3_client, url, timeout)
     try:
         response: Final = client.get(url, timeout=timeout)
     except (httpx.HTTPError, httpx.InvalidURL) as e:
@@ -307,15 +421,7 @@ def _classify_fetch_response(response: httpx.Response, url: str) -> _FetchAttemp
         )
     if response.is_error:
         return ModelCostMapReloadUnavailable(reason=f"HTTP {response.status_code} from {url}")
-    try:
-        parsed: Final = response.json()
-    except ValueError as e:
-        return ModelCostMapReloadUnavailable(reason=f"invalid JSON from {url}: {e}")
-    if not isinstance(parsed, dict):
-        return ModelCostMapReloadUnavailable(reason=f"expected a JSON object from {url}, got {type(parsed).__name__}")
-    return ModelCostMapReloaded(
-        model_cost_map=parsed, revision=git_blob_id(response.content), etag=response.headers.get("etag")
-    )
+    return _classify_fetch_content(response.content, url, response.headers.get("etag"))
 
 
 def _next_retry_wait(
@@ -341,9 +447,10 @@ async def _fetch_remote_model_cost_map_with_retry(
     sleep: Callable[[float], Awaitable[None]],
     rng: random.Random,
     client: _AsyncGetClient,
+    s3_client: _S3Client | None = None,
 ) -> ModelCostMapReloadResult:
     for attempt in range(1, max_attempts + 1):
-        outcome = await _attempt_fetch(client=client, url=url, timeout=timeout)
+        outcome = await _attempt_fetch(client=client, url=url, timeout=timeout, s3_client=s3_client)
         if not isinstance(outcome, _FetchAttemptRetryable):
             return outcome
         wait_seconds = _next_retry_wait(outcome=outcome, attempt=attempt, max_attempts=max_attempts, rng=rng)
@@ -360,10 +467,11 @@ def _fetch_remote_model_cost_map_with_retry_sync(
     sleep: Callable[[float], None],
     rng: random.Random,
     client: _SyncGetClient,
+    s3_client: _S3Client | None = None,
 ) -> ModelCostMapReloadResult:
     max_attempts: Final = attempts.stop - 1
     for attempt in attempts:
-        outcome = _attempt_fetch_sync(client=client, url=url, timeout=timeout)
+        outcome = _attempt_fetch_sync(client=client, url=url, timeout=timeout, s3_client=s3_client)
         if not isinstance(outcome, _FetchAttemptRetryable):
             return outcome
         wait_seconds = _next_retry_wait(outcome=outcome, attempt=attempt, max_attempts=max_attempts, rng=rng)
@@ -380,6 +488,7 @@ async def refetch_model_cost_map(
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     rng: random.Random | None = None,
     client: "_AsyncGetClient | None" = None,
+    s3_client: "_S3Client | None" = None,
 ) -> ModelCostMapReloadResult:
     """
     Re-fetch the model cost map for a runtime reload, retrying transient HTTP
@@ -404,6 +513,7 @@ async def refetch_model_cost_map(
         sleep=sleep,
         rng=rng if rng is not None else random.Random(),
         client=client if client is not None else _default_reload_client(),
+        s3_client=s3_client,
     )
     if isinstance(result, ModelCostMapReloadUnavailable):
         verbose_logger.warning(
@@ -587,6 +697,7 @@ def _retry_remote_fetch_in_background(
     rng: random.Random,
     client: _SyncGetClient,
     first_outcome: _FetchAttemptRetryable,
+    s3_client: _S3Client | None = None,
 ) -> None:
     try:
         first_wait: Final = _next_retry_wait(outcome=first_outcome, attempt=1, max_attempts=max_attempts, rng=rng)
@@ -600,6 +711,7 @@ def _retry_remote_fetch_in_background(
             sleep=sleep,
             rng=rng,
             client=client,
+            s3_client=s3_client,
         )
         if isinstance(result, ModelCostMapReloadUnavailable):
             verbose_logger.warning(
@@ -634,6 +746,7 @@ def get_model_cost_map(
     sleep: Callable[[float], None] = time.sleep,
     rng: random.Random | None = None,
     client: "_SyncGetClient | None" = None,
+    s3_client: "_S3Client | None" = None,
 ) -> dict:
     """
     Public entry point — returns the model cost map dict.
@@ -664,7 +777,7 @@ def get_model_cost_map(
 
     fetch_client: Final = client if client is not None else httpx
     fetch_rng: Final = rng if rng is not None else random.Random()
-    outcome: Final = _attempt_fetch_sync(client=fetch_client, url=url, timeout=timeout)
+    outcome: Final = _attempt_fetch_sync(client=fetch_client, url=url, timeout=timeout, s3_client=s3_client)
     if isinstance(outcome, _FetchAttemptRetryable) and max_attempts > 1:
         threading.Thread(
             target=_retry_remote_fetch_in_background,
@@ -676,6 +789,7 @@ def get_model_cost_map(
                 "rng": fetch_rng,
                 "client": fetch_client,
                 "first_outcome": outcome,
+                "s3_client": s3_client,
             },
             name="litellm-model-cost-map-retry",
             daemon=True,
