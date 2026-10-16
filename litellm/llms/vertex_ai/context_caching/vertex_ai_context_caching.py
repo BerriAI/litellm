@@ -1,5 +1,4 @@
 import asyncio
-import hashlib
 import re
 import threading
 import time
@@ -107,10 +106,10 @@ class _KnownCachedContents:
     """
 
     def __init__(self) -> None:
-        self._entries: dict[tuple[str, str], tuple[str, float]] = {}  # mutable-ok: private, guarded by _lock
+        self._entries: dict[tuple[tuple[str, str], str], tuple[str, float]] = {}  # mutable-ok: guarded by _lock
         self._lock: Final = threading.Lock()
         self._inflight: weakref.WeakKeyDictionary[  # mutable-ok: private, guarded by _lock
-            asyncio.AbstractEventLoop, dict[tuple[str, str], asyncio.Future[str | None]]
+            asyncio.AbstractEventLoop, dict[tuple[tuple[str, str], str], asyncio.Future[str | None]]
         ] = weakref.WeakKeyDictionary()
 
     @staticmethod
@@ -118,18 +117,21 @@ class _KnownCachedContents:
         base_url: str,
         custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
         api_key: str | None,
-    ) -> str:
-        """Where a cache name is valid: the Vertex URL names project and location, a Gemini key names the project."""
+    ) -> tuple[str, str]:
+        """Where a cache name is valid: the Vertex URL names project and location, a Gemini key names the project.
+
+        The Gemini key is kept as-is in this in-memory scope and is never logged or persisted.
+        """
         if custom_llm_provider == "gemini":
-            return f"{base_url}#{hashlib.sha256((api_key or '').encode()).hexdigest()}"
-        return base_url
+            return (base_url, api_key or "")
+        return (base_url, "")
 
     @staticmethod
     def is_usable(expire_time: object) -> bool:
         expires_at: Final = _parse_expire_time(expire_time)
         return expires_at is None or expires_at - KNOWN_CACHE_EXPIRY_MARGIN_SECONDS > time.time()
 
-    def get(self, scope: str, cache_key: str) -> str | None:
+    def get(self, scope: tuple[str, str], cache_key: str) -> str | None:
         with self._lock:
             entry: Final = self._entries.get((scope, cache_key))
             if entry is None:
@@ -140,7 +142,7 @@ class _KnownCachedContents:
             del self._entries[(scope, cache_key)]
             return None
 
-    def remember(self, scope: str, cache_key: str, name: str | None, expire_time: object) -> None:
+    def remember(self, scope: tuple[str, str], cache_key: str, name: str | None, expire_time: object) -> None:
         expires_at: Final = _parse_expire_time(expire_time)
         if not name or expires_at is None:
             return
@@ -156,7 +158,7 @@ class _KnownCachedContents:
             self._entries[(scope, cache_key)] = (name, reuse_until)
 
     async def single_flight(
-        self, scope: str, cache_key: str, resolve: Callable[[], Awaitable[str | None]]
+        self, scope: tuple[str, str], cache_key: str, resolve: Callable[[], Awaitable[str | None]]
     ) -> str | None:
         """Run ``resolve`` once per (scope, cache_key) at a time within this event loop.
 
