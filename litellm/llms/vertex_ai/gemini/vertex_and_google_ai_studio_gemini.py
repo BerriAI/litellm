@@ -530,15 +530,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return cls._drop_search_tools_mixed_with_functions(optional_params)
 
     def _map_service_tier_param(self, value: str, optional_params: dict) -> None:
-        """
-        Map OpenAI service_tier (string) to Gemini serviceTier.
-        'auto' maps to 'priority'.
-        Other values are passed lowercased.
-        """
-        if value.lower() == "auto":
-            optional_params["service_tier"] = "priority"
-        else:
-            optional_params["service_tier"] = value.lower()
+        normalized: Final = value.lower().removeprefix("service_tier_")
+        if normalized in ("auto", "default", "scale", "unspecified"):
+            return
+        optional_params["service_tier"] = normalized
 
     def _transform_computer_use_config(self, computer_use_config: dict) -> dict:
         """
@@ -2794,6 +2789,17 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             default_headers.update(api_key)
         elif api_key is not None:
             default_headers["Authorization"] = f"Bearer {api_key}"
+
+        # Vertex AI: route service_tier via headers for actual tier enforcement.
+        # See: https://github.com/BerriAI/litellm/issues/34914
+        optional_fields: Final[Mapping[str, object]] = cast(Mapping[str, object], optional_params)  # cast-ok: bare dict
+        litellm_fields: Final[Mapping[str, object]] = cast(Mapping[str, object], litellm_params)  # cast-ok: bare dict
+        service_tier: Final = optional_fields.get("service_tier")
+        provider: Final = litellm_fields.get("custom_llm_provider")
+        if isinstance(service_tier, str) and service_tier in ("priority", "flex") and provider != "gemini":
+            default_headers["X-Vertex-AI-LLM-Request-Type"] = "shared"
+            default_headers["X-Vertex-AI-LLM-Shared-Request-Type"] = service_tier
+
         if headers is not None:
             default_headers.update(headers)
 
