@@ -150,16 +150,64 @@ def test_a_login_for_another_proxy_is_never_replaced_by_an_automatic_sign_in(req
 
 
 def test_the_browser_sign_in_fails_at_once_on_a_machine_without_a_browser(requests_mock):
-    def no_browser() -> object:
+    def no_browser() -> webbrowser.BaseBrowser:
         raise webbrowser.Error("could not locate runnable browser")
 
     echoed: list[str] = []
 
-    outcome = pkce_browser_sign_in(BASE_URL, echoed.append, find_browser=no_browser)
+    outcome = pkce_browser_sign_in(BASE_URL, echoed.append, find_browser=no_browser, environ={})
 
     assert outcome == PkceFailure("no web browser is available on this machine")
     assert requests_mock.call_count == 0
     assert echoed == []
+
+
+@pytest.mark.parametrize("ci", ["true", "1", "True"])
+def test_the_browser_sign_in_never_looks_for_a_browser_in_ci(requests_mock, ci):
+    def browser_lookup() -> webbrowser.BaseBrowser:
+        raise AssertionError("looked for a browser while CI is set")
+
+    echoed: list[str] = []
+
+    outcome = pkce_browser_sign_in(BASE_URL, echoed.append, find_browser=browser_lookup, environ={"CI": ci})
+
+    assert outcome == PkceFailure("the CI environment variable is set, so lite does not open a browser")
+    assert requests_mock.call_count == 0
+    assert echoed == []
+
+
+@pytest.mark.parametrize("name", ["www-browser", "links", "elinks", "lynx", "w3m"])
+def test_a_text_mode_browser_counts_as_no_browser(requests_mock, name):
+    echoed: list[str] = []
+
+    outcome = pkce_browser_sign_in(
+        BASE_URL, echoed.append, find_browser=lambda: webbrowser.GenericBrowser(name), environ={"TERM": "xterm"}
+    )
+
+    assert outcome == PkceFailure("only a text-mode web browser is available on this machine")
+    assert requests_mock.call_count == 0
+    assert echoed == []
+
+
+@pytest.mark.parametrize(
+    "environ",
+    [{"BROWSER": "w3m"}, {"CI": "false", "BROWSER": "w3m"}, {"CI": "0", "BROWSER": "w3m"}],
+    ids=["browser-picks-it", "ci-false", "ci-zero"],
+)
+def test_a_browser_the_user_picked_starts_the_sign_in_and_names_how_long_it_waits(requests_mock, environ):
+    discovery = requests_mock.get(f"{BASE_URL}/.well-known/litellm-cli-auth", status_code=404)
+    echoed: list[str] = []
+
+    outcome = pkce_browser_sign_in(
+        BASE_URL, echoed.append, find_browser=lambda: webbrowser.GenericBrowser("w3m"), environ=environ
+    )
+
+    assert isinstance(outcome, PkceFailure)
+    assert discovery.call_count == 1
+    assert echoed == [
+        "lite is opening your browser to sign in and waits up to 5 minutes for you to approve it. "
+        "A shell or agent that stops commands sooner should run this one with a longer timeout."
+    ]
 
 
 @pytest.mark.parametrize(

@@ -1,5 +1,6 @@
+import os
 import webbrowser
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Final, Literal, Protocol
 
@@ -11,20 +12,38 @@ from litellm.litellm_core_utils.cli_token_utils import load_cli_token
 
 from ...exceptions import UnauthorizedError
 from .auth import context_secret_vault, get_stored_api_key, replace_stored_token, storage_notice
-from .pkce_login import PkceCredential, PkceFailure, pkce_token_record, run_pkce_login
+from .pkce_login import LOGIN_TIMEOUT_SECONDS, PkceCredential, PkceFailure, pkce_token_record, run_pkce_login
 
 
 class BrowserSignIn(Protocol):
     def __call__(self, base_url: str, echo: Callable[[str], None]) -> PkceCredential | PkceFailure: ...
 
 
+_TEXT_MODE_BROWSERS: Final = frozenset({"www-browser", "links", "elinks", "lynx", "w3m"})
+
+
+def _runs_in_ci(environ: Mapping[str, str]) -> bool:
+    return environ.get("CI", "").strip().lower() not in {"", "0", "false"}
+
+
 def pkce_browser_sign_in(
-    base_url: str, echo: Callable[[str], None], find_browser: Callable[[], object] = webbrowser.get
+    base_url: str,
+    echo: Callable[[str], None],
+    find_browser: Callable[[], webbrowser.BaseBrowser] = webbrowser.get,
+    environ: Mapping[str, str] = os.environ,
 ) -> PkceCredential | PkceFailure:
+    if _runs_in_ci(environ):
+        return PkceFailure("the CI environment variable is set, so lite does not open a browser")
     try:
-        _ = find_browser()
+        browser: Final = find_browser()
     except webbrowser.Error:
         return PkceFailure("no web browser is available on this machine")
+    if browser.name in _TEXT_MODE_BROWSERS and "BROWSER" not in environ:
+        return PkceFailure("only a text-mode web browser is available on this machine")
+    echo(
+        f"lite is opening your browser to sign in and waits up to {LOGIN_TIMEOUT_SECONDS // 60} minutes "
+        "for you to approve it. A shell or agent that stops commands sooner should run this one with a longer timeout."
+    )
     return run_pkce_login(base_url, requests.Session(), echo=echo)
 
 
@@ -97,7 +116,7 @@ def _attempt_with_newer_stored_key(
 
 def _sign_in(ctx: click.Context, context: _SignInContext) -> str:
     base_url: Final = context["base_url"]
-    _echo_to_stderr(f"The proxy at {base_url} needs a sign-in, so lite is opening your browser to sign in.")
+    _echo_to_stderr(f"The proxy at {base_url} needs a sign-in.")
     sign_in: Final = context.get("browser_sign_in") or pkce_browser_sign_in
     credential: Final = sign_in(base_url, _echo_to_stderr)
     if isinstance(credential, PkceFailure):
