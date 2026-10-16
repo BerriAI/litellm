@@ -28,10 +28,14 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     DEFS_MAX_INLINED_BYTES,
     is_object_schema,
     sanitize_input_schema_for_anthropic,
+    schema_grammar_branch_count,
     schema_has_lookaround_pattern,
     schema_has_open_object,
-    schema_has_ref,
+    schema_has_unresolvable_ref,
+    schema_optional_property_count,
+    schema_property_count,
     schema_string_formats,
+    schema_union_property_count,
     unpack_defs,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
@@ -51,7 +55,7 @@ from litellm.llms.base_llm.base_utils import (
     type_to_response_format_param,
     unwrap_response_format_envelope,
 )
-from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.base_llm.chat.transformation import REQUEST_PARAMS, BaseConfig, BaseLLMException
 from litellm.types.llms.anthropic import (
     ANTHROPIC_ADVISOR_TOOL_TYPE,
     ANTHROPIC_BETA_HEADER_VALUES,
@@ -161,6 +165,10 @@ _TOOLS_ADAPTER: Final = TypeAdapter(list[object])
 _NATIVE_OUTPUT_STRING_FORMATS: Final = frozenset(
     ("date-time", "time", "date", "duration", "email", "hostname", "uri", "ipv4", "ipv6", "uuid")
 )
+NATIVE_OUTPUT_MAX_UNION_PARAMETERS: Final = 16
+NATIVE_OUTPUT_MAX_OPTIONAL_PARAMETERS: Final = 24
+NATIVE_OUTPUT_MAX_GRAMMAR_BRANCHES: Final = 2048
+NATIVE_OUTPUT_MAX_PROPERTIES: Final = 64
 
 
 def _tool_type(tool: object) -> str | None:
@@ -1653,18 +1661,25 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     @staticmethod
     def native_output_schema(json_schema: Mapping[str, object]) -> Mapping[str, object] | None:
-        unpacked: Final = AnthropicConfig._defs_unpacked(json_schema)
         if (
-            schema_has_ref(unpacked)
+            schema_has_unresolvable_ref(json_schema)
             or schema_has_open_object(json_schema)
             or schema_has_lookaround_pattern(json_schema)
             or not schema_string_formats(json_schema) <= _NATIVE_OUTPUT_STRING_FORMATS
+            or schema_union_property_count(json_schema) > NATIVE_OUTPUT_MAX_UNION_PARAMETERS
+            or schema_optional_property_count(json_schema) > NATIVE_OUTPUT_MAX_OPTIONAL_PARAMETERS
+            or schema_grammar_branch_count(json_schema) > NATIVE_OUTPUT_MAX_GRAMMAR_BRANCHES
+            or schema_property_count(json_schema) > NATIVE_OUTPUT_MAX_PROPERTIES
         ):
             return None
         return AnthropicConfig.filter_anthropic_output_schema(dict(json_schema))
 
-    def uses_native_structured_output_for_schema(self, model: str, json_schema: Mapping[str, object] | None) -> bool:
-        return self.uses_native_structured_output(model)
+    def uses_native_structured_output_for_schema(
+        self, model: str, json_schema: Mapping[str, object] | None, thinking_requested: bool
+    ) -> bool:
+        return self.uses_native_structured_output(model) and (
+            json_schema is None or not schema_has_open_object(json_schema)
+        )
 
     def native_output_format_schema(self, json_schema: Mapping[str, object]) -> Mapping[str, object] | None:
         return self.filter_anthropic_output_schema(dict(self._defs_unpacked(json_schema)))
@@ -1844,7 +1859,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
             elif param == "response_format" and isinstance(value, dict):
                 if self.uses_native_structured_output_for_schema(
-                    model, self._extract_json_schema_from_response_format(value)
+                    model,
+                    self._extract_json_schema_from_response_format(value),
+                    self.is_thinking_requested(REQUEST_PARAMS.validate_python(non_default_params)),
                 ):
                     _output_format = self.map_response_format_to_anthropic_output_format(value)
                     if _output_format is not None:

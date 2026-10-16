@@ -261,6 +261,15 @@ def bedrock_supports_native_structured_output(model: str, custom_llm_provider: s
     ) or _bedrock_model_supports(model, "supports_bedrock_native_structured_output", custom_llm_provider)
 
 
+def bedrock_chat_uses_native_structured_output(
+    model: str, thinking_requested: bool, custom_llm_provider: str = "bedrock"
+) -> bool:
+    return _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider) or (
+        thinking_requested
+        and _bedrock_model_supports(model, "supports_bedrock_native_structured_output", custom_llm_provider)
+    )
+
+
 def bedrock_native_output_schema(
     model: str, schema: Mapping[str, object], custom_llm_provider: str = "bedrock"
 ) -> Mapping[str, object] | None:

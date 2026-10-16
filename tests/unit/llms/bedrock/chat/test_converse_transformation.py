@@ -18,6 +18,12 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_tools_pt,
 )
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import CONVERTED_SYSTEM_NOTE
+from litellm.llms.anthropic.chat.transformation import (
+    NATIVE_OUTPUT_MAX_GRAMMAR_BRANCHES,
+    NATIVE_OUTPUT_MAX_OPTIONAL_PARAMETERS,
+    NATIVE_OUTPUT_MAX_PROPERTIES,
+    NATIVE_OUTPUT_MAX_UNION_PARAMETERS,
+)
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -4855,10 +4861,15 @@ CAPITAL_RESPONSE_FORMAT: Final = {
 }
 
 
-def _converse_request_for_json_schema(model: str, stream: bool) -> tuple[dict, dict]:
+ADAPTIVE_THINKING: Final = {"type": "adaptive"}
+
+
+def _converse_request_for_json_schema(
+    model: str, stream: bool, thinking_params: dict | None = None
+) -> tuple[dict, dict]:
     config = AmazonConverseConfig()
     optional_params = config.map_openai_params(
-        non_default_params={"response_format": CAPITAL_RESPONSE_FORMAT, "stream": stream},
+        non_default_params={"response_format": CAPITAL_RESPONSE_FORMAT, "stream": stream, **(thinking_params or {})},
         optional_params={},
         model=model,
         drop_params=False,
@@ -4888,8 +4899,9 @@ def test_json_schema_shape_follows_each_inference_profile_own_native_output_flag
     set_native_structured_output(native_profile, "bedrock")
     set_native_structured_output(tool_profile, None)
 
-    native_params, native_request = _converse_request_for_json_schema(model=native_profile, stream=stream)
-    tool_params, tool_request = _converse_request_for_json_schema(model=tool_profile, stream=stream)
+    thinking_params: Final = {"thinking": ADAPTIVE_THINKING}
+    native_params, native_request = _converse_request_for_json_schema(native_profile, stream, thinking_params)
+    tool_params, tool_request = _converse_request_for_json_schema(tool_profile, stream, thinking_params)
 
     assert native_request["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["name"] == "capital"
     assert "toolConfig" not in native_request
@@ -4898,6 +4910,29 @@ def test_json_schema_shape_follows_each_inference_profile_own_native_output_flag
     assert [tool["toolSpec"]["name"] for tool in tool_request["toolConfig"]["tools"]] == ["json_tool_call"]
     assert tool_request["toolConfig"]["toolChoice"] == {"tool": {"name": "json_tool_call"}}
     assert tool_params.get("fake_stream", False) is stream
+
+
+@pytest.mark.parametrize(
+    ("native_key", "thinking_params", "native"),
+    [
+        ("legacy", {}, True),
+        ("bedrock", {}, False),
+        ("bedrock", {"thinking": ADAPTIVE_THINKING}, True),
+        ("bedrock", {"thinking": {"type": "enabled", "budget_tokens": 1024}}, True),
+        ("bedrock", {"reasoning_effort": "low"}, True),
+    ],
+    ids=["legacy-key", "bedrock-key-no-thinking", "bedrock-key-adaptive", "bedrock-key-enabled", "bedrock-key-effort"],
+)
+def test_bedrock_native_output_key_applies_only_when_thinking_is_requested(
+    set_native_structured_output, native_key, thinking_params, native
+):
+    model: Final = "us.anthropic.claude-haiku-5-5"
+    set_native_structured_output(model, native_key)
+
+    _, request = _converse_request_for_json_schema(model, False, thinking_params)
+
+    assert ("outputConfig" in request) is native
+    assert ("toolConfig" in request) is not native
 
 
 def test_adaptive_thinking_is_kept_next_to_json_schema_on_a_native_output_profile(set_native_structured_output):
@@ -4964,6 +4999,11 @@ UNKNOWN_FORMAT_SCHEMA: Final = {
     "properties": {"blob": {"type": "string", "format": "x-litellm-unlisted-format"}},
     "required": ["blob"],
 }
+ROOT_REF_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"name": {"type": "string"}, "parent": {"anyOf": [{"$ref": "#"}, {"type": "null"}]}},
+    "required": ["name", "parent"],
+}
 
 
 def _schema_keys(node: object) -> frozenset[str]:
@@ -4977,7 +5017,10 @@ def _schema_keys(node: object) -> frozenset[str]:
 def _converse_request_for_schema(model: str, schema: dict) -> dict:
     config: Final = AmazonConverseConfig()
     optional_params: Final = config.map_openai_params(
-        non_default_params={"response_format": {"type": "json_schema", "json_schema": {"name": "out", "schema": schema}}},
+        non_default_params={
+            "response_format": {"type": "json_schema", "json_schema": {"name": "out", "schema": schema}},
+            "thinking": ADAPTIVE_THINKING,
+        },
         optional_params={},
         model=model,
         drop_params=False,
@@ -5015,11 +5058,12 @@ def test_native_output_schema_drops_keywords_bedrock_rejects_and_closes_objects(
     ("schema", "kept_keyword"),
     [
         (RECURSIVE_TREE_SCHEMA, "$ref"),
+        (ROOT_REF_SCHEMA, "$ref"),
         (OPEN_OBJECT_SCHEMA, "additionalProperties"),
         (LOOKAROUND_PATTERN_SCHEMA, "pattern"),
         (UNKNOWN_FORMAT_SCHEMA, "format"),
     ],
-    ids=["recursive", "open-object", "lookaround-pattern", "unlisted-format"],
+    ids=["recursive", "root-ref", "open-object", "lookaround-pattern", "unlisted-format"],
 )
 def test_schema_native_output_cannot_hold_keeps_the_tool_path_on_a_native_profile(
     set_native_structured_output, schema, kept_keyword, native_key
@@ -5065,6 +5109,86 @@ def test_shared_defs_reach_native_output_once_instead_of_inlined_per_use(
     assert sent["properties"]["buyer"] == {"$ref": f"#/{defs_key}/Party"}
     assert json.dumps(sent).count('"anyOf"') == 2
     assert sent[defs_key]["Party"]["additionalProperties"] is False
+
+
+def _flat_schema(property_schema: dict, count: int, required: bool) -> dict:
+    names: Final = tuple(f"field_{index}" for index in range(count))
+    return {
+        "type": "object",
+        "properties": dict.fromkeys(names, property_schema),
+        "required": list(names) if required else [],
+    }
+
+
+def _optional_groups_schema(count: int, group_size: int = 6) -> dict:
+    groups: Final = {
+        f"group_{start}": _flat_schema({"type": "string"}, min(group_size, count - start), required=False)
+        for start in range(0, count, group_size)
+    }
+    return {"type": "object", "properties": groups, "required": list(groups)}
+
+
+@pytest.mark.parametrize("native_key", ["legacy", "bedrock"])
+@pytest.mark.parametrize(
+    ("schema_for", "limit"),
+    [
+        (lambda count: _flat_schema({"type": ["string", "null"]}, count, True), NATIVE_OUTPUT_MAX_UNION_PARAMETERS),
+        (
+            lambda count: _flat_schema({"anyOf": [{"type": "string"}, {"type": "integer"}]}, count, True),
+            NATIVE_OUTPUT_MAX_UNION_PARAMETERS,
+        ),
+        (_optional_groups_schema, NATIVE_OUTPUT_MAX_OPTIONAL_PARAMETERS),
+        (
+            lambda count: _flat_schema({"type": "string"}, count, False),
+            NATIVE_OUTPUT_MAX_GRAMMAR_BRANCHES.bit_length() - 1,
+        ),
+        (lambda count: _flat_schema({"type": "string"}, count, True), NATIVE_OUTPUT_MAX_PROPERTIES),
+    ],
+    ids=["type-list-unions", "any-of-unions", "optional", "optional-grammar-branches", "properties"],
+)
+def test_schema_past_a_native_output_size_limit_keeps_the_tool_path(
+    set_native_structured_output, native_key, schema_for, limit
+):
+    model: Final = "us.anthropic.claude-opus-4-8"
+    set_native_structured_output(model, native_key)
+
+    at_limit: Final = _converse_request_for_schema(model, schema_for(limit))
+    past_limit: Final = _converse_request_for_schema(model, schema_for(limit + 1))
+
+    sent: Final = json.loads(at_limit["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"])
+    assert sent["properties"].keys() == schema_for(limit)["properties"].keys()
+    assert "outputConfig" not in past_limit
+    assert past_limit["toolConfig"]["tools"][0]["toolSpec"]["name"] == "json_tool_call"
+
+
+def _doubling_defs_schema(depth: int) -> dict:
+    levels: Final = {
+        f"Level{index}": {
+            "type": "object",
+            "properties": {"left": {"$ref": f"#/$defs/Level{index + 1}"}, "right": {"$ref": f"#/$defs/Level{index + 1}"}},
+            "required": ["left", "right"],
+        }
+        for index in range(depth)
+    }
+    return {
+        "type": "object",
+        "properties": {"root": {"$ref": "#/$defs/Level0"}},
+        "required": ["root"],
+        "$defs": {**levels, f"Level{depth}": {"type": "string"}},
+    }
+
+
+@pytest.mark.timeout(30)
+def test_defs_that_double_at_every_level_reach_native_output_without_being_expanded(set_native_structured_output):
+    model: Final = "us.anthropic.claude-opus-4-8"
+    set_native_structured_output(model, "legacy")
+    schema: Final = _doubling_defs_schema(30)
+
+    request: Final = _converse_request_for_schema(model, schema)
+
+    sent: Final = json.loads(request["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"])
+    assert sent["$defs"].keys() == schema["$defs"].keys()
+    assert sent["properties"]["root"] == {"$ref": "#/$defs/Level0"}
 
 
 @pytest.mark.parametrize(

@@ -1346,6 +1346,35 @@ def test_opus_uses_native_structured_output(model_name):
     assert optional_params.get("json_mode") is True
 
 
+@pytest.mark.parametrize(
+    ("field_schema", "native"),
+    [
+        ({"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}, True),
+        ({"type": "object", "additionalProperties": {"type": "integer"}}, False),
+        ({"anyOf": [{"type": "object"}, {"type": "null"}]}, False),
+    ],
+    ids=["closed-object", "dict-field", "nullable-dict-field"],
+)
+def test_dict_fields_take_the_json_tool_on_a_native_structured_output_model(field_schema, native):
+    optional_params: Final = AnthropicConfig().map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "out",
+                    "schema": {"type": "object", "properties": {"field": field_schema}, "required": ["field"]},
+                },
+            }
+        },
+        optional_params={},
+        model="claude-opus-4-8",
+        drop_params=False,
+    )
+
+    assert ("output_format" in optional_params) is native
+    assert ([tool["name"] for tool in optional_params.get("tools", [])] == ["json_tool_call"]) is not native
+
+
 def test_native_structured_output_uses_bundled_capability_when_remote_map_lags(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -54,12 +54,12 @@ from litellm.llms.anthropic.chat.transformation import (
     tools_without_unsupported_tool_search,
 )
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
-from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.base_llm.chat.transformation import REQUEST_PARAMS, BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.tool_result_images import place_tool_result_images
 from litellm.llms.bedrock.common_utils import (
+    bedrock_chat_uses_native_structured_output,
     bedrock_model_supports_regex_lookaround,
     bedrock_native_output_format,
-    bedrock_supports_native_structured_output,
     bedrock_supports_tool_search,
 )
 from litellm.llms.bedrock.request_metadata import (
@@ -945,14 +945,19 @@ class AmazonConverseConfig(BaseConfig):
         return _tool
 
     @staticmethod
-    def _supports_native_structured_outputs(model: str, custom_llm_provider: str | None = None) -> bool:
-        """Check if the Bedrock model supports native structured outputs (outputConfig.textFormat).
+    def _supports_native_structured_outputs(
+        model: str, custom_llm_provider: str | None, thinking_requested: bool
+    ) -> bool:
+        """Check if the Bedrock model takes native structured outputs (outputConfig.textFormat) for this request.
 
-        Reads ``supports_native_structured_output`` or
-        ``supports_bedrock_native_structured_output`` from ``litellm.model_cost``.
+        ``supports_native_structured_output`` in ``litellm.model_cost`` turns it on for every request, and
+        ``supports_bedrock_native_structured_output`` only when the request asks for thinking, which the
+        json tool path would drop.
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/structured-output.html
         """
-        return bedrock_supports_native_structured_output(model, custom_llm_provider or "bedrock_converse")
+        return bedrock_chat_uses_native_structured_output(
+            model, thinking_requested, custom_llm_provider or "bedrock_converse"
+        )
 
     @staticmethod
     def _add_additional_properties_to_schema(schema: dict) -> dict:
@@ -990,9 +995,10 @@ class AmazonConverseConfig(BaseConfig):
 
         return result
 
-    def _native_output_schema(self, model: str, json_schema: Mapping[str, object]) -> Mapping[str, object] | None:
-        provider: Final = self.custom_llm_provider or "bedrock_converse"
-        if not self._supports_native_structured_outputs(model, provider):
+    def _native_output_schema(
+        self, model: str, json_schema: Mapping[str, object], thinking_requested: bool
+    ) -> Mapping[str, object] | None:
+        if not self._supports_native_structured_outputs(model, self.custom_llm_provider, thinking_requested):
             return None
         if BedrockModelInfo.get_base_model(model).startswith("anthropic"):
             return AnthropicConfig.native_output_schema(json_schema)
@@ -1322,7 +1328,13 @@ class AmazonConverseConfig(BaseConfig):
         if "type" in value and value["type"] == "text":
             return optional_params
 
-        native_schema: Final = self._native_output_schema(model, json_schema) if json_schema is not None else None
+        native_schema: Final = (
+            self._native_output_schema(
+                model, json_schema, self.is_thinking_requested(REQUEST_PARAMS.validate_python(non_default_params))
+            )
+            if json_schema is not None
+            else None
+        )
         if native_schema is not None:
             # Use Bedrock's native structured outputs API (outputConfig.textFormat)
             # No synthetic tool injection, no fake_stream needed.

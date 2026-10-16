@@ -543,13 +543,39 @@ OPEN_OBJECT_SCHEMA: Final = {
 }
 
 
-def _invoke_params_for_schema(model: str, schema: dict) -> dict:
+def _invoke_params_for_schema(model: str, schema: dict, thinking_params: dict | None = None) -> dict:
     return AmazonAnthropicClaudeConfig().map_openai_params(
-        non_default_params={"response_format": {"type": "json_schema", "json_schema": {"name": "out", "schema": schema}}},
+        non_default_params={
+            "response_format": {"type": "json_schema", "json_schema": {"name": "out", "schema": schema}},
+            **({"thinking": {"type": "adaptive"}} if thinking_params is None else thinking_params),
+        },
         optional_params={},
         model=model,
         drop_params=False,
     )
+
+
+@pytest.mark.parametrize(
+    ("native_key", "thinking_params", "native"),
+    [
+        ("legacy", {}, True),
+        ("bedrock", {}, False),
+        ("bedrock", {"thinking": {"type": "adaptive"}}, True),
+        ("bedrock", {"reasoning_effort": "low"}, True),
+    ],
+    ids=["legacy-key", "bedrock-key-no-thinking", "bedrock-key-adaptive", "bedrock-key-effort"],
+)
+def test_bedrock_native_output_key_applies_only_when_thinking_is_requested(
+    set_native_structured_output, native_key, thinking_params, native
+):
+    model = "us.anthropic.claude-haiku-5-5"
+    set_native_structured_output(model, native_key)
+    schema = {"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]}
+
+    result = _invoke_params_for_schema(model, schema, thinking_params)
+
+    assert ("output_format" in result) is native
+    assert ("tools" in result) is not native
 
 
 @pytest.mark.parametrize("native_key", ["legacy", "bedrock"])

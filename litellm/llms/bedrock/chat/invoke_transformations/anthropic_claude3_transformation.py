@@ -23,7 +23,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 )
 from litellm.llms.bedrock.common_utils import (
     apply_bedrock_invoke_structured_output,
-    bedrock_supports_native_structured_output,
+    bedrock_chat_uses_native_structured_output,
     bedrock_supports_tool_search,
     get_anthropic_beta_from_headers,
     normalize_bedrock_opus_output_config_effort,
@@ -81,16 +81,15 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
     def get_supported_openai_params(self, model: str) -> list[str]:
         return AnthropicConfig.get_supported_openai_params(self, model)
 
-    def uses_native_structured_output(self, model: str) -> bool:
-        return bedrock_supports_native_structured_output(model)
-
     def native_output_format_schema(self, json_schema: Mapping[str, object]) -> Mapping[str, object] | None:
         return AnthropicConfig.native_output_schema(json_schema)
 
-    def uses_native_structured_output_for_schema(self, model: str, json_schema: Mapping[str, object] | None) -> bool:
-        if json_schema is None:
-            return self.uses_native_structured_output(model)
-        return self.uses_native_structured_output(model) and self.native_output_format_schema(json_schema) is not None
+    def uses_native_structured_output_for_schema(
+        self, model: str, json_schema: Mapping[str, object] | None, thinking_requested: bool
+    ) -> bool:
+        return bedrock_chat_uses_native_structured_output(model, thinking_requested) and (
+            json_schema is None or self.native_output_format_schema(json_schema) is not None
+        )
 
     def map_openai_params(
         self,
