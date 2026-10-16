@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import logging
 import time
 import uuid
 from collections.abc import Generator
@@ -594,12 +595,19 @@ async def test_anthropic_view_applies_clear_edits_without_calling_the_compaction
     assert _tool_outputs_kept(view) == (False, False, True)
 
 
-async def test_anthropic_view_counts_the_unedited_body_when_an_edit_fails() -> None:
-    with patch.object(litellm, "token_counter", side_effect=RuntimeError("tokenizer unavailable")):
+async def test_anthropic_view_counts_the_unedited_body_without_an_error_log_when_an_edit_fails(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with (
+        patch.object(litellm, "token_counter", side_effect=RuntimeError("tokenizer unavailable")),
+        caplog.at_level(logging.DEBUG, logger="LiteLLM"),
+    ):
         view: Final = await inference_request_view(_agent_turns(3), None, "anthropic", _edits(_CLEAR_OLD_TOOL_RESULTS))
 
     assert isinstance(view, InferenceRequestView)
     assert _tool_outputs_kept(view) == (True, True, True)
+    assert any("skipping edits" in record.getMessage() for record in caplog.records)
+    assert not any(record.levelno >= logging.ERROR for record in caplog.records)
 
 
 async def test_anthropic_view_counts_the_turns_after_a_compaction_block_when_an_edit_before_compact_fails() -> None:

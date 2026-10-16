@@ -145,7 +145,7 @@ async def prepare_context_managed_request(
     user_api_key_auth: "UserAPIKeyAuth | None" = None,
     sub_call_logging_kwargs: ProxySubCallLoggingKwargs | None = None,
     parent_trace_id: str | None = None,
-    allow_summary_call: bool = True,
+    count_only: bool = False,
 ) -> PolyfillResult | None:
     """Apply client compaction history, then optional context_management polyfill."""
     from litellm.llms.anthropic.pass_through.context_management.editors.compact import (
@@ -187,7 +187,7 @@ async def prepare_context_managed_request(
         user_api_key_auth=user_api_key_auth,
         sub_call_logging_kwargs=sub_call_logging_kwargs,
         parent_trace_id=parent_trace_id,
-        allow_summary_call=allow_summary_call,
+        count_only=count_only,
     )
 
     if polyfill_result is not None:
@@ -310,7 +310,7 @@ async def _run_polyfill_if_enabled(
     user_api_key_auth: "UserAPIKeyAuth | None" = None,
     sub_call_logging_kwargs: ProxySubCallLoggingKwargs | None = None,
     parent_trace_id: str | None = None,
-    allow_summary_call: bool = True,
+    count_only: bool = False,
 ) -> PolyfillResult | None:
     """Run the async context_management polyfill if a spec is present.
 
@@ -339,14 +339,15 @@ async def _run_polyfill_if_enabled(
             user_api_key_auth=user_api_key_auth,
             sub_call_logging_kwargs=sub_call_logging_kwargs,
             parent_trace_id=parent_trace_id,
-            allow_summary_call=allow_summary_call,
+            count_only=count_only,
         )
     except AnthropicContextManagementError:
         # Surface validation errors so the endpoint can emit an Anthropic-format
         # 400. Other exception types fall into the best-effort branch below.
         raise
     except Exception as e:
-        verbose_logger.exception("context_management polyfill: skipping edits due to error: %s", e)
+        log_failure: Final = verbose_logger.debug if count_only else verbose_logger.exception
+        log_failure("context_management polyfill: skipping edits due to error: %s", e)
         # Best-effort swallow is only safe for compact-only specs, where the
         # caller's compaction-block-slicing safety net produces a correct
         # (if degraded) result. When the spec also requested non-compact

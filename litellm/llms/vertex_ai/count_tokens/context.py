@@ -272,7 +272,7 @@ async def _anthropic_inference_view(
             litellm_metadata=None,
             additional_drop_params=None,
             llm_router=None,
-            allow_summary_call=False,
+            count_only=True,
         )
     except AnthropicContextManagementError as error:
         if error.status_code >= 500:
