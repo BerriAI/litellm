@@ -12612,6 +12612,7 @@ def test_dump_redacted_config_serializes_non_json_native_values():
 async def test_update_config_general_settings_emits_audit_log(monkeypatch):
     import litellm.proxy.proxy_server as proxy_server_module
     from litellm.proxy._types import ConfigFieldUpdate
+    from litellm.proxy.management_helpers.audit_logs import drain_audit_tasks
     from litellm.proxy.proxy_server import update_config_general_settings
 
     existing = {"max_parallel_requests": 5, "some_api_key": "sk-stored-secret"}
@@ -12635,6 +12636,7 @@ async def test_update_config_general_settings_emits_audit_log(monkeypatch):
     )
     # Audit is scheduled via asyncio.create_task; yield so it runs.
     await asyncio.sleep(0)
+    await drain_audit_tasks()
 
     fake.db.litellm_auditlog.create.assert_awaited_once()
     written = fake.db.litellm_auditlog.create.call_args.kwargs["data"]
@@ -13004,6 +13006,7 @@ async def test_update_config_general_settings_applies_ssrf_globals(monkeypatch):
 async def test_delete_config_general_settings_emits_deleted_audit_log(monkeypatch):
     import litellm.proxy.proxy_server as proxy_server_module
     from litellm.proxy._types import ConfigFieldDelete
+    from litellm.proxy.management_helpers.audit_logs import drain_audit_tasks
     from litellm.proxy.proxy_server import delete_config_general_settings
 
     existing = {"max_parallel_requests": 5}
@@ -13023,6 +13026,7 @@ async def test_delete_config_general_settings_emits_deleted_audit_log(monkeypatc
     )
     # Audit is scheduled via asyncio.create_task; yield so it runs.
     await asyncio.sleep(0)
+    await drain_audit_tasks()
 
     fake.db.litellm_auditlog.create.assert_awaited_once()
     written = fake.db.litellm_auditlog.create.call_args.kwargs["data"]
