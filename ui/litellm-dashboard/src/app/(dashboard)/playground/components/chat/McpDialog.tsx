@@ -207,6 +207,12 @@ export function McpDialog({
     return allowed === tools.length ? `All ${tools.length} tools` : `${allowed} of ${tools.length} tools`;
   };
 
+  const focus = (item: string) => {
+    setFocused(item);
+    setToolQuery("");
+    setReplacingKey(null);
+  };
+
   const masterRow = (row: Row) => (
     <MasterRow
       key={row.value}
@@ -214,11 +220,7 @@ export function McpDialog({
       checked={selection.includes(row.value)}
       onCheckedChange={(on) => toggle(row.value, on)}
       active={row.value === focused}
-      onSelect={() => {
-        setFocused(row.value);
-        setToolQuery("");
-        setReplacingKey(null);
-      }}
+      onSelect={() => focus(row.value)}
       summary={summary(row)}
     />
   );
