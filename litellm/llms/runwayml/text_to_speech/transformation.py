@@ -7,11 +7,11 @@ Maps OpenAI TTS spec to RunwayML Text-to-Speech API
 import asyncio
 import time
 from collections.abc import Coroutine, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, TypedDict, Union
+from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import NotRequired, ReadOnly
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 from typing_extensions import TypedDict as _ValidatedTypedDict
 
 import litellm

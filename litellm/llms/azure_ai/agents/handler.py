@@ -23,11 +23,11 @@ import json
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Mapping
-from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, TypedDict
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import ReadOnly
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.hidden_params import set_hidden_param

@@ -9,14 +9,14 @@ from collections.abc import AsyncGenerator, Callable, Iterable, Iterator, Mappin
 from contextlib import aclosing
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import IO, Any, Final, TypedDict
+from typing import IO, Any, Final
 from urllib.parse import quote, unquote
 
 import httpx
 from httpx import Headers, Response
 from openai.types.file_deleted import FileDeleted
 from pydantic import TypeAdapter
-from typing_extensions import ReadOnly, Required
+from typing_extensions import ReadOnly, Required, TypedDict
 
 import litellm
 from litellm._uuid import uuid

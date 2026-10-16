@@ -16,7 +16,6 @@ from typing import (
     NamedTuple,
     Protocol,
     TypeAlias,
-    TypedDict,
     TypeVar,
     cast,  # noqa: TID251  # custom-logger and cold-storage payloads are untyped JSON
 )
@@ -24,7 +23,7 @@ from typing import (
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import TypeAdapter
-from typing_extensions import ReadOnly, assert_never
+from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
 from litellm._logging import verbose_proxy_logger
