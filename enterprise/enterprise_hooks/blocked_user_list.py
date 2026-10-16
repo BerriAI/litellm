@@ -17,6 +17,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import LiteLLM_EndUserTable, UserAPIKeyAuth
+from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, end_user_block_cache_key
 from litellm.proxy.utils import PrismaClient
 
@@ -97,8 +98,8 @@ class ENTERPRISE_BlockedUserList(CustomLogger):
                     )
 
                 cache_key: Final = end_user_block_cache_key(f"{user}")
-                end_user_cache_obj: Optional[LiteLLM_EndUserTable] = cache.get_cache(  # type: ignore
-                    key=cache_key
+                end_user_cache_obj: Final = CacheCodec.deserialize(
+                    cache.get_cache(key=cache_key), model_type=LiteLLM_EndUserTable
                 )
                 database: Final = self._database()
                 if end_user_cache_obj is None and database is not None:
