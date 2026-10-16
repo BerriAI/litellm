@@ -6,10 +6,14 @@ from typing import Final
 import litellm
 from litellm import get_llm_provider
 from litellm.rust_bridge import failures
-from litellm.rust_bridge.public_call import inference_decline_reason, optional_str
+from litellm.rust_bridge.public_call import inference_decline_reason, known_params, optional_str
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams, ResponsesAPIResponse
 
 PARAMETERS: Final = tuple(ResponsesAPIOptionalRequestParams.__annotations__)
+
+
+def body_params(request: Mapping[str, object]) -> Mapping[str, object]:
+    return known_params(PARAMETERS, request)
 
 
 def connection_defaults(provider: str) -> tuple[str | None, str | None]:
