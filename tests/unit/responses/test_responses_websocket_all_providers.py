@@ -1186,7 +1186,7 @@ class TestWebSocketProjectQuotaEnforcement:
     callback, not just the first one."""
 
     @pytest.mark.asyncio
-    async def test_managed_handler_blocks_frame_rejected_by_quota_callback(self, monkeypatch):
+    async def test_managed_handler_blocks_frame_rejected_by_quota_callback(self, monkeypatch: pytest.MonkeyPatch):
         from unittest.mock import AsyncMock, MagicMock
 
         import litellm
@@ -1232,11 +1232,11 @@ class TestWebSocketProjectQuotaEnforcement:
         quota_callback.enforce_project_io_token_quota_for_frame.assert_awaited_once()
         assert aresponses_called is False
         mock_websocket.send_text.assert_called_once()
-        error_event = mock_websocket.send_text.call_args[0][0]
-        assert "rate_limit_exceeded" in error_event
+        error_event = json.loads(mock_websocket.send_text.call_args[0][0])
+        assert (error_event["status"], error_event["error"]["type"]) == (429, "rate_limit_exceeded")
 
     @pytest.mark.asyncio
-    async def test_managed_handler_forwards_frame_allowed_by_quota_callback(self, monkeypatch):
+    async def test_managed_handler_forwards_frame_allowed_by_quota_callback(self, monkeypatch: pytest.MonkeyPatch):
         from unittest.mock import AsyncMock, MagicMock
 
         import litellm
@@ -1317,7 +1317,8 @@ class TestWebSocketProjectQuotaEnforcement:
         assert allowed is False
         mock_backend_ws.send.assert_not_called()
         mock_websocket.send_text.assert_called_once()
-        assert "rate_limit_exceeded" in mock_websocket.send_text.call_args[0][0]
+        error_event = json.loads(mock_websocket.send_text.call_args[0][0])
+        assert (error_event["status"], error_event["error"]["type"]) == (429, "rate_limit_exceeded")
 
     @pytest.mark.asyncio
     async def test_native_handler_forwards_frame_allowed_by_quota_callback(self):
@@ -1420,7 +1421,7 @@ class TestWebSocketTurnAdmission:
         assert "crossed budget" in str(failure)
 
     @pytest.mark.asyncio
-    async def test_managed_relay_skips_a_later_turn_the_deployment_refuses(self, monkeypatch):
+    async def test_managed_relay_skips_a_later_turn_the_deployment_refuses(self, monkeypatch: pytest.MonkeyPatch):
         from unittest.mock import AsyncMock
 
         import litellm
@@ -1430,7 +1431,7 @@ class TestWebSocketTurnAdmission:
 
         answered: Final[list[object]] = []
 
-        async def fake_aresponses(*args, **kwargs):
+        async def fake_aresponses(*args: object, **kwargs: object):
             answered.append(kwargs.get("input"))
 
             async def _empty():

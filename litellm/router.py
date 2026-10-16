@@ -9299,9 +9299,18 @@ class Router:
                         )
                     raise e
 
+    def _deployment_as_configured_now(self, deployment: Mapping[str, object]) -> Mapping[str, object]:
+        model_info: Final = deployment.get("model_info")
+        model_id: Final = (
+            _MODEL_INFO_ADAPTER.validate_python(model_info).get("id") if isinstance(model_info, dict) else None
+        )
+        current: Final = self.get_deployment(model_id) if isinstance(model_id, str) else None
+        return deployment if current is None else current.model_dump(exclude_none=True)
+
     async def async_admit_deployment_turn(
-        self, model_group: str, deployment: Mapping[str, object], request_kwargs: Mapping[str, object]
+        self, model_group: str, opened_on: Mapping[str, object], request_kwargs: Mapping[str, object]
     ) -> None:
+        deployment: Final = self._deployment_as_configured_now(opened_on)
         budget_limiter: Final = self.get_router_deployment_budget_limiter()
         if budget_limiter is not None:
             try:
@@ -9318,8 +9327,41 @@ class Router:
                     model=model_group,
                     category=litellm.RateLimitErrorCategory.LITELLM_RATE_LIMIT,
                 ) from e
+        await self._admit_turn_through_routing_strategy(model_group, deployment, request_kwargs)
         await self.async_routing_strategy_pre_call_checks(  # pyright: ignore[reportUnknownMemberType]  # legacy signature takes an untyped deployment dict
             deployment=dict(without_io_token_limits(deployment)), parent_otel_span=None
+        )
+
+    async def _admit_turn_through_routing_strategy(
+        self, model_group: str, deployment: Mapping[str, object], request_kwargs: Mapping[str, object]
+    ) -> None:
+        routing_kwargs: Final = {key: value for key, value in request_kwargs.items() if key != "litellm_logging_obj"}
+        strategy, selector = self._get_routing_context(  # pyright: ignore[reportUnknownMemberType]  # legacy signature takes an untyped request dict
+            model=model_group, request_kwargs=routing_kwargs
+        )
+        if strategy == "simple-shuffle" or selector is None:
+            return
+        selected: Final = await self._select_deployment_async(  # pyright: ignore[reportUnknownMemberType]  # legacy signature takes untyped deployment dicts
+            strategy=strategy,
+            selector=selector,
+            model=model_group,
+            healthy_deployments=[dict(deployment)],
+            messages=None,
+            input=None,
+            request_kwargs=routing_kwargs,
+        )
+        if selected is None:
+            no_deployment: Final = await async_raise_no_deployment_exception(
+                litellm_router_instance=self, model=model_group, parent_otel_span=None
+            )
+            raise litellm.RateLimitError(
+                message=str(no_deployment),
+                llm_provider="",
+                model=model_group,
+                category=litellm.RateLimitErrorCategory.LITELLM_RATE_LIMIT,
+            ) from no_deployment
+        await self._async_override_selector_pre_call_check(  # pyright: ignore[reportUnknownMemberType]  # legacy signature takes an untyped deployment dict
+            strategy, selector, dict(deployment), None
         )
 
     @contextlib.asynccontextmanager

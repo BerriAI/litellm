@@ -1,6 +1,7 @@
 import json
 import os
 from datetime import datetime, timezone
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -13,6 +14,7 @@ from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS, ROUTER_USAGE_
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.types.router import Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo
 from litellm.types.utils import (
+    CallTypes,
     ModelResponse,
     StandardLoggingHiddenParams,
     StandardLoggingMetadata,
@@ -537,6 +539,27 @@ async def _kwargs_routed_to(router: Router, model: str, function_name: str) -> d
     return routed
 
 
+async def _finish_35_token_websocket_turn(routed: Mapping[str, object], call_id: str) -> None:
+    import time
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    turn: Final = Logging(
+        model="gpt-5-mini",
+        messages=[],
+        stream=False,
+        call_type=CallTypes.aresponses_websocket.value,
+        start_time=time.time(),
+        litellm_call_id=call_id,
+        function_id=call_id,
+    )
+    turn.update_environment_variables(litellm_params={"litellm_metadata": routed["litellm_metadata"]}, optional_params={})
+    await turn.dispatch_success_handlers(
+        [{"type": "response.completed", "response": {"usage": {"input_tokens": 20, "output_tokens": 15, "total_tokens": 35}}}],
+        prefer_async_handlers=True,
+    )
+
+
 @pytest.mark.asyncio
 async def test_responses_websocket_turn_is_refused_once_its_deployment_crosses_budget():
     router = Router(
@@ -580,6 +603,86 @@ async def test_responses_websocket_turn_after_the_first_counts_toward_deployment
     assert callable(admit_turn)
 
     with pytest.raises(litellm.RateLimitError, match="RPM limit=1"):
+        await admit_turn()
+
+
+@pytest.mark.asyncio
+async def test_responses_websocket_turn_is_checked_against_limits_changed_after_the_socket_opened():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "ws-rpm-lowered",
+                "litellm_params": {"model": "openai/gpt-5-mini", "api_key": "sk-fake", "rpm": 100},
+                "model_info": {"id": "ws-rpm-lowered-dep"},
+            }
+        ],
+        optional_pre_call_checks=["enforce_model_rate_limits"],
+    )
+    admit_turn: Final = (await _kwargs_routed_to(router, "ws-rpm-lowered", "_aresponses_websocket"))["turn_admission"]
+    assert callable(admit_turn)
+    await admit_turn()
+
+    router.upsert_deployment(
+        Deployment(
+            model_name="ws-rpm-lowered",
+            litellm_params=LiteLLM_Params(model="openai/gpt-5-mini", api_key="sk-fake", rpm=1),
+            model_info=ModelInfo(id="ws-rpm-lowered-dep"),
+        )
+    )
+
+    with pytest.raises(litellm.RateLimitError, match="RPM limit=1"):
+        await admit_turn()
+
+
+@pytest.mark.asyncio
+async def test_responses_websocket_turn_counts_toward_deployment_tpm(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "callbacks", [])
+    router = Router(
+        model_list=[
+            {
+                "model_name": "ws-tpm",
+                "litellm_params": {"model": "openai/gpt-5-mini", "api_key": "sk-fake", "tpm": 30},
+                "model_info": {"id": "ws-tpm-dep"},
+            }
+        ],
+        optional_pre_call_checks=["enforce_model_rate_limits"],
+    )
+    monkeypatch.setattr(litellm, "_async_success_callback", list(litellm.callbacks))
+    routed: Final = await _kwargs_routed_to(router, "ws-tpm", "_aresponses_websocket")
+    admit_turn: Final = routed["turn_admission"]
+    assert callable(admit_turn)
+    await admit_turn()
+
+    await _finish_35_token_websocket_turn(routed, "ws-tpm-turn")
+
+    with pytest.raises(litellm.RateLimitError, match="TPM limit=30, current usage=35"):
+        await admit_turn()
+
+
+@pytest.mark.asyncio
+async def test_responses_websocket_turn_is_refused_by_usage_based_routing_once_deployment_tpm_is_used(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "callbacks", [])
+    router = Router(
+        model_list=[
+            {
+                "model_name": "ws-tpm-v2",
+                "litellm_params": {"model": "openai/gpt-5-mini", "api_key": "sk-fake", "tpm": 30},
+                "model_info": {"id": "ws-tpm-v2-dep"},
+            }
+        ],
+        routing_strategy="usage-based-routing-v2",
+    )
+    monkeypatch.setattr(litellm, "_async_success_callback", list(litellm.callbacks))
+    routed: Final = await _kwargs_routed_to(router, "ws-tpm-v2", "_aresponses_websocket")
+    admit_turn: Final = routed["turn_admission"]
+    assert callable(admit_turn)
+    await admit_turn()
+
+    await _finish_35_token_websocket_turn(routed, "ws-tpm-v2-turn")
+
+    with pytest.raises(litellm.RateLimitError):
         await admit_turn()
 
 

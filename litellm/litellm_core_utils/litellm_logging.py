@@ -968,6 +968,16 @@ class Logging(LiteLLMLoggingBaseClass):
                 return model_id
         return None
 
+    def _routed_deployment_model(self) -> str | None:
+        litellm_params: Final = self._model_call_details_view.get("litellm_params")
+        metadata: Final = (
+            StandardLoggingPayloadSetup.merge_litellm_metadata(_LITELLM_PARAMS.validate_python(litellm_params))
+            if isinstance(litellm_params, dict)
+            else {}
+        )
+        deployment: Final = metadata.get("deployment")
+        return deployment if isinstance(deployment, str) else None
+
     def get_deployment_model_for_cost(self) -> str | None:
         """The provider-qualified model to price against.
 
@@ -2419,7 +2429,8 @@ class Logging(LiteLLMLoggingBaseClass):
 
         elif self.call_type == CallTypes.aresponses_websocket.value and isinstance(result, list):  # pyright: ignore[reportUnknownMemberType]  # Logging.call_type is untyped
             logging_result = ResponsesWebSocketTokenUsageProcessor.create_logging_object(
-                results=result  # pyright: ignore[reportUnknownArgumentType]  # raw event dicts from the WS stream
+                results=result,  # pyright: ignore[reportUnknownArgumentType]  # raw event dicts from the WS stream
+                litellm_model_name=self._routed_deployment_model(),
             )
 
         elif self.relays_llm_passthrough and isinstance(result, Response):

@@ -120,6 +120,8 @@ ignored_function_names = [
     "_names_route_model",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
     "_declared_base_model",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
     "async_admit_deployment_turn",  # Bound as the WebSocket turn_admission partial, tested through it in test_router_helper_utils.py
+    "_deployment_as_configured_now",  # Read by async_admit_deployment_turn, tested through turn_admission in test_router_helper_utils.py
+    "_admit_turn_through_routing_strategy",  # Run by async_admit_deployment_turn, tested through turn_admission in test_router_helper_utils.py
 ]
 
 

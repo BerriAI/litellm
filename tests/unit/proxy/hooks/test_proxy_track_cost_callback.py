@@ -4,7 +4,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
 import httpx
 import pytest
@@ -146,7 +146,7 @@ async def test_async_post_call_failure_hook_carries_guardrail_info_from_litellm_
     ],
 )
 async def test_async_post_call_failure_hook_logs_the_routed_model_group_on_the_failure_row(
-    metadata_buckets: dict, expected_model_group: str
+    metadata_buckets: dict[str, dict[str, str]], expected_model_group: str
 ):
     request_data: Final = {
         "model": "ws-budget-sock",
@@ -155,20 +155,15 @@ async def test_async_post_call_failure_hook_logs_the_routed_model_group_on_the_f
         **metadata_buckets,
     }
 
-    with patch(
-        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
-        new_callable=AsyncMock,
-    ) as mock_update_database:
-        await ProxyDBLogger().async_post_call_failure_hook(
-            request_data=request_data,
-            original_exception=litellm.RateLimitError(
-                message="crossed budget", llm_provider="", model="ws-budget-sock"
-            ),
-            user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
-        )
+    spend_writer: Final = create_autospec(DBSpendUpdateWriter, instance=True)
+    await ProxyDBLogger(spend_writer=lambda: spend_writer).async_post_call_failure_hook(
+        request_data=request_data,
+        original_exception=litellm.RateLimitError(message="crossed budget", llm_provider="", model="ws-budget-sock"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
+    )
 
     row: Final = get_logging_payload(
-        kwargs=mock_update_database.call_args[1]["kwargs"],
+        kwargs=spend_writer.update_database.call_args.kwargs["kwargs"],
         response_obj={},
         start_time=datetime.now(),
         end_time=datetime.now(),
