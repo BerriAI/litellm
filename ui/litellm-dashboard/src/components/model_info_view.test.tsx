@@ -1699,12 +1699,13 @@ describe("ModelInfoView", () => {
 
       const payload = await save(user);
 
-      expect(payload.litellm_params).toMatchObject({
+      const expectedPricing = {
         output_cost_per_token: 0.000012,
         cache_read_input_token_cost: 0.000005,
         cache_creation_input_token_cost: 0.000009,
         cache_creation_input_token_cost_above_1hr: 0.000015,
-      });
+      };
+      expect(payload.litellm_params).toMatchObject(expectedPricing);
     });
 
     describe("1 hour cache write tier", () => {
