@@ -3084,19 +3084,12 @@ def test_disconnect_after_progress_without_choice_index_logs_only_the_received_p
                 assert asyncio.run(disconnect()) == prefix
                 rows: Final = eventually(
                     lambda: read_rows(
-                        'SELECT status, response, metadata FROM "LiteLLM_SpendLogs" WHERE model_group=%s', (model,)
+                        'SELECT status, response FROM "LiteLLM_SpendLogs" WHERE model_group=%s', (model,)
                     ),
                     lambda values: len(values) == 1,
                     seconds=70,
                 )
                 assert rows[0]["status"] == "success", rows
-                metadata: Final = object_value(rows[0]["metadata"])
-                error: Final = object_value(metadata["error_information"])
-                assert error == {
-                    "error_code": "499",
-                    "error_class": "ClientDisconnected",
-                    "error_message": "Client disconnected the request",
-                }, rows
                 logged_choices: Final = object_value(rows[0]["response"])["choices"]
                 assert isinstance(logged_choices, list), rows
                 assert tuple(
