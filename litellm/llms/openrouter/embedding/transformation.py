@@ -7,8 +7,7 @@ OpenRouter is OpenAI-compatible and supports embeddings via the /v1/embeddings e
 Docs: https://openrouter.ai/docs
 """
 
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -86,13 +85,7 @@ class OpenrouterEmbeddingConfig(BaseEmbeddingConfig):
         """
         Get the complete URL for OpenRouter Embedding API endpoint.
         """
-        casted_optional_params: Final[Mapping[str, object]] = cast(Mapping[str, object], optional_params)
-        casted_litellm_params: Final[Mapping[str, object]] = cast(Mapping[str, object], litellm_params)
-        resolved_base: Final = resolve_openrouter_api_base(
-            api_base=api_base,
-            litellm_params=casted_litellm_params,
-            optional_params=casted_optional_params,
-        ).rstrip("/")
+        resolved_base: Final = resolve_openrouter_api_base(api_base=api_base).rstrip("/")
 
         # Return the embeddings endpoint
         return f"{resolved_base}/embeddings"
