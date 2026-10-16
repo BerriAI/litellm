@@ -20,9 +20,13 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai.workload_identity import _workload_identity_auth
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import get_logging_caching_headers
+from litellm.proxy.guardrails.guardrail_hooks.openai import (
+    initialize_guardrail as initialize_openai_moderation_guardrail,
+)
 from litellm.proxy.guardrails.guardrail_hooks.openai.moderations import (
     OpenAIModerationGuardrail,
 )
+from litellm.types.guardrails import Guardrail, LitellmParams, SupportedGuardrailIntegrations
 from litellm.types.llms.openai import OpenAIModerationResponse, OpenAIModerationResult
 
 
@@ -1140,3 +1144,51 @@ async def test_openai_moderation_sends_the_federated_bearer_when_only_workload_i
 
     assert response.id == "modr-federated"
     assert endpoint.authorization == "Bearer guardrail-bearer"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_openai_moderation_federates_with_the_identity_in_its_own_guardrail_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    token_file: Final = tmp_path / "subject_token.jwt"
+    token_file.write_text("subject-token")
+    for name in (
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_API_BASE",
+        "OPENAI_IDENTITY_PROVIDER_ID",
+        "OPENAI_SERVICE_ACCOUNT_ID",
+        "OPENAI_IDENTITY_TOKEN_FILE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    for attribute in ("api_key", "openai_key", "api_base"):
+        monkeypatch.setattr(litellm, attribute, None)
+    monkeypatch.setenv("GUARDRAIL_IDENTITY_PROVIDER_ID", "idp_guardrail_config")
+    _workload_identity_auth.cache_clear()
+    exchange: Final = respx.post("https://auth.openai.com/oauth/token").mock(
+        return_value=httpx.Response(200, json={"access_token": "guardrail-config-bearer", "expires_in": 3600})
+    )
+    endpoint: Final = _ModerationsEndpointThatRecordsTheAuthorization()
+    http_client: Final = AsyncHTTPHandler()
+    http_client.client = httpx.AsyncClient(transport=httpx.MockTransport(endpoint))
+
+    guardrail_config: Final = LitellmParams(
+        guardrail=SupportedGuardrailIntegrations.OPENAI_MODERATION,
+        mode="pre_call",
+        openai_identity_provider_id="os.environ/GUARDRAIL_IDENTITY_PROVIDER_ID",
+        openai_service_account_id="user-guardrail-config",
+        openai_identity_token_file=str(token_file),
+    )
+    monkeypatch.setattr(litellm, "callbacks", [])
+    guardrail: Final = initialize_openai_moderation_guardrail(
+        litellm_params=guardrail_config,
+        guardrail=Guardrail(guardrail_name="openai-mod", litellm_params=guardrail_config),
+    )
+    guardrail.async_handler = http_client
+    await guardrail.async_make_request("hello")
+
+    exchange_body: Final = json.loads(exchange.calls.last.request.content)
+    assert exchange_body["identity_provider_id"] == "idp_guardrail_config"
+    assert exchange_body["service_account_id"] == "user-guardrail-config"
+    assert endpoint.authorization == "Bearer guardrail-config-bearer"

@@ -3,6 +3,8 @@
 OpenAI Moderation Guardrail Integration for LiteLLM
 """
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Optional
 
 from fastapi import HTTPException
@@ -22,6 +24,7 @@ from litellm.llms.openai.workload_identity import (
     resolve_openai_workload_identity_config,
 )
 from litellm.proxy.common_utils.callback_utils import add_guardrail_scan_id
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks, SupportedGuardrailIntegrations
 from litellm.types.utils import (
     GenericGuardrailAPIInputs,
@@ -34,6 +37,10 @@ from .base import OpenAIGuardrailBase
 if TYPE_CHECKING:
     from litellm.types.llms.openai import OpenAIModerationResponse
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+
+
+def _config_secret(value: object) -> object:
+    return get_secret_str(value) if isinstance(value, str) and value.startswith("os.environ/") else value
 
 
 class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
@@ -59,6 +66,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
         model: Literal["omni-moderation-latest", "text-moderation-latest"] | None = None,
         streaming_end_of_stream_only: bool | None = None,
         streaming_sampling_rate: int | None = None,
+        workload_identity_params: Mapping[str, object] | None = None,
         **kwargs,
     ):
         """Initialize OpenAI Moderation guardrail handler."""
@@ -82,7 +90,17 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
         )
         self.streaming_sampling_rate: int = 5 if streaming_sampling_rate is None else streaming_sampling_rate
 
-        if not self.api_key and resolve_openai_workload_identity_config(api_key=None, api_base=self.api_base) is None:
+        self.workload_identity_params: Mapping[str, object] = MappingProxyType(
+            {key: _config_secret(value) for key, value in (workload_identity_params or {}).items()}
+        )
+
+        if (
+            not self.api_key
+            and resolve_openai_workload_identity_config(
+                api_key=None, api_base=self.api_base, litellm_params=self.workload_identity_params
+            )
+            is None
+        ):
             raise ValueError(
                 "OpenAI Moderation: api_key is required. Set OPENAI_API_KEY environment variable or pass it in configuration."
             )
@@ -114,7 +132,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
         verbose_proxy_logger.debug("OpenAI Moderation guard request: %s", request_body)
 
         bearer_token: Final = await resolve_openai_bearer_token_async(
-            static_api_key=self.api_key, api_base=self.api_base, litellm_params=None
+            static_api_key=self.api_key, api_base=self.api_base, litellm_params=self.workload_identity_params
         )
         response: Final = await self.async_handler.post(
             url=f"{self.api_base}/moderations",

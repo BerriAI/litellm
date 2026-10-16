@@ -35,7 +35,7 @@ from litellm.proxy.auth.auth_utils import (
     is_request_body_safe,
 )
 from litellm.router import Router
-from litellm.types.utils import oauth_token_exchange_litellm_params
+from litellm.types.utils import oauth_token_exchange_litellm_params, server_owned_wif_litellm_params
 from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 
 
@@ -169,9 +169,9 @@ def _client_router_config(placement: str, litellm_params: dict[str, str]) -> dic
     return {"default_litellm_params": litellm_params}
 
 
-@pytest.mark.parametrize("param", sorted(ANTHROPIC_WIF_KWARGS_KEYS | OPENAI_WIF_KWARGS_KEYS))
+@pytest.mark.parametrize("param", server_owned_wif_litellm_params)
 @pytest.mark.parametrize("placement", ["model_list", "default_litellm_params"])
-def test_every_wif_kwarg_key_is_refused_from_a_client_router_config(param: str, placement: str):
+def test_every_server_owned_auth_param_is_refused_from_a_client_router_config(param: str, placement: str):
     user_config: Final = _client_router_config(placement, {"model": "openai/gpt-5.4-nano", param: "attacker-chosen"})
     with pytest.raises(
         ValueError,

@@ -1768,6 +1768,18 @@ class TestCountTokensFromDeployment:
     async def test_nothing_configured_falls_back_to_local_counting(self, deployment_wif: dict[str, str]) -> None:
         assert await self.count({"model": "gpt-4o-mini"}) is None
 
+    @respx.mock
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("module_key", ["api_key", "openai_key"])
+    async def test_module_level_key_without_deployment_identity_keeps_local_counting(
+        self, deployment_wif: dict[str, str], monkeypatch: pytest.MonkeyPatch, module_key: str
+    ) -> None:
+        monkeypatch.setattr(litellm, module_key, "sk-module-level")
+        route: Final = respx.post(INPUT_TOKENS_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 7}))
+
+        assert await self.count({"model": "gpt-4o-mini"}) is None
+        assert route.call_count == 0
+
 
 SLOW_EXCHANGE_SECONDS: Final = 0.4
 VECTOR_STORES_URL: Final = "https://api.openai.com/v1/vector_stores"

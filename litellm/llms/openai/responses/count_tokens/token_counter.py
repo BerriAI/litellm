@@ -2,6 +2,8 @@
 OpenAI Token Counter implementation using the Responses API /input_tokens endpoint.
 """
 
+import os
+from collections.abc import Mapping
 from typing import Any, Final
 
 from litellm._logging import verbose_logger
@@ -13,11 +15,29 @@ from litellm.llms.openai.responses.count_tokens.handler import (
 from litellm.llms.openai.responses.count_tokens.transformation import (
     OpenAICountTokensConfig,
 )
-from litellm.llms.openai.workload_identity import openai_static_api_key, resolve_openai_bearer_token_async
+from litellm.llms.openai.workload_identity import (
+    openai_static_api_key,
+    resolve_openai_bearer_token_async,
+    resolve_openai_workload_identity_config,
+)
 from litellm.types.utils import LlmProviders, TokenCountResponse
 
 # Global handler instance - reuse across all token counting requests
 openai_count_tokens_handler: Final = OpenAICountTokensHandler()
+
+
+async def _token_counting_api_key(litellm_params: Mapping[str, object], api_base: str | None) -> str | None:
+    deployment_api_key: Final = litellm_params.get("api_key")
+    static_api_key: Final = (deployment_api_key if isinstance(deployment_api_key, str) else None) or os.getenv(
+        "OPENAI_API_KEY"
+    )
+    if static_api_key:
+        return static_api_key
+    if resolve_openai_workload_identity_config(api_key=None, api_base=api_base, litellm_params=litellm_params) is None:
+        return None
+    return await resolve_openai_bearer_token_async(
+        static_api_key=openai_static_api_key(None), api_base=api_base, litellm_params=litellm_params
+    )
 
 
 class OpenAITokenCounter(BaseTokenCounter):
@@ -61,11 +81,7 @@ class OpenAITokenCounter(BaseTokenCounter):
             return None
 
         try:
-            api_key: Final = await resolve_openai_bearer_token_async(
-                static_api_key=openai_static_api_key(litellm_params.get("api_key")),
-                api_base=api_base,
-                litellm_params=litellm_params,
-            )
+            api_key: Final = await _token_counting_api_key(litellm_params, api_base)
             if not api_key:
                 verbose_logger.warning("No OpenAI API key found for token counting")
                 return None
