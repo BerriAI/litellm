@@ -3225,6 +3225,7 @@ class TestNativeWebSocketEncryptedContentAffinity:
         )
         logging_obj = MagicMock()
         logging_obj.dispatch_success_handlers = AsyncMock()
+        logging_obj.copy_for_new_call.return_value = logging_obj
         handler = _make_streaming(
             websocket=websocket,
             backend_ws=backend_ws,
@@ -3275,6 +3276,7 @@ class TestNativeWebSocketEncryptedContentAffinity:
         websocket.receive_text = AsyncMock(side_effect=[frame, Exception("stop")])
         logging_obj = MagicMock()
         logging_obj.dispatch_success_handlers = AsyncMock()
+        logging_obj.copy_for_new_call.return_value = logging_obj
         handler = _make_streaming(
             websocket=websocket,
             backend_ws=backend_ws,
@@ -3329,6 +3331,7 @@ class TestNativeWebSocketEncryptedContentAffinity:
         )
         logging_obj = MagicMock()
         logging_obj.dispatch_success_handlers = AsyncMock()
+        logging_obj.copy_for_new_call.return_value = logging_obj
         handler = _make_streaming(
             websocket=websocket,
             backend_ws=backend_ws,
