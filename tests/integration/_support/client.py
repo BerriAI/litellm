@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import time
 import uuid
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from hashlib import sha256
@@ -20,6 +20,11 @@ T = TypeVar("T")
 
 def object_value(value: JsonValue) -> dict[str, JsonValue]:
     return JSON_OBJECT.validate_python(value)
+
+
+def list_value(value: JsonValue) -> Sequence[JsonValue]:
+    assert isinstance(value, list), f"Expected a list, received {type(value).__name__}"
+    return value
 
 
 def string_value(value: JsonValue) -> str:
