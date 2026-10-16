@@ -87,8 +87,14 @@ const extractEditedMcpGrant = (
     mcp_tool_permissions: storedGrant.mcp_tool_permissions,
   };
   const previousPermissions = extractMcpEntitlement(previousValues, servers, toolsets)?.mcp_tool_permissions ?? {};
+  // A stored tool-permission key that no stored server, group or toolset reaches is itself a server grant, so it
+  // survives edits to the selection. A key normalization rewrote into server ids is not one of these
   const independentKeys = new Set(
-    Object.keys(storedGrant.mcp_tool_permissions).filter((key) => !Object.hasOwn(previousPermissions, key)),
+    Object.keys(storedGrant.mcp_tool_permissions).filter(
+      (key) =>
+        !Object.hasOwn(previousPermissions, key) &&
+        !mcpServersForIdentifier(servers, key).some((server) => Object.hasOwn(previousPermissions, server.server_id)),
+    ),
   );
   const independentServerIds = new Set(
     Array.from(independentKeys).flatMap((key) =>
@@ -136,7 +142,7 @@ export const buildCustomerPayload = (
 ): UpdateCustomerRequest => {
   const grant = changedMcpGrant(values, existing, servers, toolsets);
   return {
-    user_id: values.user_id.trim(),
+    user_id: existing?.user_id ?? values.user_id.trim(),
     ...optionalCustomerFields(values, existing),
     ...(existing || values.models.length > 0 ? { models: values.models } : {}),
     ...(grant ? { object_permission: grant } : {}),

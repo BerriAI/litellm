@@ -337,6 +337,41 @@ describe("customer payload", () => {
     });
   });
 
+  it("drops a shared-alias tool grant once no server it names is selected", () => {
+    const sharedServer = { ...server, server_id: "server-a", alias: "shared" };
+    const anotherSharedServer = { ...server, server_id: "server-b", alias: "shared" };
+    const keptServer = { ...server, server_id: "server-c" };
+    const stored = {
+      ...customer,
+      object_permission: {
+        ...permission,
+        mcp_servers: [sharedServer.server_id, keptServer.server_id],
+        mcp_access_groups: [],
+        mcp_toolsets: [],
+        mcp_tool_permissions: { shared: ["read"] },
+      },
+    };
+    const values = {
+      ...toCustomerFormValues(stored),
+      mcp_servers_and_groups: { servers: [keptServer.server_id], accessGroups: [], toolsets: [] },
+    };
+
+    expect(
+      buildCustomerPayload(values, stored, [sharedServer, anotherSharedServer, keptServer], []).object_permission,
+    ).toEqual({
+      mcp_servers: [keptServer.server_id],
+      mcp_access_groups: [],
+      mcp_toolsets: [],
+      mcp_tool_permissions: {},
+    });
+  });
+
+  it("keeps the stored ID of an existing customer exactly as stored", () => {
+    const stored = { ...customer, user_id: " customer-id " };
+
+    expect(buildCustomerPayload(toCustomerFormValues(stored), stored, [], []).user_id).toBe(" customer-id ");
+  });
+
   it("sends an empty models list when clearing the selection on update", () => {
     const stored = { ...customer, models: ["model-id"] };
     const values = { ...toCustomerFormValues(stored), models: [] };
