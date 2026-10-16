@@ -3,6 +3,7 @@ import json
 import sys
 import types
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
@@ -66,6 +67,20 @@ class FailOnPromptEndStream(FakeInputStream):
         if "promptEnd" in payload.get("event", {}):
             raise RuntimeError("bedrock rejected promptEnd")
         self.sent.append(event)
+
+
+class HangingCloseInputStream(FakeInputStream):
+    """Models a CRT input stream on an already-ended h2 stream: close sends and close() never complete"""
+
+    async def send(self, event):
+        payload = json.loads(event.value.bytes_.decode("utf-8"))
+        if "promptEnd" in payload.get("event", {}) or "sessionEnd" in payload.get("event", {}):
+            await asyncio.Future()
+        else:
+            self.sent.append(event)
+
+    async def close(self):
+        await asyncio.Future()
 
 
 class FakeBedrockStream:
@@ -418,6 +433,21 @@ class TestBedrockRealtimeHandler:
         assert stream.input_stream.closed
 
     @pytest.mark.asyncio
+    async def test_close_flush_is_bounded_when_input_stream_never_completes(self, stub_aws_models):
+        handler = BedrockRealtime(close_timeout=0.05)
+        config = BedrockRealtimeConfig()
+        stream = FakeBedrockStream(input_stream=HangingCloseInputStream())
+        client_ws = DisconnectingClientWS(
+            [json.dumps({"type": "session.update", "session": {"instructions": "You are helpful."}})]
+        )
+
+        await asyncio.wait_for(
+            handler._forward_client_to_bedrock(client_ws, stream, config, "amazon.nova-sonic-v1:0", {}), 2
+        )
+
+        assert not stream.input_stream.closed
+
+    @pytest.mark.asyncio
     async def test_close_flush_continues_after_partial_send_failure(self, stub_aws_models):
         handler = BedrockRealtime()
         config = BedrockRealtimeConfig()
@@ -612,6 +642,78 @@ class TestBedrockRealtimeSessionLifecycle:
         await handler._forward_client_to_bedrock(client_ws, stream, config, "amazon.nova-sonic-v1:0", {})
 
         assert client_ws.sent_to_client == []
+
+    @pytest.mark.asyncio
+    async def test_conflicting_session_update_gets_error_and_sends_nothing_to_bedrock(self, stub_aws_models):
+        tool: Final = {"type": "function", "name": "get_weather", "parameters": {"type": "object"}}
+        other_tool: Final = {"type": "function", "name": "get_time", "parameters": {"type": "object"}}
+
+        def update(tools) -> str:
+            return json.dumps(
+                {
+                    "type": "session.update",
+                    "event_id": "evt_update_1",
+                    "session": {"tools": tools, "modalities": ["text"]},
+                }
+            )
+
+        handler = BedrockRealtime()
+        config = BedrockRealtimeConfig()
+        stream = FakeBedrockStream()
+        client_ws = DisconnectingClientWS([update([tool]), update([other_tool]), update([tool])])
+
+        await handler._forward_client_to_bedrock(client_ws, stream, config, "amazon.nova-sonic-v1:0", {}, FakeLogging())
+
+        acked: Final = [json.loads(message) for message in client_ws.sent_to_client]
+        assert [event["type"] for event in acked] == ["session.updated", "error", "session.updated"]
+        error: Final = acked[1]["error"]
+        assert error["code"] == "session_update_not_applied"
+        assert error["event_id"] == "evt_update_1"
+        prompt_starts: Final = [
+            payload
+            for payload in (json.loads(chunk.value.bytes_.decode("utf-8")) for chunk in stream.input_stream.sent)
+            if "promptStart" in payload.get("event", {})
+        ]
+        assert len(prompt_starts) == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "drop_params,expected_errors",
+        [(False, [("invalid_type", "session.temperature")]), (True, [])],
+    )
+    async def test_malformed_number_setting_is_rejected_or_dropped_and_the_session_still_answers(
+        self, stub_aws_sdk_client, drop_params, expected_errors
+    ):
+        stream: Final = ScriptedBedrockStream([])
+        stub_aws_sdk_client["streams"] = [stream]
+        user_text: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
+        websocket: Final = ConnectedClientWS(
+            [
+                json.dumps({"type": "session.update", "session": {"temperature": "0.2", "modalities": ["text"]}}),
+                json.dumps({"type": "conversation.item.create", "item": user_text}),
+            ]
+        )
+
+        await BedrockRealtime().async_realtime(
+            model="amazon.nova-sonic-v1:0",
+            websocket=websocket,
+            logging_obj=FakeLogging(),
+            aws_region_name="us-east-1",
+            aws_access_key_id="k",
+            aws_secret_access_key="s",
+            drop_params=drop_params,
+        )
+
+        client_events: Final = [json.loads(message) for message in websocket.sent_to_client]
+        errors: Final = [event["error"] for event in client_events if event["type"] == "error"]
+        sent_to_bedrock: Final = [json.loads(chunk.value.bytes_.decode("utf-8")) for chunk in stream.input_stream.sent]
+        session_starts: Final = [
+            payload["event"]["sessionStart"] for payload in sent_to_bedrock if "sessionStart" in payload["event"]
+        ]
+        assert [(error["code"], error["param"]) for error in errors] == expected_errors
+        assert [start["inferenceConfiguration"]["temperature"] for start in session_starts] == [0.7]
+        assert next(iter(sent_to_bedrock[0]["event"])) == "sessionStart"
+        assert any(payload["event"].get("textInput", {}).get("content") == "hi" for payload in sent_to_bedrock)
 
 
 class TestBedrockRealtimeProviderFailurePropagation:

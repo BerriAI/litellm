@@ -33,6 +33,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes, LlmProviders
 from litellm.utils import ProviderConfigManager
 
+from ..litellm_core_utils.core_helpers import normalize_drop_params
 from ..litellm_core_utils.credential_accessor import CredentialAccessor
 from ..litellm_core_utils.get_litellm_params import get_litellm_params
 from ..litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -584,6 +585,7 @@ async def _arealtime(
         aws_bedrock_runtime_endpoint: Final = kwargs.get("aws_bedrock_runtime_endpoint")
         aws_external_id: Final = kwargs.get("aws_external_id")
         aws_session_tags: Final = kwargs.get("aws_session_tags")
+        drop_params: Final = litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True
 
         await bedrock_realtime.async_realtime(
             model=model,
@@ -604,6 +606,7 @@ async def _arealtime(
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
             aws_external_id=aws_external_id,
             aws_session_tags=aws_session_tags,
+            drop_params=drop_params,
         )
     elif _custom_llm_provider == "xai":
         api_base = (

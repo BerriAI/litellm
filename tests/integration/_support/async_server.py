@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import ssl
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from threading import Thread
@@ -16,10 +17,11 @@ async def close_writer(writer: asyncio.StreamWriter) -> None:
 
 
 class LoopbackServer:
-    def __init__(self, port: int, handler: Handler) -> None:
+    def __init__(self, port: int, handler: Handler, ssl_context: ssl.SSLContext | None = None) -> None:
         self.loop: Final = asyncio.new_event_loop()
         self._port: Final = port
         self._handler: Final = handler
+        self._ssl_context: Final = ssl_context
         self._server: asyncio.Server | None = None
         self._thread: Final = Thread(target=self._run, name=f"integration-relay-{port}", daemon=True)
         self._connections: tuple[asyncio.Task[None], ...] = ()
@@ -42,7 +44,7 @@ class LoopbackServer:
         finally:
             self.loop.call_soon_threadsafe(self.loop.stop)
             self._thread.join(10)
-            assert not self._thread.is_alive(), f"Database relay thread on port {self._port} did not stop"
+            assert not self._thread.is_alive(), f"Loopback server thread on port {self._port} did not stop"
 
     def _run(self) -> None:
         asyncio.set_event_loop(self.loop)
@@ -53,7 +55,7 @@ class LoopbackServer:
             self.loop.close()
 
     async def _bind(self) -> None:
-        self._server = await asyncio.start_server(self._serve, "127.0.0.1", self._port)
+        self._server = await asyncio.start_server(self._serve, "127.0.0.1", self._port, ssl=self._ssl_context)
 
     async def _serve(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         task: Final = asyncio.current_task()
