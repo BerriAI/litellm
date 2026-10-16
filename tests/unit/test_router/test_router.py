@@ -27071,8 +27071,10 @@ def test_pre_call_checks_drops_the_param_when_the_capable_deployment_is_outside_
     assert [d["model_info"]["id"] for d in filtered] == ["eu-without-json-mode"]
 
 
-def test_pre_call_checks_filters_an_authenticating_provider_deployment_that_lacks_the_param(monkeypatch):
+def test_pre_call_checks_filters_an_authenticating_provider_deployment_that_lacks_the_param(monkeypatch, tmp_path):
     monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+    (tmp_path / "api-key.json").write_text(json.dumps({"token": "tid=test", "expires_at": int(time.time()) + 3600}))
     model_list: Final = [
         {
             "model_name": "mixed-json-mode",
