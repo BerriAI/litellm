@@ -15,6 +15,15 @@ from litellm.router_utils.add_retry_fallback_headers import (
 from .asyncify import run_async_function
 
 
+def _format_fallback_key(fb: object) -> str:
+    if isinstance(fb, dict):
+        try:
+            return json.dumps(fb, sort_keys=True, default=str)
+        except (TypeError, ValueError):
+            return str(fb)
+    return str(fb)
+
+
 async def async_completion_with_fallbacks(**kwargs):
     """
     Asynchronously attempts completion with fallback models if the primary model fails.
@@ -37,35 +46,20 @@ async def async_completion_with_fallbacks(**kwargs):
     model = original_model
     top_level_fallbacks: Final = kwargs.pop("fallbacks", [])
     nested_fallbacks: Final = nested_kwargs.pop("fallbacks", [])
-    raw_fallbacks: Final[list] = []  # mutable-ok: accumulator list
-    if isinstance(top_level_fallbacks, list):
-        raw_fallbacks.extend(top_level_fallbacks)
-    elif top_level_fallbacks:
-        raw_fallbacks.append(top_level_fallbacks)
-
-    if isinstance(nested_fallbacks, list):
-        raw_fallbacks.extend(nested_fallbacks)
-    elif nested_fallbacks:
-        raw_fallbacks.append(nested_fallbacks)
+    top_list: Final = top_level_fallbacks if isinstance(top_level_fallbacks, list) else [top_level_fallbacks] if top_level_fallbacks else []
+    nested_list: Final = nested_fallbacks if isinstance(nested_fallbacks, list) else [nested_fallbacks] if nested_fallbacks else []
+    raw_fallbacks: Final = top_list + nested_list
 
     # Deduplicate fallbacks while preserving order
-    combined_fallbacks: Final[list] = []  # mutable-ok: deduplicated fallbacks list
     seen_fallbacks: Final[set[str]] = set()  # mutable-ok: tracking seen fallback keys
-    for fb in raw_fallbacks:
-        if isinstance(fb, dict):
-            try:
-                fb_key = json.dumps(fb, sort_keys=True, default=str)
-            except (TypeError, ValueError):
-                fb_key = str(fb)
-        elif isinstance(fb, str):
-            fb_key = fb
-        else:
-            fb_key = str(fb)
-
-        if fb_key in seen_fallbacks:
-            continue
-        seen_fallbacks.add(fb_key)
-        combined_fallbacks.append(fb)
+    combined_fallbacks: Final = [
+        fb
+        for fb in raw_fallbacks
+        if not (
+            (fb_key := _format_fallback_key(fb)) in seen_fallbacks
+            or seen_fallbacks.add(fb_key)
+        )
+    ]
 
     fallbacks: Final = [original_model] + combined_fallbacks
     kwargs.pop("acompletion", None)  # Remove to prevent keyword conflicts

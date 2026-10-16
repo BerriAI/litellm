@@ -103,7 +103,7 @@ async def test_same_model_distinct_api_base_fallbacks_preserved(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_string_and_non_list_fallbacks_coverage(upstream):
+async def test_string_and_non_list_fallbacks_coverage(upstream: list[str | None]):
     with pytest.raises(Exception, match="All fallback attempts failed"):
         await async_completion_with_fallbacks(
             model="openai/primary",
@@ -115,7 +115,7 @@ async def test_string_and_non_list_fallbacks_coverage(upstream):
 
 
 @pytest.mark.asyncio
-async def test_string_list_deduplication_and_custom_objects(upstream):
+async def test_string_list_deduplication_and_custom_objects(upstream: list[str | None]):
     unserializable = {"model": "openai/unserializable", "func": lambda x: x}
 
     with pytest.raises(Exception, match="All fallback attempts failed"):
