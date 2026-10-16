@@ -1,3 +1,4 @@
+import codecs
 import functools
 import json
 from collections.abc import AsyncIterator, Iterator, Mapping
@@ -128,6 +129,7 @@ class AWSEventStreamDecoder:
         self.parser = EventStreamJSONParser()
         self.content_blocks: list = []
         self.is_messages_api = is_messages_api
+        self.utf8_decoder = codecs.getincrementaldecoder("utf-8")()
 
     def _chunk_parser_messages_api(self, chunk_data: _SageMakerMessagesChunkData) -> StreamingChatCompletionChunk:
         openai_chunk: Final = StreamingChatCompletionChunk(**{"model": self.model, **chunk_data})
@@ -193,6 +195,12 @@ class AWSEventStreamDecoder:
                         continue
 
         # Handle any remaining data after the iterator is exhausted
+        remaining = self.utf8_decoder.decode(b"", final=True)
+        if remaining:
+            message = litellm.CustomStreamWrapper.strip_sse_data_from_chunk(remaining) or ""
+            message = message.replace("\n\n", "")
+            accumulated_json += message
+
         if accumulated_json:
             try:
                 if self.is_messages_api:
@@ -220,16 +228,21 @@ class AWSEventStreamDecoder:
             for event in event_stream_buffer:
                 try:
                     message = self._parse_message_from_event(event)
-                    if message:
-                        verbose_logger.debug("sagemaker  parsed chunk bytes %s", message)
-                        # remove data: prefix and "\n\n" at the end
-                        message = litellm.CustomStreamWrapper.strip_sse_data_from_chunk(message) or ""
-                        message = message.replace("\n\n", "")
+                except UnicodeDecodeError as e:
+                    verbose_logger.warning("UnicodeDecodeError: %s. Attempting to combine with next event.", e)
+                    continue
 
-                        # Accumulate JSON data
-                        accumulated_json += message
+                if message:
+                    verbose_logger.debug("sagemaker  parsed chunk bytes %s", message)
+                    # remove data: prefix and "\n\n" at the end
+                    message = litellm.CustomStreamWrapper.strip_sse_data_from_chunk(message) or ""
+                    message = message.replace("\n\n", "")
 
-                        # Try to parse the accumulated JSON
+                    # Accumulate JSON data
+                    accumulated_json += message
+
+                    # Try to parse the accumulated JSON
+                    try:
                         if self.is_messages_api:
                             yield self._chunk_parser_messages_api(
                                 chunk_data=_parse_sagemaker_messages_chunk_data(accumulated_json)
@@ -238,17 +251,17 @@ class AWSEventStreamDecoder:
                             yield self._chunk_parser(chunk_data=_parse_sagemaker_chunk_data(accumulated_json))
                         # Reset accumulated_json after successful parsing
                         accumulated_json = ""
-                except json.JSONDecodeError:
-                    # If it's not valid JSON yet, continue to the next event
-                    continue
-                except UnicodeDecodeError as e:
-                    verbose_logger.warning("UnicodeDecodeError: %s. Attempting to combine with next event.", e)
-                    continue
-                except Exception as e:
-                    verbose_logger.error("Error parsing message: %s. Attempting to combine with next event.", e)
-                    continue
+                    except json.JSONDecodeError:
+                        # If it's not valid JSON yet, continue to the next event
+                        continue
 
         # Handle any remaining data after the iterator is exhausted
+        remaining = self.utf8_decoder.decode(b"", final=True)
+        if remaining:
+            message = litellm.CustomStreamWrapper.strip_sse_data_from_chunk(remaining) or ""
+            message = message.replace("\n\n", "")
+            accumulated_json += message
+
         if accumulated_json:
             try:
                 if self.is_messages_api:
@@ -261,10 +274,8 @@ class AWSEventStreamDecoder:
                 # Handle or log any unparseable data at the end
                 verbose_logger.error("Warning: Unparseable JSON data remained: %s", accumulated_json)
                 yield None
-            except Exception as e:
-                verbose_logger.error("Final error parsing accumulated JSON: %s", e)
 
-    def _parse_message_from_event(self, event) -> str | None:
+    def _parse_message_from_event(self, event, final: bool = False) -> str | None:
         response_stream_shape: Final = get_sagemaker_response_stream_shape()
         if response_stream_shape is None:
             raise SagemakerError(
@@ -284,10 +295,17 @@ class AWSEventStreamDecoder:
             chunk = parsed_response.get("chunk")
             if not chunk:
                 return None
-            return chunk.get("bytes").decode()
+            raw_bytes = chunk.get("bytes")
+            if raw_bytes is None:
+                return None
+            if isinstance(raw_bytes, (bytes, bytearray, memoryview)):
+                return self.utf8_decoder.decode(raw_bytes, final=final)
+            return str(raw_bytes)
         else:
             chunk = response_dict.get("body")
             if not chunk:
                 return None
 
-            return chunk.decode()
+            if isinstance(chunk, (bytes, bytearray, memoryview)):
+                return self.utf8_decoder.decode(chunk, final=final)
+            return str(chunk)
