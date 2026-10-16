@@ -10288,6 +10288,8 @@ async def async_data_generator(
         )
 
         async for item in stream_source:
+            # Unblock the event loop: a stream whose chunks are already buffered never awaits
+            # between chunks, so without this yield one long stream holds the loop for its whole body
             await asyncio.sleep(0)
             if item is _STREAM_KEEPALIVE:
                 yield ": ping\n\n"
