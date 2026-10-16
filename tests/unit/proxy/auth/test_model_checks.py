@@ -700,7 +700,9 @@ def test_wildcard_lists_no_id_that_a_more_specific_route_serves(
     from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info, get_complete_model_list
 
     monkeypatch.setattr(litellm, "check_provider_endpoint", False)
-    monkeypatch.setitem(litellm.models_by_provider, "openrouter", ["openrouter/openai/gpt-4o", "meta-llama/llama-3-8b"])
+    monkeypatch.setitem(
+        litellm.models_by_provider, "openrouter", ["openrouter/openai/gpt-4o-via-openrouter", "meta-llama/llama-3-8b"]
+    )
     router: Final = Router(
         model_list=[
             {"model_name": "*", "litellm_params": {"model": "openrouter/*", "api_key": "key"}},
@@ -711,19 +713,22 @@ def test_wildcard_lists_no_id_that_a_more_specific_route_serves(
     def served_by(model_id: str) -> str:
         return str((router.pattern_router.route(model_id) or [{}])[0]["litellm_params"]["model"])
 
-    listed_by_star: Final = get_complete_model_list(
-        key_models=["*"],
-        team_models=[],
-        proxy_model_list=[],
-        user_model=None,
-        infer_model_from_keys=False,
-        llm_router=router,
-    )
+    def listed_for(key_models: list[str]) -> list[str]:
+        return get_complete_model_list(
+            key_models=key_models,
+            team_models=[],
+            proxy_model_list=[],
+            user_model=None,
+            infer_model_from_keys=False,
+            llm_router=router,
+        )
+
+    listed_by_star: Final = listed_for(["*"])
     model_info_rows: Final = expand_wildcard_deployments_for_model_info(
         copy.deepcopy(router.model_list), pattern_router=router.pattern_router
     )
 
-    assert listed_by_star == ["meta-llama/llama-3-8b"]
+    assert sorted(listed_by_star) == sorted(["meta-llama/llama-3-8b", *listed_for(["openai/*"])])
     assert "openai/gpt-4o" in [row["model_name"] for row in model_info_rows]
     assert [
         row["model_name"] for row in model_info_rows if served_by(row["model_name"]) != row["litellm_params"]["model"]
@@ -1223,6 +1228,80 @@ def test_key_scoped_to_a_wide_route_lists_ids_a_narrower_route_sends_to_the_same
     )
 
     assert sorted(listed) == ["openai/gpt-4.1-mini", "openai/gpt-4.1-nano", "openai/gpt-4o"]
+
+
+@pytest.mark.parametrize(
+    ("key_models", "expected"),
+    [
+        ([], ["wide/gpt-4.1", "wide/gpt-4.1-mini", "wide/gpt-4o", "wide/gpt-4o-mini", "wide/gpt-5"]),
+        (["wide/*"], ["wide/gpt-4.1", "wide/gpt-4.1-mini", "wide/gpt-4o", "wide/gpt-4o-mini", "wide/gpt-5"]),
+        (["wide/gpt-4.1*"], ["wide/gpt-4.1", "wide/gpt-4.1-mini"]),
+        (["wide/gpt-4o*"], ["wide/gpt-4o", "wide/gpt-4o-mini"]),
+        (["other/*"], []),
+    ],
+    ids=("admin", "key_on_wide_route", "key_on_narrow_route", "key_pattern_without_a_route", "key_elsewhere"),
+)
+def test_key_scoped_to_a_wildcard_lists_the_ids_every_route_serves_under_its_pattern(
+    monkeypatch: pytest.MonkeyPatch, key_models: list[str], expected: list[str]
+) -> None:
+    import litellm
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", False)
+    monkeypatch.setitem(litellm.models_by_provider, "openai", ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "gpt-5"])
+    router: Final = Router(
+        model_list=[
+            {"model_name": "wide/*", "litellm_params": {"model": "openai/*"}},
+            {"model_name": "wide/gpt-4.1*", "litellm_params": {"model": "openai/gpt-4o*"}},
+        ]
+    )
+
+    listed: Final = get_complete_model_list(
+        key_models=key_models,
+        team_models=[],
+        proxy_model_list=["wide/*", "wide/gpt-4.1*"],
+        user_model=None,
+        infer_model_from_keys=False,
+        llm_router=router,
+    )
+
+    assert sorted(listed) == expected
+
+
+def test_key_scoped_to_a_wildcard_lists_only_its_own_teams_narrower_routes(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", False)
+    monkeypatch.setitem(litellm.models_by_provider, "openai", ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-5"])
+    router: Final = Router(
+        model_list=[
+            {"model_name": "wide/*", "litellm_params": {"model": "openai/*"}},
+            {
+                "model_name": "team-b-narrow",
+                "litellm_params": {"model": "openai/gpt-4o*"},
+                "model_info": {"team_id": "team-b", "team_public_model_name": "wide/gpt-4.1*"},
+            },
+        ]
+    )
+
+    def listed_for(team_id: str) -> list[str]:
+        return sorted(
+            get_complete_model_list(
+                key_models=["wide/*"],
+                team_models=[],
+                proxy_model_list=["wide/*"],
+                user_model=None,
+                infer_model_from_keys=False,
+                llm_router=router,
+                team_id=team_id,
+            )
+        )
+
+    assert "wide/gpt-4.1-mini" in listed_for("team-b")
+    assert "wide/gpt-4.1-mini" not in listed_for("team-a")
 
 
 def _wide_route_beside_a_narrower_route_to_another_provider(monkeypatch: pytest.MonkeyPatch):

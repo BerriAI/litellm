@@ -223,13 +223,15 @@ class PatternMatchRouter:
             return False
         deployments: Final = _ROUTED_DEPLOYMENTS.validate_python(self.patterns[serving_regex])
         listed_model: Final = model_name_at_provider(routed_model, None)
-        return all(
+        served_models: Final = (
             model_name_at_provider(
                 fill_wildcards(captures, deployment.litellm_params.model, request),
                 deployment.litellm_params.custom_llm_provider,
             )
-            != listed_model
             for deployment in deployments
+        )
+        return not any(
+            served_model == listed_model or served_model.endswith(f"/{listed_model}") for served_model in served_models
         )
 
     def routes_to_provider(self, request: str, custom_llm_provider: str) -> bool:

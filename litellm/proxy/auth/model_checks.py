@@ -427,24 +427,49 @@ def expand_wildcard_deployments_for_model_info(
     return expanded
 
 
-def _models_listed_for_wildcard_route(
-    model: str,
-    return_wildcard_route: bool,
-    llm_router: Router | None,
-    team_id: str | None,
-) -> tuple[str, ...]:
-    model_list: Final = llm_router.get_model_list(model_name=model, team_id=team_id) if llm_router else None
+def _ids_listed_by_route(route: str, llm_router: Router | None, team_id: str | None) -> tuple[str, ...]:
+    model_list: Final = llm_router.get_model_list(model_name=route, team_id=team_id) if llm_router else None
     pattern_router: Final = llm_router.pattern_router if llm_router else None
     listings: Final = (
         chain.from_iterable(
-            _listings_served_by_route(model, LiteLLM_Params(**router_model["litellm_params"]), pattern_router)
+            _listings_served_by_route(route, LiteLLM_Params(**router_model["litellm_params"]), pattern_router)
             for router_model in model_list
         )
         if model_list
-        else _listings_served_by_route(model, None, pattern_router)
+        else _listings_served_by_route(route, None, pattern_router)
     )
-    expanded: Final = tuple(listing.listed_id for listing in listings)
-    return (model, *expanded) if return_wildcard_route else expanded
+    return tuple(listing.listed_id for listing in listings)
+
+
+def _routes_can_list_same_ids(route: str, other_route: str) -> bool:
+    prefix: Final = route.partition("*")[0]
+    other_prefix: Final = other_route.partition("*")[0]
+    return prefix.startswith(other_prefix) or other_prefix.startswith(prefix)
+
+
+def _ids_other_routes_serve_under(
+    wildcards: tuple[str, ...], llm_router: Router | None, team_id: str | None
+) -> tuple[str, ...]:
+    if llm_router is None or not wildcards:
+        return ()
+    other_routes: Final = tuple(
+        dict.fromkeys(
+            route
+            for route in llm_router.get_model_names(team_id=team_id)
+            if _check_wildcard_routing(route) and route not in wildcards
+        )
+    )
+    overlapping_routes: Final = (
+        route for route in other_routes if any(_routes_can_list_same_ids(route, wildcard) for wildcard in wildcards)
+    )
+    other_ids: Final = chain.from_iterable(
+        _ids_listed_by_route(route, llm_router, team_id) for route in overlapping_routes
+    )
+    return tuple(
+        listed_id
+        for listed_id in other_ids
+        if any(model_matches_wildcard(listed_id, wildcard) for wildcard in wildcards)
+    )
 
 
 def _get_wildcard_models(
@@ -457,10 +482,10 @@ def _get_wildcard_models(
     for model in wildcard_routes:
         unique_models.remove(model)
     listed: Final = chain.from_iterable(
-        _models_listed_for_wildcard_route(model, bool(return_wildcard_routes), llm_router, team_id)
+        (*((model,) if return_wildcard_routes else ()), *_ids_listed_by_route(model, llm_router, team_id))
         for model in wildcard_routes
     )
-    return list(dict.fromkeys(listed))
+    return list(dict.fromkeys(chain(listed, _ids_other_routes_serve_under(wildcard_routes, llm_router, team_id))))
 
 
 def get_all_fallbacks(

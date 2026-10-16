@@ -502,6 +502,8 @@ def test_routes_elsewhere_only_when_the_serving_route_sends_another_model(
         ("openai/*", "wide/gpt-4o*", "azure/gpt-4o*", None, "wide/gpt-4o-mini", False),
         ("openai/*", "wide/gpt-4.1*", "openai/gpt-4o-mini", None, "wide/gpt-4.1-mini", True),
         ("openai/*", "wide/gpt-4o*", "openai/responses/gpt-4o-mini", None, "wide/gpt-4o", True),
+        ("openai/*", "wide/gpt-4o*", "openrouter/openai/gpt-4o*", None, "wide/gpt-4o-mini", False),
+        ("openai/*", "wide/gpt-4o*", "openrouter/openai/chatgpt-4o-latest", None, "wide/gpt-4o-latest", True),
     ],
 )
 def test_routes_elsewhere_compares_the_model_each_route_reaches_at_its_provider(

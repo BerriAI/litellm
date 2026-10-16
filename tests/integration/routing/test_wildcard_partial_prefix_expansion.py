@@ -240,6 +240,7 @@ def test_each_wildcard_row_names_the_deployment_its_id_routes_to(
         ("openai/responses/gpt-4.1*", MappingProxyType({}), "gpt-4.1"),
         ("gpt-4.1*", MappingProxyType({"custom_llm_provider": "openai"}), "gpt-4.1"),
         ("azure/gpt-4.1*", MappingProxyType({"api_version": "2024-10-21"}), "gpt-4.1"),
+        ("openrouter/openai/gpt-4.1*", MappingProxyType({}), "openai/gpt-4.1"),
     ),
     ids=(
         "same_model",
@@ -247,6 +248,7 @@ def test_each_wildcard_row_names_the_deployment_its_id_routes_to(
         "same_model_through_responses_route",
         "same_model_as_bare_model_with_provider",
         "same_model_on_another_provider",
+        "same_model_under_a_vendor_namespace",
     ),
 )
 def test_key_scoped_to_a_wildcard_lists_an_id_a_narrower_route_serves_only_if_it_reaches_the_named_model(
@@ -283,11 +285,12 @@ def test_key_scoped_to_a_wildcard_lists_an_id_a_narrower_route_serves_only_if_it
         for entry in list_value(JSON_OBJECT.validate_json(listing.content)["data"])
     )
     in_namespace: Final = sorted(model_id for model_id in listed if model_id.startswith(namespace))
-    reaches_named_model: Final = upstream_model == named_model
+    reached_name: Final = upstream_model.rsplit("/", 1)[-1]
+    reaches_named_model: Final = reached_name == named_model
     assert f"{namespace}/gpt-4o-mini" in listed, in_namespace
     assert (narrowly_served in listed) is reaches_named_model, in_namespace
     assert bool(info_models) is reaches_named_model, info_models
-    assert all(model.rsplit("/", 1)[-1] == upstream_model for model in info_models), info_models
+    assert all(model.rsplit("/", 1)[-1] == reached_name for model in info_models), info_models
 
 
 def test_overlapping_deployments_of_one_wildcard_list_each_id_once(gateway: Gateway) -> None:
