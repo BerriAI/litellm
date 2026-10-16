@@ -1,6 +1,7 @@
 """Keeps a mid-stream continuation on deployments whose model supports assistant prefill."""
 
 from collections.abc import AsyncIterable, AsyncIterator, Mapping, Sequence
+from dataclasses import dataclass
 from itertools import accumulate
 from os.path import commonprefix
 from types import MappingProxyType
@@ -13,7 +14,7 @@ from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.litellm_core_utils.rules import Rules
 from litellm.router_utils.common_utils import MID_STREAM_CONTINUATION_KWARG
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import ModelResponse, ModelResponseStream
+from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
 from litellm.utils import supports_assistant_prefill
 
 
@@ -127,6 +128,13 @@ def _drop_leading_text(chunks: tuple[ModelResponseStream, ...], count: int) -> t
         _without_leading_text(chunk, min(length, count - offset))
         for chunk, offset, length in zip(chunks, offsets, lengths, strict=True)
     )
+
+
+@dataclass(frozen=True, slots=True)
+class ContinuedPartial:
+    usage: Usage
+    response_cost: float
+    response_id: str
 
 
 class ContinuationOutput:

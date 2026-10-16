@@ -1,4 +1,5 @@
 import ast, asyncio, importlib, time
+import contextlib
 import copy
 import functools
 import gc
@@ -2954,6 +2955,9 @@ def _make_midstream_source(error, chunks=None):
                 return first_chunk
             raise error
 
+        async def wait_for_failure_logging(self, timeout):
+            return None
+
     return _Source()
 
 
@@ -3270,6 +3274,17 @@ class _SpendRecorder(CustomLogger):
         self.failures.append(kwargs["standard_logging_object"])
 
 
+class _SlowFailureRecorder(_SpendRecorder):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failed_deployment_ids: Final[list[str]] = []
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        await asyncio.sleep(0.05)
+        self.failed_deployment_ids.append(kwargs["litellm_params"]["metadata"]["model_info"]["id"])
+        await super().async_log_failure_event(kwargs, response_obj, start_time, end_time)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cut_groups", [("primary",), ("primary", "middle")], ids=["one_break", "two_breaks"])
 async def test_continued_stream_success_log_bills_every_cut_leg(
@@ -3289,8 +3304,24 @@ async def test_continued_stream_success_log_bills_every_cut_leg(
     )
     router: Final = Router(
         model_list=[
-            {"model_name": "primary", "litellm_params": {"model": "openai/gpt-4o", "api_key": "k1"}},
-            {"model_name": "middle", "litellm_params": {"model": "deepseek/deepseek-chat", "api_key": "k2"}},
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "api_key": "k1",
+                    "input_cost_per_token": 0.001,
+                    "output_cost_per_token": 0.002,
+                },
+            },
+            {
+                "model_name": "middle",
+                "litellm_params": {
+                    "model": "deepseek/deepseek-chat",
+                    "api_key": "k2",
+                    "input_cost_per_token": 0.003,
+                    "output_cost_per_token": 0.004,
+                },
+            },
             {"model_name": "backup", "litellm_params": {"model": "mistral/mistral-large-latest", "api_key": "k3"}},
         ],
         fallbacks=[{"primary": ["middle" if "middle" in cut_groups else "backup"]}, {"middle": ["backup"]}],
@@ -3312,7 +3343,12 @@ async def test_continued_stream_success_log_bills_every_cut_leg(
     )
     success: Final = recorder.successes[-1]
     assert len(recorder.failures) == len(cut_groups)
-    assert all(failure["response_cost"] > 0 for failure in recorder.failures)
+    assert [failure["response_cost"] for failure in recorder.failures] == pytest.approx(
+        [
+            failure["prompt_tokens"] * input_price + failure["completion_tokens"] * output_price
+            for failure, (input_price, output_price) in zip(recorder.failures, ((0.001, 0.002), (0.003, 0.004)))
+        ]
+    )
     assert success["response_cost"] == pytest.approx(
         sum(failure["response_cost"] for failure in recorder.failures) + backup_prompt_cost + backup_completion_cost
     )
@@ -3331,6 +3367,73 @@ async def test_continued_stream_success_log_bills_every_cut_leg(
         success["completion_tokens"],
     )
     assert {chunk.id for chunk in chunks} == {spend_row["request_id"]}
+
+
+@pytest.mark.asyncio
+async def test_continued_stream_sharing_the_proxy_logging_object_bills_the_cut_to_its_own_deployment(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _SlowFailureRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=_CutSSE("Transformers use"))
+    )
+    respx_mock.post(host="api.mistral.ai").mock(
+        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, text=_BACKUP_SSE)
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "api_key": "k1",
+                    "input_cost_per_token": 0.001,
+                    "output_cost_per_token": 0.002,
+                },
+                "model_info": {"id": "primary-deployment"},
+            },
+            {"model_name": "backup", "litellm_params": {"model": "mistral/mistral-large-latest", "api_key": "k3"}},
+        ],
+        fallbacks=[{"primary": ["backup"]}],
+        enable_mid_stream_fallback_continuation=True,
+    )
+    messages: Final = [{"role": "user", "content": "How do transformers work?"}]
+    shared_logging, _ = litellm.utils.function_setup(
+        original_function="acompletion",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="primary",
+        messages=messages,
+        stream=True,
+        litellm_call_id="shared-call",
+    )
+
+    response: Final = await router.acompletion(
+        model="primary",
+        messages=messages,
+        stream=True,
+        stream_options={"include_usage": True},
+        litellm_call_id="shared-call",
+        litellm_logging_obj=shared_logging,
+    )
+    _ = [chunk async for chunk in response]
+    await asyncio.wait_for(recorder.succeeded.wait(), timeout=10)
+    await asyncio.sleep(0.5)
+
+    backup_prompt_cost, backup_completion_cost = litellm.cost_per_token(
+        model="mistral/mistral-large-latest", prompt_tokens=91, completion_tokens=5
+    )
+    (failure,) = recorder.failures
+    assert (failure["model_group"], failure["model_id"]) == ("primary", "primary-deployment")
+    assert recorder.failed_deployment_ids == ["primary-deployment"]
+    assert failure["response_cost"] == pytest.approx(
+        failure["prompt_tokens"] * 0.001 + failure["completion_tokens"] * 0.002
+    )
+    assert recorder.successes[-1]["response_cost"] == pytest.approx(
+        failure["response_cost"] + backup_prompt_cost + backup_completion_cost
+    )
 
 
 def test_carry_partial_spend_to_fallback_adds_the_partial_the_cut_stream_inherited():
@@ -3355,9 +3458,13 @@ def test_carry_partial_spend_to_fallback_adds_the_partial_the_cut_stream_inherit
     )
 
     Router._carry_partial_spend_to_fallback(
-        cast(CustomStreamWrapper, SimpleNamespace(logging_obj=cut_logging, model="deepseek/deepseek-chat")),
         SimpleNamespace(logging_obj=fallback_logging),
-        litellm.ModelResponse(id="chatcmpl-relay", usage=Usage(prompt_tokens=60, completion_tokens=3, total_tokens=63)),
+        Router._price_cut_partial(
+            cast(CustomStreamWrapper, SimpleNamespace(logging_obj=cut_logging, model="deepseek/deepseek-chat")),
+            litellm.ModelResponse(
+                id="chatcmpl-relay", usage=Usage(prompt_tokens=60, completion_tokens=3, total_tokens=63)
+            ),
+        ),
     )
 
     relay_prompt_cost, relay_completion_cost = litellm.cost_per_token(
@@ -3547,6 +3654,70 @@ async def test_acompletion_streaming_iterator_raises_content_filter_instead_of_c
                 pass
 
     mock_fallback.assert_not_awaited()
+
+
+async def _continues_after_content(initial_kwargs: dict[str, object]) -> bool:
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "gpt-4", "litellm_params": {"model": "gpt-4", "api_key": "k1"}},
+            {"model_name": "backup", "litellm_params": {"model": "anthropic/claude-3-opus-20240229", "api_key": "k2"}},
+        ],
+        fallbacks=[{"gpt-4": ["backup"]}],
+        enable_mid_stream_fallback_continuation=True,
+    )
+    error: Final = MidStreamFallbackError(
+        message="boom", model="gpt-4", llm_provider="openai", generated_content="Hello",
+        is_pre_first_chunk=False, emitted_disqualifying_content=False,
+    )
+    fallback_chunk: Final = litellm.ModelResponseStream(choices=[{"index": 0, "delta": {"content": " world"}}])
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        new=AsyncMock(return_value=_FakeFallbackStream(fallback_chunk)),
+    ) as mock_fallback:
+        result: Final = await router._acompletion_streaming_iterator(
+            model_response=_make_midstream_source(error),
+            messages=[{"role": "user", "content": "Hi"}],
+            initial_kwargs={"model": "gpt-4", "stream": True, **initial_kwargs},
+        )
+        with contextlib.suppress(MidStreamFallbackError):
+            _ = [chunk async for chunk in result]
+    return mock_fallback.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "event_hook,continues",
+    [("post_call", False), (None, False), ("pre_call", True)],
+    ids=["post_call_guardrail", "every_hook_guardrail", "input_only_guardrail"],
+)
+async def test_mid_stream_continuation_declines_while_an_output_guardrail_is_registered(
+    monkeypatch: pytest.MonkeyPatch, event_hook: str | None, continues: bool
+) -> None:
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    guardrail: Final = CustomGuardrail(
+        guardrail_name="output-check", event_hook=GuardrailEventHooks(event_hook) if event_hook else None
+    )
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+
+    assert await _continues_after_content({}) is continues
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fallback_entry,continues",
+    [({"model": "backup", "messages": [{"role": "user", "content": "Say hi"}]}, False), ({"model": "backup"}, True)],
+    ids=["entry_with_its_own_messages", "entry_with_model_only"],
+)
+async def test_mid_stream_continuation_declines_a_request_fallback_that_brings_its_own_messages(
+    fallback_entry: dict[str, object], continues: bool
+) -> None:
+    assert await _continues_after_content({"fallbacks": [fallback_entry]}) is continues
 
 
 @pytest.mark.asyncio

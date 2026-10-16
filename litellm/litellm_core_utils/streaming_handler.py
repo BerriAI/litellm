@@ -235,6 +235,7 @@ class CustomStreamWrapper:
         self.completion_stream = completion_stream
         self.sent_first_chunk = False
         self.sent_last_chunk = False
+        self._failure_logging: asyncio.Task[None] | None = None
         self._closed = False
         self._stream_created_time: float = time.time()
 
@@ -2156,7 +2157,7 @@ class CustomStreamWrapper:
             if self.logging_obj is not None:
                 self._record_partial_usage_for_failure()
                 ## LOGGING
-                asyncio.create_task(
+                self._failure_logging = asyncio.create_task(
                     self.logging_obj.dispatch_failure_handlers(e, traceback_exception, prefer_async_handlers=True)
                 )
             await self.aclose()
@@ -2289,10 +2290,16 @@ class CustomStreamWrapper:
         if self.logging_obj is not None:
             self._record_partial_usage_for_failure()
             ## LOGGING
-            asyncio.create_task(
+            self._failure_logging = asyncio.create_task(
                 self.logging_obj.dispatch_failure_handlers(e, traceback_exception, prefer_async_handlers=True)
             )
         self._handle_stream_fallback_error(e)
+
+    async def wait_for_failure_logging(self, timeout: float) -> None:
+        """Let this stream's failure log read its own deployment before a fallback reuses the logging object."""
+        if self._failure_logging is None:
+            return
+        await asyncio.wait((self._failure_logging,), timeout=timeout)
 
     def _record_partial_usage_for_failure(self) -> None:
         """

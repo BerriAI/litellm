@@ -68,6 +68,7 @@ from litellm.constants import (
     DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER,
     DEFAULT_MAX_LRU_CACHE_SIZE,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    MID_STREAM_FAILURE_LOG_WAIT_SECONDS,
     OUTPUT_TOKEN_CEILING_PARAMS,
     PROMPT_CACHE_PIN_CACHE_MAX_SIZE,
     ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
@@ -75,7 +76,7 @@ from litellm.constants import (
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
-from litellm.integrations.custom_guardrail import is_guardrail_intervention
+from litellm.integrations.custom_guardrail import CustomGuardrail, is_guardrail_intervention
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.routing import routing_decision_attributes
 from litellm.integrations.otel.runtime import phase_attributes, phase_event, phase_span
@@ -304,6 +305,7 @@ from litellm.router_utils.routing_groups import (
 from litellm.router_utils.routing_read_batch import ROUTER_USAGE_TARGET, RoutingPrefetch, RoutingReadBatch
 from litellm.scheduler import FlowItem, Scheduler
 from litellm.secret_managers.main import str_to_bool
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.litellm_params import RoutingStrategyName
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -404,6 +406,7 @@ if TYPE_CHECKING:
     from litellm.router_strategy.quality_router.quality_router import (
         QualityRouter,
     )
+    from litellm.router_utils.pre_call_checks.continuation_prefill_check import ContinuedPartial
     from litellm.types.llms.anthropic_messages.anthropic_response import (
         AnthropicMessagesResponse,
     )
@@ -3128,36 +3131,46 @@ class Router:
         setattr(fallback_item, "usage", combined_usage)
 
     @staticmethod
-    def _carry_partial_spend_to_fallback(
+    def _price_cut_partial(
         cut_stream: CustomStreamWrapper,
-        fallback_response: object,
         partial_response: ModelResponse | TextCompletionResponse | None,
-    ) -> None:
-        """Bill the cut stream's partial, and any partial it inherited, on the continuation's success log."""
+    ) -> "ContinuedPartial | None":
+        """Price the cut stream's partial, plus any partial it inherited, before a fallback can reuse its logging."""
         from litellm.cost_calculator import BaseTokenUsageProcessor
+        from litellm.router_utils.pre_call_checks.continuation_prefill_check import ContinuedPartial
 
-        fallback_logging: Final = getattr(fallback_response, "logging_obj", None)
+        cut_logging: Final = cut_stream.logging_obj
         partial_usage: Final = getattr(partial_response, "usage", None)
         if partial_response is None or not isinstance(partial_usage, Usage):
-            return
-        if not isinstance(fallback_logging, LiteLLMLogging):
-            return
-        cut_details: Final = cut_stream.logging_obj.model_call_details
-        inherited_usage: Final = cut_details.get("continued_partial_usage")
-        inherited_cost: Final = cut_details.get("continued_partial_cost")
-        inherited_id: Final = cut_details.get("continued_response_id")
-        priced_partial: Final = (
-            partial_response.model_copy(update={"model": cut_stream.model}) if cut_stream.model else partial_response
+            return None
+        inherited_usage: Final = cut_logging.model_call_details.get("continued_partial_usage")
+        inherited_cost: Final = cut_logging.model_call_details.get("continued_partial_cost")
+        inherited_id: Final = cut_logging.model_call_details.get("continued_response_id")
+        priced_partial: Final = partial_response.model_copy(
+            update={"model": cut_stream.model} if cut_stream.model else {}
         )
-        fallback_logging.record_continued_partial(
+        priced_partial._hidden_params = {  # pyright: ignore[reportPrivateUsage]  # no public accessor
+            key: value for key, value in get_hidden_params_dict(partial_response).items() if key != "response_cost"
+        }
+        return ContinuedPartial(
             usage=BaseTokenUsageProcessor.combine_usage_objects(
                 usage_objects=[partial_usage, inherited_usage]
                 if isinstance(inherited_usage, Usage)
                 else [partial_usage]
             ),
-            response_cost=(cut_stream.logging_obj.response_cost_calculator(result=priced_partial) or 0.0)
+            response_cost=(cut_logging.response_cost_calculator(result=priced_partial) or 0.0)
             + (inherited_cost if isinstance(inherited_cost, float) else 0.0),
             response_id=inherited_id if isinstance(inherited_id, str) else partial_response.id,
+        )
+
+    @staticmethod
+    def _carry_partial_spend_to_fallback(fallback_response: object, cut_partial: "ContinuedPartial | None") -> None:
+        """Bill what the cut legs consumed on the continuation's success log."""
+        fallback_logging: Final = getattr(fallback_response, "logging_obj", None)
+        if cut_partial is None or not isinstance(fallback_logging, LiteLLMLogging):
+            return
+        fallback_logging.record_continued_partial(
+            usage=cut_partial.usage, response_cost=cut_partial.response_cost, response_id=cut_partial.response_id
         )
 
     @staticmethod
@@ -3319,6 +3332,11 @@ class Router:
                         if continuation_messages is not None
                         else None
                     )
+                    cut_partial: Final = (
+                        Router._price_cut_partial(model_response, complete_response_object)
+                        if continuation_output is not None
+                        else None
+                    )
                     if continue_after_content:
                         emitted_tokens: Final = int(
                             getattr(complete_response_object_usage, "completion_tokens", 0) or 0
@@ -3326,6 +3344,7 @@ class Router:
                         reduced_ceilings: Final = self._continuation_output_ceilings(initial_kwargs, emitted_tokens)
                         if reduced_ceilings is None or continuation_messages is None:
                             self._raise_original_mid_stream_error(e)
+                        await model_response.wait_for_failure_logging(timeout=MID_STREAM_FAILURE_LOG_WAIT_SECONDS)
                         initial_kwargs.update(reduced_ceilings)
                         initial_kwargs["messages"] = continuation_messages
                         initial_kwargs[MID_STREAM_CONTINUATION_KWARG] = MID_STREAM_CONTINUATION_MARKER
@@ -3346,10 +3365,7 @@ class Router:
 
                     # If fallback returns a streaming response, iterate over it
                     if hasattr(fallback_response, "__aiter__"):
-                        if continuation_output is not None:
-                            Router._carry_partial_spend_to_fallback(
-                                model_response, fallback_response, complete_response_object
-                            )
+                        Router._carry_partial_spend_to_fallback(fallback_response, cut_partial)
                         prepared_fallback_hidden_params = Router._adopt_fallback_response_headers(
                             wrapper_ref, fallback_response
                         )
@@ -3560,7 +3576,20 @@ class Router:
         tool_choice: Final = request_kwargs.get("tool_choice")
         if tool_choice == "required" or isinstance(tool_choice, Mapping):
             return False
-        return request_kwargs.get("merge_reasoning_content_in_choices") is not True
+        if request_kwargs.get("merge_reasoning_content_in_choices") is True:
+            return False
+        fallbacks: Final = request_kwargs.get("fallbacks", self.fallbacks)
+        if isinstance(fallbacks, list) and any(
+            isinstance(entry, Mapping) and "messages" in entry for entry in fallbacks
+        ):
+            return False
+        return not any(
+            isinstance(callback, CustomGuardrail)
+            and callback._event_hook_is_event_type(  # pyright: ignore[reportPrivateUsage]  # the only check of a guardrail's hooks
+                GuardrailEventHooks.post_call
+            )
+            for callback in litellm.callbacks
+        )
 
     @staticmethod
     def _continuation_output_ceilings(
