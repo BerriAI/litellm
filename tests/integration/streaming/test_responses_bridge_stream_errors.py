@@ -1,8 +1,6 @@
 import json
-import socket
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
-from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -47,6 +45,7 @@ from integration._support.responses_stream import (
     sse_events,
 )
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from pydantic import JsonValue
 
 _PRIMARY: Final = "bridged-primary"
@@ -110,14 +109,6 @@ class FallbackProxy:
     spare_port: int
 
 
-def _free_ports(count: int) -> tuple[int, ...]:
-    with ExitStack() as reserved:
-        sockets: Final = tuple(reserved.enter_context(socket.socket()) for _ in range(count))
-        for reserve in sockets:
-            reserve.bind(("127.0.0.1", 0))
-        return tuple(reserve.getsockname()[1] for reserve in sockets)
-
-
 def _fallback_config(directory: Path, primary_port: int, spare_port: int) -> Path:
     base: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     deployments: Final = [
@@ -140,7 +131,7 @@ def _fallback_config(directory: Path, primary_port: int, spare_port: int) -> Pat
 @pytest.fixture(scope="module")
 def fallback_proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[FallbackProxy]:
     directory: Final = tmp_path_factory.mktemp("bridged-fallbacks")
-    primary_port, spare_port = _free_ports(2)
+    primary_port, spare_port = allocate_port(), allocate_port()
     with (
         gateway_from_environment() as shared,
         owned_proxy(shared, directory, {}, config=_fallback_config(directory, primary_port, spare_port)) as owned,

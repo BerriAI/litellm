@@ -12,7 +12,7 @@ import pytest
 import litellm
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
-CRUSOE_API_BASE = "https://managed-inference-api-proxy.crusoecloud.com/v1"
+CRUSOE_API_BASE = "https://api.inference.crusoecloud.com/v1"
 
 
 def test_crusoe_json_registry():

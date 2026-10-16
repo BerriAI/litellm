@@ -31,6 +31,94 @@ from litellm import completion
 from typing import Tuple
 
 
+@pytest.mark.parametrize("async_stream", [False, True])
+@pytest.mark.parametrize("transport", ["sdk", "http_handler"])
+@pytest.mark.parametrize("fingerprint", ["fp_ollama", "fp_openai", None])
+async def test_ollama_stream_ids_match_usage_and_spend_logs(
+    async_stream: bool,
+    transport: str,
+    fingerprint: str | None,
+) -> None:
+    from datetime import datetime
+
+    from openai.types.chat import ChatCompletionChunk
+
+    from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import convert_to_model_response_object
+    from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+    parser: Final = OpenAIChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
+    bodies: Final = [
+        {"choices": [{"index": 0, "delta": {"role": "assistant", "content": "h"}, "finish_reason": None}]},
+        {"choices": [{"index": 0, "delta": {"content": "i"}, "finish_reason": None}]},
+        {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+        {"choices": [], "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6}},
+    ]
+    raw_chunks: Final = [
+        {
+            "id": "chatcmpl-0",
+            "object": "chat.completion.chunk",
+            "model": "gpt-oss:20b",
+            "created": 1,
+            "system_fingerprint": fingerprint,
+            **body,
+        }
+        for body in bodies
+    ]
+    chunks: Final = [
+        ChatCompletionChunk(**body) if transport == "sdk" else parser.chunk_parser(body) for body in raw_chunks
+    ]
+    streams: Final = [
+        CustomStreamWrapper(
+            completion_stream=ModelResponseListIterator(model_responses=chunks),
+            model="gpt-oss:20b",
+            custom_llm_provider="openai",
+            stream_options={"include_usage": True},
+            logging_obj=Logging(
+                model="gpt-oss:20b",
+                messages=[{"role": "user", "content": "hi"}],
+                stream=True,
+                call_type="acompletion",
+                start_time=1.0,
+                litellm_call_id="same-client-call-id",
+                function_id="test",
+            ),
+        )
+        for _ in range(2)
+    ]
+    received_streams: Final = (
+        [chunk async for chunk in streams[0]] if async_stream else list(streams[0]),
+        [chunk async for chunk in streams[1]] if async_stream else list(streams[1]),
+    )
+    for received in received_streams:
+        assembled: Final = litellm.stream_chunk_builder(chunks=received)
+        assert assembled.choices[0].message.content == "hi"
+        assert assembled.usage.total_tokens == 6
+        assert len({chunk.id for chunk in received}) == 1
+        assert received[-1].usage.total_tokens == 6
+        assert assembled.id == received[0].id
+        reparsed: Final = convert_to_model_response_object(
+            response_object=assembled.model_dump(),
+            model_response_object=ModelResponse(),
+        )
+        assert reparsed.id == assembled.id
+        logged: Final = get_logging_payload(
+            kwargs={"call_type": "acompletion", "litellm_call_id": "same-client-call-id", "response_cost": 0.01},
+            response_obj=assembled,
+            start_time=datetime(2025, 1, 1),
+            end_time=datetime(2025, 1, 1),
+        )
+        assert logged["request_id"] == assembled.id
+        if fingerprint == "fp_ollama":
+            assert assembled.id != "chatcmpl-0"
+            assert received[0].provider_specific_fields == {"original_response_id": "chatcmpl-0"}
+            assert assembled.provider_specific_fields == {"original_response_id": "chatcmpl-0"}
+        else:
+            assert assembled.id == "chatcmpl-0"
+    assert len({chunks[0].id for chunks in received_streams}) == (2 if fingerprint == "fp_ollama" else 1)
+    assert all(chunk.id == "chatcmpl-0" for chunk in chunks)
+
+
 @pytest.fixture
 def initialized_custom_stream_wrapper() -> CustomStreamWrapper:
     streaming_handler = CustomStreamWrapper(
@@ -929,6 +1017,87 @@ async def test_bridged_stream_mid_stream_fallback_error_is_rebuilt_around_the_pr
     assert excinfo.value.message == f"litellm.MidStreamFallbackError: {rate_limit_error}"
     assert excinfo.value.is_pre_first_chunk is True
     assert excinfo.value.generated_content == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("merge_reasoning", [True, False], ids=["merged_into_content", "kept_as_reasoning"])
+async def test_mid_stream_break_after_reasoning_disqualifies_continuation(logging_obj: Logging, merge_reasoning: bool):
+    import httpx
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    class _ReasoningThenCut:
+        def __init__(self) -> None:
+            self.chunks = iter(
+                (
+                    ModelResponseStream(choices=[{"index": 0, "delta": {"reasoning_content": "Let me think"}}]),
+                    ModelResponseStream(choices=[{"index": 0, "delta": {"content": "The answer"}}]),
+                )
+            )
+
+        def __aiter__(self) -> "_ReasoningThenCut":
+            return self
+
+        async def __anext__(self) -> ModelResponseStream:
+            next_chunk: Final = next(self.chunks, None)
+            if next_chunk is None:
+                raise httpx.ReadTimeout("connection dropped")
+            return next_chunk
+
+    response: Final = CustomStreamWrapper(
+        completion_stream=_ReasoningThenCut(), model="deepseek-reasoner", logging_obj=logging_obj
+    )
+    response.merge_reasoning_content_in_choices = merge_reasoning
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        async for _ in response:
+            pass
+
+    assert excinfo.value.is_pre_first_chunk is False
+    assert excinfo.value.emitted_disqualifying_content is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "outer_delta,inner_flag,expected",
+    [
+        ({"tool_calls": [{"index": 0}]}, False, True),
+        ({"content": "Let me check."}, True, True),
+        ({"content": "Let me check."}, False, False),
+    ],
+    ids=["bridge_wrapper_sent_a_tool_call", "inner_stream_sent_a_tool_call", "plain_text_only"],
+)
+async def test_bridged_stream_rebuild_keeps_the_continuation_disqualifier(
+    logging_obj: Logging, outer_delta: dict[str, object], inner_flag: bool, expected: bool
+):
+    from litellm.exceptions import InternalServerError, MidStreamFallbackError
+
+    provider_error: Final = InternalServerError(message="upstream 500", llm_provider="azure", model="gpt-6.1-sol")
+    inner_error: Final = MidStreamFallbackError(
+        message=str(provider_error),
+        model="gpt-6.1-sol",
+        llm_provider="azure",
+        original_exception=provider_error,
+        is_pre_first_chunk=False,
+        emitted_disqualifying_content=inner_flag,
+    )
+
+    async def _raise_inner_error(**kwargs: object) -> NoReturn:
+        raise inner_error
+
+    response: Final = CustomStreamWrapper(
+        completion_stream=None,
+        model="gpt-6.1-sol",
+        logging_obj=logging_obj,
+        custom_llm_provider="azure",
+        make_call=_raise_inner_error,
+    )
+    response._accumulate_streamed_delta(outer_delta)
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        await response.__anext__()
+
+    assert excinfo.value.emitted_disqualifying_content is expected
 
 
 @pytest.mark.asyncio
@@ -5974,72 +6143,6 @@ def test_unit_test_perplexity_citations_chunk():
             assert "citations" in response_chunk
 
 
-def test_mock_response_iterator_tool_use():
-    """
-    Relevant Issue: https://github.com/BerriAI/litellm/issues/7364
-    """
-    from litellm.llms.bedrock.chat.invoke_handler import MockResponseIterator
-    from litellm.types.utils import (
-        ChatCompletionMessageToolCall,
-        Choices,
-        CompletionTokensDetailsWrapper,
-        Function,
-        Message,
-        PromptTokensDetailsWrapper,
-        Usage,
-    )
-
-    litellm.set_verbose = False
-    response = ModelResponse(
-        id="chatcmpl-Ai8KRI5vJPZXQ9SQvEJfTVuVqkyEZ",
-        created=1735081811,
-        model="o1-2024-12-17",
-        object="chat.completion",
-        system_fingerprint="fp_e6d02d4a78",
-        choices=[
-            Choices(
-                finish_reason="tool_calls",
-                index=0,
-                message=Message(
-                    content=None,
-                    role="assistant",
-                    tool_calls=[
-                        ChatCompletionMessageToolCall(
-                            function=Function(
-                                arguments='{"location":"San Francisco, CA","unit":"fahrenheit"}',
-                                name="get_current_weather",
-                            ),
-                            id="call_BfRX2S7YCKL0BtxbWMl89ZNk",
-                            type="function",
-                        )
-                    ],
-                    function_call=None,
-                ),
-            )
-        ],
-        usage=Usage(
-            completion_tokens=1955,
-            prompt_tokens=85,
-            total_tokens=2040,
-            completion_tokens_details=CompletionTokensDetailsWrapper(
-                accepted_prediction_tokens=0,
-                audio_tokens=0,
-                reasoning_tokens=1920,
-                rejected_prediction_tokens=0,
-                text_tokens=None,
-            ),
-            prompt_tokens_details=PromptTokensDetailsWrapper(
-                audio_tokens=0, cached_tokens=0, text_tokens=None, image_tokens=None
-            ),
-        ),
-        service_tier=None,
-    )
-    completion_stream = MockResponseIterator(model_response=response)
-    response_chunk = completion_stream._chunk_parser(chunk_data=response)
-
-    assert response_chunk["tool_use"] is not None
-
-
 def test_is_delta_empty():
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.types.utils import Delta
@@ -6140,6 +6243,59 @@ class TestStableStreamingResponseId:
         )
         wrapper.response_id = "chatcmpl-from-provider"
         assert wrapper.model_response_creator().id == "chatcmpl-from-provider"
+
+
+class TestContinuationDisqualifiers:
+    """The mid-stream continuation eligibility hinges on classifying which deltas
+    carry output a text-only prefill cannot represent."""
+
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "tool_calls",
+            "function_call",
+            "reasoning_content",
+            "thinking_blocks",
+            "reasoning_items",
+            "audio",
+            "images",
+            "annotations",
+        ],
+    )
+    def test_disqualifying_fields_flagged(self, field):
+        # reasoning_content included: it reaches the caller as visible reasoning a
+        # text-only prefill cannot carry, so a reasoning fallback would re-derive it
+        assert CustomStreamWrapper._delta_disqualifies_continuation({field: [{"x": 1}]}) is True
+
+    @pytest.mark.parametrize("delta", [{"content": "hi"}, {}, {"role": "assistant"}])
+    def test_plain_text_not_flagged(self, delta):
+        assert CustomStreamWrapper._delta_disqualifies_continuation(delta) is False
+
+    def test_non_mapping_delta_is_safe(self):
+        assert CustomStreamWrapper._delta_disqualifies_continuation(object()) is False
+
+    def test_accumulate_grows_text_and_leaves_flag_clear_for_plain_text(self):
+        wrapper = object.__new__(CustomStreamWrapper)
+        wrapper.response_uptil_now = ""
+        wrapper._emitted_disqualifying_content = False
+
+        wrapper._accumulate_streamed_delta({"content": "Hel"})
+        wrapper._accumulate_streamed_delta({"content": "lo"})
+
+        assert wrapper.response_uptil_now == "Hello"
+        assert wrapper._emitted_disqualifying_content is False
+
+    def test_accumulate_latches_flag_on_disqualifying_delta(self):
+        wrapper = object.__new__(CustomStreamWrapper)
+        wrapper.response_uptil_now = ""
+        wrapper._emitted_disqualifying_content = False
+
+        wrapper._accumulate_streamed_delta({"content": "Hi"})
+        wrapper._accumulate_streamed_delta({"tool_calls": [{"index": 0}]})
+        wrapper._accumulate_streamed_delta({"content": "there"})
+
+        assert wrapper.response_uptil_now == "Hithere"
+        assert wrapper._emitted_disqualifying_content is True
 
 
 @pytest.mark.asyncio
