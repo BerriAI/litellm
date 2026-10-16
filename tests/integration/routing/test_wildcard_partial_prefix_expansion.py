@@ -11,7 +11,7 @@ from typing import Final
 import httpx
 import pytest
 from integration._support.client import JSON_OBJECT, Gateway, Scenario, list_value, object_value, string_value
-from integration._support.openai_wire import answering_model_discovery, chat_reply, responses_reply
+from integration._support.openai_wire import answering_model_discovery, chat_reply, openai_error, responses_reply
 from integration._support.timing import assert_within_factor_of_control, timed
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
@@ -36,13 +36,18 @@ LISTING_SLOWDOWN_FACTOR: Final = 25
 LISTING_TIMEOUT_SECONDS: Final = 120
 
 
-def _register(scenario: Scenario, model_name: str, model: str, api_base: str) -> str:
+def _register(scenario: Scenario, model_name: str, model: str, api_base: str, **params: JsonValue) -> str:
     created: Final = object_value(
         scenario.gateway.post(
             "/model/new",
             {
                 "model_name": model_name,
-                "litellm_params": {"model": model, "api_key": "integration-wildcard-key", "api_base": api_base},
+                "litellm_params": {
+                    "model": model,
+                    "api_key": "integration-wildcard-key",
+                    "api_base": api_base,
+                    **params,
+                },
             },
         )
     )
@@ -86,6 +91,19 @@ def _openai_reply(request: Request) -> Reply:
 
 
 OPENAI_UPSTREAM: Final = answering_model_discovery(_openai_reply)
+
+
+def _reply_failing_the_gpt_4o_family(request: Request) -> Reply:
+    if string_value(JSON_OBJECT.validate_json(request.body)["model"]).startswith("gpt-4o"):
+        return openai_error(404)
+    return _openai_reply(request)
+
+
+GPT_4O_FAILING_UPSTREAM: Final = answering_model_discovery(_reply_failing_the_gpt_4o_family)
+
+
+def _empty_file_list(request: Request) -> Reply:
+    return Reply(body=b'{"object": "list", "data": [], "has_more": false}')
 
 
 def _call(gateway: Gateway, model: str) -> httpx.Response:
@@ -215,10 +233,24 @@ def test_each_wildcard_row_names_the_deployment_its_id_routes_to(
 
 
 @pytest.mark.parametrize(
-    "narrow_model", ("openai/gpt-4.1*", "openai/gpt-4o-mini"), ids=("same_model", "different_model")
+    ("narrow_model", "narrow_params", "reached_model"),
+    (
+        ("openai/gpt-4.1*", MappingProxyType({}), "gpt-4.1"),
+        ("openai/gpt-4o-mini", MappingProxyType({}), "gpt-4o-mini"),
+        ("openai/responses/gpt-4.1*", MappingProxyType({}), "gpt-4.1"),
+        ("gpt-4.1*", MappingProxyType({"custom_llm_provider": "openai"}), "gpt-4.1"),
+        ("azure/gpt-4.1*", MappingProxyType({"api_version": "2024-10-21"}), "gpt-4.1"),
+    ),
+    ids=(
+        "same_model",
+        "different_model",
+        "same_model_through_responses_route",
+        "same_model_as_bare_model_with_provider",
+        "same_model_on_another_provider",
+    ),
 )
 def test_key_scoped_to_a_wildcard_lists_an_id_a_narrower_route_serves_only_if_it_reaches_the_named_model(
-    gateway: Gateway, narrow_model: str
+    gateway: Gateway, narrow_model: str, narrow_params: MappingProxyType[str, JsonValue], reached_model: str
 ) -> None:
     namespace: Final = f"keyscope-{uuid.uuid4().hex[:12]}"
     named_model: Final = "gpt-4.1"
@@ -226,9 +258,14 @@ def test_key_scoped_to_a_wildcard_lists_an_id_a_narrower_route_serves_only_if_it
 
     with wire_server(OPENAI_UPSTREAM) as wire, gateway.scenario() as scenario:
         _register(scenario, f"{namespace}/*", "openai/*", f"{wire.url}/v1")
-        _register(scenario, f"{namespace}/{named_model}*", narrow_model, f"{wire.url}/v1")
+        _register(scenario, f"{namespace}/{named_model}*", narrow_model, f"{wire.url}/v1", **narrow_params)
         key: Final = scenario.key(models=[f"{namespace}/*"])
         listing: Final = gateway.request("GET", "/v1/models", key=key)
+        info_models: Final = tuple(
+            string_value(object_value(row["litellm_params"])["model"])
+            for row in _rows(gateway, "/model/info")
+            if row["model_name"] == narrowly_served
+        )
         wire.drain()
         call: Final = gateway.request(
             "POST",
@@ -239,15 +276,18 @@ def test_key_scoped_to_a_wildcard_lists_an_id_a_narrower_route_serves_only_if_it
         upstream_model: Final = _upstream_model(wire)
 
     assert call.status_code == 200, call.text
-    assert upstream_model == narrow_model.removeprefix("openai/").removesuffix("*")
+    assert upstream_model == reached_model
     assert listing.status_code == 200, listing.text
     listed: Final = tuple(
         string_value(object_value(entry)["id"])
         for entry in list_value(JSON_OBJECT.validate_json(listing.content)["data"])
     )
     in_namespace: Final = sorted(model_id for model_id in listed if model_id.startswith(namespace))
+    reaches_named_model: Final = upstream_model == named_model
     assert f"{namespace}/gpt-4o-mini" in listed, in_namespace
-    assert (narrowly_served in listed) is (upstream_model == named_model), in_namespace
+    assert (narrowly_served in listed) is reaches_named_model, in_namespace
+    assert bool(info_models) is reaches_named_model, info_models
+    assert all(model.rsplit("/", 1)[-1] == upstream_model for model in info_models), info_models
 
 
 def test_overlapping_deployments_of_one_wildcard_list_each_id_once(gateway: Gateway) -> None:
@@ -282,6 +322,53 @@ def test_wildcard_health_check_probes_a_model_its_pattern_names(
 
     assert (health["healthy_count"], health["unhealthy_count"]) == (1, 0), health
     assert probe.startswith(pattern.removesuffix("*")) is probes_match, probe
+
+
+def test_wildcard_health_check_stays_healthy_when_every_model_its_pattern_names_fails_but_the_provider_answers(
+    gateway: Gateway,
+) -> None:
+    model_name: Final = f"health-{uuid.uuid4().hex[:12]}/gpt-4o*"
+
+    with wire_server(GPT_4O_FAILING_UPSTREAM) as wire, gateway.scenario() as scenario:
+        _register(scenario, model_name, "openai/gpt-4o*", f"{wire.url}/v1")
+        wire.drain()
+        health: Final = gateway.get("/health", {"model": model_name})
+        probes: Final = tuple(
+            string_value(JSON_OBJECT.validate_json(request.body)["model"])
+            for request in wire.drain()
+            if request.method == "POST"
+        )
+
+    assert (health["healthy_count"], health["unhealthy_count"]) == (1, 0), (health, probes)
+    assert probes and not probes[-1].startswith("gpt-4o"), probes
+
+
+def test_team_file_listing_takes_the_credentials_of_a_narrower_wildcard_route_on_the_requested_provider(
+    gateway: Gateway,
+) -> None:
+    namespace: Final = f"files-{uuid.uuid4().hex[:12]}"
+    narrow_api_key: Final = f"integration-azure-{uuid.uuid4().hex[:12]}"
+
+    with wire_server(answering_model_discovery(_empty_file_list)) as wire, gateway.scenario() as scenario:
+        _register(scenario, f"{namespace}/*", "openai/*", UNREACHABLE_API_BASE)
+        _register(
+            scenario,
+            f"{namespace}/gpt-4o*",
+            "azure/gpt-4o*",
+            wire.url,
+            api_key=narrow_api_key,
+            api_version="2024-10-21",
+        )
+        team: Final = scenario.team(models=[f"{namespace}/*"])
+        key: Final = scenario.key(team_id=team)
+        wire.drain()
+        listing: Final = gateway.request("GET", "/v1/files", key=key, params={"custom_llm_provider": "azure"})
+        received: Final = tuple(request for request in wire.drain() if "/openai/files" in request.target)
+
+    assert listing.status_code == 200, listing.text
+    assert [
+        {name.lower(): value for name, value in request.headers.items()}.get("api-key") for request in received
+    ] == [narrow_api_key], [request.target for request in received]
 
 
 def _namespace_listing_seconds(gateway: Gateway, path: str, namespace: str) -> float:
