@@ -7582,8 +7582,11 @@ async def test_claude_tool_use_with_gemini():
                 return chunk
             raise StopAsyncIteration
 
-    with patch("litellm.acompletion", new_callable=AsyncMock) as mock_acompletion:
-        mock_acompletion.return_value = MockAsyncStream()
+    with patch(
+        "litellm.llms.anthropic.pass_through.adapters.handler.aexecute_planned_chat",
+        new_callable=AsyncMock,
+    ) as mock_chat:
+        mock_chat.return_value = MockAsyncStream()
 
         response = await litellm.anthropic.messages.acreate(
             messages=[

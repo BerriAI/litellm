@@ -1591,7 +1591,7 @@ class CustomStreamWrapper:
             setattr(e, "message", str(e))
             raise self._map_stream_exception(e)
 
-    def set_logging_event_loop(self, loop):
+    def set_logging_event_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """
         import litellm, asyncio
 
