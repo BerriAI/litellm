@@ -22,6 +22,7 @@ from fastapi import HTTPException, Request
 
 import litellm
 from litellm import Router
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
@@ -31,7 +32,7 @@ from litellm.proxy.anthropic_endpoints.endpoints import (
     count_tokens as anthropic_count_tokens,
 )
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
-from litellm.proxy.common_utils.token_count_settings import TokenCountSettings
+from litellm.proxy.common_utils.token_count_settings import UNAVAILABLE_FALLBACK_TTL_SECONDS, TokenCountSettings
 from litellm.proxy.proxy_server import _provider_or_fallback_token_count, _try_provider_token_count, token_counter
 from litellm.types.utils import TokenCountResponse
 
@@ -1288,7 +1289,11 @@ _COUNT_REQUEST = TokenCountRequest(
 
 
 async def _ladder(
-    counter: _ScriptedCounter, settings: TokenCountSettings, local_estimate_allowed: bool = True
+    counter: _ScriptedCounter,
+    settings: TokenCountSettings,
+    local_estimate_allowed: bool = True,
+    deployment_id: str = "sonnet-deployment",
+    unavailable_fallbacks: InMemoryCache | None = None,
 ) -> TokenCountResponse | None:
     return await _provider_or_fallback_token_count(
         count_with=partial(
@@ -1305,6 +1310,8 @@ async def _ladder(
         model_to_use="us.anthropic.claude-sonnet-5-5",
         settings=settings,
         local_estimate_allowed=local_estimate_allowed,
+        deployment_id=deployment_id,
+        unavailable_fallbacks=InMemoryCache() if unavailable_fallbacks is None else unavailable_fallbacks,
     )
 
 
@@ -1368,6 +1375,62 @@ async def test_unavailable_fallback_model_keeps_the_requested_model_error_unchan
     assert (raised.value.code, raised.value.message) == ("404", "scripted 404 for sonnet")
 
 
+_SONNET_WITH_UNAVAILABLE_OPUS: Final = {
+    "us.anthropic.claude-sonnet-5-5": _provider_reply("sonnet", status_code=404),
+    "us.anthropic.claude-opus-5-5": _provider_reply("opus", status_code=404),
+}
+_OPUS_FALLBACK: Final = TokenCountSettings(framing=None, fallback_model="us.anthropic.claude-opus-5-5")
+
+
+async def _ladder_error(counter: _ScriptedCounter, deployment_id: str, unavailable_fallbacks: InMemoryCache) -> str:
+    with pytest.raises(ProxyException) as raised:
+        await _ladder(counter, _OPUS_FALLBACK, deployment_id=deployment_id, unavailable_fallbacks=unavailable_fallbacks)
+    return f"{raised.value.code} {raised.value.message}"
+
+
+class _ManualClock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+@pytest.mark.asyncio
+async def test_unavailable_fallback_is_skipped_for_that_deployment_until_the_ttl_passes():
+    clock: Final = _ManualClock()
+    unavailable: Final = InMemoryCache(default_ttl=UNAVAILABLE_FALLBACK_TTL_SECONDS, clock=clock)
+    counter: Final = _ScriptedCounter(_SONNET_WITH_UNAVAILABLE_OPUS)
+
+    errors: Final = [await _ladder_error(counter, "us-west-2-sonnet", unavailable) for _ in range(2)]
+    clock.advance(UNAVAILABLE_FALLBACK_TTL_SECONDS + 1)
+    after_ttl: Final = await _ladder_error(counter, "us-west-2-sonnet", unavailable)
+
+    assert errors == ["404 scripted 404 for sonnet", "404 scripted 404 for sonnet"]
+    assert after_ttl == errors[0]
+    assert [call[0] for call in counter.calls] == [
+        "us.anthropic.claude-sonnet-5-5",
+        "us.anthropic.claude-opus-5-5",
+        "us.anthropic.claude-sonnet-5-5",
+        "us.anthropic.claude-sonnet-5-5",
+        "us.anthropic.claude-opus-5-5",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_unavailable_fallback_on_one_deployment_still_runs_on_another():
+    unavailable: Final = InMemoryCache()
+    counter: Final = _ScriptedCounter(_SONNET_WITH_UNAVAILABLE_OPUS)
+
+    await _ladder_error(counter, "us-west-2-sonnet", unavailable)
+    await _ladder_error(counter, "us-east-1-sonnet", unavailable)
+
+    assert [call[0] for call in counter.calls].count("us.anthropic.claude-opus-5-5") == 2
+
+
 @pytest.mark.parametrize("status_code", [400, 403, 429, 500])
 @pytest.mark.asyncio
 async def test_fallback_failure_answers_with_the_fallback_error_and_its_status(status_code: int):
@@ -1378,10 +1441,18 @@ async def test_fallback_failure_answers_with_the_fallback_error_and_its_status(s
         }
     )
 
-    with pytest.raises(ProxyException) as raised:
-        await _ladder(counter, TokenCountSettings(framing=10, fallback_model="us.anthropic.claude-opus-5-5"))
+    unavailable: Final = InMemoryCache()
 
-    assert (raised.value.code, raised.value.message) == (str(status_code), f"scripted {status_code} for opus")
+    for _ in range(2):
+        with pytest.raises(ProxyException) as raised:
+            await _ladder(
+                counter,
+                TokenCountSettings(framing=10, fallback_model="us.anthropic.claude-opus-5-5"),
+                unavailable_fallbacks=unavailable,
+            )
+        assert (raised.value.code, raised.value.message) == (str(status_code), f"scripted {status_code} for opus")
+
+    assert [call[0] for call in counter.calls].count("us.anthropic.claude-opus-5-5") == 2
 
 
 @pytest.mark.asyncio

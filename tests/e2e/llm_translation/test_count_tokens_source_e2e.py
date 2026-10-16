@@ -85,6 +85,8 @@ SHAPES: Final = (
     PromptShape(name="pdf_12_pages", pdf_pages=12),
 )
 SHAPE_IDS: Final = tuple(shape.name for shape in SHAPES)
+TEXT_SHAPES: Final = SHAPES[:2]
+TEXT_SHAPE_IDS: Final = SHAPE_IDS[:2]
 
 
 def _bedrock(model: str) -> LiteLLMParamsBody:
@@ -256,6 +258,7 @@ class TestAnthropicClaudeCountsWithProvider:
 
 
 class TestBedrockKimiCountsWithFramedLocalEstimate:
+    @pytest.mark.parametrize("shape", TEXT_SHAPES, ids=TEXT_SHAPE_IDS)
     @meta(
         Subject(
             domain=Domain.LLM_TRANSLATION,
@@ -265,8 +268,8 @@ class TestBedrockKimiCountsWithFramedLocalEstimate:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_baseline_estimate_matches_billed_input(self, bedrock_kimi: Served, sdk: SdkClients) -> None:
-        counted, billed = _count_and_bill(sdk.anthropic(bedrock_kimi.key), bedrock_kimi.model, SHAPES[0])
+    def test_text_estimate_matches_billed_input(self, bedrock_kimi: Served, sdk: SdkClients, shape: PromptShape) -> None:
+        counted, billed = _count_and_bill(sdk.anthropic(bedrock_kimi.key), bedrock_kimi.model, shape)
 
         assert counted.litellm_count_source == "local_estimate", counted
         assert _within_tolerance(counted.input_tokens, billed), (counted, billed)

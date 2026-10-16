@@ -144,8 +144,10 @@ from litellm.proxy.common_utils.realtime_utils import (  # noqa: F401, RUF100  #
     realtime_request_body,
 )
 from litellm.proxy.common_utils.token_count_settings import (
+    UNAVAILABLE_TOKEN_COUNT_FALLBACKS,
     ProviderCountFailure,
     TokenCountSettings,
+    UnavailableFallbacks,
     cost_map_entry,
     resolve_token_count_settings,
 )
@@ -14439,6 +14441,8 @@ async def _provider_or_fallback_token_count(
     model_to_use: str,
     settings: TokenCountSettings,
     local_estimate_allowed: bool,
+    deployment_id: str,
+    unavailable_fallbacks: UnavailableFallbacks,
 ) -> Optional["TokenCountResponse"]:
     """Count with the provider, then the configured fallback model when the provider cannot count this one.
 
@@ -14449,6 +14453,9 @@ async def _provider_or_fallback_token_count(
     if not primary.cannot_count_model:
         raise primary.to_proxy_exception()
     if settings.fallback_model is not None:
+        unavailable_key: Final = f"{deployment_id}:{settings.fallback_model}"
+        if unavailable_fallbacks.get_cache(unavailable_key) is not None:
+            raise primary.to_proxy_exception()
         fallback: Final = await count_with(settings.fallback_model)
         if isinstance(fallback, TokenCountResponse):
             return fallback.model_copy(update={"count_source": "fallback_model", "model_used": settings.fallback_model})
@@ -14459,7 +14466,10 @@ async def _provider_or_fallback_token_count(
                 fallback.status_code,
                 fallback.message,
             )
-            raise (primary if fallback.model_unavailable else fallback).to_proxy_exception()
+            if fallback.model_unavailable:
+                unavailable_fallbacks.set_cache(unavailable_key, True)
+                raise primary.to_proxy_exception()
+            raise fallback.to_proxy_exception()
         raise primary.to_proxy_exception()
     if settings.framing is not None and local_estimate_allowed:
         return None
@@ -14565,6 +14575,7 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
             model_to_use = _model
 
     if provider_counter is not None:
+        deployment_id: Final = deployment_view.get("model_info", {}).get("id")
         result: Final = await _provider_or_fallback_token_count(
             count_with=partial(
                 _try_provider_token_count,
@@ -14580,6 +14591,8 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
             model_to_use=model_to_use,
             settings=settings,
             local_estimate_allowed=litellm.disable_token_counter is not True,
+            deployment_id=deployment_id if isinstance(deployment_id, str) else model_to_use,
+            unavailable_fallbacks=UNAVAILABLE_TOKEN_COUNT_FALLBACKS,
         )
         if result is not None:
             return result

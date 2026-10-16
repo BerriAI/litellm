@@ -1,15 +1,28 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Protocol
 
 import litellm
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy._types import ProxyException
 from litellm.types.token_count import TokenCountSourceFields
 from litellm.types.utils import TokenCountResponse
 
 CANNOT_COUNT_MODEL_STATUSES: Final = frozenset({400, 404})
 MODEL_UNAVAILABLE_STATUS: Final = 404
+UNAVAILABLE_FALLBACK_TTL_SECONDS: Final = 3600
+
+
+class UnavailableFallbacks(Protocol):
+    def get_cache(self, key: str) -> object: ...
+
+    def set_cache(self, key: str, value: bool) -> None: ...
+
+
+UNAVAILABLE_TOKEN_COUNT_FALLBACKS: Final[UnavailableFallbacks] = InMemoryCache(
+    default_ttl=UNAVAILABLE_FALLBACK_TTL_SECONDS
+)
 
 
 @dataclass(frozen=True, slots=True)
