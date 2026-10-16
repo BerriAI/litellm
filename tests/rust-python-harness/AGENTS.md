@@ -49,6 +49,7 @@ tests/rust-python-harness/
 - `shared/reporting/strategy.py` is the contract: runnable module/suite specs, not-implemented/skipped specs, the runner protocol, and `StrategyDefinition`
 - Every `STRATEGY` explicitly classifies every SDK function. Surface-aware strategies declare their surfaces and classify the complete surface-by-function matrix
 - Run locally only. No CI integration
+- `python -m tests.rust-python-harness drift --target HEAD` inventories committed Python and Rust changes using `drift.json`. See `DRIFT.md` for exploratory `--since` comparisons and manual snapshot checkpoints with independent unknown, drifted, or aligned states
 - `python -m tests.rust-python-harness run <strategy>|all` runs the selected strategy. `--function` is common, while each strategy exposes only its supported options
 - Examples: `run e2e_parity --surface sdk --function ocr`, `run unit_tests_parity --function ocr --pytest-arg=-x`, or `run all --function ocr`
 - `cli/catalog.py` discovers strategies, validates their Python definitions, and orders them. `cli/__init__.py` builds the Click command tree. `cli/commands.py` runs selected cases

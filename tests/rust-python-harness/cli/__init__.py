@@ -8,7 +8,8 @@ import click
 
 from ..shared.reporting.models import SDK_FUNCTIONS, SdkFunction, Strategy, Surface
 from .catalog import load_catalog
-from .commands import run_command, select_cases
+from .commands import REPO_ROOT, run_command, select_cases
+from .drift import drift_command
 
 __all__ = ["load_catalog", "main"]
 
@@ -87,6 +88,7 @@ def _build_cli(strategies: Sequence[Strategy]) -> click.Group:
     for strategy in strategies:
         run.add_command(_strategy_command(strategy))
     root.add_command(run)
+    root.add_command(drift_command(REPO_ROOT))
     return root
 
 
