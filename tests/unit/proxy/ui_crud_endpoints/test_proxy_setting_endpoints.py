@@ -2131,14 +2131,6 @@ class TestProxySettingEndpoints:
         mock_prisma.db.litellm_config.update = AsyncMock()
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
-        from litellm.proxy.proxy_server import proxy_config
-
-        monkeypatch.setattr(
-            proxy_config,
-            "encrypt_env_variables",
-            lambda environment_variables: environment_variables,
-        )
-
         response = client.patch(
             "/update/sso_settings", json={"microsoft_client_id": "new_microsoft_id"}
         )
