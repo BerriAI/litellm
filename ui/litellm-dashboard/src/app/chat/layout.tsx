@@ -10,7 +10,7 @@ import { ChatShellProvider } from "@/contexts/ChatShellContext";
 import ChatShell from "@/components/chat/ChatShell";
 import { uiHref } from "@/utils/uiHref";
 
-// ChatShellProvider uses useSearchParams(), which requires a Suspense boundary for static export.
+// The nuqs Next adapter uses useSearchParams, so keep the chat tree behind Suspense.
 function ChatLayoutContent({ children }: { children: React.ReactNode }) {
   const { accessToken, userRole, userId, userEmail, premiumUser } = useAuthorized();
   const { data: uiSettings, isLoading: isUISettingsLoading } = useUISettings();

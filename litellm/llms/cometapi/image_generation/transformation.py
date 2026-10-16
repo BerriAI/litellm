@@ -1,6 +1,8 @@
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
@@ -13,13 +15,15 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ImageObject, ImageResponse
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 
 
 class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
@@ -132,7 +136,7 @@ class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
@@ -156,7 +160,8 @@ class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
         # CometAPI returns OpenAI-compatible format
         # Expected format: {"created": timestamp, "data": [{"url": "...", "b64_json": "..."}]}
         if "data" in response_data:
-            for image_data in response_data["data"]:
+            payload: Final = _JSON_OBJECT.validate_python(response_data)
+            for image_data in _JSON_OBJECTS.validate_python(payload["data"]):
                 image_obj = ImageObject(
                     b64_json=image_data.get("b64_json"),
                     url=image_data.get("url"),

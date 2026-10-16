@@ -1,5 +1,4 @@
 general_settings:
-  max_parallel_requests: 100
   proxy_batch_write_at: 5
   enable_jwt_auth: true
   litellm_jwtauth:
@@ -11,6 +10,7 @@ general_settings:
   store_prompts_in_spend_logs: true
   database_connection_pool_limit: 10
   forward_client_headers_to_llm_api: false
+  cancel_on_disconnect: true
   maximum_spend_logs_retention_period: "60d"
   maximum_spend_logs_cleanup_cron: "0 1 * * *"
   proxy_budget_rescheduler_min_time: 15
@@ -32,7 +32,10 @@ litellm_settings:
       - host: 127.0.0.1
         port: 6379
     ssl: true
-  callbacks: ["arize_phoenix", "datadog", "smtp_email", "prometheus", "otel"]
+  callbacks: ["arize_phoenix", "datadog", "smtp_email", "prometheus", "otel", "websearch_interception"]
+  websearch_interception_params:
+    enabled_providers: ["bedrock"]
+    search_tool_name: e2e-search
   require_auth_for_metrics_endpoint: false
 
 router_settings:
@@ -40,6 +43,8 @@ router_settings:
   num_retries: 3
   allowed_fails: 5
   cooldown_time: 30
+  model_group_alias:
+    e2e-alias-rl-alias: e2e-alias-rl-target
 
 model_list:
   - model_name: gpt-5.5
@@ -60,10 +65,38 @@ model_list:
     litellm_params:
       model: gemini/gemini-2.5-flash
       api_key: os.environ/GEMINI_API_KEY
+  - model_name: e2e-alias-rl-target
+    litellm_params:
+      model: anthropic/claude-haiku-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+      default_api_key_rpm_limit: 3
   - model_name: openai-text-embedding-3-small
     litellm_params:
       model: openai/text-embedding-3-small
       api_key: os.environ/OPENAI_API_KEY
+
+search_tools:
+  - search_tool_name: e2e-search
+    litellm_params:
+      search_provider: perplexity
+      api_key: os.environ/PERPLEXITY_API_KEY
+
+files_settings:
+  - custom_llm_provider: openai
+    api_key: os.environ/OPENAI_API_KEY
+  - custom_llm_provider: azure
+    api_base: os.environ/AZURE_API_BASE
+    api_key: os.environ/AZURE_API_KEY
+    api_version: 2025-04-01-preview
+  - custom_llm_provider: vertex_ai
+    vertex_project: os.environ/VERTEXAI_PROJECT
+    vertex_location: us-central1
+    vertex_credentials: os.environ/VERTEXAI_CREDENTIALS
+    bucket_name: os.environ/GCS_BUCKET_NAME
+
+finetune_settings:
+  - custom_llm_provider: openai
+    api_key: os.environ/OPENAI_API_KEY
 
 mcp_servers:
   devin:

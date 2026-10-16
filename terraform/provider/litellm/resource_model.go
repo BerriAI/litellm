@@ -7,10 +7,11 @@ import (
 
 func resourceLiteLLMModel() *schema.Resource {
 	return &schema.Resource{
-		Create: resourceLiteLLMModelCreate,
-		Read:   resourceLiteLLMModelRead,
-		Update: resourceLiteLLMModelUpdate,
-		Delete: resourceLiteLLMModelDelete,
+		Create:        resourceLiteLLMModelCreate,
+		Read:          resourceLiteLLMModelRead,
+		Update:        resourceLiteLLMModelUpdate,
+		Delete:        resourceLiteLLMModelDelete,
+		CustomizeDiff: validateAdditionalDropParams,
 		Importer: &schema.ResourceImporter{
 			StateContext: schema.ImportStatePassthroughContext,
 		},
@@ -60,9 +61,26 @@ func resourceLiteLLMModel() *schema.Resource {
 				Optional: true,
 			},
 			"model_api_key": {
-				Type:      schema.TypeString,
-				Optional:  true,
-				Sensitive: true,
+				Type:          schema.TypeString,
+				Optional:      true,
+				Sensitive:     true,
+				ConflictsWith: []string{"model_api_key_wo"},
+			},
+			"model_api_key_wo": {
+				Type:         schema.TypeString,
+				Optional:     true,
+				WriteOnly:    true,
+				Sensitive:    true,
+				RequiredWith: []string{"model_api_key_wo_version"},
+				Description: "Write-only alternative to model_api_key: sent to the proxy on every apply and never " +
+					"written to plan or state. Requires Terraform 1.11 or later. Bump model_api_key_wo_version to " +
+					"push a new value.",
+			},
+			"model_api_key_wo_version": {
+				Type:         schema.TypeInt,
+				Optional:     true,
+				RequiredWith: []string{"model_api_key_wo"},
+				Description:  "Version of model_api_key_wo. Change it whenever model_api_key_wo changes to trigger an update.",
 			},
 			"model_api_base": {
 				Type:     schema.TypeString,
@@ -92,6 +110,11 @@ func resourceLiteLLMModel() *schema.Resource {
 			"team_id": {
 				Type:     schema.TypeString,
 				Optional: true,
+			},
+			"display_name": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Description: "Human-readable name returned as display_name by /v1/models, shown in client model pickers instead of model_name",
 			},
 			"mode": {
 				Type:     schema.TypeString,
@@ -137,9 +160,26 @@ func resourceLiteLLMModel() *schema.Resource {
 				Sensitive: true,
 			},
 			"aws_secret_access_key": {
-				Type:      schema.TypeString,
-				Optional:  true,
-				Sensitive: true,
+				Type:          schema.TypeString,
+				Optional:      true,
+				Sensitive:     true,
+				ConflictsWith: []string{"aws_secret_access_key_wo"},
+			},
+			"aws_secret_access_key_wo": {
+				Type:         schema.TypeString,
+				Optional:     true,
+				WriteOnly:    true,
+				Sensitive:    true,
+				RequiredWith: []string{"aws_secret_access_key_wo_version"},
+				Description: "Write-only alternative to aws_secret_access_key: sent to the proxy on every apply and " +
+					"never written to plan or state. Requires Terraform 1.11 or later. Bump " +
+					"aws_secret_access_key_wo_version to push a new value.",
+			},
+			"aws_secret_access_key_wo_version": {
+				Type:         schema.TypeInt,
+				Optional:     true,
+				RequiredWith: []string{"aws_secret_access_key_wo"},
+				Description:  "Version of aws_secret_access_key_wo. Change it whenever aws_secret_access_key_wo changes to trigger an update.",
 			},
 			"aws_region_name": {
 				Type:     schema.TypeString,
@@ -166,9 +206,26 @@ func resourceLiteLLMModel() *schema.Resource {
 				Sensitive: true,
 			},
 			"vertex_credentials": {
-				Type:      schema.TypeString,
-				Optional:  true,
-				Sensitive: true,
+				Type:          schema.TypeString,
+				Optional:      true,
+				Sensitive:     true,
+				ConflictsWith: []string{"vertex_credentials_wo"},
+			},
+			"vertex_credentials_wo": {
+				Type:         schema.TypeString,
+				Optional:     true,
+				WriteOnly:    true,
+				Sensitive:    true,
+				RequiredWith: []string{"vertex_credentials_wo_version"},
+				Description: "Write-only alternative to vertex_credentials: sent to the proxy on every apply and never " +
+					"written to plan or state. Requires Terraform 1.11 or later. Bump vertex_credentials_wo_version " +
+					"to push a new value.",
+			},
+			"vertex_credentials_wo_version": {
+				Type:         schema.TypeInt,
+				Optional:     true,
+				RequiredWith: []string{"vertex_credentials_wo"},
+				Description:  "Version of vertex_credentials_wo. Change it whenever vertex_credentials_wo changes to trigger an update.",
 			},
 			"litellm_credential_name": {
 				Type:        schema.TypeString,
@@ -181,7 +238,8 @@ func resourceLiteLLMModel() *schema.Resource {
 				Elem: &schema.Schema{
 					Type: schema.TypeString,
 				},
-				Description: "Additional parameters to pass to litellm_params beyond the standard ones",
+				DiffSuppressFunc: suppressEquivalentDropParams,
+				Description:      "Additional parameters to pass to litellm_params beyond the standard ones",
 			},
 		},
 	}

@@ -237,6 +237,21 @@ describe("AddAttachmentForm", () => {
     expect(createAttachment).toHaveBeenCalledWith("test-token", { policy_name: "policy-alpha", scope: "*" });
   });
 
+  it("sends default: true when the Default switch is turned on", async () => {
+    const user = userEvent.setup();
+    const createAttachment = vi.fn().mockResolvedValue({});
+    renderWithProviders(<AddAttachmentForm {...defaultProps} createAttachment={createAttachment} />);
+    await selectPolicy(user, "policy-alpha");
+    await user.click(screen.getByRole("switch", { name: /default/i }));
+    await submit(user);
+    await waitFor(() => expect(createAttachment).toHaveBeenCalledTimes(1));
+    expect(createAttachment).toHaveBeenCalledWith("test-token", {
+      policy_name: "policy-alpha",
+      scope: "*",
+      default: true,
+    });
+  });
+
   it.each([
     ["2147483648", /at most 2147483647/i],
     ["-2147483649", /at least -2147483648/i],

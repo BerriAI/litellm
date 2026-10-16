@@ -1,8 +1,9 @@
 #### OCR Endpoints #####
 
+import io
 import json
 from collections.abc import Mapping
-from typing import Any, Final, cast
+from typing import Final, cast
 
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile
@@ -15,8 +16,8 @@ from litellm.llms.base_llm.ocr.transformation import (
     OCRResponse,
     parse_ocr_request_format,
 )
-from litellm.ocr.main import convert_file_document_to_url_document, get_mime_type
 from litellm.proxy._types import *
+from litellm.proxy._types import ProxyException
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
@@ -24,23 +25,36 @@ router: Final = APIRouter()
 _MAX_FILE_BYTES: Final = 50 * 1024 * 1024
 
 
+class _NamedUpload(io.BytesIO):
+    name: str | None
+
+    def __init__(self, content: bytes, name: str | None) -> None:
+        super().__init__(content)
+        self.name = name
+
+
+class OCRRequestError(ProxyException):
+    """A malformed OCR request, answered with a 400 before any provider call."""
+
+    def __init__(self, message: str, param: str | None = None) -> None:
+        super().__init__(  # pyright: ignore[reportUnknownMemberType]  # ProxyException.__init__ takes an untyped provider_specific_fields dict
+            message=message, type="invalid_request_error", param=param, code=400
+        )
+
+
 def _build_document_from_upload(
     file_content: bytes,
     filename: str | None,
     content_type: str | None,
-) -> dict[str, str]:
+) -> dict[str, object]:
     supplied_mime: Final = content_type.split(";")[0].strip() if content_type else None
-    mime_type: Final = (
-        get_mime_type(filename)
-        if filename and (not supplied_mime or supplied_mime == "application/octet-stream")
-        else supplied_mime
-    )
-    return convert_file_document_to_url_document(
-        {"type": "file", "file": file_content, "mime_type": mime_type or "application/octet-stream"}
-    )
+    upload: Final = _NamedUpload(file_content, filename)
+    if supplied_mime and supplied_mime != "application/octet-stream":
+        return {"type": "file", "file": upload, "mime_type": supplied_mime}
+    return {"type": "file", "file": upload}
 
 
-def _with_request_format(data: Mapping[str, Any], request: Request) -> Mapping[str, Any]:
+def _with_request_format(data: Mapping[str, object], request: Request) -> Mapping[str, object]:
     """
     Resolve the requested response format from the body or the `x-req-format` header.
 
@@ -82,7 +96,7 @@ def _native_response(response: object, fastapi_response: Response) -> Response |
     )
 
 
-async def _parse_multipart_form(request: Request) -> dict[str, Any]:
+async def _parse_multipart_form(request: Request) -> dict[str, object]:
     """
     Extract OCR data from a multipart form request.
 
@@ -95,7 +109,7 @@ async def _parse_multipart_form(request: Request) -> dict[str, Any]:
     try:
         form: Final = await request.form()
     except Exception as e:
-        raise ValueError(
+        raise OCRRequestError(
             f"Failed to parse multipart form data: {e}. "
             "When using curl with --form/-F, do NOT set the Content-Type header "
             "manually — curl will set it automatically with the required boundary."
@@ -106,7 +120,7 @@ async def _parse_multipart_form(request: Request) -> dict[str, Any]:
     # depending on middleware; check both via isinstance (FastAPI's UploadFile
     # is a subclass of Starlette's) and fall back to duck-type check.
     if uploaded_file is None or (not isinstance(uploaded_file, UploadFile) and not hasattr(uploaded_file, "read")):
-        raise ValueError("Multipart OCR request must include a 'file' field with the document to process")
+        raise OCRRequestError("Multipart OCR request must include a 'file' field with the document to process", "file")
 
     uploaded_file = cast(UploadFile, uploaded_file)
 
@@ -114,9 +128,9 @@ async def _parse_multipart_form(request: Request) -> dict[str, Any]:
     await uploaded_file.seek(0)
     file_content: Final = await uploaded_file.read(_MAX_FILE_BYTES + 1)
     if not file_content:
-        raise ValueError("Uploaded file is empty")
+        raise OCRRequestError("Uploaded file is empty", "file")
     if len(file_content) > _MAX_FILE_BYTES:
-        raise ValueError("OCR file exceeds the size limit")
+        raise OCRRequestError("OCR file exceeds the size limit", "file")
 
     document: Final = _build_document_from_upload(
         file_content=file_content,
@@ -124,7 +138,7 @@ async def _parse_multipart_form(request: Request) -> dict[str, Any]:
         content_type=uploaded_file.content_type,
     )
 
-    data: Final[dict[str, Any]] = {"document": document}
+    data: Final[dict[str, object]] = {"document": document}
 
     for field_name, field_value in form.items():
         if field_name in ("file", "document"):
@@ -148,12 +162,12 @@ async def _parse_multipart_form(request: Request) -> dict[str, Any]:
     return data
 
 
-async def _parse_ocr_request(request: Request) -> Mapping[str, Any]:
+async def _parse_ocr_request(request: Request) -> Mapping[str, object]:
     """Parse an OCR request and apply the `x-req-format` header, if any."""
     return _with_request_format(await _parse_ocr_request_body(request), request)
 
 
-async def _parse_ocr_request_body(request: Request) -> dict[str, Any]:
+async def _parse_ocr_request_body(request: Request) -> dict[str, object]:
     """
     Parse an OCR request, supporting both JSON and multipart form data.
 
@@ -193,7 +207,7 @@ async def _parse_ocr_request_body(request: Request) -> dict[str, Any]:
             )
             return await _parse_multipart_form(request)
 
-        raise ValueError(
+        raise OCRRequestError(
             "Empty request body. For file uploads, use multipart/form-data content type "
             "with a file field. When using curl with --form/-F, do NOT set the Content-Type "
             "header manually."
@@ -202,7 +216,7 @@ async def _parse_ocr_request_body(request: Request) -> dict[str, Any]:
     try:
         data: Final = orjson.loads(body)
     except orjson.JSONDecodeError as e:
-        raise ValueError(
+        raise OCRRequestError(
             f"Invalid JSON in request body: {e}. "
             "Ensure the request body is valid JSON with Content-Type: application/json, "
             "or use multipart/form-data for file uploads."
@@ -216,7 +230,7 @@ async def _parse_ocr_request_body(request: Request) -> dict[str, Any]:
     # File uploads must go through multipart/form-data instead.
     doc: Final = data.get("document") if isinstance(data, dict) else None
     if isinstance(doc, dict) and doc.get("type") == "file":
-        raise ValueError(
+        raise OCRRequestError(
             "document type 'file' is not supported through the JSON API. "
             "To upload a local file, use multipart/form-data with a 'file' field. "
             "For JSON requests, use 'document_url' or 'image_url' document types."
@@ -233,7 +247,7 @@ async def _parse_ocr_request_body(request: Request) -> dict[str, Any]:
         for url_field in ("document_url", "image_url"):
             url_value = doc.get(url_field)
             if isinstance(url_value, str) and url_value.startswith("reducto://"):
-                raise ValueError(
+                raise OCRRequestError(
                     "reducto:// file IDs are not accepted through the proxy "
                     "OCR API; upload the file in the same request via "
                     "multipart/form-data with a 'file' field, or pass an "
@@ -268,7 +282,7 @@ async def ocr(
     **1. JSON body** (Mistral OCR API compatible):
     ```bash
     curl -X POST "http://localhost:4000/v1/ocr" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H "Content-Type: application/json" \
         -d '{
             "model": "mistral-ocr",
@@ -282,7 +296,7 @@ async def ocr(
     **2. Multipart form file upload**:
     ```bash
     curl -X POST "http://localhost:4000/v1/ocr" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -F "model=mistral-ocr" \
         -F "file=@document.pdf"
     ```
@@ -314,7 +328,7 @@ async def ocr(
         # Process request using ProxyBaseLLMRequestProcessing
         processor = ProxyBaseLLMRequestProcessing(data=data)
 
-        response: Final = await processor.base_process_llm_request(
+        response: Final[object] = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -336,7 +350,7 @@ async def ocr(
         return _native_response(response, fastapi_response) or response
     except Exception as e:
         processor = ProxyBaseLLMRequestProcessing(data=data)
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,

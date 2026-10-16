@@ -29,9 +29,8 @@ from ...base_llm.chat.transformation import BaseConfig
 from ..common_utils import AzureOpenAIError
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LoggingClass = LiteLLMLoggingObj
 else:
@@ -45,7 +44,7 @@ def sanitized_tools_update(optional_params: Mapping[str, object]) -> Mapping[str
     tools: Final = optional_params.get("tools")
     if not isinstance(tools, list):
         return _NO_TOOLS_UPDATE
-    sanitized: Final = [  # mutable-ok: request tools are a JSON list
+    sanitized: Final = [
         tool_with_sanitized_parameters(tool, flatten_combinators_and_drop_non_python_regex_patterns)
         if isinstance(tool, dict)
         else tool
@@ -94,7 +93,7 @@ class AzureOpenAIConfig(BaseConfig):
         temperature: int | None = None,
         top_p: int | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -280,10 +279,17 @@ class AzureOpenAIConfig(BaseConfig):
         ordered_messages: Final = system_messages_first(messages) if litellm.openai_system_messages_first else messages
         stripped_messages: Final = drop_tool_reference_parts_from_tool_messages(ordered_messages)
         azure_messages: Final = convert_to_azure_openai_messages(hoist_images_from_tool_messages(stripped_messages))
+        request_params: Final = MappingProxyType(
+            {
+                key: value
+                for key, value in optional_params.items()
+                if key != "tool_choice" or optional_params.get("tools") or optional_params.get("functions")
+            }
+        )
         return {
             "model": model,
             "messages": azure_messages,
-            **optional_params,
+            **request_params,
             **sanitized_tools_update(optional_params),
         }
 
@@ -297,7 +303,7 @@ class AzureOpenAIConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

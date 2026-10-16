@@ -12,7 +12,10 @@ import ast
 import asyncio
 import json
 import os
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
+
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import print_verbose
@@ -23,7 +26,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    get_str_from_messages,
+    get_semantic_cache_prompt_from_messages,
 )
 from litellm.types.utils import EmbeddingResponse
 
@@ -35,6 +38,9 @@ from ._embedding_router import (
     truncate_embedding_input,
 )
 from .base_cache import BaseCache
+
+_WAIT_FOR_INDEXING: Final = MappingProxyType({"wait": "true"})
+_EMBEDDING_VECTOR: Final = TypeAdapter(object)
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -65,8 +71,8 @@ class QdrantSemanticCache(BaseCache):
         embedding_timeout: float | None = None,
     ):
         from litellm.llms.custom_httpx.http_handler import (
-            _get_httpx_client,
             get_async_httpx_client,
+            get_httpx_client,
             httpxSpecialProvider,
         )
         from litellm.secret_managers.main import get_secret_str
@@ -109,7 +115,7 @@ class QdrantSemanticCache(BaseCache):
 
         self.headers = headers
 
-        self.sync_client = _get_httpx_client()
+        self.sync_client = get_httpx_client()
         self.async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Caching)
 
         if quantization_config is None:
@@ -283,7 +289,7 @@ class QdrantSemanticCache(BaseCache):
 
         # get the prompt
         messages: Final = kwargs["messages"]
-        prompt: Final = get_str_from_messages(messages)
+        prompt: Final = get_semantic_cache_prompt_from_messages(messages)
 
         # create an embedding for prompt
         embedding_response: Final = cast(
@@ -292,7 +298,7 @@ class QdrantSemanticCache(BaseCache):
         )
 
         # get the embedding
-        embedding: Final = embedding_response["data"][0]["embedding"]
+        embedding: Final = _EMBEDDING_VECTOR.validate_python(embedding_response["data"][0]["embedding"])
 
         value = str(value)
         assert isinstance(value, str)
@@ -313,6 +319,7 @@ class QdrantSemanticCache(BaseCache):
         self.sync_client.put(
             url=f"{self.qdrant_api_base}/collections/{self.collection_name}/points",
             headers=self.headers,
+            params=_WAIT_FOR_INDEXING,
             json=data,
         )
 
@@ -321,7 +328,7 @@ class QdrantSemanticCache(BaseCache):
 
         # get the messages
         messages: Final = kwargs["messages"]
-        prompt: Final = get_str_from_messages(messages)
+        prompt: Final = get_semantic_cache_prompt_from_messages(messages)
 
         # convert to embedding
         embedding_response: Final = cast(
@@ -330,7 +337,7 @@ class QdrantSemanticCache(BaseCache):
         )
 
         # get the embedding
-        embedding: Final = embedding_response["data"][0]["embedding"]
+        embedding: Final = _EMBEDDING_VECTOR.validate_python(embedding_response["data"][0]["embedding"])
 
         data: Final = {
             "vector": embedding,
@@ -396,11 +403,11 @@ class QdrantSemanticCache(BaseCache):
 
         # get the prompt
         messages: Final = kwargs["messages"]
-        prompt: Final = get_str_from_messages(messages)
+        prompt: Final = get_semantic_cache_prompt_from_messages(messages)
         embedding_response: Final = await self._get_async_embedding(prompt, metadata=kwargs.get("metadata"))
 
         # get the embedding
-        embedding: Final = embedding_response["data"][0]["embedding"]
+        embedding: Final = _EMBEDDING_VECTOR.validate_python(embedding_response["data"][0]["embedding"])
 
         value = str(value)
         assert isinstance(value, str)
@@ -422,6 +429,7 @@ class QdrantSemanticCache(BaseCache):
         await self.async_client.put(
             url=f"{self.qdrant_api_base}/collections/{self.collection_name}/points",
             headers=self.headers,
+            params=_WAIT_FOR_INDEXING,
             json=data,
         )
 
@@ -430,12 +438,12 @@ class QdrantSemanticCache(BaseCache):
 
         # get the messages
         messages: Final = kwargs["messages"]
-        prompt: Final = get_str_from_messages(messages)
+        prompt: Final = get_semantic_cache_prompt_from_messages(messages)
 
         embedding_response: Final = await self._get_async_embedding(prompt, metadata=kwargs.get("metadata"))
 
         # get the embedding
-        embedding: Final = embedding_response["data"][0]["embedding"]
+        embedding: Final = _EMBEDDING_VECTOR.validate_python(embedding_response["data"][0]["embedding"])
 
         data: Final = {
             "vector": embedding,
