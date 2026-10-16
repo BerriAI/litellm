@@ -53,6 +53,7 @@ from typing import (
 )
 
 import anyio
+import anyio.lowlevel
 import websockets
 import websockets.exceptions
 from pydantic import BaseModel, ConfigDict, Json, JsonValue, TypeAdapter, ValidationError, with_config
@@ -147,7 +148,8 @@ from litellm.proxy.common_utils.realtime_utils import (  # noqa: F401, RUF100  #
     realtime_request_body,
 )
 from litellm.proxy.common_utils.token_count_settings import (
-    TOKENIZER_LOAD_RETRY_SECONDS,
+    TOKENIZER_LOAD_MAX_RUNNING,
+    TOKENIZER_LOAD_REUSE_SECONDS,
     TOKENIZER_LOAD_WAIT_SECONDS,
     UNAVAILABLE_TOKEN_COUNT_FALLBACKS,
     ProviderCountFailure,
@@ -14550,13 +14552,23 @@ class _LocalTokenEstimate:
     tokenizer_type: str
 
 
-def _is_fork_guard_error(error: Exception) -> bool:
+def _is_fork_guard_error(error: BaseException) -> bool:
     from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted, ProcessReservedForForking
 
     return isinstance(error, (ForkedAfterNativeRuntimeStarted, ProcessReservedForForking))
 
 
-def _provider_error_after_failed_estimate(provider_failure: ProviderCountFailure, error: Exception) -> ProxyException:
+def _is_tokenizer_panic(error: BaseException) -> bool:
+    return type(error).__module__ == "pyo3_runtime" and type(error).__name__ == "PanicException"
+
+
+def _answers_provider_error(error: BaseException) -> bool:
+    return (isinstance(error, Exception) or _is_tokenizer_panic(error)) and not _is_fork_guard_error(error)
+
+
+def _provider_error_after_failed_estimate(
+    provider_failure: ProviderCountFailure, error: BaseException
+) -> ProxyException:
     verbose_proxy_logger.warning(
         "Local token estimate failed after the provider's count error %s, answering that error: %s",
         provider_failure.status_code,
@@ -14568,8 +14580,8 @@ def _provider_error_after_failed_estimate(provider_failure: ProviderCountFailure
 async def _estimate_or_provider_error(estimate: Awaitable[int], provider_failure: ProviderCountFailure) -> int:
     try:
         return await estimate
-    except Exception as e:
-        if _is_fork_guard_error(e):
+    except BaseException as e:
+        if not _answers_provider_error(e):
             raise
         raise _provider_error_after_failed_estimate(provider_failure, e) from e
 
@@ -14581,31 +14593,74 @@ class _CustomTokenizerKey:
     auth_token: str | None
 
 
+class _TokenizerLoadsBusy(Exception):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
-class _TokenizerLoadFailed:
-    error: Exception
-    failed_at: float
+class _TokenizerLoadOutcome:
+    tokenizer: SelectTokenizerResponse | BaseException
+    finished_at: float
 
 
 @dataclass(frozen=True, slots=True)
 class _SharedTokenizerLoad:
-    outcome: asyncio.Task[SelectTokenizerResponse | _TokenizerLoadFailed]
+    outcome: asyncio.Task[_TokenizerLoadOutcome]
     started_at: float
 
     def reusable(self, now: float) -> bool:
-        if not self.outcome.done():
-            return True
-        outcome: Final = self.outcome.result()
-        return isinstance(outcome, _TokenizerLoadFailed) and now - outcome.failed_at < TOKENIZER_LOAD_RETRY_SECONDS
+        return not self.outcome.done() or now - self.outcome.result().finished_at < TOKENIZER_LOAD_REUSE_SECONDS
+
+
+async def _loaded_tokenizer(
+    model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None, threads: anyio.CapacityLimiter
+) -> SelectTokenizerResponse | BaseException:
+    try:
+        return await asyncify(litellm.utils.select_tokenizer, limiter=threads)(
+            model=model, custom_tokenizer=custom_tokenizer
+        )
+    except asyncio.CancelledError:
+        raise
+    except BaseException as e:  # noqa: BLE001  # every count sharing this load decides what it answers, pyo3 panics included
+        return e
 
 
 async def _tokenizer_load_outcome(
-    model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None
-) -> SelectTokenizerResponse | _TokenizerLoadFailed:
-    try:
-        return await asyncify(litellm.utils.select_tokenizer)(model=model, custom_tokenizer=custom_tokenizer)
-    except Exception as e:  # noqa: BLE001  # every count sharing this load answers the provider's error instead
-        return _TokenizerLoadFailed(error=e, failed_at=asyncio.get_running_loop().time())
+    model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None, threads: anyio.CapacityLimiter
+) -> _TokenizerLoadOutcome:
+    tokenizer: Final = await _loaded_tokenizer(model, custom_tokenizer, threads)
+    return _TokenizerLoadOutcome(tokenizer=tokenizer, finished_at=asyncio.get_running_loop().time())
+
+
+@dataclass(slots=True)
+class _TokenizerLoads:
+    threads: anyio.CapacityLimiter
+    running: int = 0
+
+    def start(
+        self, model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None, loop: asyncio.AbstractEventLoop
+    ) -> _SharedTokenizerLoad | None:
+        if self.running >= self.threads.total_tokens:
+            return None
+        self.running += 1
+        outcome: Final = loop.create_task(_tokenizer_load_outcome(model, custom_tokenizer, self.threads))
+        outcome.add_done_callback(self._finished)
+        return _SharedTokenizerLoad(outcome=outcome, started_at=loop.time())
+
+    def _finished(self, _outcome: asyncio.Task[_TokenizerLoadOutcome]) -> None:
+        self.running -= 1
+
+
+_TOKENIZER_LOADS: Final = anyio.lowlevel.RunVar[_TokenizerLoads]("litellm_proxy_tokenizer_loads")
+
+
+def _tokenizer_loads_for_this_loop() -> _TokenizerLoads:
+    existing: Final = _TOKENIZER_LOADS.get(None)
+    if existing is not None:
+        return existing
+    created: Final = _TokenizerLoads(threads=anyio.CapacityLimiter(TOKENIZER_LOAD_MAX_RUNNING))
+    _TOKENIZER_LOADS.set(created)
+    return created
 
 
 @dataclass(slots=True)
@@ -14614,16 +14669,12 @@ class _TokenizerLoadSlot:
     custom_tokenizer: CustomHuggingfaceTokenizer | None
     current: _SharedTokenizerLoad | None = None
 
-    def load(self, loop: asyncio.AbstractEventLoop) -> _SharedTokenizerLoad:
+    def load(self, loads: _TokenizerLoads, loop: asyncio.AbstractEventLoop) -> _SharedTokenizerLoad | None:
         current: Final = self.current
         if current is not None and current.reusable(loop.time()):
             return current
-        started: Final = _SharedTokenizerLoad(
-            outcome=loop.create_task(_tokenizer_load_outcome(self.model, self.custom_tokenizer)),
-            started_at=loop.time(),
-        )
-        self.current = started
-        return started
+        self.current = loads.start(self.model, self.custom_tokenizer, loop)
+        return self.current
 
 
 @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
@@ -14644,7 +14695,7 @@ def _tokenizer_load_slot(
 
 async def _tokenizer_after_provider_error(
     model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None
-) -> SelectTokenizerResponse | Exception:
+) -> SelectTokenizerResponse | BaseException:
     loop: Final = asyncio.get_running_loop()
     try:
         load: Final = _tokenizer_load_slot(
@@ -14657,23 +14708,25 @@ async def _tokenizer_after_provider_error(
                 auth_token=custom_tokenizer["auth_token"],
             ),
             loop,
-        ).load(loop)
+        ).load(_tokenizer_loads_for_this_loop(), loop)
+        if load is None:
+            return _TokenizerLoadsBusy()
         outcome: Final = await asyncio.wait_for(
             asyncio.shield(load.outcome),
             timeout=max(load.started_at + TOKENIZER_LOAD_WAIT_SECONDS - loop.time(), 0),
         )
     except Exception as e:  # noqa: BLE001  # a tokenizer that cannot be read, loaded in time, or loaded at all answers the provider's error
         return e
-    return outcome.error if isinstance(outcome, _TokenizerLoadFailed) else outcome
+    return outcome.tokenizer
 
 
 async def _tokenizer_or_provider_error(
     model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None, provider_failure: ProviderCountFailure
 ) -> SelectTokenizerResponse:
     tokenizer: Final = await _tokenizer_after_provider_error(model, custom_tokenizer)
-    if not isinstance(tokenizer, Exception):
+    if not isinstance(tokenizer, BaseException):
         return tokenizer
-    if _is_fork_guard_error(tokenizer):
+    if not _answers_provider_error(tokenizer):
         raise tokenizer.with_traceback(None)
     raise _provider_error_after_failed_estimate(provider_failure, tokenizer) from tokenizer
 
