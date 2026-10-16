@@ -12,6 +12,7 @@ from typing import Final, List, Optional, Tuple, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
+import respx
 from openai.types.chat import ChatCompletionMessage
 from pydantic import BaseModel, ConfigDict
 
@@ -1521,6 +1522,49 @@ def test_cache_control_hook_fills_the_mark_budget_every_claude_route_sends_after
     )
 
     assert _marks_the_route_sends(model, custom_llm_provider, processed) == 4
+
+
+def test_a_breakpoint_on_a_copilot_tool_call_never_starts_the_github_device_login(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+):
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setenv("GITHUB_COPILOT_DEVICE_CODE_URL", "https://github.test/login/device/code")
+    messages: Final = cast(
+        list[AllMessageValues],
+        [
+            {"role": "system", "content": "You are a weather assistant."},
+            {"role": "user", "content": "What is the weather in Paris?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                        "prompt_cache_breakpoint": {"mode": "explicit"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "Sunny"},
+        ],
+    )
+
+    with respx.mock(assert_all_called=False) as github:
+        device_login: Final = github.post("https://github.test/login/device/code").respond(status_code=503)
+        AnthropicCacheControlHook().get_chat_completion_prompt(
+            model="claude-sonnet-4.6",
+            messages=messages,
+            non_default_params={
+                "custom_llm_provider": "github_copilot",
+                "cache_control_injection_points": [{"location": "message", "role": "system"}],
+            },
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+
+    assert not device_login.called
 
 
 @pytest.mark.parametrize("tool_call_type", ["function", "custom", None])

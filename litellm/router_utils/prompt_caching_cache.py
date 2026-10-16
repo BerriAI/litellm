@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from itertools import accumulate, chain
 from typing import TYPE_CHECKING, Any, Final, cast
 
-from pydantic import JsonValue, TypeAdapter
+from pydantic import BaseModel, JsonValue, TypeAdapter
 from pydantic_core import to_jsonable_python
 from typing_extensions import TypedDict
 
@@ -44,7 +44,6 @@ _MARK_KEYS: Final = frozenset({"cache_control", "prompt_cache_breakpoint"})
 _ENVELOPE_SKIPPED_KEYS: Final = _MARK_KEYS | {"content"}
 _PREFIX_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, JsonValue], ...])
 _TOOLS_ADAPTER: Final = TypeAdapter(tuple[JsonValue, ...])
-_JSON_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _PINS_ADAPTER: Final[TypeAdapter[tuple[JsonValue, ...] | None]] = TypeAdapter(tuple[JsonValue, ...] | None)
 
 
@@ -78,12 +77,18 @@ def _carries_cache_mark(block: Mapping[str, object]) -> bool:
     return _mark_pin_ttl_seconds(block) is not None
 
 
+def _tool_call_fields(call: object) -> Mapping[str, object]:
+    if isinstance(call, BaseModel):
+        return dict(call)
+    if isinstance(call, Mapping):
+        return call
+    return {}
+
+
 def _carries_marked_tool_call(message: Mapping[str, object]) -> bool:
-    tool_calls: Final = _JSON_ADAPTER.validate_python(
-        to_jsonable_python(message.get("tool_calls"), serialize_unknown=True, bytes_mode="base64")
-    )
-    return isinstance(tool_calls, list) and any(
-        isinstance(call, dict) and _carries_cache_mark(call) for call in tool_calls
+    tool_calls: Final = message.get("tool_calls")
+    return isinstance(tool_calls, (list, tuple)) and any(
+        _carries_cache_mark(_tool_call_fields(call)) for call in tool_calls
     )
 
 

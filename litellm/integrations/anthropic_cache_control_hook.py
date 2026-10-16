@@ -283,9 +283,11 @@ def _marks_a_server_tool_call(messages: Sequence[object]) -> bool:
 
 def _served_by_bedrock(model: str, custom_llm_provider: str | None) -> bool:
     from litellm.exceptions import BadRequestError
-    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+    from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider, get_llm_provider
     from litellm.types.utils import LlmProviders
 
+    if declared_authenticating_provider(model, custom_llm_provider) is not None:
+        return False
     try:
         _, provider, _, _ = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
     except (BadRequestError, ValueError):

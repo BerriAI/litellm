@@ -1204,16 +1204,21 @@ def test_a_five_minute_mark_on_a_tool_the_route_sends_unmarked_leaves_the_system
     assert _sent_cache_ttls(json.loads(route.calls.last.request.content)) == ("1h", "1h")
 
 
+@pytest.mark.parametrize(
+    "member",
+    [
+        {"type": "function", "name": "spawn", "parameters": {"type": "object"}, "cache_control": _FIVE_MINUTES},
+        {
+            "type": "function",
+            "function": {"name": "spawn", "parameters": {"type": "object"}, "cache_control": _FIVE_MINUTES},
+        },
+    ],
+    ids=["flat", "function_form"],
+)
 def test_a_five_minute_mark_on_a_namespace_member_leaves_no_hour_after_it_under_drop_params(
-    respx_mock: respx.MockRouter,
+    respx_mock: respx.MockRouter, member: Mapping[str, object]
 ):
     route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").respond(json=_CLAUDE_REPLY)
-    member: Final = {
-        "type": "function",
-        "name": "spawn",
-        "parameters": {"type": "object"},
-        "cache_control": _FIVE_MINUTES,
-    }
 
     litellm.completion(
         model="anthropic/claude-opus-5-5",

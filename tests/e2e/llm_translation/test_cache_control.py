@@ -722,7 +722,7 @@ class TestPromptCacheBreakpointOnClaude:
     def test_a_30m_breakpoint_still_caches(
         self, client: PassthroughClient, resources: ResourceManager, scoped_key: str, route: ClaudeRoute
     ) -> None:
-        model: Final = _register_claude(client, resources, route)
+        model: Final = _register_claude(client, resources, route, drop_params=True)
         body: Final = ChatBody(
             model=model,
             max_tokens=64,
@@ -760,7 +760,7 @@ class TestPromptCacheBreakpointOnClaude:
     def test_a_block_carrying_both_keys_still_caches(
         self, client: PassthroughClient, resources: ResourceManager, scoped_key: str, route: ClaudeRoute
     ) -> None:
-        model: Final = _register_claude(client, resources, route)
+        model: Final = _register_claude(client, resources, route, drop_params=True)
         both_keys: Final = TextContentPart(
             text=_cacheable_prefix(),
             cache_control=CacheControl(),

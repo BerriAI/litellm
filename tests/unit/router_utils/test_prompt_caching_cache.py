@@ -1,6 +1,7 @@
 import asyncio
+from functools import reduce
 from itertools import chain
-from typing import Final
+from typing import Final, cast
 
 import pytest
 
@@ -12,6 +13,7 @@ from litellm.router_utils.prompt_caching_cache import (
     PromptCachingCache,
 )
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
+from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
 
 
 class _ManualClock:
@@ -320,6 +322,61 @@ def test_a_one_hour_breakpoint_on_a_tool_call_keeps_the_pin_after_the_mark_moves
     assert cache.get_model_id(messages=_tool_call_turn("call_1", marked_call_id="call_2"), tools=None) == {
         "model_id": "deployment-1h"
     }
+
+
+def _marked_lookup_call() -> ChatCompletionMessageToolCall:
+    return ChatCompletionMessageToolCall(
+        id="call_1",
+        type="function",
+        function=Function(name="lookup_clause", arguments="{}"),
+        prompt_cache_breakpoint={"mode": "explicit", "ttl": "1h"},
+    )
+
+
+@pytest.mark.parametrize(
+    "marked_turn",
+    [
+        Message(content=None, tool_calls=[_marked_lookup_call()]),
+        {"role": "assistant", "content": None, "tool_calls": [_marked_lookup_call()]},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": ({**_tool_call("call_1"), "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}},),
+        },
+    ],
+    ids=["response_message", "response_tool_calls", "tuple_of_dicts"],
+)
+def test_a_one_hour_breakpoint_keeps_the_pin_whatever_shape_the_marked_tool_calls_come_in(marked_turn: object) -> None:
+    clock: Final = _ManualClock()
+    cache: Final = _pin_cache(clock)
+    messages: Final = cast(list[AllMessageValues], [*_tool_call_turn(marked_call_id="call_1")[:-1], marked_turn])
+
+    cache.add_model_id(model_id="deployment-1h", messages=messages, tools=None, honors_one_hour_ttl=True)
+    clock.advance(PROMPT_CACHE_PIN_TTL_SECONDS + 1)
+
+    assert cache.get_model_id(messages=messages, tools=None) == {"model_id": "deployment-1h"}
+
+
+def test_a_deeply_nested_value_on_a_tool_call_after_the_mark_keeps_the_pin() -> None:
+    cache: Final = _pin_cache(_ManualClock())
+    deep_call: Final = {**_tool_call("call_1"), "x": reduce(lambda inner, _: {"x": inner}, range(300), "leaf")}
+    messages: Final = cast(
+        list[AllMessageValues],
+        [
+            {
+                "role": "system",
+                "content": "Here is the full text of a complex legal agreement" * 200,
+                "cache_control": {"type": "ephemeral"},
+            },
+            {"role": "user", "content": "Find the termination clause."},
+            {"role": "assistant", "content": None, "tool_calls": [deep_call]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "Section 9."},
+        ],
+    )
+
+    cache.add_model_id(model_id="deployment-1", messages=messages, tools=None)
+
+    assert cache.get_model_id(messages=messages, tools=None) == {"model_id": "deployment-1"}
 
 async def _first_non_none(read):
     while True:
