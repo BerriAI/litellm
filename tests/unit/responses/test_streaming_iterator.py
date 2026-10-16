@@ -4,8 +4,10 @@ completion_start_time on the first chunk so downstream TTFT consumers
 completion_start_time = end_time."""
 
 import asyncio, importlib
+import functools
 import json
-from collections.abc import Callable
+import threading
+from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -31,6 +33,7 @@ from litellm.types.llms.openai import (
     ResponseCompletedEvent,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
+    ResponsesAPIStreamingResponse,
 )
 from contextlib import suppress
 from litellm.responses import streaming_iterator as streaming_module
@@ -1350,6 +1353,8 @@ class _FakeLoggingObj:
         self.start_time = datetime.now()
         self.completion_start_time = None
         self.model_call_details = {"litellm_params": {}}
+        self.success_logged = threading.Event()
+        self.failure_logged = threading.Event()
 
     # Signature alignment with Logging handlers
     async def dispatch_success_handlers(self, *args, **kwargs):
@@ -1360,6 +1365,7 @@ class _FakeLoggingObj:
     def success_handler(self, *args, **kwargs):
         self.success_calls += 1
         self.last_success_kwargs = kwargs
+        self.success_logged.set()
 
     async def async_success_handler(self, *args, **kwargs):
         self.async_success_calls += 1
@@ -1367,6 +1373,7 @@ class _FakeLoggingObj:
 
     def failure_handler(self, *args, **kwargs):
         self.failure_calls += 1
+        self.failure_logged.set()
 
     async def async_failure_handler(self, *args, **kwargs):
         self.async_failure_calls += 1
@@ -1374,6 +1381,10 @@ class _FakeLoggingObj:
     def update_completion_start_time(self, completion_start_time):
         self.completion_start_time = completion_start_time
         self.model_call_details["completion_start_time"] = completion_start_time
+
+async def _await_tasks_spawned_since(existing: set["asyncio.Task[object]"]) -> None:
+    spawned: Final = asyncio.all_tasks() - existing
+    await asyncio.wait_for(asyncio.gather(*spawned, return_exceptions=True), timeout=5)
 
 def _make_completed_response(response_id: str = "resp_test") -> ResponseCompletedEvent:
     return ResponseCompletedEvent(
@@ -1525,8 +1536,9 @@ async def test_responses_streaming_triggers_hooks(monkeypatch):
         type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED, response=SimpleNamespace()
     )
 
+    existing_tasks = asyncio.all_tasks()
     iterator._handle_logging_completed_response()
-    await asyncio.sleep(0.2)  # allow async tasks to run
+    await _await_tasks_spawned_since(existing_tasks)
 
     assert logging_obj.success_calls == 1
     assert logging_obj.async_success_calls == 1
@@ -1601,8 +1613,7 @@ async def test_responses_streaming_failure_triggers_failure_handlers():
     with pytest.raises(ValueError, match="boom"):
         iterator._process_chunk('{"delta": "chunk"}')
 
-    # allow failure callbacks to run
-    await asyncio.sleep(0.2)
+    assert await asyncio.to_thread(logging_obj.failure_logged.wait, 5)
     assert logging_obj.failure_calls >= 1
     assert logging_obj.async_failure_calls >= 1
 
@@ -1769,7 +1780,7 @@ async def test_handle_logging_failed_response_uses_response_error_message():
     )
 
     iterator._handle_logging_failed_response()
-    await asyncio.sleep(0.2)
+    assert await asyncio.to_thread(logging_obj.failure_logged.wait, 5)
 
     assert logging_obj.failure_calls == 1
     assert logging_obj.async_failure_calls == 1
@@ -1891,8 +1902,9 @@ async def test_responses_streaming_completed_event_persists_async_cache():
     )
     iterator.completed_response = _make_completed_response()
 
+    existing_tasks = asyncio.all_tasks()
     iterator._handle_logging_completed_response()
-    await asyncio.sleep(0.2)
+    await _await_tasks_spawned_since(existing_tasks)
 
     litellm.cache.async_add_cache.assert_called_once()
     assert litellm.cache.async_add_cache.call_args.kwargs["stream"] is True
@@ -1981,7 +1993,7 @@ def test_log_completed_response_sync_direct_path(monkeypatch):
     iterator.completed_response = _make_completed_response("resp_log_sync")
 
     iterator._log_completed_response(is_async=False)
-    asyncio.run(asyncio.sleep(0.2))
+    assert logging_obj.success_logged.wait(timeout=5)
 
     assert logging_obj.success_calls == 1
     assert logging_obj.async_success_calls == 1
@@ -2012,7 +2024,7 @@ def test_log_completed_response_falls_back_when_model_validate_fails(monkeypatch
     monkeypatch.setattr(iterator, "_run_post_success_hooks", MagicMock())
 
     iterator._log_completed_response(is_async=False)
-    asyncio.run(asyncio.sleep(0.2))
+    assert logging_obj.success_logged.wait(timeout=5)
 
     assert logging_obj.success_calls == 1
     assert logging_obj.async_success_calls == 1
@@ -2178,8 +2190,9 @@ async def test_mock_responses_streaming_iterator_async_iteration_logs_completion
         call_type=CallTypes.responses.value,
     )
 
+    existing_tasks = asyncio.all_tasks()
     streamed_events = [event async for event in iterator]
-    await asyncio.sleep(0.2)
+    await _await_tasks_spawned_since(existing_tasks)
 
     assert streamed_events[0].type == ResponsesAPIStreamEvents.RESPONSE_CREATED
     assert streamed_events[-1].type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
@@ -2224,7 +2237,7 @@ def test_mock_responses_streaming_iterator_sync_iteration_logs_completion(monkey
     )
 
     streamed_events = list(iterator)
-    asyncio.run(asyncio.sleep(0.2))
+    assert logging_obj.success_logged.wait(timeout=5)
 
     assert streamed_events[0].type == ResponsesAPIStreamEvents.RESPONSE_CREATED
     assert streamed_events[-1].type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
@@ -2277,8 +2290,9 @@ async def test_cached_responses_stream_async_hit_triggers_success_callbacks(
         call_type=CallTypes.aresponses.value,
     )
 
+    existing_tasks = asyncio.all_tasks()
     streamed_events = [event async for event in iterator]
-    await asyncio.sleep(0.2)
+    await _await_tasks_spawned_since(existing_tasks)
 
     assert streamed_events[-1].type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
     assert logging_obj.success_calls == 1
@@ -2333,7 +2347,7 @@ def test_cached_responses_stream_sync_hit_triggers_success_callbacks(monkeypatch
     )
 
     streamed_events = list(iterator)
-    asyncio.run(asyncio.sleep(0.2))
+    assert logging_obj.success_logged.wait(timeout=5)
 
     assert streamed_events[-1].type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
     assert logging_obj.success_calls == 1
@@ -2345,3 +2359,201 @@ def test_cached_responses_stream_sync_hit_triggers_success_callbacks(monkeypatch
     litellm.cache.async_add_cache.assert_not_called()
     litellm.cache.add_cache.assert_not_called()
     litellm.cache = original_cache
+
+
+def _answer_with_text_and_tool_call() -> ResponsesAPIResponse:
+    return ResponsesAPIResponse(
+        id="resp_synthetic",
+        created_at=0,
+        status="completed",
+        model="gpt-6-luna",
+        object="response",
+        output=[
+            {
+                "type": "message",
+                "id": "msg_synthetic",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Checking the weather.", "annotations": []}],
+            },
+            {
+                "type": "function_call",
+                "id": "fc_synthetic",
+                "call_id": "call_weather",
+                "name": "get_weather",
+                "arguments": '{"city":"Berlin"}',
+                "status": "completed",
+            },
+        ],
+        usage=ResponseAPIUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+    )
+
+
+def test_faked_stream_bridged_to_chat_sends_tool_arguments_once():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    events: Final = streaming_module.build_synthetic_response_events(
+        transformed=_answer_with_text_and_tool_call(), logging_obj=None, chunk_size=5
+    )
+    chunks: Final = tuple(
+        OpenAiResponsesToChatCompletionStreamIterator(streaming_response=iter(events), sync_stream=True)
+    )
+    tool_call_deltas: Final = tuple(
+        tool_call
+        for chunk in chunks
+        for tool_call in (chunk.choices[0].delta.tool_calls or ())  # comprehension-ok: flattening each chunk's tool calls
+    )
+    joined_arguments: Final = "".join(tool_call.function.arguments or "" for tool_call in tool_call_deltas)
+    joined_text: Final = "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
+
+    assert {tool_call.index for tool_call in tool_call_deltas} == {0}
+    assert json.loads(joined_arguments) == {"city": "Berlin"}
+    assert joined_text == "Checking the weather."
+
+
+def test_faked_stream_read_by_openai_sdk_accumulates_each_value_once():
+    import openai
+
+    events: Final = streaming_module.build_synthetic_response_events(
+        transformed=_answer_with_text_and_tool_call(), logging_obj=None, chunk_size=5
+    )
+    sse_body: Final = b"".join(
+        f"event: {event.type}\ndata: {event.model_dump_json(exclude_none=True)}\n\n".encode() for event in events
+    )
+    client: Final = openai.OpenAI(
+        api_key="sk-test",
+        base_url="http://synthetic.test/v1",
+        http_client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, headers={"content-type": "text/event-stream"}, content=sse_body)
+            )
+        ),
+    )
+
+    with client.responses.stream(model="gpt-6-luna", input="Weather in Berlin?") as stream:
+        streamed: Final = tuple(stream)
+
+    text_snapshots: Final = tuple(event.snapshot for event in streamed if event.type == "response.output_text.delta")
+    argument_snapshots: Final = tuple(
+        event.snapshot for event in streamed if event.type == "response.function_call_arguments.delta"
+    )
+    assert text_snapshots[-1] == "Checking the weather."
+    assert json.loads(argument_snapshots[-1]) == {"city": "Berlin"}
+
+
+def test_faked_stream_opens_items_in_progress_and_empty_like_a_real_stream():
+    events: Final = streaming_module.build_synthetic_response_events(
+        transformed=_answer_with_text_and_tool_call(), logging_obj=None, chunk_size=5
+    )
+    added_items: Final = tuple(event.item for event in events if event.type == "response.output_item.added")
+    added_parts: Final = tuple(event.part for event in events if event.type == "response.content_part.added")
+
+    assert [(item.type, item.status) for item in added_items] == [
+        ("message", "in_progress"),
+        ("function_call", "in_progress"),
+    ]
+    assert added_items[0].content == []
+    assert added_items[1].arguments == ""
+    assert [part.text for part in added_parts] == [""]
+
+
+
+def _answer_with_reasoning_refusal_and_custom_tool_call() -> ResponsesAPIResponse:
+    return ResponsesAPIResponse(
+        id="resp_synthetic",
+        created_at=0,
+        status="completed",
+        model="gpt-6-luna",
+        object="response",
+        output=[
+            {
+                "type": "reasoning",
+                "id": "rs_synthetic",
+                "summary": [
+                    {"type": "summary_text", "text": "Weighing the cities."},
+                    {"type": "summary_text", "text": "Berlin it is."},
+                ],
+            },
+            {
+                "type": "message",
+                "id": "msg_synthetic",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {"type": "output_text", "text": "Checking the weather.", "annotations": []},
+                    {"type": "refusal", "refusal": "No forecasts for Mars."},
+                ],
+            },
+            {
+                "type": "custom_tool_call",
+                "id": "ctc_synthetic",
+                "call_id": "call_shell",
+                "name": "shell",
+                "input": "curl wttr.in/Berlin",
+            },
+        ],
+        usage=ResponseAPIUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+    )
+
+
+StreamedValueKey = tuple[int, str, int]
+
+
+def _opening_values(output_index: int, item: Mapping[str, object]) -> Mapping[StreamedValueKey, str]:
+    summaries: Final = {
+        (output_index, "summary", index): part["text"] for index, part in enumerate(item.get("summary") or ())
+    }
+    parts: Final = {
+        (output_index, "content", index): part.get("text") or part.get("refusal") or ""
+        for index, part in enumerate(item.get("content") or ())
+    }
+    tool_input: Final = {(output_index, "input", 0): item["input"]} if "input" in item else {}
+    return {**summaries, **parts, **tool_input}
+
+
+def _read_event_like_a_snapshot_reader(
+    built: Mapping[StreamedValueKey, str], event: ResponsesAPIStreamingResponse
+) -> Mapping[StreamedValueKey, str]:
+    payload: Final = event.model_dump()
+    match payload["type"]:
+        case "response.output_item.added":
+            return {**built, **_opening_values(payload["output_index"], payload["item"])}
+        case "response.content_part.added":
+            part: Final = payload["part"]
+            return {
+                **built,
+                (payload["output_index"], "content", payload["content_index"]): part.get("text")
+                or part.get("refusal")
+                or "",
+            }
+        case "response.reasoning_summary_part.added":
+            return {**built, (payload["output_index"], "summary", payload["summary_index"]): payload["part"]["text"]}
+        case "response.output_text.delta" | "response.refusal.delta":
+            content_key: Final = (payload["output_index"], "content", payload["content_index"])
+            return {**built, content_key: built[content_key] + payload["delta"]}
+        case "response.reasoning_summary_text.delta":
+            summary_key: Final = (payload["output_index"], "summary", payload["summary_index"])
+            return {**built, summary_key: built[summary_key] + payload["delta"]}
+        case "response.custom_tool_call_input.delta":
+            input_key: Final = (payload["output_index"], "input", 0)
+            return {**built, input_key: built[input_key] + payload["delta"]}
+        case _:
+            return built
+
+
+def test_faked_stream_builds_each_refusal_summary_and_custom_tool_input_once_for_a_snapshot_reader():
+    events: Final = streaming_module.build_synthetic_response_events(
+        transformed=_answer_with_reasoning_refusal_and_custom_tool_call(), logging_obj=None, chunk_size=5
+    )
+
+    built: Final = functools.reduce(_read_event_like_a_snapshot_reader, events, {})
+
+    assert built == {
+        (0, "summary", 0): "Weighing the cities.",
+        (0, "summary", 1): "Berlin it is.",
+        (1, "content", 0): "Checking the weather.",
+        (1, "content", 1): "No forecasts for Mars.",
+        (2, "input", 0): "curl wttr.in/Berlin",
+    }

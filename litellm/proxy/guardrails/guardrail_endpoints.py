@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, Union,
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -65,6 +65,7 @@ from litellm.types.guardrails import (
     LitellmParams,
     PatchGuardrailRequest,
     PiiAction,
+    PiiEntityCategoryMap,
     PiiEntityType,
     PresidioPresidioConfigModelUserInterface,
     SupportedGuardrailIntegrations,
@@ -88,6 +89,7 @@ if TYPE_CHECKING:
 
 router: Final = APIRouter()
 GUARDRAIL_REGISTRY: Final = GuardrailRegistry()
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _as_str_object_mapping(mapping: Mapping[str, object]) -> Mapping[str, object]:
@@ -143,14 +145,17 @@ def _get_guardrails_list_response(
             unmasked_length=4,
             number_of_asterisks=4,
         )
-        guardrail_configs.append(
-            GuardrailInfoResponse(
-                guardrail_id=guardrail.get("guardrail_id"),
-                guardrail_name=guardrail.get("guardrail_name"),
-                litellm_params=with_tolerated_stream_scope(masked_params),
-                guardrail_info=guardrail.get("guardrail_info"),
-            )
+        guardrail_info_response = GuardrailInfoResponse(
+            guardrail_id=guardrail.get("guardrail_id"),
+            guardrail_name=guardrail.get("guardrail_name"),
+            guardrail_info=guardrail.get("guardrail_info"),
         )
+        guardrail_info_response.litellm_params = parse_tolerant_litellm_params(
+            with_tolerated_stream_scope(masked_params),
+            guardrail_info_response.guardrail_name,
+            params_model=BaseLitellmParams,
+        )
+        guardrail_configs.append(guardrail_info_response)
     return ListGuardrailsResponse(guardrails=guardrail_configs)
 
 
@@ -1282,14 +1287,30 @@ async def patch_guardrail(
                 status_code=422,
                 detail=f"Invalid guardrail configuration, update rejected: {validation_error}",
             ) from validation_error
-        clear_stored_scope: Final = (
-            "logging_only_scope" not in requested_litellm_params
-            and parsed_litellm_params.logging_only_scope is not None
-            and GuardrailEventHooks.logging_only.value not in configured_event_hooks(parsed_litellm_params.mode)
+        mode_lacks_logging_only: Final = GuardrailEventHooks.logging_only.value not in configured_event_hooks(
+            parsed_litellm_params.mode
+        )
+        merged_overrides: Final = MappingProxyType(
+            {
+                **(
+                    {"logging_only_scope": None}
+                    if "logging_only_scope" not in requested_litellm_params
+                    and parsed_litellm_params.logging_only_scope is not None
+                    and mode_lacks_logging_only
+                    else {}
+                ),
+                **(
+                    {"logging_only_continue_on_input_failure": None}
+                    if "logging_only_continue_on_input_failure" not in requested_litellm_params
+                    and parsed_litellm_params.logging_only_continue_on_input_failure
+                    and mode_lacks_logging_only
+                    else {}
+                ),
+            }
         )
         litellm_params: Final = (
-            LitellmParams(**MappingProxyType({**merged_litellm_params, "logging_only_scope": None}))
-            if clear_stored_scope
+            LitellmParams(**MappingProxyType({**merged_litellm_params, **merged_overrides}))
+            if merged_overrides
             else parsed_litellm_params
         )
 
@@ -1320,7 +1341,9 @@ async def patch_guardrail(
         try:
             IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(
                 guardrail=guardrail,
-                reject_invalid_logging_only_scope="logging_only_scope" in requested_litellm_params,
+                reject_invalid_logging_only_scope=bool(
+                    {"logging_only_scope", "logging_only_continue_on_input_failure"} & set(requested_litellm_params)
+                ),
             )
             verbose_proxy_logger.info(
                 "Immediate sync: Successfully updated guardrail '%s' (ID: %s)", guardrail_name, guardrail_id
@@ -1475,6 +1498,7 @@ async def get_guardrail_ui_settings() -> GuardrailUIAddGuardrailSettings:
     - PII entity categories for UI organization
     - Content filter settings (patterns and categories)
     """
+    from litellm.decisions.call import supported_decisions_providers
     from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.patterns import (
         PATTERN_CATEGORIES,
         get_available_content_categories,
@@ -1482,7 +1506,7 @@ async def get_guardrail_ui_settings() -> GuardrailUIAddGuardrailSettings:
     )
     from litellm.proxy.guardrails.guardrail_registry import guardrail_class_registry
 
-    category_maps: Final = [
+    category_maps: Final[list[PiiEntityCategoryMap]] = [
         {
             "category": category.value,
             "entities": [entity.value for entity in entities],
@@ -1512,6 +1536,7 @@ async def get_guardrail_ui_settings() -> GuardrailUIAddGuardrailSettings:
         supported_modes_by_provider=supported_modes_by_provider,
         providers_without_directional_logging_only_scope=providers_without_directional_logging_only_scope,
         pii_entity_categories=category_maps,
+        decision_model_providers=supported_decisions_providers(),
         content_filter_settings={
             "prebuilt_patterns": get_pattern_metadata(),
             "pattern_categories": list(PATTERN_CATEGORIES.keys()),
@@ -1595,7 +1620,7 @@ async def get_major_airlines():
         with open(airlines_path, "r", encoding="utf-8") as f:
             import json
 
-            airlines: Final = json.load(f)
+            airlines: Final = _DECODED_JSON.validate_python(json.load(f))
         return {"airlines": airlines}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error reading major_airlines.json: {e}") from e

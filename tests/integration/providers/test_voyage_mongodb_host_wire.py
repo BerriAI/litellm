@@ -2,8 +2,6 @@ import asyncio
 import json
 import os
 import re
-import signal
-import socket
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -11,7 +9,6 @@ from pathlib import Path
 from typing import Final
 
 import httpx
-import psutil
 import pytest
 import yaml
 from integration._support.client import JSON_OBJECT, Gateway, eventually, gateway_from_environment, object_value
@@ -19,6 +16,7 @@ from integration._support.database import read_rows
 from integration._support.forward_proxy import ForwardProxy, refusing_forward_proxy
 from integration._support.process import owned_proxy, owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
+from integration._support.ports import allocate_port
 from openai import APIStatusError, AsyncOpenAI, OpenAI
 from pydantic import JsonValue, TypeAdapter
 
@@ -133,7 +131,12 @@ def _scrubbed() -> tuple[str, ...]:
 
 
 def _forward_environment(forward_url: str, **extra: str) -> dict[str, str]:
-    return {"HTTPS_PROXY": forward_url, "NO_PROXY": "127.0.0.1,localhost", **extra}
+    return {
+        "HTTPS_PROXY": forward_url,
+        "NO_PROXY": "127.0.0.1,localhost",
+        "PROXY_BATCH_POLLING_ENABLED": "false",
+        **extra,
+    }
 
 
 @pytest.fixture(scope="module")
@@ -614,15 +617,8 @@ def _spend_rows(call_id: str) -> list[dict[str, JsonValue]]:
     return read_rows('SELECT request_id FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (call_id,))
 
 
-def _reserve_port() -> int:
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        address: Final[Callable[[], tuple[str, int]]] = reserve.getsockname
-        return address()[1]
-
-
 async def test_forward_proxy_outage_mid_traffic_recovers_with_the_right_hosts(gateway: Gateway, tmp_path: Path) -> None:
-    port: Final = _reserve_port()
+    port: Final = allocate_port()
     config: Final = _write_config(tmp_path, "outage", _isolated_deployments(gateway.upstream_url))
     with owned_proxy(
         gateway,
@@ -675,12 +671,12 @@ async def test_worker_sigkill_mid_traffic_leaves_the_sibling_routing_by_key(gate
             _burst(str(candidate.client.base_url), candidate.key, 20, tolerate_transport_errors=True)
         )
         await asyncio.to_thread(eventually, lambda: forward.received.qsize(), lambda size: size >= 4, 60)
-        victim: Final = psutil.Process(workers[0])
-        victim.suspend()
-        victim.send_signal(signal.SIGKILL)
-        served: Final = await burst
-        for probe in served:
-            assert probe.response.status_code == REFUSED_STATUS, probe.response.text
+        with owned.replacing_worker(workers[0]) as kill:
+            kill.freeze()
+            await asyncio.to_thread(kill)
+            served: Final = await burst
+            for probe in served:
+                assert probe.response.status_code == REFUSED_STATUS, probe.response.text
         assert set(forward.targets()) <= {MONGODB_HOST, VOYAGE_HOST}
         follow_up: Final = _rerank(candidate, MONGODB_RERANK)
         _assert_dialed(forward, follow_up, MONGODB_HOST)

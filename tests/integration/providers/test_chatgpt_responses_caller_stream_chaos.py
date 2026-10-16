@@ -1,6 +1,5 @@
 import asyncio
 import re
-import signal
 import threading
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
@@ -21,6 +20,7 @@ from integration._support.client import Gateway, eventually, gateway_from_enviro
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
+from integration._support.ports import allocate_port
 from pydantic import JsonValue
 
 pytestmark: Final = pytest.mark.timeout(240)
@@ -63,17 +63,10 @@ class _Rig:
         return f"http://127.0.0.1:{self.port}"
 
 
-def _free_port() -> int:
-    with wire_server(cv.CodexVendor().respond) as probe:
-        port: Final = urlsplit(probe.url).port
-    assert port is not None, probe.url
-    return port
-
-
 @pytest.fixture(scope="module")
 def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
     directory: Final = tmp_path_factory.mktemp("chatgpt-caller-stream-chaos")
-    port: Final = _free_port()
+    port: Final = allocate_port()
     overrides: Final = {"CHATGPT_TOKEN_DIR": str(cv.login(directory)), "CHATGPT_API_BASE": f"http://127.0.0.1:{port}"}
     config: Final = cv.proxy_config(directory, probe=False)
     with gateway_from_environment() as gateway:
@@ -304,15 +297,15 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_answering_json(gatewa
             held_by: Final = MappingProxyType({pid: _open_upstream_connections(pid, wire.url) for pid in workers})
             assert sum(held_by.values()) == 20, held_by
             victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-            victim: Final = psutil.Process(victim_pid)
-            victim.suspend()
-            victim.send_signal(signal.SIGKILL)
-            release.set()
-            served: Final = await burst
-            assert held_by[survivor_pid] >= 10, held_by
-            assert len(served) == held_by[survivor_pid], (held_by, len(served))
-            for item in served:
-                _assert_answered_in_its_own_shape(item)
+            with owned.replacing_worker(victim_pid) as kill:
+                kill.freeze()
+                await asyncio.to_thread(kill)
+                release.set()
+                served: Final = await burst
+                assert held_by[survivor_pid] >= 10, held_by
+                assert len(served) == held_by[survivor_pid], (held_by, len(served))
+                for item in served:
+                    _assert_answered_in_its_own_shape(item)
             follow_up: Final = _Call("responses", False, uuid.uuid4().hex)
             (answered,) = await _burst(candidate, _CONFIG_MODEL, (follow_up,))
             _assert_answered_in_its_own_shape(answered)

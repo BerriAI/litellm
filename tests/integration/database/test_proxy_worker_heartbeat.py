@@ -2,6 +2,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Final
 
+import psycopg
 import pytest
 import pytest_asyncio
 
@@ -29,8 +30,9 @@ async def heartbeat_database(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[t
                 Path(__file__).resolve().parents[3]
                 / "litellm-proxy-extras/litellm_proxy_extras/migrations/20261009120000_proxy_worker_expiry/migration.sql"
             )
-            await client.db.execute_raw(migration.read_text())
-            await client.db.execute_raw(migration.read_text())
+            with psycopg.connect(url) as connection:
+                _ = connection.execute(migration.read_text())
+                _ = connection.execute(migration.read_text())
             yield client, url
         finally:
             await client.disconnect()

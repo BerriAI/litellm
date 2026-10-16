@@ -1,21 +1,18 @@
 import concurrent.futures
-import socket
 import threading
 import uuid
-from collections.abc import Iterator
 from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
 import httpx
-import psutil
 import pytest
 from integration._support.client import Gateway, Scenario, eventually
 from integration._support.database import read_rows
-from integration._support.process import OwnedProxy
 from integration._support.redis_process import owned_redis
 from integration._support.wire import Wire, wire_server
+from integration._support.ports import allocate_port
 from integration.observability.azure_dispatch_support import (
     ATTACK_MARKER,
     AzureBehavior,
@@ -25,7 +22,6 @@ from integration.observability.azure_dispatch_support import (
     dispatch_rig,
     provider_handler,
     provider_texts,
-    write_dispatch_config,
 )
 from pydantic import JsonValue
 
@@ -102,16 +98,6 @@ def _safe_request(candidate: Gateway, model: str, prompt: str) -> httpx.Response
         )
     except httpx.HTTPError:
         return None
-
-
-def _worker_processes(owned: OwnedProxy) -> tuple[psutil.Process, ...]:
-    descendants: Final = tuple(psutil.Process(owned.process.pid).children(recursive=True))
-    return tuple(
-        process
-        for process in descendants
-        if process.is_running()
-        and any("spawn_main" in argument for argument in process.cmdline())
-    )
 
 
 def _operation_specs(
@@ -265,9 +251,7 @@ def test_x1_azure_server_stop_restart_during_mixed_burst(
     with ExitStack() as resources:
         redis: Final = resources.enter_context(owned_redis(tmp_path))
         provider: Final = resources.enter_context(wire_server(provider_handler))
-        with socket.socket() as reservation:
-            reservation.bind(("127.0.0.1", 0))
-            azure_port: Final = int(reservation.getsockname()[1])
+        azure_port: Final = allocate_port()
         first_azure_lifetime: Final = ExitStack()
         try:
             azure: Final = first_azure_lifetime.enter_context(wire_server(azure_handler(), port=azure_port))
@@ -388,8 +372,8 @@ def test_x3_killing_one_worker_leaves_the_other_serving(
         _,
     ):
         candidate: Final = owned.gateway
-        workers: Final = _worker_processes(owned)
-        assert len(workers) == 2, tuple(process.cmdline() for process in workers)
+        workers: Final = owned.worker_pids()
+        assert len(workers) == 2, workers
         with candidate.scenario() as scenario:
             model: Final = _model(scenario, provider)
             with concurrent.futures.ThreadPoolExecutor(max_workers=12) as executor:
@@ -398,17 +382,17 @@ def test_x3_killing_one_worker_leaves_the_other_serving(
                     for _ in range(4)
                 )
                 assert entered.wait(timeout=30), "No request reached the slow Azure edge"
-                killed_worker: Final = workers[0]
-                survivor: Final = workers[1]
-                killed_worker.kill()
-                killed_worker.wait(timeout=10)
-                assert survivor.is_running(), "The second proxy worker exited with the killed worker"
-                prompts: Final = tuple(f"worker survivor {uuid.uuid4().hex}" for _ in range(8))
-                futures: Final = tuple(
-                    executor.submit(_safe_request, candidate, model, prompt)
-                    for prompt in prompts
-                )
-                responses: Final = tuple(future.result(timeout=70) for future in (*inflight, *futures))
+                killed_worker: Final = min(workers)
+                survivor: Final = max(workers)
+                with owned.replacing_worker(killed_worker) as kill:
+                    kill()
+                    assert survivor in owned.worker_pids(), "The second proxy worker exited with the killed worker"
+                    prompts: Final = tuple(f"worker survivor {uuid.uuid4().hex}" for _ in range(8))
+                    futures: Final = tuple(
+                        executor.submit(_safe_request, candidate, model, prompt)
+                        for prompt in prompts
+                    )
+                    responses: Final = tuple(future.result(timeout=70) for future in (*inflight, *futures))
             surviving_responses: Final = tuple(response for response in responses[4:] if response is not None)
             assert all(response.status_code == 200 for response in surviving_responses), tuple(
                 response.text for response in surviving_responses
@@ -422,6 +406,7 @@ def test_x3_killing_one_worker_leaves_the_other_serving(
                 _assert_spend(response.headers["x-litellm-call-id"], response.text)
 
 
+@pytest.mark.timeout(180)
 def test_x4_proxy_restart_preserves_completed_spend_rows(
     gateway: Gateway, tmp_path: Path
 ) -> None:
@@ -469,7 +454,7 @@ def test_x4_proxy_restart_preserves_completed_spend_rows(
                     assert arrived_count == len(interrupted_prompts), (
                         f"Only {arrived_count} of {len(interrupted_prompts)} interrupted requests reached Azure"
                     )
-                    first.process.terminate()
+                    first.begin_shutdown()
                     release.set()
                     first_proxy_lifetime.close()
                     interrupted_results: Final = tuple(future.result(timeout=70) for future in interrupted)

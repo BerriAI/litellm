@@ -401,8 +401,10 @@ def _get_tiered_base_costs(model_info: ModelInfo, usage: Usage) -> tuple[float, 
         tier_rate(tier, "input_cost_per_token"),
         completion_cost,
         cache_creation_cost,
-        tier_rate(tier, "cache_creation_input_token_cost_above_1hr", "cache_creation_input_token_cost")
-        or cache_creation_cost,
+        tier_rate(tier, "cache_creation_input_token_cost_above_1hr")
+        if "cache_creation_input_token_cost_above_1hr" in tier
+        and tier["cache_creation_input_token_cost_above_1hr"] is not None
+        else cache_creation_cost,
         tier_rate(tier, "cache_read_input_token_cost", "input_cost_per_token"),
     )
 
@@ -1267,6 +1269,13 @@ def get_provider_specific_geo_multiplier(model_info: ModelInfo, usage: Usage) ->
     return float(provider_specific_entry.get(inference_geo.lower(), 1.0))
 
 
+def get_provider_specific_speed_multiplier(model_info: ModelInfo, usage: Usage) -> float:
+    provider_specific_entry: Final = model_info.get("provider_specific_entry")
+    if getattr(usage, "speed", None) != "fast" or not provider_specific_entry:
+        return 1.0
+    return float(provider_specific_entry.get("fast", 1.0))
+
+
 def _resolve_reasoning_token_cost(
     model_info: ModelInfo,
     service_tier: str | None,
@@ -1631,6 +1640,7 @@ def _cost_map_billed_rates(
         get_regional_uplift_multiplier(model_info, data_residency)
         * get_vertex_regional_endpoint_uplift(model_info, vertex_location)
         * get_provider_specific_geo_multiplier(model_info=model_info, usage=usage)
+        * get_provider_specific_speed_multiplier(model_info=model_info, usage=usage)
     )
     return BilledTokenRates(
         input_cost_per_token=prompt_base_cost,

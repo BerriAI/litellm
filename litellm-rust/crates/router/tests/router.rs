@@ -29,6 +29,32 @@ fn configuration_preserves_deployment_parameters(#[case] parameters: &str) {
     assert_eq!(deployment.custom_llm_provider, params.custom_llm_provider);
     assert_eq!(deployment.timeout, Deployment::default().timeout);
     assert_eq!(deployment.shaping, Deployment::default().shaping);
+    assert_eq!(deployment.litellm_params, *params);
+}
+
+#[rstest]
+fn configuration_types_the_provider_params_of_a_deployment() {
+    let config = Config::from_yaml(
+        "model_list:
+  - model_name: public-model
+    litellm_params:
+      model: bedrock/anthropic.claude-3
+      aws_region_name: eu-central-1
+      aws_bedrock_runtime_endpoint: https://runtime.example
+      azure_ad_token: ignored-by-every-group",
+    )
+    .unwrap();
+    let router = Router::from_model_list(&config.model_list);
+    let params = &router.get("public-model").unwrap().litellm_params;
+
+    assert_eq!(
+        (
+            params.aws.aws_region_name.as_deref(),
+            params.aws.aws_bedrock_runtime_endpoint.as_deref(),
+            params.aws.aws_access_key_id.as_deref(),
+        ),
+        (Some("eu-central-1"), Some("https://runtime.example"), None)
+    );
 }
 
 #[rstest]
@@ -72,6 +98,7 @@ fn programmatic_deployments_preserve_overrides_and_last_entry_wins() {
         api_key: Some("test-key".into()),
         api_base: Some("https://provider.example/v1".into()),
         custom_llm_provider: Some("test-provider".into()),
+        litellm_params: Default::default(),
         timeout: Some(Duration::from_secs(7)),
         shaping: MessagesShaping {
             settings: MessagesSettings {

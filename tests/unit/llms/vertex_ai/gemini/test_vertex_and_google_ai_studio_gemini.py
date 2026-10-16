@@ -2,17 +2,19 @@ import asyncio, importlib, os, uuid
 import json
 import re
 from copy import deepcopy
-from typing import Final, List, cast, get_args
-from unittest.mock import MagicMock, patch
+from typing import Final, List, Literal, cast, get_args
+from unittest.mock import MagicMock, Mock, patch
 
 import httpx
 import pytest
+import respx
 from pydantic import BaseModel
 
 import litellm
 from litellm import ModelResponse, completion, embedding, image_generation
+from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.llms.anthropic.pass_through.messages import handler as anthropic_messages_handler
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
@@ -23,7 +25,7 @@ from litellm.types.llms.vertex_ai import GeminiFinishReason, UsageMetadata
 from litellm.types.utils import ChoiceLogprobs, Usage
 from litellm.utils import _invalidate_model_cost_lowercase_map, CustomStreamWrapper
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.llms.vertex_ai.gemini.transformation import(
+from litellm.llms.vertex_ai.gemini.transformation import (
     gemini_convert_messages_with_history,
 )
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
@@ -810,6 +812,102 @@ def test_vertex_ai_url_context_tool_use_tokens_billed_as_input_tokens():
     assert usage.total_tokens - usage.prompt_tokens - usage.completion_tokens == 0
 
 
+def test_url_context_tool_use_tokens_are_priced_as_input():
+    """
+    URL context tool-use tokens are billed at the input token rate, so the input cost must
+    cover every token counted in usage.prompt_tokens, not just the reported text modality.
+    See https://github.com/BerriAI/litellm/issues/45991
+    """
+    v = VertexGeminiConfig()
+    completion_response = {
+        "candidates": [
+            {
+                "urlContextMetadata": {"urlMetadata": []},
+                "groundingMetadata": {
+                    "groundingChunks": [{"web": {"uri": "https://example.com", "title": "Example"}}]
+                },
+            }
+        ],
+        "usageMetadata": UsageMetadata(
+            promptTokenCount=23,
+            candidatesTokenCount=10,
+            toolUsePromptTokenCount=14115,
+            totalTokenCount=14148,
+            promptTokensDetails=[{"modality": "TEXT", "tokenCount": 23}],
+            toolUsePromptTokensDetails=[{"modality": "TEXT", "tokenCount": 14115}],
+        ),
+    }
+
+    usage = v.calculate_usage(completion_response=completion_response)
+
+    assert usage.prompt_tokens == 23 + 14115
+    assert usage.prompt_tokens_details.text_tokens == usage.prompt_tokens
+    input_rate: Final = litellm.get_model_info("gemini-2.5-flash")["input_cost_per_token"]
+    prompt_cost, _ = litellm.cost_per_token(model="gemini/gemini-2.5-flash", usage_object=usage)
+    assert prompt_cost == usage.prompt_tokens * input_rate
+
+
+def test_search_grounding_tool_use_tokens_stay_unpriced():
+    """
+    Grounding with Google Search tokens are not billed at the input token rate (a separate
+    per-query search fee applies), so neither prompt_tokens nor the input cost may grow with
+    toolUsePromptTokenCount.
+    """
+    v = VertexGeminiConfig()
+    completion_response = {
+        "candidates": [{"groundingMetadata": {"webSearchQueries": ["latest nobel physics"]}}],
+        "usageMetadata": UsageMetadata(
+            promptTokenCount=23,
+            candidatesTokenCount=10,
+            toolUsePromptTokenCount=14115,
+            totalTokenCount=14148,
+            promptTokensDetails=[{"modality": "TEXT", "tokenCount": 23}],
+            toolUsePromptTokensDetails=[{"modality": "TEXT", "tokenCount": 14115}],
+        ),
+    }
+
+    usage = v.calculate_usage(completion_response=completion_response)
+
+    assert usage.prompt_tokens == 23
+    assert usage.prompt_tokens_details.text_tokens == 23
+    input_rate: Final = litellm.get_model_info("gemini-2.5-flash")["input_cost_per_token"]
+    prompt_cost, _ = litellm.cost_per_token(model="gemini/gemini-2.5-flash", usage_object=usage)
+    assert prompt_cost == 23 * input_rate
+
+
+def test_missing_prompt_tokens_details_still_prices_the_full_prompt():
+    """
+    Gemini omits promptTokensDetails on some tool-use responses, leaving text_tokens unset.
+    That None must be preserved so input billing falls back to the full prompt_tokens, and
+    must not be turned into a concrete count that prices only part of the prompt.
+    """
+    v = VertexGeminiConfig()
+    completion_response = {
+        "candidates": [
+            {
+                "urlContextMetadata": {"urlMetadata": []},
+                "groundingMetadata": {
+                    "groundingChunks": [{"web": {"uri": "https://example.com", "title": "Example"}}]
+                },
+            }
+        ],
+        "usageMetadata": UsageMetadata(
+            promptTokenCount=23,
+            candidatesTokenCount=10,
+            toolUsePromptTokenCount=14115,
+            totalTokenCount=14148,
+        ),
+    }
+
+    usage = v.calculate_usage(completion_response=completion_response)
+
+    assert usage.prompt_tokens == 23 + 14115
+    assert usage.prompt_tokens_details.text_tokens is None
+    input_rate: Final = litellm.get_model_info("gemini-2.5-flash")["input_cost_per_token"]
+    prompt_cost, _ = litellm.cost_per_token(model="gemini/gemini-2.5-flash", usage_object=usage)
+    assert prompt_cost == usage.prompt_tokens * input_rate
+
+
 def test_streaming_chunk_includes_reasoning_tokens():
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         ModelResponseIterator,
@@ -1388,7 +1486,7 @@ def test_vertex_ai_streaming_usage_calculation():
         iterator.chunk_parser(chunk)
 
         # Verify calculate_usage was called with correct parameters
-        mock_calculate_usage.assert_called_once_with(completion_response=chunk)
+        mock_calculate_usage.assert_called_once_with(completion_response=chunk, cache_creation_tokens=0)
 
     # Test non-streaming response parsing
     with patch.object(VertexGeminiConfig, "_calculate_usage") as mock_calculate_usage:
@@ -1414,6 +1512,7 @@ def test_vertex_ai_streaming_usage_calculation():
         # Verify _calculate_usage was called with correct parameters
         mock_calculate_usage.assert_called_once_with(
             completion_response=completion_response,
+            cache_creation_tokens=0,
         )
 
 
@@ -1523,6 +1622,532 @@ def test_gemini_api_maps_grounding_chunk_parser_counts_queries_as_maps_requests(
     usage = completed_response.usage
     assert usage.prompt_tokens_details.google_maps_grounding_requests == 1
     assert not hasattr(usage.prompt_tokens_details, "web_search_requests")
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_gemini_finish_reason(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(
+        url__regex=r"https://generativelanguage\.googleapis\.com/v1beta/models/gemini-2\.5-flash:generateContent.*"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {"content": {"parts": [{"text": "Answer"}]}, "finishReason": "MAX_TOKENS"},
+                ],
+                "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+            },
+        )
+    )
+    response: Final = completion(
+        model="gemini/gemini-2.5-flash",
+        messages=[{"role": "user", "content": "Provide a brief answer."}],
+        api_key="test-api-key",
+        client=HTTPHandler(),
+    )
+
+    assert route.called
+    assert response.choices[0].finish_reason == "length"
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_gemini_image_generation(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(
+        url__regex=(
+            r"https://generativelanguage\.googleapis\.com/v1beta/models/"
+            r"gemini-2\.5-flash-image:generateContent.*"
+        )
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {"text": "A red square"},
+                                {"inlineData": {"mimeType": "image/png", "data": "aW1hZ2U="}},
+                            ]
+                        },
+                        "finishReason": "STOP",
+                    }
+                ],
+                "usageMetadata": {
+                    "promptTokenCount": 1,
+                    "candidatesTokenCount": 1,
+                    "totalTokenCount": 2,
+                },
+            },
+        )
+    )
+    response: Final = completion(
+        model="gemini/gemini-2.5-flash-image",
+        messages=[{"role": "user", "content": "Draw a red square"}],
+        modalities=["image", "text"],
+        api_key="test-api-key",
+        client=HTTPHandler(),
+    )
+
+    assert response.choices[0].message.images[0]["image_url"]["url"] == "data:image/png;base64,aW1hZ2U="
+    assert json.loads(route.calls.last.request.content)["generationConfig"]["responseModalities"] == ["IMAGE", "TEXT"]
+
+
+GEMINI_MODELS_URL: Final = "https://generativelanguage.googleapis.com/v1beta/models"
+GEMINI_IMAGE_RESPONSE: Final = {
+    "candidates": [
+        {
+            "content": {
+                "role": "model",
+                "parts": [
+                    {"text": "Here is a banana wearing a LiteLLM costume."},
+                    {"inlineData": {"mimeType": "image/png", "data": "iVBORw0KGgoAAAANSUhEUg=="}},
+                ],
+            },
+            "finishReason": "STOP",
+            "index": 0,
+        }
+    ],
+    "usageMetadata": {"promptTokenCount": 13, "candidatesTokenCount": 1295, "totalTokenCount": 1308},
+    "modelVersion": "gemini-2.5-flash-image",
+    "responseId": "Vx7oaJ2sK9mKz7IP3uWg0Ak",
+}
+
+
+@pytest.fixture
+def _gemini_httpx_transport(monkeypatch: pytest.MonkeyPatch):
+    from litellm.caching.llm_caching_handler import LLMClientCache
+
+    client_cache: Final = LLMClientCache()
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", client_cache)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "force_ipv4", False)
+    yield
+    client_cache.flush_cache()
+
+
+def _gemini_sse(*events: dict[str, object]) -> httpx.Response:
+    return httpx.Response(
+        200,
+        content="".join(f"data: {json.dumps(event)}\r\n\r\n" for event in events).encode(),
+        headers={"content-type": "text/event-stream"},
+    )
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+async def test_gemini_image_generation_async(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post(f"{GEMINI_MODELS_URL}/gemini-2.5-flash-image:generateContent").mock(
+        return_value=httpx.Response(200, json=GEMINI_IMAGE_RESPONSE)
+    )
+
+    response: Final = await litellm.acompletion(
+        model="gemini/gemini-2.5-flash-image",
+        messages=[{"role": "user", "content": "Generate an image of a banana wearing a costume that says LiteLLM"}],
+        api_key="test-api-key",
+    )
+
+    assert response.choices[0].message.content == "Here is a banana wearing a LiteLLM costume."
+    assert response.choices[0].message.images == [
+        {
+            "image_url": {"url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==", "detail": "auto"},
+            "index": 0,
+            "type": "image_url",
+        }
+    ]
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+async def test_gemini_image_generation_async_stream(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post(f"{GEMINI_MODELS_URL}/gemini-2.5-flash-image:streamGenerateContent?alt=sse").mock(
+        return_value=_gemini_sse(
+            {
+                "candidates": [
+                    {
+                        "content": {
+                            "role": "model",
+                            "parts": [{"inlineData": {"mimeType": "image/png", "data": "iVBORw0KGgoAAAANSUhEUg=="}}],
+                        },
+                        "index": 0,
+                    }
+                ],
+                "usageMetadata": {"promptTokenCount": 13, "totalTokenCount": 13},
+                "modelVersion": "gemini-2.5-flash-image",
+            },
+            {
+                "candidates": [{"content": {"role": "model", "parts": [{"text": ""}]}, "finishReason": "STOP", "index": 0}],
+                "usageMetadata": {"promptTokenCount": 13, "candidatesTokenCount": 1290, "totalTokenCount": 1303},
+                "modelVersion": "gemini-2.5-flash-image",
+            },
+        )
+    )
+
+    response: Final = await litellm.acompletion(
+        model="gemini/gemini-2.5-flash-image",
+        messages=[{"role": "user", "content": "Generate an image of a banana wearing a costume that says LiteLLM"}],
+        stream=True,
+        api_key="test-api-key",
+    )
+    chunks: Final = [chunk async for chunk in response]
+
+    assert [getattr(chunk.choices[0].delta, "images", None) for chunk in chunks] == [
+        [
+            {
+                "image_url": {"url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==", "detail": "auto"},
+                "index": 0,
+                "type": "image_url",
+            }
+        ],
+        None,
+    ]
+    assert chunks[-1].choices[0].finish_reason == "stop"
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_gemini_thinking(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(
+        url__regex=r"https://generativelanguage\.googleapis\.com/v1beta/models/gemini-2\.5-flash:generateContent.*"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {"content": {"parts": [{"text": "42"}]}, "finishReason": "STOP"},
+                ],
+                "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+            },
+        )
+    )
+    response: Final = completion(
+        model="gemini/gemini-2.5-flash",
+        messages=[
+            {"role": "user", "content": "What is six times seven?"},
+            {
+                "role": "assistant",
+                "content": "The answer is 42.",
+                "reasoning_content": "I added six times seven.",
+            },
+            {"role": "user", "content": "Confirm the result."},
+        ],
+        api_key="test-api-key",
+        client=HTTPHandler(),
+    )
+    request_body: Final = json.loads(route.calls.last.request.content)
+
+    assert route.called
+    assert request_body["contents"][1] == {
+        "role": "model",
+        "parts": [
+            {"thought": True, "text": "I added six times seven."},
+            {"text": "The answer is 42."},
+        ],
+    }
+    assert response.choices[0].message.content == "42"
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_gemini_with_empty_function_call_arguments(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(
+        url__regex=r"https://generativelanguage\.googleapis\.com/v1beta/models/gemini-2\.5-flash:generateContent.*"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {"content": {"parts": [{"text": "Ready"}]}, "finishReason": "STOP"},
+                ],
+                "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+            },
+        )
+    )
+    completion(
+        model="gemini/gemini-2.5-flash",
+        messages=[{"role": "user", "content": "Call ping"}],
+        tools=[{"type": "function", "function": {"name": "ping", "parameters": ""}}],
+        api_key="test-api-key",
+        client=HTTPHandler(),
+    )
+    request_body: Final = json.loads(route.calls.last.request.content)
+
+    assert route.called
+    assert request_body["tools"] == [{"function_declarations": [{"name": "ping", "parameters": {"type": "object"}}]}]
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+def test_gemini_tool_use(respx_mock: respx.MockRouter) -> None:
+    weather_tool: Final = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Retrieve current weather for a specific location",
+            "parameters": {
+                "type": "object",
+                "properties": {"location": {"type": "string", "description": "City and country, e.g., Lima, Peru"}},
+                "required": ["location"],
+            },
+        },
+    }
+    respx_mock.post(f"{GEMINI_MODELS_URL}/gemini-2.5-flash:streamGenerateContent?alt=sse").mock(
+        return_value=_gemini_sse(
+            {
+                "candidates": [
+                    {
+                        "content": {
+                            "role": "model",
+                            "parts": [{"functionCall": {"name": "get_weather", "args": {"location": "Lima, Peru"}}}],
+                        },
+                        "finishReason": "STOP",
+                        "index": 0,
+                    }
+                ],
+                "usageMetadata": {"promptTokenCount": 80, "candidatesTokenCount": 10, "totalTokenCount": 90},
+                "modelVersion": "gemini-2.5-flash",
+            }
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="gemini/gemini-2.5-flash",
+        messages=[
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "What's the weather like in Lima, Peru today?"},
+        ],
+        tools=[weather_tool],
+        stream=True,
+        stream_options={"include_usage": True},
+        api_key="test-api-key",
+    )
+    chunks: Final = list(response)
+
+    tool_calls: Final = chunks[0].choices[0].delta.tool_calls
+    assert [(call.function.name, json.loads(call.function.arguments)) for call in tool_calls] == [
+        ("get_weather", {"location": "Lima, Peru"})
+    ]
+    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == ["tool_calls"]
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_system_message_with_no_user_message(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(f"{GEMINI_MODELS_URL}/gemini-2.5-flash:generateContent").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {"content": {"role": "model", "parts": [{"text": "I will be good."}]}, "finishReason": "STOP"}
+                ],
+                "usageMetadata": {"promptTokenCount": 6, "candidatesTokenCount": 5, "totalTokenCount": 11},
+            },
+        )
+    )
+
+    response: Final = completion(
+        model="gemini/gemini-2.5-flash",
+        messages=[{"role": "system", "content": "Be a good bot!"}],
+        api_key="test-api-key",
+        client=HTTPHandler(),
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "contents": [{"role": "user", "parts": [{"text": "."}]}],
+        "system_instruction": {"parts": [{"text": "Be a good bot!"}]},
+    }
+    assert response.choices[0].message.content == "I will be good."
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_url_context(respx_mock: respx.MockRouter) -> None:
+    metadata: Final = {
+        "urlMetadata": [
+            {
+                "retrievedUrl": "https://www.iana.org/domains/reserved",
+                "urlRetrievalStatus": "URL_RETRIEVAL_STATUS_SUCCESS",
+            }
+        ]
+    }
+    route: Final = respx_mock.post(
+        url__regex=r"https://generativelanguage\.googleapis\.com/v1beta/models/gemini-2\.5-flash:generateContent.*"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {
+                        "content": {"parts": [{"text": "Reserved domains are for examples."}]},
+                        "finishReason": "STOP",
+                        "urlContextMetadata": metadata,
+                    }
+                ],
+                "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+            },
+        )
+    )
+    response: Final = completion(
+        model="gemini/gemini-2.5-flash",
+        messages=[{"role": "user", "content": "What is this page about?"}],
+        tools=[{"urlContext": {}}],
+        api_key="test-api-key",
+        client=HTTPHandler(),
+    )
+
+    assert route.called
+    assert response.vertex_ai_url_context_metadata == [metadata]
+    assert response.hidden_params["vertex_ai_url_context_metadata"] == [metadata]
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_gemini_openai_web_search_tool_to_google_search(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(
+        url__regex=r"https://generativelanguage\.googleapis\.com/v1beta/models/gemini-2\.5-flash:generateContent.*"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {
+                        "content": {"role": "model", "parts": [{"text": "The capital of France is Paris."}]},
+                        "finishReason": "STOP",
+                        "groundingMetadata": GEMINI_GROUNDING_METADATA,
+                    },
+                ],
+                "usageMetadata": {"promptTokenCount": 8, "candidatesTokenCount": 7, "totalTokenCount": 15},
+            },
+        )
+    )
+    response: Final = completion(
+        model="gemini/gemini-2.5-flash",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        tools=[{"type": "web_search"}],
+        api_key="test-api-key",
+        client=HTTPHandler(),
+    )
+    request_body: Final = json.loads(route.calls.last.request.content)
+
+    assert request_body["tools"] == [{"googleSearch": {}}]
+    assert response.vertex_ai_grounding_metadata == [GEMINI_GROUNDING_METADATA]
+
+
+GEMINI_GROUNDING_METADATA: Final = {
+    "webSearchQueries": ["capital of France"],
+    "searchEntryPoint": {"renderedContent": "<div class=\"container\"></div>"},
+    "groundingChunks": [
+        {"web": {"uri": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AbF9w", "title": "wikipedia.org"}}
+    ],
+    "groundingSupports": [
+        {
+            "segment": {"startIndex": 0, "endIndex": 30, "text": "The capital of France is Paris."},
+            "groundingChunkIndices": [0],
+        }
+    ],
+}
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+def test_gemini_with_grounding(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(f"{GEMINI_MODELS_URL}/gemini-2.5-flash:streamGenerateContent?alt=sse").mock(
+        return_value=_gemini_sse(
+            {
+                "candidates": [
+                    {"content": {"role": "model", "parts": [{"text": "The capital of France is Paris."}]}, "index": 0}
+                ],
+                "usageMetadata": {"promptTokenCount": 8, "candidatesTokenCount": 7, "totalTokenCount": 15},
+            },
+            {
+                "candidates": [
+                    {
+                        "content": {"role": "model", "parts": [{"text": ""}]},
+                        "finishReason": "STOP",
+                        "index": 0,
+                        "groundingMetadata": GEMINI_GROUNDING_METADATA,
+                    }
+                ],
+                "usageMetadata": {"promptTokenCount": 8, "candidatesTokenCount": 7, "totalTokenCount": 15},
+            },
+        )
+    )
+
+    chunks: Final = list(
+        litellm.completion(
+            model="gemini/gemini-2.5-flash",
+            messages=[{"role": "user", "content": "What is the capital of France?"}],
+            tools=[{"googleSearch": {}}],
+            stream=True,
+            stream_options={"include_usage": True},
+            api_key="test-api-key",
+        )
+    )
+    complete_response: Final = litellm.stream_chunk_builder(chunks)
+
+    assert json.loads(route.calls.last.request.content)["tools"] == [{"googleSearch": {}}]
+    assert complete_response.choices[0].message.content == "The capital of France is Paris."
+    assert complete_response.usage.prompt_tokens_details.web_search_requests == 1
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected_exception"),
+    [
+        (400, litellm.BadRequestError),
+        (401, litellm.AuthenticationError),
+        (403, litellm.BadRequestError),
+        (404, litellm.NotFoundError),
+        (408, litellm.Timeout),
+        (429, litellm.RateLimitError),
+        (500, litellm.InternalServerError),
+        (502, litellm.APIConnectionError),
+        (503, litellm.ServiceUnavailableError),
+    ],
+)
+def test_gemini_error_status_codes_map_to_exceptions(status_code: int, expected_exception: type[Exception]) -> None:
+    response: Final = Mock(spec=httpx.Response)
+    response.status_code = status_code
+    response.text = f"API Error {status_code}"
+    response.headers = {}
+    original_exception: Final = httpx.HTTPStatusError(
+        message=f"HTTP {status_code}",
+        request=Mock(),
+        response=response,
+    )
+    original_exception.response = response
+    original_exception.status_code = status_code
+    original_exception.message = f"HTTP {status_code}"
+
+    with pytest.raises(expected_exception) as exc_info:
+        exception_type(
+            model="gemini-pro",
+            original_exception=original_exception,
+            custom_llm_provider="gemini",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert "GeminiException" in str(exc_info.value)
+    assert "VertexAIException" not in str(exc_info.value)
+
+
+def test_gemini_reasoning_effort_and_function_tool_share_request() -> None:
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "reasoning_effort": "low",
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "lookup",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ],
+        },
+        optional_params={},
+        model="gemini-2.5-flash",
+        drop_params=False,
+    )
+
+    assert request_params["thinkingConfig"] == {"includeThoughts": True, "thinkingBudget": 1024}
+    assert request_params["tools"] == [
+        {"function_declarations": [{"name": "lookup", "parameters": {"type": "object"}}]}
+    ]
 
 
 def test_vertex_ai_transform_parts():
@@ -2485,7 +3110,7 @@ def test_is_gemini_3_or_newer():
     ],
 )
 def test_gemini_3_reasoning_effort_maps_to_thinking_level(model: str):
-    """Test that reasoning_effort maps to thinkingLevel and default temperature=1.0"""
+    """Test that reasoning_effort maps to thinkingLevel and no temperature is injected"""
     from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
@@ -2510,7 +3135,7 @@ def test_gemini_3_reasoning_effort_maps_to_thinking_level(model: str):
             "thinkingLevel": effort,
             "includeThoughts": True,
         }
-        assert mapped["temperature"] == 1.0
+        assert "temperature" not in mapped
         assert "thinkingBudget" not in mapped["thinkingConfig"]
 
 
@@ -2945,28 +3570,58 @@ def test_reasoning_effort_dict_format_gemini_3():
     assert "thinkingConfig" not in result
 
 
-def test_temperature_default_for_gemini_3():
-    """Test that temperature defaults to 1.0 for Gemini 3+ models when not specified"""
+@pytest.mark.parametrize("model", ["gemini-3-pro-preview", "gemini-flash-latest"])
+@pytest.mark.parametrize("config_cls", ["vertex", "studio"])
+def test_gemini_3_omits_temperature_when_not_specified(model: str, config_cls: Literal["vertex", "studio"]) -> None:
+    """Gemini 3+ requests must not gain a temperature the caller did not send"""
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
     )
 
-    v = VertexGeminiConfig()
-    model = "gemini-3-pro-preview"
-    optional_params = {}
-
-    # No temperature specified
-    non_default_params = {}
-    result = v.map_openai_params(
-        non_default_params=non_default_params,
-        optional_params=optional_params,
+    cfg: Final = VertexGeminiConfig() if config_cls == "vertex" else GoogleAIStudioGeminiConfig()
+    result: Final = cfg.map_openai_params(
+        non_default_params={},
+        optional_params={},
         model=model,
         drop_params=False,
     )
 
-    # Should default to 1.0
-    assert "temperature" in result
-    assert result["temperature"] == 1.0
+    assert "temperature" not in result
+
+
+@pytest.mark.parametrize("config_cls", ["vertex", "studio"])
+def test_gemini_3_explicit_temperature_is_still_forwarded(config_cls: Literal["vertex", "studio"]) -> None:
+    """An explicitly supplied temperature is still forwarded"""
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    cfg: Final = VertexGeminiConfig() if config_cls == "vertex" else GoogleAIStudioGeminiConfig()
+    result: Final = cfg.map_openai_params(
+        non_default_params={"temperature": 0.4},
+        optional_params={},
+        model="gemini-3-pro-preview",
+        drop_params=False,
+    )
+
+    assert result["temperature"] == 0.4
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_get_optional_params_gemini_3_has_no_default_temperature(
+    custom_llm_provider: Literal["gemini", "vertex_ai"],
+) -> None:
+    """Neither the gemini nor the vertex_ai route injects a temperature"""
+    from litellm.utils import get_optional_params
+
+    optional_params: Final = get_optional_params(
+        model="gemini-3-pro-preview",
+        custom_llm_provider=custom_llm_provider,
+        reasoning_effort="medium",
+    )
+
+    assert "temperature" not in optional_params
+    assert optional_params["thinkingConfig"]["thinkingLevel"] == "medium"
 
 
 def test_media_resolution_from_detail_parameter():
@@ -3216,8 +3871,7 @@ def test_gemini_3_image_models_no_thinking_config():
 
     # Should NOT have thinkingConfig automatically added
     assert "thinkingConfig" not in result
-    # But should still get temperature=1.0 for Gemini 3
-    assert result["temperature"] == 1.0
+    assert "temperature" not in result
 
 
 def test_gemini_3_text_models_get_thinking_config():
@@ -3245,7 +3899,7 @@ def test_gemini_3_text_models_get_thinking_config():
 
     # Should NOT have thinkingConfig automatically added when user provides no reasoning_effort
     assert "thinkingConfig" not in result
-    assert result["temperature"] == 1.0
+    assert "temperature" not in result
 
 
 def test_gemini_image_models_excluded_from_thinking():
@@ -5123,28 +5777,20 @@ def test_sync_streaming_uses_custom_client():
 
 
 def test_transform_response_does_not_leak_body_on_parse_failure():
-    leaky_body = {"candidates": [{"content": {"parts": [{"text": "secret content"}]}}]}
-    raw_response = MagicMock()
-    raw_response.json.return_value = leaky_body
-    raw_response.text = json.dumps(leaky_body)
-    raw_response.headers = {}
+    raw_response = httpx.Response(200, json=[{"candidates": [{"content": {"parts": [{"text": "secret content"}]}}]}])
 
-    with patch(
-        "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.GenerateContentResponseBody",
-        side_effect=KeyError("missing required field"),
-    ):
-        with pytest.raises(VertexAIError) as exc_info:
-            VertexGeminiConfig().transform_response(
-                model="gemini-pro",
-                raw_response=raw_response,
-                model_response=ModelResponse(),
-                logging_obj=MagicMock(),
-                request_data={},
-                messages=[],
-                optional_params={},
-                litellm_params={},
-                encoding=None,
-            )
+    with pytest.raises(VertexAIError) as exc_info:
+        VertexGeminiConfig().transform_response(
+            model="gemini-pro",
+            raw_response=raw_response,
+            model_response=ModelResponse(),
+            logging_obj=MagicMock(),
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
 
     msg = str(exc_info.value)
     assert "secret content" not in msg
@@ -8805,6 +9451,8 @@ def test_vertex_ai_streaming_response_id():
             model="gemini-pro",
             messages=[],
             logging_obj=logging_obj,
+            request_body={},
+            hop_headers=lambda: {},
         )
         iterator = iter(iterator)
         first_chunk = next(iterator)
@@ -8861,6 +9509,39 @@ def test_vertex_ai_gemini_audio_ogg():
     print(response)
 
 
+def test_vertex_ai_cache_creation_kwarg_cannot_change_usage_or_cost() -> None:
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json.return_value = {
+        "candidates": [
+            {"content": {"parts": [{"text": "hi"}], "role": "model"}, "finishReason": "STOP", "index": 0}
+        ],
+        "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5, "totalTokenCount": 15},
+    }
+    client = HTTPHandler()
+    httpx_mock = MagicMock(return_value=mock_response)
+    with (
+        patch.object(client, "post", new=httpx_mock),
+        patch.object(VertexBase, "_ensure_access_token", return_value=("fake-token", "fake-project")),
+    ):
+        response = litellm.completion(
+            model="vertex_ai/gemini-2.5-flash",
+            messages=[{"role": "user", "content": "hi"}],
+            vertex_project="fake-project",
+            vertex_location="us-central1",
+            vertex_ai_cache_creation_input_tokens=-1000000,
+            client=client,
+        )
+
+    assert response.usage.prompt_tokens == 10
+    assert response.usage.cache_creation_input_tokens is None
+    assert response._hidden_params["response_cost"] > 0
+
+
 def load_vertex_ai_credentials():
     # Define the path to the vertex_key.json file
     print("loading vertex ai credentials")
@@ -8899,3 +9580,101 @@ def load_vertex_ai_credentials():
 
     # Export the temporary file as GOOGLE_APPLICATION_CREDENTIALS
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.abspath(temp_file.name)
+
+
+# Gemini prebuilt TTS voices per https://ai.google.dev/gemini-api/docs/speech-generation (page dated 2026-10-01, read 2026-10-07)
+GEMINI_TTS_PREBUILT_VOICES: Final[frozenset[str]] = frozenset(
+    {
+        "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus", "Aoede", "Callirrhoe", "Autonoe",
+        "Enceladus", "Iapetus", "Umbriel", "Algieba", "Despina", "Erinome", "Algenib", "Rasalgethi",
+        "Laomedeia", "Achernar", "Alnilam", "Schedar", "Gacrux", "Pulcherrima", "Achird", "Zubenelgenubi",
+        "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat",
+    }
+)
+OPENAI_TTS_VOICES: Final[tuple[str, ...]] = (
+    "alloy", "ash", "ballad", "cedar", "coral", "echo", "fable", "marin", "onyx", "sage", "shimmer", "verse",
+)
+
+
+def _mapped_voice_name(audio: dict[str, str]) -> str:
+    return VertexGeminiConfig()._map_audio_params(audio)["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"]
+
+
+@pytest.mark.parametrize("openai_voice", OPENAI_TTS_VOICES)
+def test_map_audio_params_maps_openai_voice_names_to_gemini_prebuilt_voices(openai_voice: str) -> None:
+    """Regression for the audio_speech health check default voice (alloy) 400ing on Gemini TTS models."""
+    mapped: Final = _mapped_voice_name({"voice": openai_voice, "format": "pcm16"})
+    assert mapped in GEMINI_TTS_PREBUILT_VOICES
+    assert _mapped_voice_name({"voice": openai_voice.capitalize()}) == mapped
+
+
+def test_map_audio_params_maps_the_health_check_default_voice_to_kore() -> None:
+    assert _mapped_voice_name({"voice": "alloy", "format": "pcm16"}) == "Kore"
+
+
+# nova is accepted by Gemini 3.x TTS models as given (live check 2026-10-08), so it must not be remapped
+@pytest.mark.parametrize("gemini_voice", ("Kore", "Puck", "Sulafat", "nova", "custom-voice"))
+def test_map_audio_params_passes_non_openai_voice_names_through(gemini_voice: str) -> None:
+    assert _mapped_voice_name({"voice": gemini_voice, "format": "pcm16"}) == gemini_voice
+
+
+def test_map_openai_params_audio_voice_reaches_speech_config_mapped() -> None:
+    optional_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"modalities": ["audio"], "audio": {"voice": "alloy", "format": "pcm16"}},
+        optional_params={},
+        model="gemini-3.8-flash-tts",
+        drop_params=False,
+    )
+    assert optional_params["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
+
+
+_CACHED_PROMPT_USAGE_METADATA = {
+    "promptTokenCount": 1536,
+    "candidatesTokenCount": 40,
+    "totalTokenCount": 1576,
+    "cachedContentTokenCount": 1280,
+    "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 1536}],
+}
+
+
+def test_calculate_usage_bills_context_cache_creation_tokens_once():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    usage = VertexGeminiConfig._calculate_usage(
+        {"candidates": [], "usageMetadata": _CACHED_PROMPT_USAGE_METADATA}, cache_creation_tokens=1280
+    )
+
+    assert usage.prompt_tokens == 1536 + 1280
+    assert usage.total_tokens == 1576 + 1280
+    assert usage.cache_creation_input_tokens == 1280
+    assert usage.cache_read_input_tokens == 1280
+    assert usage.prompt_tokens_details.text_tokens == 256
+    assert usage.prompt_tokens_details.cache_creation_tokens == 1280
+
+
+def test_calculate_usage_without_cache_creation_leaves_usage_unchanged():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    usage = VertexGeminiConfig._calculate_usage({"candidates": [], "usageMetadata": _CACHED_PROMPT_USAGE_METADATA})
+
+    assert usage.prompt_tokens == 1536
+    assert usage.total_tokens == 1576
+    assert usage.cache_creation_input_tokens is None
+
+
+def test_streaming_usage_reads_cache_creation_tokens_recorded_on_logging_obj():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import ModelResponseIterator
+
+    logging_obj = MagicMock()
+    logging_obj.vertex_ai_cache_creation_input_tokens = 1280
+    iterator = ModelResponseIterator(streaming_response=[], sync_stream=True, logging_obj=logging_obj)
+
+    chunk = iterator.chunk_parser(
+        {
+            "candidates": [{"content": {"parts": [{"text": "done"}]}, "finishReason": "STOP", "index": 0}],
+            "usageMetadata": _CACHED_PROMPT_USAGE_METADATA,
+        }
+    )
+
+    assert chunk.usage.prompt_tokens == 1536 + 1280
+    assert chunk.usage.cache_creation_input_tokens == 1280

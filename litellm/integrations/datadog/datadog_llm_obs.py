@@ -33,6 +33,10 @@ from litellm.integrations.datadog.datadog_mock_client import (
     should_use_datadog_mock,
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
+from litellm.litellm_core_utils.llm_cost_calc.cache_tokens import (
+    extract_cache_creation_tokens,
+    extract_cache_read_tokens,
+)
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
     handle_any_messages_to_chat_completion_str_messages_conversion,
@@ -44,7 +48,6 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy.spend_tracking.savings import extract_cache_creation_tokens, extract_cache_read_tokens
 from litellm.types.integrations.datadog_llm_obs import *
 from litellm.types.utils import (
     AUDIT_GUARDRAIL_FIELDS,
@@ -59,6 +62,7 @@ _EMPTY_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
 _EMPTY_MESSAGE: Final[Message] = {"role": "", "content": ""}
 _MAX_PARSED_TOOL_ARGUMENT_CHARS: Final = 256 * 1024
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_RESPONSE: Final = TypeAdapter(object)
 _SAFE_REDACTED_MESSAGE_ROLES: Final = frozenset(
     {"agent", "assistant", "developer", "function", "model", "system", "tool", "user"}
 )
@@ -812,11 +816,11 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             try:
                 import ast
 
-                response_obj = ast.literal_eval(response_obj)
+                response_obj = _DECODED_RESPONSE.validate_python(ast.literal_eval(response_obj))
             except (ValueError, SyntaxError):
                 try:
                     # fallback to json parsing
-                    response_obj = json.loads(str(response_obj))
+                    response_obj = _DECODED_RESPONSE.validate_python(json.loads(str(response_obj)))
                 except json.JSONDecodeError:
                     return ()
 

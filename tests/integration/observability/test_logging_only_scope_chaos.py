@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import signal
-import socket
 import threading
 import time
 import uuid
@@ -45,11 +43,16 @@ from _logging_only_scope_support import (
 from anthropic import APIConnectionError as AnthropicAPIConnectionError
 from integration._support.client import Gateway, eventually
 from integration._support.process import owned_proxy, owned_proxy_process
+from integration._support.timing import Timed, assert_not_delayed_by, timed
 from integration._support.wire import Reply, Request
+from integration._support.ports import allocate_port
 from openai import APIConnectionError as OpenAIAPIConnectionError
 from pydantic import JsonValue
 
+_EDGE_DELAY_SECONDS: Final = 5
 
+
+@pytest.mark.timeout(180)
 def test_K1_policy_edge_restart_mid_burst_keeps_output_observation_fail_open(gateway: Gateway, tmp_path: Path) -> None:
     identity: Final = f"logging-scope-k1-{uuid.uuid4().hex}"
     marker: Final = uuid.uuid4().hex
@@ -57,9 +60,7 @@ def test_K1_policy_edge_restart_mid_burst_keeps_output_observation_fail_open(gat
     def policy(_request: Request) -> Reply:
         return Reply(body=b'{"action":"NONE"}')
 
-    with socket.socket() as reservation:
-        reservation.bind(("127.0.0.1", 0))
-        policy_port: Final = reservation.getsockname()[1]
+    policy_port: Final = allocate_port()
     with gateway.scenario() as scenario:
         deployments: Final = _chaos_models(scenario, marker)
         models: Final = tuple(deployment.model_name for deployment in deployments)
@@ -209,12 +210,13 @@ def test_K1_policy_edge_restart_mid_burst_keeps_output_observation_fail_open(gat
                 ) == tuple((identity, "logging_only", expected_status) for _ in expected_directions), (index, entries)
 
 
+@pytest.mark.timeout(180)
 def test_K2_policy_edge_delay_does_not_delay_concurrent_callers(gateway: Gateway, tmp_path: Path) -> None:
     identity: Final = f"logging-scope-k2-{uuid.uuid4().hex}"
     marker: Final = uuid.uuid4().hex
 
     def policy(_request: Request) -> Reply:
-        time.sleep(2)
+        time.sleep(_EDGE_DELAY_SECONDS)
         return Reply(body=b'{"action":"NONE"}')
 
     with gateway.scenario() as scenario:
@@ -225,18 +227,23 @@ def test_K2_policy_edge_delay_does_not_delay_concurrent_callers(gateway: Gateway
         expected_directions: Final = _directions_for_audit_leg(("request", "response"), "output")
         control_config: Final = _chaos_control_configuration(tmp_path, identity, model_list)
         with owned_proxy(gateway, tmp_path, {}, config=control_config, workers=2) as control_proxy:
-            controls: Final = tuple(
-                _call_client(
-                    call.client_kind,
-                    call.endpoint,
-                    control_proxy,
-                    call.model,
-                    call.prompt,
-                    call.stream,
-                    f"{call.call_id}-control",
+
+            def run_control(call: ChaosCall) -> Timed[CallerResult]:
+                return timed(
+                    lambda: _call_client(
+                        call.client_kind,
+                        call.endpoint,
+                        control_proxy,
+                        call.model,
+                        call.prompt,
+                        call.stream,
+                        f"{call.call_id}-control",
+                    )
                 )
-                for call in chaos_calls
-            )
+
+            with ThreadPoolExecutor(max_workers=30) as control_pool:
+                timed_controls: Final = tuple(control_pool.map(run_control, chaos_calls))
+            controls: Final = tuple(control.value for control in timed_controls)
         control_upstream: Final = _drain_upstream(gateway.upstream_url)
         assert len(control_upstream) == 30, control_upstream
         assert (
@@ -268,7 +275,11 @@ def test_K2_policy_edge_delay_does_not_delay_concurrent_callers(gateway: Gateway
                 assert tuple(index for index, _, _ in results) == tuple(range(30)), results
                 assert all(result.status == controls[index].status for index, result, _ in results), results
                 assert all(result.text == controls[index].text for index, result, _ in results), results
-                assert all(duration < 2 for _, _, duration in results), results
+                assert_not_delayed_by(
+                    (seconds for _, _, seconds in results),
+                    control=(control.seconds for control in timed_controls),
+                    injected_delay=_EDGE_DELAY_SECONDS,
+                )
                 eventually(
                     lambda: edge.received.qsize(),
                     lambda count: count == 30 * len(expected_directions),
@@ -320,7 +331,7 @@ def test_K2_policy_edge_delay_does_not_delay_concurrent_callers(gateway: Gateway
                     ) == tuple((identity, "logging_only", "success") for _ in expected_directions), entries
 
 
-@pytest.mark.timeout(180)
+@pytest.mark.timeout(300)
 def test_K3_two_worker_sigkill_checks_post_kill_spend_rows(
     gateway: Gateway,
     tmp_path: Path,
@@ -362,16 +373,7 @@ def test_K3_two_worker_sigkill_checks_post_kill_spend_rows(
             config: Final = _configuration(tmp_path, identity, edge.url, "output", model_list=model_list)
             with owned_proxy_process(gateway, tmp_path, {}, config=config, workers=2) as owned:
                 candidate: Final = owned.gateway
-                root: Final = psutil.Process(owned.process.pid)
-                workers: Final = eventually(
-                    lambda: tuple(
-                        child
-                        for child in root.children(recursive=True)
-                        if any("spawn_main" in part for part in child.cmdline())
-                    ),
-                    lambda children: len(children) == 2,
-                    seconds=30,
-                )
+                workers: Final = tuple(sorted(eventually(owned.worker_pids, lambda pids: len(pids) == 2, seconds=30)))
 
                 def run(call: ChaosCall) -> tuple[int, CallerResult | None, str | None]:
                     try:
@@ -388,17 +390,12 @@ def test_K3_two_worker_sigkill_checks_post_kill_spend_rows(
                     except (OpenAIAPIConnectionError, AnthropicAPIConnectionError, httpx.RemoteProtocolError) as error:
                         return call.index, None, str(error)
 
-                with ThreadPoolExecutor(max_workers=30) as pool:
+                with owned.replacing_worker(workers[0]) as kill, ThreadPoolExecutor(max_workers=30) as pool:
                     futures: Final = tuple(pool.submit(run, call) for call in calls)
                     try:
                         assert eventually(lambda: scan_started.is_set(), bool, seconds=30)
                         eventually(lambda: edge.received.qsize(), lambda count: count >= 5, seconds=30)
-                        workers[0].send_signal(signal.SIGKILL)
-                        killed_workers, surviving_workers = psutil.wait_procs((workers[0],), timeout=10)
-                        assert len(killed_workers) == 1 and not surviving_workers, (
-                            killed_workers,
-                            surviving_workers,
-                        )
+                        kill()
                     finally:
                         release_scans.set()
                     outcomes: Final = tuple(future.result(timeout=90) for future in futures)

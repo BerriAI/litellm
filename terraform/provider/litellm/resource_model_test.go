@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/hashicorp/go-cty/cty"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
 )
@@ -240,5 +241,104 @@ func TestResourceLiteLLMModelUpdateSkipsPatchWhenDisplayNameUnchanged(t *testing
 	d := updateResourceData(t, "Claude Sonnet 4.5", "Claude Sonnet 4.5")
 	if err := resourceLiteLLMModelUpdate(d, NewClient(srv.URL, "test-key", true)); err != nil {
 		t.Fatalf("update failed: %v", err)
+	}
+}
+
+func TestResourceLiteLLMModelCreateSendsWriteOnlySecrets(t *testing.T) {
+	var createPayload map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/model/new":
+			if err := json.NewDecoder(r.Body).Decode(&createPayload); err != nil {
+				t.Errorf("failed to decode create payload: %v", err)
+			}
+			w.Write([]byte(modelInfoBody("")))
+		case "/model/info":
+			w.Write([]byte(modelInfoBody("")))
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	d := resourceLiteLLMModel().Data(&terraform.InstanceState{
+		Attributes: map[string]string{
+			"model_name":                       "sonnet-4-5-anthropic",
+			"custom_llm_provider":              "anthropic",
+			"base_model":                       "claude-sonnet-4-5",
+			"model_api_key_wo_version":         "1",
+			"aws_secret_access_key_wo_version": "1",
+			"vertex_credentials_wo_version":    "1",
+		},
+		RawConfig: cty.ObjectVal(map[string]cty.Value{
+			"model_api_key_wo":         cty.StringVal("sk-ant-only-in-config"),
+			"aws_secret_access_key_wo": cty.StringVal("aws-secret-only-in-config"),
+			"vertex_credentials_wo":    cty.StringVal(`{"type":"service_account"}`),
+		}),
+	})
+
+	if err := resourceLiteLLMModelCreate(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	params, ok := createPayload["litellm_params"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected litellm_params object in create payload, got %v", createPayload["litellm_params"])
+	}
+	want := map[string]string{
+		"api_key":               "sk-ant-only-in-config",
+		"aws_secret_access_key": "aws-secret-only-in-config",
+		"vertex_credentials":    `{"type":"service_account"}`,
+	}
+	for key, value := range want {
+		if params[key] != value {
+			t.Errorf("litellm_params.%s = %v, want %q", key, params[key], value)
+		}
+	}
+	for _, attr := range []string{"model_api_key", "aws_secret_access_key", "vertex_credentials"} {
+		if got := d.Get(attr).(string); got != "" {
+			t.Errorf("in-state %s should stay empty when the _wo variant is used, got %q", attr, got)
+		}
+	}
+}
+
+func TestResourceLiteLLMModelSchemaRejectsSecretInStateAndWriteOnly(t *testing.T) {
+	base := map[string]interface{}{
+		"model_name":          "m",
+		"custom_llm_provider": "openai",
+		"base_model":          "gpt-4.1",
+	}
+	cases := map[string]struct {
+		extra   map[string]interface{}
+		wantErr bool
+	}{
+		"write-only with version": {
+			extra:   map[string]interface{}{"model_api_key_wo": "sk", "model_api_key_wo_version": 1},
+			wantErr: false,
+		},
+		"write-only without version": {
+			extra:   map[string]interface{}{"model_api_key_wo": "sk"},
+			wantErr: true,
+		},
+		"both in-state and write-only": {
+			extra:   map[string]interface{}{"model_api_key": "sk", "model_api_key_wo": "sk", "model_api_key_wo_version": 1},
+			wantErr: true,
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			raw := map[string]interface{}{}
+			for k, v := range base {
+				raw[k] = v
+			}
+			for k, v := range tc.extra {
+				raw[k] = v
+			}
+			diags := resourceLiteLLMModel().Validate(terraform.NewResourceConfigRaw(raw))
+			if diags.HasError() != tc.wantErr {
+				t.Fatalf("wantErr=%v, got diags %v", tc.wantErr, diags)
+			}
+		})
 	}
 }

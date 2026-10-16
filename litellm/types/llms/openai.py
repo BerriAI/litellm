@@ -2,13 +2,14 @@ import builtins
 from collections.abc import Iterable, Mapping
 from enum import Enum
 from os import PathLike
-from typing import IO, Any, Final, Literal, Optional, TypeAlias, Union
+from typing import IO, Any, Final, Generic, Literal, Optional, TypeAlias, Union
 
 import httpx
 from openai import Omit
 from openai._legacy_response import (
     HttpxBinaryResponseContent as _HttpxBinaryResponseContent,
 )
+from openai._types import Response as SDKResponse
 from openai.lib.streaming._assistants import (
     AssistantEventHandler,
     AssistantStreamManager,
@@ -79,6 +80,7 @@ from typing_extensions import (
     ReadOnly,
     Required,
     TypedDict,
+    TypeVar,
     override,
 )
 
@@ -89,6 +91,7 @@ from litellm.types.responses.main import (
     OutputCodeInterpreterCall,
     OutputFunctionToolCall,
     OutputImageGenerationCall,
+    OutputToolSearchCall,
 )
 
 from .base import CachedTokensDetails
@@ -118,8 +121,12 @@ class BinaryResponseSummary(TypedDict):
     num_bytes: ReadOnly[int]
 
 
-class HttpxBinaryResponseContent(_HttpxBinaryResponseContent):
+_ResponseT = TypeVar("_ResponseT", bound=httpx.Response | SDKResponse, default=httpx.Response)
+
+
+class HttpxBinaryResponseContent(_HttpxBinaryResponseContent, Generic[_ResponseT]):
     _hidden_params: dict
+    response: _ResponseT  # pyright: ignore[reportIncompatibleVariableOverride]  # SDK accepts both backends at runtime
 
     @property
     def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
@@ -129,22 +136,28 @@ class HttpxBinaryResponseContent(_HttpxBinaryResponseContent):
     def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
         self._hidden_params = hidden_params
 
-    def __init__(self, response: httpx.Response) -> None:
-        super().__init__(response)
+    def __init__(self, response: _ResponseT) -> None:
+        super().__init__(response)  # pyright: ignore[reportArgumentType]  # SDK accepts both backends at runtime
         self._hidden_params = {}
+
+    @property
+    def content_type(self) -> str | None:
+        headers: Final[Mapping[str, str]] = self.response.headers
+        return headers.get("content-type")
 
     def logging_summary(self) -> BinaryResponseSummary:
         return {
             "object": "binary",
-            "content_type": self.response.headers.get("content-type"),
+            "content_type": self.content_type,
             "num_bytes": self._num_bytes(),
         }
 
     def _num_bytes(self) -> int:
         try:
-            return len(self.response.content)
-        except httpx.ResponseNotRead:
+            content: Final = self.response.content
+        except RuntimeError:
             return self.response.num_bytes_downloaded
+        return len(content)
 
     def set_response_cost(self, response_cost: float | None) -> None:
         if response_cost is None:
@@ -675,12 +688,14 @@ class ChatCompletionThinkingBlock(TypedDict, total=False):
     thinking: str
     signature: str | None
     cache_control: dict | ChatCompletionCachedContent | None
+    index: ReadOnly[int]
 
 
 class ChatCompletionRedactedThinkingBlock(TypedDict, total=False):
     type: Required[Literal["redacted_thinking"]]
     data: str
     cache_control: dict | ChatCompletionCachedContent | None
+    index: ReadOnly[int]
 
 
 class ChatCompletionReasoningSummaryTextBlock(TypedDict, total=False):
@@ -935,6 +950,7 @@ class ChatCompletionDeveloperMessage(OpenAIChatCompletionDeveloperMessage, total
 class GenericChatCompletionMessage(TypedDict, total=False):
     role: Required[str]
     content: Required[str | list]
+    cache_control: ReadOnly[ChatCompletionCachedContent]
 
 
 ValidUserMessageContentTypes = [
@@ -1063,6 +1079,7 @@ class ChatCompletionToolParam(OpenAIChatCompletionToolParam, total=False):
     cache_control: ChatCompletionCachedContent
     allowed_callers: list[str]
     eager_input_streaming: ReadOnly[bool]
+    defer_loading: ReadOnly[bool]
 
 
 class Function(TypedDict, total=False):
@@ -1268,7 +1285,12 @@ class ShellToolParam(TypedDict, total=False):
     """Environment config: ``type`` (e.g. ``\"container_auto\"``, ``\"container_reference\"``, ``\"local\"``), optional ``container_id``, ``network_policy``, ``domain_secrets``, ``skills``."""
 
 
-ALL_RESPONSES_API_TOOL_PARAMS = ToolParam | ComputerToolParam | ShellToolParam
+class OpenAIToolSearchToolParam(TypedDict, total=False):
+    type: Required[ReadOnly[Literal["tool_search"]]]
+    execution: ReadOnly[str]
+
+
+ALL_RESPONSES_API_TOOL_PARAMS = ToolParam | ComputerToolParam | ShellToolParam | OpenAIToolSearchToolParam
 
 
 class PromptObject(TypedDict, total=False):
@@ -1412,6 +1434,17 @@ One of: completed, failed, in_progress, cancelled, queued, or incomplete.
 """
 
 
+_NULL_DROPPED_OUTPUT_ITEM_KEYS: Final = frozenset(
+    (
+        ("reasoning", "status"),
+        ("reasoning", "content"),
+        ("reasoning", "encrypted_content"),
+        ("tool_search_call", "created_by"),
+        ("tool_search_output", "created_by"),
+    )
+)
+
+
 class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     id: str
     created_at: int
@@ -1431,6 +1464,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
             | ResponseFunctionToolCall
             | ResponseFunctionWebSearch
             | CustomToolCallOutputItem
+            | OutputToolSearchCall
         ]
     )
     parallel_tool_calls: bool | None = None
@@ -1500,8 +1534,12 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
             return serialized
         return [
             (
-                {k: v for k, v in item.items() if v is not None or k not in ("status", "content", "encrypted_content")}
-                if isinstance(item, dict) and item.get("type") == "reasoning"
+                {
+                    k: v
+                    for k, v in item.items()
+                    if v is not None or (item.get("type"), k) not in _NULL_DROPPED_OUTPUT_ITEM_KEYS
+                }
+                if isinstance(item, dict)
                 else item
             )
             for item in serialized
@@ -1659,6 +1697,7 @@ class ResponsePartAddedEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.RESPONSE_PART_ADDED]
     item_id: str
     output_index: int
+    summary_index: int = 0
     part: dict
 
 
@@ -1919,7 +1958,10 @@ class ErrorEventError(BaseLiteLLMOpenAIResponseObject):
 class ErrorEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.ERROR]
     sequence_number: int
-    error: ErrorEventError
+    error: ErrorEventError | None = None
+    code: str | int | None = None
+    message: str | None = None
+    param: str | Mapping[str, object] | None = None
 
 
 class GenericEvent(BaseLiteLLMOpenAIResponseObject):

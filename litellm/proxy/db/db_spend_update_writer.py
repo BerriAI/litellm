@@ -75,6 +75,7 @@ from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
 )
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.db.model_usage_rollup import build_model_usage_transaction
+from litellm.proxy.db.request_error_tracking import request_error_accumulator
 from litellm.proxy.db.rollup_lock_timeout import apply_rollup_lock_timeout
 from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
 from litellm.proxy.spend_tracking.compression_savings import (
@@ -1173,6 +1174,13 @@ class DBSpendUpdateWriter:
                 "_batch_database_updates: add_spend_log_transaction_to_daily_team_transaction failed: %s",
                 traceback.format_exc(),
             )
+        try:
+            self._record_request_error(payload=payload_copy, prisma_client=prisma_client)
+        except Exception:  # noqa: BLE001  # the rollup must never skip the sibling spend writes
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: _record_request_error failed: %s",
+                traceback.format_exc(),
+            )
 
         try:
             await self.add_spend_log_transaction_to_daily_org_transaction(
@@ -2064,7 +2072,7 @@ class DBSpendUpdateWriter:
             n_retry_times,
             e,
         )
-        await asyncio.sleep(random.uniform(2**attempt, 2 ** (attempt + 1)))
+        await asyncio.sleep(random.uniform(2.0**attempt, 2.0 ** (attempt + 1)))
 
     _handle_spend_update_failure = handle_spend_update_failure
 
@@ -2615,7 +2623,7 @@ class DBSpendUpdateWriter:
                             # and thus they are more likely to deadlock again.
                             # Instead, we sleep a random amount so that they retry at slightly different times, lowering the chance of
                             # repeated deadlocks, and therefore of exceeding the retry limit.
-                            random.uniform(2**i, 2 ** (i + 1))
+                            random.uniform(2.0**i, 2.0 ** (i + 1))
                         )
 
         except Exception as e:
@@ -2733,6 +2741,22 @@ class DBSpendUpdateWriter:
             daily_spend_transactions=daily_spend_transactions,
             entity_type="tag",
             entity_id_field="tag",
+        )
+
+    @staticmethod
+    def _record_request_error(*, payload: SpendLogsPayload, prisma_client: PrismaClient | None) -> None:
+        if prisma_client is None:
+            return
+        start_time: Final = payload["startTime"]
+        date: Final = start_time.isoformat() if isinstance(start_time, datetime) else str(start_time or "")
+        if not date:
+            return
+        metadata: Final[SpendLogsMetadata] = json.loads(payload["metadata"])
+        request_error_accumulator.record(
+            payload=payload,
+            request_status=prisma_client.get_request_status(payload),  # pyright: ignore[reportUnknownMemberType]  # legacy payload union; this caller supplies a typed spend payload
+            date=date.split("T")[0],
+            is_internal_call=bool(metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY)),  # pyright: ignore[reportUnknownMemberType]  # TypedDict.get overloads carry Any defaults
         )
 
     async def _common_add_spend_log_transaction_to_daily_transaction(

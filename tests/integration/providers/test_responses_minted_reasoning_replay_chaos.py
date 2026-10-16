@@ -1,8 +1,6 @@
 import asyncio
 import json
 import re
-import signal
-import socket
 import threading
 import time
 import uuid
@@ -26,6 +24,7 @@ from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, owned_proxy_process
 from integration._support.tls import server_context, write_self_signed_cert
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from pydantic import JsonValue
 
 _GPT: Final = "gpt-5.6"
@@ -227,12 +226,6 @@ def _assert_each_lands_once(
         assert by_status[match] == "success", rows
 
 
-def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.bind(("127.0.0.1", 0))
-        return int(probe.getsockname()[1])
-
-
 def _health_counts(gateway: Gateway, model: str) -> tuple[int, int]:
     response: Final = gateway.request("GET", f"/health?model={model}", None)
     assert response.status_code in (200, 503), response.text
@@ -250,7 +243,7 @@ def _marked(received: tuple[Request, ...]) -> dict[str, Request]:
 async def test_vendor_outage_fails_each_replay_cleanly_and_the_recovered_vendor_gets_them_without_minted_items(
     gateway: Gateway,
 ) -> None:
-    port: Final = _free_port()
+    port: Final = allocate_port()
     while_down: Final = _calls(15, ("responses", "chat", "messages"))
     after: Final = _calls(15, ("responses", "chat", "messages"))
     with gateway.scenario() as scenario:
@@ -351,15 +344,15 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_dropping_the_minted_i
             held_by: Final = MappingProxyType({pid: _open_upstream_connections(pid, wire.url) for pid in workers})
             assert sum(held_by.values()) == 20, held_by
             victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-            victim: Final = psutil.Process(victim_pid)
-            victim.suspend()
-            victim.send_signal(signal.SIGKILL)
-            release.set()
-            served: Final = await burst
-            assert held_by[survivor_pid] >= 10, held_by
-            assert len(served) == held_by[survivor_pid], (held_by, len(served))
-            for item in served:
-                _assert_answered_with_its_own_marker(item)
+            with owned.replacing_worker(victim_pid) as kill:
+                kill.freeze()
+                await asyncio.to_thread(kill)
+                release.set()
+                served: Final = await burst
+                assert held_by[survivor_pid] >= 10, held_by
+                assert len(served) == held_by[survivor_pid], (held_by, len(served))
+                for item in served:
+                    _assert_answered_with_its_own_marker(item)
             follow_up: Final = _Call("responses", False, uuid.uuid4().hex)
             (answered,) = await _burst(str(candidate.client.base_url), candidate.key, models, (follow_up,))
             _assert_answered_with_its_own_marker(answered)

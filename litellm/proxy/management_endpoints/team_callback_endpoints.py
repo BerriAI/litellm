@@ -8,13 +8,16 @@ import asyncio
 import copy
 import json
 import traceback
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy._types import (
     AddTeamCallback,
     LiteLLM_AuditLogs,
@@ -31,8 +34,10 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.callback_config_validation import (
     callback_config_error,
+    conflicting_callback_var_error,
     conflicting_span_scope_error,
     cross_entry_family_error,
+    stored_callback_entries,
 )
 from litellm.proxy.common_utils.callback_utils import (  # noqa: F401  # legacy module exports
     _CALLBACK_VAR_ENCRYPTED_PREFIX,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -54,11 +59,17 @@ from litellm.proxy.management_endpoints.team_endpoints import (  # noqa: F401  #
 )
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.repositories.team_repository import TeamRepository
+from litellm.types.utils import CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_VAR
 
 router: Final = APIRouter()
 
 
 _CALLBACK_VARS_REDACTED: Final = "***REDACTED***"
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+def _decrypted_metadata(metadata: object) -> Mapping[str, object]:
+    return as_str_mapping(_DECODED_JSON.validate_python(decrypt_callback_vars(metadata))) or {}
 
 
 def _callback_config_error(message: str) -> HTTPException:
@@ -144,7 +155,7 @@ def _resolve_team_callbacks(team_metadata: object) -> TeamCallbackMetadata:
     if not isinstance(team_metadata, dict):
         return TeamCallbackMetadata()
 
-    decrypted: Final = decrypt_callback_vars(team_metadata)
+    decrypted: Final = _decrypted_metadata(team_metadata)
     logging_entries: Final = decrypted.get("logging")
 
     if logging_entries is not None:
@@ -288,6 +299,10 @@ async def add_team_callbacks(
         - langfuse_host: The host for the Langfuse callback
         - langfuse_environment: The tracing environment for the Langfuse callback (lowercase; falls back to LANGFUSE_TRACING_ENVIRONMENT)
         - langfuse_span_scope: For langfuse_otel, "full" (default) sends the whole request trace, "llm_only" sends only the model-call spans
+        - capture_message_content: For OTel v2 callbacks, "no_content" or "span_only".
+          An explicit value overrides the global setting for this destination; omitted follows the proxy's own callback for that backend, else the global setting.
+          "span_only" puts prompt and response content on the destination's spans, "no_content" leaves it out
+        - excluded_services: For OTel v2 callbacks, a comma-separated list of datastore names such as "redis,postgres", or "none" to exclude nothing. An explicit value replaces the global exclusions; omitted follows them
         - gcs_bucket_name: The name of the GCS bucket
         - gcs_path_service_account: The path to the GCS service account
         - langsmith_api_key: The API key for the Langsmith callback
@@ -350,12 +365,28 @@ async def add_team_callbacks(
 
         # Decrypted, because the checks compare the incoming values against
         # the stored ones and the credentials are encrypted at rest.
-        decrypted_logging: Final = decrypt_callback_vars(team_metadata).get("logging")
+        decrypted_logging: Final = _decrypted_metadata(team_metadata).get("logging")
+        stored_callbacks: Final = stored_callback_entries(decrypted_logging)
         stored_entries: Final = decrypted_logging if isinstance(decrypted_logging, list) else ()
         stored_entry_vars: Final = [entry.get("callback_vars") or {} for entry in stored_entries]
         scope_error: Final = conflicting_span_scope_error(data.callback_vars, stored_entry_vars)
         if scope_error is not None:
             raise _callback_config_error(scope_error)
+        destination_setting_error: Final = next(
+            (
+                error
+                for variable_name in (CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_VAR)
+                if (
+                    error := conflicting_callback_var_error(
+                        data.callback_name, variable_name, data.callback_vars, stored_callbacks
+                    )
+                )
+                is not None
+            ),
+            None,
+        )
+        if destination_setting_error is not None:
+            raise _callback_config_error(destination_setting_error)
         # One entry has to own a credential family end to end. The entries are
         # flattened into one dict before a request reads them, so an entry
         # naming only a destination would pair with a key written on another
@@ -388,8 +419,8 @@ async def add_team_callbacks(
         team_callback_settings.append(data.model_dump())
 
         team_metadata["logging"] = team_callback_settings
-        team_metadata = encrypt_callback_vars(team_metadata)
-        team_metadata_json: Final = json.dumps(team_metadata)  # update team_metadata
+        encrypted_metadata: Final = _DECODED_JSON.validate_python(encrypt_callback_vars(team_metadata))
+        team_metadata_json: Final = json.dumps(encrypted_metadata)
 
         new_team_row: Final = await TeamRepository(prisma_client).table.update(
             where={"team_id": team_id},
@@ -413,7 +444,7 @@ async def add_team_callbacks(
         await _emit_team_callback_audit_log(
             team_id=team_id,
             before_metadata=before_metadata,
-            after_metadata=team_metadata,
+            after_metadata=encrypted_metadata,
             user_api_key_dict=user_api_key_dict,
             litellm_changed_by=litellm_changed_by,
         )
@@ -518,7 +549,7 @@ async def delete_team_callback(
             raise _callback_error(404, f"callback_name = {callback_name} is not registered for team_id = {team_id}.")
 
         updated_metadata: Final = {**team_metadata, "logging": remaining_callbacks}
-        encrypted_metadata: Final[object] = encrypt_callback_vars(updated_metadata)
+        encrypted_metadata: Final = _DECODED_JSON.validate_python(encrypt_callback_vars(updated_metadata))
         team_metadata_json: Final = json.dumps(encrypted_metadata)
 
         updated_team: Final = await TeamRepository(prisma_client).table.update(
@@ -655,7 +686,7 @@ async def disable_team_logging(
         # _get_dynamic_logging_metadata stops at metadata["logging"], where the API
         # and Admin UI register callbacks, without ever reading callback_settings.
         team_metadata["logging"] = []
-        encrypted_metadata: Final[object] = encrypt_callback_vars(team_metadata)
+        encrypted_metadata: Final = _DECODED_JSON.validate_python(encrypt_callback_vars(team_metadata))
         team_metadata_json: Final = json.dumps(encrypted_metadata)
 
         # Update team in database

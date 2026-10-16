@@ -1,7 +1,5 @@
 import json
 import re
-import signal
-import socket
 import threading
 import uuid
 from collections.abc import Callable, Mapping, Sequence
@@ -19,6 +17,7 @@ from integration._support.client import Gateway, Scenario, eventually
 from integration._support.process import owned_proxy_process
 from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from pydantic import JsonValue, TypeAdapter
 
 _BACKEND: Final = "claude-sonnet-4-6"
@@ -225,9 +224,7 @@ def _local_count(gateway: Gateway, body: Mapping[str, JsonValue]) -> int:
 
 
 def _closed_port_url() -> str:
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        return f"http://127.0.0.1:{reserve.getsockname()[1]}"
+    return f"http://127.0.0.1:{allocate_port()}"
 
 
 def _clients(stack: ExitStack, base_url: str, count: int) -> tuple[httpx.Client, ...]:
@@ -345,15 +342,14 @@ def test_utils_token_counter_local_mode_never_calls_the_peer(gateway: Gateway) -
         assert wire.drain() == ()
 
 
-def test_utils_token_counter_falls_back_locally_when_peer_rejects_openai_tools(gateway: Gateway) -> None:
+def test_utils_token_counter_surfaces_the_peer_error_for_openai_tools(gateway: Gateway) -> None:
     with wire_server(_peer(_strict)) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(gateway, scenario, wire.url)
         body: Final = {**_bare(model), "tools": _OPENAI_TOOLS}
         response: Final = gateway.request("POST", "/utils/token_counter", body, params={"call_endpoint": "true"})
-        payload: Final = _payload(response)
+        assert response.status_code == 400, response.text
+        assert "total_tokens" not in response.text, response.text
         assert _counted_bodies(wire) == ({**_PEER_BARE, "tools": _OPENAI_TOOLS},)
-        assert payload["total_tokens"] == _local_count(gateway, body), response.text
-        assert payload["tokenizer_type"] != "vertex_ai_partner_models", response.text
 
 
 def test_responses_input_tokens_counts_through_the_partner_peer(gateway: Gateway) -> None:
@@ -366,7 +362,7 @@ def test_responses_input_tokens_counts_through_the_partner_peer(gateway: Gateway
         assert _counted_bodies(wire) == (_PEER_BARE,)
 
 
-def test_responses_input_tokens_falls_back_locally_when_peer_rejects(gateway: Gateway) -> None:
+def test_responses_input_tokens_surfaces_the_peer_error(gateway: Gateway) -> None:
     with wire_server(_peer(_strict)) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(gateway, scenario, wire.url)
         response: Final = gateway.request(
@@ -374,11 +370,10 @@ def test_responses_input_tokens_falls_back_locally_when_peer_rejects(gateway: Ga
             "/v1/responses/input_tokens",
             {"model": model, "input": "Count this message", "instructions": "Be terse", "tools": _RESPONSES_TOOLS},
         )
-        payload: Final = _payload(response)
+        assert response.status_code == 400, response.text
+        assert "input_tokens" not in response.text, response.text
         (sent,) = _counted_bodies(wire)
         assert sent["tools"] == _RESPONSES_TOOLS, sent
-        local: Final = _local_count(gateway, {"model": model, "messages": sent["messages"], "tools": _RESPONSES_TOOLS})
-        assert payload == {"object": "response.input_tokens", "input_tokens": local}, response.text
 
 
 def test_gemini_count_tokens_route_reaches_the_partner_peer(gateway: Gateway) -> None:
@@ -389,26 +384,26 @@ def test_gemini_count_tokens_route_reaches_the_partner_peer(gateway: Gateway) ->
         assert _counted_bodies(wire) == ({"model": _BACKEND, "messages": _GEMINI_MESSAGES},)
 
 
-def test_gemini_count_tokens_route_falls_back_locally_when_peer_rejects(gateway: Gateway) -> None:
+def test_gemini_count_tokens_route_surfaces_the_peer_error(gateway: Gateway) -> None:
     with wire_server(_peer(_rejecting(400))) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(gateway, scenario, wire.url)
         response: Final = gateway.request("POST", f"/v1beta/models/{model}:countTokens", _GEMINI_BODY)
-        payload: Final = _payload(response)
+        assert response.status_code == 400, response.text
+        assert "totalTokens" not in response.text, response.text
         assert _counted_bodies(wire) == ({"model": _BACKEND, "messages": _GEMINI_MESSAGES},)
-        assert payload["totalTokens"] == _local_count(gateway, {"model": model, "messages": _GEMINI_MESSAGES})
 
 
 @pytest.mark.parametrize("status", [400, 500, 503])
-def test_messages_count_tokens_falls_back_locally_when_peer_errors(gateway: Gateway, status: int) -> None:
+def test_messages_count_tokens_surfaces_the_peer_error_when_peer_errors(gateway: Gateway, status: int) -> None:
     with wire_server(_peer(_rejecting(status))) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(gateway, scenario, wire.url)
         response: Final = _count(gateway, _full(model))
-        payload: Final = _payload(response)
+        assert response.status_code == status, response.text
+        assert "input_tokens" not in response.text, response.text
         assert _counted_bodies(wire) == (_PEER_FULL,)
-        assert payload == {"input_tokens": _local_count(gateway, _full(model))}, response.text
 
 
-def test_messages_count_tokens_falls_back_locally_when_token_endpoint_rejects(gateway: Gateway) -> None:
+def test_messages_count_tokens_surfaces_the_error_when_token_endpoint_rejects(gateway: Gateway) -> None:
     def respond(request: Request) -> Reply:
         if request.target == "/_oauth/token":
             return Reply(
@@ -422,17 +417,18 @@ def test_messages_count_tokens_falls_back_locally_when_token_endpoint_rejects(ga
             gateway, scenario, wire.url, vertex_credentials=service_account_json(_PROJECT, wire.url)
         )
         response: Final = _count(gateway, _full(model))
-        payload: Final = _payload(response)
+        assert 500 <= response.status_code < 600, response.text
+        assert "input_tokens" not in response.text, response.text
         targets: Final = frozenset(request.target for request in wire.drain())
         assert targets == {"/_oauth/token"}, targets
-        assert payload == {"input_tokens": _local_count(gateway, _full(model))}, response.text
 
 
-def test_messages_count_tokens_falls_back_locally_when_peer_is_unreachable(gateway: Gateway) -> None:
+def test_messages_count_tokens_errors_when_peer_is_unreachable(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         model: Final = _deployment(gateway, scenario, _closed_port_url())
         response: Final = _count(gateway, _full(model))
-        assert _payload(response) == {"input_tokens": _local_count(gateway, _full(model))}, response.text
+        assert 500 <= response.status_code < 600, response.text
+        assert "input_tokens" not in response.text, response.text
 
 
 @pytest.mark.parametrize(
@@ -477,13 +473,13 @@ def test_messages_count_tokens_leaves_null_system_and_tools_out(gateway: Gateway
         assert _counted_bodies(wire) == (_PEER_BARE,)
 
 
-def test_messages_count_tokens_falls_back_locally_when_peer_rejects_a_non_text_system(gateway: Gateway) -> None:
+def test_messages_count_tokens_surfaces_the_peer_error_for_a_non_text_system(gateway: Gateway) -> None:
     with wire_server(_peer(_strict)) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(gateway, scenario, wire.url)
         response: Final = _count(gateway, {**_bare(model), "system": 5})
-        payload: Final = _payload(response)
+        assert response.status_code == 400, response.text
+        assert "input_tokens" not in response.text, response.text
         assert _counted_bodies(wire) == ({**_PEER_BARE, "system": 5},)
-        assert payload == {"input_tokens": _local_count(gateway, _bare(model))}, response.text
 
 
 def test_messages_count_tokens_forwards_a_5kb_system_verbatim(gateway: Gateway) -> None:
@@ -579,7 +575,7 @@ def test_disabled_token_counter_surfaces_provider_failures_instead_of_counting_l
             assert len(_counted_bodies(wire)) == 2
 
 
-def test_peer_outage_between_concurrent_waves_falls_back_then_recovers(gateway: Gateway) -> None:
+def test_peer_outage_between_concurrent_waves_errors_then_recovers(gateway: Gateway) -> None:
     with ExitStack() as stack:
         clients: Final = _clients(stack, str(gateway.client.base_url), 8)
         pool: Final = stack.enter_context(ThreadPoolExecutor(max_workers=len(clients)))
@@ -588,7 +584,6 @@ def test_peer_outage_between_concurrent_waves_falls_back_then_recovers(gateway: 
             port: Final = int(wire.url.rsplit(":", 1)[1])
             model: Final = _deployment(gateway, scenario, wire.url)
             body: Final = _full(model)
-            local: Final = _local_count(gateway, body)
 
             def generate_then_count(client: httpx.Client) -> tuple[int, int, JsonValue]:
                 return _generated_then_counted(client, gateway.key, model, body)
@@ -596,7 +591,8 @@ def test_peer_outage_between_concurrent_waves_falls_back_then_recovers(gateway: 
             assert tuple(pool.map(generate_then_count, clients)) == ((200, 200, _PEER_COUNT),) * len(clients)
             assert _counted_bodies(wire) == (_PEER_FULL,) * len(clients)
         outage: Final = tuple(pool.map(lambda client: _counted_on(client, gateway.key, body), clients))
-        assert outage == ((200, local),) * len(clients)
+        for status, tokens in outage:
+            assert 500 <= status < 600 and tokens is None, outage
         with wire_server(_peer(), port=port) as revived:
             assert tuple(pool.map(generate_then_count, clients)) == ((200, 200, _PEER_COUNT),) * len(clients)
             assert _counted_bodies(revived) == (_PEER_FULL,) * len(clients)
@@ -663,15 +659,16 @@ def test_worker_sigkill_mid_burst_leaves_the_sibling_counting(gateway: Gateway, 
         shares: Final = {pid: _accepted_client_ports(pid, proxy_url.port or 0) & frozenset(ports) for pid in workers}
         assert sum(map(len, shares.values())) == len(clients), shares
         victim: Final = min((pid for pid in workers if shares[pid]), key=lambda pid: len(shares[pid]))
-        psutil.Process(victim).send_signal(signal.SIGKILL)
-        release.set()
-        results: Final = tuple(future.result(timeout=60) for future in futures)
-        for port, result in zip(ports, results, strict=True):
-            assert result == (None if port in shares[victim] else (200, _PEER_COUNT)), (port, result, shares)
-        second_wave: Final = _clients(stack, str(proxy_url), 6)
-        assert tuple(_counted_on(client, gateway.key, _full(_OWNED_MODEL)) for client in second_wave) == (
-            (200, _PEER_COUNT),
-        ) * len(second_wave)
+        with owned.replacing_worker(victim) as kill:
+            kill()
+            release.set()
+            results: Final = tuple(future.result(timeout=60) for future in futures)
+            for port, result in zip(ports, results, strict=True):
+                assert result == (None if port in shares[victim] else (200, _PEER_COUNT)), (port, result, shares)
+            second_wave: Final = _clients(stack, str(proxy_url), 6)
+            assert tuple(_counted_on(client, gateway.key, _full(_OWNED_MODEL)) for client in second_wave) == (
+                (200, _PEER_COUNT),
+            ) * len(second_wave)
         assert len(_counted_bodies(wire)) == len(clients) + len(second_wave)
         eventually(lambda: len(_STARTED_WORKER.findall(owned.log.read_text())), lambda started: started >= 3, 120)
         assert owned.process.poll() is None

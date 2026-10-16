@@ -44,7 +44,7 @@ from litellm.types.utils import (
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 dc: Final = DualCache()
 
 
@@ -119,7 +119,7 @@ def is_guardrail_intervention(e: Exception) -> bool:
 
 
 def _user_api_key_auth_from_request(request_data: Mapping[str, object]) -> "UserAPIKeyAuth":
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
     metadata: Final = request_data.get(get_metadata_variable_name_from_kwargs(request_data))
     stamped: Final[Mapping[str, object]] = metadata if isinstance(metadata, dict) else {}
@@ -143,6 +143,10 @@ def _unified_hook_fields(guardrail: "CustomGuardrail", request_data: Mapping[str
         "guardrail_to_apply": guardrail,
         **({"litellm_metadata": metadata_bucket} if isinstance(metadata_bucket, dict) else {}),
     }
+
+
+def _instance_attributes(value: object) -> Mapping[str, object]:
+    return vars(value)
 
 
 def _strict_guardrail_modes_enabled() -> bool:
@@ -223,6 +227,7 @@ class CustomGuardrail(CustomLogger):
 
     records_own_guardrail_information: ClassVar[bool] = False
     logging_only_scope: LoggingOnlyScope | None
+    logging_only_continue_on_input_failure: bool
 
     stream_scope_default: GuardrailStreamScope = DEFAULT_GUARDRAIL_STREAM_SCOPE
     stream_scope_by_hook: tuple[tuple[str, GuardrailStreamScope], ...] = ()
@@ -305,6 +310,7 @@ class CustomGuardrail(CustomLogger):
         stream_scope_arg: Final[object] = cast(object, kwargs.pop("stream_scope", None))  # cast-ok: config
         self.apply_stream_scope(stream_scope_arg)
         self.logging_only_scope = None
+        self.logging_only_continue_on_input_failure = False
         if timeout is not None:
             self.timeout = timeout
 
@@ -394,7 +400,7 @@ class CustomGuardrail(CustomLogger):
 
     def inject_advisory_message(
         self,
-        data: dict[str, Any],  # mutable-ok: caller's dict is mutated in place, matching mark_pre_call_hook_ran
+        data: dict[str, object],  # mutable-ok: caller's dict is mutated in place, matching mark_pre_call_hook_ran
         message: str,
     ) -> bool:
         """
@@ -471,8 +477,8 @@ class CustomGuardrail(CustomLogger):
     def raise_sensitive_data_route_exception(
         self,
         route_to_model: str,
-        request_data: dict[str, Any],
-        detection_info: dict[str, Any] | None = None,
+        request_data: dict[str, object],
+        detection_info: dict[str, object] | None = None,
     ) -> None:
         """
         Raise an exception to reroute the request to a different model.
@@ -509,7 +515,7 @@ class CustomGuardrail(CustomLogger):
             sticky_session_routing=self.sticky_session_routing,
         )
 
-    def _get_session_id_from_request_data(self, request_data: dict[str, Any]) -> str | None:
+    def _get_session_id_from_request_data(self, request_data: dict[str, object]) -> str | None:
         """Extract session_id from request data."""
         return get_session_id_from_request_data(request_data)
 
@@ -618,8 +624,8 @@ class CustomGuardrail(CustomLogger):
 
     def handle_sensitive_data_detection(
         self,
-        request_data: dict[str, Any],
-        detection_info: dict[str, Any] | None = None,
+        request_data: dict[str, object],
+        detection_info: dict[str, object] | None = None,
     ) -> None:
         """
         Handle sensitive data detection based on guardrail configuration.
@@ -886,7 +892,9 @@ class CustomGuardrail(CustomLogger):
             ) from e
         return unified_guardrail
 
-    async def async_pre_call_deployment_hook(self, kwargs: dict[str, Any], call_type: CallTypes | None) -> dict | None:
+    async def async_pre_call_deployment_hook(
+        self, kwargs: dict[str, object], call_type: CallTypes | None
+    ) -> dict | None:
         # should run guardrail
         litellm_guardrails: Final = kwargs.get("guardrails")
         if litellm_guardrails is None or not isinstance(litellm_guardrails, list):
@@ -1064,7 +1072,7 @@ class CustomGuardrail(CustomLogger):
         except Exception as e:
             if self.logging_only_scope == "output":
                 return None
-            if self.logging_only_scope == "both":
+            if self.logging_only_continue_on_input_failure:
                 verbose_logger.warning(
                     "Guardrail %s: logging_only request copy failed, skipping request scan: %s",
                     self.guardrail_name,
@@ -1092,7 +1100,7 @@ class CustomGuardrail(CustomLogger):
             "metadata": scratch_metadata,
         }
         if self.logging_only_scope != "output" and scratch_fields is not None:
-            if self.logging_only_scope == "both":
+            if self.logging_only_continue_on_input_failure:
                 try:
                     await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
                 except Exception as e:  # noqa: BLE001  # one direction's scan failure must not drop the other direction's verdict
@@ -1577,7 +1585,7 @@ class CustomGuardrail(CustomLogger):
         """
         Update the guardrails litellm params in memory
         """
-        for key, value in vars(litellm_params).items():
+        for key, value in _instance_attributes(litellm_params).items():
             setattr(self, key, value)
 
     def get_guardrails_messages_for_call_type(
