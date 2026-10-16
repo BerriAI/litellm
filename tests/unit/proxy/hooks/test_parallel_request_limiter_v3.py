@@ -1879,7 +1879,7 @@ def test_keyslot_for_redis_cluster():
 
 
 @pytest.mark.asyncio
-async def test_execute_redis_batch_rate_limiter_script_cluster_compatibility():
+async def test_execute_redis_batch_rate_limiter_script_cluster_compatibility(monkeypatch):
     """
     Test that the Redis batch rate limiter script execution handles cluster compatibility
     by grouping keys and falling back gracefully on errors.
@@ -1887,6 +1887,9 @@ async def test_execute_redis_batch_rate_limiter_script_cluster_compatibility():
     This simulates the Redis cluster error scenario and verifies fallback behavior.
     """
     from unittest.mock import AsyncMock, patch
+
+    import litellm.proxy.proxy_server as proxy_server
+    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", False)
 
     local_cache = DualCache()
     handler = _PROXY_MaxParallelRequestsHandler(
@@ -4353,13 +4356,16 @@ async def test_success_event_releases_parallel_slot_v3(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_read_only_gauge_check_counts_without_acquiring_v3():
+async def test_read_only_gauge_check_counts_without_acquiring_v3(monkeypatch):
     """
     read_only callers (e.g. the context-compaction pre-check) must observe
     the in-flight count via the count script without registering a slot, and
     a count-script failure must degrade to the local mirror instead of
     raising.
     """
+    import litellm.proxy.proxy_server as proxy_server
+    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", False)
+
     _api_key = hash_token("sk-98765")
     local_cache = DualCache()
     handler = _PROXY_MaxParallelRequestsHandler(
@@ -4497,7 +4503,7 @@ async def test_tpm_over_limit_rejection_releases_parallel_slot_v3(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_in_memory_fallback_respects_mirrored_redis_count_v3():
+async def test_in_memory_fallback_respects_mirrored_redis_count_v3(monkeypatch):
     """
     When Redis scripting fails after having worked, the local cache holds the
     integer in-flight count mirrored from the last successful script call.
@@ -4506,6 +4512,9 @@ async def test_in_memory_fallback_respects_mirrored_redis_count_v3():
     registry, which would double the admitted concurrency during a Redis
     outage.
     """
+    import litellm.proxy.proxy_server as proxy_server
+    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", False)
+
     _api_key = hash_token("sk-98765")
     local_cache = DualCache()
     handler = _PROXY_MaxParallelRequestsHandler(
@@ -6674,7 +6683,10 @@ async def test_an_open_circuit_breaker_falls_back_to_the_pipeline_without_a_warn
 
 
 @pytest.mark.asyncio
-async def test_an_open_circuit_breaker_reads_the_sliding_window_locally_without_a_warning(caplog):
+async def test_an_open_circuit_breaker_reads_the_sliding_window_locally_without_a_warning(caplog, monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server
+    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", False)
+
     handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(DualCache(redis_cache=_OpenBreakerRedis()))  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
     )
@@ -6951,7 +6963,7 @@ async def test_fail_closed_rate_limit_enforcement_is_read_from_general_settings(
         await _admit(_handler_with_redis(_UnreachableRedis()), auth)
     assert exc.value.status_code == 503
 
-    monkeypatch.delitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement")
+    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", False)
     await _admit(_handler_with_redis(_UnreachableRedis()), auth)
 
 

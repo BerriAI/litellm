@@ -17,9 +17,16 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    RateLimitUnverifiableError,
+    _fail_closed_rate_limit_enforcement_from_general_settings,
+)
 from litellm.proxy.hooks.rate_limiter_utils import (
     convert_priority_to_percent,
     resolve_llm_provider_for_rate_limit,
+)
+from litellm.proxy.hooks.rate_limit_failure_metrics import (
+    _increment_rate_limiter_failure_counter,
 )
 from litellm.types.router import ModelGroupInfo
 from litellm.types.utils import CallTypesLiteral, LLMResponseTypes
@@ -192,7 +199,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
         call_type: CallTypesLiteral,
     ) -> (
         Exception | str | dict | None
-    ):  # raise exception if invalid, return a str for the user to receive - if rejected, or return a modified dictionary for passing into litellm
+    ):
         """
         - For a model group
         - Check if tpm/rpm available
@@ -207,6 +214,25 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                 model_rpm,
                 active_projects,
             ) = await self.check_available_usage(model=data["model"], priority=key_priority)
+
+            all_none: Final = all(
+                v is None for v in (available_tpm, available_rpm, model_tpm, model_rpm, active_projects)
+            )
+            if all_none:
+                if _fail_closed_rate_limit_enforcement_from_general_settings():
+                    verbose_proxy_logger.warning(
+                        "dynamic_rate_limiter v1: check_available_usage returned all None "
+                        "(Redis unreachable?), fail-closed enabled — rejecting request."
+                    )
+                    _increment_rate_limiter_failure_counter(limiter_type="v1_dynamic", error_type="connection")
+                    raise RateLimitUnverifiableError()
+                verbose_proxy_logger.warning(
+                    "dynamic_rate_limiter v1: check_available_usage returned all None "
+                    "(Redis unreachable?), fail-open — allowing request."
+                )
+                _increment_rate_limiter_failure_counter(limiter_type="v1_dynamic", error_type="connection")
+                return None
+
             ### CHECK TPM ###
             if available_tpm is not None and available_tpm == 0:
                 resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(data.get("model"))
