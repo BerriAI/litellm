@@ -2,6 +2,7 @@ import os
 import traceback
 from litellm._uuid import uuid
 from datetime import datetime, timezone
+from collections.abc import Coroutine
 from typing import Any, Final
 
 from dotenv import load_dotenv
@@ -460,14 +461,17 @@ async def test_drain_audit_tasks_captures_tasks_queued_during_drain():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("store_audit_logs", "premium_user"),
-    [(False, True), (True, False)],
-    ids=["logging_disabled", "not_premium"],
+    ("store_audit_logs", "premium_user", "expected_write_count"),
+    [(True, True, 1), (False, True, 0), (True, False, 0)],
+    ids=["row_written", "logging_disabled", "not_premium"],
 )
-async def test_create_audit_log_for_update_does_not_track_when_no_row_is_written(
-    store_audit_logs: bool, premium_user: bool
+async def test_drain_does_not_wait_for_code_that_runs_after_an_inline_audit_write(
+    store_audit_logs: bool, premium_user: bool, expected_write_count: int
 ):
     release_caller: Final = asyncio.Event()
+    mock_prisma: Final = MagicMock()
+    writes: Final[list[dict[str, Any]]] = []
+    mock_prisma.db.litellm_auditlog.create = AsyncMock(side_effect=lambda data: writes.append(data))
 
     async def _caller_that_outlives_the_audit_call() -> None:
         await create_audit_log_for_update(
@@ -487,9 +491,11 @@ async def test_create_audit_log_for_update_does_not_track_when_no_row_is_written
     with (
         patch("litellm.store_audit_logs", store_audit_logs),
         patch("litellm.proxy.proxy_server.premium_user", premium_user),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
     ):
         caller: Final = asyncio.create_task(_caller_that_outlives_the_audit_call())
-        await asyncio.sleep(0)
+        for _ in range(3):
+            await asyncio.sleep(0)
         drain: Final = asyncio.create_task(drain_audit_tasks(timeout=60))
         for _ in range(3):
             await asyncio.sleep(0)
@@ -499,10 +505,19 @@ async def test_create_audit_log_for_update_does_not_track_when_no_row_is_written
         await drain
 
     assert drain_returned_while_caller_was_running
+    assert len(writes) == expected_write_count
 
 
 async def _io_that_never_finishes(*args: object, **kwargs: object) -> None:
     await asyncio.Event().wait()
+
+
+async def _drain_while_hook_io_hangs(hook: Coroutine[object, object, None]) -> None:
+    hook_task: Final = asyncio.create_task(hook)
+    for _ in range(3):
+        await asyncio.sleep(0)
+    await drain_audit_tasks(timeout=2.0)
+    hook_task.cancel()
 
 
 @pytest.mark.asyncio
@@ -520,29 +535,90 @@ async def test_key_generated_audit_write_is_drained_while_the_invite_email_hangs
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
         patch.object(KeyManagementEventHooks, "_send_key_created_email", side_effect=_io_that_never_finishes),
     ):
-        hook: Final = asyncio.create_task(
+        await _drain_while_hook_io_hangs(
             KeyManagementEventHooks.async_key_generated_hook(
                 data=GenerateKeyRequest(send_invite_email=True),
                 response=GenerateKeyResponse(key="sk-new", token_id="hashed-new"),
                 user_api_key_dict=UserAPIKeyAuth(api_key="sk-admin", user_id="admin"),
             )
         )
-        await asyncio.sleep(0)
-        await drain_audit_tasks(timeout=2.0)
-        hook.cancel()
 
     assert [(write["object_id"], write["action"]) for write in writes] == [("hashed-new", "created")]
 
 
 @pytest.mark.asyncio
-async def test_user_created_audit_write_is_drained_while_the_invite_email_hangs():
+async def test_key_updated_audit_write_is_drained_while_the_secret_manager_rename_hangs():
+    from litellm.proxy._types import LiteLLM_VerificationToken, UpdateKeyRequest
+    from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
+
+    mock_prisma: Final = MagicMock()
+    writes: Final[list[dict[str, Any]]] = []
+    mock_prisma.db.litellm_auditlog.create = AsyncMock(side_effect=lambda data: writes.append(data))
+
+    with (
+        patch("litellm.store_audit_logs", True),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch.object(
+            KeyManagementEventHooks, "_rename_virtual_key_in_secret_manager", side_effect=_io_that_never_finishes
+        ),
+    ):
+        await _drain_while_hook_io_hangs(
+            KeyManagementEventHooks.async_key_updated_hook(
+                data=UpdateKeyRequest(key="sk-existing", key_alias="new-alias"),
+                existing_key_row=LiteLLM_VerificationToken(token="hashed-existing", key_alias="old-alias"),
+                response=None,
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-admin", user_id="admin"),
+            )
+        )
+
+    assert [(write["object_id"], write["action"]) for write in writes] == [(hash_token("sk-existing"), "updated")]
+
+
+@pytest.mark.asyncio
+async def test_key_rotated_audit_write_is_drained_while_the_secret_manager_rotation_hangs():
+    from litellm.proxy._types import GenerateKeyResponse, LiteLLM_VerificationToken
+    from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
+
+    mock_prisma: Final = MagicMock()
+    writes: Final[list[dict[str, Any]]] = []
+    mock_prisma.db.litellm_auditlog.create = AsyncMock(side_effect=lambda data: writes.append(data))
+
+    with (
+        patch("litellm.store_audit_logs", True),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch.object(
+            KeyManagementEventHooks, "_rotate_virtual_key_in_secret_manager", side_effect=_io_that_never_finishes
+        ),
+    ):
+        await _drain_while_hook_io_hangs(
+            KeyManagementEventHooks.async_key_rotated_hook(
+                data=None,
+                existing_key_row=LiteLLM_VerificationToken(token="hashed-old"),
+                response=GenerateKeyResponse(key="sk-rotated", token_id="hashed-new"),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-admin", user_id="admin"),
+            )
+        )
+
+    assert [(write["object_id"], write["action"]) for write in writes] == [("hashed-old", "rotated")]
+
+
+@pytest.mark.asyncio
+async def test_user_created_audit_write_is_drained_while_its_user_read_is_still_running():
     from litellm.proxy._types import NewUserRequest, NewUserResponse
     from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
 
     mock_prisma: Final = MagicMock()
     writes: Final[list[dict[str, Any]]] = []
+    release_user_read: Final = asyncio.Event()
+
+    async def _slow_user_read(*args: object, **kwargs: object) -> dict[str, str]:
+        await release_user_read.wait()
+        return {"user_id": "new-user"}
+
     mock_prisma.db.litellm_auditlog.create = AsyncMock(side_effect=lambda data: writes.append(data))
-    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value={"user_id": "new-user"})
+    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(side_effect=_slow_user_read)
 
     with (
         patch("litellm.store_audit_logs", True),
@@ -557,36 +633,15 @@ async def test_user_created_audit_write_is_drained_while_the_invite_email_hangs(
                 user_api_key_dict=UserAPIKeyAuth(api_key="sk-admin", user_id="admin"),
             )
         )
-        await asyncio.sleep(0)
-        await drain_audit_tasks(timeout=2.0)
+        for _ in range(3):
+            await asyncio.sleep(0)
+        drain: Final = asyncio.create_task(drain_audit_tasks(timeout=60))
+        for _ in range(3):
+            await asyncio.sleep(0)
+        drain_waited_for_the_user_read: Final = not drain.done()
+        release_user_read.set()
+        await drain
         hook.cancel()
 
+    assert drain_waited_for_the_user_read
     assert [(write["object_id"], write["action"]) for write in writes] == [("new-user", "created")]
-
-
-@pytest.mark.asyncio
-async def test_key_deleted_audit_write_is_drained_before_it_starts_running():
-    from litellm.proxy._types import LiteLLM_VerificationToken
-    from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
-
-    mock_prisma: Final = MagicMock()
-    writes: Final[list[dict[str, Any]]] = []
-
-    async def _mock_create(data: dict[str, Any]) -> None:
-        await asyncio.sleep(0)
-        writes.append(data)
-
-    mock_prisma.db.litellm_auditlog.create = AsyncMock(side_effect=_mock_create)
-
-    with (
-        patch("litellm.store_audit_logs", True),
-        patch("litellm.proxy.proxy_server.premium_user", True),
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
-    ):
-        KeyManagementEventHooks.create_key_deleted_audit_logs(
-            keys_being_deleted=[LiteLLM_VerificationToken(token="hashed-token-1")],
-            user_api_key_dict=UserAPIKeyAuth(api_key="sk-admin", user_id="admin"),
-        )
-        await drain_audit_tasks(timeout=2.0)
-
-    assert [(write["object_id"], write["action"]) for write in writes] == [("hashed-token-1", "deleted")]

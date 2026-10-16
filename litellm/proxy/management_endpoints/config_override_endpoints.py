@@ -81,6 +81,14 @@ def _redact_config(config: Mapping[str, object] | None) -> dict[str, str]:
     return {k: _AUDIT_REDACTED for k in config}
 
 
+def _log_audit_task_exception(task: "asyncio.Task[None]") -> None:
+    if task.cancelled():
+        return
+    exc: Final = task.exception()
+    if exc is not None:
+        verbose_proxy_logger.warning("Failed to write config override audit log: %s", exc)
+
+
 async def _emit_config_override_audit_log(
     *,
     object_id: str,
@@ -100,30 +108,28 @@ async def _emit_config_override_audit_log(
     from litellm.proxy.management_helpers.audit_logs import (
         create_audit_log_for_update,
         is_audit_logging_enabled,
-        track_audit_task,
     )
     from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
     if not is_audit_logging_enabled():
         return
 
-    track_audit_task(
-        asyncio.create_task(
-            create_audit_log_for_update(
-                request_data=LiteLLM_AuditLogs(
-                    id=str(uuid.uuid4()),
-                    updated_at=datetime.now(timezone.utc),
-                    changed_by=litellm_changed_by or user_api_key_dict.user_id or litellm_proxy_admin_name,
-                    changed_by_api_key=user_api_key_dict.api_key,
-                    table_name=LitellmTableNames.CONFIG_OVERRIDES_TABLE_NAME,
-                    object_id=object_id,
-                    action=action,
-                    updated_values=json.dumps({"config": _redact_config(after_config)}, default=str),
-                    before_value=json.dumps({"config": _redact_config(before_config)}, default=str),
-                )
+    task: Final = asyncio.create_task(
+        create_audit_log_for_update(
+            request_data=LiteLLM_AuditLogs(
+                id=str(uuid.uuid4()),
+                updated_at=datetime.now(timezone.utc),
+                changed_by=litellm_changed_by or user_api_key_dict.user_id or litellm_proxy_admin_name,
+                changed_by_api_key=user_api_key_dict.api_key,
+                table_name=LitellmTableNames.CONFIG_OVERRIDES_TABLE_NAME,
+                object_id=object_id,
+                action=action,
+                updated_values=json.dumps({"config": _redact_config(after_config)}, default=str),
+                before_value=json.dumps({"config": _redact_config(before_config)}, default=str),
             )
         )
     )
+    task.add_done_callback(_log_audit_task_exception)
 
 
 # --- Hashicorp Vault constants ---

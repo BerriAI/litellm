@@ -22,6 +22,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import Field, TypeAdapter, ValidationError
 
 import litellm
+from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.caching.caching import RedisCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
@@ -225,6 +226,15 @@ def _coordination_redis_source(settings: Mapping[str, object] | None) -> Coordin
     return None
 
 
+def _log_audit_task_exception(task: "asyncio.Task[None]") -> None:
+    """Surface a fire-and-forget audit-log task failure as a warning."""
+    if task.cancelled():
+        return
+    exc: Final = task.exception()
+    if exc is not None:
+        verbose_proxy_logger.warning("Failed to write coordination-redis-settings audit log: %s", exc)
+
+
 async def _emit_coordination_redis_audit_log(
     *,
     action: AUDIT_ACTIONS,
@@ -237,30 +247,28 @@ async def _emit_coordination_redis_audit_log(
     from litellm.proxy.management_helpers.audit_logs import (
         create_audit_log_for_update,
         is_audit_logging_enabled,
-        track_audit_task,
     )
     from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
     if not is_audit_logging_enabled():
         return
 
-    track_audit_task(
-        asyncio.create_task(
-            create_audit_log_for_update(
-                request_data=LiteLLM_AuditLogs(
-                    id=str(uuid.uuid4()),
-                    updated_at=datetime.now(timezone.utc),
-                    changed_by=litellm_changed_by or user_api_key_dict.user_id or litellm_proxy_admin_name,
-                    changed_by_api_key=user_api_key_dict.api_key,
-                    table_name=LitellmTableNames.CONFIG_TABLE_NAME,
-                    object_id=_COORDINATION_REDIS_KEY,
-                    action=action,
-                    updated_values=json.dumps({"settings": _redact_all_values(after_settings)}, default=str),
-                    before_value=json.dumps({"settings": _redact_all_values(before_settings)}, default=str),
-                )
+    task: Final = asyncio.create_task(
+        create_audit_log_for_update(
+            request_data=LiteLLM_AuditLogs(
+                id=str(uuid.uuid4()),
+                updated_at=datetime.now(timezone.utc),
+                changed_by=litellm_changed_by or user_api_key_dict.user_id or litellm_proxy_admin_name,
+                changed_by_api_key=user_api_key_dict.api_key,
+                table_name=LitellmTableNames.CONFIG_TABLE_NAME,
+                object_id=_COORDINATION_REDIS_KEY,
+                action=action,
+                updated_values=json.dumps({"settings": _redact_all_values(after_settings)}, default=str),
+                before_value=json.dumps({"settings": _redact_all_values(before_settings)}, default=str),
             )
         )
     )
+    task.add_done_callback(_log_audit_task_exception)
 
 
 class CoordinationRedisSettingsResponse(LiteLLMBaseModel):

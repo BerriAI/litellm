@@ -177,6 +177,21 @@ def _resolve_team_callbacks(team_metadata: object) -> TeamCallbackMetadata:
     return resolved
 
 
+def _log_audit_task_exception(task: "asyncio.Task[None]") -> None:
+    """Surface a fire-and-forget audit-log task failure.
+
+    ``asyncio.create_task`` swallows exceptions silently — if the audit
+    write fails (transient DB error etc.) we'd otherwise lose the row
+    without any signal.  Log at warning level so the operator sees there's
+    a gap in the audit trail.
+    """
+    if task.cancelled():
+        return
+    exc: Final = task.exception()
+    if exc is not None:
+        verbose_proxy_logger.warning("Failed to write team-callback audit log: %s", exc)
+
+
 async def _emit_team_callback_audit_log(
     *,
     team_id: str,
@@ -199,7 +214,6 @@ async def _emit_team_callback_audit_log(
     from litellm.proxy.management_helpers.audit_logs import (
         create_audit_log_for_update,
         is_audit_logging_enabled,
-        track_audit_task,
     )
     from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
@@ -209,23 +223,22 @@ async def _emit_team_callback_audit_log(
     redacted_before: Final = _redact_callback_secrets(before_metadata)
     redacted_after: Final = _redact_callback_secrets(after_metadata)
 
-    track_audit_task(
-        asyncio.create_task(
-            create_audit_log_for_update(
-                request_data=LiteLLM_AuditLogs(
-                    id=str(uuid.uuid4()),
-                    updated_at=datetime.now(timezone.utc),
-                    changed_by=litellm_changed_by or user_api_key_dict.user_id or litellm_proxy_admin_name,
-                    changed_by_api_key=user_api_key_dict.api_key,
-                    table_name=LitellmTableNames.TEAM_TABLE_NAME,
-                    object_id=team_id,
-                    action="updated",
-                    updated_values=json.dumps({"metadata": redacted_after}, default=str),
-                    before_value=json.dumps({"metadata": redacted_before}, default=str),
-                )
+    task: Final = asyncio.create_task(
+        create_audit_log_for_update(
+            request_data=LiteLLM_AuditLogs(
+                id=str(uuid.uuid4()),
+                updated_at=datetime.now(timezone.utc),
+                changed_by=litellm_changed_by or user_api_key_dict.user_id or litellm_proxy_admin_name,
+                changed_by_api_key=user_api_key_dict.api_key,
+                table_name=LitellmTableNames.TEAM_TABLE_NAME,
+                object_id=team_id,
+                action="updated",
+                updated_values=json.dumps({"metadata": redacted_after}, default=str),
+                before_value=json.dumps({"metadata": redacted_before}, default=str),
             )
         )
     )
+    task.add_done_callback(_log_audit_task_exception)
 
 
 def _callback_error(status_code: int, message: str) -> HTTPException:
