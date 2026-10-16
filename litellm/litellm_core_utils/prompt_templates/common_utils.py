@@ -9,7 +9,7 @@ import json
 import mimetypes
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from itertools import groupby, islice
+from itertools import chain, groupby, islice
 from os import PathLike
 from pathlib import Path
 from types import MappingProxyType
@@ -1424,6 +1424,11 @@ def _schema_levels(schema: Mapping[str, object]) -> Iterator[tuple[Mapping[str, 
     while frontier:
         yield frontier
         frontier = tuple(child for node in frontier for child in _subschemas(node))
+
+
+def schema_has_ref(schema: Mapping[str, object]) -> bool:
+    nodes: Final = chain.from_iterable(islice(_schema_levels(schema), _MAX_SCHEMA_NESTING))
+    return any("$ref" in node for node in nodes)
 
 
 def _subschemas(node: Mapping[str, object]) -> Iterator[Mapping[str, object]]:

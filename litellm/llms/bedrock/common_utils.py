@@ -255,6 +255,18 @@ def _bedrock_model_supports(model: str, key: str) -> bool:
     return supports_factory(model=model, custom_llm_provider="bedrock", key=key)
 
 
+def bedrock_native_output_format(output_format: Mapping[str, object]) -> Mapping[str, object] | None:
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    schema: Final = output_format.get("schema")
+    if not isinstance(schema, Mapping):
+        return output_format
+    native_schema: Final = AnthropicConfig.native_output_schema(schema)
+    if native_schema is None:
+        return None
+    return {**output_format, "schema": native_schema}
+
+
 def apply_bedrock_invoke_structured_output(
     model: str,
     request_body: dict[str, object],  # mutable-ok: edited in place like siblings
@@ -277,18 +289,24 @@ def apply_bedrock_invoke_structured_output(
     if schema_format is None:
         return
 
-    if _bedrock_model_supports(model, "supports_native_structured_output"):
+    native_format: Final = (
+        bedrock_native_output_format(schema_format)
+        if _bedrock_model_supports(model, "supports_native_structured_output")
+        else None
+    )
+    if native_format is not None:
         existing_output_config: Final = request_body.get("output_config")
         if isinstance(existing_output_config, dict):
-            existing_output_config["format"] = schema_format
+            existing_output_config["format"] = native_format
         else:
-            request_body["output_config"] = {"format": schema_format}  # rebind-ok: out-param
+            request_body["output_config"] = {"format": native_format}  # rebind-ok: out-param
         return
 
     verbose_logger.warning(
         "Bedrock Invoke: model=%s does not advertise `supports_native_structured_output` "
-        "in model_prices_and_context_window.json, so the JSON schema was inlined into "
-        "the last user message and is NOT enforced by the model.",
+        "in model_prices_and_context_window.json, or the schema has a recursive or "
+        "unresolved `$ref`, so the JSON schema was inlined into the last user message "
+        "and is NOT enforced by the model.",
         model,
     )
     convert_bedrock_invoke_output_format_to_inline_schema(

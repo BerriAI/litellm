@@ -1050,6 +1050,7 @@ def test_bedrock_messages_forwards_output_config_with_output_format():
         "schema": {
             "type": "object",
             "properties": {"answer": {"type": "string"}},
+            "additionalProperties": False,
         },
     }
     optional_params = {
@@ -3190,6 +3191,61 @@ def test_bedrock_messages_inlines_schema_for_a_profile_without_native_output(set
     assert json.loads(last_content[-1]["text"]) == schema
 
 
+def _bedrock_messages_request_with_schema(model: str, schema: dict) -> dict:
+    from litellm.types.router import GenericLiteLLMParams
+
+    return AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": [{"type": "text", "text": "say hello"}]}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 100,
+            "output_config": {"format": {"type": "json_schema", "schema": schema}},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+
+def test_bedrock_messages_native_output_drops_schema_keywords_bedrock_rejects(set_native_structured_output):
+    model: Final = "us.anthropic.claude-sonnet-5"
+    set_native_structured_output(model, True)
+    schema: Final = {
+        "type": "object",
+        "properties": {
+            "count": {"type": "integer", "minimum": 1},
+            "ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": True},
+        },
+        "required": ["count", "ids"],
+    }
+
+    result: Final = _bedrock_messages_request_with_schema(model, schema)
+
+    sent: Final = result["output_config"]["format"]["schema"]
+    assert "minimum" not in sent["properties"]["count"]
+    assert "uniqueItems" not in sent["properties"]["ids"]
+    assert sent["additionalProperties"] is False
+
+
+def test_bedrock_messages_recursive_schema_on_a_native_output_profile_is_inlined(set_native_structured_output):
+    model: Final = "us.anthropic.claude-sonnet-5"
+    set_native_structured_output(model, True)
+    schema: Final = {
+        "type": "object",
+        "properties": {"root": {"$ref": "#/$defs/Node"}},
+        "$defs": {
+            "Node": {
+                "type": "object",
+                "properties": {"children": {"type": "array", "items": {"$ref": "#/$defs/Node"}}},
+            }
+        },
+    }
+
+    result: Final = _bedrock_messages_request_with_schema(model, schema)
+
+    assert "output_config" not in result
+    assert json.loads(result["messages"][-1]["content"][-1]["text"]) == schema
+
+
 def test_bedrock_messages_legacy_output_format_wins_over_output_config_format(local_model_cost_map):
     """When a request carries both schema forms, the legacy top-level
     ``output_format`` keeps winning, matching the pre-existing precedence."""
@@ -3198,7 +3254,11 @@ def test_bedrock_messages_legacy_output_format_wins_over_output_config_format(lo
     cfg = AmazonAnthropicClaudeMessagesConfig()
     legacy_format = {
         "type": "json_schema",
-        "schema": {"type": "object", "properties": {"legacy_field": {"type": "string"}}},
+        "schema": {
+            "type": "object",
+            "properties": {"legacy_field": {"type": "string"}},
+            "additionalProperties": False,
+        },
     }
     newer_format = {
         "type": "json_schema",
@@ -3232,7 +3292,7 @@ def test_bedrock_messages_drop_params_keeps_native_output_config_format(local_mo
     cfg = AmazonAnthropicClaudeMessagesConfig()
     schema_format = {
         "type": "json_schema",
-        "schema": {"type": "object", "properties": {"zebra_count": {"type": "integer"}}},
+        "schema": {"type": "object", "properties": {"zebra_count": {"type": "integer"}}, "additionalProperties": False},
     }
 
     result = cfg.transform_anthropic_messages_request(
@@ -3257,7 +3317,7 @@ def test_bedrock_messages_strips_effort_but_keeps_format_for_sonnet_4_5(local_mo
     cfg = AmazonAnthropicClaudeMessagesConfig()
     schema_format = {
         "type": "json_schema",
-        "schema": {"type": "object", "properties": {"zebra_count": {"type": "integer"}}},
+        "schema": {"type": "object", "properties": {"zebra_count": {"type": "integer"}}, "additionalProperties": False},
     }
 
     result = cfg.transform_anthropic_messages_request(

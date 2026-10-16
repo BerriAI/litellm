@@ -4925,6 +4925,81 @@ def test_adaptive_thinking_is_kept_next_to_json_schema_on_a_native_output_profil
     assert "toolConfig" not in request
 
 
+NATIVE_OUTPUT_REJECTED_KEYWORDS: Final = frozenset({"minimum", "maximum", "minItems", "uniqueItems", "oneOf"})
+CONSTRAINED_PERSON_SCHEMA: Final = {
+    "type": "object",
+    "properties": {
+        "age": {"type": "integer", "minimum": 0, "maximum": 150},
+        "tags": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": True},
+        "contact": {"oneOf": [{"type": "string"}, {"type": "integer"}]},
+    },
+    "required": ["age", "tags", "contact"],
+    "additionalProperties": True,
+}
+RECURSIVE_TREE_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"root": {"$ref": "#/$defs/Node"}},
+    "required": ["root"],
+    "$defs": {
+        "Node": {
+            "type": "object",
+            "properties": {"name": {"type": "string"}, "children": {"type": "array", "items": {"$ref": "#/$defs/Node"}}},
+            "required": ["name", "children"],
+        }
+    },
+}
+
+
+def _schema_keys(node: object) -> frozenset[str]:
+    if isinstance(node, dict):
+        return frozenset(node).union(*(_schema_keys(value) for value in node.values()))
+    if isinstance(node, list):
+        return frozenset().union(*(_schema_keys(item) for item in node))
+    return frozenset()
+
+
+def _converse_request_for_schema(model: str, schema: dict) -> dict:
+    config: Final = AmazonConverseConfig()
+    optional_params: Final = config.map_openai_params(
+        non_default_params={"response_format": {"type": "json_schema", "json_schema": {"name": "out", "schema": schema}}},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    return config._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Fill in a plausible example."}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+
+def test_native_output_schema_drops_keywords_bedrock_rejects_and_closes_objects(set_native_structured_output):
+    model: Final = "us.anthropic.claude-opus-4-8"
+    set_native_structured_output(model, True)
+
+    request: Final = _converse_request_for_schema(model, CONSTRAINED_PERSON_SCHEMA)
+
+    sent: Final = json.loads(request["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"])
+    assert not _schema_keys(sent) & NATIVE_OUTPUT_REJECTED_KEYWORDS
+    assert sent["additionalProperties"] is False
+    assert sent["properties"]["contact"]["anyOf"] == [{"type": "string"}, {"type": "integer"}]
+    assert "minimum value: 0" in sent["properties"]["age"]["description"]
+
+
+def test_recursive_schema_on_a_native_output_profile_keeps_the_tool_path(set_native_structured_output):
+    model: Final = "us.anthropic.claude-opus-4-8"
+    set_native_structured_output(model, True)
+
+    request: Final = _converse_request_for_schema(model, RECURSIVE_TREE_SCHEMA)
+
+    assert "outputConfig" not in request
+    tool_spec: Final = request["toolConfig"]["tools"][0]["toolSpec"]
+    assert tool_spec["name"] == "json_tool_call"
+    assert "$ref" in _schema_keys(tool_spec["inputSchema"]["json"])
+
+
 def test_sonnet_4_6_json_schema_still_uses_native_output_config(monkeypatch):
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))

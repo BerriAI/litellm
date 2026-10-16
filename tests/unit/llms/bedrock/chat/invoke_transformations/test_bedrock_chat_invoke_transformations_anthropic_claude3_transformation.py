@@ -527,12 +527,37 @@ def test_output_config_format_inlined_for_bedrock_chat_invoke_profile_without_na
     assert json.loads(result["messages"][-1]["content"][-1]["text"]) == schema
 
 
+def test_recursive_response_format_on_a_native_output_profile_keeps_the_tool_path(set_native_structured_output):
+    model = "us.anthropic.claude-opus-4-8"
+    set_native_structured_output(model, True)
+    tree_schema = {
+        "type": "object",
+        "properties": {"root": {"$ref": "#/$defs/Node"}},
+        "$defs": {
+            "Node": {
+                "type": "object",
+                "properties": {"children": {"type": "array", "items": {"$ref": "#/$defs/Node"}}},
+            }
+        },
+    }
+
+    result = AmazonAnthropicClaudeConfig().map_openai_params(
+        non_default_params={"response_format": {"type": "json_schema", "json_schema": {"name": "tree", "schema": tree_schema}}},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert "output_format" not in result
+    assert [tool["name"] for tool in result["tools"]] == ["json_tool_call"]
+
+
 def test_output_config_format_forwarded_for_bedrock_chat_invoke_request(local_model_cost_map):
     """Bedrock Invoke chat path forwards ``output_config.format`` alongside effort
     for models with native structured-output support (Claude Sonnet 4.6)."""
     schema_format = {
         "type": "json_schema",
-        "schema": {"type": "object", "properties": {"answer": {"type": "string"}}},
+        "schema": {"type": "object", "properties": {"answer": {"type": "string"}}, "additionalProperties": False},
     }
 
     result = AmazonAnthropicClaudeConfig().transform_request(
@@ -673,7 +698,7 @@ def test_bedrock_chat_invoke_drop_params_keeps_native_output_config_format(local
     monkeypatch.setattr(litellm, "drop_params", True)
     schema_format = {
         "type": "json_schema",
-        "schema": {"type": "object", "properties": {"zebra_count": {"type": "integer"}}},
+        "schema": {"type": "object", "properties": {"zebra_count": {"type": "integer"}}, "additionalProperties": False},
     }
 
     result = AmazonAnthropicClaudeConfig().transform_request(

@@ -1,3 +1,4 @@
+import copy
 import json
 import re
 import time
@@ -24,7 +25,10 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    DEFS_MAX_INLINED_BYTES,
     sanitize_input_schema_for_anthropic,
+    schema_has_ref,
+    unpack_defs,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     RemoteMedia,
@@ -1628,32 +1632,24 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         return json_schema
 
+    @staticmethod
+    def native_output_schema(json_schema: Mapping[str, object]) -> Mapping[str, object] | None:
+        unpacked: Final = copy.deepcopy(dict(json_schema))
+        defs: Final = unpacked.pop("$defs", unpacked.pop("definitions", None))
+        if isinstance(defs, dict) and defs:
+            unpack_defs(unpacked, defs, max_inlined_bytes=DEFS_MAX_INLINED_BYTES)
+        if schema_has_ref(unpacked):
+            return None
+        return AnthropicConfig.filter_anthropic_output_schema(unpacked)
+
     def map_response_format_to_anthropic_output_format(self, value: dict | None) -> AnthropicOutputSchema | None:
-        json_schema: dict | None = self._extract_json_schema_from_response_format(value)
+        json_schema: Final = self._extract_json_schema_from_response_format(value)
         if json_schema is None:
             return None
-
-        # Resolve $ref/$defs before filtering — Anthropic doesn't support
-        # external schema references (e.g., /$defs/CalendarEvent).
-        import copy
-
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            DEFS_MAX_INLINED_BYTES,
-            unpack_defs,
-        )
-
-        json_schema = copy.deepcopy(json_schema)
-        defs: Final = json_schema.pop("$defs", json_schema.pop("definitions", {}))
-        if defs:
-            unpack_defs(json_schema, defs, max_inlined_bytes=DEFS_MAX_INLINED_BYTES)
-
-        # Filter out unsupported fields for Anthropic's output_format API
-        filtered_schema: Final = self.filter_anthropic_output_schema(json_schema)
-
-        return AnthropicOutputSchema(
-            type="json_schema",
-            schema=filtered_schema,
-        )
+        native_schema: Final = self.native_output_schema(json_schema)
+        if native_schema is None:
+            return None
+        return AnthropicOutputSchema(type="json_schema", schema=dict(native_schema))
 
     def map_response_format_to_anthropic_tool(
         self, value: dict | None, optional_params: dict, is_thinking_enabled: bool
@@ -1820,11 +1816,17 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     output_key=param,
                 )
             elif param == "response_format" and isinstance(value, dict):
-                if self.uses_native_structured_output(model):
-                    _output_format = self.map_response_format_to_anthropic_output_format(value)
-                    if _output_format is not None:
-                        optional_params["output_format"] = _output_format
-                else:
+                _output_format = (
+                    self.map_response_format_to_anthropic_output_format(value)
+                    if self.uses_native_structured_output(model)
+                    else None
+                )
+                if _output_format is not None:
+                    optional_params["output_format"] = _output_format
+                elif (
+                    not self.uses_native_structured_output(model)
+                    or self._extract_json_schema_from_response_format(value) is not None
+                ):
                     _tool = self.map_response_format_to_anthropic_tool(value, optional_params, is_thinking_enabled)
                     if _tool is None:
                         continue

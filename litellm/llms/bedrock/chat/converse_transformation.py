@@ -55,7 +55,11 @@ from litellm.llms.anthropic.chat.transformation import (
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.tool_result_images import place_tool_result_images
-from litellm.llms.bedrock.common_utils import bedrock_model_supports_regex_lookaround, bedrock_supports_tool_search
+from litellm.llms.bedrock.common_utils import (
+    bedrock_model_supports_regex_lookaround,
+    bedrock_native_output_format,
+    bedrock_supports_tool_search,
+)
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
     bedrock_request_metadata_is_owned,
@@ -988,6 +992,24 @@ class AmazonConverseConfig(BaseConfig):
         return result
 
     @staticmethod
+    def _native_output_schema(model: str, json_schema: Mapping[str, object]) -> Mapping[str, object] | None:
+        if BedrockModelInfo.get_base_model(model).startswith("anthropic"):
+            return AnthropicConfig.native_output_schema(json_schema)
+        return json_schema
+
+    @staticmethod
+    def _output_config_for_anthropic_format(output_config_format: Mapping[str, object]) -> OutputConfigBlock | None:
+        native_format: Final = bedrock_native_output_format(output_config_format)
+        if native_format is None:
+            return None
+        schema, name, description = (native_format.get(key) for key in ("schema", "name", "description"))
+        return AmazonConverseConfig._create_output_config_for_response_format(
+            json_schema=dict(schema) if isinstance(schema, Mapping) else None,
+            name=name if isinstance(name, str) else None,
+            description=description if isinstance(description, str) else None,
+        )
+
+    @staticmethod
     def _create_output_config_for_response_format(
         json_schema: dict | None = None,
         name: str | None = None,
@@ -1296,13 +1318,18 @@ class AmazonConverseConfig(BaseConfig):
         if "type" in value and value["type"] == "text":
             return optional_params
 
-        if self._supports_native_structured_outputs(model, self.custom_llm_provider) and json_schema is not None:
+        native_schema: Final = (
+            self._native_output_schema(model, json_schema)
+            if json_schema is not None and self._supports_native_structured_outputs(model, self.custom_llm_provider)
+            else None
+        )
+        if native_schema is not None:
             # Use Bedrock's native structured outputs API (outputConfig.textFormat)
             # No synthetic tool injection, no fake_stream needed.
             # Requires an explicit schema — json_object with no schema falls through
             # to the tool-call path below.
             output_config: Final = self._create_output_config_for_response_format(
-                json_schema=json_schema,
+                json_schema=dict(native_schema),
                 name=name,
                 description=description,
             )
@@ -1689,18 +1716,14 @@ class AmazonConverseConfig(BaseConfig):
             and base_model.startswith("anthropic")
             and self._supports_native_structured_outputs(model, self.custom_llm_provider)
         ):
-            output_config = self._create_output_config_for_response_format(
-                json_schema=output_config_format.get("schema"),
-                name=output_config_format.get("name"),
-                description=output_config_format.get("description"),
-            )
-        elif output_config is None and output_config_format is not None:
+            output_config = self._output_config_for_anthropic_format(output_config_format)
+        if output_config is None and output_config_format is not None:
             litellm.verbose_logger.warning(
                 "Bedrock Converse: dropping `output_config.format` for model=%s — "
                 "model does not advertise `supports_native_structured_output` in "
-                "model_prices_and_context_window.json. The schema will not be "
-                "enforced; pass `response_format` to use the synthetic tool-call "
-                "fallback.",
+                "model_prices_and_context_window.json, or the schema has a recursive "
+                "or unresolved `$ref`. The schema will not be enforced; pass "
+                "`response_format` to use the synthetic tool-call fallback.",
                 model,
             )
 
