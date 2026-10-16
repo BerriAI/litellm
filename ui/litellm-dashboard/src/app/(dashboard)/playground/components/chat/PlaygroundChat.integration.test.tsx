@@ -431,6 +431,33 @@ describe("PlaygroundChat", () => {
     expect(screen.queryByText("late reply")).not.toBeInTheDocument();
   });
 
+  it("only says no guardrails ran when the gateway reported its headers", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: true,
+      media: query,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }));
+    chatRequest
+      .mockImplementationOnce(replyWith("unreported reply"))
+      .mockImplementationOnce(async (...args: ChatArgs) => {
+        args[27]?.(new Headers({ "x-litellm-call-id": "call-reported" }));
+        args[1]("reported reply", args[2]);
+      });
+    preload({ selectedModel: "gpt-fast", selectedGuardrails: JSON.stringify(["pii-mask"]) });
+    renderChat();
+
+    await send(user, "first");
+    expect(await screen.findByText("unreported reply")).toBeInTheDocument();
+    expect(screen.getByText("This endpoint does not report which guardrails or policies ran")).toBeInTheDocument();
+    expect(screen.queryByText("No guardrails or policies ran on this request")).not.toBeInTheDocument();
+
+    await send(user, "second");
+    expect(await screen.findByText("call-reported")).toBeInTheDocument();
+    expect(screen.getByText("No guardrails or policies ran on this request")).toBeInTheDocument();
+  });
+
   it("keeps a stopped request's gateway details off the newer reply", async () => {
     const user = userEvent.setup();
     vi.stubGlobal("matchMedia", (query: string) => ({

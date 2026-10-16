@@ -212,7 +212,7 @@ export function usePlaygroundSend(deps: SendDeps) {
     const live = untilAborted(chat, controller.signal);
     const captured: { headers?: Headers; responseId?: string } = {};
     const trace = (): ReplyTrace => ({
-      ...gatewayTraceFromHeaders(captured.headers ?? new Headers()),
+      ...(captured.headers ? gatewayTraceFromHeaders(captured.headers) : {}),
       endpoint: settings.endpoint,
       requestedModel,
       responseId: captured.responseId,

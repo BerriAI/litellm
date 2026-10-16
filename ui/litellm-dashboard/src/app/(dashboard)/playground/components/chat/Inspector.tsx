@@ -148,8 +148,15 @@ function Routing({ message }: { message: MessageType }) {
 }
 
 function Guardrails({ message }: { message: MessageType }) {
-  const guardrails = message.trace?.appliedGuardrails ?? [];
+  const guardrails = message.trace?.appliedGuardrails;
   const policies = message.trace?.appliedPolicies ?? [];
+  if (guardrails === undefined) {
+    return (
+      <TraceSection value="guardrails" title="Guardrails and policies">
+        <Muted>This endpoint does not report which guardrails or policies ran</Muted>
+      </TraceSection>
+    );
+  }
   return (
     <TraceSection value="guardrails" title="Guardrails and policies">
       {guardrails.map((name) => (

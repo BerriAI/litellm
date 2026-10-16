@@ -26,7 +26,7 @@ export interface A2ATaskMetadata {
   metadata?: Record<string, any>;
 }
 
-export type ReplyTrace = GatewayTrace &
+export type ReplyTrace = Partial<GatewayTrace> &
   Readonly<{
     endpoint: string;
     requestedModel?: string;
