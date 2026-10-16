@@ -12,7 +12,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, TypeAlias, Union
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm.exceptions import UnsupportedParamsError
@@ -21,7 +21,7 @@ from litellm.litellm_core_utils.audio_utils.utils import (
     calculate_request_duration,
     speech_media_type_from_audio_bytes,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
@@ -93,6 +93,9 @@ def _fallback_gemini_tts_audio_duration(audio: bytes, encoding: str, sample_rate
     return None
 
 
+_SPEAKER_CONFIG_ITEMS: Final = TypeAdapter(list[object])
+
+
 class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
     """
     Configuration for Google Cloud/Vertex AI Text-to-Speech
@@ -151,7 +154,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
 
     def _map_voice_to_vertex_format(
         self,
-        voice: str | dict | None,
+        voice: str | dict[str, object] | None,
         model: str | None = None,
     ) -> tuple[str | None, dict | None]:
         """
@@ -248,12 +251,14 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
                 [],
             ),
         )
-        if not isinstance(raw_speaker_configs, list):
+        try:
+            validated_speaker_configs: Final = _SPEAKER_CONFIG_ITEMS.validate_python(raw_speaker_configs, strict=True)
+        except ValidationError:
             return []
         speaker_configs: Final[  # mutable-ok: validated payloads are accumulated for serialization
             list[VertexTextToSpeechSpeakerVoiceConfig]
         ] = []
-        for raw_item in iter_items(raw_speaker_configs):
+        for raw_item in validated_speaker_configs:
             if (raw_config := as_str_mapping(raw_item)) is None:
                 continue
             speaker_alias = self._get_str_value(
@@ -363,7 +368,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         self,
         model: str,
         input: str,
-        voice: str | dict | None,
+        voice: str | dict[str, object] | None,
         optional_params: dict[str, object],
         litellm_params_dict: dict[str, object],
         logging_obj: "LiteLLMLoggingObj",
@@ -444,7 +449,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         self,
         model: str,
         optional_params: dict,
-        voice: str | dict | None = None,
+        voice: str | dict[str, object] | None = None,
         drop_params: bool = False,
         kwargs: dict = {},
     ) -> tuple[str | None, dict]:
