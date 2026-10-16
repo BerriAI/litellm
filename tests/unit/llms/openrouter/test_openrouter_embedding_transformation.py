@@ -2,6 +2,15 @@
 Unit tests for OpenRouter embedding transformation logic.
 """
 
+import json
+from typing import Final
+
+import httpx
+import pytest
+import respx
+
+import litellm
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.openrouter.embedding.transformation import (
     OpenrouterEmbeddingConfig,
 )
@@ -131,3 +140,37 @@ def test_openrouter_embedding_map_params():
     assert result["timeout"] == 30
     # Unsupported params should not be included
     assert "unsupported" not in result
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_openrouter_embedding_request_and_response(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("https://openrouter.ai/api/v1/embeddings")
+    route.return_value = httpx.Response(
+        200,
+        json={
+            "object": "list",
+            "data": [
+                {"object": "embedding", "index": 0, "embedding": [0.1, 0.2]},
+                {"object": "embedding", "index": 1, "embedding": [0.3, 0.4]},
+            ],
+            "model": "openai/text-embedding-3-small",
+            "usage": {"prompt_tokens": 4, "total_tokens": 4},
+        },
+    )
+    inputs: Final = ["Hello world", "How are you?"]
+
+    response: Final = litellm.embedding(
+        model="openrouter/openai/text-embedding-3-small",
+        input=inputs,
+        api_key="test-api-key",
+        client=HTTPHandler(),
+    )
+
+    request_body: Final = json.loads(route.calls[0].request.content)
+    assert request_body == {
+        "model": "openai/text-embedding-3-small",
+        "input": inputs,
+    }
+    assert route.calls[0].request.headers["Authorization"] == "Bearer test-api-key"
+    assert [item["embedding"] for item in response.data] == [[0.1, 0.2], [0.3, 0.4]]
+    assert response.usage.total_tokens == 4

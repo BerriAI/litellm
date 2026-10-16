@@ -47,9 +47,8 @@ The per-mode env vars and URL shapes above were captured from a real
 docs; if a CLI release changes them, the cells fail with the CLI's own
 diagnostic rather than silently testing the wrong wire.
 
-`run_models` and `env` are injection seams for
-`_driver_unit_tests/test_passthrough.py`; production callers leave
-them unset.
+`run_models` and `env` are injection seams for tests; production
+callers leave them unset.
 """
 
 from __future__ import annotations

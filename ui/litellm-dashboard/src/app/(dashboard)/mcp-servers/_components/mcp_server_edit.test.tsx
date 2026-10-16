@@ -2209,12 +2209,14 @@ describe("MCPServerEdit (max concurrent requests)", () => {
     ...interactiveOAuthServer,
     auth_type: "none",
     max_concurrent_requests: 5,
+    rpm: 5,
   };
 
   it("prefills the existing limit and sends an updated value in the payload", async () => {
     vi.mocked(networking.updateMCPServer).mockResolvedValue({
       ...limitedServer,
       max_concurrent_requests: 2,
+      rpm: 2,
     });
 
     render(
@@ -2229,8 +2231,11 @@ describe("MCPServerEdit (max concurrent requests)", () => {
 
     const limitInput = screen.getByPlaceholderText("e.g. 10") as HTMLInputElement;
     expect(limitInput.value).toBe("5");
+    const rpmInput = screen.getByPlaceholderText("e.g. 60") as HTMLInputElement;
+    expect(rpmInput.value).toBe("5");
 
     fireEvent.change(limitInput, { target: { value: "2" } });
+    fireEvent.change(rpmInput, { target: { value: "2" } });
 
     const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
     await act(async () => {
@@ -2243,6 +2248,7 @@ describe("MCPServerEdit (max concurrent requests)", () => {
 
     const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
     expect(payload.max_concurrent_requests).toBe(2);
+    expect(payload.rpm).toBe(2);
   });
 
   it("sends null when the limit is cleared so the backend unsets it", async () => {
@@ -2277,6 +2283,40 @@ describe("MCPServerEdit (max concurrent requests)", () => {
 
     const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
     expect(payload.max_concurrent_requests).toBeNull();
+  });
+
+  it("sends null when the RPM limit is cleared", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...limitedServer,
+      rpm: null,
+    });
+
+    render(
+      <MCPServerEdit
+        mcpServer={limitedServer}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    const rpmInput = screen.getByPlaceholderText("e.g. 60") as HTMLInputElement;
+    expect(rpmInput.value).toBe("5");
+
+    fireEvent.change(rpmInput, { target: { value: "" } });
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.rpm).toBeNull();
   });
 });
 

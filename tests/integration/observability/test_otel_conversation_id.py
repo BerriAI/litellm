@@ -1,7 +1,6 @@
 import asyncio
 import base64
 import json
-import os
 import re
 import signal
 import threading
@@ -16,12 +15,11 @@ from typing import Final
 import anthropic
 import httpx
 import openai
-import psutil
 import pytest
 import yaml
 from integration._support.client import Gateway, eventually, gateway_from_environment
 from integration._support.database import read_rows
-from integration._support.process import OwnedProxy, owned_proxy_process
+from integration._support.process import OwnedProxy, owned_proxy_process, stop_root_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
@@ -289,7 +287,7 @@ class RigFactory:
     def start(self) -> Iterator[Rig]:
         config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
         config["litellm_settings"].update({"callbacks": ["otel"]})
-        config["general_settings"].update({"disable_model_info_refresh": True, **self.settings})
+        config["general_settings"].update(self.settings)
         config["callback_settings"] = {
             "otel": {"exporter": "http/json", "endpoint": self.sink.wire.url, "mapper_names": ["genai"]},
         }
@@ -762,29 +760,26 @@ def test_slow_sink_during_a_burst_lands_every_response_exactly_once(rig: Rig) ->
 @pytest.mark.covers("other.observability.otel.conversation_id_survives_worker_kill")
 def test_killing_one_of_two_workers_mid_burst_keeps_serving_and_never_duplicates_a_span(two_worker_rig: Rig) -> None:
     rig: Final = two_worker_rig
-    root: Final = psutil.Process(rig.process.process.pid)
-    workers: Final = eventually(
-        lambda: tuple(child for child in root.children() if "resource_tracker" not in " ".join(child.cmdline())),
-        lambda found: len(found) == 2,
-        seconds=30,
-    )
+    workers: Final = eventually(rig.process.worker_pids, lambda found: len(found) == 2, seconds=30)
     sessions: Final = {index: f"conv-{index}-{uuid.uuid4().hex}" for index in range(24)}
     markers: Final = tuple(_marker() for _ in range(24))
 
-    def one(index: int) -> tuple[str, str | None]:
-        if index == 8:
-            os.kill(workers[0].pid, signal.SIGKILL)
-        try:
-            response: Final = rig.chat(markers[index], headers={"x-litellm-session-id": sessions[index]})
-            return f"chatcmpl-{markers[index]}", None if response.status_code == 200 else response.text
-        except httpx.HTTPError as error:
-            return f"chatcmpl-{markers[index]}", repr(error)
+    with rig.process.replacing_worker(min(workers)) as kill:
 
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        results: Final = tuple(pool.map(one, range(24)))
-    assert rig.process.process.poll() is None, "Proxy root exited after a worker was killed"
-    after: Final = rig.chat(_marker(), headers={"x-litellm-session-id": "conv-after-kill"})
-    assert after.status_code == 200, after.text
+        def one(index: int) -> tuple[str, str | None]:
+            if index == 8:
+                kill()
+            try:
+                response: Final = rig.chat(markers[index], headers={"x-litellm-session-id": sessions[index]})
+                return f"chatcmpl-{markers[index]}", None if response.status_code == 200 else response.text
+            except httpx.HTTPError as error:
+                return f"chatcmpl-{markers[index]}", repr(error)
+
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            results: Final = tuple(pool.map(one, range(24)))
+        assert rig.process.process.poll() is None, "Proxy root exited after a worker was killed"
+        after: Final = rig.chat(_marker(), headers={"x-litellm-session-id": "conv-after-kill"})
+        assert after.status_code == 200, after.text
     assert rig.sink.single_span(after.json()["id"]) == "conv-after-kill"
     failures: Final = tuple(error for _, error in results if error)
     assert all(error.startswith(("ReadError(", "RemoteProtocolError(", "ConnectError(")) for error in failures), (
@@ -823,8 +818,8 @@ def test_terminating_the_proxy_right_after_a_burst_flushes_every_span_before_exi
         lambda: _landed(rig, expected), lambda seen: all(len(values) >= 1 for values in seen.values()), seconds=60
     )
     assert drained == {session: (identity,) for identity, session in expected.items()}, drained
-    rig.process.process.terminate()
-    assert rig.process.process.wait(timeout=40) in (0, -signal.SIGTERM)
+    assert stop_root_process(rig.process.process), "Proxy did not exit within the graceful stop budget"
+    assert rig.process.process.returncode in (0, -signal.SIGTERM)
     assert _landed(rig, expected) == drained
     with pytest.raises(httpx.ConnectError):
         next(started)

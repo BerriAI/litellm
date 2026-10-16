@@ -1184,7 +1184,7 @@ async def test_output_file_content_fetches_and_parses(monkeypatch):
         return type("R", (), {"content": b'{"a": 1}\n{"b": 2}'})()
 
     monkeypatch.setattr(files_main, "afile_content", fake_afile_content)
-    monkeypatch.setattr(cu, "_is_base64_encoded_unified_file_id", lambda fid: False)
+    monkeypatch.setattr(cu, "is_base64_encoded_unified_file_id", lambda fid: False)
 
     result = await bu._fetch_batch_output_file_content(
         _batch("file-out"),
@@ -1217,7 +1217,7 @@ async def test_output_file_content_unified_file_id_extraction(monkeypatch):
     monkeypatch.setattr(files_main, "afile_content", fake_afile_content)
     monkeypatch.setattr(
         cu,
-        "_is_base64_encoded_unified_file_id",
+        "is_base64_encoded_unified_file_id",
         lambda fid: "litellm_proxy;llm_output_file_id,real-file-99;rest",
     )
 

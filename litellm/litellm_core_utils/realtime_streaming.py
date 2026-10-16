@@ -6,11 +6,16 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypedDict, cast
 
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import redact_internal_details_from_client_message, verbose_logger
-from litellm.constants import REALTIME_SESSION_FAILURE_LOGGED_KEY, REALTIME_SESSION_SUCCESS_LOGGED_KEY
+from litellm.constants import (
+    REALTIME_METERED_USAGE_KEY,
+    REALTIME_SESSION_FAILURE_LOGGED_KEY,
+    REALTIME_SESSION_SUCCESS_LOGGED_KEY,
+)
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeBackend
 from litellm.types.llms.openai import (
@@ -103,6 +108,9 @@ class _LoggingWorker(Protocol):
     def ensure_initialized_and_enqueue(self, async_coroutine: Coroutine[object, object, None]) -> None: ...
 
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
 def _decode_json_object(payload: str) -> Mapping[str, object]:
     """Decode a realtime frame into its top-level field mapping."""
     return json.loads(payload)
@@ -112,6 +120,12 @@ class RealtimeEventNormalizer(Protocol):
     def should_drop(self, event: object) -> bool: ...
     def normalize(self, event: dict) -> dict: ...
     def patch_outgoing_session(self, session: dict) -> dict: ...
+
+
+class RealtimeUsageMeter(Protocol):
+    def observe_client_event(self, event: Mapping[str, object]) -> None: ...
+    def observe_backend_event(self, event: Mapping[str, object]) -> None: ...
+    def snapshot(self) -> object: ...
 
 
 DefaultLoggedRealTimeEventTypes: Final = [
@@ -136,6 +150,7 @@ class RealTimeStreaming:
         backend_uses_beta_protocol: bool | None = None,
         force_transcription_model: str | None = None,
         event_normalizer: RealtimeEventNormalizer | None = None,
+        usage_meter: RealtimeUsageMeter | None = None,
         logging_worker: _LoggingWorker = GLOBAL_LOGGING_WORKER,
     ):
         self.websocket: _ClientWebSocket = websocket
@@ -198,6 +213,7 @@ class RealTimeStreaming:
         self._is_transcription_session: bool = force_transcription_model is not None
         # Optional per-provider GA event normalizer (e.g. XAIRealtimeNormalizer).
         self._event_normalizer = event_normalizer
+        self._usage_meter = usage_meter
 
     @property
     def _session_created_sent_to_client(self) -> bool:
@@ -281,10 +297,12 @@ class RealTimeStreaming:
         """Extract user text content from client WebSocket events for spend logging."""
         try:
             if isinstance(message, str):
-                msg_obj = json.loads(message)
+                msg_obj = _DECODED_JSON.validate_python(json.loads(message))
             elif isinstance(message, dict):
                 msg_obj = message
             else:
+                return
+            if not isinstance(msg_obj, dict):
                 return
 
             msg_type: Final = msg_obj.get("type", "")
@@ -416,6 +434,8 @@ class RealTimeStreaming:
     async def log_messages(self):
         """Log messages in list"""
         if self.logging_obj:
+            if self._usage_meter is not None:
+                self.logging_obj.model_call_details[REALTIME_METERED_USAGE_KEY] = self._usage_meter.snapshot()
             if self.input_messages:
                 self.logging_obj.model_call_details["messages"] = self.input_messages
             if self.session_tools or self.tool_calls:
@@ -481,6 +501,10 @@ class RealTimeStreaming:
                     sent = True
             return sent
         await self.backend_ws.send(message)
+        if self._usage_meter is not None:
+            sent_event: Final = self._parse_backend_event(message)
+            if sent_event is not None:
+                self._usage_meter.observe_client_event(sent_event)
         return True
 
     def _enforce_transcription_session_model(self, message: str) -> str:
@@ -755,7 +779,7 @@ class RealTimeStreaming:
         if not self._has_audio_transcription_guardrails():
             return setup_message
         try:
-            obj: Final = json.loads(setup_message)
+            obj: Final = _DECODED_JSON.validate_python(json.loads(setup_message))
         except (json.JSONDecodeError, TypeError):
             return setup_message
         setup: Final = obj.get("setup") if isinstance(obj, dict) else None
@@ -782,7 +806,7 @@ class RealTimeStreaming:
             isinstance(cb, CustomGuardrail)
             and any(
                 cb.should_run_guardrail(
-                    data=self.request_data,
+                    data={**self.request_data, "stream": True},
                     event_type=et,
                 )
                 for et in event_hooks
@@ -847,7 +871,7 @@ class RealTimeStreaming:
         if event_hooks is None:
             event_hooks = [GuardrailEventHooks.realtime_input_transcription]
         _realtime_event_types: Final = event_hooks
-        _check_data: Final = {**self.request_data, "transcript": transcript}
+        _check_data: Final = {**self.request_data, "transcript": transcript, "stream": True}
         _already_run: Final[set] = set()
 
         for callback in litellm.callbacks:
@@ -896,8 +920,8 @@ class RealTimeStreaming:
                 # clientContent / cancel messages are sent.
                 if pre_block_backend_message is not None:
                     await self._send_to_backend(pre_block_backend_message)
-                # Cancel any in-progress LLM response (e.g. VAD auto-response).
-                await self._send_to_backend(json.dumps({"type": "response.cancel"}))
+                if not self._is_transcription_session:
+                    await self._send_to_backend(json.dumps({"type": "response.cancel"}))
                 # Send the policy violation hint (shows as small gray status text in UI).
                 await self.websocket.send_text(
                     json.dumps(
@@ -911,25 +935,26 @@ class RealTimeStreaming:
                         }
                     )
                 )
-                # Ask the LLM to voice the exact guardrail message so the
-                # user hears it as audio in voice sessions (not just text).
-                guardrail_prompt = (
-                    f"Say exactly the following message to the user, word for word, "
-                    f"do not add anything else: {error_msg}"
-                )
-                await self._send_to_backend(
-                    json.dumps(
-                        {
-                            "type": "conversation.item.create",
-                            "item": {
-                                "type": "message",
-                                "role": "user",
-                                "content": [{"type": "input_text", "text": guardrail_prompt}],
-                            },
-                        }
+                if not self._is_transcription_session:
+                    # Ask the LLM to voice the exact guardrail message so the
+                    # user hears it as audio in voice sessions (not just text).
+                    guardrail_prompt = (
+                        f"Say exactly the following message to the user, word for word, "
+                        f"do not add anything else: {error_msg}"
                     )
-                )
-                await self._send_to_backend(json.dumps({"type": "response.create"}))
+                    await self._send_to_backend(
+                        json.dumps(
+                            {
+                                "type": "conversation.item.create",
+                                "item": {
+                                    "type": "message",
+                                    "role": "user",
+                                    "content": [{"type": "input_text", "text": guardrail_prompt}],
+                                },
+                            }
+                        )
+                    )
+                    await self._send_to_backend(json.dumps({"type": "response.create"}))
 
                 self._violation_count += 1
                 end_session_after: int | None = getattr(callback, "end_session_after_n_fails", None)
@@ -1030,7 +1055,7 @@ class RealTimeStreaming:
                     cast(str, transcript),
                     item_id=cast(str | None, event.get("item_id")),
                 )
-                if not blocked and not self._is_transcription_session:
+                if not blocked and self._should_disable_vad_auto_response():
                     await self._send_to_backend(json.dumps({"type": "response.create"}))
                 continue
             ## LOGGING
@@ -1070,18 +1095,14 @@ class RealTimeStreaming:
             self.store_message(event_obj)
             await self.websocket.send_text(self._event_to_client_json(event_obj))
 
-            # Transcription-only sessions (e.g. gpt-realtime-whisper) have no
-            # assistant turn: capture audio-duration usage for cost and never
-            # trigger response.create.
             if self._is_transcription_session:
                 self._capture_transcription_usage(event_obj)
-                return True
 
             blocked: Final = await self.run_realtime_guardrails(
                 transcript,
                 item_id=event_obj.get("item_id"),
             )
-            if not blocked:
+            if not blocked and self._should_disable_vad_auto_response():
                 await self._send_to_backend(json.dumps({"type": "response.create"}))
             return True
         return False
@@ -1115,6 +1136,9 @@ class RealTimeStreaming:
 
                 if self._should_drop_event_from_client(event):
                     continue
+
+                if self._usage_meter is not None:
+                    self._usage_meter.observe_backend_event(event)
 
                 if await self._handle_raw_backend_message(event, raw_response):
                     continue

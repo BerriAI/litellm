@@ -42,9 +42,10 @@ from litellm.proxy.batches_endpoints.litellm_executed_batches import (
     resolve_litellm_executed_provider,
 )
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.proxy.common_utils.http_parsing_utils import (
-    _read_request_body,
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
+    _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     extract_nested_form_metadata,
+    read_request_body,
 )
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_body,
@@ -70,8 +71,8 @@ from litellm.proxy.openai_files_endpoints.batch_guardrails import (
     rewrite_batch_input_file,
     scan_batch_input_file,
 )
-from litellm.proxy.openai_files_endpoints.common_utils import (
-    _is_base64_encoded_unified_file_id,
+from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  # legacy module exports
+    _is_base64_encoded_unified_file_id,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     add_internal_model_credentials,
     apply_team_provider_credentials,
     authorize_model_for_key,
@@ -79,6 +80,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     extract_file_creation_params,
     get_authorized_credentials_for_model,
     handle_model_based_routing,
+    is_base64_encoded_unified_file_id,
     prepare_data_with_credentials,
     validate_file_list_limit,
     validate_managed_files_requirement,
@@ -100,7 +102,7 @@ from litellm.proxy.openai_files_endpoints.general_upload_validation import (
     raise_upload_validation_failure,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging, is_known_model
-from litellm.repositories.table_repositories import ManagedFileRepository
+from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.router import Router
 from litellm.types.llms.openai import (
     CREATE_FILE_REQUESTS_PURPOSE,
@@ -620,7 +622,7 @@ async def create_file(
         )
 
         # Extract file creation parameters using utility function
-        request_body: Final = await _read_request_body(request=request) or {}
+        request_body: Final = await read_request_body(request=request) or {}
         file_params: Final = await extract_file_creation_params(
             request=request,
             request_body=request_body,
@@ -1019,7 +1021,7 @@ async def get_file_content(
         )
 
         ## check if file_id is a litellm managed file
-        is_base64_unified_file_id: Final = _is_base64_encoded_unified_file_id(file_id)
+        is_base64_unified_file_id: Final = is_base64_encoded_unified_file_id(file_id)
         if is_base64_unified_file_id:
             managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
             if managed_files_obj is None:
@@ -1366,7 +1368,7 @@ async def get_file(
             )
 
         ## EXISTING: check if file_id is a litellm managed file
-        elif _is_base64_encoded_unified_file_id(file_id):
+        elif is_base64_encoded_unified_file_id(file_id):
             managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
             if managed_files_obj is None:
                 raise ProxyException(
@@ -1576,7 +1578,7 @@ async def delete_file(
             )
 
         ## EXISTING: check if file_id is a litellm managed file
-        elif _is_base64_encoded_unified_file_id(file_id):
+        elif is_base64_encoded_unified_file_id(file_id):
             managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
             if managed_files_obj is None:
                 raise ProxyException(

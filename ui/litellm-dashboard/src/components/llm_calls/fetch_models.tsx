@@ -14,9 +14,9 @@ export interface ModelGroup {
 
 interface AvailableModel {
   model_group?: string | null;
-  providers?: string[] | null;
   model_name?: string | null;
   id?: string | null;
+  providers?: string[] | null;
   mode?: string | null;
   supports_reasoning?: boolean | null;
   supports_fast_mode?: boolean | null;
