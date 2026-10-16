@@ -10975,6 +10975,15 @@ class _ModelRewritingHook(CustomLogger):
         return data
 
 
+class _ModelReplacingHook(CustomLogger):
+    def __init__(self, target_model: str) -> None:
+        super().__init__()
+        self.target_model = target_model
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        return {**data, "model": self.target_model}
+
+
 class _EmailMaskingHook(CustomLogger):
     async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
         data["messages"] = [
@@ -11236,6 +11245,36 @@ class TestPreCallHooksForUnroutableModel:
         assert processor.data["proxy_server_request"]["body"]["messages"] == processor.data["messages"]
         logging_obj: Final = processor.data["litellm_logging_obj"]
         assert logging_obj.standard_callback_dynamic_params.get("turn_off_message_logging") is True
+
+    @pytest.mark.asyncio
+    async def test_request_rejected_after_the_routing_check_passed_is_not_redacted(self, monkeypatch):
+        guardrail: Final = _CountingGuardrail()
+        monkeypatch.setattr(litellm, "callbacks", [_ModelRewritingHook(), guardrail, _RejectingHook()])
+        processor: Final = ProxyBaseLLMRequestProcessing(data={})
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._run(monkeypatch, model="virtual-model", llm_router=self._router(), processor=processor)
+
+        assert exc_info.value.status_code == 403
+        assert guardrail.models_seen == ["gpt-4o-mini"]
+        assert processor.data["messages"] == [{"role": "user", "content": "email jane@example.com"}]
+        logging_obj: Final = processor.data["litellm_logging_obj"]
+        assert logging_obj.standard_callback_dynamic_params.get("turn_off_message_logging") is not True
+
+    @pytest.mark.asyncio
+    async def test_request_a_hook_replaced_with_another_unknown_model_is_the_one_rejected_and_redacted(
+        self, monkeypatch
+    ):
+        from litellm.proxy.route_llm_request import ProxyModelNotFoundError
+
+        monkeypatch.setattr(litellm, "callbacks", [_ModelReplacingHook("still-unknown"), _CountingGuardrail()])
+        processor: Final = ProxyBaseLLMRequestProcessing(data={})
+
+        with pytest.raises(ProxyModelNotFoundError):
+            await self._run(monkeypatch, model="virtual-model", llm_router=self._router(), processor=processor)
+
+        assert processor.data["model"] == "still-unknown"
+        assert processor.data["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
