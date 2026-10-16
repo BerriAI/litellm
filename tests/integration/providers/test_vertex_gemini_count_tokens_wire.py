@@ -167,6 +167,93 @@ def test_messages_and_count_tokens_send_matching_gemini_context(
         assert count_body == _count_tokens_request_from_generate_content(generated_body)
 
 
+_LOOKUP_TOOL: Final[JsonValue] = {
+    "name": "lookup",
+    "description": "Look up a value",
+    "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+}
+_CONTENT_BLOCK_BODIES: Final[Mapping[str, Mapping[str, JsonValue]]] = MappingProxyType(
+    {
+        "base64-pdf": {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Summarize the document."},
+                        {
+                            "type": "document",
+                            "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQK"},
+                        },
+                    ],
+                }
+            ],
+        },
+        "base64-image": {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aW1hZ2U="}},
+                        {"type": "text", "text": "What is this?"},
+                    ],
+                }
+            ],
+        },
+        "tool-turns": {
+            "tools": [_LOOKUP_TOOL],
+            "messages": [
+                {"role": "user", "content": "Look up the value."},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "Looking it up."},
+                        {"type": "tool_use", "id": "toolu_01", "name": "lookup", "input": {"query": "value"}},
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "42"}],
+                },
+            ],
+        },
+    }
+)
+
+
+def _ai_studio_deployment(scenario: Scenario, api_base: str) -> str:
+    return scenario.model(model=f"gemini/{_MODEL}", api_base=api_base, api_key="scripted-gemini-key")
+
+
+def _counted_contents(count_body: Mapping[str, JsonValue]) -> JsonValue:
+    if "contents" in count_body:
+        return count_body["contents"]
+    return _JSON_OBJECT.validate_python(count_body["generateContentRequest"])["contents"]
+
+
+@pytest.mark.parametrize("provider", ("vertex_ai", "gemini"))
+@pytest.mark.parametrize("case", sorted(_CONTENT_BLOCK_BODIES))
+def test_count_tokens_sends_the_contents_messages_inference_sends(gateway: Gateway, provider: str, case: str) -> None:
+    peer: Final = _GeminiPeer()
+    with wire_server(peer) as wire, gateway.scenario() as scenario:
+        model: Final = (
+            _deployment(gateway, scenario, wire.url)
+            if provider == "vertex_ai"
+            else _ai_studio_deployment(scenario, wire.url)
+        )
+        body: Final = {"model": model, **_CONTENT_BLOCK_BODIES[case]}
+        generated: Final = gateway.request("POST", "/v1/messages", {**body, "max_tokens": 16})
+        counted: Final = gateway.request("POST", "/v1/messages/count_tokens", body)
+        assert generated.status_code == 200, generated.text
+        assert counted.status_code == 200, counted.text
+        assert _JSON_OBJECT.validate_json(counted.content)["input_tokens"] == _COUNT, counted.text
+        requests: Final = peer.drain()
+        generated_body: Final = _json_body(
+            next(request for request in requests if request.target.endswith(":generateContent"))
+        )
+        count_body: Final = _json_body(next(request for request in requests if request.target.endswith(":countTokens")))
+        assert _counted_contents(count_body) == generated_body["contents"]
+
+
 def test_count_tokens_keeps_each_text_block_in_system_instruction(gateway: Gateway) -> None:
     peer: Final = _GeminiPeer()
     with wire_server(peer) as wire, gateway.scenario() as scenario:
