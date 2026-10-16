@@ -7,6 +7,7 @@ from typing import Any, Final
 
 from pydantic import JsonValue
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.azure_ai.anthropic.count_tokens.handler import (
     AzureAIAnthropicCountTokensHandler,
@@ -27,7 +28,7 @@ def _missing_api_base_response(request_model: str, model_to_use: str) -> TokenCo
         error=True,
         error_message=(
             f"No Azure AI API base is set for model {request_model or model_to_use}, so tokens can't be counted. "
-            "Set api_base on the deployment or AZURE_AI_API_BASE in the proxy environment."
+            "Set api_base on the deployment or AZURE_AI_API_BASE or AZURE_API_BASE in the proxy environment."
         ),
         status_code=500,
     )
@@ -80,10 +81,12 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
         if not api_key:
             api_key = os.getenv("AZURE_AI_API_KEY")
 
-        # Get API base from deployment config or environment
-        api_base = litellm_params.get("api_base")
-        if not api_base:
-            api_base = os.getenv("AZURE_AI_API_BASE")
+        api_base: Final = (
+            litellm_params.get("api_base")
+            or os.getenv("AZURE_AI_API_BASE")
+            or os.getenv("AZURE_API_BASE")
+            or litellm.api_base
+        )
 
         if not api_base:
             return _missing_api_base_response(request_model, model_to_use)
