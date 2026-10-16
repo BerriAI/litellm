@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 from litellm.types.utils import ProviderSpecificHeader
@@ -9,7 +9,7 @@ class ProviderSpecificHeaderUtils:
     def get_provider_specific_headers(
         provider_specific_header: ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None,
         custom_llm_provider: str | None,
-    ) -> dict:
+    ) -> Mapping[str, str]:
         """
         Get the provider specific headers for the given custom llm provider.
 

@@ -10,19 +10,62 @@ from datetime import datetime
 from typing import Final
 from unittest.mock import patch
 
+import httpx
 import pytest
 
+import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.passthrough.transformation import PassthroughStreamCollector
 from litellm.llms.bedrock.passthrough.transformation import (
     BedrockPassthroughConfig,
     is_bedrock_streaming_endpoint,
 )
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import ModelResponse
 
 CONVERSE_MODEL = "anthropic.claude-sonnet-4-5-20250929-v1:0"
 CONVERSE_STREAM_ENDPOINT = f"/model/{CONVERSE_MODEL}/converse-stream"
 INVOKE_STREAM_ENDPOINT = f"/model/{CONVERSE_MODEL}/invoke-with-response-stream"
+
+
+@pytest.mark.asyncio
+async def test_bedrock_passthrough_router_replaces_alias_in_endpoint() -> None:
+    deployment_model: Final = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"generation": "ok", "stop_reason": "stop"}, request=request)
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "special-bedrock-model",
+                "litellm_params": {
+                    "model": f"bedrock/{deployment_model}",
+                    "aws_access_key_id": "AKIAROUTERKEY",
+                    "aws_secret_access_key": "router-secret",
+                    "aws_region_name": "us-west-2",
+                },
+            }
+        ]
+    )
+    response: Final = await router.allm_passthrough_route(
+        model="special-bedrock-model",
+        method="POST",
+        endpoint="/model/special-bedrock-model/invoke",
+        data={"prompt": "Hey"},
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(respond)),
+    )
+    request: Final = requests[0]
+
+    assert response.status_code == 200
+    assert request.url.host == "bedrock-runtime.us-west-2.amazonaws.com"
+    assert request.url.raw_path == f"/model/{deployment_model}/invoke".encode()
+    request_body: Final = json.loads(request.content)
+
+    assert request_body == {"prompt": "Hey"}
 
 
 @pytest.mark.parametrize(
@@ -552,16 +595,18 @@ def _invoke_chunk(payload: dict) -> bytes:
     return _event_frame("chunk", {"bytes": base64.b64encode(json.dumps(payload).encode()).decode()})
 
 
-def _stream_logging_obj(endpoint: str) -> Logging:
+def _stream_logging_obj(endpoint: str, dynamic_async_success_callbacks: list[CustomLogger] | None = None) -> Logging:
     logging_obj = Logging(
-        model=CONVERSE_MODEL,
+        model=f"bedrock/{CONVERSE_MODEL}",
         messages=[],
         stream=True,
         call_type="pass_through_endpoint",
-        start_time=datetime.now(),
+        start_time=datetime(2025, 1, 1),
         litellm_call_id="call-1",
         function_id="fn-1",
+        dynamic_async_success_callbacks=dynamic_async_success_callbacks,
     )
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={})
     logging_obj.model_call_details["custom_llm_provider"] = "bedrock"
     logging_obj.model_call_details["endpoint"] = endpoint
     return logging_obj
@@ -637,6 +682,56 @@ def test_converse_stream_collector_keeps_usage_without_retaining_the_stream():
     assert response.choices[0].message.content == "".join(texts)
     assert response.choices[0].finish_reason == "stop"
     assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (25, _LARGE_TOKENS)
+    assert (
+        litellm.completion_cost(
+            model=f"bedrock/{CONVERSE_MODEL}",
+            completion_response=response,
+        )
+        > 0
+    )
+
+
+class _CaptureAsyncSuccessCallback(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.kwargs: dict[str, object] | None = None
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.kwargs = kwargs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("endpoint", "stream_kind"),
+    [
+        (CONVERSE_STREAM_ENDPOINT, "converse"),
+        (INVOKE_STREAM_ENDPOINT, "invoke"),
+    ],
+)
+async def test_bedrock_stream_passthrough_logs_cost_and_standard_metadata(endpoint: str, stream_kind: str) -> None:
+    callback: Final = _CaptureAsyncSuccessCallback()
+    logging_obj: Final = _stream_logging_obj(endpoint, [callback])
+    collector: Final = _stream_collector(endpoint)
+    stream: Final = (
+        _converse_text_stream(["Converse response"])
+        if stream_kind == "converse"
+        else _invoke_text_stream(["Invoke response"])
+    )
+    _feed(collector, stream, chunk_size=7)
+
+    await logging_obj.async_flush_passthrough_collected_chunks(collector=collector)
+
+    callback_kwargs: Final = callback.kwargs
+    assert callback_kwargs is not None
+    assert isinstance(callback_kwargs["response_cost"], (int, float)), logging_obj.model_call_details.get(
+        "response_cost_failure_debug_information"
+    )
+    assert callback_kwargs["response_cost"] > 0
+    standard_logging_object: Final = callback_kwargs["standard_logging_object"]
+    assert isinstance(standard_logging_object, dict)
+    assert standard_logging_object["model"] == f"bedrock/{CONVERSE_MODEL}"
 
 
 def test_converse_stream_collector_keeps_tool_calls_between_text_runs():
@@ -709,6 +804,13 @@ def test_invoke_stream_collector_keeps_usage_without_retaining_the_stream():
     assert response.choices[0].message.content == "".join(texts)
     assert response.choices[0].finish_reason == "stop"
     assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (25, _LARGE_TOKENS)
+    assert (
+        litellm.completion_cost(
+            model=f"bedrock/{CONVERSE_MODEL}",
+            completion_response=response,
+        )
+        > 0
+    )
 
 
 def test_stream_collector_logs_nothing_for_an_unrecognized_endpoint():

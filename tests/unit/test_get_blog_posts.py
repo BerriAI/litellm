@@ -2,17 +2,18 @@
 
 import time
 from unittest.mock import MagicMock, patch
+from xml.etree import ElementTree
 
 import pytest
 
 import litellm
 from litellm.litellm_core_utils.get_blog_posts import (
+    BLOG_POSTS_MAX,
     BlogPost,
     BlogPostsResponse,
     GetBlogPosts,
     get_blog_posts,
 )
-from xml.etree import ElementTree
 
 SAMPLE_RSS = """\
 <?xml version="1.0" encoding="UTF-8"?>
@@ -24,6 +25,8 @@ SAMPLE_RSS = """\
       <link>https://docs.litellm.ai/blog/test</link>
       <description>A test post.</description>
       <pubDate>Wed, 01 Jan 2026 10:00:00 GMT</pubDate>
+      <category>anthropic</category>
+      <category>day 0 support</category>
     </item>
     <item>
       <title>Second Post</title>
@@ -35,6 +38,8 @@ SAMPLE_RSS = """\
 </rss>
 """
 
+CACHED_POST = BlogPost(title="Cached", description="D", date="2026-01-01", url="https://x.com")
+
 
 @pytest.fixture(autouse=True)
 def reset_blog_posts_cache():
@@ -45,30 +50,52 @@ def reset_blog_posts_cache():
     GetBlogPosts._last_fetch_time = 0.0
 
 
-def test_load_local_blog_posts_returns_list():
+def test_load_local_blog_posts_returns_posts_without_tags():
     posts = GetBlogPosts.load_local_blog_posts()
-    assert isinstance(posts, list)
     assert len(posts) > 0
-    first = posts[0]
-    assert "title" in first
-    assert "description" in first
-    assert "date" in first
-    assert "url" in first
+    assert all(isinstance(post, BlogPost) for post in posts)
+    assert posts[0].tags == ()
 
 
 def test_parse_rss_to_posts():
     posts = GetBlogPosts.parse_rss_to_posts(SAMPLE_RSS, max_posts=1)
     assert len(posts) == 1
-    assert posts[0]["title"] == "Test Post"
-    assert posts[0]["url"] == "https://docs.litellm.ai/blog/test"
-    assert posts[0]["description"] == "A test post."
-    assert posts[0]["date"] == "2026-01-01"
+    assert posts[0].title == "Test Post"
+    assert posts[0].url == "https://docs.litellm.ai/blog/test"
+    assert posts[0].description == "A test post."
+    assert posts[0].date == "2026-01-01"
+
+
+def test_parse_rss_to_posts_reads_categories_as_tags():
+    posts = GetBlogPosts.parse_rss_to_posts(SAMPLE_RSS)
+    assert posts[0].tags == ("anthropic", "day 0 support")
+    assert posts[1].tags == ()
 
 
 def test_parse_rss_to_posts_multiple():
     posts = GetBlogPosts.parse_rss_to_posts(SAMPLE_RSS, max_posts=5)
     assert len(posts) == 2
-    assert posts[1]["title"] == "Second Post"
+    assert posts[1].title == "Second Post"
+
+
+def test_parse_rss_to_posts_default_cap():
+    items = "".join(
+        f"<item><title>Post {i}</title><link>https://docs.litellm.ai/blog/{i}</link>"
+        f"<description>D</description><pubDate>Thu, 0{1 + i % 9} Jan 2026 00:00:00 GMT</pubDate></item>"
+        for i in range(BLOG_POSTS_MAX + 1)
+    )
+    posts = GetBlogPosts.parse_rss_to_posts(f"<rss><channel>{items}</channel></rss>")
+    assert len(posts) == BLOG_POSTS_MAX
+    assert posts[0].title == "Post 0"
+    assert posts[-1].title == f"Post {BLOG_POSTS_MAX - 1}"
+
+
+def test_parse_rss_to_posts_skips_items_without_title_or_link_before_capping():
+    items = "<item><description>no title</description></item>" + "".join(
+        f"<item><title>Post {i}</title><link>https://docs.litellm.ai/blog/{i}</link></item>" for i in range(2)
+    )
+    posts = GetBlogPosts.parse_rss_to_posts(f"<rss><channel>{items}</channel></rss>", max_posts=2)
+    assert [post.title for post in posts] == ["Post 0", "Post 1"]
 
 
 def test_parse_rss_to_posts_invalid_xml():
@@ -82,18 +109,11 @@ def test_parse_rss_to_posts_missing_channel():
 
 
 def test_validate_blog_posts_valid():
-    posts = [
-        {"title": "T", "description": "D", "date": "2026-01-01", "url": "https://x.com"}
-    ]
-    assert GetBlogPosts.validate_blog_posts(posts) is True
+    assert GetBlogPosts.validate_blog_posts((CACHED_POST,)) is True
 
 
-def test_validate_blog_posts_empty_list():
-    assert GetBlogPosts.validate_blog_posts([]) is False
-
-
-def test_validate_blog_posts_not_list():
-    assert GetBlogPosts.validate_blog_posts("not a list") is False
+def test_validate_blog_posts_empty():
+    assert GetBlogPosts.validate_blog_posts(()) is False
 
 
 def test_get_blog_posts_success():
@@ -108,8 +128,9 @@ def test_get_blog_posts_success():
     ):
         posts = get_blog_posts(url=litellm.blog_posts_url)
 
-    assert len(posts) == 1
-    assert posts[0]["title"] == "Test Post"
+    assert len(posts) == 2
+    assert posts[0].title == "Test Post"
+    assert posts[0].tags == ("anthropic", "day 0 support")
 
 
 def test_get_blog_posts_network_error_falls_back_to_local():
@@ -120,8 +141,7 @@ def test_get_blog_posts_network_error_falls_back_to_local():
     ):
         posts = get_blog_posts(url=litellm.blog_posts_url)
 
-    assert isinstance(posts, list)
-    assert len(posts) > 0
+    assert posts == GetBlogPosts.load_local_blog_posts()
 
 
 def test_get_blog_posts_invalid_xml_falls_back_to_local():
@@ -136,54 +156,25 @@ def test_get_blog_posts_invalid_xml_falls_back_to_local():
     ):
         posts = get_blog_posts(url=litellm.blog_posts_url)
 
-    assert isinstance(posts, list)
-    assert len(posts) > 0
+    assert posts == GetBlogPosts.load_local_blog_posts()
 
 
 def test_get_blog_posts_ttl_cache_not_refetched():
     """Within TTL window, does not re-fetch."""
-    cached = [
-        {
-            "title": "Cached",
-            "description": "D",
-            "date": "2026-01-01",
-            "url": "https://x.com",
-        }
-    ]
-    GetBlogPosts._cached_posts = cached
-    GetBlogPosts._last_fetch_time = time.time()  # just now
+    GetBlogPosts._cached_posts = (CACHED_POST,)
+    GetBlogPosts._last_fetch_time = time.time()
 
-    call_count = 0
-
-    def mock_get(*args, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        m = MagicMock()
-        m.text = SAMPLE_RSS
-        m.raise_for_status = MagicMock()
-        return m
-
-    with patch(
-        "litellm.litellm_core_utils.get_blog_posts.httpx.get", side_effect=mock_get
-    ):
+    with patch("litellm.litellm_core_utils.get_blog_posts.httpx.get") as mock_get:
         posts = get_blog_posts(url=litellm.blog_posts_url)
 
-    assert call_count == 0  # cache hit, no fetch
-    assert len(posts) == 1
+    mock_get.assert_not_called()
+    assert posts == (CACHED_POST,)
 
 
 def test_get_blog_posts_ttl_expired_refetches():
     """After TTL window, re-fetches from remote."""
-    cached = [
-        {
-            "title": "Cached",
-            "description": "D",
-            "date": "2026-01-01",
-            "url": "https://x.com",
-        }
-    ]
-    GetBlogPosts._cached_posts = cached
-    GetBlogPosts._last_fetch_time = time.time() - 7200  # 2 hours ago
+    GetBlogPosts._cached_posts = (CACHED_POST,)
+    GetBlogPosts._last_fetch_time = time.time() - 7200
 
     mock_response = MagicMock()
     mock_response.text = SAMPLE_RSS
@@ -196,7 +187,7 @@ def test_get_blog_posts_ttl_expired_refetches():
         posts = get_blog_posts(url=litellm.blog_posts_url)
 
     mock_get.assert_called_once()
-    assert len(posts) == 1
+    assert len(posts) == 2
 
 
 def test_get_blog_posts_local_env_var_skips_remote(monkeypatch):
@@ -204,24 +195,9 @@ def test_get_blog_posts_local_env_var_skips_remote(monkeypatch):
     with patch("litellm.litellm_core_utils.get_blog_posts.httpx.get") as mock_get:
         posts = get_blog_posts(url=litellm.blog_posts_url)
     mock_get.assert_not_called()
-    assert isinstance(posts, list)
-    assert len(posts) > 0
+    assert posts == GetBlogPosts.load_local_blog_posts()
 
 
-def test_blog_post_pydantic_model():
-    post = BlogPost(
-        title="T",
-        description="D",
-        date="2026-01-01",
-        url="https://example.com",
-    )
-    assert post.title == "T"
-
-
-def test_blog_posts_response_pydantic_model():
-    resp = BlogPostsResponse(
-        posts=[
-            BlogPost(title="T", description="D", date="2026-01-01", url="https://x.com")
-        ]
-    )
-    assert len(resp.posts) == 1
+def test_blog_posts_response_serializes_tags_as_a_list():
+    resp = BlogPostsResponse(posts=(CACHED_POST.model_copy(update={"tags": ("day 0 support",)}),))
+    assert resp.model_dump(mode="json")["posts"][0]["tags"] == ["day 0 support"]

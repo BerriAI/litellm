@@ -25,6 +25,7 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 from fastapi import HTTPException, status
 from jwt.api_jwk import PyJWK
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._internal_context import with_service_target
@@ -75,6 +76,7 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.types.agents import AgentResponse
 from litellm.types.proxy.agent_identity import AgentIdentityFailure
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
+from litellm.types.proxy.auth.user_api_key_auth import is_jwt as is_jwt_token
 
 from .auth_checks import (
     TeamNotFoundError,
@@ -107,6 +109,7 @@ JWKS_UNREACHABLE_BACKOFF_SECONDS: Final = 30
 STALE_CACHE_KEY_PREFIX: Final = "litellm_stale_"
 STALE_WRITTEN_AT_CACHE_KEY_PREFIX: Final = "litellm_stale_written_at_"
 UNREACHABLE_CACHE_KEY_PREFIX: Final = "litellm_jwks_unreachable_"
+_CACHED_VALUE: Final = TypeAdapter(object)
 
 _CachedValueT = TypeVar("_CachedValueT", bound=JWKKeyValue | str)
 
@@ -276,10 +279,7 @@ class JWTHandler:
 
     @staticmethod
     def is_jwt(token: str | None) -> bool:
-        if token is None:
-            return False
-        parts: Final = token.split(".")
-        return len(parts) == 3
+        return is_jwt_token(token=token)
 
     @staticmethod
     def get_unverified_claims(token: str) -> dict | None:
@@ -787,12 +787,12 @@ class JWTHandler:
 
     @with_service_target(AUTH_OBJECTS_TARGET)
     async def _get_cached_value(self, cache_key: str) -> _CachedValueT | None:
-        cached: Final = await self.user_api_key_cache.async_get_cache(cache_key)
+        cached: Final = _CACHED_VALUE.validate_python(await self.user_api_key_cache.async_get_cache(cache_key))
         return cast("_CachedValueT | None", cached)  # cast-ok: cache reads are untyped
 
     @with_service_target(AUTH_OBJECTS_TARGET)
     async def _get_cached_timestamp(self, cache_key: str) -> float | None:
-        cached: Final = await self.user_api_key_cache.async_get_cache(cache_key)
+        cached: Final = _CACHED_VALUE.validate_python(await self.user_api_key_cache.async_get_cache(cache_key))
         # A JSON round-trip through Redis hands a whole-number epoch back as an int.
         return float(cached) if isinstance(cached, (int, float)) else None
 

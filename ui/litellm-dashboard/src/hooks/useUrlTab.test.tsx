@@ -2,7 +2,11 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
+import { recordUiEvent } from "@/lib/telemetry/uiEvents";
 import { useUrlTab } from "./useUrlTab";
+
+vi.mock("@/lib/telemetry/uiEvents", () => ({ recordUiEvent: vi.fn(() => Promise.resolve()) }));
+vi.mock("next/navigation", () => ({ usePathname: () => "/ui/playground" }));
 
 const TABS = ["chat", "compare", "compliance"] as const;
 type Tab = (typeof TABS)[number];
@@ -96,5 +100,19 @@ describe("useUrlTab", () => {
     expect(result.current[0]).toBe("chat");
     await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
     expect(lastUrlUpdate(onUrlUpdate)?.searchParams.has("tab")).toBe(false);
+  });
+
+  it("records a tab click with the caller's key and the selected tab, and nothing for a tab read from the URL", () => {
+    vi.mocked(recordUiEvent).mockClear();
+    const { result } = renderUrlTab({ searchParams: "?view=compare", key: "view" });
+    expect(recordUiEvent).not.toHaveBeenCalled();
+
+    act(() => result.current[1]("compliance"));
+
+    expect(recordUiEvent).toHaveBeenCalledExactlyOnceWith({
+      page: "playground",
+      action: "click",
+      target: "view=compliance",
+    });
   });
 });

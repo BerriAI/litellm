@@ -24,10 +24,15 @@ from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.pass_through.adapters.transformation import (
     LiteLLMAnthropicMessagesAdapter,
     is_provider_native_tool_dict,
+)
+from litellm.llms.anthropic.pass_through.stream_assembly import (
+    build_complete_streaming_response,
+    build_usage_only_response_from_chunks,
 )
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
@@ -46,9 +51,6 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     stream_item_field,
     stream_item_fingerprint,
     unappliable_request_rewrite,
-)
-from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
-    AnthropicPassthroughLoggingHandler,
 )
 from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
@@ -75,10 +77,10 @@ if TYPE_CHECKING:
         ModifyResponseException,
     )
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.llms.anthropic_messages.anthropic_response import (
         AnthropicMessagesResponse,
     )
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,6 +226,7 @@ def _write_back_message_text(message: _WritableMessage, target: MessageTextTarge
 
 
 _TOOL_USE_INPUT_ADAPTER: Final = TypeAdapter(dict[str, object])
+_DECODED_SSE_DATA: Final = TypeAdapter(object)
 _RELEASED_TOOL_USE_STOP: Final = (
     b"event: message_delta\n"
     b'data: {"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": null}, '
@@ -322,7 +325,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         if not chunks:
             return None
         try:
-            return AnthropicPassthroughLoggingHandler.build_usage_only_response_from_chunks(
+            return build_usage_only_response_from_chunks(
                 all_chunks=chunks,
                 model=str((request_data or {}).get("model") or ""),
             )
@@ -357,8 +360,8 @@ class AnthropicMessagesHandler(BaseTranslation):
     def build_stream_error_items(
         self,
         exc: "HTTPException",
-        responses_so_far: Sequence[Any] | None = None,
-    ) -> Sequence[Any] | None:
+        responses_so_far: Sequence[object] | None = None,
+    ) -> Sequence[object] | None:
         from litellm.proxy.common_request_processing import (
             serialize_http_exception_detail,
         )
@@ -472,12 +475,13 @@ class AnthropicMessagesHandler(BaseTranslation):
         if not line.startswith("data:"):
             return ()
         try:
-            parsed: Final[object] = json.loads(line[len("data:") :].strip())
+            parsed: Final = _DECODED_SSE_DATA.validate_python(json.loads(line[len("data:") :].strip()))
         except json.JSONDecodeError:
             return ()
-        if not isinstance(parsed, dict):
+        event: Final = as_str_mapping(parsed)
+        if event is None:
             return ()
-        return (_as_str_mapping(parsed),)
+        return (event,)
 
     @staticmethod
     def _iter_sse_events(item: object) -> Sequence[Mapping[str, object]]:
@@ -1226,7 +1230,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         has_ended: Final = self._check_streaming_has_ended(responses_so_far)
         if has_ended:
             # build the model response from the responses_so_far
-            built_response: Final = AnthropicPassthroughLoggingHandler.build_complete_streaming_response(
+            built_response: Final = build_complete_streaming_response(
                 all_chunks=responses_so_far,
                 litellm_logging_obj=cast("LiteLLMLoggingObj", litellm_logging_obj),
                 model="",
