@@ -25,7 +25,7 @@ from litellm._internal_context import current_service_target, service_target
 from litellm._logging import verbose_logger
 from litellm.constants import CACHED_STREAMING_CHUNK_DELAY
 from litellm.integrations.otel.runtime import phase_span
-from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
+from litellm.litellm_core_utils.model_param_helper import ModelParamHelper, peek_reasoning_summary_aliases
 from litellm.types.caching import *
 from litellm.types.utils import EmbeddingResponse, is_litellm_owned_kwarg
 
@@ -374,7 +374,7 @@ class Cache:
         )
         return "".join(f"{field}: {value}" for field, value in scope_values if value is not None)
 
-    def get_cache_key(self, **kwargs) -> str:
+    def get_cache_key(self, **kwargs: object) -> str:
         """
         Get the cache key for the given arguments.
 
@@ -392,7 +392,7 @@ class Cache:
             verbose_logger.debug("\nReturning preset cache key: %s", preset_cache_key)
             return preset_cache_key
 
-        combined_kwargs: Final = ModelParamHelper.get_cache_key_params()
+        combined_kwargs: Final = ModelParamHelper.get_all_llm_api_params()
         is_semantic_cache: Final = self._is_semantic_cache()
         scope_excluded_params: Final = self._SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS if is_semantic_cache else frozenset()
         for param in kwargs:
@@ -406,13 +406,16 @@ class Cache:
                 if litellm.enable_caching_on_provider_specific_optional_params is True:  # feature flagged for now
                     if kwargs[param] is None:
                         continue  # ignore None params
-                    param_value = kwargs[param]
-                    cache_key += f"{param}: {param_value}"
+                    cache_key += f"{param}: {kwargs[param]}"
 
         if is_semantic_cache:
             cache_key += self._get_semantic_cache_tenant_scope(kwargs)
 
-        hashed_cache_key = Cache._get_hashed_cache_key(cache_key)
+        reasoning_summary: Final = peek_reasoning_summary_aliases(kwargs)
+        reasoning_summary_material: Final = (
+            "" if reasoning_summary is None else f"reasoning_summary: {reasoning_summary}"
+        )
+        hashed_cache_key = Cache._get_hashed_cache_key(cache_key + reasoning_summary_material)
         hashed_cache_key = self._add_namespace_to_cache_key(hashed_cache_key, **kwargs)
         verbose_logger.debug(
             "\nCreated cache key: %s (source material length: %d)",

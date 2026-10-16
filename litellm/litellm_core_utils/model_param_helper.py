@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from functools import lru_cache
 from typing import ClassVar, Final
 
@@ -21,7 +22,23 @@ from litellm._logging import verbose_logger
 from litellm.types.llms.anthropic import AnthropicMessagesRequest
 from litellm.types.rerank import RerankRequest
 
-_REASONING_SUMMARY_ALIASES: Final = frozenset(("reasoning_summary", "reasoningSummary"))
+
+def peek_reasoning_summary_aliases(optional_params: Mapping[str, object]) -> object | None:
+    """Read AI-SDK-style reasoning summary from optional_params or nested extra_body.
+
+    Uses key membership (not ``or`` chains) so falsy values like ``""`` are not skipped.
+    """
+    if "reasoningSummary" in optional_params:
+        return optional_params["reasoningSummary"]
+    if "reasoning_summary" in optional_params:
+        return optional_params["reasoning_summary"]
+    extra_body: Final = optional_params.get("extra_body")
+    if isinstance(extra_body, dict):
+        if "reasoningSummary" in extra_body:
+            return extra_body["reasoningSummary"]
+        if "reasoning_summary" in extra_body:
+            return extra_body["reasoning_summary"]
+    return None
 
 
 class ModelParamHelper:
@@ -93,11 +110,6 @@ class ModelParamHelper:
         return combined_kwargs
 
     _get_all_llm_api_params = get_all_llm_api_params
-
-    @staticmethod
-    @lru_cache(maxsize=1)
-    def get_cache_key_params() -> frozenset[str]:
-        return frozenset(ModelParamHelper.get_all_llm_api_params() | _REASONING_SUMMARY_ALIASES)
 
     @staticmethod
     def get_litellm_provider_specific_params_for_chat_params() -> set[str]:
