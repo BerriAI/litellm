@@ -5,6 +5,7 @@ import httpx
 import pytest
 from pydantic import JsonValue, TypeAdapter
 
+import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.common_utils import GeminiModelInfo, GoogleAIStudioTokenCounter
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
@@ -97,6 +98,36 @@ async def test_google_ai_studio_count_tokens_rejects_image_system_without_reques
     assert result is not None
     assert result.error is True
     assert result.status_code == 400
+    assert peer.request_body is None
+
+
+@pytest.mark.asyncio
+async def test_google_ai_studio_count_tokens_rejects_an_image_url_it_refuses_to_fetch_without_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", True)
+    peer: Final = _GeminiCountTokensPeer()
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(peer))
+
+    with patch.object(gemini_count_tokens_handler, "get_async_httpx_client", return_value=client):
+        result: Final = await GoogleAIStudioTokenCounter().count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [{"type": "image", "source": {"type": "url", "url": "http://127.0.0.1:9/image.png"}}],
+                }
+            ],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "test-key", "api_base": "https://count-tokens.test"}},
+            request_model="gemini/gemini-2.5-flash",
+            messages_format="anthropic",
+        )
+
+    assert result is not None
+    assert result.error is True
+    assert result.status_code == 400
+    assert "http://127.0.0.1:9/image.png" in (result.error_message or "")
     assert peer.request_body is None
 
 

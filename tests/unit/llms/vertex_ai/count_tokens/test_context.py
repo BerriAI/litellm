@@ -380,14 +380,17 @@ async def test_image_that_cannot_be_fetched_returns_an_error_value(
     assert isinstance(contents, VertexGeminiCountContextError)
 
 
-def test_anthropic_view_keeps_only_the_turns_after_a_client_compaction_block() -> None:
+@pytest.mark.parametrize(
+    "system", ("Be brief.", [{"type": "text", "text": "Be brief."}]), ids=("string-system", "text-block-system")
+)
+def test_anthropic_view_keeps_only_the_turns_after_a_client_compaction_block(system: JsonValue) -> None:
     view: Final = inference_request_view(
         (
             {"role": "user", "content": "first question " * 50},
             {"role": "assistant", "content": [{"type": "compaction", "content": "Summary of the earlier turns."}]},
             {"role": "user", "content": "latest question"},
         ),
-        "Be brief.",
+        system,
         "anthropic",
     )
 
