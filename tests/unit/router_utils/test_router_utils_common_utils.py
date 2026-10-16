@@ -310,7 +310,7 @@ class TestFilterWebSearchDeployments:
     def test_native_web_search_tools_filter_unsupported(
         self, sample_deployments: list[dict[str, object]], tool: dict[str, object]
     ) -> None:
-        result = filter_web_search_deployments(sample_deployments, {"tools": [tool]})
+        result: Final = filter_web_search_deployments(sample_deployments, {"tools": [tool]})
         assert result == sample_deployments[:2]
 
     @pytest.mark.parametrize(
@@ -325,7 +325,7 @@ class TestFilterWebSearchDeployments:
     def test_non_web_search_tools_preserve_deployments(
         self, sample_deployments: list[dict[str, object]], tool: dict[str, object]
     ) -> None:
-        result = filter_web_search_deployments(sample_deployments, {"tools": [tool]})
+        result: Final = filter_web_search_deployments(sample_deployments, {"tools": [tool]})
         assert result == sample_deployments
 
     def test_web_search_with_other_tools(self, sample_deployments):
