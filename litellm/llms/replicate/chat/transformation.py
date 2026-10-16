@@ -1,3 +1,4 @@
+import types
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
@@ -168,7 +169,7 @@ class ReplicateConfig(BaseConfig):
         headers: dict,
     ) -> dict:
         ## Load Config
-        config: Final = litellm.ReplicateConfig.get_config()
+        config: Final[Mapping[str, object]] = types.MappingProxyType(litellm.ReplicateConfig.get_config())
         for k, v in config.items():
             if (
                 k not in optional_params
