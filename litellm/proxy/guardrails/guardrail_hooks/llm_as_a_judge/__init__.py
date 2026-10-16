@@ -243,10 +243,10 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
         on_failure: Literal["block", "log"] = "block",
         event_hook: JudgeModeParam = None,
         default_on: bool = False,
+        router_provider: "Callable[[], Router | None] | None" = None,
         sample_rate: float = 1.0,
         max_input_chars: int | None = None,
         sampling_draw: Callable[[str], float] | None = None,
-        router_provider: "Callable[[], Router | None] | None" = None,
         **kwargs: Unpack[_CustomGuardrailOptions],
     ) -> None:
         super().__init__(
