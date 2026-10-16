@@ -9,7 +9,6 @@ import {
   useCreateCustomer,
   useCustomer,
   useDeleteCustomers,
-  useSetCustomerBlockedState,
   useSetCustomersBlockedState,
   useUpdateCustomer,
 } from "./useCustomerMutations";
@@ -218,76 +217,6 @@ describe("customer mutations", () => {
       await expect(result.current.mutateAsync(["customer-id"])).rejects.toThrow("Access token is required");
     });
     expect(post).not.toHaveBeenCalled();
-  });
-
-  it("rejects block state changes without an access token", async () => {
-    authorized.mockReturnValue({ accessToken: null, userRole: "Admin" });
-    const { wrapper } = createWrapper();
-    const { result } = renderHook(useSetCustomerBlockedState, { wrapper });
-
-    await act(async () => {
-      await expect(result.current.mutateAsync({ userId: "customer-id", blocked: true })).rejects.toThrow(
-        "Access token is required",
-      );
-    });
-    expect(post).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    {
-      blocked: true,
-      path: "/customer/block",
-      response: { blocked_users: [{ user_id: "customer-id", blocked: true }] },
-    },
-    {
-      blocked: false,
-      path: "/customer/unblock",
-      response: { blocked_users: ["remaining-id"] },
-    },
-  ])("invalidates customer data after a per-row request to $path", async ({ blocked, path, response }) => {
-    const { queryClient, wrapper } = createWrapper();
-    const listKey = ["get", "/customer/list", {}];
-    const detailKey = ["get", "/customer/info", { params: { query: { end_user_id: "customer-id" } } }];
-    const unrelatedKey = ["get", "/key/list", {}];
-    queryClient.setQueryData(listKey, []);
-    queryClient.setQueryData(detailKey, {});
-    queryClient.setQueryData(unrelatedKey, []);
-    post.mockResolvedValue(response);
-    const { result } = renderHook(useSetCustomerBlockedState, { wrapper });
-
-    await act(async () => {
-      await expect(result.current.mutateAsync({ userId: "customer-id", blocked })).resolves.toEqual(response);
-    });
-
-    expect(post).toHaveBeenCalledExactlyOnceWith(path, {
-      accessToken: "access-token",
-      body: { user_ids: ["customer-id"] },
-    });
-    expect(queryClient.getQueryState(listKey)?.isInvalidated).toBe(true);
-    expect(queryClient.getQueryState(detailKey)?.isInvalidated).toBe(true);
-    expect(queryClient.getQueryState(unrelatedKey)?.isInvalidated).toBe(false);
-  });
-
-  it("propagates per-row unblock errors and retains customer cache data", async () => {
-    const { queryClient, wrapper } = createWrapper();
-    const listKey = ["get", "/customer/list", {}];
-    const detailKey = ["get", "/customer/info", { params: { query: { end_user_id: "customer-id" } } }];
-    const customer = { user_id: "customer-id", blocked: true };
-    queryClient.setQueryData(listKey, [customer]);
-    queryClient.setQueryData(detailKey, customer);
-    const error = new Error("Blocked user check was never set");
-    post.mockRejectedValue(error);
-    const { result } = renderHook(useSetCustomerBlockedState, { wrapper });
-
-    await act(async () => {
-      await expect(result.current.mutateAsync({ userId: "customer-id", blocked: false })).rejects.toBe(error);
-    });
-
-    await waitFor(() => expect(result.current.isError).toBe(true));
-    expect(queryClient.getQueryData(listKey)).toEqual([customer]);
-    expect(queryClient.getQueryData(detailKey)).toEqual(customer);
-    expect(queryClient.getQueryState(listKey)?.isInvalidated).toBe(false);
-    expect(queryClient.getQueryState(detailKey)?.isInvalidated).toBe(false);
   });
 
   it.each([true, false])("invalidates customer data after bulk blocked state becomes %s", async (blocked) => {

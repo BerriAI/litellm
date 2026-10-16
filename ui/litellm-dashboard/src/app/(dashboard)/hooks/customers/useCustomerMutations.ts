@@ -6,7 +6,6 @@ import {
   bulkUpdateCustomers,
   createCustomer,
   deleteCustomers,
-  setCustomerBlockedState,
   setCustomersBlockedState,
   updateCustomer,
 } from "./customerApi";
@@ -41,5 +40,4 @@ export const useCreateCustomer = () => useCustomerMutation(createCustomer);
 export const useUpdateCustomer = () => useCustomerMutation(updateCustomer);
 export const useBulkUpdateCustomers = () => useCustomerMutation(bulkUpdateCustomers);
 export const useDeleteCustomers = () => useCustomerMutation(deleteCustomers);
-export const useSetCustomerBlockedState = () => useCustomerMutation(setCustomerBlockedState);
 export const useSetCustomersBlockedState = () => useCustomerMutation(setCustomersBlockedState);

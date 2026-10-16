@@ -12,7 +12,6 @@ export type BulkUpdateCustomersRequest = Omit<Schemas["BulkUpdateCustomerRequest
   customers: UpdateCustomerRequest[];
 };
 export type BulkUpdateCustomersResponse = Schemas["BulkUpdateCustomerResponse"];
-export type CustomerBlockedStateInput = { userId: string; blocked: boolean };
 export type CustomersBlockedStateInput = {
   userIds: string[];
   blocked: boolean;
@@ -47,9 +46,3 @@ export const setCustomersBlockedState = (
       body: { user_ids: userIds },
     },
   );
-
-export const setCustomerBlockedState = (
-  accessToken: string,
-  { userId, blocked }: CustomerBlockedStateInput,
-): Promise<Schemas["BlockUsersResponse"] | Schemas["UnblockUsersResponse"]> =>
-  setCustomersBlockedState(accessToken, { userIds: [userId], blocked });

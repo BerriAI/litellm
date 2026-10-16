@@ -153,8 +153,6 @@ export default function CustomersTable({
   );
 
   const handleBulkSetBlocked = async (userIds: string[], blocked: boolean) => {
-    const canSetBlocked = canModify && !isBusy && premiumUser;
-    if (!userIds.length || !canSetBlocked) return;
     if (await onBulkSetBlocked(userIds, blocked)) {
       setRowSelection({});
       setBlockTarget(null);
@@ -197,10 +195,7 @@ export default function CustomersTable({
                     placeholder="Search customers by ID or alias"
                     className="h-8 w-56 pl-8"
                     value={search}
-                    onChange={(event) => {
-                      setRowSelection({});
-                      setSearch(event.target.value);
-                    }}
+                    onChange={(event) => setSearch(event.target.value)}
                   />
                 </div>
                 {canModify && selectedCustomers.length > 0 && (
@@ -311,10 +306,7 @@ export default function CustomersTable({
         }}
         filterMode="client"
         columnFilters={columnFilters}
-        onColumnFiltersChange={(updater) => {
-          setRowSelection({});
-          onColumnFiltersChange(updater);
-        }}
+        onColumnFiltersChange={onColumnFiltersChange}
         paginationMode="client"
         pagination={pagination}
         onPaginationChange={onPaginationChange}

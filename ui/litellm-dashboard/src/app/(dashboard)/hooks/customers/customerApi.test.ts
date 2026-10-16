@@ -4,7 +4,6 @@ import {
   bulkUpdateCustomers,
   createCustomer,
   deleteCustomers,
-  setCustomerBlockedState,
   setCustomersBlockedState,
   updateCustomer,
   type BulkUpdateCustomersRequest,
@@ -113,40 +112,6 @@ describe("customer API", () => {
 
     await expect(
       bulkUpdateCustomers("access-token", { customers: [{ user_id: "customer-id", models: [] }] }),
-    ).rejects.toBe(error);
-  });
-
-  it.each([
-    {
-      blocked: true,
-      path: "/customer/block",
-      response: { blocked_users: [{ user_id: "customer-id", blocked: true }] },
-    },
-    {
-      blocked: false,
-      path: "/customer/unblock",
-      response: { blocked_users: ["remaining-id"] },
-    },
-  ])("posts one customer ID to $path", async ({ blocked, path, response }) => {
-    const userId = "customer-id";
-    post.mockResolvedValue(response);
-
-    await expect(setCustomerBlockedState("access-token", { userId, blocked })).resolves.toEqual(response);
-    expect(post).toHaveBeenCalledExactlyOnceWith(path, {
-      accessToken: "access-token",
-      body: { user_ids: [userId] },
-    });
-  });
-
-  it.each([true, false])("propagates per-row action failures when blocked is %s", async (blocked) => {
-    const error = new Error(blocked ? "Customer action failed" : "Blocked user check was never set");
-    post.mockRejectedValue(error);
-
-    await expect(
-      setCustomerBlockedState("access-token", {
-        userId: "customer-id",
-        blocked,
-      }),
     ).rejects.toBe(error);
   });
 

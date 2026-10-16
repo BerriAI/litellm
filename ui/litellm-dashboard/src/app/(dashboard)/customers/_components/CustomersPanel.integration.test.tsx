@@ -921,7 +921,7 @@ describe("Customers management", () => {
 
       expect(await screen.findByText(message)).toBeInTheDocument();
       expect(screen.getByText("Request Error")).toBeInTheDocument();
-      expect(screen.queryByText("Customer unblocked")).not.toBeInTheDocument();
+      expect(screen.queryByText("1 customer unblocked")).not.toBeInTheDocument();
       expect(screen.getByText("Blocked")).toBeInTheDocument();
       expect(post).toHaveBeenCalledExactlyOnceWith("/customer/unblock", {
         accessToken: "sk-test",
