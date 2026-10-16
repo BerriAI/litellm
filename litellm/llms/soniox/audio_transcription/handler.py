@@ -86,7 +86,7 @@ def _float_or_default(value: object, default: float) -> float:
 
 def _int_or_default(value: object, default: int) -> int:
     try:
-        return int(str(value))
+        return int(value) if isinstance(value, (int, float)) else int(str(value))
     except (ValueError, OverflowError):
         return default
 

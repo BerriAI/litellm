@@ -64,15 +64,17 @@ SONIOX_HANDLER_ONLY_PARAMS: Final[list[str]] = [
 ]
 
 
-SONIOX_JSON_PARAMS: Final[frozenset[str]] = frozenset({"context", "translation", "language_hints"})
 SONIOX_BOOL_PARAMS: Final[frozenset[str]] = frozenset(
     {"enable_speaker_diarization", "enable_language_identification", "language_hints_strict"}
 )
-_JSON_CONTAINER: Final = TypeAdapter[dict[str, object] | list[object]](dict[str, object] | list[object])
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _STRUCTURED_CONTEXT: Final = TypeAdapter(SonioxContext)
 _FORM_BOOL: Final = TypeAdapter(bool)
-_LANGUAGE_HINTS: Final = TypeAdapter(tuple[object, ...])
-_BRACKETED_FORM_FIELD: Final = re.compile(r"(?P<param>context|translation)\[(?P<field>\w+)\]")
+_ITEMS: Final = TypeAdapter(tuple[object, ...])
+_BRACKETED_FORM_FIELD: Final = re.compile(
+    r"(?P<param>context|translation)\[(?P<field>\w+)\](?:\[\]\[(?P<entry_field>\w+)\])?"
+)
+_BracketedField = tuple[str, str, str | None, object]
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,7 +97,7 @@ def soniox_language_hints(language: object, hints: object) -> object:
     if hints is None:
         return (language,)
     try:
-        known: Final = _LANGUAGE_HINTS.validate_python(hints)
+        known: Final = _ITEMS.validate_python(hints)
     except ValidationError:
         return hints
     return known if language in known else (language, *known)
@@ -125,6 +127,22 @@ def _decode_context(value: str) -> SonioxContext | str:
         return value
 
 
+def _decode_translation(value: str) -> Mapping[str, object] | SonioxInvalidFormParam:
+    try:
+        return _JSON_OBJECT.validate_json(value)
+    except ValidationError:
+        return SonioxInvalidFormParam(key="translation", value=value, expected="a JSON object")
+
+
+def _decode_language_hints(value: str) -> tuple[object, ...] | SonioxInvalidFormParam:
+    if not value.lstrip().startswith("["):
+        return tuple(hint.strip() for hint in value.split(",") if hint.strip())
+    try:
+        return _ITEMS.validate_json(value)
+    except ValidationError:
+        return SonioxInvalidFormParam(key="language_hints", value=value, expected="a JSON list")
+
+
 def _decode_form_value(key: str, value: object) -> object | SonioxInvalidFormParam:
     if not isinstance(value, str):
         return value
@@ -134,26 +152,61 @@ def _decode_form_value(key: str, value: object) -> object | SonioxInvalidFormPar
         return _decode_polling_interval(value)
     if key == "context":
         return _decode_context(value)
-    if key in SONIOX_JSON_PARAMS and value.lstrip()[:1] in ("{", "["):
-        try:
-            return _JSON_CONTAINER.validate_json(value)
-        except ValidationError:
-            return value
+    if key == "translation":
+        return _decode_translation(value)
     if key == "language_hints":
-        return tuple(hint.strip() for hint in value.split(",") if hint.strip())
+        return _decode_language_hints(value)
     return value
 
 
-def _nest_bracketed_form_fields(params: Mapping[str, object]) -> Mapping[str, object]:
-    """The OpenAI SDK sends a dict in `extra_body` as `context[terms]`-style form keys."""
-    matches: Final = {key: _BRACKETED_FORM_FIELD.fullmatch(key) for key in params}
-    bracketed: Final = tuple((match["param"], match["field"], params[key]) for key, match in matches.items() if match)
-    nested: Final = {
-        param: {field: value for owner, field, value in bracketed if owner == param}
-        for param in {param for param, _, _ in bracketed}
+def _form_entries(columns: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    """`context[general][][key]` and `context[general][][value]` hold one column each of the entries."""
+    values: Final = {
+        name: _ITEMS.validate_python(column) if isinstance(column, list) else (column,)
+        for name, column in columns.items()
     }
-    unbracketed: Final = {key: value for key, value in params.items() if matches[key] is None}
-    return {**nested, **unbracketed}
+    return tuple(dict(zip(values, row)) for row in zip(*values.values()))
+
+
+def _nested_form_param(param: str, fields: tuple[_BracketedField, ...]) -> Mapping[str, object]:
+    owned: Final = tuple(field for field in fields if field[0] == param)
+    flat: Final = {name: value for _, name, entry_field, value in owned if entry_field is None}
+    listed: Final = {name for _, name, entry_field, _ in owned if entry_field is not None}
+    return {
+        **flat,
+        **{
+            name: _form_entries(
+                {
+                    entry_field: value
+                    for _, owner, entry_field, value in owned
+                    if owner == name and entry_field is not None
+                }
+            )
+            for name in listed
+        },
+    }
+
+
+def _is_soniox_context(value: object) -> bool:
+    try:
+        _STRUCTURED_CONTEXT.validate_python(value)
+    except ValidationError:
+        return False
+    return True
+
+
+def _nest_bracketed_form_fields(params: Mapping[str, object]) -> Mapping[str, object]:
+    """The OpenAI SDK sends a dict in `extra_body` as `context[terms]` and `context[general][][key]` form keys."""
+    matches: Final = {key: _BRACKETED_FORM_FIELD.fullmatch(key) for key in params}
+    fields: Final = tuple(
+        (match["param"], match["field"], match["entry_field"], params[key]) for key, match in matches.items() if match
+    )
+    nested: Final = {param: _nested_form_param(param, fields) for param in {field[0] for field in fields}}
+    kept: Final = {param: value for param, value in nested.items() if param != "context" or _is_soniox_context(value)}
+    unbracketed: Final = {
+        key: value for key, value in params.items() if (match := matches[key]) is None or match["param"] not in kept
+    }
+    return {**kept, **unbracketed}
 
 
 def decode_soniox_form_params(
@@ -332,14 +385,9 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             # "verbose_json")
             has_speaker: Final = any(t.get("speaker") is not None for t in tokens)
             has_language = any(t.get("language") is not None for t in tokens)
-            translated_text: Final = "".join(
-                t.get("text", "") for t in tokens if t.get("translation_status") == "translation"
-            )
 
             if (has_speaker or has_language) and tokens:
                 text = render_soniox_tokens(tokens)
-            elif translated_text:
-                text = translated_text
             elif transcript.get("text"):
                 text = transcript["text"]
             elif tokens:

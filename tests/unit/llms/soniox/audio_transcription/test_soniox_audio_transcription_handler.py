@@ -385,6 +385,19 @@ class TestPollLimitsClamping:
         )
         assert opts["poll_interval"] == SONIOX_DEFAULT_POLL_INTERVAL
 
+    @pytest.mark.parametrize("raw, expected", [(10.0, 10), (10, 10), ("10", 10)])
+    def test_should_keep_numeric_max_polling_attempts(self, raw: object, expected: int):
+        _, _, _, opts = SonioxAudioTranscriptionHandler()._prepare(
+            audio_file=None,
+            optional_params={"soniox_max_polling_attempts": raw, "audio_url": "https://example.com/a.wav"},
+            litellm_params={},
+            api_key="sk-test",
+            api_base=None,
+            provider_config=SonioxAudioTranscriptionConfig(),
+            headers={},
+        )
+        assert opts["max_attempts"] == expected
+
     def test_should_clamp_poll_interval_to_minimum(self):
         from litellm.llms.soniox.common_utils import SONIOX_MIN_POLL_INTERVAL
 

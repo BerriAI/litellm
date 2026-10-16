@@ -252,20 +252,20 @@ class TestTransformAudioTranscriptionResponse:
         assert "Speaker 1:" in resp.text
         assert "Speaker 2:" in resp.text
 
-    def test_should_return_translated_text_for_one_way_translation_without_tags(self):
+    def test_should_keep_source_transcript_for_translation_without_tags(self):
         cfg = SonioxAudioTranscriptionConfig()
         payload = {
             "transcript": {
                 "text": "Hello there.",
                 "tokens": [
-                    {"text": "Hello", "translation_status": "none"},
-                    {"text": " there.", "translation_status": "none"},
+                    {"text": "Hello", "translation_status": "original"},
+                    {"text": " there.", "translation_status": "original"},
                     {"text": "Hallo", "translation_status": "translation"},
                     {"text": " zusammen.", "translation_status": "translation"},
                 ],
             }
         }
-        assert cfg.build_response_from_payload(payload).text == "Hallo zusammen."
+        assert cfg.build_response_from_payload(payload).text == "Hello there."
 
     def test_should_set_language_when_all_tokens_share_one(self):
         cfg = SonioxAudioTranscriptionConfig()
@@ -830,6 +830,49 @@ class TestDecodeSonioxFormParams:
     )
     def test_should_decode_language_hints_strings(self, raw: str, expected: list):
         assert list(decode_soniox_form_params({"language_hints": raw})["language_hints"]) == expected
+
+    @pytest.mark.parametrize("raw", ['{"type": "one_way"', "de", '["one_way"]'])
+    def test_should_return_error_value_on_translation_that_is_not_a_json_object(self, raw: str):
+        assert decode_soniox_form_params({"translation": raw}) == SonioxInvalidFormParam(
+            key="translation", value=raw, expected="a JSON object"
+        )
+
+    def test_should_return_error_value_on_malformed_json_language_hints(self):
+        assert decode_soniox_form_params({"language_hints": "[en, es]"}) == SonioxInvalidFormParam(
+            key="language_hints", value="[en, es]", expected="a JSON list"
+        )
+
+    def test_should_drop_malformed_json_params_when_drop_params_is_set(self):
+        result = decode_soniox_form_params(
+            {"translation": '{"type": "one_way"', "language_hints": "[en, es]", "language_hints_strict": "true"},
+            drop_params=True,
+        )
+        assert result == {"language_hints_strict": True}
+
+    def test_should_rebuild_openai_sdk_list_of_object_context_fields(self):
+        result = decode_soniox_form_params(
+            {
+                "context[terms]": ["Celebrex"],
+                "context[general][][key]": ["domain", "topic"],
+                "context[general][][value]": ["Healthcare", "Follow-up visit"],
+                "context[translation_terms][][source]": "Mr. Smith",
+                "context[translation_terms][][target]": "Sr. Smith",
+            }
+        )
+        assert result == {
+            "context": {
+                "terms": ["Celebrex"],
+                "general": (
+                    {"key": "domain", "value": "Healthcare"},
+                    {"key": "topic", "value": "Follow-up visit"},
+                ),
+                "translation_terms": ({"source": "Mr. Smith", "target": "Sr. Smith"},),
+            }
+        }
+
+    def test_should_leave_bracketed_context_soniox_cannot_take_unnested(self):
+        params = {"context[terms]": ["Celebrex"], "context[note]": "follow-up"}
+        assert decode_soniox_form_params(params) == params
 
     def test_should_not_json_decode_unrelated_string_params(self):
         result = decode_soniox_form_params({"client_reference_id": '["not", "json-decoded"]'})
