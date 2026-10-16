@@ -11,6 +11,8 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal, Optional
 
 import httpx
+from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic_core import PydanticSerializationError, to_jsonable_python
 
 from litellm._logging import verbose_proxy_logger
 from litellm._version import version as litellm_version
@@ -38,6 +40,8 @@ if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 GUARDRAIL_NAME: Final = "generic_guardrail_api"
+_CHAT_ROW: Final[TypeAdapter[AllMessageValues]] = TypeAdapter(AllMessageValues)
+_SHOWN_ROW: Final[TypeAdapter[Mapping[str, JsonValue]]] = TypeAdapter(Mapping[str, JsonValue])
 
 # Headers whose values are forwarded as-is (case-insensitive). Glob patterns supported (e.g. x-stainless-*, x-litellm*).
 _HEADER_VALUE_ALLOWLIST: Final = frozenset(
@@ -150,9 +154,21 @@ def _extract_inbound_headers(
     return None
 
 
+def _row_as_shown(row: AllMessageValues) -> Mapping[str, JsonValue]:
+    """A row is shown as the chat completion types serialize it. A row they cannot
+    serialize without losing content, such as one carrying an Anthropic content
+    block, or cannot validate at all, is shown as the caller sent it."""
+    try:
+        return _SHOWN_ROW.validate_python(
+            _CHAT_ROW.dump_python(_CHAT_ROW.validate_python(row), mode="json", warnings="error")
+        )
+    except (ValidationError, PydanticSerializationError):
+        return _SHOWN_ROW.validate_python(to_jsonable_python(row))
+
+
 def _structured_rows_to_write_back(
     original_rows: Sequence[AllMessageValues] | None,
-    shown_rows: Sequence[AllMessageValues] | None,
+    shown_rows: Sequence[Mapping[str, JsonValue]] | None,
     returned_rows: Sequence[AllMessageValues],
 ) -> tuple[AllMessageValues, ...] | None:
     """The request model drops row keys its message types do not declare, so a
@@ -346,7 +362,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         images: list[str] | None,
         tools: list[ChatCompletionToolParam] | None,
         structured_messages: Sequence[AllMessageValues] | None,
-        shown_messages: Sequence[AllMessageValues] | None,
+        shown_messages: Sequence[Mapping[str, JsonValue]] | None,
         guardrail_response: GenericGuardrailAPIResponse,
     ) -> GenericGuardrailAPIInputs:
         # Action is NONE or no modifications needed
@@ -465,7 +481,9 @@ class GenericGuardrailAPI(CustomGuardrail):
                 litellm_version=litellm_version,
                 images=images,
                 tools=([GuardrailToolParam.model_validate(t) for t in tools] if tools else None),
-                structured_messages=structured_messages,
+                structured_messages=(
+                    [_row_as_shown(row) for row in structured_messages] if structured_messages is not None else None
+                ),
                 tool_calls=tool_calls,
                 additional_provider_specific_params=additional_params,
                 input_type=input_type,

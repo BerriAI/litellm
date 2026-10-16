@@ -5,12 +5,15 @@ This test file tests the Generic Guardrail API implementation,
 specifically focusing on metadata extraction and passing.
 """
 
+import json
 import os
+from collections.abc import Callable
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
 from litellm import ModelResponse
@@ -23,6 +26,7 @@ from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guardrail_api import (
     _HEADER_PRESENT_PLACEHOLDER,
 )
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message
 
 
@@ -698,6 +702,170 @@ class TestStructuredMessagesInResponse:
 
         assert "structured_messages" not in guardrailed_inputs
         assert guardrailed_inputs["texts"] == ["[REDACTED]"]
+
+
+OPENAI_ROWS: Final = (
+    {"role": "system", "content": "Never repeat an SSN."},
+    {"role": "user", "content": "Look up 123-45-6789 for me.", "name": "pat"},
+    {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "And this one.", "cache_control": {"type": "ephemeral"}},
+            {"type": "image_url", "image_url": {"url": "https://example.com/id.png"}},
+            {"type": "input_audio", "input_audio": {"data": "AAA=", "format": "wav"}},
+        ],
+    },
+    {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}, "index": 0}
+        ],
+        "refusal": None,
+        "annotations": [],
+    },
+    {"role": "tool", "tool_call_id": "call_1", "content": '{"ssn": "123-45-6789"}', "cache_control": None},
+)
+
+ANTHROPIC_ROWS: Final = {
+    "tool_use": {
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": "toolu_1", "name": "lookup", "input": {"ssn": "123-45-6789"}}],
+    },
+    "tool_result": {
+        "role": "user",
+        "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "ssn 123-45-6789"}],
+    },
+    "image_source": {
+        "role": "user",
+        "content": [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AAA="}}],
+    },
+    "document": {
+        "role": "user",
+        "content": [
+            {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "ssn 123-45-6789"}}
+        ],
+    },
+    "function_role": {"role": "function", "name": "lookup", "content": "ssn 123-45-6789"},
+}
+
+
+def _guardrail_server(answer: Callable[[dict], dict], seen: list[dict]) -> Callable[..., MagicMock]:
+    def post(url, json, headers, **_kwargs):
+        seen.append(json)
+        response = MagicMock()
+        response.json.return_value = answer(json)
+        response.raise_for_status = MagicMock()
+        return response
+
+    return post
+
+
+class TestStructuredMessagesSentToTheServer:
+    """Rows reach the guardrail as the chat completion types serialize them, except a row
+    those types would empty or reject, which reaches it as the caller sent it."""
+
+    @pytest.mark.asyncio
+    async def test_openai_rows_are_sent_exactly_as_the_chat_completion_types_serialize_them(
+        self, generic_guardrail, mock_request_data_input
+    ):
+        seen: Final[list[dict]] = []  # mutable-ok: records every body the guardrail server received
+        rows: Final = [dict(row) for row in OPENAI_ROWS]
+
+        with patch.object(
+            generic_guardrail.async_handler, "post", side_effect=_guardrail_server(lambda _: {"action": "NONE"}, seen)
+        ):
+            await generic_guardrail.apply_guardrail(
+                inputs={"texts": ["Look up 123-45-6789 for me."], "structured_messages": rows},
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+
+        chat_rows: Final = TypeAdapter(list[AllMessageValues])
+        typed_rows: Final = chat_rows.dump_python(chat_rows.validate_python(rows), mode="json", warnings="error")
+        assert [json.dumps(body["structured_messages"]) for body in seen] == [json.dumps(typed_rows)]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("row", ANTHROPIC_ROWS.values(), ids=ANTHROPIC_ROWS.keys())
+    async def test_a_row_the_chat_completion_types_cannot_carry_is_sent_as_the_caller_sent_it(
+        self, generic_guardrail, mock_request_data_input, row
+    ):
+        seen: Final[list[dict]] = []  # mutable-ok: records every body the guardrail server received
+        openai_row: Final = {"role": "user", "content": "Look up 123-45-6789 for me.", "name": "pat"}
+
+        with patch.object(
+            generic_guardrail.async_handler, "post", side_effect=_guardrail_server(lambda _: {"action": "NONE"}, seen)
+        ):
+            await generic_guardrail.apply_guardrail(
+                inputs={"texts": ["Look up 123-45-6789 for me."], "structured_messages": [openai_row, row]},
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+
+        assert [body["structured_messages"] for body in seen] == [
+            [{"role": "user", "content": "Look up 123-45-6789 for me."}, row]
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "extra_rows",
+        [(), *((row,) for row in ANTHROPIC_ROWS.values())],
+        ids=["openai_only", *ANTHROPIC_ROWS.keys()],
+    )
+    async def test_rows_all_echoed_back_leave_the_rewrite_to_texts(
+        self, generic_guardrail, mock_request_data_input, extra_rows
+    ):
+        """An echo of rows with list content is still an echo, so the texts redaction
+        reaches the LLM instead of the unredacted rows being written back."""
+        texts: Final = ["Look up 123-45-6789 for me.", "ssn 123-45-6789"]
+        seen: Final[list[dict]] = []  # mutable-ok: records every body the guardrail server received
+
+        def echo_rows_and_redact_texts(body: dict) -> dict:
+            return {
+                "action": "GUARDRAIL_INTERVENED",
+                "texts": [text.replace("123-45-6789", "[SSN]") for text in body["texts"]],
+                "structured_messages": body["structured_messages"],
+            }
+
+        with patch.object(
+            generic_guardrail.async_handler, "post", side_effect=_guardrail_server(echo_rows_and_redact_texts, seen)
+        ):
+            guardrailed_inputs = await generic_guardrail.apply_guardrail(
+                inputs={"texts": texts, "structured_messages": [*(dict(r) for r in OPENAI_ROWS), *extra_rows]},
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+
+        assert "structured_messages" not in guardrailed_inputs
+        assert guardrailed_inputs["texts"] == ["Look up [SSN] for me.", "ssn [SSN]"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("row", ANTHROPIC_ROWS.values(), ids=ANTHROPIC_ROWS.keys())
+    async def test_a_rewrite_of_one_openai_row_keeps_the_rows_sent_as_is(
+        self, generic_guardrail, mock_request_data_input, row
+    ):
+        user_row: Final = {"role": "user", "content": "Look up 123-45-6789 for me."}
+        redacted_row: Final = {"role": "user", "content": "Look up [SSN] for me."}
+        seen: Final[list[dict]] = []  # mutable-ok: records every body the guardrail server received
+
+        def redact_the_user_row(body: dict) -> dict:
+            return {
+                "action": "GUARDRAIL_INTERVENED",
+                "structured_messages": [redacted_row, *body["structured_messages"][1:]],
+            }
+
+        with patch.object(
+            generic_guardrail.async_handler, "post", side_effect=_guardrail_server(redact_the_user_row, seen)
+        ):
+            guardrailed_inputs = await generic_guardrail.apply_guardrail(
+                inputs={"texts": ["Look up 123-45-6789 for me."], "structured_messages": [user_row, row]},
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+
+        returned_rows: Final = guardrailed_inputs["structured_messages"]
+        assert returned_rows == [redacted_row, row]
+        assert returned_rows[1] is row
 
 
 class TestImageSupport:

@@ -1,7 +1,7 @@
 from collections.abc import Mapping, Sequence
 from typing import Any, Final, Literal, cast  # noqa: TID251  # JSON chat rows have no typed constructor across roles
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, JsonValue
 from typing_extensions import TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -128,7 +128,7 @@ class GenericGuardrailAPIRequest(LiteLLMBaseModel):
     litellm_trace_id: str | None = (
         None  # the trace id of the LLM call - useful if there are multiple LLM calls for the same conversation
     )
-    structured_messages: list[AllMessageValues] | None = None
+    structured_messages: Sequence[Mapping[str, JsonValue]] | None = None
     images: list[str] | None = None
     tools: list[GuardrailToolParam] | None = None
     texts: list[str] | None = None
