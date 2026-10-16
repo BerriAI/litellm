@@ -600,7 +600,9 @@ def test_buffered_stream_block_returns_an_error_before_any_frame(rig: Rig) -> No
     )
     outcome: Final = rig.converse_stream(BUFFERED, marker)
     assert outcome.events == () and outcome.rejected_before_stream is not None, outcome
-    assert "(400)" in outcome.rejected_before_stream, outcome
+    assert outcome.rejected_before_stream.endswith(
+        f"(ValidationException) when calling the ConverseStream operation: {BLOCK_REASON}"
+    ), outcome
 
 
 def _spend_statuses(call_id: str, at_least: int) -> list[JsonValue]:
