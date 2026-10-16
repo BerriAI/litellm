@@ -8578,3 +8578,155 @@ async def test_a2a_url_target_owns_invocation_fee_and_request_limit(
         await _rpm_request(limiter, cache, auth, "a2a/cheap")
     assert denied.value.status_code == 429
     assert "expensive" in str(denied.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_fail_closed_parallel_limiter_increments_prometheus_counter(monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.hooks.rate_limit_failure_metrics import _get_counter
+
+    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", True)
+
+    counter = _get_counter()
+    assert counter is not None
+    before: Final = counter.labels(limiter_type="parallel_v3", error_type="ConnectionError")._value.get()
+
+    _api_key = hash_token("sk-prometheus")
+    handler = _handler_with_redis(_UnreachableRedis(), fail_closed=True)
+    auth = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=5)
+
+    with pytest.raises(HTTPException) as excinfo:
+        await _admit(handler, auth)
+    assert excinfo.value.status_code == 503
+
+    after: Final = counter.labels(limiter_type="parallel_v3", error_type="ConnectionError")._value.get()
+    assert after == before + 1
+
+
+@pytest.mark.asyncio
+async def test_fail_open_parallel_limiter_still_increments_counter(monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.hooks.rate_limit_failure_metrics import _get_counter
+
+    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", False)
+
+    counter = _get_counter()
+    assert counter is not None
+    before: Final = counter.labels(limiter_type="parallel_v3", error_type="ConnectionError")._value.get()
+
+    _api_key = hash_token("sk-prometheus-open")
+    handler = _handler_with_redis(_UnreachableRedis(), fail_closed=False)
+    auth = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=5)
+
+    admission = await _admit(handler, auth)
+    assert admission is None
+
+    after: Final = counter.labels(limiter_type="parallel_v3", error_type="ConnectionError")._value.get()
+    assert after == before + 1
+
+
+@pytest.mark.asyncio
+async def test_fail_closed_model_rate_limit_check_increments_counter(monkeypatch):
+    from litellm.caching import DualCache
+    from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitUnverifiableError
+    from litellm.proxy.hooks.rate_limit_failure_metrics import _get_counter
+
+    import litellm.proxy.proxy_server as proxy_server
+    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", True)
+
+    counter = _get_counter()
+    before: Final = counter.labels(limiter_type="model_rate_limit_check", error_type="ConnectionError")._value.get()
+
+    class _BombCache(DualCache):
+        async def async_increment_cache(self, *a, **kw):
+            raise ConnectionError("Redis went down")
+
+    check = ModelRateLimitingCheck(_BombCache())
+    deployment = {
+        "litellm_params": {"model": "gpt-4o-mini"},
+        "model_info": {"id": "m1", "tpm": 1000, "rpm": 100},
+        "tpm": 1000,
+        "rpm": 100,
+    }
+
+    with pytest.raises(RateLimitUnverifiableError):
+        await check.async_pre_call_check(deployment)
+
+    after: Final = counter.labels(limiter_type="model_rate_limit_check", error_type="ConnectionError")._value.get()
+    assert after == before + 1
+
+
+@pytest.mark.asyncio
+async def test_fail_closed_io_token_rate_limiter_raises_unverifiable(monkeypatch):
+    from litellm.caching import DualCache
+    from litellm.router_utils.pre_call_checks import io_token_rate_limit_check as iot
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitUnverifiableError
+
+    import litellm.proxy.proxy_server as proxy_server
+    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", True)
+
+    iot.set_io_token_rate_limit_request_kwargs(
+        {"messages": [{"role": "user", "content": "hi"}], "metadata": {}}
+    )
+
+    class _BombIotCache(DualCache):
+        async def async_increment_cache(self, *a, **kw):
+            raise ConnectionError("Redis unreachable (iot)")
+
+    cache = _BombIotCache()
+    deployment = {
+        "litellm_params": {"model": "gpt-4o-mini", "itpm": 100, "otpm": 100},
+        "model_info": {"id": "iot-m1"},
+    }
+
+    with pytest.raises(RateLimitUnverifiableError):
+        await iot.async_io_token_pre_call_check(cache, deployment)
+
+
+@pytest.mark.asyncio
+async def test_fail_open_io_token_rate_limiter_allows_request(monkeypatch):
+    from litellm.caching import DualCache
+    from litellm.router_utils.pre_call_checks import io_token_rate_limit_check as iot
+
+    import litellm.proxy.proxy_server as proxy_server
+    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", False)
+
+    iot.set_io_token_rate_limit_request_kwargs(
+        {"messages": [{"role": "user", "content": "hi"}], "metadata": {}}
+    )
+
+    class _BombIotCache(DualCache):
+        async def async_increment_cache(self, *a, **kw):
+            raise ConnectionError("Redis unreachable (iot)")
+
+    cache = _BombIotCache()
+    deployment = {
+        "litellm_params": {"model": "gpt-4o-mini", "itpm": 100, "otpm": 100},
+        "model_info": {"id": "iot-m1-open"},
+    }
+
+    result = await iot.async_io_token_pre_call_check(cache, deployment)
+    assert result is deployment
+
+
+@pytest.mark.asyncio
+async def test_complete_admission_lifecycle_fail_closed_parallel(monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitUnverifiableError
+
+    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", True)
+
+    class _BrokenRedis:
+        def async_register_script(self, script):
+            async def _boom(*a, **kw):
+                raise ConnectionError("Redis unreachable")
+            return _boom
+
+    handler = _handler_with_redis(_BrokenRedis(), fail_closed=True)
+    _api_key = hash_token("sk-lifecycle")
+    auth = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=5)
+
+    with pytest.raises(RateLimitUnverifiableError) as excinfo:
+        await _admit(handler, auth)
+    assert excinfo.value.status_code == 503

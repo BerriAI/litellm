@@ -1553,6 +1553,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             return await self._batch_get_counter_values(keys=keys, parent_otel_span=parent_otel_span, local_only=True)
 
     def _reject_if_rate_limit_unverifiable(self, failed_operation: str, error: BaseException) -> None:
+        from litellm.proxy.hooks.rate_limit_failure_metrics import (
+            _increment_rate_limiter_failure_counter,
+        )
+
+        _increment_rate_limiter_failure_counter(limiter_type="parallel_v3", error_type=type(error).__name__)
         if not self._fail_closed_resolver():
             return
         log_redis_failure(
