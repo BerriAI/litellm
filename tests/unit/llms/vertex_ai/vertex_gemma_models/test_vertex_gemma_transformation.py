@@ -413,7 +413,7 @@ class TestVertexGemmaCompletion:
         }
 
         with (
-            patch("litellm.llms.vertex_ai.vertex_gemma_models.transformation._get_httpx_client") as mock_get_client,
+            patch("litellm.llms.vertex_ai.vertex_gemma_models.transformation.get_httpx_client") as mock_get_client,
             patch(
                 "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
                 return_value=("fake-access-token", "PROJECT_ID"),
@@ -929,7 +929,7 @@ class TestVertexGemmaCompletion:
         )
 
         with (
-            patch("litellm.llms.vertex_ai.vertex_gemma_models.transformation._get_httpx_client") as mock_get_client,
+            patch("litellm.llms.vertex_ai.vertex_gemma_models.transformation.get_httpx_client") as mock_get_client,
             patch(
                 "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
                 return_value=("fake-access-token", "PROJECT_ID"),

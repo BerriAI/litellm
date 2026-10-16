@@ -14,8 +14,10 @@ signing approach as :mod:`.envelope`), or RS256 under an operator-provided RSA p
 key (:class:`AsymmetricSessionKeys`) so downstream validators hold only the public half.
 Claims are ``iss``/``iat``/``exp``
 plus ``jti`` (per-mint uniqueness, so two tokens minted in the same second never
-collide and a future revocation list has a stable handle), ``kind``, ``user_id``, and
-``client_id``; ``client_id`` binds the refresh token
+collide and the single-use record has a stable handle), ``kind``, ``user_id``,
+``client_id``, and on a rotated refresh token ``family`` (the ``jti`` of the refresh token
+its chain started from, so a revocation can end every rotation that descends
+from one sign-in); ``client_id`` binds the refresh token
 to the DCR client it was issued to (RFC 6749 section 6) and is carried on the access
 token for parity and audit. There is no encrypted payload: nothing in a session token
 is secret beyond the signature, and reprs never print the signed value because minted
@@ -35,6 +37,7 @@ from __future__ import annotations
 
 import secrets
 from collections import Counter
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from functools import lru_cache
 from typing import Final, Literal, TypeAlias
@@ -43,7 +46,9 @@ import jwt
 from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator, model_validator
+from pydantic import ConfigDict, Field, SecretStr, ValidationError, field_validator, model_validator
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 SESSION_TOKEN_PREFIX: Final = "llm_session_"
 """Marker prefix on every serialized session ACCESS token so the admission edge can cheaply
@@ -97,7 +102,7 @@ is read only from the signed claims, never from the request, so a token of one a
 never be redeemed as the other."""
 
 
-class SessionPrincipal(BaseModel):
+class SessionPrincipal(LiteLLMBaseModel):
     """The litellm user a session token identifies and the DCR client it was issued to.
 
     ``user_id`` is the SSO-established litellm user subject, never a credential: admission
@@ -106,22 +111,29 @@ class SessionPrincipal(BaseModel):
     gateway-sealed) DCR client identifier the token was issued to; the token endpoint
     requires it to match on the refresh grant.
 
-    ``resource_server_id`` is the single MCP server this session was authorized for when
-    the client requested a per-server RFC 8707 resource at authorize time, or ``None`` for
-    the aggregate scope. It is a RESTRICTION carried for admission to intersect against
-    the live grant resolution, never a grant by itself; the refresh grant re-mints from
-    this principal so the restriction survives rotation.
+    ``resource_server_ids`` are the MCP servers this session was authorized for when the
+    client requested an RFC 8707 resource or gateway scope at authorize time, or ``None``
+    for the aggregate scope. They are a RESTRICTION carried for admission to intersect
+    against the live grant resolution, never a grant by itself; the refresh grant re-mints
+    from this principal so the restriction survives rotation.
     """
 
     model_config = ConfigDict(frozen=True)
     user_id: str = Field(min_length=1)
     client_id: str = Field(min_length=1)
-    resource_server_id: str | None = None
+    resource_server_ids: tuple[str, ...] | None = Field(default=None, min_length=1)
     audience: SessionAudience | None = None
     team_id: str | None = None
 
+    @field_validator("resource_server_ids")
+    @classmethod
+    def _resource_server_ids_are_nonempty(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        if value is not None and not value:
+            raise ValueError("resource_server_ids must not be empty")
+        return value
 
-class SessionKeys(BaseModel):
+
+class SessionKeys(LiteLLMBaseModel):
     """Injected key material: the HS256 signing key.
 
     ``signing_key`` must be at least 32 bytes: HS256's HMAC-SHA256 has a 256-bit security
@@ -133,7 +145,7 @@ class SessionKeys(BaseModel):
     signing_key: SecretStr = Field(min_length=32)
 
 
-class SessionRotatedPublicKey(BaseModel):
+class SessionRotatedPublicKey(LiteLLMBaseModel):
     """The public half of a retired signing key, kept verifiable under its ``kid`` during a
     rotation window so tokens minted before the rotation stay valid until they expire."""
 
@@ -155,7 +167,7 @@ class SessionRotatedPublicKey(BaseModel):
         return value
 
 
-class AsymmetricSessionKeys(BaseModel):
+class AsymmetricSessionKeys(LiteLLMBaseModel):
     """Injected RS256 key material: the issuer-held RSA private key and the stable ``kid``
     stamped into every minted token's JOSE header, plus the public halves of previously
     rotated keys that verification still accepts while their tokens age out. Downstream
@@ -212,7 +224,7 @@ def session_public_key_pem(keys: AsymmetricSessionKeys) -> str:
     return _public_key_pem_from_private(keys.private_key_pem.get_secret_value())
 
 
-class MintedSessionToken(BaseModel):
+class MintedSessionToken(LiteLLMBaseModel):
     """A minted session token: the client-held bearer value and when it expires."""
 
     model_config = ConfigDict(frozen=True)
@@ -220,21 +232,24 @@ class MintedSessionToken(BaseModel):
     expires_at: datetime
 
 
-class OpenedSessionToken(BaseModel):
+class OpenedSessionToken(LiteLLMBaseModel):
     """A validated session token of either kind: the principal it was minted for, the
-    ``jti`` so the token endpoint can enforce single-use rotation on a refresh token, and
+    ``jti`` so the token endpoint can enforce single-use rotation on a refresh token, the
+    ``family`` every rotation of one refresh token shares (the root token's ``jti``; a
+    token minted before families were stamped, or an access token, is its own root), and
     the signed ``kind``/``iat``/``exp`` so an introspection response can report the
     token's metadata without re-decoding."""
 
     model_config = ConfigDict(frozen=True)
     principal: SessionPrincipal
     jti: str
+    family: str
     kind: SessionTokenKind
     iat: int
     exp: int
 
 
-class SessionTokenTooLarge(BaseModel):
+class SessionTokenTooLarge(LiteLLMBaseModel):
     """The serialized token exceeded ``MAX_SESSION_TOKEN_BYTES``; carries sizes only. Only
     reachable through an oversized ``client_id``, which registration should have bounded."""
 
@@ -247,28 +262,28 @@ class SessionTokenTooLarge(BaseModel):
 SessionTokenMintError: TypeAlias = SessionTokenTooLarge
 
 
-class NotASessionToken(BaseModel):
+class NotASessionToken(LiteLLMBaseModel):
     """The candidate does not carry the expected session prefix."""
 
     model_config = ConfigDict(frozen=True)
     tag: Literal["not_a_session_token"] = "not_a_session_token"
 
 
-class SessionBadSignature(BaseModel):
+class SessionBadSignature(LiteLLMBaseModel):
     """The JWT signature does not verify under the provided signing key."""
 
     model_config = ConfigDict(frozen=True)
     tag: Literal["session_bad_signature"] = "session_bad_signature"
 
 
-class SessionExpired(BaseModel):
+class SessionExpired(LiteLLMBaseModel):
     """The token's ``exp`` is not in the future relative to the provided ``now``."""
 
     model_config = ConfigDict(frozen=True)
     tag: Literal["session_expired"] = "session_expired"
 
 
-class SessionMalformed(BaseModel):
+class SessionMalformed(LiteLLMBaseModel):
     """The token is not a well-formed session token: undecodable JWT, wrong issuer, wrong
     ``kind``, or missing/mistyped/extra claims."""
 
@@ -279,7 +294,7 @@ class SessionMalformed(BaseModel):
 SessionTokenOpenError: TypeAlias = NotASessionToken | SessionBadSignature | SessionExpired | SessionMalformed
 
 
-class _SessionClaims(BaseModel):
+class _SessionClaims(LiteLLMBaseModel):
     """Decoded-claims boundary that pins the exact shape the mints emit.
 
     ``user_id``/``client_id`` mirror the ``min_length`` constraints of
@@ -300,8 +315,10 @@ class _SessionClaims(BaseModel):
     user_id: str = Field(min_length=1)
     client_id: str = Field(min_length=1)
     resource_server_id: str | None = None
+    resource_server_ids: Sequence[str] | None = Field(default=None, min_length=2)
     audience: SessionAudience | None = None
     team_id: str | None = None
+    family: str | None = Field(default=None, min_length=1)
 
 
 def is_session_token(candidate: str) -> bool:
@@ -340,12 +357,14 @@ def mint_session_refresh_token(
     principal: SessionPrincipal,
     keys: SessionSigningKeys,
     now: datetime,
+    family: str | None = None,
 ) -> MintedSessionToken | SessionTokenMintError:
     """Mint the long-lived session REFRESH token for ``principal``.
 
     ``exp`` is ``SESSION_REFRESH_TTL_SECONDS`` from ``now``. Minting a distinct
     ``kind="session_refresh"`` claim is what keeps a refresh token from ever opening as an
-    access credential at the MCP edge.
+    access credential at the MCP edge. ``family`` is the rotation chain the token continues
+    (the opened predecessor's ``family``); ``None`` starts a chain rooted at this token.
     """
     return _mint(
         kind="session_refresh",
@@ -354,6 +373,7 @@ def mint_session_refresh_token(
         expires_at=now + timedelta(seconds=SESSION_REFRESH_TTL_SECONDS),
         keys=keys,
         now=now,
+        family=family,
     )
 
 
@@ -391,6 +411,7 @@ def _mint(
     expires_at: datetime,
     keys: SessionSigningKeys,
     now: datetime,
+    family: str | None = None,
 ) -> MintedSessionToken | SessionTokenTooLarge:
     """Sign the claims for either token kind and enforce the size cap. Shared by both mints
     so the JWT shape, issuer, and size guard cannot drift between access and refresh."""
@@ -402,9 +423,19 @@ def _mint(
         kind=kind,
         user_id=principal.user_id,
         client_id=principal.client_id,
-        resource_server_id=principal.resource_server_id,
+        resource_server_id=(
+            principal.resource_server_ids[0]
+            if principal.resource_server_ids is not None and len(principal.resource_server_ids) == 1
+            else None
+        ),
+        resource_server_ids=(
+            list(principal.resource_server_ids)
+            if principal.resource_server_ids is not None and len(principal.resource_server_ids) >= 2
+            else None
+        ),
         audience=principal.audience,
         team_id=principal.team_id,
+        family=family,
     )
     token: Final = prefix + _sign_claims(claims, keys)
     size_bytes: Final = len(token.encode("utf-8"))
@@ -452,24 +483,33 @@ def _open(
         return claims
     if claims.kind != expected_kind:
         return SessionMalformed()
+    if claims.resource_server_id is not None and claims.resource_server_ids is not None:
+        return SessionMalformed()
     if now.timestamp() >= claims.exp:
         return SessionExpired()
     return OpenedSessionToken(
         principal=SessionPrincipal(
             user_id=claims.user_id,
             client_id=claims.client_id,
-            resource_server_id=claims.resource_server_id,
+            resource_server_ids=(
+                (claims.resource_server_id,)
+                if claims.resource_server_id is not None
+                else tuple(claims.resource_server_ids)
+                if claims.resource_server_ids is not None
+                else None
+            ),
             audience=claims.audience,
             team_id=claims.team_id,
         ),
         jti=claims.jti,
+        family=claims.family or claims.jti,
         kind=claims.kind,
         iat=claims.iat,
         exp=claims.exp,
     )
 
 
-class _VerificationMaterial(BaseModel):
+class _VerificationMaterial(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     key: SecretStr
     algorithm: Literal["HS256", "RS256"]

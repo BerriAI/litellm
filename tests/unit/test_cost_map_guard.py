@@ -2,6 +2,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from types import ModuleType
 from typing import Final
@@ -62,13 +63,68 @@ def _snapshot(cost_map: dict[str, object], backup: str | None = None, schema: st
 BASE: Final = _snapshot(BASE_MAP)
 
 
-def _failures(head: object, changed_files: tuple[str, ...] = MAP_FILES, bot: bool = True) -> tuple[str, ...]:
-    return guard.guard_failures(BASE, head, changed_files, bot)
+def _failures(
+    head: object,
+    changed_files: tuple[str, ...] = MAP_FILES,
+    bot: bool = True,
+    evaluation_output_price_sources: Mapping[str, str] = guard.EVALUATION_OUTPUT_PRICE_SOURCES,
+) -> tuple[str, ...]:
+    return guard.guard_failures(
+        BASE,
+        head,
+        changed_files,
+        bot,
+        evaluation_output_price_sources=evaluation_output_price_sources,
+    )
 
 
 def test_in_sync_files_pass_for_humans_and_bots() -> None:
     assert _failures(BASE, bot=False) == ()
     assert _failures(BASE, bot=True) == ()
+
+
+EVALUATION_MODEL: Final = "azure_ai/Microsoft-Decision-1"
+DECISIONS_MODEL: Final = "azure_ai/decisions/Microsoft-Decision-1"
+INPUT_ONLY_OUTPUT_PRICE_FAILURE: Final = (
+    "mode evaluation and decisions rows bill input only; output_cost_per_token must be 0 unless the vendor prices "
+    "output tokens for this model (add the source to EVALUATION_OUTPUT_PRICE_SOURCES)"
+)
+
+
+@pytest.mark.parametrize(("model", "mode"), ((EVALUATION_MODEL, "evaluation"), (DECISIONS_MODEL, "decisions")))
+@pytest.mark.parametrize("bot", (True, False))
+def test_evaluation_and_decisions_rows_with_output_price_fail_for_humans_and_bots(
+    model: str, mode: str, bot: bool
+) -> None:
+    head: Final = _snapshot({**BASE_MAP, model: _entry(mode=mode, output_cost_per_token=4.2e-08)})
+    assert _failures(head, bot=bot) == (f"{model}: {INPUT_ONLY_OUTPUT_PRICE_FAILURE}",)
+
+
+@pytest.mark.parametrize(("model", "mode"), ((EVALUATION_MODEL, "evaluation"), (DECISIONS_MODEL, "decisions")))
+def test_evaluation_and_decisions_rows_with_zero_or_missing_output_price_pass(model: str, mode: str) -> None:
+    zero_output: Final = _snapshot({**BASE_MAP, model: _entry(mode=mode, output_cost_per_token=0.0)})
+    missing_output_entry: Final = {
+        key: value for key, value in _entry(mode=mode).items() if key != "output_cost_per_token"
+    }
+    missing_output: Final = _snapshot({**BASE_MAP, model: missing_output_entry})
+
+    assert _failures(zero_output) == ()
+    assert _failures(missing_output) == ()
+
+
+def test_chat_rows_with_output_price_pass() -> None:
+    head: Final = _snapshot(
+        {**BASE_MAP, "openrouter/chat-with-output": _entry(output_cost_per_token=4.2e-08)}
+    )
+    assert _failures(head) == ()
+
+
+@pytest.mark.parametrize(("model", "mode"), ((EVALUATION_MODEL, "evaluation"), (DECISIONS_MODEL, "decisions")))
+def test_evaluation_and_decisions_output_price_source_allowlist_passes(model: str, mode: str) -> None:
+    head: Final = _snapshot({**BASE_MAP, model: _entry(mode=mode, output_cost_per_token=4.2e-08)})
+    source: Final = 'https://vendor.example/pricing "Output tokens are charged per token."'
+
+    assert _failures(head, evaluation_output_price_sources={model: source}) == ()
 
 
 def test_bot_may_add_and_reprice_models() -> None:

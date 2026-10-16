@@ -77,7 +77,7 @@ class CodexStreamState:
     started: set[str] = field(default_factory=set)  # mutable-ok: parser records announced tool items
 
 
-def _tool_input(item: Mapping[str, Any]) -> tuple[str, str, Mapping[str, Any], bool]:
+def _tool_input(item: Mapping[str, Any]) -> tuple[str, str, Mapping[str, object], bool]:
     """(normalized name, native name, input, builtin) for a tool-like item."""
     item_type = item.get("type")
     if item_type == "command_execution":

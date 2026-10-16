@@ -46,6 +46,12 @@ FROM generate_series(1, %s::int) AS n
 # The master key's user id. `/team/new` appends the creator to the roster as an admin, so every team
 # created here carries this member alongside the ones the test adds.
 PROXY_ADMIN: Final = "default_user_id"
+KEYS_WELL_PAST_THE_PUBLISH_CAP: Final = 2500
+SEED_TEAM_KEYS_SQL: Final = """
+INSERT INTO "LiteLLM_VerificationToken" (token, team_id, models)
+SELECT encode(sha256(convert_to(%s || '-' || n::text, 'UTF8')), 'hex'), %s, '{}'::text[]
+FROM generate_series(1, %s::int) AS n
+"""
 TAKE_TEAM_LOCK_SQL: Final = "SELECT pg_advisory_xact_lock(hashtext(%s))"
 # Sessions blocked on the advisory lock the given backend holds, and nothing else on the shared rig.
 WAITERS_ON_HELD_LOCK_SQL: Final = """
@@ -632,3 +638,36 @@ def test_member_add_and_delete_released_together_leave_no_team_reference(gateway
         assert _user_teams(newcomer) == []
         assert _users_referencing(team) == []
         assert [row["team_id"] for row in _tombstones(team)] == [team]
+
+
+def _seeded_team_keys(team_id: str, count: int) -> tuple[str, ...]:
+    prefix: Final = f"sk-integration-{uuid.uuid4().hex}"
+    write_rows(SEED_TEAM_KEYS_SQL, (prefix, team_id, str(count)))
+    return tuple(f"{prefix}-{index}" for index in range(1, count + 1))
+
+
+def _models_status(proxy: Gateway, key: str) -> int:
+    return proxy.request("GET", "/v1/models", key=key).status_code
+
+
+def _statuses(proxy: Gateway, keys: Sequence[str]) -> dict[int, int]:
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        statuses: Final = tuple(pool.map(lambda key: _models_status(proxy, key), keys))
+    return {status: statuses.count(status) for status in frozenset(statuses)}
+
+
+def test_deleting_a_team_with_more_keys_than_the_publish_cap_revokes_every_key_on_a_warmed_peer(
+    gateway: Gateway, peer: Gateway
+) -> None:
+    with gateway.scenario() as scenario:
+        team: Final = _create_team(scenario)
+        scenario.cleanups.callback(write_rows, 'DELETE FROM "LiteLLM_VerificationToken" WHERE team_id = %s', (team,))
+        keys: Final = _seeded_team_keys(team, KEYS_WELL_PAST_THE_PUBLISH_CAP)
+        assert _statuses(peer, keys) == {200: len(keys)}
+
+        response: Final = _delete_teams(gateway, [team])
+        assert response.status_code == 200, response.text
+        assert read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE team_id = %s', (team,)) == []
+
+        _ = eventually(lambda: _models_status(peer, keys[-1]), lambda status: status == 401, seconds=10)
+        assert _statuses(peer, keys) == {401: len(keys)}

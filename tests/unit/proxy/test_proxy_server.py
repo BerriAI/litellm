@@ -1,12 +1,14 @@
 import os
 import sys
 import traceback
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Mapping
 from contextlib import asynccontextmanager
-from typing import Final, Literal
+from typing import Final, Literal, NoReturn, cast
 from unittest import mock
 
 from dotenv import load_dotenv
+
+from tests._master_key import MASTER_KEY
 
 import litellm.proxy
 import litellm.proxy.proxy_server
@@ -33,7 +35,7 @@ logging.basicConfig(
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket
 
 # test /chat/completion request to the proxy
 from fastapi.testclient import TestClient
@@ -233,7 +235,7 @@ async def test_proxy_shutdown_closes_admin_connector_when_drain_is_cancelled(
 
 
 # Your bearer token
-token = "sk-1234"
+token = MASTER_KEY
 
 headers = {"Authorization": f"Bearer {token}"}
 
@@ -632,7 +634,7 @@ async def test_team_disable_guardrails(mock_acompletion, client_no_auth, monkeyp
 
     user_api_key_cache: Final = UserApiKeyCache()
     _team_id = "1234"
-    user_key = "sk-12345678"
+    user_key = "sk-98765678"
 
     valid_token = UserAPIKeyAuth(
         team_id=_team_id,
@@ -651,7 +653,7 @@ async def test_team_disable_guardrails(mock_acompletion, client_no_auth, monkeyp
     user_api_key_cache.set_cache(key="team_id:{}".format(_team_id), value=team_obj)
 
     monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(litellm.proxy.proxy_server, "prisma_client", "hello-world")
 
     request = Request(scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
@@ -694,7 +696,7 @@ def test_custom_logger_failure_handler(mock_acompletion, client_no_auth, monkeyp
     proxy_logging_obj._init_litellm_callbacks(llm_router=None)
 
     monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(litellm.proxy.proxy_server, "prisma_client", "FAKE-VAR")
     setattr(litellm.proxy.proxy_server, "proxy_logging_obj", proxy_logging_obj)
 
@@ -1236,7 +1238,7 @@ async def test_team_update_redis():
     """
     from litellm.caching.caching import DualCache, RedisCache
     from litellm.proxy._types import LiteLLM_TeamTableCachedObj
-    from litellm.proxy.auth.auth_checks import _cache_team_object
+    from litellm.proxy.auth.auth_checks import cache_team_object
 
     proxy_logging_obj: ProxyLogging = getattr(
         litellm.proxy.proxy_server, "proxy_logging_obj"
@@ -1249,7 +1251,7 @@ async def test_team_update_redis():
         "async_set_cache",
         new=AsyncMock(),
     ) as mock_client:
-        await _cache_team_object(
+        await cache_team_object(
             team_id="1234",
             team_table=LiteLLM_TeamTableCachedObj(team_id="1234"),
             user_api_key_cache=DualCache(redis_cache=redis_cache),
@@ -1307,8 +1309,6 @@ from litellm.proxy._types import (
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.team_endpoints import team_member_add
 from tests.unit.proxy.management_endpoints.test_key_generate_prisma import prisma_client
-
-
 @pytest.fixture
 def mock_prisma_client():
     client = MagicMock()
@@ -1327,7 +1327,7 @@ def mock_prisma_client():
 async def test_create_user_default_budget(prisma_client, user_role):  # noqa: F811  # pytest fixture, not a redefinition
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(litellm, "max_internal_user_budget", 10)
     setattr(litellm, "internal_user_budget_duration", "5m")
     await litellm.proxy.proxy_server.prisma_client.connect()
@@ -1390,7 +1390,7 @@ async def test_create_team_member_add(prisma_client, new_member_method):  # noqa
     from litellm.proxy.proxy_server import hash_token, user_api_key_cache
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(litellm, "max_internal_user_budget", 10)
     setattr(litellm, "internal_user_budget_duration", "5m")
     await litellm.proxy.proxy_server.prisma_client.connect()
@@ -1504,12 +1504,12 @@ async def test_create_team_member_add_team_admin_user_api_key_auth(
     user_api_key_cache: Final = UserApiKeyCache()
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(litellm, "max_internal_user_budget", 10)
     setattr(litellm, "internal_user_budget_duration", "5m")
     user = f"ishaan {uuid.uuid4().hex}"
     _team_id = "litellm-test-client-id-new"
-    user_key = "sk-12345678"
+    user_key = "sk-98765678"
 
     valid_token = UserAPIKeyAuth(
         team_id=_team_id,
@@ -1579,12 +1579,12 @@ async def test_create_team_member_add_team_admin(
     )
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(litellm, "max_internal_user_budget", 10)
     setattr(litellm, "internal_user_budget_duration", "5m")
     user = f"ishaan {uuid.uuid4().hex}"
     _team_id = "litellm-test-client-id-new"
-    user_key = "sk-12345678"
+    user_key = "sk-98765678"
     team_admin = f"krrish {uuid.uuid4().hex}"
 
     valid_token = UserAPIKeyAuth(
@@ -1705,7 +1705,7 @@ async def test_user_info_team_list(prisma_client):  # noqa: F811  # pytest fixtu
     from litellm.proxy._types import LiteLLM_UserTable
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     await litellm.proxy.proxy_server.prisma_client.connect()
 
     from litellm.proxy.management_endpoints.internal_user_endpoints import user_info
@@ -1729,7 +1729,7 @@ async def test_user_info_team_list(prisma_client):  # noqa: F811  # pytest fixtu
                 request=MagicMock(),
                 user_id=None,
                 user_api_key_dict=UserAPIKeyAuth(
-                    api_key="sk-1234", user_id="default_user_id"
+                    api_key=MASTER_KEY, user_id="default_user_id"
                 ),
             )
         except Exception:
@@ -1753,7 +1753,7 @@ async def test_add_callback_via_key(prisma_client):  # noqa: F811  # pytest fixt
     from litellm.proxy.proxy_server import chat_completion
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     await litellm.proxy.proxy_server.prisma_client.connect()
 
     litellm.set_verbose = True
@@ -1850,7 +1850,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils(
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
 
     proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
 
@@ -2009,7 +2009,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils_gcs_bucket(
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
 
     proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
 
@@ -2145,7 +2145,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils_langsmith(
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
 
     proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
 
@@ -2319,7 +2319,7 @@ async def test_proxy_model_group_alias_checks(prisma_client, hidden):  # noqa: F
     from litellm.proxy.proxy_server import model_group_info, model_info_v1, model_list
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     await litellm.proxy.proxy_server.prisma_client.connect()
 
     proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
@@ -2400,7 +2400,7 @@ async def test_proxy_model_group_info_rerank(prisma_client):  # noqa: F811  # py
     from litellm.proxy.proxy_server import model_group_info, model_info_v1, model_list
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     await litellm.proxy.proxy_server.prisma_client.connect()
 
     proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
@@ -2454,7 +2454,7 @@ async def test_proxy_model_group_info_rerank(prisma_client):  # noqa: F811  # py
 #     from litellm.proxy._types import TeamMemberAddRequest, Member, NewTeamRequest
 
 #     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-#     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+#     setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
 #     try:
 
 #         async def test():
@@ -2463,7 +2463,7 @@ async def test_proxy_model_group_info_rerank(prisma_client):  # noqa: F811  # py
 
 #             user_api_key_dict = UserAPIKeyAuth(
 #                 user_role=LitellmUserRoles.PROXY_ADMIN,
-#                 api_key="sk-1234",
+#                 api_key=MASTER_KEY,
 #                 user_id="1234",
 #             )
 
@@ -3296,3 +3296,496 @@ def test_get_litellm_model_info(data):
     ):
         get_litellm_model_info(model=model)
         get_info_mock.assert_called_once_with(data["expected"])
+
+
+def test_live_session_accept_failure_releases_reservations(
+    client_no_auth: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    released: Final[list[str]] = []
+
+    async def release_budget(user_api_key_dict: object) -> None:
+        released.append("budget")
+
+    async def release_slot(user_api_key_dict: object) -> None:
+        released.append("slot")
+
+    async def receive() -> dict[str, object]:
+        return {"type": "websocket.connect"}
+
+    async def send_failing_accept(message: Mapping[str, object]) -> None:
+        if message["type"] == "websocket.accept":
+            raise RuntimeError("accept failed")
+
+    scope: Final = {
+        "type": "websocket",
+        "path": "/v1/live/sessions",
+        "raw_path": b"/v1/live/sessions",
+        "root_path": "",
+        "scheme": "ws",
+        "query_string": b"",
+        "headers": [(b"host", b"testserver"), (b"authorization", b"Bearer test-api-key")],
+        "client": ("testclient", 50000),
+        "server": ("testserver", 80),
+        "subprotocols": [],
+    }
+    route_call: Final = AsyncMock()
+    monkeypatch.setattr(proxy_server, "route_request", route_call)
+    monkeypatch.setattr(proxy_server, "_release_realtime_budget_reservation", release_budget)
+    monkeypatch.setattr(proxy_server, "_release_realtime_max_parallel_slot", release_slot)
+
+    with pytest.raises(RuntimeError, match="accept failed"):
+        asyncio.run(client_no_auth.app(scope, receive, send_failing_accept))
+
+    assert released == ["budget", "slot"]
+    route_call.assert_not_awaited()
+
+
+def _override_live_session_authorizer(
+    monkeypatch: pytest.MonkeyPatch,
+    authorizer: Callable[[WebSocket, str], Awaitable[UserAPIKeyAuth]],
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setitem(
+        proxy_server.app.dependency_overrides,
+        proxy_server.live_session_model_authorizer,
+        lambda: authorizer,
+    )
+
+
+def _start_live_session_and_wait_for_reply(client: TestClient) -> None:
+    with client.websocket_connect("/v1/live/sessions", headers={"Authorization": "Bearer test-api-key"}) as websocket:
+        websocket.send_json({"type": "session.start", "session": {"model": "gpt-3.5-turbo"}})
+        websocket.receive_text()
+
+
+def test_live_session_model_check_error_releases_reservations(
+    client_no_auth: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    released: Final[list[str]] = []
+
+    async def release_budget(user_api_key_dict: object) -> None:
+        released.append("budget")
+
+    async def release_slot(user_api_key_dict: object) -> None:
+        released.append("slot")
+
+    async def failing_authorizer(websocket: object, model: str) -> UserAPIKeyAuth:
+        raise RuntimeError("agent lookup failed")
+
+    route_call: Final = AsyncMock()
+    monkeypatch.setattr(proxy_server, "route_request", route_call)
+    _override_live_session_authorizer(monkeypatch, failing_authorizer)
+    monkeypatch.setattr(proxy_server, "_release_realtime_budget_reservation", release_budget)
+    monkeypatch.setattr(proxy_server, "_release_realtime_max_parallel_slot", release_slot)
+
+    with pytest.raises(RuntimeError, match="agent lookup failed"):
+        _start_live_session_and_wait_for_reply(client_no_auth)
+
+    assert released == ["budget", "slot"]
+    route_call.assert_not_awaited()
+
+
+class _PreCallAborted(BaseException):
+    pass
+
+
+def test_live_session_pre_call_abort_releases_reservations(
+    client_no_auth: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+    frame_auth: Final = UserAPIKeyAuth(token="frame-authorized")
+    released_for_frame: Final[list[str]] = []
+
+    async def release_budget(user_api_key_dict: UserAPIKeyAuth) -> None:
+        if user_api_key_dict is frame_auth:
+            released_for_frame.append("budget")
+
+    async def release_slot(user_api_key_dict: UserAPIKeyAuth) -> None:
+        if user_api_key_dict is frame_auth:
+            released_for_frame.append("slot")
+
+    async def authorize(websocket: object, model: str) -> UserAPIKeyAuth:
+        return frame_auth
+
+    class _AbortingPreCallProcessing(ProxyBaseLLMRequestProcessing):
+        async def common_processing_pre_call_logic(self, *args: object, **kwargs: object) -> NoReturn:
+            raise _PreCallAborted
+
+    route_call: Final = AsyncMock()
+    monkeypatch.setattr(proxy_server, "route_request", route_call)
+    _override_live_session_authorizer(monkeypatch, authorize)
+    monkeypatch.setattr(proxy_server, "ProxyBaseLLMRequestProcessing", _AbortingPreCallProcessing)
+    monkeypatch.setattr(proxy_server, "_release_realtime_budget_reservation", release_budget)
+    monkeypatch.setattr(proxy_server, "_release_realtime_max_parallel_slot", release_slot)
+
+    with pytest.raises(_PreCallAborted):
+        _start_live_session_and_wait_for_reply(client_no_auth)
+
+    assert released_for_frame == ["budget", "slot"]
+    route_call.assert_not_awaited()
+
+
+@pytest.mark.parametrize("path", ["/openai/v1/live/sessions", "/v1/live/sessions", "/live/sessions"])
+def test_live_session_invalid_start_is_rejected_without_routing(
+    path: str,
+    client_no_auth: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from starlette.websockets import WebSocketDisconnect
+
+    async def no_op(user_api_key_dict: object) -> None:
+        return None
+
+    route_call: Final = AsyncMock()
+    monkeypatch.setattr(proxy_server, "route_request", route_call)
+    monkeypatch.setattr(proxy_server, "_release_realtime_budget_reservation", no_op)
+    monkeypatch.setattr(proxy_server, "_release_realtime_max_parallel_slot", no_op)
+
+    with client_no_auth.websocket_connect(path, headers={"Authorization": "Bearer test-api-key"}) as websocket:
+        websocket.send_text('{"type":"session.start","session":{"model":""}}')
+        assert websocket.receive_json() == {
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "code": "invalid_session_start",
+                "message": "First message must be a session.start JSON object with a non-empty session.model.",
+            },
+        }
+        with pytest.raises(WebSocketDisconnect) as error:
+            websocket.receive_json()
+        assert error.value.code == 1008
+
+    route_call.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("denial_type", "expected_code"),
+    (("user_model_access_denied", "model_not_allowed"), ("budget_exceeded", "session_not_allowed")),
+)
+def test_live_session_frame_authorization_denial_closes_with_policy_code(
+    client_no_auth: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    denial_type: str,
+    expected_code: str,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import ProxyException
+    from starlette.websockets import WebSocketDisconnect
+
+    async def no_op(user_api_key_dict: object) -> None:
+        return None
+
+    authorized_models: Final[list[str]] = []
+
+    async def deny(websocket: object, model: str) -> UserAPIKeyAuth:
+        authorized_models.append(model)
+        raise ProxyException("model access denied for this user", denial_type, "model", 403)
+
+    route_call: Final = AsyncMock()
+    monkeypatch.setattr(proxy_server, "route_request", route_call)
+    monkeypatch.setattr(proxy_server, "_release_realtime_budget_reservation", no_op)
+    monkeypatch.setattr(proxy_server, "_release_realtime_max_parallel_slot", no_op)
+    _override_live_session_authorizer(monkeypatch, deny)
+
+    with client_no_auth.websocket_connect(
+        "/v1/live/sessions",
+        headers={"Authorization": "Bearer test-api-key"},
+    ) as websocket:
+        websocket.send_json({"type": "session.start", "session": {"model": "gpt-4o"}})
+        assert websocket.receive_json() == {
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "code": expected_code,
+                "message": "model access denied for this user",
+            },
+        }
+        with pytest.raises(WebSocketDisconnect) as error:
+            websocket.receive_json()
+        assert error.value.code == 1008
+
+    assert authorized_models == ["gpt-4o"]
+    route_call.assert_not_awaited()
+
+
+def test_live_session_valid_start_routes_with_model_and_frame(
+    client_no_auth: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from litellm.proxy import proxy_server
+    from starlette.websockets import WebSocket
+
+    async def no_op(user_api_key_dict: object) -> None:
+        return None
+
+    async def complete_call() -> None:
+        return None
+
+    captured: Final = SimpleNamespace(data=None, route_type=None)
+
+    async def route(
+        *,
+        data: dict[str, object],
+        route_type: str,
+        llm_router: object,
+        user_model: str | None,
+    ) -> Coroutine[object, object, None]:
+        captured.data = data
+        captured.route_type = route_type
+        await cast(WebSocket, data["websocket"]).send_text("routed")
+        return complete_call()
+
+    frame_auth: Final = UserAPIKeyAuth(token="frame-authorized")
+
+    async def authorize(websocket: object, model: str) -> UserAPIKeyAuth:
+        return frame_auth
+
+    monkeypatch.setattr(proxy_server, "route_request", route)
+    _override_live_session_authorizer(monkeypatch, authorize)
+    monkeypatch.setattr(proxy_server, "_release_realtime_budget_reservation", no_op)
+    monkeypatch.setattr(proxy_server, "_release_realtime_max_parallel_slot", no_op)
+    start_frame: Final[dict[str, object]] = {
+        "type": "session.start",
+        "session": {"model": "gpt-3.5-turbo", "instructions": "Stay brief"},
+    }
+
+    with client_no_auth.websocket_connect(
+        "/v1/live/sessions",
+        headers={"Authorization": "Bearer test-api-key"},
+    ) as websocket:
+        websocket.send_json(start_frame)
+        assert websocket.receive_text() == "routed"
+
+    routed_data: Final = cast(dict[str, object], captured.data)
+    assert captured.route_type == "_arealtime"
+    assert routed_data["model"] == "gpt-3.5-turbo"
+    assert routed_data["live_session_start"] == start_frame
+    assert routed_data["user_api_key_dict"] is frame_auth
+
+
+def test_live_session_ignores_query_model_and_authorizes_frame_model(
+    client_no_auth: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi import Request
+
+    from litellm.proxy import proxy_server
+    from starlette.websockets import WebSocket
+
+    async def no_op(user_api_key_dict: object) -> None:
+        return None
+
+    async def complete_call() -> None:
+        return None
+
+    async def route(
+        *,
+        data: dict[str, object],
+        route_type: str,
+        llm_router: object,
+        user_model: str | None,
+    ) -> Coroutine[object, object, None]:
+        await cast(WebSocket, data["websocket"]).send_text("routed")
+        return complete_call()
+
+    upgrade_auth: Final = UserAPIKeyAuth(token="upgrade", models=["gpt-live-1"])
+
+    async def authenticate(request: Request, api_key: str) -> UserAPIKeyAuth:
+        if await request.body() != b'{"model": ""}':
+            raise HTTPException(status_code=403, detail="Model is not allowed")
+        return upgrade_auth
+
+    auth_call: Final = AsyncMock(side_effect=authenticate)
+    monkeypatch.setattr("litellm.proxy.auth.user_api_key_auth.user_api_key_auth", auth_call)
+    frame_auth: Final = UserAPIKeyAuth(token="frame-authorized", models=["gpt-live-1"])
+    authorize: Final = AsyncMock(return_value=frame_auth)
+    monkeypatch.setattr(proxy_server, "route_request", route)
+    monkeypatch.setattr(proxy_server, "_release_realtime_budget_reservation", no_op)
+    monkeypatch.setattr(proxy_server, "_release_realtime_max_parallel_slot", no_op)
+    _override_live_session_authorizer(monkeypatch, authorize)
+
+    with client_no_auth.websocket_connect(
+        "/v1/live/sessions?model=gpt-realtime",
+        headers={"Authorization": "Bearer test-api-key"},
+    ) as websocket:
+        websocket.send_json({"type": "session.start", "session": {"model": "gpt-live-1"}})
+        assert websocket.receive_text() == "routed"
+
+    request_arg: Final = auth_call.await_args.kwargs["request"]
+    assert json.loads(asyncio.run(request_arg.body())) == {"model": ""}
+    assert authorize.await_args.args[1] == "gpt-live-1"
+
+
+def test_live_session_reauthorized_token_still_needs_the_model_on_the_key(
+    client_no_auth: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from starlette.websockets import WebSocketDisconnect
+
+    from litellm.proxy import proxy_server
+
+    released_tokens: Final[list[str | None]] = []
+
+    async def release_budget(user_api_key_dict: UserAPIKeyAuth) -> None:
+        released_tokens.append(user_api_key_dict.token)
+
+    async def no_op(user_api_key_dict: object) -> None:
+        return None
+
+    async def custom_auth_without_common_checks(websocket: object, model: str) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(token="custom-auth", models=["gpt-4o"])
+
+    route_call: Final = AsyncMock()
+    monkeypatch.setattr(proxy_server, "route_request", route_call)
+    monkeypatch.setattr(proxy_server, "_release_realtime_budget_reservation", release_budget)
+    monkeypatch.setattr(proxy_server, "_release_realtime_max_parallel_slot", no_op)
+    _override_live_session_authorizer(monkeypatch, custom_auth_without_common_checks)
+
+    with client_no_auth.websocket_connect(
+        "/v1/live/sessions",
+        headers={"Authorization": "Bearer test-api-key"},
+    ) as websocket:
+        websocket.send_json({"type": "session.start", "session": {"model": "gpt-3.5-turbo"}})
+        error_event: Final = websocket.receive_json()
+        with pytest.raises(WebSocketDisconnect) as error:
+            websocket.receive_json()
+
+    assert error_event["error"]["code"] == "model_not_allowed", error_event
+    assert error.value.code == 1008
+    assert "custom-auth" in released_tokens
+    route_call.assert_not_awaited()
+
+
+def test_live_session_releases_the_upgrade_reservation_before_the_frame_reserves(
+    client_no_auth: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from starlette.websockets import WebSocket
+
+    from litellm.proxy import proxy_server
+
+    released_reservations: Final[list[object]] = []
+
+    async def release_budget(user_api_key_dict: UserAPIKeyAuth) -> None:
+        released_reservations.append(user_api_key_dict.budget_reservation)
+
+    async def no_op(user_api_key_dict: object) -> None:
+        return None
+
+    async def complete_call() -> None:
+        return None
+
+    async def route(
+        *,
+        data: dict[str, object],
+        route_type: str,
+        llm_router: object,
+        user_model: str | None,
+    ) -> Coroutine[object, object, None]:
+        await cast(WebSocket, data["websocket"]).send_text("routed")
+        return complete_call()
+
+    frame_auth: Final = UserAPIKeyAuth(token="frame-authorized", budget_reservation={"reserved_for": "frame model"})
+
+    async def upgrade_auth() -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(token="upgrade", budget_reservation={"reserved_for": "query model"})
+
+    released_before_frame_auth: Final[list[tuple[object, ...]]] = []
+
+    async def authorize(websocket: object, model: str) -> UserAPIKeyAuth:
+        released_before_frame_auth.append(tuple(released_reservations))
+        return frame_auth
+
+    monkeypatch.setattr(proxy_server, "route_request", route)
+    monkeypatch.setattr(proxy_server, "_release_realtime_budget_reservation", release_budget)
+    monkeypatch.setattr(proxy_server, "_release_realtime_max_parallel_slot", no_op)
+    monkeypatch.setitem(proxy_server.app.dependency_overrides, proxy_server.user_api_key_auth_live_websocket, upgrade_auth)
+    _override_live_session_authorizer(monkeypatch, authorize)
+
+    with client_no_auth.websocket_connect(
+        "/v1/live/sessions?model=gpt-4o",
+        headers={"Authorization": "Bearer test-api-key"},
+    ) as websocket:
+        websocket.send_json({"type": "session.start", "session": {"model": "gpt-3.5-turbo"}})
+        assert websocket.receive_text() == "routed"
+
+    assert released_before_frame_auth == [({"reserved_for": "query model"},)], released_reservations
+
+
+def test_live_session_preserves_pretty_printed_start_frame(
+    client_no_auth: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from starlette.websockets import WebSocket
+
+    from litellm.proxy import proxy_server
+
+    async def no_op(user_api_key_dict: object) -> None:
+        return None
+
+    async def complete_call() -> None:
+        return None
+
+    captured: Final = SimpleNamespace(data=None, route_type=None)
+
+    async def route(
+        *,
+        data: dict[str, object],
+        route_type: str,
+        llm_router: object,
+        user_model: str | None,
+    ) -> Coroutine[object, object, None]:
+        captured.data = data
+        captured.route_type = route_type
+        await cast(WebSocket, data["websocket"]).send_text("routed")
+        return complete_call()
+
+    frame_auth: Final = UserAPIKeyAuth(token="frame-authorized")
+
+    async def authorize(websocket: object, model: str) -> UserAPIKeyAuth:
+        return frame_auth
+
+    monkeypatch.setattr(proxy_server, "route_request", route)
+    _override_live_session_authorizer(monkeypatch, authorize)
+    monkeypatch.setattr(proxy_server, "_release_realtime_budget_reservation", no_op)
+    monkeypatch.setattr(proxy_server, "_release_realtime_max_parallel_slot", no_op)
+
+    start_frame: Final = "\r\n".join(
+        [
+            "{",
+            '  "type": "session.start",',
+            '  "session": {"model": "gpt-live-1", "instructions": "a\\nb"}',
+            "}",
+        ]
+    )
+    expected_start: Final[dict[str, object]] = {
+        "type": "session.start",
+        "session": {"model": "gpt-live-1", "instructions": "a\nb"},
+    }
+
+    with client_no_auth.websocket_connect(
+        "/v1/live/sessions",
+        headers={"Authorization": "Bearer test-api-key"},
+    ) as websocket:
+        websocket.send_text(start_frame)
+        assert websocket.receive_text() == "routed"
+
+    routed_data: Final = cast(dict[str, object], captured.data)
+    assert captured.route_type == "_arealtime"
+    assert routed_data["model"] == "gpt-live-1"
+    assert routed_data["live_session_start"] == expected_start

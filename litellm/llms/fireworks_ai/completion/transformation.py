@@ -6,7 +6,7 @@ from litellm.types.llms.openai import AllMessageValues, OpenAITextCompletionUser
 from litellm.utils import supports_reasoning
 
 from ...base_llm.completion.transformation import BaseTextCompletionConfig
-from ...openai.completion.utils import _transform_prompt
+from ...openai.completion.utils import transform_prompt
 from ..chat.transformation import (
     EFFORT_KWARG_KEYS,
     NIM_VLLM_STRIP_PARAMS,
@@ -159,7 +159,7 @@ class FireworksAITextCompletionConfig(FireworksAIMixin, BaseTextCompletionConfig
         headers: dict,
     ) -> dict:
         translated_params: Final = self.map_extra_body_params(optional_params=optional_params, model=model)
-        prompt: Final = _transform_prompt(messages=messages)
+        prompt: Final = transform_prompt(messages=messages)
 
         data: Final = {
             "model": resolve_fireworks_resource_name(model),

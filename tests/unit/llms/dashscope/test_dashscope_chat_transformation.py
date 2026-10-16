@@ -128,9 +128,7 @@ class TestDashScopeConfig:
         ]
 
         # Call the _transform_messages method directly
-        transformed_messages = config._transform_messages(
-            messages=messages, model="qwen-turbo", is_async=False
-        )
+        transformed_messages = config.transform_messages(messages=messages, model="qwen-turbo", is_async=False)
 
         # Verify that the content is still in list format and has not been transformed to a string
         assert isinstance(transformed_messages[0]["content"], list)
@@ -200,3 +198,20 @@ class TestDashScopeConfig:
         )
 
         assert transformed_tools[0].get("cache_control") == {"type": "ephemeral"}
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://gateway.example.com/dashscope/compatible-mode/v1",
+        "https://gateway.example.com/dashscope/compatible-mode/v1/",
+        "https://gateway.example.com/dashscope/compatible-mode/v1/chat/completions/",
+    ],
+)
+def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str) -> None:
+    assert (
+        DashScopeChatConfig().get_complete_url(
+            api_base=api_base, api_key=None, model="qwen-plus", optional_params={}, litellm_params={}
+        )
+        == "https://gateway.example.com/dashscope/compatible-mode/v1/chat/completions"
+    )

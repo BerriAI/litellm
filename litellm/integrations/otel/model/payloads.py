@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 
 from typing_extensions import ReadOnly, TypedDict
 
-from litellm.integrations.otel.model.metadata import RequestContext, RequestIdentity
+from litellm.integrations.otel.model.metadata import RequestContext, RequestIdentity, allowlisted_metadata
 from litellm.integrations.otel.model.semconv import (
     GenAIOperation,
     GenAIOutputType,
@@ -30,6 +30,7 @@ from litellm.integrations.otel.model.utils import (
     as_str_mapping,
     as_str_tuple,
 )
+from litellm.integrations.otel.routing import RoutingAttributeValue, routing_decision_attributes
 
 # ``RequestIdentity`` and the request-metadata translation now live in
 # :mod:`metadata`; re-exported here so existing ``model.payloads`` imports keep
@@ -59,6 +60,8 @@ if TYPE_CHECKING:
         StandardLoggingGuardrailInformation,
         StandardLoggingPayload,
     )
+
+_EMPTY_METADATA: Final[Mapping[str, str]] = MappingProxyType({})
 
 
 # --- typed sub-structures ---------------------------------------------------- #
@@ -436,6 +439,8 @@ class LLMCallSpanData:
     trace: TraceControls = field(default_factory=TraceControls)
     session_id: str | None = None
     embedding_output: EmbeddingOutput | None = None
+    promoted_metadata: Mapping[str, str] = field(default_factory=lambda: _EMPTY_METADATA)
+    routing_attributes: Mapping[str, RoutingAttributeValue] = field(default_factory=lambda: MappingProxyType({}))
 
     @classmethod
     def from_standard_logging_payload(
@@ -447,12 +452,16 @@ class LLMCallSpanData:
         request_purpose: str | None = None,
         trace: TraceControls | None = None,
         session_id: str | None = None,
+        *,
+        metadata_keys: tuple[str, ...] = (),
     ) -> LLMCallSpanData:
         params: Final = cast(Mapping[str, object], payload.get("model_parameters") or {})
         # The single parse of the request's metadata — the request-vs-provider
         # model split, the response model, api base, and identity all come from
         # here rather than being re-derived from the raw payload dicts.
         context: Final = RequestContext.from_standard_logging_payload(payload)
+        metadata: Final = payload.get("metadata")
+        decision: Final = metadata["routing_decision"] if metadata and "routing_decision" in metadata else None
         # Normalize ``response`` to a dict once so the content/id reads below are a
         # plain ``.get`` — no repeated ``isinstance`` guards.
         raw_response: Final = payload.get("response")
@@ -483,6 +492,7 @@ class LLMCallSpanData:
             cost=LLMCost.from_breakdown(cast("Mapping[str, object] | None", payload.get("cost_breakdown"))),
             server=ServerInfo.from_api_base(context.api_base),
             identity=context.identity,
+            promoted_metadata=allowlisted_metadata(context.identity.metadata, metadata_keys),
             is_streaming=as_bool(payload.get("stream")),
             tools=_extract_tools(params),
             messages_in=_dicts(payload.get("messages")) if capture_content else (),
@@ -496,6 +506,7 @@ class LLMCallSpanData:
             trace=trace or TraceControls(),
             session_id=session_id or None,
             embedding_output=embedding_output if capture_content else None,
+            routing_attributes=routing_decision_attributes(decision),
         )
 
 

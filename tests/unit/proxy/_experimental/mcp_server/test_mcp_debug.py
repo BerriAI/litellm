@@ -51,10 +51,10 @@ class TestMask:
     def test_short_value_masked(self):
         # Short auth values must not be echoed verbatim in debug headers, even though
         # visible_prefix + visible_suffix would otherwise reveal the whole value.
-        masked = MCPDebug._mask("sk-1234")
-        assert "sk-1234" not in masked
+        masked = MCPDebug._mask("sk-9876")
+        assert "sk-9876" not in masked
         assert set(masked) == {"*"}
-        assert len(masked) == len("sk-1234")
+        assert len(masked) == len("sk-9876")
 
     def test_long_value_masked(self):
         result = MCPDebug._mask("Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9")
@@ -63,9 +63,9 @@ class TestMask:
         assert "****" in result or "**" in result
 
     def test_litellm_key_masked(self):
-        result = MCPDebug._mask("Bearer sk-1234567890abcdef")
+        result = MCPDebug._mask("Bearer sk-9876567890abcdef")
         assert result.startswith("Bearer")
-        assert "sk-1234567890abcdef" not in result
+        assert "sk-9876567890abcdef" not in result
 
 
 class TestBuildDebugHeaders:
@@ -87,11 +87,11 @@ class TestBuildDebugHeaders:
     def test_litellm_key_in_dedicated_header(self):
         headers = MCPDebug.build_debug_headers(
             inbound_headers={
-                "x-litellm-api-key": "Bearer sk-1234567890abcdef",
+                "x-litellm-api-key": "Bearer sk-9876567890abcdef",
                 "host": "localhost",
             },
             oauth2_headers=None,
-            litellm_api_key="Bearer sk-1234567890abcdef",
+            litellm_api_key="Bearer sk-9876567890abcdef",
             auth_resolution="no-auth",
             server_url="https://mcp.example.com",
             server_auth_type="oauth2",
@@ -103,10 +103,10 @@ class TestBuildDebugHeaders:
         """When Authorization and x-litellm-api-key carry the same token."""
         headers = MCPDebug.build_debug_headers(
             inbound_headers={
-                "authorization": "Bearer sk-1234567890abcdef",
+                "authorization": "Bearer sk-9876567890abcdef",
             },
-            oauth2_headers={"Authorization": "Bearer sk-1234567890abcdef"},
-            litellm_api_key="Bearer sk-1234567890abcdef",
+            oauth2_headers={"Authorization": "Bearer sk-9876567890abcdef"},
+            litellm_api_key="Bearer sk-9876567890abcdef",
             auth_resolution="oauth2-passthrough",
             server_url="https://mcp.example.com",
             server_auth_type="oauth2",

@@ -13,7 +13,7 @@ from typing import Final, TypeAlias
 
 import click
 import requests
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.proxy.common_utils.codex_model_catalog import (
     CODEX_BASE_INSTRUCTIONS_PATH,
@@ -22,8 +22,9 @@ from litellm.proxy.common_utils.codex_model_catalog import (
     CodexStockModel,
     codex_models_response_json,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 
-from .auth import CliContextObj, context_secret_vault, get_stored_api_key, login
+from .auth import cli_context_obj, context_secret_vault, get_stored_api_key, login
 from .claude_settings import ClaudeSettingsError, install_statusline_script
 from .cmd_quoting import quote_for_cmd
 from .pi import (
@@ -261,7 +262,7 @@ def agent_launch_args(command: str, base_url: str) -> list[str]:
     return builder(base_url) if builder else []
 
 
-class ListedModel(BaseModel):
+class ListedModel(LiteLLMBaseModel):
     """The fields of a /v1/models entry that an OpenCode or Codex model entry is built from."""
 
     id: str
@@ -270,7 +271,7 @@ class ListedModel(BaseModel):
     max_output_tokens: int | None = None
 
 
-class _ModelListing(BaseModel):
+class _ModelListing(LiteLLMBaseModel):
     data: tuple[ListedModel, ...]
 
 
@@ -318,29 +319,29 @@ def _fetch_model_listing(
     return listing.data
 
 
-class _OpenCodeLimit(BaseModel):
+class _OpenCodeLimit(LiteLLMBaseModel):
     context: int
     output: int
 
 
-class _OpenCodeModel(BaseModel):
+class _OpenCodeModel(LiteLLMBaseModel):
     name: str
     limit: _OpenCodeLimit | None = None
 
 
-class _OpenCodeProviderOptions(BaseModel):
+class _OpenCodeProviderOptions(LiteLLMBaseModel):
     baseURL: str
     apiKey: str
 
 
-class _OpenCodeProvider(BaseModel):
+class _OpenCodeProvider(LiteLLMBaseModel):
     npm: str
     name: str
     options: _OpenCodeProviderOptions
     models: Mapping[str, _OpenCodeModel]
 
 
-class _OpenCodeConfig(BaseModel):
+class _OpenCodeConfig(LiteLLMBaseModel):
     provider: Mapping[str, _OpenCodeProvider]
 
 
@@ -740,7 +741,7 @@ def _is_interactive() -> bool:
 
 
 def resolve_api_key(ctx: click.Context) -> str:
-    ctx_obj: Final[CliContextObj] = ctx.obj
+    ctx_obj: Final = cli_context_obj(ctx)
     base_url: Final = ctx_obj["base_url"]
     api_key = ctx_obj.get("api_key")
     if api_key:
@@ -764,7 +765,7 @@ _SKIP_VERIFY_HELP: Final = "Skip the pre-launch key check against the proxy."
 
 
 def _launch(ctx: click.Context, binary: str, args: Sequence[str], *, skip_verify: bool) -> None:
-    ctx_obj: Final[CliContextObj] = ctx.obj
+    ctx_obj: Final = cli_context_obj(ctx)
     base_url: Final = ctx_obj["base_url"]
     started_interactive: Final = _is_interactive()
     api_key: Final = resolve_api_key(ctx)

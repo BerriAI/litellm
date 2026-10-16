@@ -1,7 +1,9 @@
 from collections.abc import Mapping
 from typing import Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
+from pydantic import ConfigDict, Field, JsonValue, TypeAdapter
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 TIER_NAMES: Final[tuple[str, ...]] = ("SIMPLE", "MEDIUM", "COMPLEX", "REASONING")
 AUTOROUTER_MODEL_NAME: Final = "autorouter"
@@ -11,14 +13,14 @@ class ConfigGenerationError(Exception):
     """Raised when an AutorouteConfig references a model the discovery step didn't find."""
 
 
-class DiscoveredModel(BaseModel):
+class DiscoveredModel(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     name: str
     mode: str = "chat"
 
 
-class _RawModelListing(BaseModel):
+class _RawModelListing(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
 
     id: str
@@ -45,12 +47,12 @@ def embedding_models(models: tuple[DiscoveredModel, ...]) -> tuple[DiscoveredMod
     return tuple(m for m in models if m.mode == "embedding")
 
 
-class HeuristicClassifier(BaseModel):
+class HeuristicClassifier(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     kind: Literal["heuristic"] = "heuristic"
 
 
-class LLMClassifier(BaseModel):
+class LLMClassifier(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     kind: Literal["llm"] = "llm"
     model: str
@@ -60,12 +62,12 @@ class LLMClassifier(BaseModel):
 ClassifierChoice = HeuristicClassifier | LLMClassifier
 
 
-class NoSemanticMatching(BaseModel):
+class NoSemanticMatching(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     kind: Literal["none"] = "none"
 
 
-class KeywordTierRule(BaseModel):
+class KeywordTierRule(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     keywords: tuple[str, ...]
     tier: str
@@ -81,7 +83,7 @@ DEFAULT_KEYWORD_TIER_RULES: Final[tuple[KeywordTierRule, ...]] = (
 )
 
 
-class SemanticMatching(BaseModel):
+class SemanticMatching(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     kind: Literal["semantic"] = "semantic"
     embedding_model: str
@@ -92,7 +94,7 @@ class SemanticMatching(BaseModel):
 SemanticMatchingChoice = NoSemanticMatching | SemanticMatching
 
 
-class AutorouteConfig(BaseModel):
+class AutorouteConfig(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     base_url: str

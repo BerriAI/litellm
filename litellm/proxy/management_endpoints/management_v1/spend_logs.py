@@ -48,9 +48,9 @@ async def _spend_log_scope_clause(
     applies, so a dropdown can never offer a value from a row the caller could
     not open.
     """
-    from litellm.proxy.spend_tracking.spend_management_endpoints import _is_admin_view_safe, read_scope_sql
+    from litellm.proxy.spend_tracking.spend_management_endpoints import is_admin_view_safe, read_scope_sql
 
-    if _is_admin_view_safe(user_api_key_dict=user_api_key_dict):
+    if is_admin_view_safe(user_api_key_dict=user_api_key_dict):
         return None, ()
     scope: Final = await resolve_owned_read_scope(
         user_api_key_dict.user_id, partial(log_team_lookup, user_api_key_dict)
@@ -188,7 +188,7 @@ async def list_spend_log_end_users(
     Example curl:
     ```
     curl --location --globoff 'http://0.0.0.0:4000/management/v1/spend_logs/end_users?filter[startTime][gte]=2026-07-23T00:00:00Z&filter[startTime][lte]=2026-07-24T00:00:00Z&page_size=50&q=acme' \
-        --header 'Authorization: Bearer sk-1234'
+        --header "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     return await _list_spend_log_facet(

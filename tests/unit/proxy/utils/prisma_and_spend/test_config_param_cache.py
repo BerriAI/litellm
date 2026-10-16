@@ -12,8 +12,9 @@ Symbols pinned here:
 
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
-from typing import Any, List
+from typing import Any, Final, List
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -214,14 +215,23 @@ async def test_invalidate_config_param_evicts_from_cache(
 
 
 @pytest.mark.asyncio
-async def test_invalidate_config_param_propagates_cache_error(
-    _swap_config_cache: Any,
+async def test_invalidate_config_param_survives_a_cache_error(
+    _swap_config_cache: Any, caplog: pytest.LogCaptureFixture
 ) -> None:
     _swap_config_cache.async_delete_cache = AsyncMock(
         side_effect=ConnectionError("redis down")
     )
-    with pytest.raises(ConnectionError):
+    caplog.set_level(logging.WARNING, logger="LiteLLM Proxy")
+    utils_mod.verbose_proxy_logger.addHandler(caplog.handler)
+    try:
         await invalidate_config_param("p5")
+    finally:
+        utils_mod.verbose_proxy_logger.removeHandler(caplog.handler)
+    actual: Final = {
+        "delete_calls": _swap_config_cache.async_delete_cache.await_count,
+        "warned": "config cache eviction of p5 failed: redis down" in caplog.text,
+    }
+    assert actual == {"delete_calls": 1, "warned": True}
 
 
 @pytest.mark.asyncio
