@@ -339,6 +339,15 @@ class GenericGuardrailAPI(CustomGuardrail):
             headers.update(self.headers)
         return headers
 
+    @staticmethod
+    def _echo_sent_tool_calls(
+        guardrailed: GenericGuardrailAPIInputs, *, sent: GenericGuardrailAPIInputs
+    ) -> GenericGuardrailAPIInputs:
+        sent_tool_calls: Final = sent.get("tool_calls")
+        if not sent_tool_calls or "tool_calls" in guardrailed:
+            return guardrailed
+        return {**guardrailed, "tool_calls": sent_tool_calls}
+
     def _build_guardrail_return_inputs(
         self,
         *,
@@ -368,6 +377,8 @@ class GenericGuardrailAPI(CustomGuardrail):
         )
         if rows_to_write_back is not None:
             return_inputs["structured_messages"] = list(rows_to_write_back)
+        if guardrail_response.tool_calls:
+            return_inputs["tool_calls"] = list(guardrail_response.tool_calls)
         if guardrail_response.stream_holdback_chars is not None:
             return_inputs["stream_holdback_chars"] = guardrail_response.stream_holdback_chars
         return return_inputs
@@ -502,13 +513,16 @@ class GenericGuardrailAPI(CustomGuardrail):
                     blocked_content=True,
                 )
 
-            return self._build_guardrail_return_inputs(
-                texts=texts,
-                images=images,
-                tools=tools,
-                structured_messages=structured_messages,
-                shown_messages=guardrail_request.structured_messages,
-                guardrail_response=guardrail_response,
+            return self._echo_sent_tool_calls(
+                self._build_guardrail_return_inputs(
+                    texts=texts,
+                    images=images,
+                    tools=tools,
+                    structured_messages=structured_messages,
+                    shown_messages=guardrail_request.structured_messages,
+                    guardrail_response=guardrail_response,
+                ),
+                sent=inputs,
             )
 
         except GuardrailRaisedException:

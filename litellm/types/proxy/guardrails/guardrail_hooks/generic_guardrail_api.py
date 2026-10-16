@@ -4,6 +4,7 @@ from typing import Any, Final, Literal, cast  # noqa: TID251  # JSON chat rows h
 from pydantic import ConfigDict, Field
 from typing_extensions import TypedDict
 
+from litellm._logging import verbose_proxy_logger
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -168,6 +169,40 @@ def structured_messages_from_response(value: object) -> Sequence[AllMessageValue
     return cast("Sequence[AllMessageValues]", value)  # cast-ok: JSON rows checked for a role, the same trust texts get
 
 
+def _json_object(value: object) -> Mapping[str, object] | None:
+    if not isinstance(value, Mapping):
+        return None
+    return cast("Mapping[str, object]", value)  # cast-ok: isinstance leaves a Mapping's item types unknown
+
+
+def _json_field(container: object, key: str) -> object:
+    fields: Final = _json_object(container)
+    return fields.get(key) if fields is not None else None
+
+
+def _is_usable_tool_call(row: object) -> bool:
+    function: Final = _json_field(row, "function")
+    return isinstance(_json_field(function, "name"), str) and isinstance(_json_field(function, "arguments"), str)
+
+
+def _json_array(value: object) -> Sequence[object] | None:
+    if not isinstance(value, list):
+        return None
+    return cast("Sequence[object]", value)  # cast-ok: isinstance leaves a list's item type unknown
+
+
+def tool_calls_from_response(value: object) -> Sequence[ChatCompletionToolCallChunk] | None:
+    rows: Final = _json_array(value)
+    if rows is None:
+        return None
+    if not all(_is_usable_tool_call(row) for row in rows):
+        verbose_proxy_logger.warning(
+            "Generic Guardrail API returned tool calls missing a function name or arguments; keeping the ones already sent",
+        )
+        return None
+    return cast("Sequence[ChatCompletionToolCallChunk]", rows)  # cast-ok: every row checked above
+
+
 class GenericGuardrailAPIResponse:
     """Response model for the Generic Guardrail API"""
 
@@ -178,6 +213,7 @@ class GenericGuardrailAPIResponse:
     action: str
     blocked_reason: str | None
     stream_holdback_chars: list[int] | None
+    tool_calls: Sequence[ChatCompletionToolCallChunk] | None
 
     def __init__(
         self,
@@ -188,6 +224,7 @@ class GenericGuardrailAPIResponse:
         tools: list[GuardrailToolParam] | None = None,
         stream_holdback_chars: list[int] | None = None,
         structured_messages: Sequence[AllMessageValues] | None = None,
+        tool_calls: Sequence[ChatCompletionToolCallChunk] | None = None,
     ) -> None:
         self.action = action
         self.blocked_reason = blocked_reason
@@ -199,9 +236,11 @@ class GenericGuardrailAPIResponse:
         # framework must withhold from streaming emission until the next
         # processing round (word-boundary safety for text transformations).
         self.stream_holdback_chars = stream_holdback_chars
+        self.tool_calls = tool_calls
 
     @classmethod
     def from_dict(cls, data: dict) -> "GenericGuardrailAPIResponse":
+        fields: Final = _json_object(data) or {}
         raw_holdback: Final = data.get("stream_holdback_chars")
         stream_holdback_chars: Final = (
             [coerce_stream_holdback_value(value) for value in raw_holdback] if isinstance(raw_holdback, list) else None
@@ -213,5 +252,6 @@ class GenericGuardrailAPIResponse:
             images=data.get("images"),
             tools=data.get("tools"),
             stream_holdback_chars=stream_holdback_chars,
-            structured_messages=structured_messages_from_response(data.get("structured_messages")),
+            structured_messages=structured_messages_from_response(fields.get("structured_messages")),
+            tool_calls=tool_calls_from_response(fields.get("tool_calls")),
         )
