@@ -1,4 +1,6 @@
+import asyncio
 from collections.abc import Mapping
+from functools import partial
 from typing import Final
 
 import httpx
@@ -75,21 +77,24 @@ async def asystemone(
     assets: DecisionsAssetEntries | None = None,
     **kwargs: object,  # kwargs-ok: litellm_params forwarded by @client
 ) -> DecisionsResponse:
-    call: Final = _prepare_systemone_call(
-        model=model,
-        state=state,
-        questions=questions,
-        images=images,
-        assets=assets,
-        safety_identifier=safety_identifier,
-        audio=audio,
-        videos=videos,
-        api_key=api_key,
-        api_base=api_base,
-        timeout=timeout,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=extra_headers,
-        kwargs=kwargs,
+    call: Final = await asyncio.to_thread(
+        partial(
+            _prepare_systemone_call,
+            model=model,
+            state=state,
+            questions=questions,
+            images=images,
+            assets=assets,
+            safety_identifier=safety_identifier,
+            audio=audio,
+            videos=videos,
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            kwargs=kwargs,
+        )
     )
     return _systemone_response(await asend(call))
 
