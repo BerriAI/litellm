@@ -152,9 +152,13 @@ def _namespace_members(tools: Sequence[object]) -> Iterator[tuple[_Path, _Fields
         )
 
 
+def _function_mark(tool: _Fields) -> _Fields | None:
+    return _fields((_fields(tool.get("function")) or {}).get("cache_control"))
+
+
 def _member_mark(member: _Fields) -> object:
     own: Final = member.get("cache_control")
-    return own if own is not None else (_fields(member.get("function")) or {}).get("cache_control")
+    return own if own is not None else _function_mark(member)
 
 
 def _transform_sends_member(member: _Fields) -> bool:
@@ -530,12 +534,13 @@ def _on_wire(
 ) -> bool:
     """Claude sends a message-level mark on string content, or on list content only for a tool result, and none on
     a developer message, which reaches it as a system message without one; a tool's mark only when the route sends
-    it, and one under ``function`` only off Converse and when the tool carries none of its own; no tool_search call
-    nobody answered; and no mark on tool history the route sends as text."""
+    it, and one under ``function`` only off Converse, as an object, and when the tool carries none of its own; no
+    tool_search call nobody answered; and no mark on tool history the route sends as text."""
     if path[0] == "tools":
         tool: Final = _fields(tools[int(path[1])]) or {}
         return tool_mark_reaches_claude(tool, route) and (
-            len(path) == 2 or (route != "converse" and tool.get("cache_control") is None)
+            len(path) == 2
+            or (route != "converse" and tool.get("cache_control") is None and _function_mark(tool) is not None)
         )
     message: Final = _fields(messages[int(path[1])]) or {}
     if tool_history_as_text and _is_tool_history(message):

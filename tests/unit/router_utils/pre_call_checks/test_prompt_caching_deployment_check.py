@@ -19,6 +19,7 @@ from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import
 )
 from litellm.router_utils.prompt_caching_cache import PROMPT_CACHE_PIN_TTL_SECONDS, PromptCachingCache
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
 from litellm.utils import get_prompt_cache_min_tokens, is_prompt_caching_valid_prompt, token_counter
 
 MODEL_GROUP_ALIAS = "my-claude-group"
@@ -858,6 +859,48 @@ async def test_pin_survives_the_marked_message_coming_back_as_string_content():
     )
 
     assert filtered == [deployments[0]]
+
+
+def _lookup_call() -> ChatCompletionMessageToolCall:
+    return ChatCompletionMessageToolCall(
+        id="call_1", type="function", function=Function(name="lookup_clause", arguments="{}")
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "assistant_turn",
+    [
+        Message(content=None, tool_calls=[_lookup_call()]),
+        {"role": "assistant", "content": None, "tool_calls": [_lookup_call()]},
+        {"role": "assistant", "content": None, "tool_calls": "call_1"},
+        {"role": "assistant", "content": None, "tool_calls": {"id": "call_1"}},
+        {"role": "assistant", "content": None, "tool_calls": [1]},
+        {"role": "assistant", "content": None, "tool_calls": ["call_1"]},
+        {"role": "assistant", "content": None, "tool_calls": [None]},
+    ],
+    ids=["response_message", "response_tool_calls", "string", "object", "number_list", "string_list", "null_list"],
+)
+async def test_pin_holds_whatever_shape_the_assistant_tool_calls_come_back_in(assistant_turn: object):
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    deployments = _deployments(AUTO_CACHING_MODEL, AUTO_CACHING_MODEL)
+    turn_one = _turn(
+        {"role": "system", "content": [_marked(LONG_PROMPT)]},
+        {"role": "user", "content": "Find the termination clause."},
+    )
+    turn_two = cast(
+        list[AllMessageValues],
+        [*turn_one, assistant_turn, {"role": "tool", "tool_call_id": "call_1", "content": "Section 9."}],
+    )
+
+    await PromptCachingCache(cache=cache).async_add_model_id(model_id="dep-2", messages=turn_one, tools=None)
+
+    filtered = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS, healthy_deployments=deployments, messages=turn_two
+    )
+
+    assert filtered == [deployments[1]]
 
 
 @pytest.mark.asyncio

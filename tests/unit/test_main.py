@@ -1148,6 +1148,34 @@ def test_a_breakpoint_drop_params_drops_leaves_key_auto_caching_on(respx_mock: r
             {"type": "tool_search_tool_regex_20251119", "name": "tool_search", "cache_control": _FIVE_MINUTES},
             id="converse-tool-search-regex",
         ),
+        pytest.param(
+            "anthropic/claude-opus-5-5",
+            r"https://api\.anthropic\.com/v1/messages",
+            _CLAUDE_REPLY,
+            {"api_key": "fake"},
+            {
+                "type": "function",
+                "function": {"name": "spawn", "parameters": {"type": "object"}, "cache_control": "ephemeral"},
+            },
+            id="anthropic-string-function-mark",
+        ),
+        pytest.param(
+            "bedrock/invoke/us.anthropic.claude-opus-5-5",
+            _INVOKE_ROUTE,
+            _CLAUDE_REPLY,
+            _FAKE_AWS,
+            {
+                "type": "namespace",
+                "name": "agents",
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {"name": "spawn", "parameters": {"type": "object"}, "cache_control": "ephemeral"},
+                    }
+                ],
+            },
+            id="invoke-namespace-member-string-function-mark",
+        ),
     ],
 )
 def test_a_five_minute_mark_on_a_tool_the_route_sends_unmarked_leaves_the_system_breakpoint_free_to_take_the_hour(
@@ -1278,6 +1306,60 @@ def test_a_marked_past_server_tool_call_leaves_the_operator_system_point_in_plac
             {"location": "message", "index": -1},
         ],
         api_key="fake",
+    )
+
+    assert "cache_control" in json.dumps(json.loads(route.calls.last.request.content)["messages"][0])
+
+
+@pytest.mark.parametrize(
+    ("model", "api_base", "url"),
+    [
+        ("openrouter/anthropic/claude-opus-5-5", None, "https://openrouter.ai/api/v1/chat/completions"),
+        (
+            "databricks/databricks-claude-opus-4-5",
+            "https://adb-cache.cloud.databricks.com/serving-endpoints",
+            "https://adb-cache.cloud.databricks.com/serving-endpoints/chat/completions",
+        ),
+    ],
+    ids=["openrouter", "databricks"],
+)
+def test_a_breakpoint_on_a_tool_call_the_route_never_translates_leaves_the_operator_system_point_in_place(
+    respx_mock: respx.MockRouter,
+    openai_api_response: Mapping[str, object],
+    model: str,
+    api_base: str | None,
+    url: str,
+):
+    route: Final = respx_mock.post(url).respond(json=openai_api_response)
+
+    litellm.completion(
+        model=model,
+        messages=[
+            {"role": "system", "content": "sys"},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": str(index), "prompt_cache_breakpoint": _BREAKPOINT} for index in range(3)
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": "Looking it up.",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": "{}"},
+                        "prompt_cache_breakpoint": _BREAKPOINT,
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "Sunny"},
+            {"role": "user", "content": "Thanks"},
+        ],
+        cache_control_injection_points=[{"location": "message", "role": "system"}],
+        api_key="fake",
+        api_base=api_base,
     )
 
     assert "cache_control" in json.dumps(json.loads(route.calls.last.request.content)["messages"][0])

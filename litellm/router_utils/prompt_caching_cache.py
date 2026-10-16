@@ -44,7 +44,7 @@ _MARK_KEYS: Final = frozenset({"cache_control", "prompt_cache_breakpoint"})
 _ENVELOPE_SKIPPED_KEYS: Final = _MARK_KEYS | {"content"}
 _PREFIX_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, JsonValue], ...])
 _TOOLS_ADAPTER: Final = TypeAdapter(tuple[JsonValue, ...])
-_OBJECTS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+_JSON_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _PINS_ADAPTER: Final[TypeAdapter[tuple[JsonValue, ...] | None]] = TypeAdapter(tuple[JsonValue, ...] | None)
 
 
@@ -79,8 +79,12 @@ def _carries_cache_mark(block: Mapping[str, object]) -> bool:
 
 
 def _carries_marked_tool_call(message: Mapping[str, object]) -> bool:
-    tool_calls: Final = _OBJECTS_ADAPTER.validate_python(message.get("tool_calls") or ())
-    return any(_carries_cache_mark(call) for call in tool_calls)
+    tool_calls: Final = _JSON_ADAPTER.validate_python(
+        to_jsonable_python(message.get("tool_calls"), serialize_unknown=True, bytes_mode="base64")
+    )
+    return isinstance(tool_calls, list) and any(
+        isinstance(call, dict) and _carries_cache_mark(call) for call in tool_calls
+    )
 
 
 def _unmarked(block: JsonValue) -> JsonValue:
