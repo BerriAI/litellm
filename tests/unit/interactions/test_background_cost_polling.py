@@ -76,6 +76,7 @@ def _context(
     logging_obj: LitellmLogging,
     timeout_seconds: float = 1.0,
     store: Optional[InMemoryBackgroundSettlementStore] = None,
+    resumed: bool = False,
 ) -> BackgroundInteractionPollContext:
     return BackgroundInteractionPollContext(
         interaction_id="interactions/bg-abc",
@@ -85,6 +86,7 @@ def _context(
         max_interval_seconds=0.002,
         timeout_seconds=timeout_seconds,
         store=store if store is not None else InMemoryBackgroundSettlementStore(),
+        resumed=resumed,
     )
 
 
@@ -275,8 +277,9 @@ def _provider_error_response(status_code: int) -> httpx.Response:
         litellm.NotFoundError(message="interaction not found", model="gemini-2.5-flash", llm_provider="gemini"),
     ],
 )
+@pytest.mark.parametrize("resumed", [False, True])
 @pytest.mark.asyncio
-async def test_poller_stops_at_the_first_error_no_retry_changes_and_releases_the_reservation(error):
+async def test_poller_stops_at_the_first_error_no_retry_changes_and_releases_the_reservation(error, resumed):
     """
     The regression: a fetch the provider refuses for good, like an unknown id
     or a revoked key, was retried every interval until the poll timed out.
@@ -285,11 +288,46 @@ async def test_poller_stops_at_the_first_error_no_retry_changes_and_releases_the
     logging_obj = _logging_obj_with_reservation(reservation)
     fetch, calls = _fetch_sequence(error)
 
-    outcome = await poll_and_log_background_interaction_cost(_context(logging_obj), fetch_interaction=fetch)
+    outcome = await poll_and_log_background_interaction_cost(
+        _context(logging_obj, timeout_seconds=0.05, resumed=resumed), fetch_interaction=fetch
+    )
 
     assert outcome == "unsettled"
     assert len(calls) == 1
     assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_resumed_poll_the_provider_refuses_leaves_the_bill_to_the_replica_still_polling_it():
+    """
+    The regression: a replica that booted with credentials unable to read the
+    interaction settled it as unsettled on its first 404, and the replica that
+    created it, still polling, then found it settled and never billed it.
+    """
+    store = InMemoryBackgroundSettlementStore()
+    creator_logging_obj = _logging_obj()
+    resumed_fetched = asyncio.Event()
+
+    async def creator_fetch(context):
+        if resumed_fetched.is_set():
+            return _response("completed", with_usage=True)
+        return _response("in_progress", with_usage=False)
+
+    async def resumed_fetch(context):
+        resumed_fetched.set()
+        raise litellm.NotFoundError(message="interaction not found", model="gemini-2.5-flash", llm_provider="gemini")
+
+    creator_outcome, resumed_outcome = await asyncio.gather(
+        poll_and_log_background_interaction_cost(
+            _context(creator_logging_obj, store=store), fetch_interaction=creator_fetch
+        ),
+        poll_and_log_background_interaction_cost(
+            _context(_logging_obj(), store=store, resumed=True), fetch_interaction=resumed_fetch
+        ),
+    )
+
+    assert (creator_outcome, resumed_outcome) == ("billed", None)
+    assert creator_logging_obj.model_call_details["response_cost"] > 0
 
 
 @pytest.mark.parametrize(

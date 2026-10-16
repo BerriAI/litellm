@@ -375,6 +375,16 @@ async def _settled_elsewhere(context: BackgroundInteractionPollContext) -> bool:
         return False
 
 
+async def _settled_elsewhere_before_the_window_ends(
+    context: BackgroundInteractionPollContext, intervals: Iterator[float]
+) -> bool:
+    for interval in intervals:
+        await asyncio.sleep(interval)
+        if await _settled_elsewhere(context):
+            return True
+    return False
+
+
 async def _claim(context: BackgroundInteractionPollContext) -> bool | None:
     """
     Exactly-once gate between every settler of one interaction, on every
@@ -431,17 +441,28 @@ async def poll_and_log_background_interaction_cost(
 ) -> SettlementOutcome | None:
     last_response: InteractionsAPIResponse | None = None  # rebind-ok: the give-up path settles from the last poll
     await asyncio.sleep(context.start_delay_seconds)
-    for interval in _poll_intervals(
+    intervals: Final = _poll_intervals(
         initial=context.initial_interval_seconds,
         maximum=context.max_interval_seconds,
         timeout=context.timeout_seconds,
-    ):
+    )
+    for interval in intervals:
         await asyncio.sleep(interval)
         if await _settled_elsewhere(context):
             return None
         try:
             response = await fetch_interaction(context)
         except Exception as e:  # noqa: BLE001  # any fetch error must not kill the billing poll loop
+            if context.resumed and _is_permanent_fetch_error(e):
+                verbose_logger.warning(
+                    "Stopped fetching resumed background interaction %s: the provider answered %s, so this "
+                    "process cannot read it and leaves it to the replica that created it until the poll window ends",
+                    context.interaction_id,
+                    e,
+                )
+                if await _settled_elsewhere_before_the_window_ends(context, intervals):
+                    return None
+                break
             if _is_permanent_fetch_error(e):
                 verbose_logger.warning(
                     "Stopped cost polling for background interaction %s early: the provider answered %s, "
