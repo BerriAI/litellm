@@ -127,6 +127,14 @@ def test_initialize_guardrail_ok(mock_mgr):
     mock_mgr.add_litellm_callback.assert_called_once_with(instance)
 
 
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.logging_callback_manager")
+def test_initialize_guardrail_empty_sample_rate_means_unset(mock_mgr):
+    lp = _make_litellm_params()
+    g = _make_guardrail_dict(sample_rate="")
+    instance = initialize_guardrail(lp, g)
+    assert instance.sample_rate == 1.0
+
+
 def test_initialize_guardrail_missing_judge_model():
     lp = _make_litellm_params()
     g = _make_guardrail_dict(judge_model=None)

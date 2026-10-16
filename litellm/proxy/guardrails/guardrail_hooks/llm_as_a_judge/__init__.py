@@ -445,7 +445,7 @@ def initialize_guardrail(
     mode: Final[JudgeModeParam] = _get_litellm_param(litellm_params, guardrail, "mode", None)
 
     sample_rate_param: Final = _get_litellm_param(litellm_params, guardrail, "sample_rate", None)
-    sample_rate: Final = float(sample_rate_param) if sample_rate_param is not None else 1.0
+    sample_rate: Final = float(sample_rate_param) if sample_rate_param not in (None, "") else 1.0
     max_input_chars_param: Final = _get_litellm_param(litellm_params, guardrail, "max_input_chars", None)
     max_input_chars: Final = int(max_input_chars_param) if max_input_chars_param is not None else None
 
