@@ -19,7 +19,7 @@ from types import MappingProxyType, TracebackType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 
 from httpx import Response
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, JsonValue, TypeAdapter
 
 import litellm
 from litellm._internal_context import post_response_phase
@@ -536,6 +536,10 @@ def _resolve_mantle_region_for_cost(
     return resolve_mantle_region(litellm_params or MappingProxyType({}))
 
 
+_PER_CALL_LITELLM_PARAM_DICTS: Final = frozenset({"metadata", "litellm_metadata"})
+_LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
+
+
 def _provider_response_id(source: object) -> str | None:
     candidate: Final = source.get("id") if isinstance(source, dict) else getattr(source, "id", None)
     return candidate if isinstance(candidate, str) and candidate else None
@@ -770,6 +774,36 @@ class Logging(LiteLLMLoggingBaseClass):
         self._async_success_scheduled: bool = False
         self.on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
+
+    def copy_for_new_call(self, litellm_call_id: str, start_time: datetime.datetime) -> "Logging":
+        """One turn of a long-lived connection: the connection's deployment, key and metadata under its own call id,
+        start time and chunk buffers, so the turn logs and bills as a request of its own."""
+        connection_params: Final = _LITELLM_PARAMS.validate_python(
+            self.litellm_params  # pyright: ignore[reportUnknownMemberType]  # Logging.litellm_params is untyped
+        )
+        litellm_params: Final[dict[str, object]] = {
+            **connection_params,
+            **{
+                key: _LITELLM_PARAMS.validate_python(value)
+                for key, value in connection_params.items()
+                if key in _PER_CALL_LITELLM_PARAM_DICTS and isinstance(value, dict)
+            },
+            "litellm_call_id": litellm_call_id,
+        }
+        new_call: Final = copy.copy(self)
+        new_call.litellm_call_id = litellm_call_id
+        new_call.start_time = start_time
+        new_call.litellm_params = litellm_params
+        new_call.model_call_details = {
+            **self.model_call_details,
+            "litellm_call_id": litellm_call_id,
+            "start_time": start_time,
+            "first_api_call_start_time": None,
+            "litellm_params": litellm_params,
+        }
+        new_call.streaming_chunks = []
+        new_call.sync_streaming_chunks = []
+        return new_call
 
     def set_response_timing_metrics(self, timing_metrics: Mapping[str, float]) -> None:
         """Keep ``_response_ms`` / ``litellm_overhead_time_ms`` for a result that has no ``_hidden_params``."""
@@ -2384,19 +2418,8 @@ class Logging(LiteLLMLoggingBaseClass):
             )
 
         elif self.call_type == CallTypes.aresponses_websocket.value and isinstance(result, list):  # pyright: ignore[reportUnknownMemberType]  # Logging.call_type is untyped
-            combined_ws_usage: Final = (
-                ResponsesWebSocketTokenUsageProcessor.collect_and_combine_usage_from_responses_ws_results(
-                    results=result  # pyright: ignore[reportUnknownArgumentType]  # raw event dicts from the WS stream
-                )
-            )
-            ws_tier_partition: Final = ResponsesWebSocketTokenUsageProcessor.partition_results_by_service_tier(
+            logging_result = ResponsesWebSocketTokenUsageProcessor.create_logging_object(
                 results=result  # pyright: ignore[reportUnknownArgumentType]  # raw event dicts from the WS stream
-            )
-            ws_service_tier: Final = next(iter(ws_tier_partition)) if len(ws_tier_partition) == 1 else None
-            logging_result = LiteLLMRealtimeStreamLoggingObject(
-                usage=combined_ws_usage,
-                results=result,  # pyright: ignore[reportUnknownArgumentType]  # raw event dicts from the WS stream
-                service_tier=ws_service_tier,
             )
 
         elif self.relays_llm_passthrough and isinstance(result, Response):
@@ -4507,6 +4530,32 @@ def get_masked_values(
 _get_masked_values = get_masked_values
 
 
+@lru_cache(maxsize=1)
+def start_sentry(dsn: str) -> None:
+    try:
+        import sentry_sdk
+    except ImportError:
+        print_verbose("Package 'sentry_sdk' is missing. Installing it...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "sentry_sdk"])
+        import sentry_sdk
+    from litellm.litellm_core_utils.sentry_scrubbing import build_sentry_init_options
+
+    sentry_sdk.init(**build_sentry_init_options({**os.environ, "SENTRY_DSN": dsn}))
+
+
+def initialize_sentry() -> None:
+    global sentry_sdk_instance, capture_exception, add_breadcrumb
+    dsn: Final = os.environ.get("SENTRY_DSN")
+    if not dsn:
+        return
+    start_sentry(dsn)
+    import sentry_sdk
+
+    sentry_sdk_instance = sentry_sdk  # rebind-ok: process-wide Sentry SDK handle read by every logging path
+    capture_exception = sentry_sdk.capture_exception  # rebind-ok: process-wide Sentry SDK handle
+    add_breadcrumb = sentry_sdk.add_breadcrumb  # rebind-ok: process-wide Sentry SDK handle
+
+
 def set_callbacks(
     callback_list: Iterable[str | Callable[..., object] | CustomLogger],
     function_id: str | None = None,
@@ -4515,9 +4564,6 @@ def set_callbacks(
     Globally sets the callback client
     """
     global \
-        sentry_sdk_instance, \
-        capture_exception, \
-        add_breadcrumb, \
         slack_app, \
         alerts_channel, \
         traceloopLogger, \
@@ -4541,18 +4587,7 @@ def set_callbacks(
     try:
         for callback in callback_list:
             if callback == "sentry":
-                try:
-                    import sentry_sdk
-                except ImportError:
-                    print_verbose("Package 'sentry_sdk' is missing. Installing it...")
-                    subprocess.check_call([sys.executable, "-m", "pip", "install", "sentry_sdk"])
-                    import sentry_sdk
-                from litellm.litellm_core_utils.sentry_scrubbing import build_sentry_init_options
-
-                sentry_sdk_instance = sentry_sdk
-                sentry_sdk_instance.init(**build_sentry_init_options(os.environ))
-                capture_exception = sentry_sdk_instance.capture_exception
-                add_breadcrumb = sentry_sdk_instance.add_breadcrumb
+                initialize_sentry()
             elif callback == "slack":
                 try:
                     from slack_bolt import App
@@ -6714,7 +6749,7 @@ def get_standard_logging_object_payload(
             else raw_usage_dict
         )
 
-        id = response_obj.get("id", kwargs.get("litellm_call_id"))
+        id = response_obj.get("id") or kwargs.get("litellm_call_id")
 
         _model_id: Final = metadata.get("model_info", {}).get("id", "")
         _model_group: Final = metadata.get("model_group", "")

@@ -10,7 +10,6 @@ from __future__ import annotations
 import hashlib
 import itertools
 import json
-import socket
 import threading
 import uuid
 from collections.abc import Callable, Iterator
@@ -30,6 +29,7 @@ from integration._support.client import Gateway, eventually, gateway_from_enviro
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, WorkerHealthcheck, owned_proxy, owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
+from integration._support.ports import allocate_port
 
 V3_KEY: Final = "sk_agt_synthetic_integration_key"
 V1_KEY: Final = "synthetic-v1-collection-key"
@@ -426,10 +426,7 @@ class Rig:
 @pytest.fixture(scope="module")
 def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
     root: Final = tmp_path_factory.mktemp("straiker")
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        port: Final = reserve.getsockname()[1]
-    sink: Final = Sink(port)
+    sink: Final = Sink(allocate_port())
     sink.start()
     with gateway_from_environment() as gateway, wire_server(_provider) as provider:
         config: Final = _rig_config(sink.url, root)
