@@ -4458,9 +4458,9 @@ class TestAddMCPServerAtomicity:
 
 class TestIdJagRegistrationWarnsAboutTheSSOGap:
     """An `oauth2_id_jag` server only ever works when the login path captures an IdP identity
-    assertion, and only the generic OIDC arm does. Registering one under Google or Microsoft
-    succeeds and then fails for every user on every call, so the mismatch has to be said at
-    registration time, while the admin is still looking at the configuration."""
+    assertion, and only the OIDC logins (Google, Microsoft, generic) do. Registering one under SAML
+    or with no SSO succeeds and then fails for every user on every call, so the mismatch has to be
+    said at registration time, while the admin is still looking at the configuration."""
 
     @staticmethod
     def _clear_sso_env(monkeypatch):
@@ -4530,8 +4530,6 @@ class TestIdJagRegistrationWarnsAboutTheSSOGap:
     @pytest.mark.parametrize(
         "provider_env, expected_fragment",
         [
-            ({"GOOGLE_CLIENT_ID": "cid"}, "google"),
-            ({"MICROSOFT_CLIENT_ID": "cid"}, "microsoft"),
             ({"SAML_IDP_METADATA_URL": "https://idp.example.com/metadata"}, "saml"),
             ({}, "no SSO provider is configured"),
         ],
@@ -4546,8 +4544,9 @@ class TestIdJagRegistrationWarnsAboutTheSSOGap:
         assert "ema-1" in str(warnings[0])
 
     @pytest.mark.asyncio
-    async def test_create_is_silent_under_generic_oidc(self, monkeypatch, caplog):
-        await self._run_create(monkeypatch, {"GENERIC_CLIENT_ID": "cid"}, MCPAuth.oauth2_id_jag, caplog)
+    @pytest.mark.parametrize("client_id_env", ["GOOGLE_CLIENT_ID", "MICROSOFT_CLIENT_ID", "GENERIC_CLIENT_ID"])
+    async def test_create_is_silent_under_oidc_logins(self, monkeypatch, caplog, client_id_env):
+        await self._run_create(monkeypatch, {client_id_env: "cid"}, MCPAuth.oauth2_id_jag, caplog)
         assert self._id_jag_warnings(caplog) == []
 
     @pytest.mark.asyncio
@@ -4565,7 +4564,7 @@ class TestIdJagRegistrationWarnsAboutTheSSOGap:
         )
 
         self._clear_sso_env(monkeypatch)
-        monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")
+        monkeypatch.setenv("SAML_IDP_METADATA_URL", "https://idp.example.com/metadata")
 
         mock_manager = MagicMock()
         mock_manager.update_server = AsyncMock()
@@ -4602,7 +4601,7 @@ class TestIdJagRegistrationWarnsAboutTheSSOGap:
 
         warnings = self._id_jag_warnings(caplog)
         assert len(warnings) == 1
-        assert "google" in str(warnings[0])
+        assert "saml" in str(warnings[0])
 
 
 class TestHealthCheckServers:

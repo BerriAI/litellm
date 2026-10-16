@@ -19,6 +19,9 @@ from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (
     build_token_endpoint_client_auth,
     normalize_token_endpoint_auth_method,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
+    GOOGLE_REFRESH_TOKEN_PARAMS,
+)
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.middleware.per_request_root_path_middleware import get_request_root_path
 
@@ -59,7 +62,7 @@ _DEFAULT_NATIVE_REDIRECT_URIS: Final[list[str]] = [
 ]
 
 _GOOGLE_AUTHORIZATION_HOSTS: Final = frozenset({"accounts.google.com"})
-_GOOGLE_OFFLINE_ACCESS_PARAMS: Final = MappingProxyType({"access_type": "offline", "prompt": "consent"})
+_GOOGLE_OFFLINE_ACCESS_PARAMS: Final = GOOGLE_REFRESH_TOKEN_PARAMS
 
 _warned_invalid_proxy_base_url: str | None = None
 

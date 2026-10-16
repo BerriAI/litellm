@@ -12,15 +12,18 @@ not the size of the user table) and single-flighted per user through the same ``
 the ``authorization_code`` arm uses, because an IdP that rotates refresh tokens treats two concurrent
 redemptions of one token as replay and can revoke the whole grant chain.
 
-The refresh is redeemed against the generic-OIDC client the login itself used
-(``GENERIC_TOKEN_ENDPOINT`` / ``GENERIC_CLIENT_ID`` / ``GENERIC_CLIENT_SECRET``, which the proxy
-reconciles from the stored SSO row into the process environment at startup), authenticated the way
-that login authenticated: the non-PKCE path always sends HTTP Basic, while the PKCE path sends the
-credentials in the body when ``GENERIC_INCLUDE_CLIENT_ID`` is set, and an IdP application may accept
-only one of the two. An assertion can only exist if that client minted it, so no other client could
-redeem its refresh token, and no other method is known to be accepted. A deployment whose
-``GENERIC_SCOPE`` omits ``offline_access`` captures no refresh token at all, which is why that miss
-logs the scope by name rather than failing silently.
+The refresh is redeemed against the SSO client the login itself used, resolved in the same order
+the login callback dispatches (Google, then Microsoft, then generic OIDC, from the client ids the
+proxy reconciles from the stored SSO row into the process environment at startup), authenticated the
+way that login authenticated: the Google and Microsoft logins and the non-PKCE generic path send
+HTTP Basic, while the PKCE generic path sends the credentials in the body when
+``GENERIC_INCLUDE_CLIENT_ID`` is set, and an IdP application may accept only one of the two. An
+assertion can only exist if that client minted it, so no other client could redeem its refresh
+token, and no other method is known to be accepted. A login whose authorization request never asked
+for a refresh token captures none at all: the Google and Microsoft logins ask (``access_type=offline``,
+``offline_access``) only while an ``oauth2_id_jag`` server exists, and generic OIDC asks only when
+``GENERIC_SCOPE`` carries ``offline_access``, which is why that miss names the cause rather than
+failing silently.
 
 Failures are values internally (``Result[_, RefreshFailure]``). At the store boundary they collapse
 onto the protocol's existing two-outcome contract: a refusal returns the expired assertion unchanged
@@ -92,6 +95,10 @@ _SINGLE_FLIGHT_KEY: Final = "sso_identity_assertion"
 # Renew this far ahead of ``exp`` so a token that would die between resolution and the second leg of
 # the exchange is replaced first. Matches the sibling per-user token store's skew.
 _DEFAULT_EXPIRY_SKEW_SECONDS: Final = 60.0
+# Where fastapi-sso's Google login redeemed the authorization code, read from Google's discovery
+# document; Microsoft's mirrors ``CustomMicrosoftSSO``, override first, tenant template second.
+_GOOGLE_TOKEN_ENDPOINT: Final = "https://oauth2.googleapis.com/token"
+_MICROSOFT_TOKEN_ENDPOINT_TEMPLATE: Final = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
 
 
 class AssertionRead(Protocol):
@@ -122,7 +129,7 @@ class FormPost(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class SSOClientConfig:
-    """The generic-OIDC client credentials a refresh_token grant has to authenticate as, and how."""
+    """The SSO client credentials a refresh_token grant has to authenticate as, and how."""
 
     token_endpoint: str
     client_id: str
@@ -131,32 +138,58 @@ class SSOClientConfig:
 
 
 def sso_client_config(env: Mapping[str, str]) -> SSOClientConfig | None:
-    """The configured generic-OIDC client, or ``None`` when the deployment has none.
+    """The configured SSO client the login used, or ``None`` when the deployment has none.
 
-    Read from the process environment because that is where the login path reads it
-    (``_setup_generic_sso_env_vars``) and where the proxy materializes the stored ``sso_config`` row
-    at startup, so this resolves to the same client that minted the assertion. ``None`` is an
-    ordinary state, not an error: a deployment signing in through a provider that captures no
+    Read from the process environment because that is where the login callback reads it and where
+    the proxy materializes the stored ``sso_config`` row at startup, and resolved in the callback's
+    own order (``GOOGLE_CLIENT_ID``, then ``MICROSOFT_CLIENT_ID``, then ``GENERIC_CLIENT_ID``, each
+    selecting its branch when set at all), so this is the same client that minted the assertion: a
+    deployment carrying both a Google and a generic client signed the user in through Google. ``None``
+    is an ordinary state, not an error: a deployment signing in through a provider that captures no
     assertion has nothing here to renew, and a client with no secret is not a confidential client
     that could redeem one.
 
-    ``auth_method`` is derived from the same ``GENERIC_INCLUDE_CLIENT_ID`` the login reads, because
-    the two login paths do not agree: the non-PKCE path always authenticates with HTTP Basic, while
-    the PKCE path puts the credentials in the body when that flag is set. Both capture assertions, so
-    a constant here would authenticate the renewal differently from the sign-in that produced the
+    ``auth_method`` follows how each login authenticated at the token endpoint. The Google and
+    Microsoft logins (fastapi-sso) and the non-PKCE generic path send HTTP Basic, while the PKCE
+    generic path puts the credentials in the body when ``GENERIC_INCLUDE_CLIENT_ID`` is set. A
+    constant here would authenticate the renewal differently from the sign-in that produced the
     refresh token and 401 against an IdP application registered for only one of the two.
     """
-    token_endpoint: Final = env.get("GENERIC_TOKEN_ENDPOINT")
-    client_id: Final = env.get("GENERIC_CLIENT_ID")
-    client_secret: Final = env.get("GENERIC_CLIENT_SECRET")
+    if env.get("GOOGLE_CLIENT_ID") is not None:
+        return _confidential_client(
+            _GOOGLE_TOKEN_ENDPOINT, env.get("GOOGLE_CLIENT_ID"), env.get("GOOGLE_CLIENT_SECRET"), "client_secret_basic"
+        )
+    if env.get("MICROSOFT_CLIENT_ID") is not None:
+        tenant: Final = env.get("MICROSOFT_TENANT")
+        return _confidential_client(
+            env.get("MICROSOFT_TOKEN_ENDPOINT")
+            or (_MICROSOFT_TOKEN_ENDPOINT_TEMPLATE.format(tenant=tenant) if tenant else None),
+            env.get("MICROSOFT_CLIENT_ID"),
+            env.get("MICROSOFT_CLIENT_SECRET"),
+            "client_secret_basic",
+        )
+    includes_client_id: Final = env.get("GENERIC_INCLUDE_CLIENT_ID", "false").lower() == "true"
+    return _confidential_client(
+        env.get("GENERIC_TOKEN_ENDPOINT"),
+        env.get("GENERIC_CLIENT_ID"),
+        env.get("GENERIC_CLIENT_SECRET"),
+        "client_secret_post" if includes_client_id else "client_secret_basic",
+    )
+
+
+def _confidential_client(
+    token_endpoint: str | None,
+    client_id: str | None,
+    client_secret: str | None,
+    auth_method: MCPTokenEndpointAuthMethod,
+) -> SSOClientConfig | None:
     if not token_endpoint or not client_id or not client_secret:
         return None
-    includes_client_id: Final = env.get("GENERIC_INCLUDE_CLIENT_ID", "false").lower() == "true"
     return SSOClientConfig(
         token_endpoint=token_endpoint,
         client_id=client_id,
         client_secret=SecretStr(client_secret),
-        auth_method="client_secret_post" if includes_client_id else "client_secret_basic",
+        auth_method=auth_method,
     )
 
 
@@ -263,8 +296,9 @@ class SSOAssertionRefresher:
         if assertion.refresh_token is None:
             verbose_proxy_logger.warning(
                 "ID-JAG: the stored IdP identity assertion for user_id=%s has expired and no refresh token was "
-                "captured with it, so it cannot be renewed without another interactive sign-in. Add "
-                "'offline_access' to GENERIC_SCOPE so the SSO login captures one.",
+                "captured with it, so it cannot be renewed without another interactive sign-in. Google and Microsoft "
+                "logins ask for one once an oauth2_id_jag MCP server is registered, so a user who signed in before "
+                "that has to sign in again. Generic OIDC asks only with 'offline_access' in GENERIC_SCOPE.",
                 user_id,
             )
             return Error(RefreshFailure.of_rejected("no refresh token was captured at sign-in"))
@@ -272,11 +306,12 @@ class SSOAssertionRefresher:
         if config is None:
             verbose_proxy_logger.warning(
                 "ID-JAG: the stored IdP identity assertion for user_id=%s has expired and cannot be renewed "
-                "because the generic SSO client is not configured (GENERIC_TOKEN_ENDPOINT, GENERIC_CLIENT_ID, "
-                "GENERIC_CLIENT_SECRET).",
+                "because the active SSO provider has no confidential client configured (GOOGLE_CLIENT_ID and "
+                "GOOGLE_CLIENT_SECRET, MICROSOFT_CLIENT_ID with MICROSOFT_CLIENT_SECRET and MICROSOFT_TENANT, or "
+                "GENERIC_TOKEN_ENDPOINT with GENERIC_CLIENT_ID and GENERIC_CLIENT_SECRET).",
                 user_id,
             )
-            return Error(RefreshFailure.of_rejected("the generic SSO client is not configured"))
+            return Error(RefreshFailure.of_rejected("the SSO client is not configured"))
 
         carried_refresh_token: Final = assertion.refresh_token.get_secret_value()
         # Whichever method the SSO login used for this client, since that is the one the IdP

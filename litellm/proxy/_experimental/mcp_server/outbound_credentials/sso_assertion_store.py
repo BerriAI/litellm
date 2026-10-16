@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
 import jwt
@@ -34,6 +35,13 @@ if TYPE_CHECKING:
     from prisma.models import LiteLLM_SSOIdentityAssertion
 
     from litellm.proxy.utils import PrismaClient
+
+"""What a Google or Microsoft authorization request has to carry for the IdP to issue a refresh token
+beside the id_token. Asked for only while an ``oauth2_id_jag`` server exists to renew an assertion for, so
+a deployment without one sees no extra consent."""
+MICROSOFT_REFRESH_TOKEN_SCOPE: Final = "offline_access"
+GOOGLE_REFRESH_TOKEN_PARAMS: Final = MappingProxyType({"access_type": "offline", "prompt": "consent"})
+
 
 _ASSERTION_DECRYPT_LOG_KEY: Final = "sso_identity_assertion"
 _STR_ADAPTER: Final[TypeAdapter[str]] = TypeAdapter(str)
