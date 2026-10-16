@@ -12,6 +12,8 @@ from litellm.types.utils import TokenCountResponse
 CANNOT_COUNT_MODEL_STATUSES: Final = frozenset({400, 404})
 MODEL_UNAVAILABLE_STATUS: Final = 404
 UNAVAILABLE_FALLBACK_TTL_SECONDS: Final = 3600
+TOKENIZER_LOAD_WAIT_SECONDS: Final = 5.0
+TOKENIZER_LOAD_RETRY_SECONDS: Final = 60.0
 
 
 class UnavailableFallbacks(Protocol):

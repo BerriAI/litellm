@@ -4,6 +4,8 @@
 
 import asyncio
 import json
+import logging
+import threading
 import time
 from functools import partial
 from typing import Final, NoReturn
@@ -29,6 +31,7 @@ from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ProxyException, TokenCountRequest
 from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted
 from litellm.proxy.anthropic_endpoints.endpoints import (
@@ -1566,6 +1569,128 @@ async def test_framed_deployment_whose_custom_tokenizer_cannot_load_answers_the_
         )
 
     assert (raised.value.code, raised.value.message) == ("400", "scripted 400 for kimi")
+
+
+def _framed_kimi_with_custom_tokenizer(monkeypatch: pytest.MonkeyPatch, identifier: str) -> None:
+    counter: Final = _ScriptedCounter({"us.moonshotai.kimi-k3": _provider_reply("kimi", status_code=400)})
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "kimi",
+                    "litellm_params": {"model": "bedrock/us.moonshotai.kimi-k3"},
+                    "model_info": {
+                        "custom_tokenizer": {"identifier": identifier, "revision": "main", "auth_token": None}
+                    },
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "_get_provider_token_counter", lambda deployment, model: (counter, model, "bedrock")
+    )
+
+
+async def _kimi_count_status() -> str:
+    try:
+        response: Final = await token_counter(
+            request=TokenCountRequest(model="kimi", messages=[{"role": "user", "content": "What is new?"}]),
+            call_endpoint=True,
+        )
+    except ProxyException as e:
+        return e.code
+    return response.count_source or ""
+
+
+@pytest.mark.asyncio
+async def test_hanging_tokenizer_download_answers_the_provider_error_after_the_wait_with_one_download_per_worker(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _framed_kimi_with_custom_tokenizer(monkeypatch, "lit-tests/hanging-tokenizer")
+    hub_released: Final = threading.Event()
+    downloads: Final[list[str]] = []
+
+    def hanging_download(model: str, custom_tokenizer: object = None) -> NoReturn:
+        downloads.append(model)
+        hub_released.wait(10)
+        raise OSError("hub unreachable")
+
+    monkeypatch.setattr(litellm.utils, "select_tokenizer", hanging_download)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_WAIT_SECONDS", 0.5)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_RETRY_SECONDS", 1e9)
+    try:
+        started: Final = time.monotonic()
+        burst: Final = await asyncio.wait_for(asyncio.gather(*(_kimi_count_status() for _ in range(60))), 5)
+        burst_seconds: Final = time.monotonic() - started
+        later_started: Final = time.monotonic()
+        later: Final = await asyncio.wait_for(_kimi_count_status(), 5)
+        later_seconds: Final = time.monotonic() - later_started
+    finally:
+        hub_released.set()
+
+    assert set(burst) == {"400"} and later == "400"
+    assert 0.5 <= burst_seconds < 3
+    assert later_seconds < 0.4
+    assert len(downloads) == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_tokenizer_download_is_reused_until_the_retry_window_passes(monkeypatch: pytest.MonkeyPatch):
+    _framed_kimi_with_custom_tokenizer(monkeypatch, "lit-tests/flaky-tokenizer")
+    real_select_tokenizer: Final = litellm.utils.select_tokenizer
+    downloads: Final[list[str]] = []
+
+    def hub_down_once(model: str, custom_tokenizer: object = None):
+        downloads.append(model)
+        if len(downloads) == 1:
+            raise OSError("hub unreachable")
+        return real_select_tokenizer(model="gpt-5.4-mini")
+
+    monkeypatch.setattr(litellm.utils, "select_tokenizer", hub_down_once)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_RETRY_SECONDS", 1e9)
+    within_window: Final = [await _kimi_count_status() for _ in range(3)]
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_RETRY_SECONDS", 1e-9)
+    after_window: Final = await _kimi_count_status()
+
+    assert within_window == ["400", "400", "400"]
+    assert after_window == "local_estimate"
+    assert len(downloads) == 2
+
+
+@pytest.mark.asyncio
+async def test_swallowed_estimate_error_is_logged_by_type_without_the_request_content(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    counter: Final = _ScriptedCounter({"us.moonshotai.kimi-k3": _provider_reply("kimi", status_code=400)})
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(model_list=[{"model_name": "kimi", "litellm_params": {"model": "bedrock/us.moonshotai.kimi-k3"}}]),
+    )
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "_get_provider_token_counter", lambda deployment, model: (counter, model, "bedrock")
+    )
+    verbose_proxy_logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name), pytest.raises(ProxyException):
+            await token_counter(
+                request=TokenCountRequest(
+                    model="kimi",
+                    messages=[
+                        {"role": "user", "content": "hi"},
+                        {"role": "assistant", "content": "ok", "tool_calls": "private-marker-in-the-prompt"},
+                    ],
+                ),
+                call_endpoint=True,
+            )
+    finally:
+        verbose_proxy_logger.removeHandler(caplog.handler)
+
+    warnings: Final = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("count error 400" in message and "ValueError" in message for message in warnings)
+    assert not any("private-marker-in-the-prompt" in message for message in warnings)
 
 
 @pytest.mark.asyncio

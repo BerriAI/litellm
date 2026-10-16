@@ -145,6 +145,8 @@ from litellm.proxy.common_utils.realtime_utils import (  # noqa: F401, RUF100  #
     realtime_request_body,
 )
 from litellm.proxy.common_utils.token_count_settings import (
+    TOKENIZER_LOAD_RETRY_SECONDS,
+    TOKENIZER_LOAD_WAIT_SECONDS,
     UNAVAILABLE_TOKEN_COUNT_FALLBACKS,
     ProviderCountFailure,
     TokenCountSettings,
@@ -306,6 +308,7 @@ from litellm.constants import (
     CLI_SSO_SESSION_TTL_SECONDS,
     DAYS_IN_A_MONTH,
     DEFAULT_HEALTH_CHECK_INTERVAL,
+    DEFAULT_MAX_LRU_CACHE_SIZE,
     DEFAULT_MODEL_CREATED_AT_TIME,
     GLOBAL_PROXY_SPEND_CACHE_KEY,
     LITELLM_PROXY_ADMIN_NAME,
@@ -986,7 +989,13 @@ from litellm.types.secret_managers.main import (
     KeyManagementSettings,
     KeyManagementSystem,
 )
-from litellm.types.utils import CredentialItem, CustomHuggingfaceTokenizer, RawRequestTypedDict, StandardLoggingPayload
+from litellm.types.utils import (
+    CredentialItem,
+    CustomHuggingfaceTokenizer,
+    RawRequestTypedDict,
+    SelectTokenizerResponse,
+    StandardLoggingPayload,
+)
 from litellm.types.utils import ModelInfo as ModelMapInfo
 from litellm.utils import add_custom_logger_callback_to_specific_event
 
@@ -14521,11 +14530,81 @@ async def _estimate_or_provider_error(
         if provider_failure is None or isinstance(e, (ForkedAfterNativeRuntimeStarted, ProcessReservedForForking)):
             raise
         verbose_proxy_logger.warning(
-            "Local token estimate failed after the provider's count error %s, answering that error: %r",
+            "Local token estimate failed after the provider's count error %s, answering that error: %s",
             provider_failure.status_code,
-            e,
+            type(e).__name__,
         )
         raise provider_failure.to_proxy_exception() from e
+
+
+@dataclass(frozen=True, slots=True)
+class _CustomTokenizerKey:
+    identifier: str
+    revision: str
+    auth_token: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _TokenizerLoadFailed:
+    error: Exception
+
+
+@dataclass(frozen=True, slots=True)
+class _SharedTokenizerLoad:
+    outcome: asyncio.Task[SelectTokenizerResponse | _TokenizerLoadFailed]
+    started_at: float
+
+
+async def _tokenizer_load_outcome(
+    model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None
+) -> SelectTokenizerResponse | _TokenizerLoadFailed:
+    try:
+        return await asyncify(litellm.utils.select_tokenizer)(model=model, custom_tokenizer=custom_tokenizer)
+    except Exception as e:  # noqa: BLE001  # every count sharing this load re-raises the error it gets
+        return _TokenizerLoadFailed(error=e)
+
+
+@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
+def _shared_tokenizer_load(
+    model: str, custom_tokenizer: _CustomTokenizerKey | None, loop: asyncio.AbstractEventLoop, retry_window: int
+) -> _SharedTokenizerLoad:
+    tokenizer: Final = (
+        None
+        if custom_tokenizer is None
+        else CustomHuggingfaceTokenizer(
+            identifier=custom_tokenizer.identifier,
+            revision=custom_tokenizer.revision,
+            auth_token=custom_tokenizer.auth_token,
+        )
+    )
+    return _SharedTokenizerLoad(
+        outcome=loop.create_task(_tokenizer_load_outcome(model, tokenizer)), started_at=loop.time()
+    )
+
+
+async def _load_tokenizer(
+    model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None, wait_seconds: float | None
+) -> SelectTokenizerResponse:
+    loop: Final = asyncio.get_running_loop()
+    load: Final = _shared_tokenizer_load(
+        model,
+        None
+        if custom_tokenizer is None
+        else _CustomTokenizerKey(
+            identifier=custom_tokenizer["identifier"],
+            revision=custom_tokenizer["revision"],
+            auth_token=custom_tokenizer["auth_token"],
+        ),
+        loop,
+        int(loop.time() // TOKENIZER_LOAD_RETRY_SECONDS),
+    )
+    outcome: Final = await asyncio.wait_for(
+        asyncio.shield(load.outcome),
+        timeout=None if wait_seconds is None else max(load.started_at + wait_seconds - loop.time(), 0),
+    )
+    if isinstance(outcome, _TokenizerLoadFailed):
+        raise outcome.error.with_traceback(None)
+    return outcome
 
 
 async def _local_token_estimate(
@@ -14534,8 +14613,9 @@ async def _local_token_estimate(
     messages: Sequence[AllMessageValues] | None,
     tools: list[ChatCompletionToolParam] | None,
     custom_tokenizer: CustomHuggingfaceTokenizer | None,
+    tokenizer_wait_seconds: float | None,
 ) -> _LocalTokenEstimate:
-    tokenizer: Final = await asyncify(litellm.utils.select_tokenizer)(model=model, custom_tokenizer=custom_tokenizer)
+    tokenizer: Final = await _load_tokenizer(model, custom_tokenizer, tokenizer_wait_seconds)
     total_tokens: Final = await offload_token_count(litellm.token_counter)(
         model=model,
         text=prompt,
@@ -14721,6 +14801,7 @@ async def count_request_tokens(
             messages=counted_messages,
             tools=counted_tools,
             custom_tokenizer=custom_tokenizer,
+            tokenizer_wait_seconds=None if ladder is None else TOKENIZER_LOAD_WAIT_SECONDS,
         ),
         provider_failure=ladder,
     )
