@@ -26,8 +26,8 @@ class GuardrailToolParam(LiteLLMBaseModel):
     type: str | None = None
 
     @model_serializer(mode="wrap")
-    def _without_absent_type(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
-        dumped: Final = cast("dict[str, object]", handler(self))  # cast-ok: wrap handler dumps this model's own fields
+    def _without_absent_type(self, handler: SerializerFunctionWrapHandler) -> Mapping[str, object]:
+        dumped: Final = cast("Mapping[str, object]", handler(self))  # cast-ok: handler dumps this model's fields
         if self.type is not None:
             return dumped
         return {key: value for key, value in dumped.items() if key != "type"}
@@ -67,6 +67,15 @@ class GenericGuardrailAPIOptionalParams(LiteLLMBaseModel):
             "True (default) raises and blocks the request on error. "
             "False logs a critical error and allows the request to proceed, so only a valid "
             "guardrail response can block or modify it; broader than unreachable_fallback."
+        ),
+    )
+
+    forward_messages_as_sent: bool | None = Field(
+        default=False,
+        description=(
+            "When True, structured_messages reaches the guardrail exactly as the client sent it, so rows can "
+            "carry provider-native content blocks and keys the OpenAI chat types do not declare. False "
+            "(default) sends OpenAI-format chat rows with undeclared keys removed."
         ),
     )
 
@@ -136,7 +145,7 @@ class GenericGuardrailAPIRequest(LiteLLMBaseModel):
     litellm_trace_id: str | None = (
         None  # the trace id of the LLM call - useful if there are multiple LLM calls for the same conversation
     )
-    structured_messages: Sequence[Mapping[str, object]] | None = None
+    structured_messages: list[AllMessageValues] | None = None
     images: list[str] | None = None
     tools: list[GuardrailToolParam] | None = None
     texts: list[str] | None = None

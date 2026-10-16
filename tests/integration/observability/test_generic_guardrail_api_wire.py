@@ -22,8 +22,10 @@ ANTHROPIC_MODEL: Final = "anthropic/claude-sonnet-5-5"
 OPENAI_MODEL: Final = "openai/gpt-5.6"
 ECHO_GEMINI_TOOLS: Final = "echo-gemini-tools"
 NONE_CHAT_ROWS: Final = "none-chat-rows"
+NONE_CHAT_ROWS_DEFAULT: Final = "none-chat-rows-default"
 NONE_ANTHROPIC_IMAGE: Final = "none-anthropic-image"
 ECHO_ANTHROPIC_MESSAGES: Final = "echo-anthropic-messages"
+FORWARDS_MESSAGES_AS_SENT: Final = frozenset({NONE_CHAT_ROWS, NONE_ANTHROPIC_IMAGE, ECHO_ANTHROPIC_MESSAGES})
 FAIL_OPEN_CONNECT_ERROR: Final = "fail-open-connect-error"
 FAIL_OPEN_TIMEOUT: Final = "fail-open-timeout"
 FAIL_OPEN_HTTP_STATUS: Final = "fail-open-http-status"
@@ -102,6 +104,7 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
             {
                 ECHO_GEMINI_TOOLS: stack.enter_context(wire_server(_verdict_echo)),
                 NONE_CHAT_ROWS: stack.enter_context(wire_server(_verdict_none)),
+                NONE_CHAT_ROWS_DEFAULT: stack.enter_context(wire_server(_verdict_none)),
                 NONE_ANTHROPIC_IMAGE: stack.enter_context(wire_server(_verdict_none)),
                 ECHO_ANTHROPIC_MESSAGES: stack.enter_context(wire_server(_verdict_echo)),
             }
@@ -116,7 +119,10 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
                 {
                     **config,
                     "guardrails": [
-                        *(_guardrail(name, wire.url) for name, wire in policies.items()),
+                        *(
+                            _guardrail(name, wire.url, forward_messages_as_sent=name in FORWARDS_MESSAGES_AS_SENT)
+                            for name, wire in policies.items()
+                        ),
                         _guardrail(FAIL_OPEN_CONNECT_ERROR, f"http://127.0.0.1:{allocate_port()}", fail_on_error=False),
                         _guardrail(FAIL_OPEN_TIMEOUT, stalled.url, fail_on_error=False, timeout=1),
                         _guardrail(FAIL_OPEN_HTTP_STATUS, unavailable.url, fail_on_error=False),
@@ -165,27 +171,46 @@ def test_gemini_native_tools_reach_the_guardrail_and_gemini_as_sent(rig: Guardra
         assert [tool for tool in sent[0]["tools"] if "type" in tool] == [], sent
 
 
-def test_guardrail_sees_chat_rows_with_name_and_tool_call_index_as_sent(rig: GuardrailRig) -> None:
-    messages: Final = [
-        {"role": "user", "name": "pat", "content": "weather in Paris?"},
-        {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [
-                {"index": 0, "id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
-            ],
-        },
-        {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
-    ]
+CHAT_ROWS: Final = (
+    {"role": "user", "name": "pat", "content": "weather in Paris?"},
+    {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {"index": 0, "id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+        ],
+    },
+    {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+)
+OPENAI_CHAT_ROWS: Final = (
+    {"role": "user", "content": "weather in Paris?"},
+    {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}],
+    },
+    {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+)
+
+
+@pytest.mark.parametrize(
+    ("guardrail", "seen"),
+    [(NONE_CHAT_ROWS, CHAT_ROWS), (NONE_CHAT_ROWS_DEFAULT, OPENAI_CHAT_ROWS)],
+    ids=["forward_messages_as_sent", "default"],
+)
+def test_guardrail_sees_chat_rows_as_sent_only_when_configured(
+    rig: GuardrailRig, guardrail: str, seen: tuple[dict[str, JsonValue], ...]
+) -> None:
+    messages: Final = list(CHAT_ROWS)
     with wire_server(_openai_reply) as openai_peer, rig.owned.gateway.scenario() as scenario:
         model: Final = scenario.model(
             model=OPENAI_MODEL, api_base=f"{openai_peer.url}/v1", api_key="synthetic-openai-key"
         )
         response: Final = rig.owned.gateway.request(
-            "POST", "/v1/chat/completions", {"model": model, "messages": messages, "guardrails": [NONE_CHAT_ROWS]}
+            "POST", "/v1/chat/completions", {"model": model, "messages": messages, "guardrails": [guardrail]}
         )
         assert response.status_code == 200, response.text
-        assert [body["structured_messages"] for body in _bodies(rig.policies[NONE_CHAT_ROWS])] == [messages]
+        assert [body["structured_messages"] for body in _bodies(rig.policies[guardrail])] == [list(seen)]
         assert len(openai_peer.drain()) == 1
 
 
