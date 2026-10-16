@@ -174,17 +174,24 @@ _WEB_SEARCH_TOOL_TYPE_PREFIX: Final = "web_search"
 _UNSUPPORTED_WEB_SEARCH_TOOL_FIELDS: Final = frozenset({"search_content_types"})
 
 
-def _strip_one_web_search_tool(tool: object) -> object:
+def strip_unsupported_web_search_tool_keys(tool: object) -> object:
+    """Drop Mantle-rejected keys (e.g. ``search_content_types``) from one web-search tool.
+
+    Non-dict tools, non-web-search tool types, and tools with nothing to drop are
+    returned as the same object.
+    """
     if not isinstance(tool, dict):
         return tool
     typed_tool: Final = cast(  # cast-ok: OpenAI tool JSON; isinstance(dict) does not bind key/value types
         dict[str, object], tool
     )
     tool_type: Final = typed_tool.get("type")
-    if not isinstance(tool_type, str) or not tool_type.startswith(_WEB_SEARCH_TOOL_TYPE_PREFIX):
-        return tool
-    if not _UNSUPPORTED_WEB_SEARCH_TOOL_FIELDS.intersection(typed_tool):
-        return tool
+    if (
+        not isinstance(tool_type, str)
+        or not tool_type.startswith(_WEB_SEARCH_TOOL_TYPE_PREFIX)
+        or not _UNSUPPORTED_WEB_SEARCH_TOOL_FIELDS.intersection(typed_tool)
+    ):
+        return typed_tool
     return {key: value for key, value in typed_tool.items() if key not in _UNSUPPORTED_WEB_SEARCH_TOOL_FIELDS}
 
 
@@ -202,7 +209,7 @@ def strip_unsupported_web_search_tool_fields(tools: object) -> object:
     tools_seq: Final = cast(  # cast-ok: isinstance(list|tuple) does not bind element types for basedpyright
         Sequence[object], tools
     )
-    rewritten: Final = tuple(_strip_one_web_search_tool(tool) for tool in tools_seq)
+    rewritten: Final = tuple(strip_unsupported_web_search_tool_keys(tool) for tool in tools_seq)
     if all(new is old for new, old in zip(rewritten, tools_seq, strict=True)):
-        return tools
+        return tools_seq
     return list(rewritten)
