@@ -18,9 +18,10 @@ import random
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from itertools import groupby
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from itertools import chain, groupby
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import LiteralString
 
 from litellm.constants import SPEND_LOG_WRITE_BATCH_MAX_BYTES, SPEND_LOG_WRITE_BATCH_MAX_ROWS
@@ -47,19 +48,71 @@ class ToolUsageTransaction:
 def response_tool_call_names(completion_response: object) -> tuple[str, ...]:
     """Tool names invoked in a completion response, in call order, for any response
     surface get_tool_calls_from_response understands (chat completions, Responses
-    API output items, Anthropic Messages tool_use blocks). Reads every choice of
-    an ``n>1`` chat response: each choice cost money and its tool calls ran."""
+    API output items, Anthropic Messages tool_use blocks), plus the MCP tools an
+    auto-executed Responses API call ran. Reads every choice of an ``n>1`` chat
+    response: each choice cost money and its tool calls ran."""
     if completion_response is None or isinstance(completion_response, Exception):
         return ()
     from litellm.litellm_core_utils.prompt_templates.factory import (
         get_tool_calls_from_response,
     )
 
+    called_names: Final = (
+        tool_call.get("name")
+        for tool_call in get_tool_calls_from_response(completion_response, include_all_choices=True)
+    )
     return tuple(
         stripped
-        for tool_call in get_tool_calls_from_response(completion_response, include_all_choices=True)
-        if isinstance(name := tool_call.get("name"), str) and (stripped := name.strip())
+        for name in chain(called_names, _auto_executed_mcp_tool_names(completion_response))
+        if isinstance(name, str) and (stripped := name.strip())
     )
+
+
+class _ExecutedTool(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    name: str | None = None
+
+
+class _OutputText(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    text: str
+
+
+class _ToolExecutionResults(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    type: Literal["tool_execution_results"]
+    content: tuple[_OutputText, ...]
+
+
+class _ResponsesApiOutput(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    output: tuple[object, ...]
+
+
+_EXECUTED_TOOLS: Final = TypeAdapter(tuple[_ExecutedTool, ...])
+
+
+def _auto_executed_mcp_tool_names(completion_response: object) -> tuple[str | None, ...]:
+    try:
+        response: Final = _ResponsesApiOutput.model_validate(completion_response)
+    except ValidationError:
+        return ()
+    return tuple(chain.from_iterable(_executed_tool_names(item) for item in response.output))
+
+
+def _executed_tool_names(output_item: object) -> tuple[str | None, ...]:
+    try:
+        results: Final = _ToolExecutionResults.model_validate(output_item)
+        executed: Final = tuple(
+            chain.from_iterable(_EXECUTED_TOOLS.validate_json(content.text) for content in results.content)
+        )
+    except ValidationError:
+        return ()
+    return tuple(tool.name for tool in executed)
 
 
 def build_tool_usage_transaction(

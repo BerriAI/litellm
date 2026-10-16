@@ -488,7 +488,11 @@ class BaseConfig(ABC):
         """
         return True
 
-    def post_stream_processing(self, stream: Any) -> Any:
+    @property
+    def accepts_reasoning_summary_in_reasoning_effort(self) -> bool:
+        return False
+
+    def post_stream_processing(self, stream: object) -> object:
         """Hook for providers to post-process streaming responses. Default: pass-through."""
         return stream
 

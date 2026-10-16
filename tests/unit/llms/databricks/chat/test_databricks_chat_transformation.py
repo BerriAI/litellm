@@ -461,6 +461,21 @@ def test_transform_messages_sanitizes_empty_content():
     assert result[1]["content"] == "Hi"
 
 
+def test_transform_messages_drops_the_prefill_prefix_flag():
+    """Databricks rejects unknown message keys, so a continuation prefill reaches Claude without ``prefix``."""
+    messages = [
+        {"role": "user", "content": "How do transformers work?"},
+        {"role": "assistant", "content": "Transformers use", "prefix": True},
+    ]
+
+    result = DatabricksConfig().transform_messages(
+        messages=messages, model="databricks-claude-sonnet-4-6", is_async=False
+    )
+
+    assert result[-1] == {"role": "assistant", "content": "Transformers use"}
+    assert messages[-1]["prefix"] is True
+
+
 def test_transform_request_preserves_unity_model_service_name():
     config = DatabricksConfig()
     result = config.transform_request(

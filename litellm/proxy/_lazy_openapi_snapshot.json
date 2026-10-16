@@ -3703,6 +3703,11 @@
               "title": "Total Prompt Tokens",
               "type": "integer"
             },
+            "total_ptu_hours": {
+              "default": 0.0,
+              "title": "Total Ptu Hours",
+              "type": "number"
+            },
             "total_response_time_ms": {
               "default": 0,
               "title": "Total Response Time Ms",
@@ -4510,6 +4515,11 @@
               "default": 0,
               "title": "Prompt Tokens",
               "type": "integer"
+            },
+            "ptu_hours": {
+              "default": 0.0,
+              "title": "Ptu Hours",
+              "type": "number"
             },
             "spend": {
               "default": 0.0,
@@ -14251,6 +14261,19 @@
               "description": "Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor', 'generic_guardrail_api' and 'crowdstrike_aidr'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.",
               "title": "Fail On Error"
             },
+            "forward_messages_as_sent": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": false,
+              "description": "Only honored by guardrail='generic_guardrail_api'. When True, structured_messages reaches the guardrail exactly as the client sent it, so rows can carry provider-native content blocks and keys the OpenAI chat types do not declare. Default False sends OpenAI-format chat rows with undeclared keys removed.",
+              "title": "Forward Messages As Sent"
+            },
             "guard_name": {
               "anyOf": [
                 {
@@ -16601,6 +16624,19 @@
               ],
               "description": "HTTP timeout in seconds for checking attached files. Default: 10.",
               "title": "File Guardrail Timeout"
+            },
+            "forward_messages_as_sent": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": false,
+              "description": "Only honored by guardrail='generic_guardrail_api'. When True, structured_messages reaches the guardrail exactly as the client sent it, so rows can carry provider-native content blocks and keys the OpenAI chat types do not declare. Default False sends OpenAI-format chat rows with undeclared keys removed.",
+              "title": "Forward Messages As Sent"
             },
             "gateway_name": {
               "anyOf": [
@@ -34531,6 +34567,17 @@
               ],
               "title": "Id Jag Resource Token Endpoint"
             },
+            "id_jag_subject_source": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Subject Source"
+            },
             "redirect_uris": {
               "anyOf": [
                 {
@@ -35761,7 +35808,7 @@
       "/.well-known/oauth-authorization-server": {
         "get": {
           "description": "OAuth authorization server discovery endpoint.\n\nSupports both legacy pattern (/{server_name}) and root endpoint.",
-          "operationId": "oauth_authorization_server_mcp__well_known_oauth_authorization_server_get",
+          "operationId": "oauth_authorization_server_mcp__well_known_oauth_authorization_server_get_2",
           "parameters": [
             {
               "in": "query",
@@ -35809,7 +35856,7 @@
       "/.well-known/oauth-authorization-server/mcp": {
         "get": {
           "description": "OAuth authorization server discovery for the aggregate /mcp endpoint, the RFC 8414\npath-inserted form for a client that treats {base}/mcp as its authorization base URL.\n\nThe single-segment /mcp is reserved for the aggregate so the discovery chain stays\nconsistent: the aggregate protected-resource document advertises {base}/mcp as its\nauthorization server, so the document served here must have issuer {base}/mcp. A server\nliterally named ``mcp`` therefore does not take this route; it keeps its standard\ntwo-segment discovery at /.well-known/oauth-authorization-server/mcp/mcp. Letting the\nper-server row win here instead would serve an issuer of {base} against a resource that\nadvertised {base}/mcp, which fails the RFC 8414 issuer check and breaks the front door.",
-          "operationId": "oauth_authorization_server_aggregate__well_known_oauth_authorization_server_mcp_get",
+          "operationId": "oauth_authorization_server_aggregate__well_known_oauth_authorization_server_mcp_get_2",
           "responses": {
             "200": {
               "content": {
@@ -35829,7 +35876,7 @@
       "/.well-known/oauth-authorization-server/mcp/{mcp_server_name}": {
         "get": {
           "description": "OAuth authorization server discovery endpoint using standard MCP URL pattern.\n\nStandard pattern: /mcp/{server_name}\nDiscovery path: /.well-known/oauth-authorization-server/mcp/{server_name}",
-          "operationId": "oauth_authorization_server_mcp_standard__well_known_oauth_authorization_server_mcp__mcp_server_name__get",
+          "operationId": "oauth_authorization_server_mcp_standard__well_known_oauth_authorization_server_mcp__mcp_server_name__get_2",
           "parameters": [
             {
               "in": "path",
@@ -35870,7 +35917,7 @@
       "/.well-known/oauth-authorization-server/{mcp_server_name}": {
         "get": {
           "description": "OAuth authorization server discovery endpoint.\n\nSupports both legacy pattern (/{server_name}) and root endpoint.",
-          "operationId": "oauth_authorization_server_mcp__well_known_oauth_authorization_server__mcp_server_name__get",
+          "operationId": "oauth_authorization_server_mcp__well_known_oauth_authorization_server__mcp_server_name__get_2",
           "parameters": [
             {
               "in": "path",
@@ -35918,7 +35965,7 @@
       "/.well-known/oauth-authorization-server/{mcp_server_name}/mcp": {
         "get": {
           "description": "OAuth authorization server discovery for legacy /{server_name}/mcp pattern.",
-          "operationId": "oauth_authorization_server_legacy__well_known_oauth_authorization_server__mcp_server_name__mcp_get",
+          "operationId": "oauth_authorization_server_legacy__well_known_oauth_authorization_server__mcp_server_name__mcp_get_2",
           "parameters": [
             {
               "in": "path",
@@ -35958,7 +36005,7 @@
       },
       "/.well-known/oauth-protected-resource": {
         "get": {
-          "operationId": "oauth_protected_resource_root__well_known_oauth_protected_resource_get",
+          "operationId": "oauth_protected_resource_root__well_known_oauth_protected_resource_get_2",
           "responses": {
             "200": {
               "content": {
@@ -35994,7 +36041,7 @@
       "/.well-known/oauth-protected-resource/mcp": {
         "get": {
           "description": "OAuth protected resource discovery for the aggregate /mcp endpoint.\n\nThe single-segment ``/mcp`` path does not collide with any per-server PRM pattern\n(those are two-segment: ``/mcp/{server}`` or ``/{server}/mcp``), so this unambiguously\ndescribes the aggregate resource.",
-          "operationId": "oauth_protected_resource_aggregate__well_known_oauth_protected_resource_mcp_get",
+          "operationId": "oauth_protected_resource_aggregate__well_known_oauth_protected_resource_mcp_get_2",
           "responses": {
             "200": {
               "content": {
@@ -36014,7 +36061,7 @@
       "/.well-known/oauth-protected-resource/mcp/{mcp_server_name}": {
         "get": {
           "description": "OAuth protected resource discovery endpoint using standard MCP URL pattern.\n\nStandard pattern: /mcp/{server_name}\nDiscovery path: /.well-known/oauth-protected-resource/mcp/{server_name}\n\nThis endpoint is compliant with MCP specification and works with standard\nMCP clients like mcp-inspector and VSCode Copilot.",
-          "operationId": "oauth_protected_resource_mcp_standard__well_known_oauth_protected_resource_mcp__mcp_server_name__get",
+          "operationId": "oauth_protected_resource_mcp_standard__well_known_oauth_protected_resource_mcp__mcp_server_name__get_2",
           "parameters": [
             {
               "in": "path",
@@ -36055,7 +36102,7 @@
       "/.well-known/oauth-protected-resource/{mcp_server_name}/mcp": {
         "get": {
           "description": "OAuth protected resource discovery endpoint using LiteLLM legacy URL pattern.\n\nLegacy pattern: /{server_name}/mcp\nDiscovery path: /.well-known/oauth-protected-resource/{server_name}/mcp\n\nThis endpoint is kept for backward compatibility. New integrations should\nuse the standard MCP pattern (/mcp/{server_name}) instead.",
-          "operationId": "oauth_protected_resource_mcp__well_known_oauth_protected_resource__mcp_server_name__mcp_get",
+          "operationId": "oauth_protected_resource_mcp__well_known_oauth_protected_resource__mcp_server_name__mcp_get_2",
           "parameters": [
             {
               "in": "path",
@@ -36184,9 +36231,27 @@
         },
         "Body_token_endpoint__mcp_server_name__token_post": {
           "properties": {
+            "assertion": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Assertion"
+            },
             "client_id": {
-              "title": "Client Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Client Id"
             },
             "client_secret": {
               "anyOf": [
@@ -36283,17 +36348,34 @@
             }
           },
           "required": [
-            "grant_type",
-            "client_id"
+            "grant_type"
           ],
           "title": "Body_token_endpoint__mcp_server_name__token_post",
           "type": "object"
         },
         "Body_token_endpoint_token_post": {
           "properties": {
+            "assertion": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Assertion"
+            },
             "client_id": {
-              "title": "Client Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Client Id"
             },
             "client_secret": {
               "anyOf": [
@@ -36390,8 +36472,7 @@
             }
           },
           "required": [
-            "grant_type",
-            "client_id"
+            "grant_type"
           ],
           "title": "Body_token_endpoint_token_post",
           "type": "object"
@@ -37314,6 +37395,17 @@
               ],
               "title": "Id Jag Resource Token Endpoint"
             },
+            "id_jag_subject_source": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Subject Source"
+            },
             "redirect_uris": {
               "anyOf": [
                 {
@@ -38141,7 +38233,7 @@
       "/.well-known/oauth-authorization-server": {
         "get": {
           "description": "OAuth authorization server discovery endpoint.\n\nSupports both legacy pattern (/{server_name}) and root endpoint.",
-          "operationId": "oauth_authorization_server_mcp__well_known_oauth_authorization_server_get_2",
+          "operationId": "oauth_authorization_server_mcp__well_known_oauth_authorization_server_get",
           "parameters": [
             {
               "in": "query",
@@ -38189,7 +38281,7 @@
       "/.well-known/oauth-authorization-server/mcp": {
         "get": {
           "description": "OAuth authorization server discovery for the aggregate /mcp endpoint, the RFC 8414\npath-inserted form for a client that treats {base}/mcp as its authorization base URL.\n\nThe single-segment /mcp is reserved for the aggregate so the discovery chain stays\nconsistent: the aggregate protected-resource document advertises {base}/mcp as its\nauthorization server, so the document served here must have issuer {base}/mcp. A server\nliterally named ``mcp`` therefore does not take this route; it keeps its standard\ntwo-segment discovery at /.well-known/oauth-authorization-server/mcp/mcp. Letting the\nper-server row win here instead would serve an issuer of {base} against a resource that\nadvertised {base}/mcp, which fails the RFC 8414 issuer check and breaks the front door.",
-          "operationId": "oauth_authorization_server_aggregate__well_known_oauth_authorization_server_mcp_get_2",
+          "operationId": "oauth_authorization_server_aggregate__well_known_oauth_authorization_server_mcp_get",
           "responses": {
             "200": {
               "content": {
@@ -38209,7 +38301,7 @@
       "/.well-known/oauth-authorization-server/mcp/{mcp_server_name}": {
         "get": {
           "description": "OAuth authorization server discovery endpoint using standard MCP URL pattern.\n\nStandard pattern: /mcp/{server_name}\nDiscovery path: /.well-known/oauth-authorization-server/mcp/{server_name}",
-          "operationId": "oauth_authorization_server_mcp_standard__well_known_oauth_authorization_server_mcp__mcp_server_name__get_2",
+          "operationId": "oauth_authorization_server_mcp_standard__well_known_oauth_authorization_server_mcp__mcp_server_name__get",
           "parameters": [
             {
               "in": "path",
@@ -38250,7 +38342,7 @@
       "/.well-known/oauth-authorization-server/{mcp_server_name}": {
         "get": {
           "description": "OAuth authorization server discovery endpoint.\n\nSupports both legacy pattern (/{server_name}) and root endpoint.",
-          "operationId": "oauth_authorization_server_mcp__well_known_oauth_authorization_server__mcp_server_name__get_2",
+          "operationId": "oauth_authorization_server_mcp__well_known_oauth_authorization_server__mcp_server_name__get",
           "parameters": [
             {
               "in": "path",
@@ -38298,7 +38390,7 @@
       "/.well-known/oauth-authorization-server/{mcp_server_name}/mcp": {
         "get": {
           "description": "OAuth authorization server discovery for legacy /{server_name}/mcp pattern.",
-          "operationId": "oauth_authorization_server_legacy__well_known_oauth_authorization_server__mcp_server_name__mcp_get_2",
+          "operationId": "oauth_authorization_server_legacy__well_known_oauth_authorization_server__mcp_server_name__mcp_get",
           "parameters": [
             {
               "in": "path",
@@ -38338,7 +38430,7 @@
       },
       "/.well-known/oauth-protected-resource": {
         "get": {
-          "operationId": "oauth_protected_resource_root__well_known_oauth_protected_resource_get_2",
+          "operationId": "oauth_protected_resource_root__well_known_oauth_protected_resource_get",
           "responses": {
             "200": {
               "content": {
@@ -38374,7 +38466,7 @@
       "/.well-known/oauth-protected-resource/mcp": {
         "get": {
           "description": "OAuth protected resource discovery for the aggregate /mcp endpoint.\n\nThe single-segment ``/mcp`` path does not collide with any per-server PRM pattern\n(those are two-segment: ``/mcp/{server}`` or ``/{server}/mcp``), so this unambiguously\ndescribes the aggregate resource.",
-          "operationId": "oauth_protected_resource_aggregate__well_known_oauth_protected_resource_mcp_get_2",
+          "operationId": "oauth_protected_resource_aggregate__well_known_oauth_protected_resource_mcp_get",
           "responses": {
             "200": {
               "content": {
@@ -38394,7 +38486,7 @@
       "/.well-known/oauth-protected-resource/mcp/{mcp_server_name}": {
         "get": {
           "description": "OAuth protected resource discovery endpoint using standard MCP URL pattern.\n\nStandard pattern: /mcp/{server_name}\nDiscovery path: /.well-known/oauth-protected-resource/mcp/{server_name}\n\nThis endpoint is compliant with MCP specification and works with standard\nMCP clients like mcp-inspector and VSCode Copilot.",
-          "operationId": "oauth_protected_resource_mcp_standard__well_known_oauth_protected_resource_mcp__mcp_server_name__get_2",
+          "operationId": "oauth_protected_resource_mcp_standard__well_known_oauth_protected_resource_mcp__mcp_server_name__get",
           "parameters": [
             {
               "in": "path",
@@ -38435,7 +38527,7 @@
       "/.well-known/oauth-protected-resource/{mcp_server_name}/mcp": {
         "get": {
           "description": "OAuth protected resource discovery endpoint using LiteLLM legacy URL pattern.\n\nLegacy pattern: /{server_name}/mcp\nDiscovery path: /.well-known/oauth-protected-resource/{server_name}/mcp\n\nThis endpoint is kept for backward compatibility. New integrations should\nuse the standard MCP pattern (/mcp/{server_name}) instead.",
-          "operationId": "oauth_protected_resource_mcp__well_known_oauth_protected_resource__mcp_server_name__mcp_get_2",
+          "operationId": "oauth_protected_resource_mcp__well_known_oauth_protected_resource__mcp_server_name__mcp_get",
           "parameters": [
             {
               "in": "path",
@@ -40719,6 +40811,17 @@
               ],
               "title": "Id Jag Resource Token Endpoint"
             },
+            "id_jag_subject_source": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Subject Source"
+            },
             "redirect_uris": {
               "anyOf": [
                 {
@@ -42846,6 +42949,24 @@
               }
             },
             {
+              "description": "Filter MCP servers by internal user scope. When provided (and team_id is not), returns the union of the servers each of the user's teams has access to plus globally available (allow_all_keys) servers. A user who belongs to no team gets the unscoped list. Used by the Internal User and Virtual Key edit UIs.",
+              "in": "query",
+              "name": "user_id",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Filter MCP servers by internal user scope. When provided (and team_id is not), returns the union of the servers each of the user's teams has access to plus globally available (allow_all_keys) servers. A user who belongs to no team gets the unscoped list. Used by the Internal User and Virtual Key edit UIs.",
+                "title": "User Id"
+              }
+            },
+            {
               "description": "Annotate each returned server with connected_app_reachable: whether a connected app authorized by the calling user (a gateway OAuth session) is served this server on the aggregate MCP endpoint.",
               "in": "query",
               "name": "connected_app_view",
@@ -44780,6 +44901,17 @@
                 }
               ],
               "title": "Id Jag Resource Token Endpoint"
+            },
+            "id_jag_subject_source": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Subject Source"
             },
             "redirect_uris": {
               "anyOf": [

@@ -4,6 +4,8 @@ from types import MappingProxyType
 from typing import Final, cast
 from urllib.parse import urlparse
 
+from pydantic import ValidationError
+
 import litellm
 from litellm.constants import (
     NADIR_DEFAULT_API_BASE,
@@ -38,6 +40,12 @@ _ROUTE_TYPE_PREFIXES_BY_PROVIDER: Final = MappingProxyType(
         ),
     }
 )
+
+
+def invalid_provider_routing_hints_message(error: ValidationError) -> str:
+    return "; ".join(
+        f"Invalid {'.'.join(str(part) for part in detail['loc'])}: {detail['msg']}" for detail in error.errors()
+    )
 
 
 def _endpoint_matches_api_base(endpoint: str, api_base: str) -> bool:
@@ -75,6 +83,10 @@ def _endpoint_matches_api_base(endpoint: str, api_base: str) -> bool:
         return True
     url_path: Final = parsed_url.path.rstrip("/")
     return url_path == endpoint_path or url_path.startswith(endpoint_path + "/")
+
+
+def is_openai_compatible_endpoint(api_base: str) -> bool:
+    return any(_endpoint_matches_api_base(endpoint, api_base) for endpoint in litellm.openai_compatible_endpoints)
 
 
 def is_non_openai_azure_model(model: str) -> bool:

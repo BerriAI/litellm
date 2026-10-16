@@ -1,16 +1,21 @@
 import asyncio
 import json
 import time
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
+from pathlib import Path
 from types import TracebackType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.openai.workload_identity import _workload_identity_auth
 from litellm.models.credentials import CredentialItem
 from litellm.realtime_api import main as realtime_main
 from litellm.realtime_api.main import _with_resolved_session_model
@@ -83,7 +88,7 @@ def _run_client_secret(session, model, monkeypatch):
         captured.update(kwargs)
         return object()
 
-    def mock_get_llm_provider(model, api_base, api_key):
+    def mock_get_llm_provider(model, api_base, api_key, custom_llm_provider: str | None = None):
         return model, "openai", None, api_base
 
     monkeypatch.setattr(realtime_main, "get_llm_provider", mock_get_llm_provider)
@@ -180,7 +185,7 @@ async def test_meta_realtime_dispatches_to_base_handler_with_meta_config(monkeyp
 
     captured: dict[str, object] = {}
 
-    def mock_get_llm_provider(model, api_base, api_key):
+    def mock_get_llm_provider(model, api_base, api_key, custom_llm_provider: str | None = None):
         return model.removeprefix("meta/"), "meta", None, api_base
 
     async def mock_async_realtime(**kwargs):
@@ -210,7 +215,7 @@ async def test_arealtime_vertex_branch_resolves_credentials_under_a_bound(monkey
     async def hanging_token_refresh(**kwargs):
         await asyncio.sleep(30)
 
-    def mock_get_llm_provider(model, api_base, api_key):
+    def mock_get_llm_provider(model, api_base, api_key, custom_llm_provider: str | None = None):
         return model, "vertex_ai", None, api_base
 
     monkeypatch.setattr(realtime_main, "get_llm_provider", mock_get_llm_provider)
@@ -252,6 +257,7 @@ async def test_arealtime_live_session_dispatches_to_openai_live_handler(monkeypa
         model: str,
         api_base: str | None,
         api_key: str | None,
+        custom_llm_provider: str | None = None,
     ) -> tuple[str, str, str | None, str | None]:
         return "gpt-live-1", "openai", "resolved-key", "https://live-gateway.example/v1"
 
@@ -315,6 +321,7 @@ async def test_arealtime_live_session_rejects_matching_guardrail_before_dispatch
         model: str,
         api_base: str | None,
         api_key: str | None,
+        custom_llm_provider: str | None = None,
     ) -> tuple[str, str, str | None, str | None]:
         return "gpt-live-1", "openai", "resolved-key", "https://live-gateway.example/v1"
 
@@ -358,6 +365,7 @@ async def test_arealtime_live_session_rejects_streaming_only_pre_call_guardrail(
         model: str,
         api_base: str | None,
         api_key: str | None,
+        custom_llm_provider: str | None = None,
     ) -> tuple[str, str, str | None, str | None]:
         return "gpt-live-1", "openai", "resolved-key", "https://live-gateway.example/v1"
 
@@ -383,6 +391,7 @@ async def test_arealtime_live_session_rejects_non_openai_provider(monkeypatch: p
         model: str,
         api_base: str | None,
         api_key: str | None,
+        custom_llm_provider: str | None = None,
     ) -> tuple[str, str, str | None, str | None]:
         return "claude-live", "anthropic", None, None
 
@@ -407,6 +416,7 @@ async def test_arealtime_without_live_start_preserves_openai_realtime_dispatch(
         model: str,
         api_base: str | None,
         api_key: str | None,
+        custom_llm_provider: str | None = None,
     ) -> tuple[str, str, str | None, str | None]:
         return "gpt-realtime", "openai", "resolved-key", "https://realtime-gateway.example/v1"
 
@@ -652,6 +662,55 @@ async def test_arealtime_azure_ai_on_a_foundry_host_connects_to_the_azure_openai
     assert connect.url == "wss://my-project.services.ai.azure.com/openai/v1/realtime?model=gpt-realtime-mini"
 
 
+@pytest.mark.asyncio
+async def test_arealtime_routes_a_bare_model_name_to_its_explicit_provider():
+    connect: Final = _ConnectThatStopsAfterCapturingTheUrl()
+    with patch("websockets.connect", connect):
+        await realtime_main._arealtime.__wrapped__(
+            model="my-realtime",
+            websocket=MagicMock(close=AsyncMock()),
+            custom_llm_provider="openai",
+            api_base="https://realtime-gateway.example/v1",
+            api_key="fake-key",
+            query_params={"model": "my-realtime"},
+            litellm_logging_obj=FakeLogging(),
+        )
+    assert connect.url == "wss://realtime-gateway.example/v1/realtime?model=my-realtime"
+
+
+class _GatewayThatRecordsTheUrl:
+    url: str | None = None
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.url = str(request.url)
+        return httpx.Response(200, json={"value": "ek_test"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route", "route_kwargs", "path"),
+    [
+        (realtime_main.acreate_realtime_client_secret, {}, "client_secrets"),
+        (realtime_main.acreate_realtime_transcription_session, {}, "transcription_sessions"),
+        (realtime_main.arealtime_calls, {"openai_ephemeral_key": "ek_test", "sdp_body": b"v=0"}, "calls"),
+    ],
+)
+async def test_realtime_http_routes_send_a_bare_model_name_to_its_explicit_provider(
+    route: Callable[..., Awaitable[object]], route_kwargs: Mapping[str, object], path: str
+) -> None:
+    gateway: Final = _GatewayThatRecordsTheUrl()
+    await route.__wrapped__(
+        model="my-realtime",
+        custom_llm_provider="openai",
+        api_base="https://realtime-gateway.example/v1",
+        api_key="fake-key",
+        litellm_logging_obj=FakeLogging(),
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(gateway)),
+        **route_kwargs,
+    )
+    assert gateway.url == f"https://realtime-gateway.example/v1/realtime/{path}"
+
+
 class _ClientWebSocketWithHeaders:
     def __init__(self, headers: tuple[tuple[bytes, bytes], ...]) -> None:
         self.scope: Final = {"headers": headers}
@@ -714,7 +773,7 @@ async def _vertex_provider_config_for(monkeypatch, model: str, vertex_location: 
 
     captured: dict[str, object] = {}
 
-    def mock_get_llm_provider(model, api_base, api_key):
+    def mock_get_llm_provider(model, api_base, api_key, custom_llm_provider: str | None = None):
         return model.removeprefix("vertex_ai/"), "vertex_ai", None, api_base
 
     async def mock_token_resolver(**kwargs):
@@ -996,3 +1055,124 @@ async def test_voice_transcript_blocked_by_guardrail():
 
     finally:
         litellm.callbacks = []
+
+
+@pytest.fixture
+def federated_deployment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, str]:
+    token_file: Final = tmp_path / "subject_token.jwt"
+    token_file.write_text("subject-token")
+    for name in (
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_API_BASE",
+        "OPENAI_IDENTITY_PROVIDER_ID",
+        "OPENAI_SERVICE_ACCOUNT_ID",
+        "OPENAI_IDENTITY_TOKEN_FILE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    for attribute in ("api_key", "openai_key", "api_base"):
+        monkeypatch.setattr(litellm, attribute, None)
+    _workload_identity_auth.cache_clear()
+    return {
+        "openai_identity_provider_id": "idp_realtime",
+        "openai_service_account_id": "user-realtime",
+        "openai_identity_token_file": str(token_file),
+    }
+
+
+def _mock_token_exchange() -> None:
+    respx.post("https://auth.openai.com/oauth/token").mock(
+        return_value=httpx.Response(200, json={"access_token": "federated-bearer", "expires_in": 3600})
+    )
+
+
+class _ConnectThatStopsAfterCapturingTheAuthorization:
+    authorization: str | None = None
+
+    def __call__(
+        self, url: str, *, additional_headers: Mapping[str, str], **kwargs: object
+    ) -> "_ConnectThatStopsAfterCapturingTheAuthorization":
+        self.authorization = additional_headers.get("Authorization")
+        return self
+
+    async def __aenter__(self) -> None:
+        raise RuntimeError("backend headers captured, nothing to bridge")
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "live_session_start",
+    [None, {"type": "session.start", "session": {"model": "gpt-live-1"}}],
+    ids=["realtime", "live_session"],
+)
+@respx.mock
+async def test_openai_websocket_sessions_send_the_federated_bearer_for_a_keyless_deployment(
+    federated_deployment: dict[str, str], live_session_start: Mapping[str, object] | None
+) -> None:
+    _mock_token_exchange()
+    connect: Final = _ConnectThatStopsAfterCapturingTheAuthorization()
+    with patch("websockets.connect", connect):
+        await realtime_main._arealtime.__wrapped__(
+            model="gpt-realtime",
+            custom_llm_provider="openai",
+            websocket=MagicMock(close=AsyncMock()),
+            litellm_logging_obj=FakeLogging(),
+            live_session_start=live_session_start,
+            **federated_deployment,
+        )
+    assert connect.authorization == "Bearer federated-bearer"
+
+
+class _GatewayThatRecordsTheAuthorization:
+    authorization: str | None = None
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.authorization = request.headers.get("Authorization")
+        return httpx.Response(200, json={"value": "ek_test"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route",
+    [realtime_main.acreate_realtime_client_secret, realtime_main.acreate_realtime_transcription_session],
+    ids=["client_secrets", "transcription_sessions"],
+)
+@respx.mock
+async def test_openai_realtime_http_routes_send_the_federated_bearer_for_a_keyless_deployment(
+    federated_deployment: dict[str, str], route: Callable[..., Awaitable[object]]
+) -> None:
+    _mock_token_exchange()
+    gateway: Final = _GatewayThatRecordsTheAuthorization()
+    await route.__wrapped__(
+        model="gpt-realtime",
+        custom_llm_provider="openai",
+        litellm_logging_obj=FakeLogging(),
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(gateway)),
+        **federated_deployment,
+    )
+    assert gateway.authorization == "Bearer federated-bearer"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_openai_realtime_health_check_sends_the_federated_bearer_for_a_keyless_deployment(
+    federated_deployment: dict[str, str],
+) -> None:
+    _mock_token_exchange()
+    connect: Final = _CapturingConnect()
+    with patch("websockets.connect", connect):
+        assert await realtime_main.realtime_health_check(
+            model="gpt-realtime",
+            custom_llm_provider="openai",
+            api_key=None,
+            model_params={"model": "openai/gpt-realtime", **federated_deployment},
+        )
+    assert connect.kwargs["additional_headers"] == {"Authorization": "Bearer federated-bearer"}

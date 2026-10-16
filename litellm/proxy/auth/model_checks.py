@@ -383,7 +383,7 @@ def _model_info_rows(
 
 
 def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_Params | None = None) -> list[str]:
-    return [listing.listed_id for listing in _wildcard_listings(wildcard_model, litellm_params)]
+    return list(dict.fromkeys(listing.listed_id for listing in _wildcard_listings(wildcard_model, litellm_params)))
 
 
 def expand_wildcard_deployments_for_model_info(
