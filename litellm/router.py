@@ -128,6 +128,7 @@ from litellm.llms.base_llm.vector_store.transformation import (
     RouterVectorStoreEmbeddingExecutor,
     vector_store_request_metadata,
 )
+from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.openai_like.model_info import (
@@ -328,6 +329,7 @@ from litellm.types.router import (
     FallbackBudgetCheck,
     GuardrailTypedDict,
     LiteLLM_Params,
+    LiteLLMParamsTypedDict,
     MockRouterTestingParams,
     ModelGroupInfo,
     OptionalPreCallChecks,
@@ -374,6 +376,7 @@ from litellm.utils import (
     get_non_default_completion_params,
     get_secret,
     get_utc_datetime,
+    is_generalized_model_info,
     is_region_allowed,
     provider_rejectable_params,
     set_live_deployment_replay,
@@ -484,6 +487,7 @@ _CLAUDE_CODE_SESSION_ID_RE: Final = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
 _CLAUDE_CODE_SESSION_ROUTER_TTL_SECONDS: Final = 3600
 CLAUDE_CODE_SESSION_ROUTER_BINDING_TARGET: Final = "claude_code_session_router_binding"
 
+_PRE_CALL_CHECK_FILTERED_PARAMS: Final = frozenset({"response_format"})
 _RUNTIME_TOGGLEABLE_PRE_CALL_CHECKS: Final[Mapping[str, type[CustomLogger]]] = MappingProxyType(
     {
         "prompt_caching": PromptCachingDeploymentCheck,
@@ -521,6 +525,7 @@ _SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
 _RESOLVED_RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy | None)
 _ROUTING_KWARGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _FALLBACK_HOP_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_OPAQUE_VALUE_ADAPTER: Final = TypeAdapter(object)
 _DEPLOYMENT_SELECTED_EVENT: Final = "litellm.request.deployment_selected"
 
 
@@ -821,7 +826,8 @@ MAX_HELD_PRE_OUTPUT_RESPONSES_EVENTS: Final = 200
 
 def _retry_policy_ceiling(policy: RetryPolicy) -> int:
     """The most retries any error class under this policy can be granted."""
-    return max((retries for retries in policy.model_dump().values() if isinstance(retries, int)), default=0)
+    retry_counts: Final[Iterable[object]] = policy.model_dump().values()
+    return max((retries for retries in retry_counts if isinstance(retries, int)), default=0)
 
 
 def _responses_stream_holds_event(item: object, held_event_count: int) -> bool:
@@ -987,6 +993,49 @@ def as_output_cap(value: object) -> int | None:
     except (ValueError, OverflowError):
         return None
     return cap if cap >= 0 else None
+
+
+def _exact_base_model_max_input_tokens(base_model: str) -> int | None:
+    try:
+        model_info: Final = litellm.get_model_info(model=base_model)
+    except Exception:  # noqa: BLE001  # get_model_info raises ModelNotMappedError or a bare Exception for an unmapped model
+        return None
+    if is_generalized_model_info(model_info):
+        return None
+    return model_info.get("max_input_tokens")
+
+
+def _provider_model_id(model_name: str, custom_llm_provider: str) -> str:
+    model_id: Final = model_name.rsplit("/", 1)[-1]
+    return get_bedrock_base_model(model_id) if custom_llm_provider.startswith("bedrock") else model_id
+
+
+def _names_route_model(base_model: str, route_key: str, custom_llm_provider: str) -> bool:
+    route_model_id: Final = _provider_model_id(route_key, custom_llm_provider)
+    base_model_id: Final = _provider_model_id(base_model, custom_llm_provider)
+    return route_model_id in (base_model_id, base_model_id.split("@", 1)[0])
+
+
+def _declared_base_model(user_model_info: Mapping[str, object]) -> str | None:
+    match user_model_info:
+        case {"base_model": str() as base_model}:
+            return base_model
+        case _:
+            return None
+
+
+def _base_model_widened_window(
+    route_model_info: ModelMapInfo, base_model: str | None, custom_llm_provider: str
+) -> Mapping[str, int]:
+    route_max_input_tokens: Final = route_model_info.get("max_input_tokens")
+    if base_model is None or route_max_input_tokens is None:
+        return MappingProxyType({})
+    if not _names_route_model(base_model, route_model_info["key"], custom_llm_provider):
+        return MappingProxyType({})
+    base_max_input_tokens: Final = _exact_base_model_max_input_tokens(base_model)
+    if base_max_input_tokens is None or base_max_input_tokens <= route_max_input_tokens:
+        return MappingProxyType({})
+    return MappingProxyType({"max_input_tokens": base_max_input_tokens})
 
 
 class Router:
@@ -1534,7 +1583,7 @@ class Router:
         if not startup_nodes:
             _env_cluster_nodes: Final = get_secret("REDIS_CLUSTER_NODES")
             if _env_cluster_nodes is not None and isinstance(_env_cluster_nodes, str):
-                startup_nodes = json.loads(_env_cluster_nodes)
+                startup_nodes = _OPAQUE_VALUE_ADAPTER.validate_python(json.loads(_env_cluster_nodes))
 
         if startup_nodes:
             return RedisClusterCache(**{**cache_config, "startup_nodes": startup_nodes})
@@ -5416,17 +5465,19 @@ class Router:
             self._stamp_retry_skip_deployment_id(e, kwargs)
             raise e
 
-    async def _asearch_with_fallbacks(self, original_function: Callable, **kwargs):
+    async def _asearch_with_fallbacks(self, original_function: Callable, **kwargs) -> object:
         """
         Helper function to make a search API call through the router with load balancing and fallbacks.
         Reuses the router's retry/fallback infrastructure.
         """
         from litellm.router_utils.search_api_router import SearchAPIRouter
 
-        return await SearchAPIRouter.async_search_with_fallbacks(
-            router_instance=self,
-            original_function=original_function,
-            **kwargs,
+        return _OPAQUE_VALUE_ADAPTER.validate_python(
+            await SearchAPIRouter.async_search_with_fallbacks(
+                router_instance=self,
+                original_function=original_function,
+                **kwargs,
+            )
         )
 
     async def _asearch_with_fallbacks_helper(self, model: str, original_generic_function: Callable, **kwargs):
@@ -6197,16 +6248,18 @@ class Router:
                 )
                 else e
             )
-            fallback_response: Final = await self.async_function_with_fallbacks_common_utils(
-                e=fallback_trigger,
-                disable_fallbacks=fallbacks_disabled_for_request(initial_kwargs),
-                fallbacks=fallbacks,
-                context_window_fallbacks=context_window_fallbacks,
-                content_policy_fallbacks=content_policy_fallbacks,
-                model_group=model_group,
-                args=(),
-                kwargs=initial_kwargs,
-                include_fallback_errors=initial_kwargs.get("include_fallback_errors", False) is True,
+            fallback_response: Final = _OPAQUE_VALUE_ADAPTER.validate_python(
+                await self.async_function_with_fallbacks_common_utils(
+                    e=fallback_trigger,
+                    disable_fallbacks=fallbacks_disabled_for_request(initial_kwargs),
+                    fallbacks=fallbacks,
+                    context_window_fallbacks=context_window_fallbacks,
+                    content_policy_fallbacks=content_policy_fallbacks,
+                    model_group=model_group,
+                    args=(),
+                    kwargs=initial_kwargs,
+                    include_fallback_errors=initial_kwargs.get("include_fallback_errors", False) is True,
+                )
             )
             async for fallback_item in self._aanthropic_messages_yield_recovered(fallback_response, wrapper):
                 yield fallback_item
@@ -11337,6 +11390,7 @@ class Router:
         Augment litellm info with additional params set in `model_info`.
 
         For azure models, ignore the `model:`. Only set max tokens, cost values if base_model is set.
+        For every other provider, a base_model naming the same model as `model:` can only widen its context window.
 
         Returns
         - ModelInfo - If found -> typed dict with max tokens, input cost, etc.
@@ -11433,20 +11487,23 @@ class Router:
 
         ## CHECK USER SET MODEL INFO
         raw_user_model_info: Final = deployment.get("model_info")
-        user_model_info: Final = (
+        user_model_info: Final = _MODEL_INFO_ADAPTER.validate_python(
             raw_user_model_info.model_dump(exclude_none=True)
             if isinstance(raw_user_model_info, BaseModel)
-            else raw_user_model_info
+            else raw_user_model_info or {}
         )
 
         # get_model_info() hands back an lru_cache'd dict, so merge into a copy; unset
         # values are skipped or Deployment's None pricing defaults would erase the map's
         merged_model_info: Final[ModelMapInfo] = {
             **copy.deepcopy(model_info),
-            **self.get_discovered_model_info((deployment.get("model_info") or {}).get("id")),
-            **MappingProxyType(
-                {key: value for key, value in (user_model_info or MappingProxyType({})).items() if value is not None}
+            **_base_model_widened_window(
+                model_info,
+                _declared_base_model(user_model_info) or _declared_base_model(litellm_params.model_extra or {}),
+                custom_llm_provider,
             ),
+            **self.get_discovered_model_info((deployment.get("model_info") or {}).get("id")),
+            **MappingProxyType({key: value for key, value in user_model_info.items() if value is not None}),
         }
 
         return merged_model_info
@@ -12636,16 +12693,34 @@ class Router:
             str(deployment_params.get("model") or ""), deployment_params.get("custom_llm_provider")
         ):
             return True
+        return Router._deployment_supports_param(deployment, group, param)
+
+    @staticmethod
+    def _capability_model_and_provider(deployment_params: LiteLLMParamsTypedDict, group: str) -> tuple[str, str]:
+        model_label: Final = str(deployment_params.get("model") or group)
+        authenticating_provider: Final = declared_authenticating_provider(
+            model_label, deployment_params.get("custom_llm_provider")
+        )
+        if authenticating_provider is not None:
+            return model_label.removeprefix(f"{authenticating_provider}/"), authenticating_provider
+        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+            model=model_label,
+            custom_llm_provider=deployment_params.get("custom_llm_provider"),
+            litellm_params=LiteLLM_Params.model_validate(deployment_params),
+        )
+        return model, custom_llm_provider
+
+    @staticmethod
+    def _deployment_supports_param(deployment: DeploymentTypedDict, group: str, param: str) -> bool:
+        deployment_params: Final = deployment.get("litellm_params")
+        if not deployment_params:
+            return True
         deployment_model_info: Final = deployment.get("model_info")
         base_model: Final = (
             deployment_model_info.get("base_model") if deployment_model_info else None
         ) or deployment_params.get("base_model")
         try:
-            model, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                model=deployment_params.get("model") or group,
-                custom_llm_provider=deployment_params.get("custom_llm_provider"),
-                litellm_params=LiteLLM_Params.model_validate(deployment_params),
-            )
+            model, custom_llm_provider = Router._capability_model_and_provider(deployment_params, group)
             supported: Final = litellm.get_supported_openai_params(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
@@ -12653,7 +12728,7 @@ class Router:
             )
         except Exception as e:  # noqa: BLE001  # best-effort filter: an unresolvable provider must not narrow the request
             verbose_router_logger.debug(
-                "litellm.router.py::_deployment_accepts_param: keeping %s for model=%s. Got - %s", param, group, e
+                "litellm.router.py::_deployment_supports_param: keeping %s for model=%s. Got - %s", param, group, e
             )
             return True
         return supported is None or param in supported
@@ -13150,7 +13225,8 @@ class Router:
 
         Returns None when no deployment limits its context window, and when counting fails. The
         caller pairs this with ``skip_inline_token_count`` so neither case puts the count back on
-        the loop: a failed count leaves the deployments unfiltered, exactly as before.
+        the loop: a failed count only skips the context-window check - RPM, region and
+        invalid-params checks still run for every deployment.
         """
         if messages is None and input is None:
             return None
@@ -13168,6 +13244,66 @@ class Router:
             )
             return None
 
+    def _resolve_pre_call_check_input_tokens(
+        self,
+        messages: Sequence[Mapping[str, str]] | None,
+        input: str | Sequence[object] | None,
+        request_kwargs: Mapping[str, object] | None,
+        input_token_count: int | None,
+        count_inline: bool,
+    ) -> int | None:
+        if input_token_count is not None:
+            return input_token_count
+        if not count_inline:
+            return None
+        try:
+            return self._count_pre_call_check_tokens(
+                messages=cast(list[dict[str, str]] | None, messages),  # cast-ok: forwarded to the sync counter
+                input=cast(str | list[object] | None, input),  # cast-ok: forwarded to the sync counter
+                request_kwargs=request_kwargs,
+            )
+        except Exception as e:
+            verbose_router_logger.error(
+                "litellm.router.py::_pre_call_checks: failed to count tokens. "
+                "Skipping the context-window check only; RPM/region/param checks still apply. Got - %s",
+                e,
+            )
+            return None
+
+    @staticmethod
+    def _params_neither_dropped_nor_allowed(params: Mapping[str, object], candidates: frozenset[str]) -> frozenset[str]:
+        if params.get("drop_params") is True:
+            return frozenset()
+        dropped: Final = params.get("additional_drop_params")
+        dropped_names: Final = (
+            frozenset(entry for entry in dropped if isinstance(entry, str))
+            if isinstance(dropped, list)
+            else frozenset()
+        )
+        return candidates - Router._declared_param_allowlist(params) - dropped_names
+
+    @staticmethod
+    def _deployment_lacks_params(deployment: DeploymentTypedDict, group: str, params: frozenset[str]) -> bool:
+        return any(not Router._deployment_supports_param(deployment, group, param) for param in params)
+
+    @staticmethod
+    def _deployment_rejects_params(
+        deployment: DeploymentTypedDict, group: str, params: frozenset[str], request_kwargs: Mapping[str, object]
+    ) -> bool:
+        call_settings: Final[Mapping[str, object]] = {**(deployment.get("litellm_params") or {}), **request_kwargs}
+        return Router._deployment_lacks_params(
+            deployment, group, Router._params_neither_dropped_nor_allowed(call_settings, params)
+        )
+
+    @staticmethod
+    def _pre_call_check_requested_chat_params(request_kwargs: Mapping[str, object]) -> frozenset[str]:
+        requested: Final = litellm.utils.get_non_default_params(passed_params=dict(request_kwargs))
+        return frozenset(
+            param
+            for param, value in requested.items()
+            if param in _PRE_CALL_CHECK_FILTERED_PARAMS and not isinstance(value, str)
+        )
+
     def _pre_call_checks(
         self,
         model: str,
@@ -13177,6 +13313,7 @@ class Router:
         request_kwargs: dict | None = None,
         input_token_count: int | None = None,
         skip_inline_token_count: bool = False,
+        request_deployments: Sequence[DeploymentTypedDict] | None = None,
     ):
         """
         Filter out model in model group, if:
@@ -13195,13 +13332,6 @@ class Router:
 
         invalid_model_indices: Final = set()  # Use set for O(1) membership checks
 
-        # Token counting (tiktoken) is the dominant on-loop cost for large prompts.
-        # Only count when a deployment actually declares max_input_tokens, and count
-        # at most once; for model groups with no context-window limit it is skipped.
-        # Async callers pass the count in, already computed off the event loop, and set
-        # skip_inline_token_count so a failed off-loop count is not retried back on the loop.
-        input_tokens: int | None = input_token_count
-
         _context_window_error = False
         _potential_error_str = ""
         _rate_limit_error = False
@@ -13209,6 +13339,24 @@ class Router:
 
         has_countable_input: Final = (messages is not None or input is not None) and not compaction_pending(
             request_kwargs
+        )
+        deployment_max_input_tokens: Final = tuple(
+            self._deployment_max_input_tokens(model, deployment) for deployment in _returned_deployments
+        )
+        input_tokens: Final = self._resolve_pre_call_check_input_tokens(
+            messages=messages,
+            input=cast(str | list[object] | None, input),  # cast-ok: forwarded to the resolver
+            request_kwargs=cast(Mapping[str, object] | None, request_kwargs),  # cast-ok: forwarded to the resolver
+            input_token_count=input_token_count,
+            count_inline=has_countable_input
+            and not skip_inline_token_count
+            and any(limit is not None for limit in deployment_max_input_tokens),
+        )
+        request_settings: Final[Mapping[str, object]] = request_kwargs if request_kwargs is not None else {}
+        requested_params: Final[frozenset[str]] = (
+            self._pre_call_check_requested_chat_params(request_settings)
+            if request_kwargs is not None and litellm.drop_params is False
+            else frozenset()
         )
 
         ## get model group RPM ##
@@ -13223,39 +13371,22 @@ class Router:
             _litellm_params = deployment.get("litellm_params", {})
             _model_info = deployment.get("model_info", {})
 
-            # see if we have the info for this model
-            _deployment_model = None  # per-deployment model name (avoids overwriting the outer `model` group name)
-            try:
-                base_model = _model_info.get("base_model", None)
-                if base_model is None:
-                    base_model = _litellm_params.get("base_model", None)
-                _deployment_model = base_model or _litellm_params.get("model", None)
-                model_info = self.get_router_model_info(deployment=deployment, received_model_name=model)
-
-                max_input_tokens = model_info.get("max_input_tokens") if isinstance(model_info, dict) else None
-                if isinstance(max_input_tokens, int) and has_countable_input:
-                    if input_tokens is None:
-                        if skip_inline_token_count:
-                            return _returned_deployments
-                        try:
-                            input_tokens = self._count_pre_call_check_tokens(
-                                messages=messages, input=input, request_kwargs=request_kwargs
-                            )
-                        except Exception as e:
-                            verbose_router_logger.error(
-                                "litellm.router.py::_pre_call_checks: failed to count tokens. Returning initial list of deployments. Got - %s",
-                                e,
-                            )
-                            return _returned_deployments
-                    if input_tokens > max_input_tokens:
-                        invalid_model_indices.add(idx)
-                        _context_window_error = True
-                        _potential_error_str += (
-                            f"Model={_deployment_model}, Max Input Tokens={max_input_tokens}, Got={input_tokens}"
-                        )
-                        continue
-            except Exception as e:
-                verbose_router_logger.exception("An error occurs - %s", e)
+            max_input_tokens = deployment_max_input_tokens[idx]
+            if (
+                max_input_tokens is not None
+                and has_countable_input
+                and input_tokens is not None
+                and input_tokens > max_input_tokens
+            ):
+                invalid_model_indices.add(idx)
+                _context_window_error = True
+                deployment_model = (
+                    _model_info.get("base_model") or _litellm_params.get("base_model") or _litellm_params.get("model")
+                )
+                _potential_error_str += (
+                    f"Model={deployment_model}, Max Input Tokens={max_input_tokens}, Got={input_tokens}"
+                )
+                continue
 
             model_id = _model_info.get("id", "")
             ## RPM CHECK ##
@@ -13287,53 +13418,57 @@ class Router:
                         invalid_model_indices.add(idx)
                         continue
 
-            ## INVALID PARAMS ## -> catch 'gpt-3.5-turbo-16k' not supporting 'response_format' param
-            if request_kwargs is not None and litellm.drop_params is False:
-                # get supported params — use per-deployment model to avoid overwriting the outer model group name
-                _dep_model_for_params: str = _deployment_model or model
-                try:
-                    (
-                        _dep_model_for_params,
-                        custom_llm_provider,
-                        _,
-                        _,
-                    ) = litellm.get_llm_provider(
-                        model=_dep_model_for_params,
-                        litellm_params=LiteLLM_Params.model_validate(_litellm_params),
-                    )
-                except Exception as e:  # noqa: BLE001  # best-effort filter: an unresolvable provider must not fail the request
-                    verbose_router_logger.debug(
-                        "litellm.router.py::_pre_call_checks: skipping supported-params check for model=%s. Got - %s",
-                        _dep_model_for_params,
-                        e,
-                    )
-                    continue
+        typed_deployments: Final = tuple(
+            cast(DeploymentTypedDict, deployment)  # cast-ok: router deployments are plain dicts
+            for deployment in _returned_deployments
+        )
+        param_candidates: Final = tuple(
+            (idx, deployment) for idx, deployment in enumerate(typed_deployments) if idx not in invalid_model_indices
+        )
+        candidates_lacking_params: Final = tuple(
+            self._deployment_lacks_params(deployment, model, requested_params) for _, deployment in param_candidates
+        )
+        no_deployment_takes_params: Final = bool(candidates_lacking_params) and all(candidates_lacking_params)
+        candidates_failing_params: Final = (
+            tuple(
+                self._deployment_rejects_params(deployment, model, requested_params, request_settings)
+                for _, deployment in param_candidates
+            )
+            if no_deployment_takes_params
+            else candidates_lacking_params
+        )
+        excluded_indices: Final = frozenset(invalid_model_indices) | frozenset(
+            idx for (idx, _), fails in zip(param_candidates, candidates_failing_params, strict=True) if fails
+        )
 
-                supported_openai_params = litellm.get_supported_openai_params(
-                    model=_dep_model_for_params,
-                    custom_llm_provider=custom_llm_provider,
-                )
-
-                if supported_openai_params is None:
-                    continue
-                else:
-                    # check the non-default openai params in request kwargs
-                    non_default_params = litellm.utils.get_non_default_params(passed_params=request_kwargs)
-                    special_params = ["response_format"]
-                    # check if all params are supported
-                    for k, v in non_default_params.items():
-                        if k not in supported_openai_params and k in special_params:
-                            # if not -> invalid model
-                            verbose_router_logger.debug("INVALID MODEL INDEX @ REQUEST KWARG FILTERING, k=%s", k)
-                            invalid_model_indices.add(idx)
-
-        if len(invalid_model_indices) == len(_returned_deployments):
+        if len(excluded_indices) == len(_returned_deployments):
             """
             - no healthy deployments available b/c context window checks or rate limit error
 
             - First check for rate limit errors (if this is true, it means the model passed the context window check but failed the rate limit check)
             """
 
+            group_deployments: Final = (
+                tuple(request_deployments)
+                if request_deployments is not None
+                else (tuple(self.get_all_deployments(model_name=model)) or typed_deployments)
+            )
+            if (
+                not _context_window_error
+                and group_deployments
+                and all(
+                    self._deployment_rejects_params(deployment, model, requested_params, request_settings)
+                    for deployment in group_deployments
+                )
+            ):
+                raise litellm.UnsupportedParamsError(
+                    message=(
+                        f"no deployment of model={model} supports {sorted(requested_params)}. "
+                        "To drop these, set `litellm.drop_params=True` or for proxy `litellm_settings: drop_params: true`, "
+                        f"or send allowed_openai_params={sorted(requested_params)} to pass them through"
+                    ),
+                    model=model,
+                )
             if _rate_limit_error is True:  # allow generic fallback logic to take place
                 raise RouterRateLimitErrorBasic(
                     model=model,
@@ -13345,9 +13480,9 @@ class Router:
                     model=model,
                     llm_provider="",
                 )
-        if len(invalid_model_indices) > 0:
+        if len(excluded_indices) > 0:
             # Single-pass filter using set for O(1) lookups (avoids O(n^2) from repeated pops)
-            _returned_deployments = [d for i, d in enumerate(_returned_deployments) if i not in invalid_model_indices]
+            _returned_deployments = [d for i, d in enumerate(_returned_deployments) if i not in excluded_indices]
 
         return _returned_deployments
 
@@ -13770,6 +13905,10 @@ class Router:
                 )
             return healthy_deployments
 
+        request_deployments: Final = cast(  # cast-ok: router deployments are plain dicts
+            Sequence[DeploymentTypedDict], healthy_deployments
+        )
+
         # Health-check-based filtering (before cooldown)
         healthy_deployments = await self._async_filter_health_check_unhealthy_deployments(
             healthy_deployments=healthy_deployments,
@@ -13829,6 +13968,7 @@ class Router:
                     request_kwargs=request_kwargs,
                 ),
                 skip_inline_token_count=True,
+                request_deployments=request_deployments,
             )
         # check if user wants to do tag based routing
         healthy_deployments = await get_deployments_for_tag(
@@ -14995,6 +15135,9 @@ class Router:
             return healthy_deployments
 
         parent_otel_span: Final[Span | None] = get_parent_otel_span_from_kwargs(request_kwargs)
+        request_deployments: Final = cast(  # cast-ok: router deployments are plain dicts
+            Sequence[DeploymentTypedDict], healthy_deployments
+        )
 
         # Health-check-based filtering (before cooldown)
         healthy_deployments = self._filter_health_check_unhealthy_deployments(
@@ -15026,6 +15169,7 @@ class Router:
                 messages=messages,
                 input=input,
                 request_kwargs=request_kwargs,
+                request_deployments=request_deployments,
             )
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
@@ -15189,6 +15333,9 @@ class Router:
 
         # 4. Apply health-check and cooldown filtering
         parent_otel_span: Final[Span | None] = get_parent_otel_span_from_kwargs(request_kwargs)
+        request_deployments: Final = cast(  # cast-ok: router deployments are plain dicts
+            Sequence[DeploymentTypedDict], pass_through_deployments
+        )
         pass_through_deployments = self._filter_health_check_unhealthy_deployments(
             healthy_deployments=pass_through_deployments,
             parent_otel_span=parent_otel_span,
@@ -15210,6 +15357,7 @@ class Router:
                 messages=messages,
                 input=input,
                 request_kwargs=request_kwargs,
+                request_deployments=request_deployments,
             )
 
         if self._is_priority_routing_group(model):

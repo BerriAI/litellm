@@ -2,6 +2,7 @@
 Azure Anthropic messages transformation config - extends AnthropicMessagesConfig with Azure authentication
 """
 
+from collections.abc import Sequence
 from typing import Any, Final
 
 from litellm.llms.anthropic.pass_through.messages.transformation import (
@@ -29,7 +30,7 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
         self,
         headers: dict,
         model: str,
-        messages: list[Any],
+        messages: Sequence[object],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,

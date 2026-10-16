@@ -1315,3 +1315,21 @@ async def test_id_jag_source_describes_final_token_after_both_exchanges() -> Non
     assert result.ok.source.value == "id-jag"
     assert _emitted(result.ok.auth)["Authorization"] == "Bearer resource-token"
     assert len(endpoint.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_client_credentials_subscription_identity_preserves_resolved_grant_scopes():
+    async def resolve(token):
+        source = _FakeM2MSource(Ok(token))
+        result = await UpstreamCredentialProvider(client_credentials_source=source).resolve_credentials(_SUBJECT, _spec(_M2M))
+        assert isinstance(result, Ok)
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.client_credentials import ClientCredentialsBearerAuth
+        assert isinstance(result.ok, ClientCredentialsBearerAuth)
+        return result.ok.subscription_identity
+
+    original = await resolve(OAuthToken(access_token="original", scopes=("read", "write")))
+    renewed = await resolve(OAuthToken(access_token="renewed", scopes=("write", "read")))
+    reduced = await resolve(OAuthToken(access_token="renewed", scopes=("read",)))
+    assert original is not None
+    assert original == renewed
+    assert original != reduced

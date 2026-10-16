@@ -56,6 +56,10 @@ _INVOKE_PROVIDERS: Final = TypeAdapter(tuple[litellm.BEDROCK_INVOKE_PROVIDERS_LI
 )
 
 
+def _response_header(headers: Mapping[str, str], name: str) -> str | None:
+    return headers.get(name, None)
+
+
 def _bedrock_invoke_guardrail_headers(raw_guardrail_config: object) -> "dict[str, str]":
     try:
         guardrail_config: Final = _GUARDRAIL_CONFIG_VALIDATOR.validate_python(raw_guardrail_config)
@@ -398,8 +402,8 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             )
 
         ## CALCULATING USAGE - bedrock returns usage in the headers
-        bedrock_input_tokens: Final = raw_response.headers.get("x-amzn-bedrock-input-token-count", None)
-        bedrock_output_tokens: Final = raw_response.headers.get("x-amzn-bedrock-output-token-count", None)
+        bedrock_input_tokens: Final = _response_header(raw_response.headers, "x-amzn-bedrock-input-token-count")
+        bedrock_output_tokens: Final = _response_header(raw_response.headers, "x-amzn-bedrock-output-token-count")
 
         prompt_tokens: Final = int(bedrock_input_tokens or litellm.token_counter(messages=messages))
 

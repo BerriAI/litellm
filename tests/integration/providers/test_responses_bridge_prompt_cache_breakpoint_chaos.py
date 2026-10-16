@@ -8,7 +8,6 @@ from contextlib import ExitStack
 from pathlib import Path
 from queue import SimpleQueue
 from typing import Final
-from urllib.parse import urlsplit
 
 import httpx
 import psutil
@@ -17,6 +16,7 @@ import yaml
 from integration._support.client import Gateway, eventually
 from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from integration.providers._responses_bridge_prompt_cache_breakpoint import (
     _Call,
     _JSON_OBJECT,
@@ -86,8 +86,9 @@ async def test_worker_and_peer_outages_preserve_markers_and_recover(
         assert gate.wait(timeout=60), "The worker-kill burst was never released"
         return _responses_reply(request)
 
+    upstream_port: Final = allocate_port()
     with ExitStack() as peer_stack:
-        wire: Final = peer_stack.enter_context(wire_server(held))
+        wire: Final = peer_stack.enter_context(wire_server(held, port=upstream_port))
         config: Final = _chaos_config(wire, tmp_path)
         with owned_proxy_process(gateway, tmp_path, {}, config=config, workers=2) as owned:
             try:
@@ -113,9 +114,6 @@ async def test_worker_and_peer_outages_preserve_markers_and_recover(
                     early_successful: Final = tuple(item for item in early_served if item.status == 200)
                     for item in early_successful:
                         _assert_spend_for_result(item, _CONFIG_MODEL)
-                    upstream_port_value: Final = urlsplit(wire.url).port
-                    assert upstream_port_value is not None
-                    upstream_port: Final = upstream_port_value
                     active_by_worker: Final = eventually(
                         lambda: {pid: _open_upstream_connections(pid, upstream_port) for pid in workers},
                         lambda counts: sum(counts.values()) == len(calls) - len(early_calls),
