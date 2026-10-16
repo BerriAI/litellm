@@ -3,13 +3,16 @@ Helper functions for health check calls.
 """
 
 import base64
+import re
+import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal
 
+from litellm.litellm_core_utils.get_llm_provider_logic import strip_provider_family_prefix
 from litellm.llms.base_llm.ocr.transformation import DocumentType
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.ocr.entrypoints import NATIVE_OCR_HEALTH_CHECK_DOCUMENT
-from litellm.types.utils import LIST_BATCHES_SUPPORTED_PROVIDERS, LlmProviders
+from litellm.types.utils import LIST_BATCHES_SUPPORTED_PROVIDERS
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -80,23 +83,17 @@ def _ocr_health_check_document(model: str, custom_llm_provider: str) -> Document
     return native(model, custom_llm_provider)
 
 
-def _strip_known_provider_prefix(model: str, known_providers: frozenset[str]) -> str:
-    leading, sep, model_suffix = model.partition("/")
-    return model_suffix if sep and leading in known_providers else model
-
-
 def _wildcard_health_check_models(
     wildcard_suffix: str, custom_llm_provider: str, candidate_models: Sequence[str]
 ) -> tuple[str, ...]:
     if wildcard_suffix == "*":
         return tuple(candidate_models[:3])
-    known_providers: Final = frozenset(provider.value for provider in LlmProviders)
-    literal_prefix: Final = wildcard_suffix.replace("*", "")
-    stripped_ids: Final = tuple(_strip_known_provider_prefix(model, known_providers) for model in candidate_models)
-    matching: Final = tuple(stripped for stripped in stripped_ids if stripped.startswith(literal_prefix))
-    if matching:
-        return tuple(f"{custom_llm_provider}/{stripped}" for stripped in matching[:3])
-    return tuple(candidate_models[:3])
+    suffix_regex: Final = re.compile(re.escape(wildcard_suffix).replace(r"\*", ".*"))
+    model_ids: Final = (strip_provider_family_prefix(model, custom_llm_provider) for model in candidate_models)
+    matching: Final = tuple(
+        f"{custom_llm_provider}/{model_id}" for model_id in model_ids if suffix_regex.fullmatch(model_id)
+    )
+    return matching[:3] or tuple(candidate_models[:3])
 
 
 class HealthCheckHelpers:
@@ -112,8 +109,9 @@ class HealthCheckHelpers:
             pick_cheapest_chat_models_from_llm_provider,
         )
 
-        # this is a wildcard model, we need to pick a random model from the provider
-        cheapest_models = pick_cheapest_chat_models_from_llm_provider(custom_llm_provider=custom_llm_provider, n=10_000)
+        cheapest_models = pick_cheapest_chat_models_from_llm_provider(
+            custom_llm_provider=custom_llm_provider, n=sys.maxsize
+        )
         if len(cheapest_models) == 0:
             raise Exception(
                 f"Unable to health check wildcard model for provider {custom_llm_provider}. Add a model on your config.yaml or contribute here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"

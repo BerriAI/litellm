@@ -541,19 +541,26 @@ def test_gemini_model_info_partial_wildcard_has_unique_model_names(
 
 
 @pytest.mark.parametrize(
-    ("model_name", "deployment_model"),
+    ("model_name", "deployment_model", "route_namespace"),
     [
-        ("cloudflare/@cf/*", "cloudflare/@cf/*"),
-        ("gemini/gemini-2.5*", "gemini/gemini-2.5*"),
-        ("vertex_ai/gemini-*", "vertex_ai/gemini-*"),
-        ("fireworks_ai/accounts/fireworks/models/llama*", "fireworks_ai/accounts/fireworks/models/llama*"),
-        ("genai/test/*", "openai/*"),
-        ("custom/gemini-*", "gemini/*"),
-        ("team/claude-*", "anthropic/claude-*"),
+        ("cloudflare/@cf/*", "cloudflare/@cf/*", "cloudflare/"),
+        ("gemini/gemini-2.5*", "gemini/gemini-2.5*", "gemini/"),
+        ("vertex_ai/gemini-*", "vertex_ai/gemini-*", "vertex_ai/"),
+        (
+            "fireworks_ai/accounts/fireworks/models/llama*",
+            "fireworks_ai/accounts/fireworks/models/llama*",
+            "fireworks_ai/",
+        ),
+        ("genai/test/*", "openai/*", "genai/test/"),
+        ("team/claude-*", "anthropic/claude-*", "team/"),
     ],
 )
-def test_every_listed_partial_wildcard_id_routes_to_a_known_provider_model(
-    monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None, model_name: str, deployment_model: str
+def test_every_listed_wildcard_id_routes_to_the_known_model_it_names(
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
+    model_name: str,
+    deployment_model: str,
+    route_namespace: str,
 ) -> None:
     import litellm
     from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
@@ -579,6 +586,112 @@ def test_every_listed_partial_wildcard_id_routes_to_a_known_provider_model(
     assert listed
     assert len(listed) == len(set(listed))
     assert [routed for routed in routed_ids if routed.removeprefix(f"{provider}/") not in known_ids] == []
+    assert [
+        (model_id, routed)
+        for model_id, routed in zip(listed, routed_ids)
+        if routed != f"{provider}/{model_id.removeprefix(route_namespace)}"
+    ] == []
+
+
+@pytest.mark.parametrize(
+    ("model_name", "deployment_model"),
+    [
+        ("custom/gemini-*", "gemini/*"),
+        ("openai/gpt-4*", "openai/*"),
+        ("team/*", "anthropic/claude-*"),
+        ("*", "cloudflare/@cf/*"),
+        ("*", "gemini/gemini-2.5*"),
+    ],
+)
+def test_route_that_rewrites_part_of_the_model_name_lists_no_ids(
+    monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None, model_name: str, deployment_model: str
+) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", False)
+
+    assert get_known_models_from_wildcard(
+        wildcard_model=deployment_model, litellm_params=LiteLLM_Params(model=deployment_model)
+    )
+    assert (
+        get_known_models_from_wildcard(wildcard_model=model_name, litellm_params=LiteLLM_Params(model=deployment_model))
+        == []
+    )
+
+
+def test_partial_wildcard_without_a_deployment_lists_the_same_ids_as_with_one(
+    monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
+) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", False)
+    wildcard: Final = "cloudflare/@cf/*"
+
+    without_deployment: Final = get_known_models_from_wildcard(wildcard_model=wildcard, litellm_params=None)
+
+    assert without_deployment
+    assert without_deployment == get_known_models_from_wildcard(
+        wildcard_model=wildcard, litellm_params=LiteLLM_Params(model=wildcard)
+    )
+
+
+@pytest.mark.parametrize(
+    ("wildcard", "expected"),
+    [
+        ("wandb/*", ["wandb/openai/gpt-oss-20b", "wandb/openai/gpt-oss-120b"]),
+        ("wandb/openai/*", ["wandb/openai/gpt-oss-20b", "wandb/openai/gpt-oss-120b"]),
+        ("wandb/gpt*", []),
+    ],
+)
+def test_wildcard_keeps_a_vendor_namespace_that_matches_another_provider_name(
+    monkeypatch: pytest.MonkeyPatch, wildcard: str, expected: list[str]
+) -> None:
+    from litellm.proxy.auth import model_checks
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(
+        model_checks,
+        "get_provider_models",
+        lambda provider, litellm_params=None: ["openai/gpt-oss-20b", "wandb/openai/gpt-oss-120b"],
+    )
+
+    assert get_known_models_from_wildcard(wildcard_model=wildcard, litellm_params=LiteLLM_Params(model=wildcard)) == (
+        expected
+    )
+
+
+def test_complete_model_list_lists_each_id_once_across_deployments_of_one_wildcard(
+    monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
+) -> None:
+    import litellm
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", False)
+    wildcard: Final = "gemini/gemini-2.5*"
+    router: Final = Router(
+        model_list=[
+            {"model_name": wildcard, "litellm_params": {"model": wildcard, "api_key": "key-a"}},
+            {"model_name": wildcard, "litellm_params": {"model": wildcard, "api_key": "key-b"}},
+        ]
+    )
+
+    listed: Final = get_complete_model_list(
+        key_models=[],
+        team_models=[],
+        proxy_model_list=[wildcard],
+        user_model=None,
+        infer_model_from_keys=False,
+        llm_router=router,
+    )
+
+    assert listed
+    assert len(listed) == len(set(listed))
 
 
 @pytest.mark.parametrize(

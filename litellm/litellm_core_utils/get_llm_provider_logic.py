@@ -14,6 +14,9 @@ from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.secret_managers.main import get_secret, get_secret_str
 
 from ..types.router import GenericLiteLLMParams, LiteLLM_Params
+from ..types.utils import LlmProviders
+
+_KNOWN_PROVIDERS: Final = frozenset(provider.value for provider in LlmProviders)
 
 
 def _endpoint_matches_api_base(endpoint: str, api_base: str) -> bool:
@@ -144,6 +147,16 @@ def declared_authenticating_provider(model: str | None, custom_llm_provider: str
     """
     declared: Final = custom_llm_provider or (model.split("/", 1)[0] if model and "/" in model else None)
     return declared if declared in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO else None
+
+
+def strip_provider_family_prefix(model: str, custom_llm_provider: str) -> str:
+    leading, sep, model_id = model.partition("/")
+    if not sep:
+        return model
+    is_provider_family: Final = leading == custom_llm_provider or (
+        leading in _KNOWN_PROVIDERS and custom_llm_provider.startswith(f"{leading}_")
+    )
+    return model_id if is_provider_family else model
 
 
 def inferred_provider(model: str | None) -> str | None:

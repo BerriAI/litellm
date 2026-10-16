@@ -1525,6 +1525,22 @@ def test_wildcard_health_check_models_partial_prefix_filters_candidates_to_liter
     ) == ("openai/gpt-4o-mini", "openai/gpt-4.1-mini", "openai/gpt-4o")
 
 
+def test_wildcard_health_check_models_keeps_a_vendor_namespace_that_matches_another_provider_name():
+    candidates: Final = ("openai/gpt-oss-20b", "wandb/openai/gpt-oss-120b")
+
+    assert _wildcard_health_check_models("openai/gpt*", "wandb", candidates) == (
+        "wandb/openai/gpt-oss-20b",
+        "wandb/openai/gpt-oss-120b",
+    )
+    assert "wandb/gpt-oss-20b" not in _wildcard_health_check_models("gpt*", "wandb", candidates)
+
+
+def test_wildcard_health_check_models_strips_the_provider_family_prefix():
+    assert _wildcard_health_check_models("gemma*", "ollama_chat", ["ollama/llama3:8b", "ollama/gemma3:1b"]) == (
+        "ollama_chat/gemma3:1b",
+    )
+
+
 def test_wildcard_health_check_models_partial_prefix_matching_nothing_keeps_cheapest_candidates():
     assert _wildcard_health_check_models("ft:*", "openai", ["gpt-4o-mini", "gpt-4.1-nano"]) == (
         "gpt-4o-mini",
@@ -1533,21 +1549,35 @@ def test_wildcard_health_check_models_partial_prefix_matching_nothing_keeps_chea
 
 
 @pytest.mark.asyncio
-async def test_ahealth_check_partial_prefix_wildcard_never_probes_a_spliced_model_id():
+async def test_ahealth_check_partial_prefix_wildcard_never_probes_a_spliced_model_id(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
     from litellm.litellm_core_utils.llm_request_utils import pick_cheapest_chat_models_from_llm_provider
 
-    cheapest: Final = pick_cheapest_chat_models_from_llm_provider(custom_llm_provider="databricks", n=3)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    cheapest: Final = pick_cheapest_chat_models_from_llm_provider(custom_llm_provider="databricks", n=1)
+    upstream: Final = respx_mock.post("https://dbx.test/serving-endpoints/chat/completions").respond(
+        json={
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "probe",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+    )
 
-    captured: dict[str, object] = {}
+    result: Final = await ahealth_check(
+        model_params={
+            "model": "databricks/system.ai.*",
+            "api_key": "x",
+            "api_base": "https://dbx.test/serving-endpoints",
+        },
+        mode="chat",
+    )
 
-    async def _capture(**kwargs):
-        captured.update(kwargs)
-
-    with patch("litellm.acompletion", side_effect=_capture):
-        await ahealth_check(
-            model_params={"model": "databricks/system.ai.*", "api_key": "x", "api_base": "https://example.invalid"},
-            mode="chat",
-        )
-
-    assert captured["model"] == cheapest[0]
-    assert captured["fallbacks"] == list(cheapest[1:])
+    assert "error" not in result, result
+    assert upstream.call_count == 1
+    assert json.loads(upstream.calls[0].request.content)["model"] == cheapest[0].removeprefix("databricks/")
