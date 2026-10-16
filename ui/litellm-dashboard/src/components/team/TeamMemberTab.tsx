@@ -10,6 +10,7 @@ import MemberTable from "@/components/common_components/MemberTable";
 import type { StoredModelMaxBudget } from "@/components/key_team_helpers/modelMaxBudgetPayload";
 import { Member } from "@/components/networking";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
+import { tempBudgetStatus } from "@/components/shared/InheritedBudgetHint";
 import { DateCell, MoneyCell } from "@/components/shared/table_cells";
 import { toast } from "@/lib/toast";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
@@ -117,6 +118,12 @@ export default function TeamMemberTab({
     return membership?.litellm_budget_table?.max_budget ?? teamDefaultBudget;
   };
 
+  const getUserTempBudget = (userId: string | null) => {
+    if (!userId) return null;
+    const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
+    return tempBudgetStatus(membership?.litellm_budget_table);
+  };
+
   // Helper function to get rate limits for a user
   const getUserRateLimits = (userId: string | null): string => {
     if (!userId) return "No Limits";
@@ -160,6 +167,7 @@ export default function TeamMemberTab({
           </SimpleTooltip>
         </span>
       ),
+      label: "Model Scope",
       key: "model_scope",
       render: (record: Member) => {
         const models = getUserAllowedModels(record.user_id);
@@ -193,6 +201,7 @@ export default function TeamMemberTab({
           </SimpleTooltip>
         </span>
       ),
+      label: "Current Cycle Spend",
       key: "spend",
       numeric: true,
       sortValue: (record: Member) => getUserCurrentCycleSpend(record.user_id),
@@ -207,6 +216,7 @@ export default function TeamMemberTab({
           </SimpleTooltip>
         </span>
       ),
+      label: "Total Spend",
       key: "total_spend",
       numeric: true,
       sortValue: (record: Member) => getUserTotalSpend(record.user_id),
@@ -221,6 +231,7 @@ export default function TeamMemberTab({
           </SimpleTooltip>
         </span>
       ),
+      label: "Team Member Budget",
       key: "budget",
       numeric: true,
       sortValue: (record: Member) => getUserBudget(record.user_id),
@@ -250,7 +261,38 @@ export default function TeamMemberTab({
       },
     },
     {
+      title: (
+        <span className="flex items-center gap-1">
+          Temporary Budget (USD)
+          <SimpleTooltip content="Extra budget added on top of the member's budget until the expiry date. Once it expires, the member goes back to the budget shown in Team Member Budget.">
+            <CircleHelp className="size-4" aria-label="Temporary budget information" />
+          </SimpleTooltip>
+        </span>
+      ),
+      label: "Temporary Budget",
+      key: "temp_budget",
+      numeric: true,
+      sortValue: (record: Member) => {
+        const tempBudget = getUserTempBudget(record.user_id);
+        return tempBudget?.active ? tempBudget.amount : null;
+      },
+      render: (record: Member) => {
+        const tempBudget = getUserTempBudget(record.user_id);
+        if (!tempBudget) return <span className="text-muted-foreground">-</span>;
+        return (
+          <span
+            data-testid="member-temp-budget"
+            data-active={tempBudget.active}
+            className={tempBudget.active ? "block" : "block text-muted-foreground line-through"}
+          >
+            <MoneyCell value={tempBudget.amount} decimals={2} />
+          </span>
+        );
+      },
+    },
+    {
       title: "Budget Reset",
+      label: "Budget Reset",
       key: "budget_reset",
       sortValue: (record: Member) => getUserBudgetReset(record.user_id),
       render: (record: Member) => <DateCell value={getUserBudgetReset(record.user_id)} precision="date" />,
@@ -264,6 +306,7 @@ export default function TeamMemberTab({
           </SimpleTooltip>
         </span>
       ),
+      label: "Team Member Rate Limits",
       key: "rate_limits",
       render: (record: Member) => <span>{getUserRateLimits(record.user_id)}</span>,
     },
@@ -309,6 +352,7 @@ export default function TeamMemberTab({
     <>
       <MemberTable
         key={teamData.team_id}
+        columnsTableId="team-members"
         members={teamData.team_info.members_with_roles}
         canEdit={canEditTeam}
         onEdit={(record) => {

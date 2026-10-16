@@ -96,6 +96,21 @@ const activeIncrease = (row: MemberBudgetRow, now: Date): number => {
   return row?.temp_budget_increase ?? 0;
 };
 
+export interface TempBudgetStatus {
+  amount: number;
+  expiresAt: Date;
+  active: boolean;
+}
+
+// Describes a stored temporary increase for display. Returns null when there is nothing worth showing
+// (no increase, a 0 increase, or an unparseable expiry); `active` is false once the expiry has passed.
+export const tempBudgetStatus = (row: MemberBudgetRow, now: Date = new Date()): TempBudgetStatus | null => {
+  const expiry = tempBudgetExpiryMs(row);
+  const amount = row?.temp_budget_increase ?? 0;
+  if (expiry === null || Number.isNaN(expiry) || amount <= 0) return null;
+  return { amount, expiresAt: new Date(expiry), active: expiry > now.getTime() };
+};
+
 export const teamMemberBudgetGate = (
   teamInfo: TeamMemberBudgetSource | null | undefined,
   userId: string | null | undefined,
