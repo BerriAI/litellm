@@ -19,7 +19,7 @@ from openai._types import RequestOptions
 from openai.types import CreateEmbeddingResponse
 from openai.types.beta.assistant_deleted import AssistantDeleted
 from openai.types.file_deleted import FileDeleted
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import overload
 
 import litellm
@@ -352,6 +352,37 @@ _NO_EXTRA_HEADERS: Final[Mapping[str, str]] = types.MappingProxyType({})
 _SDK_OPTION_KEYS: Final = frozenset(("extra_headers", "extra_query", "extra_body"))
 
 
+_STR_DICT_ADAPTER: Final = TypeAdapter(dict[str, str])
+
+
+def _first_non_ascii_header(extra_headers: Mapping[str, str] | None) -> str | None:
+    """Name the first non-ASCII entry in `extra_headers`, or None if there isn't one."""
+    if extra_headers is None:
+        return None
+    return next((k for k, v in extra_headers.items() if not v.isascii()), None)
+
+
+def _non_ascii_header_error(extra_headers: Mapping[str, str] | None, original_error: UnicodeEncodeError) -> OpenAIError:
+    """Re-raise a bare httpx ``UnicodeEncodeError`` (``'ascii' codec can't encode
+    character ...``) naming the offending header when it is one litellm set.
+
+    Names only the header, never its value: the header may itself be a
+    credential (e.g. a configured ``x-api-key``), and this becomes a customer-
+    facing error message.
+    """
+    offending: Final = _first_non_ascii_header(extra_headers)
+    message: Final = (
+        f"extra_headers['{offending}'] contains a non-ASCII character and cannot be sent as an HTTP header value."
+        if offending is not None
+        else (
+            "A request header contains a non-ASCII character and cannot be sent as an HTTP header value. "
+            "None of this request's extra_headers are at fault, so check api_key, api_base and organization "
+            f"for stray non-ASCII characters. Original error: {original_error}"
+        )
+    )
+    return OpenAIError(status_code=400, message=message)
+
+
 def _embedding_request_without_sdk_defaults(
     data: Mapping[str, object], timeout: float | httpx.Timeout
 ) -> tuple[Mapping[str, object], RequestOptions]:
@@ -538,6 +569,12 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             if not is_output_token_limit_error(e):
                 raise
             return build_output_token_limit_response(e=e, data=data, is_async=True)
+        except UnicodeEncodeError as e:
+            try:
+                extra_headers: Final = _STR_DICT_ADAPTER.validate_python(data["extra_headers"])
+            except (KeyError, ValidationError):
+                raise _non_ascii_header_error(None, original_error=e) from e
+            raise _non_ascii_header_error(extra_headers, original_error=e) from e
         except Exception as e:
             raise e
 
@@ -575,6 +612,12 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             if not is_output_token_limit_error(e):
                 raise
             return build_output_token_limit_response(e=e, data=data, is_async=False)
+        except UnicodeEncodeError as e:
+            try:
+                extra_headers: Final = _STR_DICT_ADAPTER.validate_python(data["extra_headers"])
+            except (KeyError, ValidationError):
+                raise _non_ascii_header_error(None, original_error=e) from e
+            raise _non_ascii_header_error(extra_headers, original_error=e) from e
         except Exception as e:
             if raw_response is not None:
                 raise Exception(
