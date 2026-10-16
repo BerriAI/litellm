@@ -3,6 +3,7 @@ package litellm
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -269,6 +270,7 @@ func TestResourceLiteLLMModelPlanComparesAdditionalDropParamsWithProxy(t *testin
 		configLocation string
 		stored         interface{}
 		storedLocation string
+		extraConfig    map[string]interface{}
 		wantChanged    []string
 	}{
 		"list never sent by an older provider": {configured: `["store"]`, configLocation: "eu", storedLocation: "eu", wantChanged: []string{listKey}},
@@ -276,6 +278,20 @@ func TestResourceLiteLLMModelPlanComparesAdditionalDropParamsWithProxy(t *testin
 			configured:     `["store", "vertex_location", "tpm", "max_parallel_requests"]`,
 			configLocation: "eu",
 			wantChanged:    []string{listKey, "vertex_location", "tpm", parallelKey},
+		},
+		"listed flag an older provider deleted": {
+			configured:     `["merge_reasoning_content_in_choices"]`,
+			configLocation: "eu",
+			storedLocation: "eu",
+			extraConfig:    map[string]interface{}{"merge_reasoning_content_in_choices": true},
+			wantChanged:    []string{listKey, "merge_reasoning_content_in_choices"},
+		},
+		"listed key an older provider still sent": {
+			configured:     `["litellm_credential_name"]`,
+			configLocation: "eu",
+			storedLocation: "eu",
+			extraConfig:    map[string]interface{}{"litellm_credential_name": "vertex-cred"},
+			wantChanged:    []string{listKey},
 		},
 		"list changed in the Admin UI":         {configured: `["store"]`, configLocation: "eu", stored: []string{"temperature"}, storedLocation: "eu", wantChanged: []string{listKey}},
 		"list set outside Terraform":           {configLocation: "eu", stored: []string{"store"}, storedLocation: "eu"},
@@ -318,6 +334,7 @@ func TestResourceLiteLLMModelPlanComparesAdditionalDropParamsWithProxy(t *testin
 			if tc.configLocation != "" {
 				config["vertex_location"] = tc.configLocation
 			}
+			maps.Copy(config, tc.extraConfig)
 			d := schema.TestResourceDataRaw(t, res.Schema, config)
 			d.SetId("model-123")
 			if err := resourceLiteLLMModelRead(d, NewClient(srv.URL, "test-key", true)); err != nil {
@@ -328,7 +345,7 @@ func TestResourceLiteLLMModelPlanComparesAdditionalDropParamsWithProxy(t *testin
 			if err != nil {
 				t.Fatalf("diff failed: %v", err)
 			}
-			for _, key := range []string{listKey, "vertex_location", "tpm", parallelKey} {
+			for _, key := range []string{listKey, "vertex_location", "tpm", parallelKey, "merge_reasoning_content_in_choices", "litellm_credential_name"} {
 				attr := (*terraform.ResourceAttrDiff)(nil)
 				if diff != nil {
 					attr = diff.Attributes[key]
