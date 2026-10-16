@@ -1,9 +1,11 @@
 import json
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from dataclasses import replace as dataclasses_replace
 from enum import Enum
 from typing import Any, Final, Literal, cast
+
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -35,6 +37,7 @@ class BatchCostUsageResult:
 
 
 _COMPLETED_BATCH_STATUSES: Final = frozenset({"completed", "complete"})
+_DECODED_BATCH_LINE: Final = TypeAdapter(object)
 
 
 def _uses_native_vertex_output(
@@ -70,7 +73,17 @@ def batch_cost_is_final(batch: Batch) -> bool:
 
 
 async def calculate_batch_cost_and_usage(
-    file_content_dictionary: list[dict[str, object]],
+    file_content_dictionary: Sequence[dict[str, object]],
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral"],
+    model_name: str | None = None,
+    model_info: ModelInfo | None = None,
+) -> BatchCostUsageResult:
+    """Calculate the cost and usage of a batch, see batch_cost_and_usage."""
+    return batch_cost_and_usage(file_content_dictionary, custom_llm_provider, model_name, model_info)
+
+
+def batch_cost_and_usage(
+    file_content_dictionary: Sequence[dict[str, object]],  # mutable-ok: the rows calculate_batch_cost_and_usage takes
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral"],
     model_name: str | None = None,
     model_info: ModelInfo | None = None,
@@ -436,7 +449,7 @@ def _provider_output_file_id(output_file_id: str) -> str:
     return extracted
 
 
-async def _fetch_batch_managed_file_content(
+async def fetch_batch_managed_file_content(
     file_id: str,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral"] = "openai",
     litellm_params: Mapping[str, object] | None = None,
@@ -465,6 +478,9 @@ async def _fetch_batch_managed_file_content(
 
     _file_content: Final = await afile_content(**file_content_kwargs)
     return _file_content.content
+
+
+_fetch_batch_managed_file_content: Final = fetch_batch_managed_file_content
 
 
 async def _fetch_batch_output_file_content(
@@ -604,14 +620,14 @@ def _iter_batch_output_entries(file_content: bytes) -> Iterator[dict[str, object
     whole batch's cost accounting.
     """
     for line in iter_batch_input_lines(file_content):
-        entry = _parse_batch_output_line(line)
+        entry = parse_batch_output_line(line)
         if entry is not None:
             yield entry
 
 
-def _parse_batch_output_line(line: bytes) -> dict[str, object] | None:
+def parse_batch_output_line(line: bytes) -> dict[str, object] | None:
     try:
-        parsed: Final[object] = json.loads(line)
+        parsed: Final = _DECODED_BATCH_LINE.validate_python(json.loads(line))
     except ValueError as e:
         verbose_logger.warning("skipping malformed batch output line: %s", str(e))
         return None

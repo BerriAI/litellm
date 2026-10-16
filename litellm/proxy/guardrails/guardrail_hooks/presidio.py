@@ -30,6 +30,7 @@ from litellm.constants import (
     PRESIDIO_ANALYZE_CHUNK_CONCURRENCY,
     PRESIDIO_ANALYZE_CHUNK_OVERLAP_CHARS,
 )
+from litellm.litellm_core_utils.core_helpers import attribute_items, attribute_or_none
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -91,6 +92,10 @@ class _JsonResponse(Protocol):
 
 async def _json_body(response: _JsonResponse) -> object:
     return await response.json()
+
+
+def _write_attribute(target: object, name: str, value: object) -> None:
+    setattr(target, name, value)
 
 
 _LoopSemaphores = dict[asyncio.AbstractEventLoop, asyncio.Semaphore]
@@ -1373,38 +1378,41 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         )
 
             # 2. Process tool calls
-            tool_calls = getattr(message, "tool_calls", None)
-            if tool_calls:
-                tool_call: object
-                for tool_call in tool_calls:
-                    function = getattr(tool_call, "function", None)
-                    if function and hasattr(function, "arguments"):
-                        args = function.arguments
-                        if isinstance(args, str):
-                            if mode == "unmask":
-                                function.arguments = self._unmask_pii_text(args, pii_tokens)
-                            elif mode == "mask":
-                                function.arguments = await self.check_pii(
-                                    text=args,
-                                    output_parse_pii=False,
-                                    presidio_config=presidio_config,
-                                    request_data=request_data,
-                                )
-
-            # 3. Process legacy function calls
-            function_call = getattr(message, "function_call", None)
-            if function_call and hasattr(function_call, "arguments"):
-                args = function_call.arguments
+            for tool_call in attribute_items(message, "tool_calls"):
+                function = attribute_or_none(tool_call, "function")
+                args = attribute_or_none(function, "arguments") if function else None
                 if isinstance(args, str):
                     if mode == "unmask":
-                        function_call.arguments = self._unmask_pii_text(args, pii_tokens)
+                        _write_attribute(function, "arguments", self._unmask_pii_text(args, pii_tokens))
                     elif mode == "mask":
-                        function_call.arguments = await self.check_pii(
-                            text=args,
+                        _write_attribute(
+                            function,
+                            "arguments",
+                            await self.check_pii(
+                                text=args,
+                                output_parse_pii=False,
+                                presidio_config=presidio_config,
+                                request_data=request_data,
+                            ),
+                        )
+
+            # 3. Process legacy function calls
+            function_call = attribute_or_none(message, "function_call")
+            legacy_args = attribute_or_none(function_call, "arguments") if function_call else None
+            if isinstance(legacy_args, str):
+                if mode == "unmask":
+                    _write_attribute(function_call, "arguments", self._unmask_pii_text(legacy_args, pii_tokens))
+                elif mode == "mask":
+                    _write_attribute(
+                        function_call,
+                        "arguments",
+                        await self.check_pii(
+                            text=legacy_args,
                             output_parse_pii=False,
                             presidio_config=presidio_config,
                             request_data=request_data,
-                        )
+                        ),
+                    )
         return response
 
     async def _mask_output_response(

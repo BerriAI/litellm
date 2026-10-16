@@ -336,6 +336,18 @@ model_list:
       model: openai/responses/gpt-6.1-sol
       api_base: http://127.0.0.1:8191
       api_key: synthetic-openai-key
+  - model_name: contract-affinity-responses
+    litellm_params:
+      model: openai/responses/gpt-6.1-sol
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-openai-key
+      provider_affinity_header: x-session-affinity
+  - model_name: contract-affinity-anthropic
+    litellm_params:
+      model: anthropic/claude-sonnet-5-5
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-anthropic-key
+      provider_affinity_header: x-session-affinity
   - model_name: azure/gpt-5.4
     litellm_params:
       model: azure/gpt-5.4
