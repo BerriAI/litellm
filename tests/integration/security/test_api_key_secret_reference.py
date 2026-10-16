@@ -508,6 +508,23 @@ def test_input_token_count_with_an_unreadable_reference_fails_closed(rig: _Rig) 
     assert str(rig.secrets.allowed) not in response.text, response.text
 
 
+def test_messages_with_an_unreadable_reference_hides_the_token_path(rig: _Rig) -> None:
+    marker: Final = _marker()
+    response: Final = rig.owned.gateway.request(
+        "POST",
+        "/v1/messages",
+        {
+            "model": _UNREADABLE["missing_file"],
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": f"say {marker}"}],
+        },
+        headers=_CLOSE,
+    )
+    reached: Final = _carrying(rig.provider.requests(), marker)
+    assert (response.status_code, reached) == (401, ()), (response.text, _bearers(reached))
+    assert str(rig.secrets.allowed) not in response.text, response.text
+
+
 @pytest.mark.parametrize("source", ("config_credential", "config_inline"))
 def test_provider_token_count_sends_the_current_token(rig: _Rig, source: str) -> None:
     marker: Final = _marker()

@@ -58,7 +58,7 @@ from litellm._lazy_imports import (
     get_messages_reach_token_count,
     get_token_counter_new,
 )
-from litellm._logging import redact_secrets
+from litellm._logging import redact_internal_details_from_client_message, redact_secrets
 from litellm._uuid import uuid
 from litellm.constants import (
     DEFAULT_CHAT_COMPLETION_PARAM_VALUES,
@@ -762,27 +762,29 @@ def _secret_behind_api_key_reference(
     reference: AdminApiKeySecretReference, model: object, llm_provider: object, upstream: Mapping[str, object]
 ) -> str:
     if not reference.may_reach(upstream):
-        raise AuthenticationError(
-            message=_unreachable_upstream_message(reference), llm_provider=llm_provider, model=model
-        )
+        raise _secret_reference_error(_unreachable_upstream_message(reference), llm_provider=llm_provider, model=model)
     if not reference.startswith(LOCAL_OIDC_SECRET_PREFIXES):
-        raise AuthenticationError(
-            message=(
-                f"api_key {reference} is an oidc/ secret reference of a kind api_key does not support. "
-                "Use oidc/file/<absolute path> or oidc/env/<VARIABLE_NAME>."
-            ),
+        raise _secret_reference_error(
+            f"api_key {reference} is an oidc/ secret reference of a kind api_key does not support. "
+            "Use oidc/file/<absolute path> or oidc/env/<VARIABLE_NAME>.",
             llm_provider=llm_provider,
             model=model,
         )
     match resolve_local_oidc_reference(reference):
         case UnresolvableSecretReference(reason=reason):
-            raise AuthenticationError(
-                message=f"api_key secret reference {reference} could not be resolved: {reason}",
+            raise _secret_reference_error(
+                f"api_key secret reference {reference} could not be resolved: {reason}",
                 llm_provider=llm_provider,
                 model=model,
             )
         case str() as secret:
             return secret
+
+
+def _secret_reference_error(message: str, llm_provider: object, model: object) -> AuthenticationError:
+    return AuthenticationError(
+        message=redact_internal_details_from_client_message(message), llm_provider=llm_provider, model=model
+    )
 
 
 def _unreachable_upstream_message(reference: AdminApiKeySecretReference) -> str:

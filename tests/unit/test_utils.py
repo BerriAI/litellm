@@ -6907,7 +6907,7 @@ def test_explicit_api_key_wins_over_a_named_credential_reference(
         (lambda tmp_path: f"oidc/file/{tmp_path / 'binary'}", "not UTF-8 text"),
     ],
 )
-def test_unresolvable_oidc_api_key_fails_closed_naming_the_reference_without_its_content(
+def test_unresolvable_oidc_api_key_fails_closed_naming_the_reason_without_its_path_or_content(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     make_reference: Callable[[Path], str],
@@ -6928,8 +6928,8 @@ def test_unresolvable_oidc_api_key_fails_closed_naming_the_reference_without_its
 
     assert not route.called
     assert excinfo.value.status_code == 401
-    assert reference in excinfo.value.message
     assert reason in excinfo.value.message
+    assert str(tmp_path.parent) not in excinfo.value.message
     assert "FILE-CONTENT" not in excinfo.value.message
     assert "0xff" not in excinfo.value.message
 
