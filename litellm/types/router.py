@@ -541,6 +541,10 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         default=None,
         description="Send the LiteLLM user id of the calling key as the `user` field on Fireworks AI chat, responses and messages requests.",
     )
+    hosted_vllm_cache_salt: bool | None = Field(
+        default=None,
+        description="Set vLLM's `cache_salt` from the calling key on hosted_vllm chat and responses requests, so prefix-cache hits are never shared across keys.",
+    )
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
     merge_reasoning_content_in_choices: bool | None = False
     model_info: dict | None = None

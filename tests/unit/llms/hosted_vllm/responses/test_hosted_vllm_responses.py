@@ -183,3 +183,61 @@ def test_hosted_vllm_validate_environment_custom_api_key():
     )
 
     assert headers.get("Authorization") == "Bearer my-custom-key"
+
+
+def _sent_responses_body(**call_kwargs) -> dict:
+    mock_client = _make_mock_http_client(_make_mock_responses_api_response())
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.get_httpx_client",
+        return_value=mock_client,
+    ):
+        litellm.responses(
+            model="hosted_vllm/Qwen/Qwen3-8B",
+            input="hi",
+            api_base="https://test-vllm.example.com/v1",
+            api_key="test-key",
+            **call_kwargs,
+        )
+    kwargs = mock_client.post.call_args.kwargs
+    return kwargs["json"] if "json" in kwargs else json.loads(kwargs["data"])
+
+
+def test_responses_cache_salt_is_per_key():
+    alice = _sent_responses_body(hosted_vllm_cache_salt=True, litellm_metadata={"user_api_key_hash": "hash-alice"})
+    bob = _sent_responses_body(hosted_vllm_cache_salt=True, litellm_metadata={"user_api_key_hash": "hash-bob"})
+    assert len(alice["cache_salt"]) == 64
+    assert alice["cache_salt"] != bob["cache_salt"]
+    assert "hosted_vllm_cache_salt" not in alice
+
+
+def test_responses_cache_salt_mixes_caller_salt_from_extra_body():
+    opted_in = {"hosted_vllm_cache_salt": True, "litellm_metadata": {"user_api_key_hash": "hash-alice"}}
+    plain = _sent_responses_body(**opted_in)["cache_salt"]
+    split = _sent_responses_body(**opted_in, extra_body={"cache_salt": "end-user-1"})["cache_salt"]
+    forged = _sent_responses_body(
+        hosted_vllm_cache_salt=True,
+        litellm_metadata={"user_api_key_hash": "hash-bob"},
+        extra_body={"cache_salt": plain},
+    )["cache_salt"]
+    assert split not in (plain, "end-user-1")
+    assert forged != plain
+
+
+@pytest.mark.parametrize(
+    "call_kwargs, expected_salt",
+    [
+        pytest.param(
+            {"hosted_vllm_cache_salt": True, "metadata": {"user_api_key_hash": "hash-alice"}},
+            None,
+            id="ignores-caller-responses-metadata",
+        ),
+        pytest.param({"litellm_metadata": {"user_api_key_hash": "hash-alice"}}, None, id="not-opted-in-sends-no-salt"),
+        pytest.param(
+            {"litellm_metadata": {"user_api_key_hash": "hash-alice"}, "extra_body": {"cache_salt": "caller"}},
+            "caller",
+            id="not-opted-in-keeps-caller-salt",
+        ),
+    ],
+)
+def test_responses_cache_salt_untouched_without_opt_in_or_caller_key(call_kwargs, expected_salt):
+    assert _sent_responses_body(**call_kwargs).get("cache_salt") == expected_salt

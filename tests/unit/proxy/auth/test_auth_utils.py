@@ -3303,6 +3303,28 @@ class TestIsRequestBodySafeBlocksFireworksForwardUserId:
         )
 
 
+class TestIsRequestBodySafeBlocksHostedVllmCacheSalt:
+    @pytest.mark.parametrize("value", [True, False])
+    @pytest.mark.parametrize(
+        "body_for",
+        [
+            pytest.param(lambda value: {"hosted_vllm_cache_salt": value}, id="root"),
+            pytest.param(lambda value: {"extra_body": {"hosted_vllm_cache_salt": value}}, id="extra_body"),
+            pytest.param(lambda value: {"metadata": {"hosted_vllm_cache_salt": value}}, id="metadata"),
+        ],
+    )
+    def test_hosted_vllm_cache_salt_in_request_body_is_rejected(
+        self, body_for: Callable[[bool], dict[str, object]], value: bool
+    ) -> None:
+        with pytest.raises(ValueError, match="hosted_vllm_cache_salt"):
+            is_request_body_safe(
+                request_body={"model": "vllm-model", **body_for(value)},
+                general_settings={},
+                llm_router=None,
+                model="vllm-model",
+            )
+
+
 class TestIsRequestBodySafeBlocksRustOptIn:
     """``rust`` hands the whole call to the Rust core, which signs and sends
     with its own HTTP client rather than the one the deployment configured, and

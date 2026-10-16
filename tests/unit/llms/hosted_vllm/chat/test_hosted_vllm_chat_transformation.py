@@ -397,3 +397,125 @@ def test_hosted_vllm_custom_tools_use_top_level_input_schema():
     assert tools[0]["function"]["name"] == "search"
     assert tools[0]["function"]["description"] == "Search docs"
     assert tools[0]["function"]["parameters"] == input_schema
+
+
+def _vllm_chat_client() -> MagicMock:
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    body = {
+        "id": "chat-cache-salt",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "Qwen/Qwen3-8B",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    raw_response = MagicMock()
+    raw_response.status_code = 200
+    raw_response.headers = {}
+    raw_response.text = json.dumps(body)
+    raw_response.json = lambda: body
+    client = MagicMock(spec=HTTPHandler)
+    client.post.return_value = raw_response
+    return client
+
+
+def _sent_chat_body(**call_kwargs: object) -> dict:
+    import litellm
+
+    client = _vllm_chat_client()
+    litellm.completion(
+        model="hosted_vllm/Qwen/Qwen3-8B",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base="http://vllm.internal:8000/v1",
+        client=client,
+        **call_kwargs,
+    )
+    return json.loads(client.post.call_args.kwargs["data"])
+
+
+def _salt_for(key_hash: str, **call_kwargs: object) -> str | None:
+    body = _sent_chat_body(hosted_vllm_cache_salt=True, metadata={"user_api_key_hash": key_hash}, **call_kwargs)
+    assert "hosted_vllm_cache_salt" not in body
+    return body.get("cache_salt")
+
+
+def test_cache_salt_is_per_key_and_stable():
+    alice = _salt_for("hash-alice")
+    assert alice is not None and len(alice) == 64
+    assert alice == _salt_for("hash-alice")  # same key -> same salt -> prefix reuse kept
+    assert alice != _salt_for("hash-bob")  # other key -> no shared prefix-cache hits
+    assert alice != "hash-alice"
+
+
+@pytest.mark.parametrize(
+    "caller_salt_kwargs",
+    [
+        pytest.param({"cache_salt": "end-user-1"}, id="top-level"),
+        pytest.param({"extra_body": {"cache_salt": "end-user-1"}}, id="extra-body"),
+    ],
+)
+def test_caller_salt_splits_a_key_but_never_crosses_keys(caller_salt_kwargs: dict):
+    alice = _salt_for("hash-alice")
+    alice_user = _salt_for("hash-alice", **caller_salt_kwargs)
+    assert alice_user not in (alice, "end-user-1")
+    assert alice_user == _salt_for("hash-alice", **caller_salt_kwargs)
+    assert alice_user != _salt_for("hash-bob", **caller_salt_kwargs)
+
+
+def test_caller_cannot_submit_another_keys_salt():
+    alice = _salt_for("hash-alice")
+    assert _salt_for("hash-bob", cache_salt=alice) != alice
+    assert _salt_for("hash-bob", extra_body={"cache_salt": alice}) != alice
+
+
+def test_cache_salt_reads_litellm_metadata():
+    body = _sent_chat_body(hosted_vllm_cache_salt=True, litellm_metadata={"user_api_key_hash": "hash-alice"})
+    assert body["cache_salt"] == _salt_for("hash-alice")
+
+
+@pytest.mark.parametrize(
+    "call_kwargs, expected_salt",
+    [
+        pytest.param({"metadata": {"user_api_key_hash": "hash-alice"}}, None, id="not-opted-in-sends-no-salt"),
+        pytest.param(
+            {"metadata": {"user_api_key_hash": "hash-alice"}, "cache_salt": "caller"},
+            "caller",
+            id="not-opted-in-keeps-caller-salt",
+        ),
+        pytest.param({"hosted_vllm_cache_salt": True}, None, id="no-key-hash-sends-no-salt"),
+        pytest.param(
+            {"hosted_vllm_cache_salt": True, "metadata": {"user_api_key_hash": ""}, "cache_salt": "caller"},
+            "caller",
+            id="empty-key-hash-keeps-caller-salt",
+        ),
+        pytest.param(
+            {"hosted_vllm_cache_salt": "true", "metadata": {"user_api_key_hash": "hash-alice"}},
+            None,
+            id="non-bool-flag-is-off",
+        ),
+    ],
+)
+def test_cache_salt_untouched_without_opt_in_or_caller_key(call_kwargs: dict, expected_salt: str | None):
+    body = _sent_chat_body(**call_kwargs)
+    assert body.get("cache_salt") == expected_salt
+    assert "hosted_vllm_cache_salt" not in body
+
+
+def test_cache_salt_set_when_streaming():
+    import litellm
+
+    client = _vllm_chat_client()
+    client.post.return_value.iter_lines = lambda: iter(())
+    litellm.completion(
+        model="hosted_vllm/Qwen/Qwen3-8B",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base="http://vllm.internal:8000/v1",
+        client=client,
+        stream=True,
+        hosted_vllm_cache_salt=True,
+        metadata={"user_api_key_hash": "hash-alice"},
+    )
+    body = json.loads(client.post.call_args.kwargs["data"])
+    assert body["stream"] is True
+    assert body["cache_salt"] == _salt_for("hash-alice")

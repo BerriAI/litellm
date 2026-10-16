@@ -35134,6 +35134,11 @@ export interface components {
             gcs_bucket_name?: string | null;
             /** Google Maps Grounding Cost Per Query */
             google_maps_grounding_cost_per_query?: number | null;
+            /**
+             * Hosted Vllm Cache Salt
+             * @description Set vLLM's `cache_salt` from the calling key on hosted_vllm chat and responses requests, so prefix-cache hits are never shared across keys.
+             */
+            hosted_vllm_cache_salt?: boolean | null;
             /** Input Cost Per Audio Per Second */
             input_cost_per_audio_per_second?: number | null;
             /** Input Cost Per Audio Per Second Above 128K Tokens */
@@ -50376,6 +50381,11 @@ export interface components {
             gcs_bucket_name?: string | null;
             /** Google Maps Grounding Cost Per Query */
             google_maps_grounding_cost_per_query?: number | null;
+            /**
+             * Hosted Vllm Cache Salt
+             * @description Set vLLM's `cache_salt` from the calling key on hosted_vllm chat and responses requests, so prefix-cache hits are never shared across keys.
+             */
+            hosted_vllm_cache_salt?: boolean | null;
             /** Input Cost Per Audio Per Second */
             input_cost_per_audio_per_second?: number | null;
             /** Input Cost Per Audio Per Second Above 128K Tokens */

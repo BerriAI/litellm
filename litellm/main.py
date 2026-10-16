@@ -5951,6 +5951,7 @@ def completion(
                     PROVIDER_AFFINITY_HEADER_KWARG_KEY,
                     "fireworks_forward_user_id",
                     "responses_api_version",
+                    "hosted_vllm_cache_salt",
                 )
                 if key in kwargs
             },
