@@ -714,6 +714,7 @@ jobs:
               tests/unit/responses/test_streaming_iterator.py
               tests/unit/responses/test_streaming_iterator_error_events.py
               tests/unit/responses/test_text_format_conversion.py
+              tests/unit/responses/tool_search
               tests/unit/types
             python-version: "3.12"
             workers: 2
