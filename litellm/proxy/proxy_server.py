@@ -1201,6 +1201,20 @@ async def _flush_spend_logs_queue_on_shutdown() -> None:
         verbose_proxy_logger.exception("Error flushing spend logs queue on shutdown: %s", e)
 
 
+async def _drain_audit_tasks_on_shutdown() -> None:
+    try:
+        from litellm.proxy.management_helpers.audit_logs import drain_audit_tasks
+
+        await drain_audit_tasks()
+    except Exception as e:  # noqa: BLE001  # shutdown must continue even if the drain fails
+        verbose_proxy_logger.exception("Error draining audit tasks on shutdown: %s", e)
+
+
+async def _flush_request_accumulators(prisma: PrismaClient) -> None:
+    await flush_gateway_requests(prisma, gateway_request_accumulator)
+    await flush_request_errors(prisma, request_error_accumulator)
+
+
 async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = None) -> None:
     global prisma_client, master_key, user_custom_auth, user_custom_key_generate, user_custom_key_update
     verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
@@ -1211,10 +1225,11 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
         # is lost, and a write attempted after disconnect raises
         # ClientNotConnectedError rather than persisting anything. Ordering this
         # inside the same guard is what keeps the two from drifting apart.
-        await flush_gateway_requests(prisma_client, gateway_request_accumulator)
-        await flush_request_errors(prisma_client, request_error_accumulator)
+        await asyncio.gather(_drain_audit_tasks_on_shutdown(), _flush_request_accumulators(prisma_client))
         verbose_proxy_logger.debug("Disconnecting from Prisma")
         await prisma_client.disconnect()
+    else:
+        await _drain_audit_tasks_on_shutdown()
 
     await drain_post_call_redis_batches()
     if litellm.cache is not None:

@@ -31,6 +31,7 @@ from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.internal_call_metadata import without_budget_reservation
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
+from litellm.litellm_core_utils.llm_response_utils.get_headers import provider_request_id_headers
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     update_response_metadata,
 )
@@ -262,7 +263,9 @@ def stream_error_status_and_message(error_obj: object) -> tuple[int, str]:
     return _status_code_for_error_fields(error_type, error_code), message
 
 
-def _map_stream_error_to_exception(error_obj: object, model: str, custom_llm_provider: str) -> Exception:
+def _map_stream_error_to_exception(
+    error_obj: object, model: str, custom_llm_provider: str, headers: httpx.Headers | None = None
+) -> Exception:
     from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
     error_message, error_type, error_code = _error_event_fields(error_obj)
@@ -272,6 +275,7 @@ def _map_stream_error_to_exception(error_obj: object, model: str, custom_llm_pro
         status_code=status_code,
         message=f"Error code: {status_code} - {{'error': {error_body}}}",
         body=error_body,
+        headers=headers,
     )
     try:
         return litellm.exception_type(
@@ -667,7 +671,12 @@ class BaseResponsesAPIStreamingIterator:
         )
 
     def _map_error_event_exception(self, error_obj: object) -> Exception:
-        return _map_stream_error_to_exception(error_obj, self.model or "", self.custom_llm_provider or "")
+        return _map_stream_error_to_exception(
+            error_obj,
+            self.model or "",
+            self.custom_llm_provider or "",
+            headers=provider_request_id_headers(self._raw_response_headers),
+        )
 
     def _maybe_raise_for_error_event(self, result: object) -> None:
         chunk_type: Final = getattr(result, "type", None)
@@ -683,11 +692,17 @@ class BaseResponsesAPIStreamingIterator:
         mapped_exception: Final = self._map_error_event_exception(error_obj)
         if not _mid_stream_fallback_eligible(mapped_exception):
             raise mapped_exception
+        mapped_status: Final = getattr(mapped_exception, "status_code", None)
         raise MidStreamFallbackError(
             message=str(mapped_exception),
             model=self.model or "",
             llm_provider=self.custom_llm_provider or "",
             original_exception=mapped_exception,
+            response=httpx.Response(
+                status_code=int(mapped_status) if mapped_status is not None else 503,
+                headers=provider_request_id_headers(self._raw_response_headers),
+                request=httpx.Request(method="POST", url=f"https://{self.custom_llm_provider or ''}.com/v1/"),
+            ),
             generated_content=self._generated_content,
             is_pre_first_chunk=not self._yielded_first_chunk,
         )
