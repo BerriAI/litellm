@@ -3,6 +3,7 @@ Unified /v1/messages endpoint - (Anthropic Spec)
 """
 
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -302,12 +303,16 @@ def _requested_output_format(data: Mapping[str, JsonValue]) -> JsonValue:
 class _CountTokensBodyOptions(TypedDict):
     output_format: ReadOnly[JsonValue]
     context_management: ReadOnly[JsonValue]
+    request_litellm_params: ReadOnly[Mapping[str, JsonValue]]
 
 
 def _count_tokens_body_options(data: Mapping[str, JsonValue]) -> _CountTokensBodyOptions:
     return {
         "output_format": _requested_output_format(data),
         "context_management": data.get("context_management"),
+        "request_litellm_params": MappingProxyType(
+            {"additional_drop_params": data["additional_drop_params"]} if "additional_drop_params" in data else {}
+        ),
     }
 
 

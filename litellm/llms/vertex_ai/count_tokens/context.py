@@ -14,6 +14,7 @@ from litellm.types.utils import TokenCountMessagesFormat, TokenCountResponse
 
 if TYPE_CHECKING:
     from litellm.exceptions import APIError
+    from litellm.llms.anthropic.pass_through.context_management import AnthropicContextManagementError
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,20 +190,11 @@ class CountContextEdits:
     spec: JsonValue
     model: str
     tools: tuple[Mapping[str, object], ...] | None
-    additional_drop_params: tuple[str, ...] | None
 
 
 _CONTEXT_MANAGEMENT_SPEC: Final[TypeAdapter[Mapping[str, object] | tuple[Mapping[str, object], ...]]] = TypeAdapter(
     Mapping[str, object] | tuple[Mapping[str, object], ...]
 )
-_DROP_PARAMS: Final = TypeAdapter(tuple[str, ...])
-
-
-def _additional_drop_params(value: object) -> tuple[str, ...] | None:
-    try:
-        return _DROP_PARAMS.validate_python(value)
-    except ValidationError:
-        return None
 
 
 def count_context_edits(
@@ -216,22 +208,14 @@ def count_context_edits(
         spec=context_management,
         model=model if isinstance(model, str) else fallback_model,
         tools=None if tools is None else tuple(tools),
-        additional_drop_params=_additional_drop_params(litellm_params.get("additional_drop_params")),
     )
 
 
-def _edits_without_compaction(spec: JsonValue) -> tuple[Mapping[str, object], ...]:
-    from litellm.llms.anthropic.pass_through.context_management.constants import COMPACT_EDIT_TYPE
-    from litellm.llms.anthropic.pass_through.context_management.dispatcher import normalize_spec
-
+def _typed_spec(spec: JsonValue) -> Mapping[str, object] | tuple[Mapping[str, object], ...] | None:
     try:
-        typed_spec: Final = _CONTEXT_MANAGEMENT_SPEC.validate_python(spec)
+        return _CONTEXT_MANAGEMENT_SPEC.validate_python(spec)
     except ValidationError:
-        return ()
-    edits: Final = normalize_spec(
-        dict(typed_spec) if isinstance(typed_spec, Mapping) else [dict(edit) for edit in typed_spec]
-    )
-    return tuple(edit for edit in edits or () if edit.get("type") != COMPACT_EDIT_TYPE)
+        return None
 
 
 def _typed_system(
@@ -245,6 +229,26 @@ def _typed_system(
         return _INVALID_SYSTEM
 
 
+def _failed_edit_error(
+    error: "AnthropicContextManagementError",
+    messages: Sequence[Mapping[str, object]],
+    system: str | Sequence[Mapping[str, object]] | None,
+) -> VertexGeminiCountContextError:
+    from litellm.llms.anthropic.pass_through.context_management.editors.compact import (
+        apply_client_compaction_block_history,
+    )
+
+    edit_error: Final = VertexGeminiCountContextError(error_message=error.message, status_code=error.status_code)
+    if error.status_code < 500:
+        return edit_error
+    history: Final = apply_client_compaction_block_history(
+        messages=[dict(message) for message in messages],
+        system=system if system is None or isinstance(system, str) else [dict(block) for block in system],
+    )
+    blocks_error: Final = unconvertible_messages_error(messages if history is None else history.messages, "anthropic")
+    return edit_error if blocks_error is None else blocks_error
+
+
 async def _anthropic_inference_view(
     messages: Sequence[Mapping[str, object]], system: object | None, edits: CountContextEdits
 ) -> InferenceRequestView | VertexGeminiCountContextError:
@@ -256,20 +260,23 @@ async def _anthropic_inference_view(
     if isinstance(typed_system, VertexGeminiCountContextError):
         return typed_system
     normalized: Final = normalize_native_messages(messages)
-    kept_edits: Final = _edits_without_compaction(edits.spec)
+    spec: Final = _typed_spec(edits.spec)
     try:
         prepared: Final = await prepare_context_managed_request(
             model=edits.model,
             messages=normalized,
             tools=None if edits.tools is None else [dict(tool) for tool in edits.tools],
             system=[dict(block) for block in typed_system] if isinstance(typed_system, tuple) else typed_system,
-            context_management_spec={"edits": [dict(edit) for edit in kept_edits]} if kept_edits else None,
+            context_management_spec=(
+                None if spec is None else dict(spec) if isinstance(spec, Mapping) else [dict(edit) for edit in spec]
+            ),
             litellm_metadata=None,
-            additional_drop_params=None if edits.additional_drop_params is None else list(edits.additional_drop_params),
+            additional_drop_params=None,
             llm_router=None,
+            allow_summary_call=False,
         )
     except AnthropicContextManagementError as error:
-        return VertexGeminiCountContextError(error_message=error.message, status_code=error.status_code)
+        return _failed_edit_error(error, normalized, typed_system)
     if prepared is None:
         return InferenceRequestView(messages=normalized, system=system)
     return InferenceRequestView(messages=prepared.messages, system=prepared.system)

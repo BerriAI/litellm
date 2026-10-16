@@ -145,6 +145,7 @@ async def prepare_context_managed_request(
     user_api_key_auth: "UserAPIKeyAuth | None" = None,
     sub_call_logging_kwargs: ProxySubCallLoggingKwargs | None = None,
     parent_trace_id: str | None = None,
+    allow_summary_call: bool = True,
 ) -> PolyfillResult | None:
     """Apply client compaction history, then optional context_management polyfill."""
     from litellm.llms.anthropic.pass_through.context_management.editors.compact import (
@@ -186,6 +187,7 @@ async def prepare_context_managed_request(
         user_api_key_auth=user_api_key_auth,
         sub_call_logging_kwargs=sub_call_logging_kwargs,
         parent_trace_id=parent_trace_id,
+        allow_summary_call=allow_summary_call,
     )
 
     if polyfill_result is not None:
@@ -259,16 +261,14 @@ def _spec_has_non_compact_edits(
     return any(isinstance(edit.get("type"), str) and edit.get("type") != COMPACT_EDIT_TYPE for edit in edits)
 
 
-def _context_management_explicitly_dropped(additional_drop_params: list[str] | None) -> bool:
+def context_management_explicitly_dropped(additional_drop_params: object) -> bool:
     """True when the caller opted out of context_management via ``additional_drop_params``.
 
     ``drop_params`` deliberately does NOT gate the polyfill: ``context_management``
     is a LiteLLM-supported param (native on Anthropic, polyfilled elsewhere), and
     ``drop_params`` only exists to drop genuinely unsupported params.
     """
-    if not isinstance(additional_drop_params, list):
-        return False
-    return "context_management" in additional_drop_params
+    return isinstance(additional_drop_params, list) and "context_management" in additional_drop_params
 
 
 def _normalize_spec_edits(
@@ -284,7 +284,7 @@ def _normalize_spec_edits(
     if not context_management_spec:
         return None
 
-    if _context_management_explicitly_dropped(additional_drop_params):
+    if context_management_explicitly_dropped(additional_drop_params):
         return None
 
     from litellm.llms.anthropic.pass_through.context_management.dispatcher import (
@@ -310,6 +310,7 @@ async def _run_polyfill_if_enabled(
     user_api_key_auth: "UserAPIKeyAuth | None" = None,
     sub_call_logging_kwargs: ProxySubCallLoggingKwargs | None = None,
     parent_trace_id: str | None = None,
+    allow_summary_call: bool = True,
 ) -> PolyfillResult | None:
     """Run the async context_management polyfill if a spec is present.
 
@@ -323,7 +324,7 @@ async def _run_polyfill_if_enabled(
     if not context_management_spec:
         return None
 
-    if _context_management_explicitly_dropped(additional_drop_params):
+    if context_management_explicitly_dropped(additional_drop_params):
         return None
 
     try:
@@ -338,6 +339,7 @@ async def _run_polyfill_if_enabled(
             user_api_key_auth=user_api_key_auth,
             sub_call_logging_kwargs=sub_call_logging_kwargs,
             parent_trace_id=parent_trace_id,
+            allow_summary_call=allow_summary_call,
         )
     except AnthropicContextManagementError:
         # Surface validation errors so the endpoint can emit an Anthropic-format

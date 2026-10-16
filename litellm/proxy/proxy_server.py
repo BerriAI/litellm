@@ -14462,6 +14462,21 @@ async def _try_provider_token_count(
     return result
 
 
+def _count_context_management(
+    context_management: JsonValue, model: str, request_litellm_params: Mapping[str, JsonValue]
+) -> JsonValue:
+    from litellm.llms.anthropic.pass_through.adapters.handler import context_management_explicitly_dropped
+
+    group: Final = () if llm_router is None else llm_router.get_model_list(model_name=model) or ()
+    dropped_by_a_deployment: Final = any(
+        context_management_explicitly_dropped(
+            {**deployment["litellm_params"], **request_litellm_params}.get("additional_drop_params")
+        )
+        for deployment in group
+    )
+    return None if dropped_by_a_deployment else context_management
+
+
 def _system_message(system: object) -> ChatCompletionSystemMessage | None:
     if not isinstance(system, (str, list)) or not system:
         return None
@@ -14493,6 +14508,7 @@ async def count_request_tokens(
     messages_format: TokenCountMessagesFormat = "openai",
     output_format: JsonValue = None,
     context_management: JsonValue = None,
+    request_litellm_params: Mapping[str, JsonValue] = MappingProxyType({}),
 ) -> TokenCountResponse:
     prompt: Final = request.prompt
     messages: Final = request.messages
@@ -14554,7 +14570,7 @@ async def count_request_tokens(
             system=system,
             messages_format=messages_format,
             output_format=output_format,
-            context_management=context_management,
+            context_management=_count_context_management(context_management, request.model, request_litellm_params),
         )
         if result is not None:
             return result

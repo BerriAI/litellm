@@ -642,6 +642,7 @@ async def apply_compact_20260112(
     user_api_key_auth: Optional["UserAPIKeyAuth"] = None,
     sub_call_logging_kwargs: ProxySubCallLoggingKwargs | None = None,
     parent_trace_id: str | None = None,
+    allow_summary_call: bool = True,
 ) -> PolyfillResult:
     """Apply ``compact_20260112``; return a ``PolyfillResult``.
 
@@ -682,7 +683,7 @@ async def apply_compact_20260112(
 
     # Opt-in gate: no summary model configured → no-op (but still return the
     # Phase A-sliced/stripped messages so compaction blocks don't leak).
-    summary_model: Final = _read_summary_model_setting()
+    summary_model: Final = _read_summary_model_setting() if allow_summary_call else None
     if summary_model is None:
         applied["error"] = "summary_model_not_configured"
         # Slice-only forwarding: ``augmented_system`` already carries any prior

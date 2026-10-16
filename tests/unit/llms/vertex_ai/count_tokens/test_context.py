@@ -33,9 +33,7 @@ _SCHEMA: Final[JsonValue] = {
     "properties": {},
     "additionalProperties": False,
 }
-_NO_EDITS: Final = CountContextEdits(
-    spec=None, model="gemini/gemini-2.5-flash", tools=None, additional_drop_params=None
-)
+_NO_EDITS: Final = CountContextEdits(spec=None, model="gemini/gemini-2.5-flash", tools=None)
 _FUNCTION_DECLARATION: Final = {
     "functionDeclarations": [
         {
@@ -510,7 +508,9 @@ async def test_anthropic_replayed_web_search_result_is_counted_as_its_text(
 
     view: Final = await inference_request_view(messages, None, "anthropic", _NO_EDITS)
     assert isinstance(view, InferenceRequestView)
-    contents: Final = await gemini_count_contents(view.messages, "anthropic", "gemini-2.5-flash", custom_llm_provider, {})
+    contents: Final = await gemini_count_contents(
+        view.messages, "anthropic", "gemini-2.5-flash", custom_llm_provider, {}
+    )
 
     assert snippet in str(contents)
 
@@ -529,11 +529,11 @@ _CLEAR_EDIT: Final[JsonValue] = {
 _CLEAR_OLD_TOOL_RESULTS: Final[JsonValue] = {"edits": [_CLEAR_EDIT]}
 
 
-def _agent_turns(rounds: int) -> tuple[dict[str, JsonValue], ...]:
+def _agent_turns(rounds: int, first_round: int = 0) -> tuple[dict[str, JsonValue], ...]:
     return (
         *(
             turn
-            for index in range(rounds)
+            for index in range(first_round, first_round + rounds)
             for turn in (
                 {"role": "user", "content": f"Read file {index}."},
                 {
@@ -554,19 +554,12 @@ def _agent_turns(rounds: int) -> tuple[dict[str, JsonValue], ...]:
 
 def _tool_outputs_kept(view: InferenceRequestView) -> tuple[bool, ...]:
     return tuple(
-        _TOOL_OUTPUT in str(message["content"])
-        for message in view.messages
-        if "tool_result" in str(message["content"])
+        _TOOL_OUTPUT in str(message["content"]) for message in view.messages if "tool_result" in str(message["content"])
     )
 
 
-def _edits(spec: JsonValue, additional_drop_params: tuple[str, ...] | None = None) -> CountContextEdits:
-    return CountContextEdits(
-        spec=spec,
-        model="gemini/gemini-2.5-flash",
-        tools=(_READ_FILE_TOOL,),
-        additional_drop_params=additional_drop_params,
-    )
+def _edits(spec: JsonValue) -> CountContextEdits:
+    return CountContextEdits(spec=spec, model="gemini/gemini-2.5-flash", tools=(_READ_FILE_TOOL,))
 
 
 async def test_anthropic_view_clears_the_tool_results_inference_clears() -> None:
@@ -574,15 +567,6 @@ async def test_anthropic_view_clears_the_tool_results_inference_clears() -> None
 
     assert isinstance(view, InferenceRequestView)
     assert _tool_outputs_kept(view) == (False, False, True)
-
-
-async def test_anthropic_view_keeps_tool_results_when_the_deployment_drops_context_management() -> None:
-    view: Final = await inference_request_view(
-        _agent_turns(3), None, "anthropic", _edits(_CLEAR_OLD_TOOL_RESULTS, ("context_management",))
-    )
-
-    assert isinstance(view, InferenceRequestView)
-    assert _tool_outputs_kept(view) == (True, True, True)
 
 
 async def test_anthropic_view_applies_clear_edits_without_calling_the_compaction_summary_model() -> None:
@@ -611,9 +595,64 @@ async def test_anthropic_view_applies_clear_edits_without_calling_the_compaction
 
 async def test_anthropic_view_returns_the_error_inference_answers_for_a_failed_edit() -> None:
     with patch.object(litellm, "token_counter", side_effect=RuntimeError("tokenizer unavailable")):
-        view: Final = await inference_request_view(
-            _agent_turns(3), None, "anthropic", _edits(_CLEAR_OLD_TOOL_RESULTS)
-        )
+        view: Final = await inference_request_view(_agent_turns(3), None, "anthropic", _edits(_CLEAR_OLD_TOOL_RESULTS))
 
     assert isinstance(view, VertexGeminiCountContextError)
     assert view.status_code == 500
+
+
+async def test_anthropic_view_fails_like_inference_when_an_edit_before_compact_meets_a_compaction_block() -> None:
+    clear_before_compact: Final[JsonValue] = {
+        "edits": [
+            {
+                "type": "clear_tool_uses_20250919",
+                "trigger": {"type": "tool_uses", "value": 3},
+                "keep": {"type": "tool_uses", "value": 1},
+            },
+            {"type": "compact_20260112"},
+        ]
+    }
+    turns: Final = (
+        *_agent_turns(3)[:-1],
+        {"role": "assistant", "content": [{"type": "compaction", "content": "Read files 0 to 2."}]},
+        *_agent_turns(2, first_round=3),
+    )
+
+    view: Final = await inference_request_view(turns, None, "anthropic", _edits(clear_before_compact))
+
+    assert isinstance(view, VertexGeminiCountContextError)
+    assert view.status_code == 500
+
+
+async def test_anthropic_view_rejects_a_compact_trigger_inference_rejects() -> None:
+    low_trigger: Final[JsonValue] = {
+        "edits": [{"type": "compact_20260112", "trigger": {"type": "input_tokens", "value": 1000}}]
+    }
+
+    view: Final = await inference_request_view(_agent_turns(1), None, "anthropic", _edits(low_trigger))
+
+    assert isinstance(view, VertexGeminiCountContextError)
+    assert view.status_code == 400
+
+
+async def test_anthropic_view_names_the_block_gemini_cannot_count_when_an_edit_trigger_cannot_tokenize_it() -> None:
+    turns: Final = (
+        *_agent_turns(1)[:-1],
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "search_result",
+                    "source": "https://docs.litellm.ai",
+                    "title": "Docs",
+                    "content": [{"type": "text", "text": "LiteLLM docs"}],
+                }
+            ],
+        },
+    )
+
+    view: Final = await inference_request_view(turns, None, "anthropic", _edits(_CLEAR_OLD_TOOL_RESULTS))
+
+    assert isinstance(view, VertexGeminiCountContextError)
+    assert view.status_code == 400
+    assert "search_result" in view.error_message
