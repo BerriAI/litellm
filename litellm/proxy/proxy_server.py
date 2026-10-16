@@ -10290,8 +10290,9 @@ async def async_data_generator(
 
         loop_released_at = time.monotonic()  # rebind-ok: last time this stream let other tasks run
         async for item in stream_source:
-            # Unblock the event loop: a stream whose chunks are already buffered never awaits
-            # between chunks, so without this yield one long stream holds the loop for its whole body
+            # Unblock the event loop: a stream whose chunks are already buffered never awaits between
+            # chunks, so without this one long stream holds the loop for its whole body. Yield once this
+            # stream has held the loop for 50 ms (_STREAM_LOOP_HOLD_SECONDS), never on a stream that waits
             if time.monotonic() - loop_released_at >= _STREAM_LOOP_HOLD_SECONDS:
                 await asyncio.sleep(0)
                 loop_released_at = time.monotonic()
