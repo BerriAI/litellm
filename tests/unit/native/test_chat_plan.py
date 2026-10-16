@@ -1,3 +1,4 @@
+import json
 from typing import Final
 
 import httpx
@@ -93,3 +94,44 @@ async def test_a_provider_failure_on_the_messages_to_chat_bridge_is_mapped(respx
         await _router({"model": "groq/llama-3.1-8b-instant"}, {"mode": "responses"}).aanthropic_messages(
             model="m", max_tokens=32, messages=[{"role": "user", "content": "hi"}]
         )
+
+
+@pytest.mark.asyncio
+async def test_a_responses_request_on_a_chat_api_deployment_stays_on_chat_despite_mode_responses(
+    respx_mock: respx.MockRouter,
+):
+    chat: Final = respx_mock.post(f"{API_BASE}/chat/completions").mock(
+        return_value=httpx.Response(200, json=_CHAT_REPLY)
+    )
+
+    await _router({"model": "openai/gpt-4.1", "use_chat_completions_api": True}, {"mode": "responses"}).aresponses(
+        model="m", input="hi"
+    )
+
+    assert chat.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_the_skip_bridge_flag_is_never_sent_to_the_provider(respx_mock: respx.MockRouter):
+    chat: Final = respx_mock.post(f"{API_BASE}/chat/completions").mock(
+        return_value=httpx.Response(200, json=_CHAT_REPLY)
+    )
+
+    await _router({"model": "openai/gpt-4.1"}).acompletion(
+        model="m", messages=[{"role": "user", "content": "hi"}], _skip_responses_api_bridge=True
+    )
+
+    assert "_skip_responses_api_bridge" not in json.loads(chat.calls.last.request.content)
+
+
+@pytest.mark.asyncio
+async def test_the_skip_bridge_flag_keeps_a_mode_responses_deployment_on_chat(respx_mock: respx.MockRouter):
+    chat: Final = respx_mock.post(f"{API_BASE}/chat/completions").mock(
+        return_value=httpx.Response(200, json=_CHAT_REPLY)
+    )
+
+    await _router({"model": "openai/gpt-4.1"}, {"mode": "responses"}).acompletion(
+        model="m", messages=[{"role": "user", "content": "hi"}], _skip_responses_api_bridge=True
+    )
+
+    assert chat.call_count == 1

@@ -66,6 +66,14 @@ def test_translate_openai_response_to_anthropic_empty_choices() -> None:
     assert result["usage"]["input_tokens"] == 10
 
 
+def test_translate_openai_response_to_anthropic_without_usage_reports_zero_tokens() -> None:
+    response: Final = ModelResponse(choices=[Choices(message=Message(content="x"), finish_reason="stop")])
+
+    result: Final = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response)
+
+    assert (result["usage"]["input_tokens"], result["usage"]["output_tokens"]) == (0, 0)
+
+
 @pytest.mark.parametrize("text,count,expected_stop", [
     ("", 1, "compaction"), (None, 1, "compaction"), ("Answer", 1, "max_tokens"),
     (" ", 1, "max_tokens"), ("", 2, "max_tokens"), ("", 0, "max_tokens"),
