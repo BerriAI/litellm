@@ -19,6 +19,7 @@ from unittest.mock import Mock, patch
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm import Router
@@ -2235,6 +2236,67 @@ def test_a_deployment_mode_never_rewrites_the_shared_row(
     assert litellm.model_cost["routing-test-model"]["mode"] == registered_mode
     shared_info, _ = responses_api_bridge_check(model="routing-test-model", custom_llm_provider="openai")
     assert shared_info["mode"] == registered_mode
+
+
+def test_a_custom_priced_chat_pin_request_leaves_its_unpinned_sibling_on_responses(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    _register_routing_test_row(monkeypatch, "responses")
+    chat_route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "routing-test-model",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+    responses_route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "resp_1",
+                "object": "response",
+                "created_at": 1,
+                "status": "completed",
+                "model": "routing-test-model",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+                    }
+                ],
+                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "priced-chat-pin",
+                "litellm_params": {
+                    "model": "openai/routing-test-model",
+                    "api_key": "sk-test",
+                    "input_cost_per_token": 3e-06,
+                    "output_cost_per_token": 4e-06,
+                },
+                "model_info": {"id": "priced-chat-pin-id", "mode": "chat"},
+            },
+            {"model_name": "sibling", "litellm_params": {"model": "openai/routing-test-model", "api_key": "sk-test"}},
+        ]
+    )
+
+    router.completion(model="priced-chat-pin", messages=[{"role": "user", "content": "Say ok"}])
+    router.completion(model="sibling", messages=[{"role": "user", "content": "Say ok"}])
+
+    assert (chat_route.call_count, responses_route.call_count) == (1, 1)
 
 
 def test_a_prefixed_deployment_override_leaves_the_shared_row_limits_alone(monkeypatch: pytest.MonkeyPatch) -> None:

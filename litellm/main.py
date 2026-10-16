@@ -1200,10 +1200,11 @@ def _register_custom_pricing_for_request(
     Router-originated requests (identified by the deployment id the router puts
     in metadata) get their full pricing registered under that unique id only;
     the shared ``{provider}/{model}`` key receives the entry with pricing fields
-    stripped, mirroring Router._create_deployment. This keeps one deployment's
-    pricing overrides (e.g. a zero-cost wildcard) from clobbering built-in
-    pricing used by sibling deployments of the same backend model. Direct SDK
-    calls keep the legacy behavior of registering the shared key with pricing.
+    and ``mode`` stripped, since Router._create_deployment already registered the
+    shared row's mode. This keeps one deployment's pricing overrides (e.g. a
+    zero-cost wildcard) or ``mode`` pin from changing the pricing and routing of
+    sibling deployments of the same backend model. Direct SDK calls keep the
+    legacy behavior of registering the shared key with pricing.
     """
     entry: Final = _build_custom_pricing_entry(
         custom_llm_provider=custom_llm_provider,
@@ -1215,11 +1216,13 @@ def _register_custom_pricing_for_request(
     if deployment_id is None:
         litellm.register_model({shared_key: entry}, persist_across_reloads=False)
         return
+    shared_entry: Final = {
+        key: value
+        for key, value in CustomPricingLiteLLMParams.strip_custom_pricing_fields(entry).items()
+        if key != "mode"
+    }
     litellm.register_model(
-        {
-            deployment_id: entry,
-            shared_key: CustomPricingLiteLLMParams.strip_custom_pricing_fields(entry),
-        },
+        {deployment_id: entry, shared_key: shared_entry},
         persist_across_reloads=False,
         warning_display_name=shared_key,
         custom_llm_provider=custom_llm_provider,
