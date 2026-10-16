@@ -63,20 +63,14 @@ const PTU_EDIT_FIELDS: PtuEditField[] = [
   { name: PTU_END_FIELD, label: "PTU Effective To (UTC)", input: "datetime" },
 ];
 
-export type TouchedPricingField =
-  | "input_cost"
-  | "output_cost"
-  | "cache_read_cost"
-  | "cache_write_cost"
-  | "cache_write_cost_1h";
-
-const PRICING_FIELDS: readonly TouchedPricingField[] = [
+const PRICING_FIELDS = [
   "input_cost",
   "output_cost",
   "cache_read_cost",
   "cache_write_cost",
   "cache_write_cost_1h",
 ] as const;
+export type TouchedPricingField = (typeof PRICING_FIELDS)[number];
 
 const COST_SOURCES: Record<TouchedPricingField, { param: string; info: string }> = {
   input_cost: { param: "input_cost_per_token", info: "input_cost_per_token" },
