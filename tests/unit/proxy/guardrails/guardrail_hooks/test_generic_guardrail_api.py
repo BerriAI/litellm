@@ -2302,4 +2302,3 @@ class TestFailOnError:
                     request_data={},
                     input_type="response",
                 )
-

@@ -1,5 +1,4 @@
 import json
-import socket
 import threading
 from collections.abc import Iterator, Mapping
 from contextlib import ExitStack
@@ -13,6 +12,7 @@ import yaml
 from integration._support.anthropic_sse import message_json
 from integration._support.client import Gateway, eventually
 from integration._support.openai_wire import chat_reply
+from integration._support.ports import allocate_port
 from integration._support.process import OwnedProxy, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
@@ -82,12 +82,6 @@ def _guardrail(name: str, api_base: str, **params: JsonValue) -> dict[str, JsonV
     }
 
 
-def _closed_port_url() -> str:
-    with socket.socket() as released:
-        released.bind(("127.0.0.1", 0))
-        return f"http://127.0.0.1:{released.getsockname()[1]}"
-
-
 @dataclass(frozen=True, slots=True)
 class GuardrailRig:
     owned: OwnedProxy
@@ -123,7 +117,7 @@ def rig(session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory) -> I
                     **config,
                     "guardrails": [
                         *(_guardrail(name, wire.url) for name, wire in policies.items()),
-                        _guardrail(FAIL_OPEN_CONNECT_ERROR, _closed_port_url(), fail_on_error=False),
+                        _guardrail(FAIL_OPEN_CONNECT_ERROR, f"http://127.0.0.1:{allocate_port()}", fail_on_error=False),
                         _guardrail(FAIL_OPEN_TIMEOUT, stalled.url, fail_on_error=False, timeout=1),
                         _guardrail(FAIL_OPEN_HTTP_STATUS, unavailable.url, fail_on_error=False),
                     ],
