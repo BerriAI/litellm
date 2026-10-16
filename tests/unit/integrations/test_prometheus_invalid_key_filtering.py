@@ -6,11 +6,14 @@ requests rejected at the proxy gate while recording a provider's 401, and that
 the proxy-level failed request counter still records them.
 """
 
+from collections.abc import Iterator
+from typing import Final
 from unittest.mock import Mock, patch
 
 import pytest
 from fastapi import HTTPException
 from prometheus_client import REGISTRY
+from prometheus_client.samples import Sample
 
 import litellm
 from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
@@ -198,7 +201,7 @@ class TestSkipMetricsValidation:
     def test_skip_except_for_provider_errors_the_proxy_did_not_raise(
         self, prometheus_logger, exception, proxy_gate, expected
     ):
-        kwargs = {"exception": exception}
+        kwargs: Final[dict[str, object]] = {"exception": exception}
         if proxy_gate:
             kwargs[LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL] = True
         assert prometheus_logger._should_skip_metrics_for_invalid_key(kwargs=kwargs) is expected
@@ -255,12 +258,12 @@ class TestSkipMetricsValidation:
         ],
     )
     def test_skip_a_provider_401_on_a_credential_the_caller_owns(self, prometheus_logger, logged_call, expected):
-        exception = litellm.AuthenticationError(
+        exception: Final = litellm.AuthenticationError(
             message="Incorrect API key provided: sk-calle*****",
             llm_provider="openai",
             model="gpt-4o-mini",
         )
-        kwargs = {"exception": exception, **logged_call}
+        kwargs: Final = {"exception": exception, **logged_call}
         assert prometheus_logger._should_skip_metrics_for_invalid_key(kwargs=kwargs) is expected
 
     @pytest.mark.parametrize("field", PROVIDER_CREDENTIAL_FIELDS)
@@ -268,9 +271,9 @@ class TestSkipMetricsValidation:
     def test_skip_a_provider_401_on_a_provider_credential_field_the_caller_sent(
         self, prometheus_logger, field, inside_extra_body
     ):
-        sent = {field: "caller-credential"}
-        body = {"model": "shared-deployment", **({"extra_body": sent} if inside_extra_body else sent)}
-        kwargs = {
+        sent: Final = {field: "caller-credential"}
+        body: Final = {"model": "shared-deployment", **({"extra_body": sent} if inside_extra_body else sent)}
+        kwargs: Final = {
             "exception": litellm.AuthenticationError(message="Unauthorized", llm_provider="azure", model="gpt-4o"),
             "litellm_params": {"proxy_server_request": {"body": body}},
         }
@@ -278,7 +281,7 @@ class TestSkipMetricsValidation:
 
     @pytest.mark.parametrize("field", PROVIDER_CREDENTIAL_FIELDS)
     def test_count_a_provider_401_on_a_provider_credential_field_the_deployment_owns(self, prometheus_logger, field):
-        kwargs = {
+        kwargs: Final = {
             "exception": litellm.AuthenticationError(message="Unauthorized", llm_provider="azure", model="gpt-4o"),
             "litellm_params": {
                 field: "deployment-credential",
@@ -295,7 +298,7 @@ class TestSkipMetricsValidation:
     def test_skip_a_provider_401_on_a_token_exchange_deployment(
         self, prometheus_logger, token_exchange_endpoint, expected
     ):
-        kwargs = {
+        kwargs: Final = {
             "exception": litellm.AuthenticationError(
                 message="Unauthorized", llm_provider="microsoft_365_copilot", model="copilot"
             ),
@@ -404,8 +407,8 @@ class TestAsyncHooks:
             mock_deployment.assert_not_called()
 
 
-def _provider_auth_failure_kwargs() -> dict:
-    exception = litellm.AuthenticationError(
+def _provider_auth_failure_kwargs() -> dict[str, object]:
+    exception: Final = litellm.AuthenticationError(
         message="Incorrect API key provided: sk-rotat*****",
         llm_provider="openai",
         model="gpt-4o-mini",
@@ -438,7 +441,7 @@ def _metric_values(name: str, model_id: str) -> list[float]:
     ]
 
 
-def _registry_samples():
+def _registry_samples() -> Iterator[Sample]:
     for metric in REGISTRY.collect():
         yield from metric.samples
 
@@ -462,7 +465,7 @@ class TestProviderAuthFailures:
     def test_deployment_failure_metrics_record_a_provider_401(self, prometheus_logger):
         prometheus_logger.set_llm_deployment_failure_metrics(_provider_auth_failure_kwargs())
 
-        failures = [
+        failures: Final = [
             sample for sample in _registry_samples() if sample.name == "litellm_deployment_failure_responses_total"
         ]
         assert [

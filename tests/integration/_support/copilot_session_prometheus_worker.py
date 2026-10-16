@@ -9,6 +9,7 @@ import asyncio
 import json
 import subprocess
 import sys
+from itertools import chain
 from dataclasses import dataclass
 from typing import Final
 
@@ -86,6 +87,7 @@ def run_copilot_session_worker(api_base: str) -> WorkerReport:
 
 
 def _deployment_series() -> tuple[Series, ...]:
+    samples: Final = tuple(chain.from_iterable(family.samples for family in REGISTRY.collect()))
     return tuple(
         Series(
             metric=sample.name,
@@ -93,8 +95,7 @@ def _deployment_series() -> tuple[Series, ...]:
             api_base=str(sample.labels.get("api_base", "")),
             value=float(sample.value),
         )
-        for family in REGISTRY.collect()
-        for sample in family.samples
+        for sample in samples
         if sample.name in DEPLOYMENT_SERIES
     )
 
