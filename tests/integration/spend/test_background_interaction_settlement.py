@@ -1,3 +1,4 @@
+import json
 import math
 import socket
 import time
@@ -17,6 +18,8 @@ from integration._support.client import (
     Gateway,
     eventually,
     gateway_from_environment,
+    held,
+    list_value,
     object_value,
     string_value,
 )
@@ -55,6 +58,8 @@ _CUSTOM_OUTPUT_RATE: Final = 4e-05
 _ENV_KEY: Final = "integration-gemini-env-key"
 _DEPLOYMENT_KEY: Final = "integration-gemini-deployment-key"
 _DATABASE_DEPLOYMENT_KEY: Final = "integration-gemini-database-deployment-key"
+_ROTATED_DEPLOYMENT_KEY: Final = "integration-gemini-rotated-deployment-key"
+_TAG: Final = "integration-settlement-team"
 _CREATOR_POLL: Final = {"BACKGROUND_INTERACTION_COST_POLL_INITIAL_INTERVAL_SECONDS": "300"}
 _SETTLER_POLL: Final = {
     "BACKGROUND_INTERACTION_COST_POLL_INITIAL_INTERVAL_SECONDS": "1",
@@ -67,14 +72,25 @@ _RESUMER_POLL: Final = {
     "BACKGROUND_INTERACTION_COST_POLL_TIMEOUT_SECONDS": "120",
 }
 _EAGER_RESUMER_POLL: Final = {**_RESUMER_POLL, "BACKGROUND_INTERACTION_COST_POLL_INITIAL_INTERVAL_SECONDS": "0.01"}
+_LATE_RESUMER_POLL: Final = {**_RESUMER_POLL, "BACKGROUND_INTERACTION_COST_POLL_TIMEOUT_SECONDS": "30"}
 _SPEND_QUERY: Final = (
-    "SELECT request_id, spend, call_type, status, model, prompt_tokens, completion_tokens "
+    "SELECT request_id, spend, call_type, status, model, prompt_tokens, completion_tokens, request_tags "
     'FROM "LiteLLM_SpendLogs" WHERE request_id = %s'
 )
 _SETTLEMENT_QUERY: Final = (
     "SELECT interaction_id, claimed_by, outcome, claimed_at IS NOT NULL AS claimed, "
     'settled_at IS NOT NULL AS settled, create_context FROM "LiteLLM_BackgroundInteractionSettlement" '
     "WHERE interaction_id = %s"
+)
+_ABANDONED_CLAIM: Final = (
+    'UPDATE "LiteLLM_BackgroundInteractionSettlement" SET claimed_by = %s, '
+    "claimed_at = (now() AT TIME ZONE 'UTC') - interval '10 minutes', settled_at = NULL, outcome = NULL, "
+    "create_context = %s::jsonb WHERE interaction_id = %s"
+)
+_DEAD_SETTLER: Final = "dead-settler:1"
+_CREATED_AN_HOUR_AGO: Final = (
+    'UPDATE "LiteLLM_BackgroundInteractionSettlement" '
+    "SET created_at = (now() AT TIME ZONE 'UTC') - interval '1 hour' WHERE interaction_id = %s"
 )
 _SETTLEMENT_TABLE_PRESENT_QUERY: Final = "SELECT to_regclass(%s) IS NOT NULL AS present"
 _SETTLEMENT_TABLE: Final = '"LiteLLM_BackgroundInteractionSettlement"'
@@ -181,6 +197,40 @@ def _write_config(directory: Path, upstream_url: str, models: Deployments) -> Pa
     return path
 
 
+def _variant_config(rig: Rig, name: str, document: Mapping[str, JsonValue]) -> Path:
+    path: Final = rig.directory / name
+    path.write_text(yaml.safe_dump(dict(document)))
+    return path
+
+
+def _rig_config(rig: Rig) -> dict[str, JsonValue]:
+    return JSON_OBJECT.validate_python(yaml.safe_load(rig.config.read_text()))
+
+
+def _config_without_spend_logs(rig: Rig) -> Path:
+    config: Final = _rig_config(rig)
+    general_settings: Final = {**object_value(config["general_settings"]), "disable_spend_logs": True}
+    return _variant_config(
+        rig, "settlement_config_without_spend_logs.yaml", {**config, "general_settings": general_settings}
+    )
+
+
+def _config_with_a_rotated_key(rig: Rig) -> Path:
+    config: Final = _rig_config(rig)
+    model_list: Final = [_with_rotated_key(entry, rig.models.in_progress) for entry in list_value(config["model_list"])]
+    return _variant_config(rig, "settlement_config_rotated_key.yaml", {**config, "model_list": model_list})
+
+
+def _with_rotated_key(entry: JsonValue, model_name: str) -> JsonValue:
+    deployment: Final = object_value(entry)
+    if deployment["model_name"] != model_name:
+        return deployment
+    return {
+        **deployment,
+        "litellm_params": {**object_value(deployment["litellm_params"]), "api_key": _ROTATED_DEPLOYMENT_KEY},
+    }
+
+
 def _interaction(status: str, usage: dict[str, JsonValue] | None, http_status: int = 200) -> JsonResponse:
     return JsonResponse(
         content_type="application/json",
@@ -208,12 +258,14 @@ def _create(
     path: str = "/v1beta/interactions",
     background: bool = True,
     text: str | None = None,
+    headers: Mapping[str, str] | None = None,
 ) -> str:
     response: Final = replica.request(
         "POST",
         path,
         {"model": model, "input": text or f"settle {uuid.uuid4().hex}", "background": background},
         key=key,
+        headers=headers,
     )
     assert response.status_code == 200, response.text
     return string_value(JSON_OBJECT.validate_json(response.content)["id"])
@@ -252,6 +304,16 @@ def _spend_rows(request_id: str) -> list[dict[str, JsonValue]]:
 def _settlement(interaction_id: str) -> dict[str, JsonValue] | None:
     rows: Final = read_rows(_SETTLEMENT_QUERY, (interaction_id,))
     return rows[0] if rows else None
+
+
+def _registered(interaction_id: str) -> dict[str, JsonValue]:
+    row: Final = eventually(lambda: _settlement(interaction_id), lambda value: value is not None)
+    assert row is not None
+    return row
+
+
+def _abandon_claim(interaction_id: str, create_context: JsonValue) -> None:
+    write_rows(_ABANDONED_CLAIM, (_DEAD_SETTLER, json.dumps(create_context), interaction_id))
 
 
 def _settlement_table_present() -> bool:
@@ -315,6 +377,11 @@ def _assert_billed(row: Mapping[str, JsonValue], rates: tuple[float, float]) -> 
     assert row["status"] == "success", row
     assert row["prompt_tokens"] == _INPUT_TOKENS and row["completion_tokens"] == _OUTPUT_TOKENS, row
     return spend
+
+
+def _assert_billed_with_tag(row: Mapping[str, JsonValue], rates: tuple[float, float]) -> None:
+    _assert_billed(row, rates)
+    assert _TAG in list_value(row["request_tags"]), row
 
 
 def _key_spend(replica: Gateway, key: str) -> float:
@@ -449,7 +516,7 @@ def test_a_replica_booting_later_resumes_and_bills_unclaimed_interactions(rig: R
         model: Final = rig.models.in_progress
         key: Final = scenario.key()
         created_after: Final = time.time()
-        created: Final = tuple(_create(rig.creator, model, key) for _ in range(3))
+        created: Final = tuple(_create(rig.creator, model, key, headers={"x-litellm-tags": _TAG}) for _ in range(3))
         for item in created:
             _state(rig, item, _completed())
         rates: Final = _rates(rig.creator, model)
@@ -459,7 +526,7 @@ def test_a_replica_booting_later_resumes_and_bills_unclaimed_interactions(rig: R
             pids: Final = _worker_pids(resumer.process.pid)
             assert len(pids) == 2, pids
             for item in created:
-                _assert_billed(_await_spend_row(item, seconds=90), rates)
+                _assert_billed_with_tag(_await_spend_row(item, seconds=90), rates)
                 claimer: Final = _claimer_pid(_await_outcome(item, "billed"))
                 assert claimer in pids or _booted_after(claimer, created_after), (claimer, pids)
         assert {key for _, key in _calls(rig, *created)} == {_DEPLOYMENT_KEY}
@@ -480,6 +547,90 @@ def test_a_replica_booting_later_resumes_a_database_model_with_its_own_key(rig: 
             _await_spend_row(created, seconds=90)
             _await_outcome(created, "billed")
         assert {key for _, key in _calls(rig, created)} == {_DATABASE_DEPLOYMENT_KEY}
+
+
+def test_a_replica_booting_later_takes_over_lapsed_claims_and_bills_only_the_unbilled(rig: Rig) -> None:
+    with rig.creator.scenario() as scenario:
+        model: Final = rig.models.in_progress
+        key: Final = scenario.key()
+        unbilled: Final = _create(rig.creator, model, key)
+        billed: Final = _create(rig.settler, model, key)
+        contexts: Final = {item: _registered(item)["create_context"] for item in (unbilled, billed)}
+        for item in (unbilled, billed):
+            _state(rig, item, _completed())
+        rates: Final = _rates(rig.creator, model)
+        spend: Final = _assert_billed(_await_spend_row(billed), rates)
+        _await_outcome(billed, "billed")
+        for item, create_context in contexts.items():
+            _abandon_claim(item, create_context)
+        with owned_proxy_process(
+            rig.gateway, rig.directory, rig.environment(**_EAGER_RESUMER_POLL), config=rig.config, workers=2
+        ):
+            _assert_billed(_await_spend_row(unbilled, seconds=90), rates)
+            assert _await_outcome(unbilled, "billed")["claimed_by"] != _DEAD_SETTLER
+            assert _await_outcome(billed, "billed", seconds=90)["claimed_by"] != _DEAD_SETTLER
+            held(
+                lambda: _key_spend(rig.creator, key),
+                lambda observed: math.isclose(observed, 2 * spend, rel_tol=1e-9),
+                holding=5,
+                seconds=30,
+            )
+        for item in (unbilled, billed):
+            assert len(_spend_rows(item)) == 1
+
+
+def test_a_lapsed_claim_with_spend_logs_off_is_recorded_unsettled_and_never_billed(rig: Rig) -> None:
+    with rig.creator.scenario() as scenario:
+        model: Final = rig.models.in_progress
+        key: Final = scenario.key()
+        created: Final = _create(rig.creator, model, key)
+        _abandon_claim(created, _registered(created)["create_context"])
+        _state(rig, created, _completed())
+        with owned_proxy_process(
+            rig.gateway,
+            rig.directory,
+            rig.environment(**_EAGER_RESUMER_POLL),
+            config=_config_without_spend_logs(rig),
+            workers=2,
+        ):
+            assert _await_outcome(created, "unsettled", seconds=90)["claimed_by"] != _DEAD_SETTLER
+        assert _spend_rows(created) == []
+        assert _key_spend(rig.creator, key) == 0
+
+
+def test_a_resumed_interaction_whose_deployment_key_rotated_fetches_with_the_new_key(rig: Rig) -> None:
+    with rig.creator.scenario() as scenario:
+        model: Final = rig.models.in_progress
+        created: Final = _create(rig.creator, model, scenario.key())
+        _state(rig, created, _completed())
+        with owned_proxy_process(
+            rig.gateway,
+            rig.directory,
+            rig.environment(**_EAGER_RESUMER_POLL),
+            config=_config_with_a_rotated_key(rig),
+            workers=2,
+        ) as resumer:
+            assert _model_info(resumer.gateway, model)["id"] != _model_info(rig.creator, model)["id"]
+            _assert_billed(_await_spend_row(created, seconds=90), _rates(rig.creator, model))
+            _await_outcome(created, "billed")
+        assert {key for _, key in _calls(rig, created)} == {_ROTATED_DEPLOYMENT_KEY}
+
+
+def test_a_late_restart_retries_a_failed_fetch_within_a_full_poll_window(rig: Rig) -> None:
+    with rig.creator.scenario() as scenario:
+        model: Final = rig.models.in_progress
+        created: Final = _create(rig.creator, model, scenario.key())
+        _registered(created)
+        write_rows(_CREATED_AN_HOUR_AGO, (created,))
+        _state(rig, created, InteractionState(status="completed", usage=_USAGE, get_status=503))
+        _drain(rig)
+        with owned_proxy_process(
+            rig.gateway, rig.directory, rig.environment(**_LATE_RESUMER_POLL), config=rig.config, workers=2
+        ):
+            eventually(lambda: _calls(rig, created), lambda calls: calls != (), seconds=90)
+            _state(rig, created, _completed())
+            _assert_billed(_await_spend_row(created), _rates(rig.creator, model))
+            _await_outcome(created, "billed")
 
 
 def test_deletes_on_the_creating_proxy_bill_each_interaction_once(rig: Rig) -> None:
