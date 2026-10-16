@@ -28,6 +28,7 @@ from integration._support.process import OwnedProxy, graceful_stop_seconds, owne
 from integration._support.upstream import aws_event_stream_frame
 from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from pydantic import JsonValue, TypeAdapter
 
 _JSON_TOOL: Final = "json_tool_call"
@@ -1734,9 +1735,9 @@ def test_vertex_chat_peer_error_reaches_the_caller_and_the_deployment_keeps_serv
 ) -> None:
     marker, marker_hex = _marker("wrapped")
     after, after_hex = _marker("wrapped")
+    port: Final = allocate_port()
     with gateway.scenario() as scenario:
-        with wire_server(_failing(status)) as failing:
-            port: Final = int(failing.url.rsplit(":", 1)[1])
+        with wire_server(_failing(status), port=port) as failing:
             model: Final = _vertex_deployment(gateway, scenario, failing.url, _TOOL_MODEL)
             response: Final = gateway.request("POST", "/v1/chat/completions", _chat_body(model, marker))
             assert response.status_code == status, response.text
@@ -1830,8 +1831,8 @@ def test_upstream_outage_mid_run_recovers_with_envelopes_still_unwrapped(gateway
                 assert observed == _payload(marker_hex), response.text
             _seen_once(_delivered(wire), tuple(marker_hex for _, marker_hex, _ in results))
 
-        with wire_server(_peer) as wire:
-            port: Final = int(wire.url.rsplit(":", 1)[1])
+        port: Final = allocate_port()
+        with wire_server(_peer, port=port) as wire:
             model: Final = _vertex_deployment(gateway, scenario, wire.url, _TOOL_MODEL)
             unwrapped(wire, wave())
         outage: Final = wave()

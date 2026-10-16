@@ -8,7 +8,7 @@ import pytest
 import yaml
 from mcp import ClientSession, MCPError
 from mcp.client.streamable_http import streamable_http_client
-from mcp.types import CallToolRequest, CallToolRequestParams, CallToolResult, PaginatedRequestParams
+from mcp.types import CallToolRequest, CallToolRequestParams, CallToolResult, DiscoverResult, PaginatedRequestParams
 
 from integration._support.client import Gateway
 from integration._support.mcp import McpPeer, paginated_mcp_peer
@@ -18,24 +18,27 @@ from litellm.types.mcp import MCPTransport
 
 
 @asynccontextmanager
-async def catalog_session(gateway):
+async def catalog_session(gateway, protocol: str = "2025-11-25"):
     async with httpx.AsyncClient(headers={"Authorization": "Bearer " + gateway.key}) as client:
         async with streamable_http_client(
             str(gateway.client.base_url).rstrip("/") + "/mcp/", http_client=client
         ) as streams:
             async with ClientSession(streams[0], streams[1]) as session:
-                await session.initialize()
+                if protocol == "2026-07-28":
+                    session.adopt(DiscoverResult.model_validate(await session.send_discover(protocol)))
+                else:
+                    await session.initialize()
                 yield session
 
 
-def config_file(directory: Path, upstream: str) -> Path:
+def config_file(directory: Path, upstream: str, protocol: str | None = None) -> Path:
     config = directory / "proxy.yaml"
     config.write_text(
         yaml.safe_dump(
             {
                 "model_list": [],
-                "mcp_servers": {"pages": {"url": upstream, "transport": "http"}},
-                "general_settings": {"master_key": "sk-pagination-test", "store_model_in_db": False},
+                "mcp_servers": {"pages": {"url": upstream, "transport": "http", **({"protocol_version": protocol} if protocol else {})}},
+                "general_settings": {"master_key": "sk-pagination-test", "store_model_in_db": False, **({"mcp_advertised_versions": ["2025-11-25", "2026-07-28"]} if protocol == "2026-07-28" else {})},
             }
         )
     )
@@ -45,7 +48,8 @@ def config_file(directory: Path, upstream: str) -> Path:
 REMOVE_DATABASE = ("DATABASE_URL", "DATABASE_URL_READ_REPLICA", "LITELLM_LICENSE", "LITELLM_LICENSE_PATH")
 
 
-def test_catalog_pages_are_portable_repeatable_and_complete(tmp_path: Path):
+@pytest.mark.parametrize("protocol", ["2025-11-25", "2026-07-28"])
+def test_catalog_pages_are_portable_repeatable_and_complete(tmp_path: Path, protocol: str):
     async def exercise(first_replica, second_replica):
         for method, field in (
             ("list_tools", "tools"),
@@ -53,10 +57,10 @@ def test_catalog_pages_are_portable_repeatable_and_complete(tmp_path: Path):
             ("list_resources", "resources"),
             ("list_resource_templates", "resource_templates"),
         ):
-            async with catalog_session(first_replica) as first_session:
+            async with catalog_session(first_replica, protocol) as first_session:
                 first = await getattr(first_session, method)()
             assert first.next_cursor
-            async with catalog_session(second_replica) as second_session:
+            async with catalog_session(second_replica, protocol) as second_session:
                 second = await getattr(second_session, method)(params=PaginatedRequestParams(cursor=first.next_cursor))
                 replay = await getattr(second_session, method)(params=PaginatedRequestParams(cursor=first.next_cursor))
                 assert getattr(second, field) == getattr(replay, field)
@@ -65,14 +69,14 @@ def test_catalog_pages_are_portable_repeatable_and_complete(tmp_path: Path):
             names = [item.name for page in (first, second, third) for item in getattr(page, field)]
             assert len(names) == len(set(names)) == 3
             assert third.next_cursor is None
-        async with catalog_session(second_replica) as session:
+        async with catalog_session(second_replica, protocol) as session:
             called = await session.call_tool("pages-add2", {"a": 3, "b": 4})
             assert not called.is_error
             assert called.content[0].text == "7"
 
     with paginated_mcp_peer() as peer, httpx.Client() as client:
         seed = Gateway(client, "sk-pagination-test", peer.url)
-        config = config_file(tmp_path, peer.url)
+        config = config_file(tmp_path, peer.url, protocol)
         options = dict(config=config, database_setup=(), remove_environment=REMOVE_DATABASE)
         environment = {
             "STORE_MODEL_IN_DB": "False",
@@ -128,7 +132,8 @@ def test_no_salt_preserves_complete_lists_and_calls_but_rejects_continuations(tm
 
 
 @pytest.mark.parametrize("grant", ["direct", "access_group"])
-def test_continuations_reauthorize_and_reject_registry_changes(tmp_path: Path, monkeypatch, grant: str):
+@pytest.mark.parametrize("protocol", ["2025-11-25", "2026-07-28"])
+def test_continuations_reauthorize_and_reject_registry_changes(tmp_path: Path, monkeypatch, grant: str, protocol: str):
     import os
     import subprocess
     import sys
@@ -144,15 +149,15 @@ def test_continuations_reauthorize_and_reject_registry_changes(tmp_path: Path, m
         stranger_b = Gateway(b.client, stranger, peer.url)
         first_pages = {}
         for method in ("list_tools", "list_prompts", "list_resources", "list_resource_templates"):
-            async with catalog_session(owner_a) as session:
+            async with catalog_session(owner_a, protocol) as session:
                 first_pages[method] = await getattr(session, method)()
                 assert first_pages[method].next_cursor
-            async with catalog_session(owner_b) as session:
+            async with catalog_session(owner_b, protocol) as session:
                 continued = await getattr(session, method)(
                     params=PaginatedRequestParams(cursor=first_pages[method].next_cursor)
                 )
                 assert continued.next_cursor
-            async with catalog_session(stranger_b) as session:
+            async with catalog_session(stranger_b, protocol) as session:
                 peer.drain()
                 with pytest.raises(MCPError, match="fresh listing"):
                     await getattr(session, method)(
@@ -172,7 +177,7 @@ def test_continuations_reauthorize_and_reject_registry_changes(tmp_path: Path, m
             },
         )
         for method, first in first_pages.items():
-            async with catalog_session(owner_b) as session:
+            async with catalog_session(owner_b, protocol) as session:
                 peer.drain()
                 with pytest.raises(MCPError, match="fresh listing"):
                     await getattr(session, method)(params=PaginatedRequestParams(cursor=first.next_cursor))
@@ -181,7 +186,7 @@ def test_continuations_reauthorize_and_reject_registry_changes(tmp_path: Path, m
         changed = a.request("PUT", "/v1/mcp/server", {"server_id": identity, "description": "new catalog generation"})
         assert changed.status_code == 202, changed.text
         for method, first in first_pages.items():
-            async with catalog_session(owner_b) as session:
+            async with catalog_session(owner_b, protocol) as session:
                 peer.drain()
                 with pytest.raises(MCPError, match="fresh listing"):
                     await getattr(session, method)(params=PaginatedRequestParams(cursor=first.next_cursor))
@@ -212,7 +217,7 @@ def test_continuations_reauthorize_and_reject_registry_changes(tmp_path: Path, m
             config = tmp_path / "database-proxy.yaml"
             config.write_text(
                 yaml.safe_dump(
-                    {"model_list": [], "general_settings": {"master_key": seed.key, "store_model_in_db": True}}
+                    {"model_list": [], "general_settings": {"master_key": seed.key, "store_model_in_db": True, "mcp_advertised_versions": ["2025-11-25", "2026-07-28"]}}
                 )
             )
             environment = {
@@ -230,8 +235,8 @@ def test_continuations_reauthorize_and_reject_registry_changes(tmp_path: Path, m
                 owned_proxy(seed, tmp_path / "b", environment, **options) as b,
                 a.scenario() as scenario,
             ):
-                identity = register_mcp(scenario, peer, "pages")
-                spare: Final = register_mcp(scenario, spare_peer, "spare")
+                identity = register_mcp(scenario, peer, "pages", protocol_version=protocol)
+                spare: Final = register_mcp(scenario, spare_peer, "spare", protocol_version=protocol)
                 group = a.request(
                     "POST",
                     "/v1/access_group",

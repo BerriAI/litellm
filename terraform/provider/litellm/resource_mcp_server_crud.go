@@ -54,6 +54,8 @@ func buildMCPServerRequest(d *schema.ResourceData) *MCPServerRequest {
 		}
 	}
 
+	req.Credentials = mcpCredentialsFromResource(d)
+
 	// Handle env
 	if env, ok := d.GetOk("env"); ok {
 		envMap := env.(map[string]interface{})
@@ -105,6 +107,21 @@ func buildMCPServerRequest(d *schema.ResourceData) *MCPServerRequest {
 	return req
 }
 
+// mcpCredentialsFromResource builds the credentials object from the write-only
+// secrets and their non-secret companions; nil when none is configured so the
+// proxy keeps whatever it already stores.
+func mcpCredentialsFromResource(d *schema.ResourceData) *MCPCredentials {
+	creds := &MCPCredentials{
+		AuthValue:    writeOnlyString(d, "auth_value_wo"),
+		ClientID:     d.Get("client_id").(string),
+		ClientSecret: writeOnlyString(d, "client_secret_wo"),
+	}
+	if *creds == (MCPCredentials{}) {
+		return nil
+	}
+	return creds
+}
+
 // Helper function to update schema data from MCPServerResponse
 func updateSchemaFromResponse(d *schema.ResourceData, resp *MCPServerResponse) error {
 	d.Set("server_id", resp.ServerID)
@@ -113,7 +130,9 @@ func updateSchemaFromResponse(d *schema.ResourceData, resp *MCPServerResponse) e
 	d.Set("description", resp.Description)
 	d.Set("url", resp.URL)
 	d.Set("transport", resp.Transport)
-	d.Set("spec_version", resp.SpecVersion)
+	if resp.SpecVersion != "" {
+		d.Set("spec_version", resp.SpecVersion)
+	}
 	d.Set("auth_type", resp.AuthType)
 	d.Set("created_at", resp.CreatedAt)
 	d.Set("created_by", resp.CreatedBy)
@@ -134,8 +153,9 @@ func updateSchemaFromResponse(d *schema.ResourceData, resp *MCPServerResponse) e
 		d.Set("args", resp.Args)
 	}
 
-	// Set mcp_info
-	if resp.MCPInfo != nil {
+	if !mcpInfoHasModeledFields(resp.MCPInfo) {
+		d.Set("mcp_info", []interface{}{})
+	} else {
 		mcpInfoList := make([]map[string]interface{}, 1)
 		mcpInfoMap := make(map[string]interface{})
 
@@ -161,6 +181,14 @@ func updateSchemaFromResponse(d *schema.ResourceData, resp *MCPServerResponse) e
 	}
 
 	return nil
+}
+
+func mcpInfoHasModeledFields(info *MCPInfo) bool {
+	return info != nil &&
+		(info.ServerName != "" ||
+			info.Description != "" ||
+			info.LogoURL != "" ||
+			info.MCPServerCostInfo != nil)
 }
 
 func resourceLiteLLMMCPServerCreate(d *schema.ResourceData, m interface{}) error {

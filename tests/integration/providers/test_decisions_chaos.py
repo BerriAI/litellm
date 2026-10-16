@@ -18,6 +18,7 @@ from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from pydantic import JsonValue, TypeAdapter
 
 _BACKEND: Final = "pplx-decider-v1-27b"
@@ -239,10 +240,9 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_serving_the_default_m
 @pytest.mark.timeout(180)
 async def test_upstream_outage_fails_its_calls_and_recovery_on_the_same_port_restores_them(gateway: Gateway) -> None:
     base_url: Final = str(gateway.client.base_url)
+    port: Final = allocate_port()
     with gateway.scenario() as scenario:
-        with wire_server(_reply) as wire:
-            port: Final = urlsplit(wire.url).port
-            assert port is not None
+        with wire_server(_reply, port=port) as wire:
             model: Final = scenario.model(model=f"perplexity/{_BACKEND}", api_base=wire.url, api_key=_API_KEY)
             before: Final = await _burst(base_url, gateway.key, model, _calls(5, fail=False))
             assert _health(gateway, model) == (1, 0)

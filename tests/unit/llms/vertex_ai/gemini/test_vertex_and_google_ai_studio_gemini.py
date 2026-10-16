@@ -5777,28 +5777,20 @@ def test_sync_streaming_uses_custom_client():
 
 
 def test_transform_response_does_not_leak_body_on_parse_failure():
-    leaky_body = {"candidates": [{"content": {"parts": [{"text": "secret content"}]}}]}
-    raw_response = MagicMock()
-    raw_response.json.return_value = leaky_body
-    raw_response.text = json.dumps(leaky_body)
-    raw_response.headers = {}
+    raw_response = httpx.Response(200, json=[{"candidates": [{"content": {"parts": [{"text": "secret content"}]}}]}])
 
-    with patch(
-        "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.GenerateContentResponseBody",
-        side_effect=KeyError("missing required field"),
-    ):
-        with pytest.raises(VertexAIError) as exc_info:
-            VertexGeminiConfig().transform_response(
-                model="gemini-pro",
-                raw_response=raw_response,
-                model_response=ModelResponse(),
-                logging_obj=MagicMock(),
-                request_data={},
-                messages=[],
-                optional_params={},
-                litellm_params={},
-                encoding=None,
-            )
+    with pytest.raises(VertexAIError) as exc_info:
+        VertexGeminiConfig().transform_response(
+            model="gemini-pro",
+            raw_response=raw_response,
+            model_response=ModelResponse(),
+            logging_obj=MagicMock(),
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
 
     msg = str(exc_info.value)
     assert "secret content" not in msg
@@ -9459,6 +9451,8 @@ def test_vertex_ai_streaming_response_id():
             model="gemini-pro",
             messages=[],
             logging_obj=logging_obj,
+            request_body={},
+            hop_headers=lambda: {},
         )
         iterator = iter(iterator)
         first_chunk = next(iterator)
