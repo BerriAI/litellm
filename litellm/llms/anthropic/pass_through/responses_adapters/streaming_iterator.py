@@ -35,6 +35,7 @@ from .transformation import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
+    from litellm.llms.anthropic.pass_through.held_stream_completion import HeldStreamCompletion
     from litellm.llms.anthropic.pass_through.safeguards import SafeguardsEvaluator
     from litellm.types.llms.openai import ResponseIncompleteEvent
 
@@ -127,10 +128,12 @@ class AnthropicResponsesStreamWrapper:
         model: str,
         litellm_logging_obj: "LiteLLMLoggingObject | None" = None,
         safeguards_evaluator: "SafeguardsEvaluator | None" = None,
+        held_completion: "HeldStreamCompletion | None" = None,
     ) -> None:
         self.responses_stream = responses_stream
         self.model = model
         self.safeguards_evaluator: Final = safeguards_evaluator
+        self._held_completion: Final = held_completion
         self._message_id: str = f"msg_{uuid.uuid4()}"
         if litellm_logging_obj is not None:
             litellm_logging_obj.record_streamed_anthropic_message_id(self._message_id)
@@ -498,8 +501,22 @@ class AnthropicResponsesStreamWrapper:
 
     async def _sse_frames(self) -> AsyncGenerator[bytes, None]:
         safeguard_results: Final = StreamedSafeguardResults(self.safeguards_evaluator)
-        async for chunk in self:
-            yield anthropic_sse_frame(await safeguard_results.observe(chunk))
+        held: Final = self._held_completion
+        try:
+            async for chunk in self:
+                yield anthropic_sse_frame(await safeguard_results.observe(chunk))
+        except Exception:
+            if held is not None:
+                held.discard()
+            raise
+        else:
+            if held is not None and self._stream_failed:
+                held.discard()
+            if held is not None:
+                held.log(is_async=True)
+        finally:
+            if held is not None:
+                held.log(is_async=True, client_detached=True)
 
     def partial_response_on_disconnect(self) -> "ResponseIncompleteEvent | None":
         return partial_responses_incomplete_event_on_disconnect(self.responses_stream)
