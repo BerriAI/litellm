@@ -2019,7 +2019,7 @@ def _restore_wrapped_ids_in_response_create(msg_obj: Mapping[str, object]) -> di
     return {**msg_obj, **top_fields, **restored_nested}
 
 
-def _restore_wrapped_ids_in_response_inject(msg_obj: Mapping[str, object]) -> dict[str, object] | None:
+def _restore_wrapped_ids_in_response_inject(msg_obj: Mapping[str, object]) -> Mapping[str, object] | None:
     response_id: Final = msg_obj.get("response_id")
     original_id: Final = (
         ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(response_id)
