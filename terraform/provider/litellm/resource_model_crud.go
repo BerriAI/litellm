@@ -1,6 +1,7 @@
 package litellm
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -79,11 +80,25 @@ func parseAdditionalDropParams(raw string) ([]string, error) {
 	}
 	names := []string{}
 	for _, item := range items {
-		if name, ok := item.(string); ok {
-			names = append(names, name)
+		if item == nil {
+			continue
 		}
+		name, ok := item.(string)
+		if !ok {
+			return nil, fmt.Errorf("additional_litellm_params.%s entries must be parameter names, got %v", additionalDropParamsKey, item)
+		}
+		names = append(names, name)
 	}
 	return names, nil
+}
+
+func validateAdditionalDropParams(_ context.Context, d *schema.ResourceDiff, _ interface{}) error {
+	raw, set := d.GetOk("additional_litellm_params." + additionalDropParamsKey)
+	if !set {
+		return nil
+	}
+	_, err := parseAdditionalDropParams(raw.(string))
+	return err
 }
 
 func suppressEquivalentDropParams(key, oldValue, newValue string, _ *schema.ResourceData) bool {
@@ -96,16 +111,43 @@ func suppressEquivalentDropParams(key, oldValue, newValue string, _ *schema.Reso
 }
 
 func withStoredDropParams(params map[string]interface{}, stored interface{}) map[string]interface{} {
-	if _, managed := params[additionalDropParamsKey]; !managed {
+	_, managed := params[additionalDropParamsKey]
+	storedList, _ := stored.([]interface{})
+	if !managed && len(storedList) == 0 {
 		return params
 	}
-	refreshed := maps.Clone(params)
+	refreshed := map[string]interface{}{}
+	maps.Copy(refreshed, params)
 	delete(refreshed, additionalDropParamsKey)
 	if stored != nil {
 		encoded, _ := json.Marshal(stored)
 		refreshed[additionalDropParamsKey] = string(encoded)
 	}
 	return refreshed
+}
+
+func storedStringAttribute(params LiteLLMParams, key string) (string, string, bool) {
+	switch key {
+	case "api_base":
+		return "model_api_base", params.APIBase, true
+	case "api_version":
+		return "api_version", params.APIVersion, true
+	case "aws_region_name":
+		return "aws_region_name", params.AWSRegionName, true
+	case "aws_session_name":
+		return "aws_session_name", params.AWSSessionName, true
+	case "aws_role_name":
+		return "aws_role_name", params.AWSRoleName, true
+	case "vertex_project":
+		return "vertex_project", params.VertexProject, true
+	case "vertex_location":
+		return "vertex_location", params.VertexLocation, true
+	case "reasoning_effort":
+		return "reasoning_effort", params.ReasoningEffort, true
+	case "litellm_credential_name":
+		return "litellm_credential_name", params.LiteLLMCredentialName, true
+	}
+	return "", "", false
 }
 
 func coerceAdditionalParamValue(strValue string) interface{} {
@@ -416,9 +458,19 @@ func resourceLiteLLMModelRead(d *schema.ResourceData, m interface{}) error {
 		d.Set("merge_reasoning_content_in_choices", modelResp.LiteLLMParams.MergeReasoningContentInChoices)
 	}
 
+	additionalParams, _ := d.Get("additional_litellm_params").(map[string]interface{})
+	if rawDropParams, ok := additionalParams[additionalDropParamsKey].(string); ok {
+		listed, _ := parseAdditionalDropParams(rawDropParams)
+		for _, key := range listed {
+			if attribute, stored, ok := storedStringAttribute(modelResp.LiteLLMParams, key); ok {
+				d.Set(attribute, stored)
+			}
+		}
+	}
+
 	// Preserve additional_litellm_params from state since API might not return all custom parameters
-	if additionalParams, ok := d.GetOk("additional_litellm_params"); ok {
-		d.Set("additional_litellm_params", withStoredDropParams(additionalParams.(map[string]interface{}), modelResp.LiteLLMParams.AdditionalDropParams))
+	if refreshed := withStoredDropParams(additionalParams, modelResp.LiteLLMParams.AdditionalDropParams); len(additionalParams) > 0 || len(refreshed) > 0 {
+		d.Set("additional_litellm_params", refreshed)
 	}
 
 	return nil

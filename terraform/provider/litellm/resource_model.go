@@ -7,10 +7,11 @@ import (
 
 func resourceLiteLLMModel() *schema.Resource {
 	return &schema.Resource{
-		Create: resourceLiteLLMModelCreate,
-		Read:   resourceLiteLLMModelRead,
-		Update: resourceLiteLLMModelUpdate,
-		Delete: resourceLiteLLMModelDelete,
+		Create:        resourceLiteLLMModelCreate,
+		Read:          resourceLiteLLMModelRead,
+		Update:        resourceLiteLLMModelUpdate,
+		Delete:        resourceLiteLLMModelDelete,
+		CustomizeDiff: validateAdditionalDropParams,
 		Importer: &schema.ResourceImporter{
 			StateContext: schema.ImportStatePassthroughContext,
 		},

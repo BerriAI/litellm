@@ -180,13 +180,17 @@ func TestResourceLiteLLMModelCreateSendsAdditionalLiteLLMParams(t *testing.T) {
 	}
 }
 
-func TestResourceLiteLLMModelCreateNormalizesAdditionalDropParams(t *testing.T) {
+const terraformUnknownValue = "74D93920-ED26-11E3-AC10-0800200C9A66"
+
+func TestResourceLiteLLMModelChecksAdditionalDropParams(t *testing.T) {
 	cases := map[string]struct {
 		dropParams string
 		want       []interface{}
 		wantErr    bool
 	}{
 		"null entry from an unset variable is skipped": {dropParams: `["store", null]`, want: []interface{}{"store"}},
+		"number entry is rejected":                     {dropParams: `["store", 1]`, wantErr: true},
+		"object entry is rejected":                     {dropParams: `["store", {"name": "temperature"}]`, wantErr: true},
 		"object is rejected":                           {dropParams: `{"store": true}`, wantErr: true},
 		"bare name is rejected":                        {dropParams: "store", wantErr: true},
 	}
@@ -209,13 +213,18 @@ func TestResourceLiteLLMModelCreateNormalizesAdditionalDropParams(t *testing.T) 
 			}))
 			defer srv.Close()
 
-			d := schema.TestResourceDataRaw(t, resourceLiteLLMModel().Schema, map[string]interface{}{
+			res := resourceLiteLLMModel()
+			config := map[string]interface{}{
 				"model_name":                "vertex-claude-haiku",
 				"custom_llm_provider":       "vertex_ai",
 				"base_model":                "claude-haiku-4-5",
 				"additional_litellm_params": map[string]interface{}{"additional_drop_params": tc.dropParams},
-			})
+			}
+			if _, err := res.Diff(context.Background(), nil, terraform.NewResourceConfigRaw(config), nil); (err != nil) != tc.wantErr {
+				t.Errorf("plan error = %v, want error %v", err, tc.wantErr)
+			}
 
+			d := schema.TestResourceDataRaw(t, res.Schema, config)
 			err := resourceLiteLLMModelCreate(d, NewClient(srv.URL, "test-key", true))
 			if tc.wantErr {
 				if err == nil {
@@ -237,22 +246,42 @@ func TestResourceLiteLLMModelCreateNormalizesAdditionalDropParams(t *testing.T) 
 	}
 }
 
+func TestResourceLiteLLMModelPlanAcceptsDropParamsUnknownUntilApply(t *testing.T) {
+	config := terraform.NewResourceConfigRaw(map[string]interface{}{
+		"model_name":                "vertex-claude-haiku",
+		"custom_llm_provider":       "vertex_ai",
+		"additional_litellm_params": map[string]interface{}{"additional_drop_params": terraformUnknownValue},
+	})
+	if _, err := resourceLiteLLMModel().Diff(context.Background(), nil, config, nil); err != nil {
+		t.Errorf("plan failed on a drop list not known until apply: %v", err)
+	}
+}
+
 func TestResourceLiteLLMModelPlanComparesAdditionalDropParamsWithProxy(t *testing.T) {
 	cases := map[string]struct {
-		configured string
-		stored     interface{}
-		wantDiff   bool
+		configured         string
+		stored             interface{}
+		storedLocation     string
+		wantListDiff       bool
+		wantLocationChange bool
 	}{
-		"list never sent by an older provider": {configured: `["store"]`, stored: nil, wantDiff: true},
-		"list changed in the Admin UI":         {configured: `["store"]`, stored: []string{"temperature"}, wantDiff: true},
-		"same list written with spaces":        {configured: `["store", "vertex_location"]`, stored: []string{"store", "vertex_location"}},
-		"null entry the proxy never received":  {configured: `["store", null]`, stored: []string{"store"}},
+		"list never sent by an older provider": {configured: `["store"]`, stored: nil, storedLocation: "eu", wantListDiff: true},
+		"listed key an older provider deleted": {configured: `["store", "vertex_location"]`, stored: nil, wantListDiff: true, wantLocationChange: true},
+		"list changed in the Admin UI":         {configured: `["store"]`, stored: []string{"temperature"}, storedLocation: "eu", wantListDiff: true},
+		"list set outside Terraform":           {stored: []string{"store"}, storedLocation: "eu", wantListDiff: true},
+		"same list written with spaces":        {configured: `["store", "vertex_location"]`, stored: []string{"store", "vertex_location"}, storedLocation: "eu"},
+		"null entry the proxy never received":  {configured: `["store", null]`, stored: []string{"store"}, storedLocation: "eu"},
+		"listed key changed in the Admin UI":   {configured: `["vertex_location"]`, stored: []string{"vertex_location"}, storedLocation: "us-east5", wantLocationChange: true},
+		"no list on the model or in the proxy": {storedLocation: "eu"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			litellmParams := map[string]interface{}{"model": "vertex_ai/claude-haiku-4-5", "custom_llm_provider": "vertex_ai"}
 			if tc.stored != nil {
 				litellmParams["additional_drop_params"] = tc.stored
+			}
+			if tc.storedLocation != "" {
+				litellmParams["vertex_location"] = tc.storedLocation
 			}
 			body, _ := json.Marshal(map[string]interface{}{
 				"model_name":     "vertex-claude-haiku",
@@ -266,10 +295,13 @@ func TestResourceLiteLLMModelPlanComparesAdditionalDropParamsWithProxy(t *testin
 
 			res := resourceLiteLLMModel()
 			config := map[string]interface{}{
-				"model_name":                "vertex-claude-haiku",
-				"custom_llm_provider":       "vertex_ai",
-				"base_model":                "claude-haiku-4-5",
-				"additional_litellm_params": map[string]interface{}{"additional_drop_params": tc.configured},
+				"model_name":          "vertex-claude-haiku",
+				"custom_llm_provider": "vertex_ai",
+				"base_model":          "claude-haiku-4-5",
+				"vertex_location":     "eu",
+			}
+			if tc.configured != "" {
+				config["additional_litellm_params"] = map[string]interface{}{"additional_drop_params": tc.configured}
 			}
 			d := schema.TestResourceDataRaw(t, res.Schema, config)
 			d.SetId("model-123")
@@ -281,13 +313,18 @@ func TestResourceLiteLLMModelPlanComparesAdditionalDropParamsWithProxy(t *testin
 			if err != nil {
 				t.Fatalf("diff failed: %v", err)
 			}
-			var attr *terraform.ResourceAttrDiff
-			if diff != nil {
-				attr = diff.Attributes["additional_litellm_params.additional_drop_params"]
+			changed := func(key string) bool {
+				if diff == nil {
+					return false
+				}
+				attr := diff.Attributes[key]
+				return attr != nil && attr.Old != attr.New
 			}
-			gotDiff := attr != nil && attr.Old != attr.New
-			if gotDiff != tc.wantDiff {
-				t.Errorf("plan shows additional_drop_params change = %v (%#v), want %v", gotDiff, attr, tc.wantDiff)
+			if got := changed("additional_litellm_params.additional_drop_params"); got != tc.wantListDiff {
+				t.Errorf("plan shows additional_drop_params change = %v, want %v", got, tc.wantListDiff)
+			}
+			if got := changed("vertex_location"); got != tc.wantLocationChange {
+				t.Errorf("plan shows vertex_location change = %v, want %v", got, tc.wantLocationChange)
 			}
 		})
 	}
