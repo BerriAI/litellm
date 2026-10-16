@@ -693,7 +693,7 @@ async def eu_jev_proxy_route(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ) -> Response:
     """[Docs](https://docs.litellm.ai/docs/pass_through/eu_jev)"""
-    base_target_url: Final = get_secret_str("EU_JEV_API_BASE") or "https://jev.bevel.software"
+    base_target_url: Final = get_secret_str("EU_JEV_API_BASE") or "https://eu-jev.com"
     encoded_endpoint: Final = httpx.URL(endpoint).path
     normalized_endpoint: Final = encoded_endpoint if encoded_endpoint.startswith("/") else f"/{encoded_endpoint}"
     base_url: Final = httpx.URL(base_target_url)

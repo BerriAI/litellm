@@ -8327,7 +8327,7 @@ class TestEuJevPassthroughRoute:
             user_api_key_dict=UserAPIKeyAuth(api_key="virtual-key"),
         )
 
-        assert create_route.call_args.kwargs["target"] == "https://jev.bevel.software/v1/systemone"
+        assert create_route.call_args.kwargs["target"] == "https://eu-jev.com/v1/systemone"
 
 
 @pytest.mark.parametrize("provider", ["laya", "bespoke"])
