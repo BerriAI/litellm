@@ -1056,10 +1056,11 @@ class TestUsageAiChatModelAccess:
                 "litellm.proxy.proxy_server.prisma_client", None
             ),
         ):
-            await check_usage_ai_chat_model_access(
+            result: Final = await check_usage_ai_chat_model_access(
                 user_api_key_dict=UserAPIKeyAuth(models=["shared-model"], api_key="sk-test"),
                 model="shared-model",
             )
+            assert result is None
 
     @pytest.mark.asyncio
     async def test_unrestricted_key_can_call_any_model(self):
@@ -1080,10 +1081,11 @@ class TestUsageAiChatModelAccess:
                 "litellm.proxy.proxy_server.prisma_client", None
             ),
         ):
-            await check_usage_ai_chat_model_access(
+            result: Final = await check_usage_ai_chat_model_access(
                 user_api_key_dict=UserAPIKeyAuth(models=[], api_key="sk-test"),
                 model="team-a-secret",
             )
+            assert result is None
 
     @pytest.mark.asyncio
     async def test_team_model_restriction_is_enforced(self):
