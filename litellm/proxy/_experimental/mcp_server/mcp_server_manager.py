@@ -1196,6 +1196,8 @@ def should_strip_caller_authorization(
       admission credential — a virtual key, an IdP JWT, or an SSO / OIDC /
       session token whose ``api_key`` is ``None`` — and must never reach
       the upstream, so it is stripped regardless of the ``api_key`` value.
+    - **Every other auth-enabled mode**: strip when ``Authorization`` is the
+      credential admission validated.
     """
     if _authorization_is_admission_jwt(raw_headers, user_api_key_auth):
         return True
@@ -1215,7 +1217,21 @@ def should_strip_caller_authorization(
         mcp_server.auth_type == MCPAuth.oauth2 and mcp_server.delegate_auth_to_upstream
     )
     if not (mcp_server.is_oauth_passthrough or is_delegated_oauth):
-        return False
+        from litellm.proxy.auth.user_api_key_auth import is_no_auth_dev_mode
+        from litellm.proxy.proxy_server import (
+            general_settings,  # pyright: ignore[reportUnknownVariableType]  # legacy global is declared as a bare dict
+            master_key,
+        )
+
+        proxy_general_settings: Final = _GENERAL_SETTINGS_ADAPTER.validate_python(general_settings)
+        admission_ran: Final = not is_no_auth_dev_mode(master_key, proxy_general_settings) or (
+            user_api_key_auth is not None and user_api_key_auth.authenticated_by_custom_auth
+        )
+        return admission_ran and (
+            _authorization_is_litellm_admission_credential_with_settings(
+                raw_headers, user_api_key_auth, proxy_general_settings
+            )
+        )
 
     has_explicit_litellm_admission_header: Final = _has_explicit_litellm_admission_header(raw_headers)
     if is_delegated_oauth:
@@ -1242,16 +1258,39 @@ def _has_explicit_litellm_admission_header(raw_headers: Mapping[str, str] | None
     return bool(_raw_header_value(raw_headers, "x-litellm-api-key"))
 
 
+_GENERAL_SETTINGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
 def _authorization_is_litellm_admission_credential(
     raw_headers: Mapping[str, str] | None,
     user_api_key_auth: UserAPIKeyAuth | None,
 ) -> bool:
+    from litellm.proxy.proxy_server import (
+        general_settings,  # pyright: ignore[reportUnknownVariableType]  # legacy global is declared as a bare dict
+    )
+
+    proxy_general_settings: Final = _GENERAL_SETTINGS_ADAPTER.validate_python(general_settings)
+    return _authorization_is_litellm_admission_credential_with_settings(
+        raw_headers, user_api_key_auth, proxy_general_settings
+    )
+
+
+def _authorization_is_litellm_admission_credential_with_settings(
+    raw_headers: Mapping[str, str] | None,
+    user_api_key_auth: UserAPIKeyAuth | None,
+    proxy_general_settings: Mapping[str, object],
+) -> bool:
     """True when ``Authorization`` carries the LiteLLM key admission validated.
 
-    That is the case when no usable ``x-litellm-api-key`` was sent, or when the client repeated the
-    same key in both headers.
+    That is the case when no usable admission header was sent, or when the client repeated the same key in both headers.
     """
-    admission_header: Final = _raw_header_value(raw_headers, "x-litellm-api-key")
+    custom_header_name: Final[object | None] = proxy_general_settings.get("litellm_key_header_name")
+    custom_admission_header: Final = (
+        _raw_header_value(raw_headers, custom_header_name.lower())
+        if isinstance(custom_header_name, str) and custom_header_name
+        else None
+    )
+    admission_header: Final = custom_admission_header or _raw_header_value(raw_headers, "x-litellm-api-key")
     authorization: Final = _raw_header_value(raw_headers, "authorization")
     if admission_header and authorization:
         return strip_auth_scheme(authorization, "Bearer") == strip_auth_scheme(admission_header, "Bearer")
