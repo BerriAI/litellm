@@ -1,60 +1,53 @@
 "use client";
 
+import { Page } from "@/components/shared/Page";
 import { teamListCall as v2TeamListCall } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { KeyResponse, Team } from "@/components/key_team_helpers/key_list";
-import CreateKey, { CreateKeyPrefillData } from "@/components/organisms/create_key_button";
+import CreateKey, { type CreateKeyPrefillData } from "@/components/organisms/create_key_button";
 import { VirtualKeysTable } from "@/components/VirtualKeysPage/VirtualKeysTable";
-import { useSearchParams } from "next/navigation";
+import { parseAsArrayOf, parseAsBoolean, parseAsString, parseAsStringLiteral, useQueryStates } from "nuqs";
 import { useEffect, useMemo, useState } from "react";
+
+const CREATE_KEY_URL_PARAMS = {
+  create: parseAsBoolean.withDefault(false),
+  owned_by: parseAsStringLiteral(["you", "service_account", "another_user"] as const),
+  team_id: parseAsString,
+  key_alias: parseAsString,
+  models: parseAsArrayOf(parseAsString),
+  key_type: parseAsStringLiteral(["default", "llm_api", "management"] as const),
+};
 
 export default function ApiKeysDashboard() {
   const { userId: userID, userRole, accessToken, isViewOnly } = useAuthorized();
-  const searchParams = useSearchParams()!;
+  const [{ create, owned_by, team_id, key_alias, models, key_type }] = useQueryStates(CREATE_KEY_URL_PARAMS);
 
   const [teams, setTeams] = useState<Team[] | null>(null);
   const [keys, setKeys] = useState<KeyResponse[] | null>([]);
 
-  const autoOpenCreate = searchParams.get("create") === "true";
+  const autoOpenCreate = create;
   const prefillData: CreateKeyPrefillData | undefined = useMemo(() => {
     if (!autoOpenCreate) return undefined;
 
-    const ownedBy = searchParams.get("owned_by");
-    const teamId = searchParams.get("team_id");
-    const keyAlias = searchParams.get("key_alias");
-    const modelsParam = searchParams.get("models");
-    const keyType = searchParams.get("key_type");
-
-    if (!ownedBy && !teamId && !keyAlias && !modelsParam && !keyType) {
+    if ([owned_by, team_id, key_alias, models, key_type].every((value) => value === null)) {
       return undefined;
     }
 
-    const validOwnedByValues = ["you", "service_account", "another_user"];
-    const validatedOwnedBy =
-      ownedBy && validOwnedByValues.includes(ownedBy) ? (ownedBy as CreateKeyPrefillData["owned_by"]) : undefined;
-
-    const validKeyTypes = ["default", "llm_api", "management"];
-    const validatedKeyType =
-      keyType && validKeyTypes.includes(keyType) ? (keyType as CreateKeyPrefillData["key_type"]) : undefined;
-
-    const sanitizedKeyAlias = keyAlias ? keyAlias.trim().slice(0, 256) : undefined;
-
-    const sanitizedModels = modelsParam
-      ? modelsParam
-          .split(",")
+    const sanitizedModels = models
+      ? models
           .slice(0, 100)
           .map((m) => m.trim().slice(0, 256))
           .filter((m) => m.length > 0)
       : undefined;
 
     return {
-      owned_by: validatedOwnedBy,
-      team_id: teamId?.trim() || undefined,
-      key_alias: sanitizedKeyAlias,
+      owned_by: owned_by ?? undefined,
+      team_id: team_id?.trim() || undefined,
+      key_alias: key_alias === null ? undefined : key_alias.trim().slice(0, 256),
       models: sanitizedModels && sanitizedModels.length > 0 ? sanitizedModels : undefined,
-      key_type: validatedKeyType,
+      key_type: key_type ?? undefined,
     };
-  }, [searchParams, autoOpenCreate]);
+  }, [autoOpenCreate, key_alias, key_type, models, owned_by, team_id]);
 
   const addKey = (data: KeyResponse) => {
     setKeys((prevData) => (prevData ? [...prevData, data] : [data]));
@@ -71,7 +64,7 @@ export default function ApiKeysDashboard() {
   }, [accessToken, userID, userRole]);
 
   return (
-    <main className="flex h-full flex-col p-8">
+    <Page className="h-full">
       <VirtualKeysTable
         headerActions={
           isViewOnly ? undefined : (
@@ -86,6 +79,6 @@ export default function ApiKeysDashboard() {
           )
         }
       />
-    </main>
+    </Page>
   );
 }

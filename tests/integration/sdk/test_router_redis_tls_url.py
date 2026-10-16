@@ -12,7 +12,9 @@ from typing import Final
 
 import pytest
 from integration._support.tls import server_context, write_self_signed_cert
-from litellm import Router
+import litellm
+from litellm import Router, completion
+from litellm.caching.caching import Cache, LiteLLMCacheType
 from redis import Redis
 
 PAYLOAD: Final = {"transport": "tls"}
@@ -105,3 +107,53 @@ def test_sync_router_cache_built_from_a_rediss_url_talks_tls_to_redis(tmp_path: 
         assert cache.get_cache(key) == PAYLOAD
         assert relay.handshakes.qsize() >= 1
         assert relay.handshakes.get_nowait().startswith("TLS")
+
+
+def test_caching_v2(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with tls_relay(tmp_path) as relay:
+        monkeypatch.setattr(
+            litellm,
+            "cache",
+            Cache(type=LiteLLMCacheType.REDIS, url=relay.url),
+        )
+        messages: Final = [{"role": "user", "content": f"tls cache {uuid.uuid4().hex}"}]
+        first: Final = completion(
+            model="gpt-4o-mini",
+            messages=messages,
+            caching=True,
+            mock_response="cached over tls",
+        )
+        second: Final = completion(
+            model="gpt-4o-mini",
+            messages=messages,
+            caching=True,
+            mock_response="not cached",
+        )
+
+        assert first.id == second.id
+        assert relay.handshakes.qsize() >= 1
+
+
+def test_caching_router(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "cache", None)
+    with tls_relay(tmp_path) as relay:
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "tls-cache",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "synthetic-tls-key",
+                        "mock_response": "cached through router",
+                    },
+                }
+            ],
+            redis_url=relay.url,
+            cache_responses=True,
+        )
+        messages: Final = [{"role": "user", "content": f"tls router cache {uuid.uuid4().hex}"}]
+        first: Final = router.completion(model="tls-cache", messages=messages)
+        second: Final = router.completion(model="tls-cache", messages=messages)
+
+        assert first.id == second.id
+        assert relay.handshakes.qsize() >= 1

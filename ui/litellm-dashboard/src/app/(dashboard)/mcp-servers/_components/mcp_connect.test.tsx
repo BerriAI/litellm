@@ -5,10 +5,27 @@ import { describe, it, expect, vi } from "vitest";
 import MCPConnect from "./mcp_connect";
 
 vi.mock("@/components/networking", () => ({
-  getProxyBaseUrl: vi.fn().mockReturnValue("http://localhost:4000"),
+  getProxyBaseUrl: vi.fn().mockReturnValue("https://backend.example.com"),
+  getGatewayBaseUrl: vi.fn().mockReturnValue("https://gateway.example.com"),
 }));
 
 const activePanel = () => screen.getByRole("tabpanel");
+
+describe("MCPConnect routing", () => {
+  it("uses the gateway for Responses and the backend for MCP server URLs", async () => {
+    const user = userEvent.setup();
+    render(<MCPConnect />);
+
+    expect(within(activePanel()).getByText(/"server_url": "https:\/\/backend\.example\.com\/mcp"/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "LiteLLM Proxy" }));
+
+    expect(within(activePanel()).getByText("https://backend.example.com/mcp")).toBeInTheDocument();
+    expect(
+      within(activePanel()).getByText(/curl --location 'https:\/\/gateway\.example\.com\/v1\/responses'/),
+    ).toBeInTheDocument();
+  });
+});
 
 describe("MCPConnect (tab mount contract)", () => {
   it("keeps the x-mcp-servers header toggle on after switching tabs away and back", async () => {

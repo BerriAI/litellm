@@ -11,8 +11,13 @@ from litellm.integrations.otel.model.config import (
     ExporterSpec,
     OpenTelemetryV2Config,
 )
-from litellm.integrations.otel.presets.utils import ensure_mappers
+from litellm.integrations.otel.presets.utils import credential_gated_exporters, ensure_mappers
 from litellm.types.utils import StandardCallbackDynamicParams
+
+#: Arize routes an export to a project by the ``model_id`` resource attribute and
+#: rejects one that names none, so this is the project when ``ARIZE_PROJECT_NAME``
+#: is unset.
+ARIZE_DEFAULT_PROJECT: Final = "litellm"
 
 
 class _ArizeSettings(BaseSettings):
@@ -32,6 +37,18 @@ def arize_preset(
     mappers: Final = ensure_mappers(base.mapper_names, "openinference")
     arize_cfg: Final = _V1ArizeLogger.get_arize_config()
     headers: Final = _arize_headers(arize_cfg)
+    resource_attributes: Final = {
+        **base.resource_attributes,
+        "model_id": arize_cfg.project_name or base.resource_attributes.get("model_id") or ARIZE_DEFAULT_PROJECT,
+    }
+    if headers is None:
+        return base.model_copy(
+            update={
+                "exporters": credential_gated_exporters(base.exporters, ExporterOwner.ARIZE_AX),
+                "mapper_names": mappers,
+                "resource_attributes": resource_attributes,
+            }
+        )
     return base.model_copy(
         update={
             "exporters": [
@@ -44,10 +61,7 @@ def arize_preset(
                 ),
             ],
             "mapper_names": mappers,
-            "resource_attributes": {
-                **base.resource_attributes,
-                **({"model_id": arize_cfg.project_name} if arize_cfg.project_name else {}),
-            },
+            "resource_attributes": resource_attributes,
         }
     )
 
@@ -61,7 +75,8 @@ def _arize_headers(arize_cfg) -> str | None:
     if not pieces:
         # Fall back to the standard OTLP headers env var when no Arize
         # credentials are configured.
-        return _ArizeSettings().otlp_traces_headers
+        fallback: Final = _ArizeSettings().otlp_traces_headers
+        return (fallback.strip() or None) if fallback else None
     return ",".join(pieces)
 
 

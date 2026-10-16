@@ -2,9 +2,15 @@ import os
 import json
 import copy
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+
+import httpx
+import pytest
+from pydantic import ValidationError
 
 import litellm
+from litellm.llms.snowflake.embedding.transformation import SnowflakeEmbeddingConfig
+from litellm.types.utils import EmbeddingResponse
 
 model_name = "snowflake-arctic-embed"
 
@@ -94,3 +100,59 @@ def test_snowflake_env(mock_post):
 
     os.environ.pop("SNOWFLAKE_ACCOUNT_ID", None)
     os.environ.pop("SNOWFLAKE_JWT", None)
+
+
+def _transform(raw_response: httpx.Response) -> EmbeddingResponse:
+    return SnowflakeEmbeddingConfig().transform_embedding_response(
+        model="snowflake-arctic-embed-m",
+        raw_response=raw_response,
+        model_response=EmbeddingResponse(),
+        logging_obj=MagicMock(),
+        api_key="test-key",
+        request_data={},
+        optional_params={},
+        litellm_params={},
+    )
+
+
+def test_transform_embedding_response_flattens_each_vector_and_prefixes_the_model():
+    response = _transform(
+        httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "model": "snowflake-arctic-embed-m",
+                "data": [{"object": "embedding", "index": 0, "embedding": [[0.1, 2]]}],
+                "usage": {"total_tokens": 5},
+                "unknown": "ignored",
+            },
+        )
+    )
+
+    assert response.model_dump() == {
+        "model": "snowflake/snowflake-arctic-embed-m",
+        "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 2]}],
+        "object": "list",
+        "usage": {
+            "completion_tokens": 0,
+            "prompt_tokens": 0,
+            "total_tokens": 5,
+            "completion_tokens_details": None,
+            "prompt_tokens_details": None,
+        },
+    }
+    assert response._hidden_params["model"] == "snowflake-arctic-embed-m"
+
+
+@pytest.mark.parametrize("body", [b"null", b"[]", b"7"])
+def test_transform_embedding_response_body_that_is_not_an_object_raises_type_error(body: bytes):
+    with pytest.raises(TypeError):
+        _transform(httpx.Response(200, content=body))
+
+
+def test_transform_embedding_response_invalid_envelope_field_is_reported_by_name():
+    with pytest.raises(ValidationError) as exc_info:
+        _transform(httpx.Response(200, json={"data": [], "model": 5}))
+
+    assert exc_info.value.title == "EmbeddingResponse"
+    assert [error["loc"] for error in exc_info.value.errors()] == [("model",)]

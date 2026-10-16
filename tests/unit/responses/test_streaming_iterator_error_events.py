@@ -20,15 +20,18 @@ Pydantic ValidationError (previously typed as Optional[str]).
 """
 
 import json
+from datetime import datetime
 from importlib import import_module
+from typing import Final
 from unittest.mock import Mock, patch
 
+import httpx
 import pytest
-
 
 import litellm
 from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.litellm_logging import _get_provider_request_id
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.responses.streaming_iterator import (
     _ERROR_CODE_HTTP_STATUS,
@@ -63,6 +66,52 @@ def _make_iterator() -> BaseResponsesAPIStreamingIterator:
 def _make_error_chunk(error_type: str, code: str, message: str = "err") -> ErrorEvent:
     error_obj = ErrorEventError(type=error_type, code=code, message=message)
     return ErrorEvent(type=ResponsesAPIStreamEvents.ERROR, sequence_number=0, error=error_obj)
+
+
+@pytest.mark.parametrize("provider", ("openai", "azure", "bedrock"))
+@pytest.mark.parametrize("header", ("x-amzn-RequestId", "x-request-id", None))
+@pytest.mark.parametrize(
+    "code,status", (("server_error", 500), ("rate_limit_exceeded", 429), ("invalid_request_error", 400))
+)
+def test_stream_error_preserves_provider_request_id(provider: str, header: str | None, code: str, status: int) -> None:
+    stream_headers: Final = {"retry-after": "7", "content-type": "text/event-stream"}
+    response: Final = httpx.Response(
+        200, headers={**stream_headers, header: "provider-request-id"} if header else stream_headers
+    )
+    logging: Final = LiteLLMLoggingObj(
+        model="test-model",
+        messages=[],
+        stream=True,
+        call_type="responses",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="test-call",
+        function_id="test-function",
+    )
+    iterator: Final = BaseResponsesAPIStreamingIterator(
+        response=response,
+        model="test-model",
+        responses_api_provider_config=None,
+        logging_obj=logging,
+        custom_llm_provider=provider,
+    )
+    expected_id: Final = "provider-request-id" if header else None
+    expected_headers: Final = {header.lower(): "provider-request-id"} if header else {}
+    mapped: Final = iterator._map_error_event_exception({"type": code, "code": code, "message": "failure"})
+    assert _get_provider_request_id(mapped) == expected_id
+    assert dict(getattr(mapped, "litellm_response_headers", None) or {}) == expected_headers
+    expected_status: Final = 503 if provider == "bedrock" and status == 500 else status
+    with pytest.raises((litellm.BadRequestError, MidStreamFallbackError)) as raised:
+        iterator._maybe_raise_for_error_event(_make_error_chunk(code, code, "failure"))
+    assert raised.value.status_code == expected_status
+    assert _get_provider_request_id(raised.value) == expected_id
+    assert response.status_code == 200
+    if status in (429, 500):
+        assert isinstance(raised.value, MidStreamFallbackError)
+        assert dict(raised.value.response.headers) == expected_headers
+        assert raised.value.response.status_code == expected_status
+        assert str(raised.value.response.request.url) == f"https://{provider}.com/v1/"
+        assert raised.value.generated_content == ""
+        assert raised.value.is_pre_first_chunk is True
 
 
 def test_maybe_raise_for_error_event_wraps_unknown_error_in_mid_stream_fallback():
@@ -163,6 +212,7 @@ def test_maybe_raise_for_response_failed_event_wraps_content_policy_violation():
     "error_type,error_code,expected_exception",
     [
         ("invalid_request_error", "content_policy_violation", litellm.ContentPolicyViolationError),
+        ("invalid_request_error", "cyber_policy", litellm.ContentPolicyViolationError),
         ("tokens", "rate_limit_exceeded", litellm.RateLimitError),
         ("invalid_request_error", "insufficient_quota", litellm.RateLimitError),
         ("server_error", "internal_error", litellm.InternalServerError),
@@ -354,20 +404,22 @@ def test_response_failed_numeric_code_maps_to_its_http_status(code: int | str):
     assert isinstance(exc_info.value.original_exception, litellm.RateLimitError)
 
 
-def test_response_failed_unknown_code_keeps_upstream_code_and_message_on_mapped_exception():
+@pytest.mark.parametrize("code", ["cyber_policy", "unrecognized_failure"])
+def test_response_failed_keeps_upstream_code_and_uses_content_policy_fallback_for_cyber_policy(code: str):
     iterator = _make_iterator()
     upstream_message = "This content was flagged for possible cybersecurity risk."
     mock_response_obj = Mock()
-    mock_response_obj.error = {"code": "cyber_policy", "message": upstream_message}
+    mock_response_obj.error = {"code": code, "message": upstream_message}
     chunk = Mock()
     chunk.type = "response.failed"
     chunk.response = mock_response_obj
     with pytest.raises(MidStreamFallbackError) as exc_info:
         iterator._maybe_raise_for_error_event(chunk)
     mapped = exc_info.value.original_exception
-    assert isinstance(mapped, litellm.InternalServerError)
-    assert mapped.code == "cyber_policy"
-    assert mapped.body == {"message": upstream_message, "type": None, "code": "cyber_policy"}
+    expected = litellm.ContentPolicyViolationError if code == "cyber_policy" else litellm.InternalServerError
+    assert isinstance(mapped, expected)
+    assert mapped.code == code
+    assert mapped.body == {"message": upstream_message, "type": None, "code": code}
 
 
 def test_maybe_raise_for_error_event_null_error_obj():
@@ -452,7 +504,7 @@ def test_handle_logging_failed_response_records_usage_and_cost():
         usage=usage,
     )
     iterator.completed_response = chunk
-    iterator.logging_obj._response_cost_calculator.return_value = 0.0042
+    iterator.logging_obj.response_cost_calculator.return_value = 0.0042
     with (
         patch.object(import_module("litellm.responses.streaming_iterator"), "run_async_function"),
         patch.object(import_module("litellm.responses.streaming_iterator"), "executor"),
@@ -464,7 +516,7 @@ def test_handle_logging_failed_response_records_usage_and_cost():
     assert combined_usage.completion_tokens == 5
     assert combined_usage.total_tokens == 15
     assert iterator.logging_obj.model_call_details["response_cost"] == 0.0042
-    iterator.logging_obj._response_cost_calculator.assert_called_once_with(result=chunk.response)
+    iterator.logging_obj.response_cost_calculator.assert_called_once_with(result=chunk.response)
 
 
 def test_handle_logging_failed_response_without_usage_skips_recording():
@@ -478,7 +530,7 @@ def test_handle_logging_failed_response_without_usage_skips_recording():
     ):
         iterator._handle_logging_failed_response()
     assert "combined_usage_object" not in iterator.logging_obj.model_call_details
-    iterator.logging_obj._response_cost_calculator.assert_not_called()
+    iterator.logging_obj.response_cost_calculator.assert_not_called()
 
 
 def test_sync_iterator_raises_mid_stream_fallback_on_rate_limit_error_event():
@@ -585,3 +637,24 @@ def test_maybe_raise_for_error_event_maps_vector_store_timeout_to_retriable_504(
     with pytest.raises(MidStreamFallbackError) as exc_info:
         iterator._maybe_raise_for_error_event(chunk)
     assert exc_info.value.status_code == 504
+
+
+@pytest.mark.parametrize(
+    ("code", "status_code", "exception_type"),
+    [
+        ("rate_limit_exceeded", 429, litellm.RateLimitError),
+        ("server_error", 500, litellm.InternalServerError),
+        (429, 429, litellm.RateLimitError),
+    ],
+)
+def test_openai_top_level_error_event_keeps_the_provider_code_and_message(
+    code: str | int, status_code: int, exception_type: type[Exception]
+):
+    chunk = ErrorEvent(
+        type=ResponsesAPIStreamEvents.ERROR, sequence_number=3, code=code, message=f"upstream said {code}"
+    )
+    with pytest.raises(MidStreamFallbackError) as exc_info:
+        _make_iterator()._maybe_raise_for_error_event(chunk)
+    assert exc_info.value.status_code == status_code
+    assert type(exc_info.value.original_exception) is exception_type
+    assert f"upstream said {code}" in str(exc_info.value.original_exception)

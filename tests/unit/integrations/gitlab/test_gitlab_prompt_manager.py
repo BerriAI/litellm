@@ -568,7 +568,7 @@ def test_list_templates_returns_encoded_ids(manager):
 
 
 def test_load_prompt_from_gitlab_parses_metadata(manager, mock_gitlab_client):
-    manager._load_prompt_from_gitlab("gitlab::hello")
+    manager.load_prompt_from_gitlab("gitlab::hello")
     assert "gitlab::hello" in manager.prompts
 
     tmpl = manager.prompts["gitlab::hello"]
@@ -578,7 +578,7 @@ def test_load_prompt_from_gitlab_parses_metadata(manager, mock_gitlab_client):
 
 
 def test_render_template_renders_jinja(manager, mock_gitlab_client):
-    manager._load_prompt_from_gitlab("gitlab::hello")
+    manager.load_prompt_from_gitlab("gitlab::hello")
     output = manager.render_template("gitlab::hello", {"name": "Prishu"})
     assert "Hello Prishu" in output
 
@@ -589,7 +589,7 @@ def test_get_template_returns_none_if_not_loaded(manager):
 
 def test_repo_path_conversion(manager):
     raw = "gitlab::nested::sub"
-    repo_path = manager._id_to_repo_path(raw)
+    repo_path = manager.id_to_repo_path(raw)
     assert repo_path.endswith("nested/sub.prompt")
     # Ensure decode/encode reversibility
     decoded = manager._repo_path_to_id(repo_path)
@@ -689,7 +689,7 @@ class FakeTemplateManager:
     """
 
     def __init__(self, prompts_path="prompts"):
-        # simulate a configured prompts folder (affects _id_to_repo_path)
+        # simulate a configured prompts folder (affects id_to_repo_path)
         self.prompts_path = prompts_path.strip("/")
         self.prompts = {}  # id -> GitLabPromptTemplate
 
@@ -700,7 +700,7 @@ class FakeTemplateManager:
     def list_templates(self, *, recursive: bool = True):
         return list(self._discoverable_ids)
 
-    def _load_prompt_from_gitlab(self, pid, ref=None):
+    def load_prompt_from_gitlab(self, pid, ref=None):
         # Pretend we fetched and parsed a file; add a basic template if not present
         if pid not in self.prompts:
             self.prompts[pid] = GitLabPromptTemplate(
@@ -712,7 +712,7 @@ class FakeTemplateManager:
     def get_template(self, pid):
         return self.prompts.get(pid)
 
-    def _id_to_repo_path(self, pid):
+    def id_to_repo_path(self, pid):
         base = f"{self.prompts_path}/" if self.prompts_path else ""
         return f"{base}{pid}.prompt"
 
@@ -758,8 +758,8 @@ def test_cache_load_all_encodes_ids_and_populates_maps(mock_pm_cls, fake_manager
     assert set(result.keys()) == {encode_prompt_id("a"), encode_prompt_id("sub/b")}
 
     # Files map built with full repo paths
-    expect_a_path = tm._id_to_repo_path("a")
-    expect_b_path = tm._id_to_repo_path("sub/b")
+    expect_a_path = tm.id_to_repo_path("a")
+    expect_b_path = tm.id_to_repo_path("sub/b")
     assert cache.list_files() == [expect_a_path, expect_b_path]
 
     # IDs list is the encoded IDs
@@ -829,7 +829,7 @@ def test_cache_skips_when_template_missing_even_after_reload_attempt(
             # Always return None to trigger the continue path
             return None
 
-        def _load_prompt_from_gitlab(self, pid, ref=None):
+        def load_prompt_from_gitlab(self, pid, ref=None):
             # Pretend to load, but still don't populate prompts so get_template stays None
             pass
 
@@ -855,8 +855,8 @@ def test_cache_get_by_file_returns_exact_entry(mock_pm_cls, fake_managers):
     cache = GitLabPromptCache({"project": "g/s/r", "access_token": "tkn"})
     cache.load_all()
 
-    alpha_path = tm._id_to_repo_path("alpha")
-    beta_path = tm._id_to_repo_path("nested/beta")
+    alpha_path = tm.id_to_repo_path("alpha")
+    beta_path = tm.id_to_repo_path("nested/beta")
 
     alpha = cache.get_by_file(alpha_path)
     beta = cache.get_by_file(beta_path)

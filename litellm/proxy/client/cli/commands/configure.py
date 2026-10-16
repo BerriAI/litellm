@@ -6,7 +6,8 @@ from typing import Final
 
 import click
 from InquirerPy import inquirer
-from pydantic import BaseModel
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 from .auth import CliContextObj
 from .claude_settings import (
@@ -38,7 +39,7 @@ from .configure_setup import (
 )
 
 
-class _ConnectionOptions(BaseModel):
+class _ConnectionOptions(LiteLLMBaseModel):
     api_key: str | None = None
     gateway_url: str | None = None
 
@@ -253,7 +254,7 @@ def unconfigure_group(ctx: click.Context, forget: bool) -> None:
             _disconnect(target, forget)
 
 
-class _UnconfigureOptions(BaseModel):
+class _UnconfigureOptions(LiteLLMBaseModel):
     forget: bool = False
 
 

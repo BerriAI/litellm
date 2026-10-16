@@ -6,10 +6,11 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import weakref
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Coroutine, Generator, Iterator
 from functools import partial
 from types import TracebackType
-from typing import Any, Final, cast
+from typing import Final, cast
 
 import httpx
 from httpx._types import CookieTypes, QueryParamTypes, RequestContent, RequestFiles
@@ -25,6 +26,23 @@ from litellm.utils import client
 
 base_llm_http_handler = BaseLLMHTTPHandler()
 from .utils import BasePassthroughUtils
+
+_provider_errors: Final[weakref.WeakSet[httpx.HTTPStatusError]] = weakref.WeakSet()
+
+
+def raise_for_provider_status(response: httpx.Response) -> None:
+    """``response.raise_for_status()`` for the provider's response to a passthrough request, recording the raised
+    error as the provider's own."""
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as error:
+        _provider_errors.add(error)
+        raise
+
+
+def is_provider_error(error: httpx.HTTPStatusError) -> bool:
+    """Whether ``error`` is the provider's own error response to a passthrough request."""
+    return error in _provider_errors
 
 
 async def _as_async_generator(iterable: AsyncIterator[bytes]) -> AsyncGenerator[bytes, bytes]:
@@ -104,7 +122,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
     def headers(self, value: httpx.Headers) -> None:
         self._headers = value
 
-    def __await__(self) -> Iterator[Any]:
+    def __await__(self) -> Generator[object, None, AsyncPassthroughStreamingResponse]:
         async def _init():
             if not self._initialized:
                 self._response = await self._response_coro
@@ -112,16 +130,16 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
                 self.status_code = self._response.status_code
                 self._initialized = True
                 try:
-                    self._response.raise_for_status()
+                    raise_for_provider_status(self._response)
                     self._iterator = _as_async_generator(self._response.aiter_bytes())
                 except Exception:  # noqa: BLE001 # Safe catch-all for cleanup logic
                     try:
                         await self._response.aread()
-                    except Exception:  # noqa: BLE001 S110 # Safe catch-all for cleanup logic
+                    except Exception:  # noqa: BLE001, S110 # Safe catch-all for cleanup logic
                         pass
                     try:
                         await self._response.aclose()
-                    except Exception:  # noqa: BLE001 S110 # Safe catch-all for cleanup logic
+                    except Exception:  # noqa: BLE001, S110 # Safe catch-all for cleanup logic
                         pass
                     raise
             return self
@@ -164,7 +182,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
             self._start_flush()
             try:
                 await self._response.aclose()
-            except Exception:  # noqa: BLE001 S110 # Safe catch-all for cleanup logic
+            except Exception:  # noqa: BLE001, S110 # Safe catch-all for cleanup logic
                 pass
             raise
         else:
@@ -191,7 +209,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
             if self._initialized:
                 await self._iterator.aclose()
                 await self._response.aclose()
-        except Exception:  # noqa: BLE001 S110 # Safe catch-all for cleanup logic
+        except Exception:  # noqa: BLE001, S110 # Safe catch-all for cleanup logic
             pass
 
 
@@ -239,7 +257,7 @@ class PassthroughStreamingResponse(Generator[bytes, bytes, None]):
             self._start_flush()
             try:
                 self._response.close()
-            except Exception:  # noqa: BLE001 S110 # Safe catch-all for cleanup logic
+            except Exception:  # noqa: BLE001, S110 # Safe catch-all for cleanup logic
                 pass
             raise
         else:
@@ -260,7 +278,7 @@ class PassthroughStreamingResponse(Generator[bytes, bytes, None]):
         self._start_flush()
         try:
             self._response.close()
-        except Exception:  # noqa: BLE001 S110 # Safe catch-all for cleanup logic
+        except Exception:  # noqa: BLE001, S110 # Safe catch-all for cleanup logic
             pass
 
 
@@ -375,7 +393,7 @@ async def allm_passthrough_route(
                     provider=LlmProviders(resolved_custom_llm_provider),
                     model=model,
                 )
-            except Exception:  # noqa: BLE001 S110
+            except Exception:  # noqa: BLE001, S110  # provider config is optional
                 # If we can't get provider config, pass None
                 pass
 
@@ -383,7 +401,7 @@ async def allm_passthrough_route(
             # If no provider config available, raise the original exception
             raise e
 
-        raise base_llm_http_handler._handle_error(
+        raise base_llm_http_handler.handle_error(
             e=e,
             provider_config=provider_config,
         )
@@ -441,8 +459,8 @@ def llm_passthrough_route(
 
     if client is None:
         from litellm.llms.custom_httpx.http_handler import (
-            _get_httpx_client,
             get_async_httpx_client,
+            get_httpx_client,
         )
         from litellm.passthrough.timeout_utils import resolve_llm_passthrough_timeout
         from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -457,7 +475,7 @@ def llm_passthrough_route(
                 params={"timeout": resolved_timeout},
             )
         else:
-            client = _get_httpx_client(params={"timeout": resolved_timeout})
+            client = get_httpx_client(params={"timeout": resolved_timeout})
 
     # Add model_id to litellm_params if present in kwargs (for Bedrock Application Inference Profiles)
     if "model_id" in kwargs:
@@ -581,11 +599,11 @@ def llm_passthrough_route(
             except Exception:  # noqa: BLE001 # Safe catch-all for cleanup logic
                 try:
                     response.read()
-                except Exception:  # noqa: BLE001 S110 # Safe catch-all for cleanup logic
+                except Exception:  # noqa: BLE001, S110 # Safe catch-all for cleanup logic
                     pass
                 try:
                     response.close()
-                except Exception:  # noqa: BLE001 S110 # Safe catch-all for cleanup logic
+                except Exception:  # noqa: BLE001, S110 # Safe catch-all for cleanup logic
                     pass
                 raise
 
@@ -595,7 +613,7 @@ def llm_passthrough_route(
                 return response
     except Exception as e:
         assert provider_config is not None
-        raise base_llm_http_handler._handle_error(
+        raise base_llm_http_handler.handle_error(
             e=e,
             provider_config=provider_config,
         )
@@ -626,7 +644,7 @@ async def _async_passthrough_request(
         else:
             response: Final = await response_result
             await response.aread()
-            response.raise_for_status()
+            raise_for_provider_status(response)
             return response
     else:
         # Fallback for sync-like behavior (shouldn't happen in async path)

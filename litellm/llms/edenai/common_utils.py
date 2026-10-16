@@ -7,12 +7,13 @@ from collections.abc import Container, Mapping
 from types import MappingProxyType
 from typing import Final
 
-from pydantic import AliasChoices, BaseModel, Field, ValidationError
+from pydantic import AliasChoices, Field, ValidationError
 
 import litellm
 from litellm.exceptions import AuthenticationError
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import LlmProviders
 
 EDENAI_API_BASE: Final = "https://api.edenai.run/v3"
@@ -23,7 +24,7 @@ class EdenAIException(BaseLLMException):
     pass
 
 
-class _EdenAIExtras(BaseModel):
+class _EdenAIExtras(LiteLLMBaseModel):
     cost: float | None = Field(default=None, validation_alias=AliasChoices("cost", EDENAI_COST_HEADER))
 
 

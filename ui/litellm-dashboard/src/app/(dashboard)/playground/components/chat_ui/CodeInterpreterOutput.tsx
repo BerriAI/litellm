@@ -4,7 +4,7 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 
 import { useSyntaxTheme } from "@/hooks/useSyntaxTheme";
-import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
+import { getGatewayBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 
@@ -39,7 +39,7 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({ code, ann
   const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
   const [loadingImages, setLoadingImages] = useState<Record<string, boolean>>({});
   const [codeOpen, setCodeOpen] = useState(false);
-  const proxyBaseUrl = getProxyBaseUrl();
+  const proxyBaseUrl = getGatewayBaseUrl();
 
   useEffect(() => {
     const createdUrls: string[] = [];

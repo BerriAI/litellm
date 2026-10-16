@@ -239,7 +239,7 @@ def create_assistants(
     temperature: float | None = None,
     top_p: float | None = None,
     response_format: str | dict[str, str] | None = None,
-    client: Any | None = None,
+    client: object | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     api_version: str | None = None,
@@ -410,7 +410,7 @@ async def adelete_assistant(
 def delete_assistant(
     custom_llm_provider: Literal["openai", "azure"],
     assistant_id: str,
-    client: Any | None = None,
+    client: object | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     api_version: str | None = None,
@@ -1181,7 +1181,7 @@ async def arun_thread(
     model: str | None = None,
     stream: bool | None = None,
     tools: Iterable[AssistantToolParam] | None = None,
-    client: Any | None = None,
+    client: object | None = None,
     **kwargs,
 ) -> Run:
     loop: Final = asyncio.get_event_loop()
@@ -1246,7 +1246,7 @@ def run_thread(
     model: str | None = None,
     stream: bool | None = None,
     tools: Iterable[AssistantToolParam] | None = None,
-    client: Any | None = None,
+    client: object | None = None,
     event_handler: AssistantEventHandler | None = None,  # for stream=True calls
     **kwargs,
 ) -> Run:
