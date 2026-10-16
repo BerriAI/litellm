@@ -202,6 +202,10 @@ def _block_mark(block: object, key: str) -> object:
     return (_fields(block) or {}).get(key)
 
 
+def _is_supported(marker: object) -> bool:
+    return not isinstance(_breakpoint_mark(marker), UnsupportedPromptCacheParam)
+
+
 def _asks_for_an_hour(marker: object) -> bool:
     mark: Final = _breakpoint_mark(marker)
     return not isinstance(mark, UnsupportedPromptCacheParam) and mark.get("ttl") == "1h"
@@ -243,9 +247,12 @@ def tool_mark_may_reach_claude(tool: object) -> bool:
     return any(tool_mark_reaches_claude(tool, route) for route in _CLAUDE_ROUTES)
 
 
-def _first_usable(markers: Sequence[object]) -> tuple[object, tuple[object, ...]]:
-    """The first breakpoint Claude can use stays, so a malformed one ``drop_params`` drops never takes its place."""
-    index: Final = next((index for index, marker in enumerate(markers) if prompt_cache_breakpoint_is_usable(marker)), 0)
+def _kept_breakpoint(markers: Sequence[object]) -> tuple[object, tuple[object, ...]]:
+    """The first breakpoint Claude takes as sent stays, else the first one ``drop_params`` can fix, so a malformed one
+    or one whose ttl ``drop_params`` drops never takes the place of a valid one and costs the ttl it chose."""
+    supported: Final = (index for index, marker in enumerate(markers) if _is_supported(marker))
+    usable: Final = (index for index, marker in enumerate(markers) if prompt_cache_breakpoint_is_usable(marker))
+    index: Final = next(chain(supported, usable), 0)
     return markers[index], (*markers[:index], *markers[index + 1 :])
 
 
@@ -270,7 +277,7 @@ def _tool_result_hoisted(message: _Fields) -> _Hoisted:
         )
     if own is None and not part_breakpoints:
         return _Hoisted(message, ())
-    kept, replaced = _first_usable(part_breakpoints if own is None else (own, *part_breakpoints))
+    kept, replaced = _kept_breakpoint(part_breakpoints if own is None else (own, *part_breakpoints))
     return _Hoisted(
         {**message, "prompt_cache_breakpoint": _joined_breakpoint(kept, replaced), "content": unmarked_parts}, replaced
     )
@@ -314,7 +321,7 @@ def _message_breakpoint_hoisted(message: _Fields) -> _Hoisted:
     if block.get("cache_control") is not None:
         return _Hoisted(_without_own_breakpoint(message), (own,))
     existing: Final = block.get("prompt_cache_breakpoint")
-    kept, replaced = (own, ()) if existing is None else _first_usable((existing, own))
+    kept, replaced = (own, ()) if existing is None else _kept_breakpoint((existing, own))
     return _Hoisted(
         {
             **_without_own_breakpoint(message),
@@ -366,7 +373,7 @@ def _hoisted_tool(tool: object) -> _Hoisted:
     }
     if function.get("cache_control") is not None or fields.get("cache_control") is not None:
         return _Hoisted(unmarked, markers)
-    kept, replaced = _first_usable(markers)
+    kept, replaced = _kept_breakpoint(markers)
     return _Hoisted({**unmarked, "prompt_cache_breakpoint": _joined_breakpoint(kept, replaced)}, replaced)
 
 

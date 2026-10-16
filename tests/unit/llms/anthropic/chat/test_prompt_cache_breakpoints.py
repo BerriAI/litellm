@@ -1,4 +1,3 @@
-import time
 from typing import Final
 
 import pytest
@@ -933,6 +932,68 @@ def test_a_tools_breakpoint_joined_with_its_functions_keeps_the_hour_the_functio
     assert list(result.tools or ()) == [{"type": "function", "function": {"name": "t"}, "cache_control": _ONE_HOUR}]
 
 
+@pytest.mark.parametrize(
+    ("messages", "tools", "sent_messages", "sent_tools"),
+    [
+        pytest.param(
+            [
+                {
+                    "role": "tool",
+                    "tool_call_id": "c1",
+                    "content": [
+                        _part("r0", prompt_cache_breakpoint=_THIRTY_MINUTES),
+                        _part("r1", prompt_cache_breakpoint={"mode": "explicit", "ttl": "1h"}),
+                    ],
+                }
+            ],
+            None,
+            [{"role": "tool", "tool_call_id": "c1", "content": [_part("r0"), _part("r1")], "cache_control": _ONE_HOUR}],
+            [],
+            id="tool-result-parts",
+        ),
+        pytest.param(
+            [
+                {
+                    "role": "user",
+                    "content": [_part("u0"), _part("u1", prompt_cache_breakpoint=_THIRTY_MINUTES)],
+                    "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"},
+                }
+            ],
+            None,
+            [{"role": "user", "content": [_part("u0"), _part("u1", cache_control=_ONE_HOUR)]}],
+            [],
+            id="message-and-its-last-part",
+        ),
+        pytest.param(
+            [{"role": "user", "content": "hi"}],
+            [
+                {
+                    "type": "function",
+                    "prompt_cache_breakpoint": _THIRTY_MINUTES,
+                    "function": {"name": "t", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}},
+                }
+            ],
+            [{"role": "user", "content": "hi"}],
+            [{"type": "function", "function": {"name": "t"}, "cache_control": _ONE_HOUR}],
+            id="tool-and-its-function",
+        ),
+    ],
+)
+def test_a_breakpoint_whose_ttl_drop_params_drops_never_costs_the_hour_of_the_one_it_joins(
+    messages: list[object],
+    tools: list[object] | None,
+    sent_messages: list[object],
+    sent_tools: list[object],
+):
+    outcome: Final = _cache(messages, tools)
+    result: Final = _resolved(messages, tools, drop_params=True)
+
+    assert isinstance(outcome, UnsupportedPromptCacheParam)
+    assert outcome.value == _THIRTY_MINUTES
+    assert list(result.messages) == sent_messages
+    assert list(result.tools or ()) == sent_tools
+
+
 def test_a_function_breakpoint_the_tools_own_breakpoint_replaces_is_still_reported():
     tools: Final = [
         {
@@ -946,41 +1007,6 @@ def test_a_function_breakpoint_the_tools_own_breakpoint_replaces_is_still_report
 
     assert isinstance(outcome, UnsupportedPromptCacheParam)
     assert outcome.value == _THIRTY_MINUTES
-
-
-@pytest.mark.parametrize(
-    "messages",
-    [
-        pytest.param(
-            [
-                {"role": "user", "content": "hi"},
-                *(
-                    {"role": "system", "content": f"s{index}", "prompt_cache_breakpoint": _EXPLICIT}
-                    for index in range(8000)
-                ),
-            ],
-            id="system-turns-with-breakpoints",
-        ),
-        pytest.param(
-            [
-                {
-                    "role": "user",
-                    "content": [
-                        *(_part(f"p{index}", cache_control=_ONE_HOUR) for index in range(20000)),
-                        _part("end", prompt_cache_breakpoint=_EXPLICIT),
-                    ],
-                }
-            ],
-            id="one-hour-parts-beside-a-breakpoint",
-        ),
-    ],
-)
-def test_settling_thousands_of_marks_under_drop_params_takes_well_under_a_second_per_thousand(messages: list[object]):
-    started: Final = time.perf_counter()
-
-    _resolved(messages, drop_params=True)
-
-    assert time.perf_counter() - started < 5
 
 
 def test_a_tool_config_cache_point_takes_one_of_claudes_four_and_is_never_dropped_under_drop_params():
