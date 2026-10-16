@@ -1,7 +1,6 @@
 #### What this does ####
 #    On success, logs events to Langfuse
 import os
-import re
 import traceback
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import datetime
@@ -14,7 +13,7 @@ from packaging.version import Version
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.constants import MAX_LANGFUSE_INITIALIZED_CLIENTS
+from litellm.constants import MAX_LANGFUSE_INITIALIZED_CLIENTS, SESSION_ID_SOURCE_METADATA_KEY
 from litellm.integrations.langfuse.langfuse_mock_client import (
     create_mock_langfuse_client,
     should_use_langfuse_mock,
@@ -70,36 +69,18 @@ def _widened_items(mapping: Mapping[str, object]) -> Iterable[tuple[object, obje
     return mapping.items()
 
 
-def _is_session_header_trace(trace_id: object, session_id: object, proxy_server_request: object) -> bool:
-    if not isinstance(trace_id, str) or not isinstance(session_id, str):
+def _is_session_header_trace(metadata: Mapping[str, object], proxy_server_request: object) -> bool:
+    """The proxy records what set the session id. A trace id that is only a session header's value
+    is not a real trace, so each call gets its own trace inside that session, unless the caller
+    named a Langfuse trace explicitly."""
+    if metadata.get(SESSION_ID_SOURCE_METADATA_KEY) != "session_header":
         return False
     request: Final = _object_mapping(proxy_server_request)
     raw_headers: Final = _object_mapping(request.get("headers")) if request is not None else None
     if raw_headers is None:
         return False
-    headers: Final = MappingProxyType(
-        {key.lower(): value for key, value in _widened_items(raw_headers) if isinstance(key, str)}
-    )
-    if headers.get("x-litellm-trace-id"):
-        return False
-    if headers.get("langfuse_trace_id") is not None:
-        return False
-    if trace_id != session_id and headers.get("langfuse_session_id") != session_id:
-        return False
-    if headers.get("x-litellm-session-id") == trace_id or headers.get("x-session-affinity") == trace_id:
-        return True
-    if re.fullmatch(r"[a-zA-Z0-9_\-]{8,}", trace_id) is None:
-        return False
-    user_agent: Final = headers.get("user-agent")
-    codex: Final = isinstance(user_agent, str) and re.match(r"^codex[-_ /]", user_agent, re.IGNORECASE) is not None
-    return any(
-        value == trace_id
-        and (
-            key == "x-session-id"
-            or re.fullmatch(r"x-.+-session-id", key) is not None
-            or (codex and key in ("session-id", "session_id", "thread-id", "conversation_id"))
-        )
-        for key, value in headers.items()
+    return all(
+        not (isinstance(key, str) and key.lower() == "langfuse_trace_id") for key, _ in _widened_items(raw_headers)
     )
 
 
@@ -135,7 +116,7 @@ def langfuse_trace_id(
         if standard_trace_id is not None
         else litellm_trace_id or litellm_call_id
     )
-    if _is_session_header_trace(trace_id, metadata.get("session_id"), proxy_server_request):
+    if _is_session_header_trace(metadata, proxy_server_request):
         return litellm_call_id or trace_id
     return trace_id
 

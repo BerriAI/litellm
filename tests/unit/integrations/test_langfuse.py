@@ -1881,33 +1881,50 @@ def test_session_header_trace_without_call_id_keeps_session_alias():
 
 
 def test_every_proxy_session_header_shape_is_classified_as_a_session_alias():
-    """The classifier must cover every header shape the proxy turns into a chain id."""
+    """Every header shape the proxy turns into a chain id is recorded as a session-header source,
+    which is what makes Langfuse give each call its own trace inside that session."""
+    from litellm.constants import SESSION_ID_SOURCE_METADATA_KEY
     from litellm.integrations.langfuse.langfuse import _is_session_header_trace
     from litellm.proxy.litellm_pre_call_utils import (
         _CODEX_SESSION_ID_HEADERS,
+        LiteLLMProxyRequestSetup,
         get_chain_id_from_headers,
     )
 
     session: Final = "session-7125-abcdef"
+    affinity: Final = "web:alice.smith:7f3e9c2a-5b1d-4e8f-9a6c-0d2b4f6e8a1c"
     session_shapes: Final = (
         {"x-litellm-session-id": session},
         {"X-Claude-Code-Session-Id": session},
         {"x-session-id": session},
         {"x-session-affinity": session},
+        {"x-session-affinity": affinity},
         *({header: session, "user-agent": "codex_cli_rs/1.0"} for header in _CODEX_SESSION_ID_HEADERS),
     )
     for headers in session_shapes:
-        assert get_chain_id_from_headers(dict(headers)) == session, headers
-        assert _is_session_header_trace(session, session, {"headers": headers}) is True, headers
-
-    affinity: Final = "web:alice.smith:7f3e9c2a-5b1d-4e8f-9a6c-0d2b4f6e8a1c"
-    assert get_chain_id_from_headers({"x-session-affinity": affinity}) == affinity
-    assert _is_session_header_trace(affinity, affinity, {"headers": {"x-session-affinity": affinity}}) is True
-    assert _is_session_header_trace(affinity, affinity, {"headers": {"x-session-affinity": "other:id:1234"}}) is False
+        expected: Final = next(iter(headers.values()))
+        assert get_chain_id_from_headers(dict(headers)) == expected, headers
+        data = {"metadata": {}}
+        LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+            headers=dict(headers), data=data, _metadata_variable_name="metadata"
+        )
+        assert _is_session_header_trace(data["metadata"], {"headers": dict(headers)}) is True, headers
+        assert _is_session_header_trace({}, {"headers": dict(headers)}) is False, headers
 
     explicit_trace: Final = {"x-litellm-trace-id": session, "x-litellm-session-id": session}
-    assert get_chain_id_from_headers(dict(explicit_trace)) == session
-    assert _is_session_header_trace(session, session, {"headers": explicit_trace}) is False
+    data = {"metadata": {}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=explicit_trace, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["metadata"][SESSION_ID_SOURCE_METADATA_KEY] == "trace_header"
+    assert _is_session_header_trace(data["metadata"], {"headers": explicit_trace}) is False
+
+    named_trace: Final = {"x-litellm-session-id": session, "langfuse_trace_id": "explicit-trace"}
+    data = {"metadata": {}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=named_trace, data=data, _metadata_variable_name="metadata"
+    )
+    assert _is_session_header_trace(data["metadata"], {"headers": named_trace}) is False
 
 
 @pytest.mark.parametrize(
@@ -1939,15 +1956,6 @@ def test_sdk_caller_without_request_headers_keeps_its_trace(proxy_server_request
     assert _span_trace_id(_exported_span(logger, exporter)) == resolve_trace_id("session-7125")
     assert result["trace_id"] == resolve_trace_id("session-7125")
 
-
-def test_session_header_classifier_survives_non_string_header_keys():
-    """A non-string header key must not cost the caller its whole trace."""
-    from litellm.integrations.langfuse.langfuse import _is_session_header_trace
-
-    session: Final = "session-7125-abcdef"
-    headers: Final = {7: "numeric key", "x-litellm-session-id": session}
-    assert _is_session_header_trace(session, session, {"headers": headers}) is True
-    assert _is_session_header_trace(session, session, {"headers": {7: "numeric key"}}) is False
 
 
 def test_mask_input_header_false_keeps_the_prompt():

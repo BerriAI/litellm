@@ -3725,15 +3725,9 @@ PI_AI_SESSION_ID = "web:alice.smith:7f3e9c2a-5b1d-4e8f-9a6c-0d2b4f6e8a1c"
 def _apply_session_sources(
     headers: dict[str, str], data: dict[str, object], parent_otel_span: object = None
 ) -> dict[str, object]:
-    """The session/trace steps of add_litellm_data_to_request, in the order the proxy runs them."""
-    from litellm.proxy.litellm_pre_call_utils import add_otel_trace_id_to_request
-
+    """The session/trace step of add_litellm_data_to_request, with the parent OTel span the proxy passes."""
     LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
-        headers=headers, data=data, _metadata_variable_name="metadata"
-    )
-    add_otel_trace_id_to_request(data=data, _metadata_variable_name="metadata", parent_otel_span=parent_otel_span)
-    LiteLLMProxyRequestSetup.add_session_affinity_from_request_headers(
-        headers=headers, data=data, _metadata_variable_name="metadata"
+        headers=headers, data=data, _metadata_variable_name="metadata", parent_otel_span=parent_otel_span
     )
     return data
 
@@ -3836,7 +3830,7 @@ def test_baggage_session_beats_session_affinity():
     assert data["litellm_session_id"] == "baggage-session-42"
     assert data["metadata"]["session_id"] == "baggage-session-42"
     assert "litellm_trace_id" not in data
-    assert get_chain_id_from_headers(headers) is None
+    assert get_chain_id_from_headers(headers) == PI_AI_SESSION_ID
     assert get_chain_id_from_headers({**headers, "baggage": "user.id=42"}) == PI_AI_SESSION_ID
     assert _session_from_affinity_only() == PI_AI_SESSION_ID
 
@@ -3854,7 +3848,7 @@ def test_traceparent_keeps_trace_id_while_session_affinity_fills_session_id():
     assert data["metadata"]["trace_id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
     assert data["litellm_session_id"] == PI_AI_SESSION_ID
     assert data["metadata"]["session_id"] == PI_AI_SESSION_ID
-    assert get_chain_id_from_headers(headers) is None
+    assert get_chain_id_from_headers(headers) == "4bf92f3577b34da6a3ce929d0e0e4736"
 
 
 def test_parent_otel_span_trace_beats_session_affinity():
