@@ -1,6 +1,5 @@
 import asyncio
 import re
-import socket
 import threading
 import uuid
 from collections.abc import Iterator
@@ -29,6 +28,7 @@ from integration._support.sagemaker_embedding import (
     respond,
 )
 from integration._support.wire import Reply, Request, wire_server
+from integration._support.ports import allocate_port
 from pydantic import JsonValue
 
 pytestmark = pytest.mark.timeout(300)
@@ -54,12 +54,6 @@ class _Served:
     call_id: str
 
 
-def _free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
-
-
 def _config(directory: Path) -> Path:
     config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     config["model_list"] = [openai_deployment(_MODEL, "openai", model_info={"mode": "embedding"})]
@@ -80,7 +74,7 @@ def rig() -> Iterator[Gateway]:
 
 @pytest.fixture(scope="module")
 def peer_port() -> int:
-    return _free_port()
+    return allocate_port()
 
 
 @pytest.fixture(scope="module")

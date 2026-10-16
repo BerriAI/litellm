@@ -23,6 +23,8 @@ export default defineConfig({
   use: {
     ...devices["Desktop Chrome"],
     baseURL: UI_BASE_URL,
+    // The proxy closes idle keep-alive sockets after 5s and a reused one fails with "socket hang up"
+    extraHTTPHeaders: { Connection: "close" },
     actionTimeout: 15_000,
     navigationTimeout: 30_000,
     trace: "retain-on-failure",

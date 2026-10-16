@@ -1892,6 +1892,71 @@ async def test_anthropic_post_retry_reserializes_mutated_body():
     assert "MUTATED" in second_sent  # ... the mutated body
 
 
+_BOUND_THINKING_ERROR: Final = (
+    '{"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.0: '
+    'Invalid `signature` in `thinking` block. The block is bound to a different conversation."}}'
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("prefix_mismatch_behavior", "expected_posts"),
+    (("error", 1), ("drop_block", 2)),
+)
+async def test_anthropic_post_skips_the_thinking_strip_retry_when_block_binding_errors(
+    prefix_mismatch_behavior: str, expected_posts: int
+) -> None:
+    """A caller that pinned ``prefix_mismatch_behavior: error`` asked for the 400,
+    so the handler must surface it instead of stripping the bound blocks and retrying."""
+    from litellm.llms.anthropic.pass_through.messages.transformation import AnthropicMessagesConfig
+
+    handler = BaseLLMHTTPHandler()
+    thinking_block = {"type": "thinking", "thinking": "", "signature": "sig"}
+    request_body = {
+        "model": "claude-opus-5-5",
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": [thinking_block, {"type": "text", "text": "hello"}]},
+        ],
+        "thinking": {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": prefix_mismatch_behavior}},
+    }
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    http_client = Mock()
+    http_client.post = AsyncMock(
+        side_effect=[
+            httpx.Response(400, request=request, text=_BOUND_THINKING_ERROR),
+            httpx.Response(200, request=request, json={"type": "message", "content": []}),
+        ]
+    )
+    logging_obj: Final = Mock(baseline_cache_context=None)
+    logging_obj.model_call_details = {}
+
+    async def _post() -> httpx.Response:
+        return await handler._async_post_anthropic_messages_with_http_error_retry(
+            async_httpx_client=http_client,
+            request_url="https://api.anthropic.com/v1/messages",
+            headers={},
+            signed_json_body=None,
+            request_body=request_body,
+            stream=False,
+            logging_obj=logging_obj,
+            provider_config=AnthropicMessagesConfig(),
+            litellm_params=GenericLiteLLMParams(),
+            api_key="k",
+            model="claude-opus-5-5",
+        )
+
+    if expected_posts == 1:
+        with pytest.raises(BaseLLMException) as raised:
+            await _post()
+        assert raised.value.status_code == 400
+        assert "bound to a different conversation" in raised.value.message
+        assert request_body["messages"][1]["content"][0] == thinking_block
+    else:
+        assert (await _post()).status_code == 200
+    assert http_client.post.await_count == expected_posts
+
+
 def test_base_responses_config_sign_request_is_noop_by_default():
     """Default responses sign_request must be a no-op: unchanged headers, no signed body.
 

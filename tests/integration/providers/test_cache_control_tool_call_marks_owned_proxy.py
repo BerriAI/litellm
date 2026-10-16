@@ -1,6 +1,5 @@
 import asyncio
 import re
-import socket
 import threading
 from collections import Counter
 from collections.abc import Callable, Sequence
@@ -17,6 +16,7 @@ from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
+from integration._support.ports import allocate_port
 from integration.providers._cache_control_marks_support import (
     CITIES,
     POINTS,
@@ -55,12 +55,6 @@ class _Sent:
     status: int
     text: str
     call_id: str
-
-
-def _free_port() -> int:
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        return int(reserve.getsockname()[1])
 
 
 def _surface_request(surface: str, marker: str) -> tuple[str, dict[str, JsonValue]]:
@@ -150,7 +144,7 @@ def _single_spend_row(item: _Sent) -> None:
 async def test_capped_burst_rides_out_a_provider_outage_and_logs_every_request_once(
     gateway: Gateway, tmp_path: Path
 ) -> None:
-    port: Final = _free_port()
+    port: Final = allocate_port()
     config: Final = owned_config(
         tmp_path, [anthropic_deployment(_MODEL, f"http://127.0.0.1:{port}", cache_control_injection_points=POINTS)]
     )

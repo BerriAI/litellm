@@ -556,12 +556,11 @@ def cost_per_token(
 
     assert custom_llm_provider is not None  # caller-supplied or get_llm_provider
 
-    model_without_prefix = model
     model_parts: Final = model.split("/", 1)
-    if len(model_parts) > 1:
-        model_without_prefix = model_parts[1]
-    else:
-        model_without_prefix = model
+    model_is_provider_relative: Final = (
+        model_with_provider == f"{custom_llm_provider}/{model}" and model_with_provider in model_cost_ref
+    )
+    model_without_prefix: Final = model if len(model_parts) == 1 or model_is_provider_relative else model_parts[1]
     """
     Code block that formats model to lookup in litellm.model_cost
     Option1. model = "bedrock/ap-northeast-1/anthropic.claude-instant-v1". This is the most accurate since it is region based. Should always be option 1
@@ -3009,6 +3008,7 @@ _RESPONSES_WS_BILLABLE_EVENT_TYPES: Final = frozenset({"response.completed", "re
 
 
 class _ResponsesWsEventResponse(LiteLLMBaseModel):
+    id: str | None = None
     usage: Mapping[str, object] | None = None
     service_tier: str | None = None
 
@@ -3059,6 +3059,23 @@ class ResponsesWebSocketTokenUsageProcessor(BaseTokenUsageProcessor):
             results
         )
         return ResponsesWebSocketTokenUsageProcessor.combine_usage_objects(list(collected_usage_objects))
+
+    @staticmethod
+    def response_id_from_responses_ws_results(results: Sequence[Mapping[str, object]]) -> str | None:
+        response_ids: Final = tuple(
+            response.id for _, response in _billable_responses_ws_events(results) if response.id
+        )
+        return response_ids[-1] if response_ids else None
+
+    @staticmethod
+    def create_logging_object(results: Sequence[Mapping[str, object]]) -> LiteLLMRealtimeStreamLoggingObject:
+        tier_partition: Final = ResponsesWebSocketTokenUsageProcessor.partition_results_by_service_tier(results)
+        return LiteLLMRealtimeStreamLoggingObject(
+            id=ResponsesWebSocketTokenUsageProcessor.response_id_from_responses_ws_results(results),
+            usage=ResponsesWebSocketTokenUsageProcessor.collect_and_combine_usage_from_responses_ws_results(results),
+            results=cast(OpenAIRealtimeStreamList, list(results)),  # cast-ok: raw WS frames, unvalidated field
+            service_tier=next(iter(tier_partition)) if len(tier_partition) == 1 else None,
+        )
 
 
 _TRANSCRIPTION_COMPLETED_EVENT_TYPE: Final = "conversation.item.input_audio_transcription.completed"
