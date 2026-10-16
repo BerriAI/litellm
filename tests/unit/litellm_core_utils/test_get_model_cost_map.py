@@ -595,6 +595,22 @@ async def test_refetch_s3_no_such_key_fails_without_retry() -> None:
 
 
 @pytest.mark.asyncio
+async def test_refetch_s3_malformed_client_error_fails_without_retry() -> None:
+    s3_client: Final = _FakeS3Client((ClientError({}, "GetObject"),))
+    sleeper: Final = _SleepRecorder()
+
+    result: Final = await refetch_model_cost_map(
+        url="s3://my-bucket/prices/model_prices.json",
+        sleep=sleeper,
+        s3_client=s3_client,
+    )
+
+    assert isinstance(result, ModelCostMapReloadUnavailable)
+    assert s3_client.calls == [("my-bucket", "prices/model_prices.json")]
+    assert sleeper.waits == []
+
+
+@pytest.mark.asyncio
 async def test_refetch_retries_s3_slow_down() -> None:
     s3_client: Final = _FakeS3Client((_s3_client_error("SlowDown", 503), _real_map_bytes()))
     sleeper: Final = _SleepRecorder()

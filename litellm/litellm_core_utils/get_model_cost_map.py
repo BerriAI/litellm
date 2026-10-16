@@ -280,7 +280,7 @@ class _S3GetObjectResponse(TypedDict):
 
 
 class _S3ClientErrorDetails(TypedDict):
-    Code: ReadOnly[str]
+    Code: NotRequired[ReadOnly[str]]
 
 
 class _S3ResponseMetadata(TypedDict):
@@ -288,7 +288,7 @@ class _S3ResponseMetadata(TypedDict):
 
 
 class _S3ClientErrorResponse(TypedDict):
-    Error: ReadOnly[_S3ClientErrorDetails]
+    Error: NotRequired[ReadOnly[_S3ClientErrorDetails]]
     ResponseMetadata: NotRequired[ReadOnly[_S3ResponseMetadata]]
 
 
@@ -329,7 +329,6 @@ def _classify_fetch_error(error: httpx.HTTPError | httpx.InvalidURL, url: str) -
 
 def _classify_s3_error(error: Exception, url: str) -> _FetchAttemptOutcome:
     from botocore.exceptions import (
-        BotoCoreError,
         ClientError,
         HTTPClientError,
     )
@@ -342,7 +341,8 @@ def _classify_s3_error(error: Exception, url: str) -> _FetchAttemptOutcome:
         response: Final = cast(  # cast-ok: botocore ClientError responses have an operation-specific shape
             _S3ClientErrorResponse, error.response
         )
-        code: Final = response["Error"]["Code"]
+        error_details: Final = response.get("Error")
+        code: Final = error_details.get("Code", "Unknown") if error_details is not None else "Unknown"
         metadata: Final = response.get("ResponseMetadata")
         status_code: Final = metadata.get("HTTPStatusCode") if metadata is not None else None
         client_error_reason: Final = f"S3 {code} fetching {url}: {error}"
@@ -351,8 +351,6 @@ def _classify_s3_error(error: Exception, url: str) -> _FetchAttemptOutcome:
         return ModelCostMapReloadUnavailable(reason=client_error_reason)
     if isinstance(error, (BotocoreConnectionError, HTTPClientError)):
         return _FetchAttemptRetryable(reason=reason, retry_after_seconds=None)
-    if isinstance(error, BotoCoreError):
-        return ModelCostMapReloadUnavailable(reason=reason)
     return ModelCostMapReloadUnavailable(reason=reason)
 
 
