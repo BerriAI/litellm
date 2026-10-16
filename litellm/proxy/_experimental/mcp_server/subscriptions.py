@@ -300,6 +300,14 @@ async def _listing(event: ServerEvent, context: OperationContext) -> str | None:
     raise MCPError(code=-32603, message="Subscription catalog exceeds the pagination limit")
 
 
+async def _enforce_rate_limit(context: OperationContext, server: MCPServer) -> None:
+    await operations._enforce_mcp_server_rate_limit(context.user_api_key_auth, server)  # pyright: ignore[reportPrivateUsage]  # same admission policy as other gateway operations
+
+
+async def _unmetered(_: OperationContext, __: MCPServer) -> None:
+    return None
+
+
 async def _recheck_authorization(check: Callable[[], Awaitable[OperationContext]]) -> None:
     while True:
         await asyncio.sleep(15)
@@ -341,8 +349,10 @@ class GatewaySubscriptions:
         max_listeners: int = 128,
         max_per_caller: int = 8,
         resolve_targets: Callable[[OperationContext], Awaitable[tuple[SubscriptionTarget, ...]]] = _targets,
+        admit: Callable[[OperationContext, MCPServer], Awaitable[None]] = _enforce_rate_limit,
     ) -> None:
         self._resolve_targets = resolve_targets
+        self._admit = admit
         self._slots = anyio.CapacityLimiter(max_listeners)
         self._upstream_slots = anyio.CapacityLimiter(max_listeners)
         self._max_per_caller = max_per_caller
@@ -361,7 +371,7 @@ class GatewaySubscriptions:
         if ctx.protocol_version != "2026-07-28":
             raise MCPError(code=-32601, message="Subscriptions require the modern MCP protocol")
         async with self._capacity(owner):
-            return await self._listen(ctx, params, authorize)
+            return await self._listen(ctx, params, authorize, self._admit)
 
     @asynccontextmanager
     async def _capacity(self, owner: str) -> AsyncGenerator[None]:
@@ -414,6 +424,7 @@ class GatewaySubscriptions:
                     ctx,
                     SubscriptionFilter(tools_list_changed=True, prompts_list_changed=True, resources_list_changed=True),
                     authorization,
+                    _unmetered,
                 )
                 if (ready := self._initializing.get(key)) is not None:
                     ready.set()
@@ -427,6 +438,7 @@ class GatewaySubscriptions:
         ctx: ServerRequestContext,
         notifications: SubscriptionFilter,
         authorization: SubscriptionAuthorization,
+        admit: Callable[[OperationContext, MCPServer], Awaitable[None]],
         scope: anyio.CancelScope | None = None,
         *,
         task_status: TaskStatus[None],
@@ -443,7 +455,7 @@ class GatewaySubscriptions:
 
             async with self._capacity(authorization.owner):
                 await self._listen(
-                    ctx, SubscriptionsListenRequestParams(notifications=notifications), authorization, ready
+                    ctx, SubscriptionsListenRequestParams(notifications=notifications), authorization, admit, ready
                 )
 
     async def legacy_resource(self, ctx: ServerRequestContext, uri: str, *, subscribe: bool) -> None:
@@ -464,6 +476,7 @@ class GatewaySubscriptions:
                     ctx,
                     SubscriptionFilter(resource_subscriptions=[uri]),
                     state.authorization,
+                    self._admit,
                     scope,
                 )
                 state.resources = {**state.resources, uri: scope}
@@ -476,6 +489,7 @@ class GatewaySubscriptions:
         ctx: ServerRequestContext,
         params: SubscriptionsListenRequestParams,
         authorize: Callable[[], Awaitable[OperationContext]],
+        admit: Callable[[OperationContext, MCPServer], Awaitable[None]],
         ready: Callable[[SubscriptionFilter], None] | None = None,
     ) -> SubscriptionsListenResult:
         context: Final = await authorize()
@@ -501,7 +515,7 @@ class GatewaySubscriptions:
             return fresh
 
         async def relay(target: SubscriptionTarget, *, task_status: TaskStatus[SubscriptionFilter]) -> None:
-            await operations._enforce_mcp_server_rate_limit(context.user_api_key_auth, target.server)  # pyright: ignore[reportPrivateUsage]  # same admission policy as other gateway operations
+            await admit(context, target.server)
 
             legacy: Final = LegacyNotifications()
 

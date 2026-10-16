@@ -356,3 +356,64 @@ async def test_proxy_route_rejects_legacy_resource_subscription_before_setup(met
             await getattr(server, method)(context(Mock(spec=ServerSession)), params)
     finally:
         server._mcp_proxy_mode.reset(token)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("client_requests", "tools_list_admitted"),
+    [((), True), (("subscriptions/listen",), False), (("resources/subscribe",), False)],
+)
+async def test_only_client_initiated_listeners_consume_server_rate_limit(
+    client_requests: tuple[str, ...], tools_list_admitted: bool
+) -> None:
+    window: Final = asyncio.Semaphore(1)
+
+    async def admit(_: OperationContext, __: MCPServer) -> None:
+        if window.locked():
+            raise MCPError(code=-32600, message="Rate limit exceeded for mcp_server")
+        await window.acquire()
+
+    opened: Final = asyncio.Queue[None]()
+
+    async def hold_upstream(*_: object, **__: object) -> None:
+        opened.put_nowait(None)
+        await asyncio.Event().wait()
+
+    client: Final = Mock(spec=MCPClient)
+    client.run_with_session = AsyncMock(side_effect=hold_upstream)
+    server: Final = MCPServer(server_id="upstream", name="upstream", url="http://localhost/mcp", transport="http")
+    target: Final = subscriptions.SubscriptionTarget(server, client, "synthetic-fingerprint")
+
+    async def resolve(_: OperationContext) -> tuple[subscriptions.SubscriptionTarget, ...]:
+        return (target,)
+
+    service: Final = subscriptions.GatewaySubscriptions(resolve_targets=resolve, admit=admit)
+    caller: Final = OperationContext(_caller=UserAPIKeyAuth(user_id="alice"))
+    authorize: Final = AsyncMock(return_value=caller)
+    session: Final = Mock(spec=ServerSession)
+    session.client_params = Mock()
+    legacy: Final = context(session, "2025-11-25")
+    requests: Final = {
+        "subscriptions/listen": lambda: service.listen(
+            context(Mock(spec=ServerSession)),
+            SubscriptionsListenRequestParams(notifications=SubscriptionFilter(tools_list_changed=True)),
+            authorize,
+            "alice",
+        ),
+        "resources/subscribe": lambda: service.legacy_resource(legacy, "test://value", subscribe=True),
+    }
+    authorization: Final = subscriptions.SubscriptionAuthorization(caller, authorize, lambda *_: "alice")
+    starts: Final = (lambda: service.legacy_session(legacy, authorization), *(requests[r] for r in client_requests))
+    tasks: Final = tuple(asyncio.create_task(start()) for start in starts)
+    try:
+        for _ in tasks:
+            await asyncio.wait_for(opened.get(), 1)
+        if tools_list_admitted:
+            await admit(caller, server)
+        else:
+            with pytest.raises(MCPError, match="Rate limit exceeded"):
+                await admit(caller, server)
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
