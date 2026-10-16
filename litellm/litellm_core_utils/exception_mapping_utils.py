@@ -20,6 +20,7 @@ from ..exceptions import (
     ContextWindowExceededError,
     InternalServerError,
     NotFoundError,
+    OpenRouterRegionNotSupportedError,
     PermissionDeniedError,
     RateLimitError,
     ServiceUnavailableError,
@@ -2135,6 +2136,24 @@ def _map_openrouter_exception(
                 litellm_debug_info=extra_information,
             )
         elif original_exception.status_code == 404:
+            if "supporting your data region" in error_str.lower():
+                response_obj = getattr(original_exception, "response", None)
+                inferred_region = None
+                if response_obj is not None and getattr(response_obj, "url", None):
+                    from litellm.llms.openrouter.data_residency import infer_openrouter_data_residency
+
+                    inferred_region = infer_openrouter_data_residency(
+                        custom_llm_provider="openrouter",
+                        api_base=str(response_obj.url),
+                    )
+                raise OpenRouterRegionNotSupportedError(
+                    message=f"OpenRouterRegionNotSupportedError: {exception_provider} - {error_str}",
+                    model=model,
+                    llm_provider=custom_llm_provider,
+                    response=response_obj,
+                    litellm_debug_info=extra_information,
+                    region=inferred_region,
+                )
             raise NotFoundError(
                 message=f"NotFoundError: {exception_provider} - {error_str}",
                 model=model,

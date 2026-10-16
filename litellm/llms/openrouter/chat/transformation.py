@@ -21,6 +21,7 @@ from litellm.types.utils import ModelResponse, ModelResponseStream
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import OpenRouterException
+from ..data_residency import resolve_openrouter_api_base
 
 
 class CacheControlSupportedModels(str, Enum):
@@ -34,6 +35,37 @@ class CacheControlSupportedModels(str, Enum):
 
 
 class OpenrouterConfig(OpenAIGPTConfig):
+    region: str | None = None
+
+    def __init__(
+        self,
+        region: str | None = None,
+        **kwargs,
+    ):
+        self.region = region
+        super().__init__(**kwargs)
+
+    def get_complete_url(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+        model: str,
+        optional_params: dict,
+        litellm_params: dict,
+        stream: bool | None = None,
+    ) -> str:
+        api_base = resolve_openrouter_api_base(
+            api_base=api_base,
+            region=self.region,
+            litellm_params=litellm_params,
+            optional_params=optional_params,
+        )
+        endpoint: Final = "chat/completions"
+        api_base = api_base.rstrip("/")
+        if endpoint in api_base:
+            return api_base
+        return f"{api_base}/{endpoint}"
+
     def get_supported_openai_params(self, model: str) -> list:
         """
         Allow reasoning parameters for models flagged as reasoning-capable.

@@ -1342,6 +1342,7 @@ from .exceptions import (
     BadRequestError,
     ImageFetchError,
     NotFoundError,
+    OpenRouterRegionNotSupportedError,
     PermissionDeniedError,
     RateLimitError,
     RateLimitErrorCategory,
