@@ -40,7 +40,7 @@ class TeamsManagementClient:
         self,
         user_id: str | None = None,
         organization_id: str | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> builtins.list[dict[str, Any]]:
         """
         List teams that the user belongs to.
 
@@ -80,7 +80,7 @@ class TeamsManagementClient:
         page_size: int = 10,
         sort_by: str | None = None,
         sort_order: str = "asc",
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Get a paginated list of teams with filtering and sorting options.
 

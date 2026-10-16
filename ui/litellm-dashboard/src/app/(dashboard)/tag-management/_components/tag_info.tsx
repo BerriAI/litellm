@@ -2,11 +2,11 @@
 
 import React, { useState, useEffect } from "react";
 import { SimpleTooltip } from "@/components/ui/tooltip";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { fetchUserModels } from "@/components/organisms/create_key_button";
 import { getModelDisplayName } from "@/components/key_team_helpers/fetch_available_models_team_key";
 import { tagInfoCall, tagUpdateCall } from "@/components/networking";
-import { Tag, TagUpdateRequest } from "@/components/tag_management/types";
+import { Tag } from "@/components/tag_management/types";
 import { toast } from "@/lib/toast";
 import NumericalInput from "@/components/shared/numerical_input";
 import BudgetDurationDropdown from "@/components/common_components/budget_duration_dropdown";
@@ -27,13 +27,25 @@ const tagEditShape = {
   name: z.string().min(1, "Please input a tag name"),
   description: z.string().optional(),
   models: z.array(z.string()).optional(),
-  max_budget: z.union([z.string(), z.number()]).optional(),
-  budget_duration: z.string().optional(),
+  max_budget: z
+    .union([z.string(), z.number()])
+    .refine(
+      (value) => value === "" || (Number.isFinite(Number(value)) && Number(value) >= 0),
+      "Enter a nonnegative budget",
+    )
+    .optional(),
+  budget_duration: z.string().nullish(),
 };
 
 const tagEditSchema = z.object(tagEditShape);
 
 type TagEditFormValues = z.output<typeof tagEditSchema>;
+
+const budgetPayload = (value: TagEditFormValues["max_budget"]): number | null | undefined => {
+  if (value === undefined) return undefined;
+  if (value === "") return null;
+  return Number(value);
+};
 
 interface TagEditFormProps {
   tag: Tag;
@@ -198,8 +210,8 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
       await tagUpdateCall(accessToken, {
         name: values.name,
         description: values.description,
-        models: values.models as TagUpdateRequest["models"],
-        max_budget: values.max_budget as TagUpdateRequest["max_budget"],
+        models: values.models,
+        max_budget: budgetPayload(values.max_budget),
         tpm_limit: undefined,
         rpm_limit: undefined,
         budget_duration: values.budget_duration,

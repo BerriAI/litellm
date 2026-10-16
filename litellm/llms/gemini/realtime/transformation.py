@@ -95,7 +95,7 @@ def _gemini_live_speech_config(voice: object) -> Mapping[str, object] | None:
             voice,
         )
         return None
-    return VertexGeminiConfig()._map_audio_params({"voice": voice})
+    return VertexGeminiConfig().map_audio_params({"voice": voice})
 
 
 class _GeminiLiveSetupEnvelope(TypedDict, total=False):
@@ -113,6 +113,19 @@ def _parse_setup(session_configuration_request: str) -> BidiGenerateContentSetup
     envelope: Final[_GeminiLiveSetupEnvelope] = json.loads(session_configuration_request)
     empty_setup: Final[BidiGenerateContentSetup] = {}
     return envelope.get("setup", empty_setup)
+
+
+def _grounding_metadata_from_frame(frame: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    """Read ``serverContent.groundingMetadata`` off the frame that carries the turn's usage.
+
+    Live reports grounding in the server frames rather than in ``usageMetadata``, and it emits both
+    on the same frame, so the per-query charge is countable at the point usage is built.
+    """
+    server_content: Final = frame.get("serverContent")
+    if not isinstance(server_content, Mapping):
+        return ()
+    metadata: Final = server_content.get("groundingMetadata")
+    return (metadata,) if isinstance(metadata, Mapping) else ()
 
 
 # Google bills Live transcription at an estimated 25 audio tokens/sec of input and
@@ -318,12 +331,12 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
                 vertex_gemini_config = VertexGeminiConfig()
                 # Tools should be at the top level of setup, not inside generationConfig
-                optional_params["tools"] = vertex_gemini_config._map_function(
+                optional_params["tools"] = vertex_gemini_config.map_function(
                     value=value, optional_params=optional_params
                 )
             elif key == "input_audio_transcription" and value is not None:
                 optional_params["inputAudioTranscription"] = {}
-            elif key == "turn_detection":
+            elif key == "turn_detection" and value is not None:
                 value_typed = cast(OpenAIRealtimeTurnDetection, value)
                 if (
                     isinstance(value_typed, dict)
@@ -440,7 +453,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return normalized
 
     @staticmethod
-    def _finalize_gemini_live_setup(model: str, setup: dict[str, Any]) -> dict[str, Any]:
+    def _finalize_gemini_live_setup(model: str, setup: dict[str, object]) -> dict[str, object]:
         generation_config: Final = setup.get("generationConfig")
         if isinstance(generation_config, dict):
             modalities: Final = generation_config.get("responseModalities")
@@ -1043,16 +1056,21 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         _modalities: Final = [modality.lower() for modality in cast(list[str], gemini_modalities)]
         resolved_usage_metadata: Final = self._consume_usage_metadata_for_response_done(cast(dict, message))
         if resolved_usage_metadata is not None:
-            _chat_completion_usage = VertexGeminiConfig._calculate_usage(
+            _chat_completion_usage = VertexGeminiConfig.calculate_usage(
                 completion_response=cast(
                     BidiGenerateContentServerMessage,
                     {**cast(dict, message), "usageMetadata": resolved_usage_metadata},
                 ),
             )
+            grounding_metadata: Final = _grounding_metadata_from_frame(message)
+            if grounding_metadata:
+                VertexGeminiConfig._set_grounding_usage_counters(  # pyright: ignore[reportPrivateUsage]  # shared with the chat path; no public alias exists yet
+                    _chat_completion_usage, grounding_metadata
+                )
         else:
             _chat_completion_usage = get_empty_usage()
 
-        responses_api_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+        responses_api_usage = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
             _chat_completion_usage,
         )
         _usage_dict: Final = responses_api_usage.model_dump()
@@ -1154,7 +1172,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
     def map_openai_event(
         self,
         key: str,
-        value: Any,
+        value: object,
         current_delta_type: ALL_DELTA_TYPES | None,
     ) -> OpenAIRealtimeEventTypes | ResponsesAPIStreamEvents:
         if isinstance(value, dict):
@@ -1466,7 +1484,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
                 resolved_tool_call_usage_metadata = self._consume_usage_metadata_for_response_done(json_message)
                 if resolved_tool_call_usage_metadata is not None:
-                    _tool_call_chat_completion_usage = VertexGeminiConfig._calculate_usage(
+                    _tool_call_chat_completion_usage = VertexGeminiConfig.calculate_usage(
                         completion_response=cast(
                             BidiGenerateContentServerMessage,
                             {
@@ -1478,7 +1496,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 else:
                     _tool_call_chat_completion_usage = get_empty_usage()
                 tool_call_responses_api_usage = (
-                    LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+                    LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
                         _tool_call_chat_completion_usage,
                     )
                 )

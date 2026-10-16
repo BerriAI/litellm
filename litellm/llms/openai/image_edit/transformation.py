@@ -66,7 +66,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
     def _add_image_to_files(
         self,
         files_list: list[tuple[str, Any]],
-        image: Any,
+        image: object,
         field_name: str,
     ) -> None:
         """Add an image to the files list with appropriate content type"""

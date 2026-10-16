@@ -16,6 +16,7 @@ then cheapest `model_info.input_cost_per_token`).
 """
 
 import math
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Optional
 
 from litellm._logging import verbose_router_logger
@@ -98,7 +99,7 @@ class QualityRouter(CustomLogger):
             self._tier_to_models_cache = self._build_tier_index()
         return self._tier_to_models_cache
 
-    def _get_routing_preferences(self, deployment: Any) -> dict[str, Any] | None:
+    def _get_routing_preferences(self, deployment: object) -> dict[str, Any] | None:
         """
         Extract litellm_routing_preferences from a deployment, handling both
         dict-shaped and Pydantic-object-shaped deployments.
@@ -112,14 +113,14 @@ class QualityRouter(CustomLogger):
             return getattr(model_info, "litellm_routing_preferences", None)
 
         # Pydantic-object deployment.
-        model_info = getattr(deployment, "model_info", None)
-        if model_info is None:
+        deployment_model_info: Final[object] = getattr(deployment, "model_info", None)
+        if deployment_model_info is None:
             return None
-        if isinstance(model_info, dict):
-            return model_info.get("litellm_routing_preferences")
-        return getattr(model_info, "litellm_routing_preferences", None)
+        if isinstance(deployment_model_info, dict):
+            return deployment_model_info.get("litellm_routing_preferences")
+        return getattr(deployment_model_info, "litellm_routing_preferences", None)
 
-    def _get_deployment_input_cost(self, deployment: Any) -> float | None:
+    def _get_deployment_input_cost(self, deployment: object) -> float | None:
         """
         Extract `input_cost_per_token` from a deployment's model_info.
 
@@ -144,7 +145,7 @@ class QualityRouter(CustomLogger):
         except (TypeError, ValueError):
             return None
 
-    def _get_deployment_model_name(self, deployment: Any) -> str | None:
+    def _get_deployment_model_name(self, deployment: object) -> str | None:
         """Extract `model_name` from a dict- or object-shaped deployment."""
         if isinstance(deployment, dict):
             return deployment.get("model_name")
@@ -304,8 +305,8 @@ class QualityRouter(CustomLogger):
 
     def _stash_decision(
         self,
-        request_kwargs: dict[str, Any] | None,
-        decision: dict[str, Any],
+        request_kwargs: dict[str, object] | None,
+        decision: Mapping[str, object],
     ) -> None:
         """
         Stash the routing decision in request_kwargs.metadata so the Router can
@@ -322,7 +323,7 @@ class QualityRouter(CustomLogger):
         self,
         model: str,
         request_kwargs: dict,
-        messages: list[dict[str, Any]] | None = None,
+        messages: list[dict[str, object]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
     ) -> Optional["PreRoutingHookResponse"]:

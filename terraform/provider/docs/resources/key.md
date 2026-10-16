@@ -30,9 +30,12 @@ resource "litellm_key" "example" {
   permissions          = {
     "can_create_keys" = "true"
   }
-  model_max_budget     = {
-    "gpt-4" = 50.0
-  }
+  model_max_budget     = jsonencode({
+    "gpt-4" = {
+      budget_limit = 50.0
+      time_period  = "30d"
+    }
+  })
   model_rpm_limit      = {
     "gpt-3.5-turbo" = 30
   }
@@ -73,7 +76,7 @@ The following arguments are supported:
 
 * `key_alias` - (Optional) Alias for this key. This provides a human-readable identifier for the key.
 
-* `duration` - (Optional) Duration for which this key is valid. This sets an expiration time for the key.
+* `duration` - (Optional) How long the key stays valid, e.g. "30d" or "12h". The proxy stores this as an absolute `expires` timestamp. Changing the value resets the expiry to the time of the update plus the new duration; removing it from the configuration leaves the current expiry in place.
 
 * `aliases` - (Optional) Map of model aliases. This allows you to create custom names for models when using this key.
 
@@ -81,7 +84,7 @@ The following arguments are supported:
 
 * `permissions` - (Optional) Permissions associated with this key. This defines what actions are allowed with this key.
 
-* `model_max_budget` - (Optional) Maximum budget per model. This allows setting different budget limits for each model.
+* `model_max_budget` - (Optional) JSON string of per-model budget config, e.g. `jsonencode({"gpt-4" = {budget_limit = 50.0, time_period = "30d"}})`. Each model maps to an object with `budget_limit` (or `max_budget`), `time_period` (or `budget_duration`), `tpm_limit` and `rpm_limit`.
 
 * `model_rpm_limit` - (Optional) Requests per minute limit per model. This allows setting different RPM limits for each model.
 
@@ -116,6 +119,8 @@ The following arguments are supported:
 In addition to all arguments above, the following attributes are exported:
 
 * `key` - The generated API key. This is the actual key value that will be used for authentication.
+
+* `server_metadata` - Map of every metadata entry the proxy stores for this key, including entries not declared in `metadata`, so drift on them is visible on refresh. Entries already exposed as their own attributes (`model_rpm_limit`, `model_tpm_limit`, `tags`, `guardrails`, `enforced_params`, `allowed_passthrough_routes`, `rpm_limit_type`, `tpm_limit_type`, `prompts`) are omitted and non-string values are JSON encoded. Terraform never writes it; `metadata` still tracks only the entries declared in the configuration.
 
 * `spend` - The current spend for this key. This reflects the total amount spent using this key so far.
 

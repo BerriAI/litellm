@@ -14,8 +14,11 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.llms.pass_through.guardrail_translation.handler import (
+        PassThroughEndpointHandler,
+    )
     from litellm.proxy.utils import ProxyLogging
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 _CONVERSE_ACTIONS: Final = frozenset({"converse", "converse-stream"})
 _EVENT_STREAM_CONTENT_TYPE: Final = "vnd.amazon.eventstream"
@@ -27,7 +30,7 @@ def _is_converse_endpoint(endpoint: str) -> bool:
     return bool(parts) and parts[-1] in _CONVERSE_ACTIONS
 
 
-def _generic_passthrough_handler() -> BaseTranslation:
+def _generic_passthrough_handler() -> "PassThroughEndpointHandler":
     """
     Fallback for non-Converse Bedrock routes (e.g. invoke). The generic
     handler scans the full request/response payload so blocking guardrails
@@ -89,11 +92,24 @@ def _extract_converse_texts(
     top-level ``text`` blocks this scans the arbitrary-JSON fields a caller can
     hide prompt content in -- ``toolUse.input`` and
     ``toolResult.content[].json`` (alongside ``toolResult.content[].text``) --
-    as well as the request-level fields still forwarded to Bedrock that a caller
-    can route blocked content through: ``toolConfig.tools`` (tool names,
-    descriptions and input schemas) and ``additionalModelRequestFields``. Tool
-    message blocks are skipped when tool messages are excluded, but tool
-    definitions are always scanned to match the chat-completions guardrail path.
+    as well as ``additionalModelRequestFields``, a free-form model-parameter bag
+    with no schema that a caller can route blocked content through.
+
+    ``toolConfig.tools`` is deliberately NOT scanned. Tool definitions are
+    app-authored config, so their names, descriptions and JSON-schema strings
+    ("object", property names, titles, type names, enum values) would each reach
+    the guardrail as a separate INPUT item, producing false positives and
+    inflating guardrail usage for a request whose only prompt is one user
+    message. No other guardrail translation handler puts tool definitions in
+    ``texts``; the chat and messages handlers carry them in the structured
+    ``tools`` input instead, which this handler does not populate because a
+    Bedrock ``toolSpec`` is not the OpenAI tool shape those consumers expect.
+
+    ``additionalModelRequestFields`` is treated differently on purpose. Bedrock
+    gives ``toolConfig.tools`` a fixed schema whose contents are tool metadata by
+    contract, while ``additionalModelRequestFields`` is free-form and defined by
+    the target model, so what it carries cannot be classified without knowing
+    that model. Scanning it stays the fail-closed default.
     """
     holders: Final[list[_StringHolder]] = []
 
@@ -120,10 +136,6 @@ def _extract_converse_texts(
                     if isinstance(inner, dict):
                         _collect_block_text(inner, holders)
                         _collect_strings(inner.get("json"), holders)
-
-    tool_config: Final = body.get("toolConfig")
-    if isinstance(tool_config, dict):
-        _collect_strings(tool_config.get("tools"), holders)
 
     _collect_strings(body.get("additionalModelRequestFields"), holders)
 
@@ -194,12 +206,14 @@ class _TextContainer(Protocol):
 
 _DeltaHolder = tuple[_GroupKey, _TextContainer, str]
 
+_StreamGroupKey: TypeAlias = tuple[int | None, _GroupKey]
+
 
 class _StreamFrame(TypedDict):
     """One raw event-stream frame plus the guardrailable texts it carries."""
 
     raw: ReadOnly[bytes]
-    texts: ReadOnly[Sequence[tuple[_GroupKey, str]]]
+    texts: ReadOnly[Sequence[tuple[_StreamGroupKey, str]]]
 
 
 def _unpack_uint32(buffer: bytes) -> int:
@@ -290,12 +304,14 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
                 frames.append({"raw": frame_raw, "texts": []})
                 continue
 
-            texts: list[tuple[_GroupKey, str]] = []
+            texts: list[tuple[_StreamGroupKey, str]] = []
             if event_type == "contentBlockDelta":
                 try:
                     payload_dict: dict[str, object] = _json.loads(payload_bytes)
+                    block_index = payload_dict.get("contentBlockIndex")
+                    # Group per content block: a guardrail edit that changes length must not move text between blocks.
                     texts = [
-                        (group_key, container[key])
+                        ((block_index if isinstance(block_index, int) else None, group_key), container[key])
                         for group_key, container, key in _collect_stream_delta_text_holders(payload_dict.get("delta"))
                     ]
                 except Exception as e:
@@ -309,9 +325,9 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
 
         trailing_bytes: Final = body_bytes[offset:]
 
-        group_order: Final[list[_GroupKey]] = []
-        group_members: Final[dict[_GroupKey, list[tuple[int, int]]]] = {}
-        group_texts: Final[dict[_GroupKey, list[str]]] = {}
+        group_order: Final[list[_StreamGroupKey]] = []
+        group_members: Final[dict[_StreamGroupKey, list[tuple[int, int]]]] = {}
+        group_texts: Final[dict[_StreamGroupKey, list[str]]] = {}
         for frame_idx, frame in enumerate(frames):
             for local_idx, (group_key, text) in enumerate(frame["texts"]):
                 if group_key not in group_members:

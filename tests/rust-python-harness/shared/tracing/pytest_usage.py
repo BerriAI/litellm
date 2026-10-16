@@ -11,6 +11,7 @@ import tempfile
 import warnings
 from collections.abc import Generator, Sequence
 from pathlib import Path
+from types import CodeType
 from typing import TYPE_CHECKING, Final
 
 from pluggy import HookimplMarker
@@ -62,9 +63,12 @@ class PythonFunctionReference(BaseModel):
         value: object = importlib.import_module(self.module)
         for component in self.qualname.split("."):
             value = getattr(value, component)
+        if not callable(value):
+            raise ValueError(f"Python function is not callable: {self.module}:{self.qualname}")
         function: Final = inspect.unwrap(value)
         code: Final = getattr(function, "__code__", None)
-        if code is None:
+        qualname: Final = getattr(function, "__qualname__", None)
+        if not isinstance(code, CodeType) or not isinstance(qualname, str):
             raise ValueError(f"Python function has no code object: {self.module}:{self.qualname}")
         source: Final = Path(code.co_filename).resolve()
         try:
@@ -74,7 +78,7 @@ class PythonFunctionReference(BaseModel):
         return PythonFunctionIdentity(
             file=relative.as_posix(),
             line=code.co_firstlineno,
-            qualname=code.co_qualname,
+            qualname=qualname,
         )
 
 

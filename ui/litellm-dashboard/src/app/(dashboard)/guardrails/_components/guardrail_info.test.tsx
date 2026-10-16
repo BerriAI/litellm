@@ -338,3 +338,27 @@ describe("Guardrail Info", () => {
     expect(screen.getByText("Guardrail Settings")).toBeInTheDocument();
   });
 });
+
+describe("Guardrail Info when the guardrail cannot be loaded", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("should keep Back to Guardrails reachable so a stale ?guardrail= link is not a dead end", async () => {
+    vi.mocked(networking.getGuardrailInfo).mockRejectedValue(new Error("Guardrail stale-id not found"));
+    vi.mocked(networking.getGuardrailUISettings).mockResolvedValue({
+      supported_entities: [],
+      supported_actions: [],
+      pii_entity_categories: [],
+      supported_modes: [],
+    });
+    vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
+    const onClose = vi.fn();
+
+    render(<GuardrailInfoView guardrailId="stale-id" onClose={onClose} accessToken="123" isAdmin={true} />);
+
+    expect(await screen.findByText("Guardrail not found")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /back to guardrails/i }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});

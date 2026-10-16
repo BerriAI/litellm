@@ -1,5 +1,7 @@
 import os
 import time
+import types
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from httpx import Headers, Response
@@ -19,6 +21,7 @@ from ..common_utils import PredibaseError
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -64,9 +67,24 @@ class PredibaseConfig(BaseConfig):
         typical_p: float | None = None,
         watermark: bool | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
-        for key, value in locals_.items():
-            if key != "self" and value is not None:
+        locals_: Final = (
+            ("best_of", best_of),
+            ("decoder_input_details", decoder_input_details),
+            ("details", details),
+            ("max_new_tokens", max_new_tokens),
+            ("repetition_penalty", repetition_penalty),
+            ("return_full_text", return_full_text),
+            ("seed", seed),
+            ("stop", stop),
+            ("temperature", temperature),
+            ("top_k", top_k),
+            ("top_p", top_p),
+            ("truncate", truncate),
+            ("typical_p", typical_p),
+            ("watermark", watermark),
+        )
+        for key, value in locals_:
+            if value is not None:
                 setattr(self.__class__, key, value)
 
     @classmethod
@@ -133,7 +151,7 @@ class PredibaseConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -216,11 +234,11 @@ class PredibaseConfig(BaseConfig):
         except Exception:
             # Keep usage calculation non-blocking if token counting fails.
             pass
-        output_text: Final = model_response["choices"][0]["message"].get("content", "")
-        if output_text is not None and len(output_text) > 0:
+        output_text: Final = model_response.choices[0].message.content
+        if encoding is not None and output_text is not None and len(output_text) > 0:
             completion_tokens = 0
             try:
-                completion_tokens = len(encoding.encode(model_response["choices"][0]["message"].get("content", "")))
+                completion_tokens = len(encoding.encode(output_text))
             except Exception:
                 # Keep usage calculation non-blocking if encoding fails.
                 pass
@@ -244,7 +262,7 @@ class PredibaseConfig(BaseConfig):
             if k.startswith("x-"):
                 response_headers[f"llm_provider-{k}"] = v
 
-        model_response._hidden_params["additional_headers"] = response_headers
+        model_response.hidden_params["additional_headers"] = response_headers
 
         return model_response
 
@@ -269,7 +287,7 @@ class PredibaseConfig(BaseConfig):
             prompt = prompt_factory(model=model, messages=messages)
 
         request_optional_params: Final = {**optional_params}
-        config: Final = self.get_config()
+        config: Final[Mapping[str, object]] = types.MappingProxyType(self.get_config())
         for k, v in config.items():
             if k not in request_optional_params:
                 request_optional_params[k] = v

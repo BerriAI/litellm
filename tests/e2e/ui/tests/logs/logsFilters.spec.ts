@@ -143,10 +143,12 @@ test.describe("Logs page filters", () => {
     await applyComboboxFilter(page, drawer, "Search a key alias", mine.alias!);
     await expect(requestLogsRows(page).filter({ hasText: theirRequestId })).toHaveCount(0, { timeout: 30_000 });
 
-    // A filter you cannot clear is a page that looks empty forever, which is how it reads to a user.
     await page.getByRole("button", { name: "Reset Filters" }).filter({ visible: true }).click();
 
+    const search = visibleTestId(page, "datatable-search");
+    await search.fill(theirRequestId);
     await expect(requestLogsRows(page).filter({ hasText: theirRequestId })).toHaveCount(1, { timeout: 30_000 });
-    await expect(requestLogsRows(page).filter({ hasText: myRequestId })).toHaveCount(1, { timeout: 10_000 });
+    await search.fill(myRequestId);
+    await expect(requestLogsRows(page).filter({ hasText: myRequestId })).toHaveCount(1, { timeout: 30_000 });
   });
 });

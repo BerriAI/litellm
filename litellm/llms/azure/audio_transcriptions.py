@@ -37,6 +37,7 @@ class AzureAudioTranscription(AzureChatCompletion):
         azure_ad_token: str | None = None,
         atranscription: bool = False,
         litellm_params: dict | None = None,
+        custom_llm_provider: str = "azure",
     ) -> TranscriptionResponse | Coroutine[Any, Any, TranscriptionResponse]:
         data: Final = {"model": model, "file": audio_file, **optional_params}
 
@@ -53,6 +54,7 @@ class AzureAudioTranscription(AzureChatCompletion):
                 logging_obj=logging_obj,
                 model=model,
                 litellm_params=litellm_params,
+                custom_llm_provider=custom_llm_provider,
             )
 
         azure_client: Final = self.get_azure_openai_client(
@@ -76,7 +78,7 @@ class AzureAudioTranscription(AzureChatCompletion):
             api_key=azure_client.api_key,
             additional_args={
                 "headers": {"Authorization": f"Bearer {azure_client.api_key}"},
-                "api_base": azure_client._base_url._uri_reference,
+                "api_base": azure_client._base_url._uri_reference,  # pyright: ignore[reportPrivateUsage]  # SDK URL internals
                 "atranscription": True,
                 "complete_input_dict": data,
             },
@@ -99,7 +101,7 @@ class AzureAudioTranscription(AzureChatCompletion):
             additional_args={"complete_input_dict": data},
             original_response=stringified_response,
         )
-        hidden_params: Final = {"model": model, "custom_llm_provider": "azure"}
+        hidden_params: Final = {"model": model, "custom_llm_provider": custom_llm_provider}
         final_response: Final[TranscriptionResponse] = convert_to_model_response_object(
             response_object=stringified_response,
             model_response_object=model_response,
@@ -122,6 +124,7 @@ class AzureAudioTranscription(AzureChatCompletion):
         client=None,
         max_retries=None,
         litellm_params: dict | None = None,
+        custom_llm_provider: str = "azure",
     ) -> TranscriptionResponse:
         response = None
         try:
@@ -146,7 +149,7 @@ class AzureAudioTranscription(AzureChatCompletion):
                 api_key=async_azure_client.api_key,
                 additional_args={
                     "headers": {"Authorization": f"Bearer {async_azure_client.api_key}"},
-                    "api_base": async_azure_client._base_url._uri_reference,
+                    "api_base": async_azure_client._base_url._uri_reference,  # pyright: ignore[reportPrivateUsage]  # SDK URL internals
                     "atranscription": True,
                     "complete_input_dict": data,
                 },
@@ -172,13 +175,13 @@ class AzureAudioTranscription(AzureChatCompletion):
                 api_key=api_key,
                 additional_args={
                     "headers": {"Authorization": f"Bearer {async_azure_client.api_key}"},
-                    "api_base": async_azure_client._base_url._uri_reference,
+                    "api_base": async_azure_client._base_url._uri_reference,  # pyright: ignore[reportPrivateUsage]  # SDK URL internals
                     "atranscription": True,
                     "complete_input_dict": data,
                 },
                 original_response=stringified_response,
             )
-            hidden_params: Final = {"model": model, "custom_llm_provider": "azure"}
+            hidden_params: Final = {"model": model, "custom_llm_provider": custom_llm_provider}
             response = convert_to_model_response_object(
                 _response_headers=headers,
                 response_object=stringified_response,

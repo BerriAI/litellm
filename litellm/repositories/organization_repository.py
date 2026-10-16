@@ -2,7 +2,8 @@
 Organization repository for database operations on LiteLLM_OrganizationTable.
 """
 
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Final, Protocol
 
 from litellm.models.organization import LiteLLM_OrganizationTable
 from litellm.repositories.base_repository import BaseRepository
@@ -12,12 +13,27 @@ if TYPE_CHECKING:
     from prisma import models as prisma_models
 
 
+class _OrganizationDb(Protocol):
+    """The single Prisma table this repository reaches for on ``prisma_client.db``."""
+
+    @property
+    def litellm_organizationtable(self) -> TableActions["prisma_models.LiteLLM_OrganizationTable"]: ...
+
+
+class _PrismaClientView(Protocol):
+    """The one attribute this repository reads off the untyped Prisma client wrapper."""
+
+    @property
+    def db(self) -> _OrganizationDb: ...
+
+
 class OrganizationRepository(BaseRepository[LiteLLM_OrganizationTable]):
     """Repository for organization database operations."""
 
     @property
     def table(self) -> TableActions["prisma_models.LiteLLM_OrganizationTable"]:
-        return self.prisma_client.db.litellm_organizationtable
+        client: Final[_PrismaClientView] = self.prisma_client
+        return client.db.litellm_organizationtable
 
     @property
     def model_class(self) -> type[LiteLLM_OrganizationTable]:
@@ -39,12 +55,12 @@ class OrganizationRepository(BaseRepository[LiteLLM_OrganizationTable]):
         budget_id: str,
         created_by: str,
         organization_id: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        metadata: Mapping[str, object] | None = None,
         models: list[str] | None = None,
         object_permission_id: str | None = None,
     ) -> LiteLLM_OrganizationTable:
         """Create a new organization."""
-        data: Final[dict[str, Any]] = {
+        data: Final[dict[str, object]] = {
             "organization_alias": organization_alias,
             "budget_id": budget_id,
             "created_by": created_by,
@@ -67,12 +83,12 @@ class OrganizationRepository(BaseRepository[LiteLLM_OrganizationTable]):
         updated_by: str,
         organization_alias: str | None = None,
         budget_id: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        metadata: Mapping[str, object] | None = None,
         models: list[str] | None = None,
         object_permission_id: str | None = None,
     ) -> LiteLLM_OrganizationTable | None:
         """Update an organization."""
-        data: Final[dict[str, Any]] = {"updated_by": updated_by}
+        data: Final[dict[str, object]] = {"updated_by": updated_by}
         if organization_alias is not None:
             data["organization_alias"] = organization_alias
         if budget_id is not None:
