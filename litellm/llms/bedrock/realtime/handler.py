@@ -17,7 +17,9 @@ from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm._logging import redact_string, verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.constants import (
+    BEDROCK_REALTIME_CLOSE_TIMEOUT_SECONDS,
     BEDROCK_REALTIME_COMMITTED_FAILURE_SCOPE_KEY,
     BEDROCK_REALTIME_PENDING_SESSION_UPDATE_SCOPE_KEY,
     BEDROCK_REALTIME_SDK_DISTRIBUTION,
@@ -35,7 +37,7 @@ from litellm.types.realtime import RealtimeResponseTransformInput
 
 from ..base_aws_llm import BaseAWSLLM, run_aws_signing
 from ..common_utils import BedrockError
-from .transformation import BedrockRealtimeConfig
+from .transformation import BedrockRealtimeConfig, BedrockSessionUpdateRejection
 
 _CLIENT_MODALITIES_ADAPTER: Final[TypeAdapter["list[str] | None"]] = TypeAdapter(list[str] | None)
 _CLIENT_MESSAGE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
@@ -232,12 +234,43 @@ async def _ack_session_update(
     return True
 
 
+async def _reject_session_update(
+    client_ws: RealtimeClientWebSocket,
+    parsed_client_message: Mapping[str, JsonValue],
+    rejection: BedrockSessionUpdateRejection,
+) -> bool:
+    """Send an error event for a session.update Bedrock cannot apply; False means the client is gone."""
+    client_event_id: Final = parsed_client_message.get("event_id")
+    error_event: Final = {
+        "type": "error",
+        "event_id": f"event_{uuid.uuid4()}",
+        "error": {
+            "type": "invalid_request_error",
+            "code": rejection.code,
+            "message": rejection.message,
+            "param": rejection.param,
+            "event_id": client_event_id if isinstance(client_event_id, str) else None,
+        },
+    }
+    try:
+        await client_ws.send_text(json.dumps(error_event))
+    except Exception as e:  # noqa: BLE001  # any send failure means the client is gone
+        verbose_proxy_logger.debug("Client to Bedrock forwarding ended: %s", e, exc_info=True)
+        return False
+    return True
+
+
 class BedrockRealtime(BaseAWSLLM):
     """Handler for Bedrock Nova Sonic realtime speech-to-speech API."""
 
-    def __init__(self, sdk_version_lookup: Callable[[], str | None] = _installed_sdk_version):
+    def __init__(
+        self,
+        sdk_version_lookup: Callable[[], str | None] = _installed_sdk_version,
+        close_timeout: float = BEDROCK_REALTIME_CLOSE_TIMEOUT_SECONDS,
+    ):
         super().__init__()
         self._sdk_version_lookup: Final = sdk_version_lookup
+        self._close_timeout: Final = close_timeout
 
     async def async_realtime(
         self,
@@ -259,6 +292,7 @@ class BedrockRealtime(BaseAWSLLM):
         aws_bedrock_runtime_endpoint: str | None = None,
         aws_external_id: str | None = None,
         aws_session_tags: object = None,
+        drop_params: bool = False,
         **kwargs: object,
     ):
         """
@@ -341,7 +375,9 @@ class BedrockRealtime(BaseAWSLLM):
             )
 
         try:
-            await self._run_session(websocket, open_bidirectional_stream, model, logging_obj, pending_session_update)
+            await self._run_session(
+                websocket, open_bidirectional_stream, model, logging_obj, pending_session_update, drop_params
+            )
         finally:
             await _close_bedrock_client(bedrock_client)
 
@@ -352,8 +388,9 @@ class BedrockRealtime(BaseAWSLLM):
         model: str,
         logging_obj: LiteLLMLogging,
         pending_session_update: str | None,
+        drop_params: bool = False,
     ) -> None:
-        transformation_config: Final = BedrockRealtimeConfig()
+        transformation_config: Final = BedrockRealtimeConfig(drop_params=drop_params)
 
         bedrock_stream: Final = await open_bidirectional_stream()
 
@@ -489,6 +526,11 @@ class BedrockRealtime(BaseAWSLLM):
                 parsed_client_message = _parse_client_message(message)
                 is_session_update = _json_str(parsed_client_message.get("type")) == "session.update"
                 if is_session_update:
+                    rejection = transformation_config.session_update_rejection(parsed_client_message)
+                    if rejection is not None:
+                        if not await _reject_session_update(client_ws, parsed_client_message, rejection):
+                            break
+                        continue
                     client_ws.scope[BEDROCK_REALTIME_PENDING_SESSION_UPDATE_SCOPE_KEY] = message
 
                 transformed_messages = transformation_config.transform_realtime_request(
@@ -504,11 +546,20 @@ class BedrockRealtime(BaseAWSLLM):
                 ):
                     break
         finally:
-            for close_message in transformation_config.session_close_messages():
+
+            async def close_bedrock_input() -> None:
+                for close_message in transformation_config.session_close_messages():
+                    with contextlib.suppress(Exception):
+                        await send_to_bedrock(close_message)
                 with contextlib.suppress(Exception):
-                    await send_to_bedrock(close_message)
-            with contextlib.suppress(Exception):
-                await bedrock_stream.input_stream.close()
+                    await bedrock_stream.input_stream.close()
+
+            try:
+                await asyncio.wait_for(close_bedrock_input(), self._close_timeout)
+            except (asyncio.TimeoutError, TimeoutError):
+                verbose_proxy_logger.debug(
+                    "Bedrock Realtime: timed out closing Bedrock input stream after %.1fs", self._close_timeout
+                )
 
     async def _forward_bedrock_to_client(
         self,

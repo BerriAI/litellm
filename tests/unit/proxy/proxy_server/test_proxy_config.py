@@ -186,6 +186,68 @@ async def test_tracing_config_automatically_exports_spend_without_a_storage_depe
     assert logger.task is not None and logger.task.done() and not logger.task.cancelled()
 
 
+@pytest.mark.asyncio
+async def test_tracing_logs_an_error_naming_the_store_when_lens_is_misconfigured(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from litellm.proxy.tracing_runtime import manage_tracing
+
+    monkeypatch.delenv("LITELLM_LENS_URL", raising=False)
+    monkeypatch.delenv("LITELLM_LENS_SERVICE_TOKEN", raising=False)
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+        async with manage_tracing(enabled=True) as receiver:
+            assert receiver is None
+
+    failures: Final = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.ERROR and "lens" in record.getMessage()
+    ]
+    assert len(failures) == 1
+    assert "LITELLM_LENS_URL" in failures[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "config_text",
+    (
+        "model_list: []\nlitellm_settings:\n  failure_callback:\n    - sentry\n",
+        "model_list: []\nlitellm_settings:\n  success_callback:\n    - sentry\n",
+        "model_list: []\nlitellm_settings:\n  input_callback:\n    - sentry\n",
+        "model_list: []\ngeneral_settings:\n  alerting:\n    - sentry\n",
+    ),
+    ids=("failure_callback", "success_callback", "input_callback", "alerting"),
+)
+async def test_proxy_config_starts_sentry_at_boot_without_request_bodies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, config_text: str
+) -> None:
+    import sentry_sdk
+
+    from litellm.litellm_core_utils import litellm_logging
+
+    init: Final = MagicMock()
+    monkeypatch.setattr(sentry_sdk, "init", init)
+    monkeypatch.setenv("SENTRY_DSN", "https://key@sentry.example/1")
+    monkeypatch.setattr(litellm_logging, "sentry_sdk_instance", None)
+    litellm_logging.start_sentry.cache_clear()
+    monkeypatch.setattr(litellm_logging, "capture_exception", None)
+    monkeypatch.setattr(litellm_logging, "add_breadcrumb", None)
+    monkeypatch.setattr(litellm, "input_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    config_file: Final = tmp_path / "sentry.yaml"
+    config_file.write_text(config_text)
+
+    await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+    init.assert_called_once()
+    assert init.call_args.kwargs["max_request_body_size"] == "never"
+    assert litellm_logging.sentry_sdk_instance is sentry_sdk
+
 
 # ---------------------------------------------------------------------------
 # _is_remote_module_url
