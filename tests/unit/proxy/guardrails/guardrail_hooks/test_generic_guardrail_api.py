@@ -1945,6 +1945,31 @@ class TestToolSupport:
 
         assert forwarded_tools == tools
 
+    @pytest.mark.asyncio
+    async def test_gemini_native_tools_without_a_type_reach_the_guardrail_and_come_back_unchanged(
+        self, generic_guardrail
+    ):
+        tools = [
+            {"function_declarations": [{"name": "get_weather", "parameters": {"type": "object", "properties": {}}}]},
+            {"googleSearch": {}},
+        ]
+
+        def echo_tools(url, json, headers, **_kwargs):
+            answer = MagicMock()
+            answer.json.return_value = {"action": "NONE", "texts": ["hi"], "tools": json["tools"]}
+            answer.raise_for_status = MagicMock()
+            return answer
+
+        with patch.object(generic_guardrail.async_handler, "post", side_effect=echo_tools) as mock_post:
+            guardrailed_inputs = await generic_guardrail.apply_guardrail(
+                inputs={"texts": ["hi"], "tools": tools},
+                request_data={},
+                input_type="request",
+            )
+
+        assert mock_post.call_args.kwargs["json"]["tools"] == tools
+        assert guardrailed_inputs["tools"] == tools
+
 
 class TestFailOnError:
     """Test fail_on_error: complete fail-open on any guardrail error"""

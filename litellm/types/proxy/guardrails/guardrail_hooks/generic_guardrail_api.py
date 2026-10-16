@@ -1,7 +1,7 @@
 from collections.abc import Mapping, Sequence
 from typing import Any, Final, Literal, cast  # noqa: TID251  # JSON chat rows have no typed constructor across roles
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer
 from typing_extensions import TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -17,12 +17,21 @@ class GuardrailToolParam(LiteLLMBaseModel):
     """A tool forwarded verbatim to the guardrail for inspection.
 
     Built-in tools (code_interpreter, file_search, ...) have no ``function`` block
-    and stash their config in tool-specific keys, so only ``type`` is required and
-    ``extra="allow"`` preserves the rest instead of stripping it.
+    and stash their config in tool-specific keys, and Gemini's own tools
+    (``googleSearch``, ``function_declarations``, ...) carry no ``type`` at all, so
+    nothing is required and ``extra="allow"`` preserves the rest instead of stripping
+    it. An absent ``type`` stays absent on the wire rather than going out as null.
     """
 
     model_config = ConfigDict(extra="allow")
-    type: str
+    type: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _without_absent_type(self, handler: SerializerFunctionWrapHandler) -> Mapping[str, object]:
+        dumped: Final = cast("Mapping[str, object]", handler(self))  # cast-ok: handler dumps this model's fields
+        if self.type is not None:
+            return dumped
+        return {key: value for key, value in dumped.items() if key != "type"}
 
 
 class GenericGuardrailAPIMetadata(TypedDict, total=False):
