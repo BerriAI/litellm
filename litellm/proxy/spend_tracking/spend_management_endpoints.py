@@ -2265,8 +2265,8 @@ async def get_spend_report_for_time_range(
         )
 
         return response, spend_per_tag
-    except Exception as e:
-        verbose_proxy_logger.error("Exception in _get_daily_spend_reports %s", e)
+    except Exception:
+        verbose_proxy_logger.error("Exception in _get_daily_spend_reports")
 
 
 _get_spend_report_for_time_range: Final = get_spend_report_for_time_range
@@ -5054,13 +5054,34 @@ async def trigger_spend_report_email(
 
     from litellm.proxy.spend_tracking.spend_report_email import send_spend_report_email
 
+    clean_team_id: Final = (
+        request.team_id.strip().replace("\r", "").replace("\n", "")
+        if request.team_id is not None
+        else None
+    )
+    clean_start_date: Final = (
+        request.start_date.strip().replace("\r", "").replace("\n", "")
+        if request.start_date is not None
+        else None
+    )
+    clean_end_date: Final = (
+        request.end_date.strip().replace("\r", "").replace("\n", "")
+        if request.end_date is not None
+        else None
+    )
+    clean_recipients: Final = (
+        tuple(r.strip().replace("\r", "").replace("\n", "") for r in request.recipient_emails)
+        if request.recipient_emails is not None
+        else None
+    )
+
     return await send_spend_report_email(
         frequency=request.frequency,
-        recipient_emails=request.recipient_emails,
+        recipient_emails=clean_recipients,
         group_by=request.group_by,
-        start_date=request.start_date,
-        end_date=request.end_date,
-        team_id=request.team_id,
+        start_date=clean_start_date,
+        end_date=clean_end_date,
+        team_id=clean_team_id,
     )
 
 

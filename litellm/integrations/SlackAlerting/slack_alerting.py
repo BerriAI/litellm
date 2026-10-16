@@ -1911,10 +1911,10 @@ Model Info:
                 ttl=duration_in_seconds(time_range),
             )
 
-        except ValueError as ve:
-            verbose_proxy_logger.error("Invalid time range format: %s", ve)
-        except Exception as e:
-            verbose_proxy_logger.error("Error sending spend report: %s", e)
+        except ValueError:
+            verbose_proxy_logger.error("Invalid time range format")
+        except Exception:
+            verbose_proxy_logger.error("Error sending spend report")
 
     async def send_monthly_spend_report(self):
         """ """
@@ -1986,8 +1986,8 @@ Model Info:
                 ttl=(30 * HOURS_IN_A_DAY * 60 * 60),  # 1 month
             )
 
-        except Exception as e:
-            verbose_proxy_logger.exception("Error sending weekly spend report %s", e)
+        except Exception:
+            verbose_proxy_logger.error("Error sending monthly spend report")
 
     async def send_user_spend_alerts(self, prisma_client: "PrismaClient | None" = None) -> None:
         """Check per-user daily/monthly spend thresholds and spend anomalies, alerting once per user per period."""

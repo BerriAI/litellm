@@ -299,6 +299,8 @@ async def default_email_sender(
     subject: str,
     html: str,
 ) -> None:
+    clean_receiver: Final = receiver_email.strip().replace("\r", "").replace("\n", "")
+    clean_subject: Final = subject.strip().replace("\r", "").replace("\n", "")
     if os.getenv("SENDGRID_API_KEY"):
         sg_sender_email: Final = (
             os.getenv("SENDGRID_SENDER_EMAIL") or os.getenv("SMTP_SENDER_EMAIL") or "notifications@alerts.litellm.ai"
@@ -307,8 +309,8 @@ async def default_email_sender(
             module_name="litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email",
             class_name="SendGridEmailLogger",
             from_email=sg_sender_email,
-            to_email=(receiver_email,),
-            subject=subject,
+            to_email=(clean_receiver,),
+            subject=clean_subject,
             html=html,
         )
         if sg_sent:
@@ -321,8 +323,8 @@ async def default_email_sender(
             module_name="litellm_enterprise.enterprise_callbacks.send_emails.resend_email",
             class_name="ResendEmailLogger",
             from_email=resend_sender_email,
-            to_email=(receiver_email,),
-            subject=subject,
+            to_email=(clean_receiver,),
+            subject=clean_subject,
             html=html,
         )
         if resend_sent:
@@ -332,8 +334,8 @@ async def default_email_sender(
     from litellm.proxy.utils import send_email as send_smtp_email
 
     await send_smtp_email(
-        receiver_email=receiver_email,
-        subject=subject,
+        receiver_email=clean_receiver,
+        subject=clean_subject,
         html=html,
     )
 
