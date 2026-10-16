@@ -3,7 +3,7 @@ Handler for transforming responses api requests to litellm.completion requests
 """
 
 from collections.abc import Coroutine, Mapping
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from pydantic import TypeAdapter
 
@@ -23,7 +23,18 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import ModelResponse
 
+if TYPE_CHECKING:
+    from litellm.main import PlannedChat
+
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
+def _plan_bridged_chat(request: Mapping[str, object]) -> "PlannedChat | None":
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.main import plan_chat
+
+    logging_obj: Final = request.get("litellm_logging_obj")
+    return plan_chat(request, logging_obj) if isinstance(logging_obj, Logging) else None
 
 
 class LiteLLMCompletionTransformationHandler:
@@ -67,13 +78,13 @@ class LiteLLMCompletionTransformationHandler:
                 **kwargs,
             )
 
-        completion_args: Final = {}
-        completion_args.update(kwargs)
-        completion_args.update(litellm_completion_request)
-        completion_args["_skip_responses_api_bridge"] = True
+        completion_args: Final = {**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True}
 
-        litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = litellm.completion(
-            **completion_args,
+        from litellm.main import execute_planned_chat
+
+        planned_chat: Final = _plan_bridged_chat(_REQUEST_KWARGS_ADAPTER.validate_python(completion_args))
+        litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = (
+            litellm.completion(**completion_args) if planned_chat is None else execute_planned_chat(planned_chat)
         )
 
         if isinstance(litellm_completion_response, ModelResponse):
@@ -114,13 +125,15 @@ class LiteLLMCompletionTransformationHandler:
                 request_kwargs=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
             )
 
-        acompletion_args: Final = {}
-        acompletion_args.update(kwargs)
-        acompletion_args.update(litellm_completion_request)
-        acompletion_args["_skip_responses_api_bridge"] = True
+        acompletion_args: Final = {**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True}
 
-        litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = await litellm.acompletion(
-            **acompletion_args,
+        from litellm.main import aexecute_planned_chat
+
+        planned_chat: Final = _plan_bridged_chat(_REQUEST_KWARGS_ADAPTER.validate_python(acompletion_args))
+        litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = (
+            await litellm.acompletion(**acompletion_args)
+            if planned_chat is None
+            else await aexecute_planned_chat(planned_chat)
         )
 
         if isinstance(litellm_completion_response, ModelResponse):
