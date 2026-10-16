@@ -84,6 +84,9 @@ _PROVIDERS: Final = (
     ),
     _Provider("typesafe", "typesafe/jev-1.13.0", "/v1/systemone", "jev-1.13.0", _API_KEY, False, "typesafe/jev-1.13.0"),
     _Provider(
+        "decisionmodels", "decisionmodels/s1-fast", "/v1/systemone", "s1-fast", _API_KEY, False, "decisionmodels/s1-fast"
+    ),
+    _Provider(
         "openrouter",
         "openrouter/typesafe/jev-1.13",
         "/alpha/decisions",
@@ -135,7 +138,7 @@ _PROVIDERS: Final = (
     ),
 )
 _PERPLEXITY: Final = _PROVIDERS[0]
-_OPENROUTER: Final = _PROVIDERS[2]
+_OPENROUTER: Final = next(provider for provider in _PROVIDERS if provider.name == "openrouter")
 _OPENROUTER_CHAT_MODEL: Final = "openrouter/openai/gpt-5-mini"
 _UNSUPPORTED_PROVIDER_MODEL: Final = "anthropic/claude-opus-5-5"
 _CONNECTION_ERROR: Final = "litellm.APIConnectionError"

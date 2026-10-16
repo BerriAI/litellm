@@ -9116,6 +9116,8 @@ class ProviderConfigManager:
             return litellm.PerplexityDecisionsConfig()
         if provider == LlmProviders.TYPESAFE:
             return litellm.TypeSafeDecisionsConfig()
+        if provider == LlmProviders.DECISIONMODELS:
+            return litellm.DecisionModelsDecisionsConfig()
         if provider == LlmProviders.OPENROUTER:
             return litellm.OpenRouterDecisionsConfig()
         if provider == LlmProviders.FIREWORKS_AI:

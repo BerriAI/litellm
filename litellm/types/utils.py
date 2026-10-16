@@ -4268,6 +4268,7 @@ class LlmProviders(str, Enum):
     DEEPINFRA = "deepinfra"
     PERPLEXITY = "perplexity"
     TYPESAFE = "typesafe"
+    DECISIONMODELS = "decisionmodels"
     STRANDS_DECIDER = "strands_decider"
     LAYA = "laya"
     BESPOKE = "bespoke"
