@@ -46,8 +46,16 @@ async def async_completion_with_fallbacks(**kwargs):
     model = original_model
     top_level_fallbacks: Final = kwargs.pop("fallbacks", [])
     nested_fallbacks: Final = nested_kwargs.pop("fallbacks", [])
-    top_list: Final = top_level_fallbacks if isinstance(top_level_fallbacks, list) else [top_level_fallbacks] if top_level_fallbacks else []
-    nested_list: Final = nested_fallbacks if isinstance(nested_fallbacks, list) else [nested_fallbacks] if nested_fallbacks else []
+    top_list: Final = (
+        top_level_fallbacks
+        if isinstance(top_level_fallbacks, list)
+        else [top_level_fallbacks]
+        if top_level_fallbacks
+        else []
+    )
+    nested_list: Final = (
+        nested_fallbacks if isinstance(nested_fallbacks, list) else [nested_fallbacks] if nested_fallbacks else []
+    )
     raw_fallbacks: Final = top_list + nested_list
 
     # Deduplicate fallbacks while preserving order
@@ -55,10 +63,7 @@ async def async_completion_with_fallbacks(**kwargs):
     combined_fallbacks: Final = [
         fb
         for fb in raw_fallbacks
-        if not (
-            (fb_key := _format_fallback_key(fb)) in seen_fallbacks
-            or seen_fallbacks.add(fb_key)
-        )
+        if not ((fb_key := _format_fallback_key(fb)) in seen_fallbacks or seen_fallbacks.add(fb_key))
     ]
 
     fallbacks: Final = [original_model] + combined_fallbacks

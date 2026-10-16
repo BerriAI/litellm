@@ -1,5 +1,6 @@
-import litellm
 import pytest
+
+import litellm
 from litellm.litellm_core_utils.fallback_utils import async_completion_with_fallbacks
 from litellm.llms.openai.openai import OpenAIChatCompletion
 
@@ -22,14 +23,14 @@ def upstream(monkeypatch):
 
 
 def _common():
-    return dict(
-        messages=[{"role": "user", "content": "hi"}],
-        api_base=BASE,
-        api_key="none",
-        num_retries=0,
-        max_retries=0,
-        timeout=5,
-    )
+    return {
+        "messages": [{"role": "user", "content": "hi"}],
+        "api_base": BASE,
+        "api_key": "none",
+        "num_retries": 0,
+        "max_retries": 0,
+        "timeout": 5,
+    }
 
 
 def _fb(name):
