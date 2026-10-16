@@ -617,6 +617,111 @@ def test_a_health_check_probes_the_api_its_deployment_sends_chat_to(
     assert probed == (route,), probed
 
 
+_INPUT_PRICE: Final = 0.001
+_OUTPUT_PRICE: Final = 0.002
+_SPEND_OF_MODEL_GROUP: Final = 'SELECT request_id, spend FROM "LiteLLM_SpendLogs" WHERE model_group = %s'
+
+
+def _priced_chat_pin(scenario: Scenario, wire: Wire) -> str:
+    return scenario.model(
+        model=_MANTLE_GPT,
+        custom_llm_provider="bedrock_mantle",
+        api_base=_api_base(wire, _MANTLE_GPT),
+        api_key=_API_KEY,
+        input_cost_per_token=_INPUT_PRICE,
+        output_cost_per_token=_OUTPUT_PRICE,
+        model_info={"mode": "chat"},
+    )
+
+
+def _probe_or_marked(request: Request) -> Reply:
+    if request.method == "POST" and _MARKER.search(request.body.decode()) is None:
+        return _health_upstream(request)
+    return _upstream()(request)
+
+
+async def _answered_burst(gateway: Gateway, model: str, count: int) -> tuple[tuple[_Call, _Answer], ...]:
+    calls: Final = tuple(_Call(model, "chat", False, uuid.uuid4().hex) for _ in range(count))
+    answers: Final = await _burst(_proxy_url(gateway), gateway.key, calls)
+    return tuple((call, _assert_answered(answer, call.marker)) for call, answer in zip(calls, answers, strict=True))
+
+
+async def test_a_custom_priced_chat_pin_bills_its_price_and_leaves_its_unpinned_sibling_on_responses(
+    gateway: Gateway,
+) -> None:
+    with wire_server(_upstream()) as wire, gateway.scenario() as scenario:
+        pinned: Final = _priced_chat_pin(scenario, wire)
+        sibling: Final = _deployment(scenario, wire, _MANTLE_GPT, None)
+        pinned_calls: Final = await _answered_burst(gateway, pinned, 8)
+        sibling_calls: Final = await _answered_burst(gateway, sibling, 8)
+        assert _routes(_attempts(wire)) == {call.marker: ("chat",) for call, _ in pinned_calls} | {
+            call.marker: ("responses",) for call, _ in sibling_calls
+        }
+        _, answer = pinned_calls[0]
+        rows: Final = eventually(
+            lambda: [
+                row for row in read_rows(_SPEND_OF_MODEL_GROUP, (pinned,)) if _logs_answer(row["request_id"], answer)
+            ],
+            lambda found: len(found) == 1,
+            seconds=70,
+        )
+        assert float(str(rows[0]["spend"])) == pytest.approx(5 * _INPUT_PRICE + 3 * _OUTPUT_PRICE), rows
+
+
+async def test_a_health_probe_of_a_custom_priced_chat_pin_leaves_its_unpinned_sibling_on_responses(
+    gateway: Gateway,
+) -> None:
+    with wire_server(_probe_or_marked) as wire, gateway.scenario() as scenario:
+        pinned: Final = _priced_chat_pin(scenario, wire)
+        sibling: Final = _deployment(scenario, wire, _MANTLE_GPT, None)
+        async with httpx.AsyncClient(base_url=_proxy_url(gateway), timeout=60, trust_env=False) as client:
+            probes: Final = await asyncio.gather(
+                *(
+                    client.get("/health", params={"model": pinned}, headers={"Authorization": f"Bearer {gateway.key}"})
+                    for _ in range(6)
+                )
+            )
+        probed: Final = tuple(
+            _api(request.target)
+            for request in wire.drain()
+            if request.method == "POST" and _MARKER.search(request.body.decode()) is None
+        )
+        sibling_calls: Final = await _answered_burst(gateway, sibling, 8)
+        assert _routes(_attempts(wire)) == {call.marker: ("responses",) for call, _ in sibling_calls}
+    assert [(probe.status_code, _JSON_OBJECT.validate_json(probe.content)["healthy_count"]) for probe in probes] == [
+        (200, 1)
+    ] * 6, [probe.text for probe in probes]
+    assert probed == ("chat",) * 6, probed
+
+
+@pytest.mark.parametrize(
+    "extra_body",
+    (
+        {"reasoning_effort": "low", "reasoningSummary": "auto"},
+        {"reasoning_effort": {"effort": "low"}, "reasoning_summary": "auto"},
+    ),
+    ids=("string-effort", "object-effort"),
+)
+@pytest.mark.parametrize(
+    ("backend", "mode"), ((_OPENAI_GPT, None), (_MANTLE_GPT, "chat")), ids=("openai", "mantle-chat-pin")
+)
+async def test_a_summary_alias_beside_an_extra_body_effort_reaches_the_responses_api(
+    gateway: Gateway, extra_body: Mapping[str, JsonValue], backend: str, mode: str | None
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(_upstream()) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire, backend, mode)
+        answer: Final = _assert_answered(
+            await _http(gateway, _Call(model, "chat", False, marker), {**_NO_RETRIES, "extra_body": dict(extra_body)}),
+            marker,
+        )
+        (attempt,) = _attempts(wire)
+        assert (attempt.api, attempt.body.get("reasoning")) == ("responses", {"effort": "low", "summary": "auto"}), (
+            attempt
+        )
+        _assert_logged(answer, model, "success")
+
+
 @pytest.mark.parametrize("placement", ("top-level", "extra-body"))
 async def test_a_mantle_chat_pin_rejects_n_above_one_before_the_upstream(gateway: Gateway, placement: str) -> None:
     marker: Final = uuid.uuid4().hex
