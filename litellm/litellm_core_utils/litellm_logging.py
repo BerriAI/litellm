@@ -576,6 +576,10 @@ class Logging(LiteLLMLoggingBaseClass):
     baseline_cache_context: "BaselineCacheContext | None" = None
     baseline_observation: "CapturedBaselineObservation | None" = None
 
+    def hold_stream_completion(self, completion: tuple[object, ...]) -> None:
+        """Parks stream-end logging for the proxy to release once its end-of-stream guardrails finish."""
+        setattr(self, "_deferred_stream_complete_args", completion)  # noqa: B010  # declaring the slot here turns the proxy's reads of it into private-usage findings
+
     @property
     def _defer_async_logging(self) -> bool:
         return self.defer_async_logging

@@ -6,6 +6,7 @@ from typing import Any, Final, cast
 
 import litellm
 from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.main import stream_chunk_builder
 from litellm.responses.litellm_completion_transformation.custom_tools import (
     build_tool_call_item_kwargs,
@@ -22,7 +23,7 @@ from litellm.responses.litellm_completion_transformation.tool_search import (
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
-from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
+from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator, dispatch_stream_success
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     PART_UNION_TYPES,
@@ -100,6 +101,10 @@ def _delta_carries_output(delta: ChatCompletionDelta) -> bool:
     return any(fields) or _delta_has_signed_thinking_block(delta)
 
 
+def _logged_by_this_stream(_assembled: object) -> None:
+    return None
+
+
 class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     """
     Async iterator for processing streaming responses from the Responses API.
@@ -113,9 +118,14 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         responses_api_request: ResponsesAPIOptionalRequestParams,
         custom_llm_provider: str | None = None,
         litellm_metadata: dict | None = None,
+        logs_completion: bool = False,
     ):
+        """``logs_completion`` makes this stream, not the chat stream it wraps, log the request as a Responses row."""
         self.model: str = model
         self.litellm_custom_stream_wrapper: litellm.CustomStreamWrapper = litellm_custom_stream_wrapper
+        self._logs_completion: Final = logs_completion
+        if logs_completion:
+            litellm_custom_stream_wrapper.hand_completion_to(_logged_by_this_stream)
         self.request_input: str | ResponseInputParam = request_input
         self.responses_api_request: ResponsesAPIOptionalRequestParams = responses_api_request
         self.custom_llm_provider: str | None = custom_llm_provider
@@ -124,7 +134,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         # repeated Pydantic attribute access in end-of-stream assembly.
         self.collected_chat_completion_chunks: list[dict[str, object]] = []
         self.finished: bool = False
-        self.litellm_logging_obj = litellm_custom_stream_wrapper.logging_obj
+        self.litellm_logging_obj: LiteLLMLoggingObj = litellm_custom_stream_wrapper.logging_obj
         self.sent_response_created_event: bool = False
         self.sent_response_in_progress_event: bool = False
         self.sent_output_item_added_event: bool = False
@@ -999,6 +1009,15 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             # Latch so wrappers (FallbackResponsesStreamWrapper) + proxy
             # container-ownership hook can read completed_response.
             self.completed_response = response_completed_event
+            if self._logs_completion:
+                dispatch_stream_success(
+                    self.litellm_logging_obj,
+                    response_completed_event,
+                    start_time=None,
+                    end_time=None,
+                    cache_hit=None,
+                    is_async=not sync_mode,
+                )
             return response_completed_event
         else:
             if sync_mode:
