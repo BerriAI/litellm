@@ -1,5 +1,4 @@
 import json
-import time
 import webbrowser
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -18,6 +17,8 @@ BASE_URL: Final = "https://proxy.example.com"
 SIGNED_IN_KEY: Final = "sk-signed-in"
 GENERATED: Final = {"key": "sk-generated", "key_alias": "experiment-1"}
 REJECTED: Final = {"error": {"message": "Authentication Error, No api key passed in.", "type": "auth_error"}}
+SIGNED_IN_AT: Final = 1_790_000_000.0
+EXPIRES_AT: Final = 4_102_444_800.0
 
 
 class FakeBrowserSignIn:
@@ -35,7 +36,7 @@ def _credential(access_token: str = SIGNED_IN_KEY) -> PkceCredential:
     return PkceCredential(
         access_token=access_token,
         refresh_token="refresh-token",
-        expires_at=time.time() + 3600,
+        expires_at=EXPIRES_AT,
         client_id="cli-client",
         token_endpoint=f"{BASE_URL}/v1/cli/token",
         revocation_endpoint=f"{BASE_URL}/v1/cli/revoke",
@@ -54,7 +55,7 @@ def _classic_login(key: str) -> CliTokenData:
         "user_role": "cli",
         "auth_header_name": "Authorization",
         "jwt_token": "",
-        "timestamp": time.time(),
+        "timestamp": SIGNED_IN_AT,
     }
 
 
@@ -76,8 +77,12 @@ def _bearers(route) -> list[str | None]:
     return [request.headers.get("Authorization") for request in route.request_history]
 
 
-def _key_check(requests_mock, status_code: int):
-    return requests_mock.get(f"{BASE_URL}/v1/models", status_code=status_code, json={"data": []})
+def _key_check(requests_mock, status_code: int, public: bool = False):
+    def respond(request, context) -> dict[str, list[str]]:
+        context.status_code = status_code if public or "Authorization" in request.headers else 401
+        return {"data": []}
+
+    return requests_mock.get(f"{BASE_URL}/v1/models", json=respond)
 
 
 def test_a_401_without_a_login_signs_in_once_stores_the_key_and_finishes_the_command(
@@ -398,9 +403,11 @@ def test_a_sibling_key_the_proxy_also_rejects_falls_through_to_one_sign_in(reque
     assert get_stored_api_key(BASE_URL, vault=vault) == SIGNED_IN_KEY
 
 
-@pytest.mark.parametrize("explicit", [False, True], ids=["stored", "explicit"])
+@pytest.mark.parametrize(
+    ("explicit", "accepted"), [(False, "your stored login"), (True, "this API key")], ids=["stored", "explicit"]
+)
 def test_a_401_for_a_key_the_proxy_accepts_elsewhere_reports_a_missing_role_without_a_browser(
-    requests_mock, secret_vault_factory, explicit
+    requests_mock, secret_vault_factory, explicit, accepted
 ):
     vault = secret_vault_factory()
     save_token(_classic_login("sk-member"), vault=vault)
@@ -413,12 +420,33 @@ def test_a_401_for_a_key_the_proxy_accepts_elsewhere_reports_a_missing_role_with
 
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit)
-    assert "accepts this API key but refused `cli credentials list` with HTTP 401" in result.stderr
+    assert f"accepts {accepted} but refused `cli credentials list` with HTTP 401" in result.stderr
+    assert "Set LITELLM_PROXY_API_KEY to a key that has it" in result.stderr
     assert sign_in.calls == []
     assert route.call_count == 1
-    assert _bearers(key_check) == ["Bearer sk-member"]
+    assert _bearers(key_check) == ["Bearer sk-member", None]
     assert vault.writes == writes_before
     assert "sk-member" not in result.output
+
+
+def test_a_public_models_route_never_passes_a_rejected_stored_login_off_as_a_missing_role(
+    requests_mock, secret_vault_factory
+):
+    vault = secret_vault_factory()
+    save_token(_classic_login("sk-stale"), vault=vault)
+    _key_check(requests_mock, 200, public=True)
+    route = requests_mock.get(
+        f"{BASE_URL}/credentials",
+        [{"status_code": 401, "json": REJECTED}, {"status_code": 200, "json": {"credentials": []}}],
+    )
+    sign_in = FakeBrowserSignIn(_credential())
+
+    result = _lite(["credentials", "list", "--format", "json"], vault, sign_in)
+
+    assert result.exit_code == 0, result.output
+    assert sign_in.calls == [BASE_URL]
+    assert _bearers(route) == ["Bearer sk-stale", f"Bearer {SIGNED_IN_KEY}"]
+    assert get_stored_api_key(BASE_URL, vault=vault) == SIGNED_IN_KEY
 
 
 def test_help_never_signs_in(requests_mock, secret_vault_factory):

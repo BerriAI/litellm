@@ -695,7 +695,8 @@ class TestWhoamiCommand:
 
             assert result.exit_code == 0
             assert "Not authenticated" in result.output
-            assert "Run 'lite login'" in result.output
+            assert "lite opens your browser to sign in" in result.output
+            assert "run 'lite login'" in result.output
 
     def test_whoami_old_token(self):
         """Test whoami with old token showing warning"""

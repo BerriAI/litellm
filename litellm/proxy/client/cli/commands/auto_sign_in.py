@@ -1,4 +1,6 @@
 import os
+import subprocess
+import sys
 import webbrowser
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -26,11 +28,16 @@ def _runs_in_ci(environ: Mapping[str, str]) -> bool:
     return environ.get("CI", "").strip().lower() not in {"", "0", "false"}
 
 
+def _open_browser_off_stdout(url: str) -> bool:
+    return subprocess.run((sys.executable, "-I", "-m", "webbrowser", url), stdout=2, check=False).returncode == 0
+
+
 def pkce_browser_sign_in(
     base_url: str,
     echo: Callable[[str], None],
     find_browser: Callable[[], webbrowser.BaseBrowser] = webbrowser.get,
     environ: Mapping[str, str] = os.environ,
+    open_browser: Callable[[str], object] = _open_browser_off_stdout,
 ) -> PkceCredential | PkceFailure:
     if _runs_in_ci(environ):
         return PkceFailure("the CI environment variable is set, so lite does not open a browser")
@@ -44,7 +51,7 @@ def pkce_browser_sign_in(
         f"lite is opening your browser to sign in and waits up to {LOGIN_TIMEOUT_SECONDS // 60} minutes "
         "for you to approve it. A shell or agent that stops commands sooner should run this one with a longer timeout."
     )
-    return run_pkce_login(base_url, requests.Session(), echo=echo)
+    return run_pkce_login(base_url, requests.Session(), open_browser=open_browser, echo=echo)
 
 
 class _SignInContext(TypedDict):
@@ -132,14 +139,16 @@ def _sign_in(ctx: click.Context, context: _SignInContext) -> str:
     return credential.access_token
 
 
-def _proxy_accepts(base_url: str, api_key: str) -> bool:
+def _lists_models(base_url: str, headers: Mapping[str, str]) -> bool:
     try:
-        response: Final = requests.get(
-            f"{base_url.rstrip('/')}/v1/models", headers={"Authorization": f"Bearer {api_key}"}, timeout=10
-        )
+        response: Final = requests.get(f"{base_url.rstrip('/')}/v1/models", headers=headers, timeout=10)
     except requests.RequestException:
         return False
     return response.ok
+
+
+def _proxy_accepts(base_url: str, api_key: str) -> bool:
+    return _lists_models(base_url, {"Authorization": f"Bearer {api_key}"}) and not _lists_models(base_url, {})
 
 
 def _login_for_another_proxy(ctx: click.Context, base_url: str) -> str | None:
@@ -153,9 +162,10 @@ def _rerun_after_sign_in(run: Callable[[click.Context], object], ctx: click.Cont
     base_url: Final = context["base_url"]
     rejected_key: Final = context.get("api_key")
     if rejected_key is not None and _proxy_accepts(base_url, rejected_key):
+        accepted: Final = "your stored login" if context.get("api_key_from_token_file", False) else "this API key"
         raise click.ClickException(
-            f"The proxy at {base_url} accepts this API key but refused `{ctx.command_path}` with HTTP 401, "
-            "so the key likely lacks the role this command needs."
+            f"The proxy at {base_url} accepts {accepted} but refused `{ctx.command_path}` with HTTP 401, "
+            "so it likely lacks the role this command needs. Set LITELLM_PROXY_API_KEY to a key that has it."
         )
     if not context.get("api_key_from_token_file", False):
         raise click.ClickException(

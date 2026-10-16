@@ -1089,7 +1089,10 @@ def whoami(ctx: click.Context):
     token_data: Final = load_token(vault=vault)
 
     if not token_data:
-        click.echo("Not authenticated. Run 'lite login' to authenticate.")
+        click.echo(
+            "Not authenticated. Run the command you need, such as 'lite keys generate', "
+            "and lite opens your browser to sign in. To sign in first from a terminal, run 'lite login'."
+        )
         return
 
     key_readable: Final = token_data.get("key") is not None
