@@ -525,7 +525,6 @@ class GenericGuardrailAPI(CustomGuardrail):
                 json=guardrail_request.model_dump(mode="json"),
                 headers=headers,
                 timeout=self.timeout,
-                idempotent=True,
             )
 
             response.raise_for_status()

@@ -13,13 +13,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from aiohttp import ClientSession
 
 import litellm
 from litellm import ModelResponse
 from litellm._version import version as litellm_version
 from litellm.exceptions import GuardrailRaisedException, Timeout
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPEventHooks, MaskedHTTPStatusError
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, MaskedHTTPStatusError
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     GenericGuardrailAPI,
@@ -27,7 +26,6 @@ from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guardrail_api import (
     _HEADER_PRESENT_PLACEHOLDER,
 )
-from litellm.types.llms.custom_http import VerifyTypes
 from litellm.types.utils import Choices, Message
 
 
@@ -679,13 +677,16 @@ class TestStructuredMessagesInResponse:
             sent_bodies.append(request.content)
             return httpx.Response(200, json={"action": "NONE"}, request=request)
 
-        async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as endpoint:
-            with patch.object(generic_guardrail, "async_handler", _HandlerWithAFreshClient(endpoint, endpoint)):
+        endpoint: Final = AsyncHTTPHandler(transport=httpx.MockTransport(answer))
+        try:
+            with patch.object(generic_guardrail, "async_handler", endpoint):
                 await generic_guardrail.apply_guardrail(
                     inputs={"texts": ["Look up 123-45-6789 for me."], "structured_messages": [row]},
                     request_data=mock_request_data_input,
                     input_type="request",
                 )
+        finally:
+            await endpoint.close()
 
         assert [json.loads(body)["structured_messages"] for body in sent_bodies] == [[row]]
 
@@ -2302,46 +2303,3 @@ class TestFailOnError:
                     input_type="response",
                 )
 
-
-class _HandlerWithAFreshClient(AsyncHTTPHandler):
-    def __init__(self, pooled: httpx.AsyncClient, fresh: httpx.AsyncClient) -> None:
-        self._fresh: Final = fresh
-        super().__init__()
-        self.client = pooled
-
-    def create_client(
-        self,
-        timeout: float | httpx.Timeout | None,
-        event_hooks: HTTPEventHooks | None,
-        ssl_verify: VerifyTypes | None = None,
-        shared_session: ClientSession | None = None,
-    ) -> httpx.AsyncClient:
-        return self._fresh
-
-
-@pytest.mark.asyncio
-async def test_guardrail_check_cut_before_a_response_is_resent_once(generic_guardrail) -> None:
-    sent_bodies: Final[list[bytes]] = []  # mutable-ok: records every body the guardrail endpoint received
-
-    async def cut_before_responding(request: httpx.Request) -> httpx.Response:
-        sent_bodies.append(request.content)
-        raise httpx.RemoteProtocolError("Server disconnected", request=request)
-
-    async def answer(request: httpx.Request) -> httpx.Response:
-        sent_bodies.append(request.content)
-        return httpx.Response(200, json={"action": "NONE"}, request=request)
-
-    async with (
-        httpx.AsyncClient(transport=httpx.MockTransport(cut_before_responding)) as pooled,
-        httpx.AsyncClient(transport=httpx.MockTransport(answer)) as fresh,
-    ):
-        with patch.object(generic_guardrail, "async_handler", _HandlerWithAFreshClient(pooled, fresh)):
-            result: Final = await generic_guardrail.apply_guardrail(
-                inputs={"texts": ["hi"]},
-                request_data={},
-                input_type="request",
-            )
-
-    assert result == {"texts": ["hi"]}
-    assert len(sent_bodies) == 2
-    assert sent_bodies[0] == sent_bodies[1]

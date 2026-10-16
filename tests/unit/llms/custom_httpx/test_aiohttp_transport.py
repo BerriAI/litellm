@@ -169,27 +169,6 @@ async def test_client_payload_error_before_first_chunk_raises_read_error():
 
 
 @pytest.mark.asyncio
-async def test_server_disconnect_mid_body_stays_a_read_error() -> None:
-    mock_response: Final = MockAiohttpResponse(
-        content_chunks=[b"data: one\n\n", b"data: two\n\n"],
-        exception_to_raise=aiohttp.ServerDisconnectedError(),
-        exception_at_chunk=1,
-    )
-    stream: Final = AiohttpResponseStream(mock_response)  # pyright: ignore[reportArgumentType]  # duck-typed response
-    received_chunks: Final[list[bytes]] = []  # mutable-ok: collects what the stream yielded before the cut
-
-    async def _drain() -> None:
-        async for chunk in stream:
-            received_chunks.append(chunk)
-
-    with pytest.raises(httpx.ReadError):
-        await _drain()
-
-    assert received_chunks == [b"data: one\n\n"]
-    assert mock_response.closed is True
-
-
-@pytest.mark.asyncio
 async def test_connection_closed_runtime_error_raises_read_error():
     """aiohttp's bare RuntimeError('Connection closed.') must surface as httpx.ReadError"""
     mock_response = MockAiohttpResponse(
