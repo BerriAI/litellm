@@ -17,7 +17,7 @@ import pytest
 
 
 import litellm
-from litellm.main import _build_custom_pricing_entry
+from litellm.native.request_support import _build_custom_pricing_entry
 from litellm.utils import _invalidate_model_cost_lowercase_map
 
 
@@ -1071,7 +1071,7 @@ def test_register_model_scopes_builtin_match_to_the_given_provider():
 
 
 def test_per_request_custom_pricing_scopes_a_colliding_deployment_id_to_its_provider():
-    from litellm.main import _register_custom_pricing_for_request
+    from litellm.native.request_support import register_custom_pricing_for_request
 
     deployment_id: Final = "baseten/zai-org/glm-5.2"
     builtin_key: Final = "baseten/zai-org/GLM-5.2"
@@ -1080,7 +1080,7 @@ def test_per_request_custom_pricing_scopes_a_colliding_deployment_id_to_its_prov
     builtin_row_before: Final = copy.deepcopy(litellm.model_cost[builtin_key])
     openai_models_before: Final = frozenset(litellm.open_ai_chat_completion_models)
     try:
-        _register_custom_pricing_for_request(
+        register_custom_pricing_for_request(
             model="zai-org/GLM-5.2",
             custom_llm_provider="openai",
             kwargs={

@@ -31,7 +31,7 @@ async def test_mock_basic_google_ai_studio_responses_api_with_tools():
         ],
     )
 
-    with patch("litellm.main.aexecute_planned_chat", new_callable=AsyncMock) as mock_chat:
+    with patch("litellm.native.chat_plan.aexecute_planned_chat", new_callable=AsyncMock) as mock_chat:
         mock_chat.return_value = mock_response
 
         request_model = "gemini/gemini-2.5-flash"

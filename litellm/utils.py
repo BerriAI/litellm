@@ -8429,7 +8429,7 @@ def validate_and_fix_openai_tools(tools: list | None) -> list[dict[str, object]]
     """
     Ensure tools is List[dict] and not List[BaseModel]
     """
-    new_tools: Final = []
+    new_tools: Final[list[dict[str, object]]] = []
     if tools is None:
         return tools
     for tool in tools:
@@ -8550,7 +8550,7 @@ def validate_chat_completion_tool_choice(
     )
 
 
-def validate_openai_optional_params(stop: str | list[str] | None = None, **kwargs) -> str | list[str] | None:
+def validate_openai_optional_params(stop: str | list[str] | None = None, **kwargs: object) -> str | list[str] | None:
     """
     Validates and fixes OpenAI optional parameters.
 
@@ -10435,7 +10435,7 @@ def get_non_default_completion_params(kwargs: Mapping[str, object]) -> dict[str,
     return filter_out_litellm_params(kwargs, excluding=litellm.OPENAI_CHAT_COMPLETION_PARAMS)
 
 
-def peek_reasoning_summary_aliases(optional_params: dict) -> object | None:
+def peek_reasoning_summary_aliases(optional_params: Mapping[str, object]) -> object | None:
     """Read AI-SDK-style reasoning summary from optional_params or nested extra_body.
 
     Uses key membership (not ``or`` chains) so falsy values like ``""`` are not skipped.
@@ -10454,8 +10454,8 @@ def peek_reasoning_summary_aliases(optional_params: dict) -> object | None:
 
 
 def strip_reasoning_summary_aliases_from_optional_params(
-    optional_params: dict,
-) -> tuple[dict, object | None]:
+    optional_params: Mapping[str, object],
+) -> tuple[dict[str, object], object | None]:
     """Copy optional_params; remove reasoningSummary aliases from top-level and extra_body."""
     op: Final = dict(optional_params)
     rs_val = op.pop("reasoningSummary", None)

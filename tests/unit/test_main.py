@@ -28,6 +28,7 @@ import litellm
 from litellm import acompletion, completion
 from litellm import acompletion_with_retries, aresponses_with_retries, completion_with_retries, responses_with_retries
 from litellm import main as litellm_main
+from litellm.native import chat as native_chat
 from litellm.constants import CONTROL_OPTIONS_KEY
 from litellm.caching.base_cache import BaseCache
 from litellm.caching.caching import Cache
@@ -377,7 +378,7 @@ def test_bedrock_latency_optimized_inference():
     ],
 )
 def test_is_claude_tool_target(custom_llm_provider: str, model: str, expected: bool):
-    assert litellm_main._is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model) is expected
+    assert native_chat._is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model) is expected
 
 
 @pytest.mark.parametrize("key", ["input_examples", "eager_input_streaming"])
@@ -387,7 +388,7 @@ def test_drop_anthropic_only_tool_keys_strips_tool_and_function_levels(key: str)
         "opaque_tool",
     ]
 
-    cleaned = litellm_main._drop_anthropic_only_tool_keys(tools=tools)
+    cleaned = native_chat._drop_anthropic_only_tool_keys(tools=tools)
 
     assert cleaned == [
         {"type": "function", "name": "example_tool", "function": {"name": "example_tool"}},
@@ -2128,7 +2129,7 @@ def test_completion_optional_params_base_model(
 
     Regression for #29618: overwriting ``model`` with a friendly ``base_model``
     label made Bedrock drop ``tools``/``tool_choice`` under ``drop_params``."""
-    with patch("litellm.main.get_optional_params") as mock_get_optional_params:
+    with patch("litellm.native.chat.get_optional_params") as mock_get_optional_params:
         mock_get_optional_params.return_value = MagicMock()
 
         import litellm

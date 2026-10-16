@@ -27,11 +27,11 @@ def _funnel_kwargs_completion_forwards(monkeypatch, wif_kwargs: dict[str, object
     from unittest.mock import MagicMock
 
     import litellm
-    import litellm.main as litellm_main
+    import litellm.native.chat as native_chat
 
-    spy = MagicMock(wraps=litellm_main.get_litellm_params)
+    spy = MagicMock(wraps=native_chat.get_litellm_params)
     monkeypatch.setattr(  # test-quality-ok: completion() has no injection seam for its kwargs funnel
-        litellm_main, "get_litellm_params", spy
+        native_chat, "get_litellm_params", spy
     )
     litellm.completion(
         model="anthropic/claude-sonnet-5",
