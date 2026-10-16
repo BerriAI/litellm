@@ -549,6 +549,57 @@ class TestLangfuseOtelIntegration:
             }
             assert not [key for key in actual if key.startswith("langfuse.trace.metadata.")]
 
+    def test_request_metadata_omits_prompt_mcp_and_vector_store_content(self) -> None:
+        request_metadata: Final = {
+            "prompt_management_metadata": {
+                "prompt_id": "prompt-1",
+                "prompt_variables": {"input": "prompt-variables-secret"},
+                "prompt_integration": "prompt-service",
+            },
+            "mcp_tool_call_metadata": {
+                "name": "lookup_weather",
+                "mcp_server_name": "weather-server",
+                "arguments": {"location": "mcp-arguments-secret"},
+                "result": {"forecast": "mcp-result-secret"},
+            },
+            "vector_store_request_metadata": [
+                {
+                    "vector_store_id": "vs-1",
+                    "custom_llm_provider": "openai",
+                    "query": "vector-query-secret",
+                    "vector_store_search_response": {"text": "vector-response-secret"},
+                    "start_time": 1.0,
+                    "end_time": 2.0,
+                }
+            ],
+        }
+        kwargs: Final[dict[str, object]] = {
+            "litellm_params": {"metadata": {}},
+            "standard_logging_object": {"metadata": request_metadata},
+        }
+
+        with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(MagicMock(), kwargs, None)
+
+        actual: Final = {call.args[1]: call.args[2] for call in mock_safe_set_attribute.call_args_list}
+        observation_metadata: Final = actual["langfuse.observation.metadata"]
+        serialized: Final = json.dumps(observation_metadata)
+        parsed: Final = json.loads(observation_metadata)
+
+        assert "prompt-variables-secret" not in serialized
+        assert "mcp-arguments-secret" not in serialized
+        assert "mcp-result-secret" not in serialized
+        assert "vector-query-secret" not in serialized
+        assert "vector-response-secret" not in serialized
+        assert parsed["prompt_management_metadata"]["prompt_id"] == "prompt-1"
+        assert parsed["prompt_management_metadata"]["prompt_integration"] == "prompt-service"
+        assert parsed["mcp_tool_call_metadata"]["name"] == "lookup_weather"
+        assert parsed["mcp_tool_call_metadata"]["mcp_server_name"] == "weather-server"
+        assert parsed["vector_store_request_metadata"][0]["vector_store_id"] == "vs-1"
+        assert parsed["vector_store_request_metadata"][0]["custom_llm_provider"] == "openai"
+        assert parsed["vector_store_request_metadata"][0]["start_time"] == 1.0
+        assert parsed["vector_store_request_metadata"][0]["end_time"] == 2.0
+
     def test_request_metadata_drops_null_fields_and_skips_empty_trace_identities(self) -> None:
         request_metadata: Final = {
             "user_api_key_alias": "prod-key",

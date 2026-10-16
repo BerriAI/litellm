@@ -815,6 +815,56 @@ def test_langfuse_mapper_emits_request_metadata_and_identity():
     assert attrs["langfuse.observation.metadata.provider"] == "openai"
 
 
+def test_langfuse_mapper_omits_prompt_mcp_and_vector_store_content():
+    payload: Final[dict[str, object]] = {
+        "call_type": "acompletion",
+        "custom_llm_provider": "openai",
+        "model": "gpt-4o",
+        "metadata": {
+            "prompt_management_metadata": {
+                "prompt_id": "prompt-1",
+                "prompt_variables": {"input": "prompt-variables-secret"},
+                "prompt_integration": "prompt-service",
+            },
+            "mcp_tool_call_metadata": {
+                "name": "lookup_weather",
+                "mcp_server_name": "weather-server",
+                "arguments": {"location": "mcp-arguments-secret"},
+                "result": {"forecast": "mcp-result-secret"},
+            },
+            "vector_store_request_metadata": [
+                {
+                    "vector_store_id": "vs-1",
+                    "custom_llm_provider": "openai",
+                    "query": "vector-query-secret",
+                    "vector_store_search_response": {"text": "vector-response-secret"},
+                    "start_time": 1.0,
+                    "end_time": 2.0,
+                }
+            ],
+        },
+        "response": {},
+    }
+    attrs: Final = LangfuseMapper().map(LLMCallSpanData.from_standard_logging_payload(payload))
+    observation_metadata: Final = attrs["langfuse.observation.metadata"]
+    serialized: Final = json.dumps(observation_metadata)
+    parsed: Final = json.loads(observation_metadata)
+
+    assert "prompt-variables-secret" not in serialized
+    assert "mcp-arguments-secret" not in serialized
+    assert "mcp-result-secret" not in serialized
+    assert "vector-query-secret" not in serialized
+    assert "vector-response-secret" not in serialized
+    assert parsed["prompt_management_metadata"]["prompt_id"] == "prompt-1"
+    assert parsed["prompt_management_metadata"]["prompt_integration"] == "prompt-service"
+    assert parsed["mcp_tool_call_metadata"]["name"] == "lookup_weather"
+    assert parsed["mcp_tool_call_metadata"]["mcp_server_name"] == "weather-server"
+    assert parsed["vector_store_request_metadata"][0]["vector_store_id"] == "vs-1"
+    assert parsed["vector_store_request_metadata"][0]["custom_llm_provider"] == "openai"
+    assert parsed["vector_store_request_metadata"][0]["start_time"] == 1.0
+    assert parsed["vector_store_request_metadata"][0]["end_time"] == 2.0
+
+
 def test_langfuse_mapper_skips_empty_identity_values():
     payload: Final[dict[str, object]] = {
         "call_type": "acompletion",
