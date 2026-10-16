@@ -176,6 +176,11 @@ def _client_trace_id(request_kwargs: Mapping[str, object]) -> str | None:
     return trace_id if isinstance(trace_id, str) else None
 
 
+def _request_call_id(request_kwargs: Mapping[str, object]) -> str | None:
+    call_id: Final = request_kwargs.get("litellm_call_id")
+    return call_id if isinstance(call_id, str) else None
+
+
 def _request_trace_id(request_kwargs: Mapping[str, object]) -> str | None:
     logging_obj: Final = request_kwargs.get("litellm_logging_obj")
     if isinstance(logging_obj, LiteLLMLoggingObj):
@@ -398,6 +403,7 @@ async def aresponses_api_with_mcp(
                     mcp_server_auth_headers=mcp_server_auth_headers,
                     oauth2_headers=oauth2_headers,
                     raw_headers=raw_headers_from_request,
+                    litellm_call_id=_request_call_id(request_kwargs),
                     litellm_trace_id=_request_trace_id(request_kwargs),
                     request_tags=LiteLLM_Proxy_MCP_Handler.get_parent_request_tags(kwargs),
                     guardrail_context=MCPRequestContext.resolve_guardrail_context(

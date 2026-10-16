@@ -1735,7 +1735,7 @@ async def test_non_stream_auto_execute_bills_the_paid_first_round_when_the_follo
     assert call_tool.await_count == 1
     assert call_tool.await_args is not None
     tool_logging_obj: Final = call_tool.await_args.kwargs["litellm_logging_obj"]
-    assert tool_logging_obj.litellm_call_id != recorder.failed[0]["id"]
+    assert tool_logging_obj.litellm_call_id == f"{recorder.failed[0]['id']}_call_echo"
     assert tool_logging_obj.litellm_trace_id == recorder.failed[0]["trace_id"]
 
 
