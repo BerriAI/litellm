@@ -29,9 +29,10 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
 )
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.llms.custom_httpx.http_handler import get_httpx_client
+from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.langfuse import *
-from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
+from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
@@ -106,6 +107,27 @@ class _UsageObject(Protocol):
     """Token-count surface the Langfuse logger reads off a response usage payload."""
 
     def get(self, key: Literal["cache_creation_input_tokens", "cache_read_input_tokens"], /) -> int | None: ...
+
+
+def _chat_usage(raw_usage: _UsageObject | None) -> _UsageObject | None:
+    """Chat-shaped view of a response's usage.
+
+    /v1/responses carries ResponseAPIUsage (input_tokens/output_tokens), and an
+    assembled /v1/responses stream carries a plain dict of chat usage fields.
+    Any other usage object, or a dict whose token counts are not integers, is
+    returned unchanged.
+    """
+    if isinstance(raw_usage, ResponseAPIUsage):
+        return ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(raw_usage)
+    usage_fields: Final = _object_mapping(raw_usage)
+    if usage_fields is None or not (
+        ResponseAPILoggingUtils.is_response_api_usage(usage_fields) or "prompt_tokens" in usage_fields
+    ):
+        return raw_usage
+    try:
+        return ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage_fields)
+    except ValueError:
+        return raw_usage
 
 
 def _extract_cache_read_input_tokens(usage_obj) -> int:
@@ -815,7 +837,8 @@ class LangFuseLogger:
             if response_obj is not None:
                 if hasattr(response_obj, "id") and response_obj.get("id", None) is not None:
                     generation_id = _logging_id(start_time, response_obj)
-                _usage_obj: Final[_UsageObject | None] = getattr(response_obj, "usage", None)
+                _raw_usage_obj: Final[_UsageObject | None] = getattr(response_obj, "usage", None)
+                _usage_obj: Final = _chat_usage(_raw_usage_obj)
 
                 if _usage_obj:
                     # Safely get usage values, defaulting None to 0 for Langfuse compatibility.

@@ -35,6 +35,7 @@ from litellm.litellm_core_utils.redact_messages import _get_turn_off_message_log
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
 from litellm.proxy._types import AddTeamCallback, ProxyException, TeamCallbackMetadata, UserAPIKeyAuth
+from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES
 from litellm.proxy.litellm_pre_call_utils import (
     KeyAndTeamLoggingSettings,
     LiteLLMProxyRequestSetup,
@@ -231,6 +232,37 @@ async def test_add_litellm_data_to_request_parses_string_metadata():
     litellm_metadata = updated_data.get("metadata", {})
     assert isinstance(litellm_metadata, dict)
     assert updated_data["metadata"]["generation_name"] == "gen123"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disabled", [False, True])
+async def test_add_litellm_data_to_request_keeps_requester_ip_address_for_guardrails_when_ip_logging_is_disabled(
+    monkeypatch: pytest.MonkeyPatch, disabled: bool
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    settings = {"use_x_forwarded_for": True, "disable_requester_ip_address_logging": disabled}
+    monkeypatch.setattr(proxy_server, "general_settings", settings)
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json", "x-forwarded-for": "203.0.113.9"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    updated_data = await add_litellm_data_to_request(
+        data={"model": "gpt-4o"},
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings=settings,
+    )
+
+    assert updated_data["metadata"]["requester_ip_address"] == "203.0.113.9"
 
 
 @pytest.mark.asyncio
@@ -1157,6 +1189,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "litellm_gateway_injected_cache": "forged-deployment-id",
         "_session_deployment_affinity_ttl": 999999,
         "internal_call_origin": "autorouter_classifier",
+        "_managed_background_response": True,
         "_guardrail_pipelines": [{"name": "spoofed"}],
         "_pipeline_managed_guardrails": ["evaded"],
         "safe_user_metadata": "kept",
@@ -1214,6 +1247,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "litellm_gateway_injected_cache",
         "_session_deployment_affinity_ttl",
         "internal_call_origin",
+        "_managed_background_response",
         "_guardrail_pipelines",
         "_pipeline_managed_guardrails",
     }
@@ -1276,13 +1310,7 @@ async def test_key_metadata_enable_prompt_caching_promoted_to_request_root(key_v
         "service_callback",
         "logger_fn",
         "litellm_disabled_callbacks",
-        "_agentic_loop_depth",
-        "_agentic_loop_fingerprints",
-        "_code_interpreter_interception_active",
-        "_code_interpreter_interception_converted_stream",
-        "_code_interpreter_interception_sandbox_key",
-        "_headroom_interception_converted_stream",
-        "max_agentic_loops",
+        *AGENTIC_LOOP_KWARG_NAMES,
     ],
 )
 async def test_add_litellm_data_to_request_strips_callback_control_fields(
@@ -1313,13 +1341,18 @@ async def test_add_litellm_data_to_request_strips_callback_control_fields(
         "logger_fn": "module.func",
         "_agentic_loop_depth": 5,
         "_agentic_loop_fingerprints": ["forged"],
+        "_agentic_loop_api_surface": "responses",
         "_code_interpreter_interception_active": True,
         "_code_interpreter_interception_converted_stream": True,
         "_code_interpreter_interception_sandbox_key": "forged-key",
+        "_code_interpreter_interception_session_scoped": True,
+        "_websearch_interception_emit_native_blocks": True,
+        "_websearch_interception_converted_stream": True,
+        "_websearch_interception_stream_options": {"include_usage": True},
         "_headroom_interception_converted_stream": True,
         "max_agentic_loops": 9999,
     }
-    sample_value = sample_values[control_field]
+    sample_value: Final = sample_values.get(control_field, "forged")
 
     updated = await add_litellm_data_to_request(
         data={
@@ -2016,6 +2049,8 @@ async def test_add_litellm_data_to_request_user_spend_and_budget():
         api_key="hashed-key",
         metadata={},
         team_metadata={},
+        team_id="team-1",
+        team_member_model_max_budget={"gpt-3.5-turbo": {"max_budget": 15.0, "budget_duration": "1d"}},
         user_spend=150.0,
         user_max_budget=500.0,
     )
@@ -2032,6 +2067,9 @@ async def test_add_litellm_data_to_request_user_spend_and_budget():
     metadata = updated_data.get("metadata", {})
     assert metadata["user_api_key_user_spend"] == 150.0
     assert metadata["user_api_key_user_max_budget"] == 500.0
+    assert metadata["user_api_key_team_member_model_max_budget"] == {
+        "gpt-3.5-turbo": {"max_budget": 15.0, "budget_duration": "1d"}
+    }
 
 
 @pytest.mark.asyncio
@@ -7810,6 +7848,23 @@ def test_client_anthropic_api_headers_stay_off_openai_compatible_providers():
     forwarded = _headers_forwarded_to({"anthropic-beta": "claude-code-20250219"}, "openai")
 
     assert forwarded == {}
+
+
+TYPESAFE_DANGER_ZONE_HEADERS = {
+    "TypeSafe-Danger-Zone-Images": "true",
+    "typesafe-danger-zone-long-context": "true",
+}
+
+
+def test_client_typesafe_danger_zone_headers_reach_typesafe():
+    client_headers = {**TYPESAFE_DANGER_ZONE_HEADERS, "x-request-id": "abc"}
+
+    assert _headers_forwarded_to(client_headers, "typesafe") == TYPESAFE_DANGER_ZONE_HEADERS
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["perplexity", "openai", "anthropic"])
+def test_client_typesafe_danger_zone_headers_stay_off_other_providers(custom_llm_provider: str):
+    assert _headers_forwarded_to(TYPESAFE_DANGER_ZONE_HEADERS, custom_llm_provider) == {}
 
 
 @pytest.mark.parametrize("authorization_header_name", AUTHORIZATION_HEADER_CASINGS)

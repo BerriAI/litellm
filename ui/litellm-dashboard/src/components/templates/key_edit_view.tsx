@@ -45,6 +45,7 @@ import {
   McpServersAndGroups,
   toKeyEditFormValues,
   toSubmittedValues,
+  clearMcpGrants,
 } from "./keyEditFormValues";
 import { BudgetFallbacksEditor } from "../key_team_helpers/BudgetFallbacksEditor";
 import { END_USER_BUDGET_HINT, EndUserBudgetSelect } from "../key_team_helpers/EndUserBudgetSelect";
@@ -146,9 +147,8 @@ export function KeyEditView({
   const selectedModels = (form.watch("models") as string[] | undefined) ?? [];
   const allowedRoutes = parseAllowedRoutes(allowedRoutesValue);
   const isModelsDisabled = allowedRoutes.includes("management_routes") || allowedRoutes.includes("info_routes");
-  const mcpSelection = form.watch("mcp_servers_and_groups") as
-    | { servers?: string[]; accessGroups?: string[]; toolsets?: string[] }
-    | undefined;
+  const mcpSelection = form.watch("mcp_servers_and_groups") as McpServersAndGroups | undefined;
+  const mcpScope = { teamId: form.watch("team_id") ?? null, userId: keyData.user_id };
   const mcpToolPermissions = form.watch("mcp_tool_permissions");
 
   useEffect(() => {
@@ -332,11 +332,11 @@ export function KeyEditView({
 
   const handleTeamChange = (setField: (value: string | null) => void, teamId: string | null) => {
     setField(teamId);
-    const selectedTeam = teams?.find((t) => t.team_id === teamId) || null;
-    if (selectedTeam?.organization_id) {
-      setSelectedOrganizationId(selectedTeam.organization_id);
-      form.setValue("organization_id", selectedTeam.organization_id);
-    }
+    clearMcpGrants(form.setValue);
+    const organizationId = teams?.find((t) => t.team_id === teamId)?.organization_id;
+    if (!organizationId) return;
+    setSelectedOrganizationId(organizationId);
+    form.setValue("organization_id", organizationId);
   };
 
   const handleDisabledCallbacksChange = (internalValues: string[]) => {
@@ -761,6 +761,7 @@ export function KeyEditView({
                 onChange={onChange}
                 value={value as McpServersAndGroups | undefined}
                 accessToken={accessToken || ""}
+                {...mcpScope}
                 placeholder="Select MCP servers or access groups (optional)"
                 allowNoMcpServers
               />

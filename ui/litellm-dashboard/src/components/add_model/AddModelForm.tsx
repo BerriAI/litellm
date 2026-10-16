@@ -28,7 +28,7 @@ import type { Team } from "../key_team_helpers/key_list";
 import { type CredentialItem, type ProviderCreateInfo, credentialCreateCall, modelAvailableCall } from "../networking";
 import CredentialModal from "../model_add/CredentialModal";
 import { federatedProviderOf } from "../model_add/credential_federation";
-import { buildCredential, withoutRestrictedFields } from "../model_add/credential_form_helpers";
+import { buildCredential, type CredentialSubmission } from "../model_add/credential_form_helpers";
 import { ProviderLogo } from "../molecules/models/ProviderLogo";
 import AccessGroupTagsCombobox from "./AccessGroupTagsCombobox";
 import AdvancedSettings from "./advanced_settings";
@@ -39,7 +39,7 @@ import ProviderSpecificFields from "./provider_specific_fields";
 import { authTypesFor } from "./provider_auth_types";
 import { TEST_MODES } from "./add_model_modes";
 import DecisionModelNote from "./DecisionModelNote";
-import { decisionModelsSublabel, type DecisionCatalog } from "@/lib/decisionModels";
+import { type DecisionCatalog } from "@/lib/decisionModels";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { credentialsKeys } from "@/app/(dashboard)/hooks/credentials/useCredentials";
 import { extractProxyErrorMessage } from "@/lib/http/client";
@@ -114,8 +114,8 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
     isProxyAdminRole(userRole ?? "") && federatedProviderOf(selectedProvider) !== null;
   const selectedAuthType = authTypesFor(selectedProvider).find(({ id }) => id === selectedAuthTypeId);
 
-  const handleCreateCredential = async (values: Record<string, unknown>) => {
-    const credential = buildCredential(values, withoutRestrictedFields(values));
+  const handleCreateCredential = async (submission: CredentialSubmission) => {
+    const credential = buildCredential(submission, submission.credential_values);
     try {
       await credentialCreateCall(accessToken, credential);
     } catch (error) {
@@ -173,10 +173,9 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
       sortedProviderMetadata.map((providerInfo) => ({
         label: providerInfo.provider_display_name,
         value: providerInfo.provider,
-        sublabel: decisionModelsSublabel(decisionCatalog, providerInfo.litellm_provider),
         icon: <ProviderLogo provider={providerInfo.provider} className="w-5 h-5" />,
       })),
-    [sortedProviderMetadata, decisionCatalog],
+    [sortedProviderMetadata],
   );
 
   const pickedLitellmProvider = sortedProviderMetadata.find(

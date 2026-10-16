@@ -6,7 +6,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.integrations.otel.mappers.utils import json_or_none
-from litellm.proxy.guardrails.anthropic_sse import assemble_anthropic_sse_stream, is_raw_sse_stream
+from litellm.llms.anthropic.pass_through.stream_assembly import assemble_anthropic_sse_stream, is_raw_sse_stream
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import ResponseCompletedEvent, ResponsesAPIResponse
 from litellm.types.utils import ModelResponse, ModelResponseStream

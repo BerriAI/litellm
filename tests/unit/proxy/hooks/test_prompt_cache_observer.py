@@ -10,11 +10,8 @@ import litellm
 from litellm.caching.dual_cache import DualCache
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.llms.anthropic.prompt_cache_prediction import cache_scope, parse_prompt
-from litellm.proxy.hooks.prompt_cache_prediction import (
-    PromptCacheObserver,
-    lookup,
-)
+from litellm.llms.anthropic.prompt_cache_prediction import cache_scope, lookup, parse_prompt
+from litellm.proxy.hooks.prompt_cache_prediction import PromptCacheObserver
 from litellm.proxy.utils import InternalUsageCache
 from litellm.types.utils import ModelResponse
 

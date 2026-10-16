@@ -96,6 +96,21 @@ describe("detectAgentType", () => {
 
     expect(detectAgentType(agent)).toBe("bedrock_agentcore");
   });
+
+  it("detects databricks_agent agents from custom_llm_provider so the edit form shows the Databricks fields", () => {
+    const agent = {
+      agent_id: "agent-2",
+      agent_name: "dbx-agent",
+      agent_card_params: { url: "https://adb-1.azuredatabricks.net" },
+      litellm_params: {
+        custom_llm_provider: "databricks_agent",
+        model: "my-agent-endpoint",
+        api_base: "https://adb-1.azuredatabricks.net",
+      },
+    } as unknown as Agent;
+
+    expect(detectAgentType(agent)).toBe("databricks_agent");
+  });
 });
 
 describe("API agent metadata validation", () => {

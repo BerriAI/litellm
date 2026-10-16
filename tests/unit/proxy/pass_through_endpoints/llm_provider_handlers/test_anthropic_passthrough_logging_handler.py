@@ -7,13 +7,16 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import httpx
 import litellm
 import pytest
+from pydantic import ValidationError
 
 
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.anthropic.pass_through.stream_assembly import extract_sse_data
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
 )
+from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
 
 async def _drain_tasks():
@@ -2288,9 +2291,7 @@ class TestAnthropicUsageOnlyFallback:
     def test_extract_sse_data_handles_malformed_and_sentinel_lines(
         self, event_str, expected
     ):
-        assert (
-            AnthropicPassthroughLoggingHandler._extract_sse_data(event_str) == expected
-        )
+        assert extract_sse_data(event_str) == expected
 
     def _real_logging_obj(self):
         from litellm.litellm_core_utils.litellm_logging import Logging as RealLoggingObj
@@ -2865,6 +2866,51 @@ def test_build_complete_streaming_response(all_chunks):
     assert result.usage.total_tokens == 266
 
 
+_USABLE_MESSAGE_START: Final = 'data: {"type": "message_start", "message": {"id": "msg_real", "model": "claude-real"}}'
+
+
+@pytest.mark.parametrize(
+    "unusable_line",
+    [
+        "data: [1, 2]",
+        'data: "message_start"',
+        "data: 7",
+        "data: null",
+        "data: not json",
+        'data: {"type": "message_start"}',
+        'data: {"type": "message_start", "message": null}',
+        'data: {"type": "message_start", "message": {}}',
+        'data: {"type": "message_start", "message": ""}',
+        'data: {"type": "message_start", "message": []}',
+        'data: {"type": "message_start", "message": {"id": 7, "model": ["claude"]}}',
+        'data: {"type": "message_start", "message": {"id": "", "model": null}}',
+        'data: {"type": "ping", "message": "not an object"}',
+    ],
+)
+def test_model_and_response_id_come_from_the_first_message_start_that_carries_them(unusable_line: str):
+    all_chunks: Final = [f"event: message_start\n{unusable_line}\n\n".encode(), _USABLE_MESSAGE_START]
+
+    extracted: Final = (
+        AnthropicPassthroughLoggingHandler._extract_model_from_anthropic_chunks(all_chunks),
+        AnthropicPassthroughLoggingHandler._extract_response_id_from_anthropic_chunks(all_chunks),
+    )
+
+    assert extracted == ("claude-real", "msg_real"), unusable_line
+
+
+@pytest.mark.parametrize("message", ['"upstream text"', "7", "[1, 2]", "true"])
+def test_message_start_whose_message_is_not_an_object_fails_without_echoing_the_upstream_value(message: str):
+    all_chunks: Final = [f'data: {{"type": "message_start", "message": {message}}}', _USABLE_MESSAGE_START]
+
+    with pytest.raises(ValidationError) as exc_info:
+        AnthropicPassthroughLoggingHandler._extract_model_from_anthropic_chunks(all_chunks)
+
+    assert str(exc_info.value).splitlines()[:2] == [
+        "1 validation error for dict[str,any]",
+        "  Input should be a valid dictionary [type=dict_type]",
+    ], message
+
+
 @pytest.mark.parametrize(
     "end_user_id",
     [{"litellm_metadata": {"user": "test"}}, {"metadata": {"user_id": "test"}}],
@@ -2906,3 +2952,58 @@ def test_get_user_from_metadata(end_user_id):
     )
 
     assert response == "test"
+
+
+def _anthropic_sse_stream(stop_reason: str, stop_details: dict | None) -> list[str]:
+    events: Final = (
+        (
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": ANTHROPIC_DOCS_REFUSAL_MESSAGE["id"],
+                    "type": "message",
+                    "role": "assistant",
+                    "model": ANTHROPIC_DOCS_REFUSAL_MESSAGE["model"],
+                    "content": [],
+                    "usage": {"input_tokens": 412, "output_tokens": 0},
+                },
+            },
+        ),
+        (
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": stop_reason, "stop_sequence": None, "stop_details": stop_details},
+                "usage": {"output_tokens": 0},
+            },
+        ),
+        ("message_stop", {"type": "message_stop"}),
+    )
+    return [f"event: {name}\ndata: {json.dumps(data)}\n\n" for name, data in events]
+
+
+def test_streamed_messages_refusal_stop_details_on_the_logged_response(mock_logging_obj):
+    stop_details: Final = ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]
+    logged: Final = AnthropicPassthroughLoggingHandler.build_complete_streaming_response(
+        all_chunks=_anthropic_sse_stream("refusal", stop_details),
+        litellm_logging_obj=mock_logging_obj,
+        model="claude-sonnet-5-5",
+    )
+
+    assert logged.choices[0].finish_reason == "content_filter"
+    provider_fields: Final = logged.choices[0].message.provider_specific_fields
+    assert provider_fields["stop_reason"] == "refusal"
+    assert provider_fields["stop_details"] == stop_details
+
+
+def test_streamed_messages_end_turn_logs_no_stop_details(mock_logging_obj):
+    logged: Final = AnthropicPassthroughLoggingHandler.build_complete_streaming_response(
+        all_chunks=_anthropic_sse_stream("end_turn", None),
+        litellm_logging_obj=mock_logging_obj,
+        model="claude-sonnet-5-5",
+    )
+
+    assert logged.choices[0].finish_reason == "stop"
+    provider_fields: Final = logged.choices[0].message.provider_specific_fields or {}
+    assert "stop_details" not in provider_fields

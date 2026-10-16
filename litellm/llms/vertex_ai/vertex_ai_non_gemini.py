@@ -1,7 +1,7 @@
-import json
 import os
 import time
-from collections.abc import Callable
+import types
+from collections.abc import Callable, Mapping
 from typing import Any, Final, cast
 
 import httpx
@@ -10,6 +10,12 @@ import litellm
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.bedrock.common_utils import ModelResponseIterator
 from litellm.llms.custom_httpx.http_handler import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
+from litellm.llms.vertex_ai.credentials_source import (
+    VertexCredentialsJson,
+    build_vertex_credentials,
+    load_vertex_credentials_source,
+    raise_vertex_credentials_failure,
+)
 from litellm.types.llms.vertex_ai import *
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
@@ -132,11 +138,15 @@ def completion(
         if vertex_credentials is not None and isinstance(vertex_credentials, str):
             import google.oauth2.service_account
 
-            json_obj: Final = json.loads(vertex_credentials)
+            source: Final = load_vertex_credentials_source(vertex_credentials)
+            if not isinstance(source, VertexCredentialsJson):
+                raise_vertex_credentials_failure(source)
 
-            creds = google.oauth2.service_account.Credentials.from_service_account_info(
-                json_obj,
-                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            creds = build_vertex_credentials(
+                source,
+                lambda info: google.oauth2.service_account.Credentials.from_service_account_info(
+                    info, scopes=["https://www.googleapis.com/auth/cloud-platform"]
+                ),
             )
         else:
             creds, _ = google.auth.default(quota_project_id=vertex_project)
@@ -152,7 +162,7 @@ def completion(
             )
 
         ## Load Config
-        config: Final = litellm.VertexAIConfig.get_config()
+        config: Final[Mapping[str, object]] = types.MappingProxyType(litellm.VertexAIConfig.get_config())
         for k, v in config.items():
             if k not in optional_params:
                 optional_params[k] = v
@@ -404,7 +414,7 @@ def completion(
                     completion_tokens = response_obj.usage_metadata.candidates_token_count
             else:
                 prompt_tokens = len(encoding.encode(prompt))
-                completion_tokens = len(encoding.encode(model_response["choices"][0]["message"].get("content", "")))
+                completion_tokens = len(encoding.encode(model_response.choices[0].message.content))
 
             usage = Usage(
                 prompt_tokens=prompt_tokens,
@@ -550,7 +560,7 @@ async def async_completion(
                 completion_tokens = response_obj.usage_metadata.candidates_token_count
             else:
                 prompt_tokens = len(encoding.encode(prompt))
-                completion_tokens = len(encoding.encode(model_response["choices"][0]["message"].get("content", "")))
+                completion_tokens = len(encoding.encode(model_response.choices[0].message.content))
 
             # set usage
             usage = Usage(

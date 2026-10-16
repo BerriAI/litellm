@@ -7,7 +7,7 @@ use litellm_http::transport::Error as TransportError;
 use litellm_llms::base_llm::{
     auth::{Authenticated, resolve_auth},
     messages::{
-        streaming::{ByteStream, StreamDecoder, encode_anthropic_sse},
+        streaming::{self, ByteStream, StreamDecoder},
         transformation::BaseMessagesConfig,
     },
 };
@@ -25,7 +25,7 @@ use litellm_inference::{context::CallContext, outbound::outbound_request};
 pub(super) struct ProviderCall {
     pub identity: ProviderIdentity,
     pub wire: WireRequest,
-    provider: super::common_utils::MessagesProvider,
+    pub(super) provider: super::common_utils::MessagesProvider,
     signer: Option<litellm_auth_aws::SigV4Signer>,
     timeout: Option<Duration>,
     stream: bool,
@@ -245,7 +245,7 @@ fn decoded_chunks(
         let Some(event) = events.try_next().await? else {
             return Ok(None);
         };
-        let chunk = encode_anthropic_sse(&event)?;
+        let chunk = streaming::encode(&event)?;
         log_chunk(provider, "client_response", &chunk);
         Ok(Some((chunk, events)))
     })
@@ -271,7 +271,6 @@ fn log_chunk(provider: &str, stage: &str, data: &bytes::Bytes) {
 
 #[cfg(test)]
 mod tests {
-    use litellm_llms::base_llm::messages::streaming::anthropic_sse_event_stream;
     use rstest::rstest;
     use wiremock::{Mock, MockServer, ResponseTemplate, matchers::any};
 
@@ -300,7 +299,7 @@ mod tests {
             .await
             .unwrap();
         let MessagesCallResponse::Stream { mut chunks, .. } =
-            streaming_response(response, Some(anthropic_sse_event_stream), "test")
+            streaming_response(response, Some(streaming::event_stream), "test")
         else {
             panic!("a streaming response returns chunks");
         };

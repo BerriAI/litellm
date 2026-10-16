@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from typing import (
     TYPE_CHECKING,
     Final,
@@ -6,11 +6,13 @@ from typing import (
     cast,
 )
 
+from pydantic import TypeAdapter
 from typing_extensions import TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 from litellm.llms.anthropic.pass_through.adapters.transformation import (
     AnthropicAdapter,
 )
@@ -19,11 +21,22 @@ from litellm.llms.anthropic.pass_through.context_management import (
     PolyfillResult,
     apply_context_management,
 )
+from litellm.llms.anthropic.pass_through.safeguards import (
+    SafeguardsEvaluator,
+    build_safeguards_evaluator,
+    read_classifier_model_setting,
+    requested_dangerous_tool_use,
+    with_safeguard_results,
+)
 from litellm.llms.anthropic.pass_through.utils import (
+    ProxySubCallLoggingKwargs,
     is_reasoning_auto_summary_enabled,
     litellm_logging_obj_from_kwargs,
     local_model_name,
+    proxy_sub_call_logging_kwargs,
+    proxy_sub_call_trace_id,
 )
+from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
@@ -32,11 +45,12 @@ from litellm.types.utils import ModelResponse
 from litellm.utils import get_model_info
 
 if TYPE_CHECKING:
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.router import Router
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 # Anthropic-only keys already mapped by the translator; strip on extra_kwargs re-merge.
 ANTHROPIC_ONLY_REQUEST_KEYS: Final[frozenset[str]] = frozenset({"output_config", "safeguards"})
+_REQUEST_KWARGS: Final = TypeAdapter(Mapping[str, object])
 
 _AnthropicMessages: TypeAlias = "list[dict[str, object]]"
 _AnthropicSystem: TypeAlias = "str | list[dict[str, object]] | None"
@@ -68,6 +82,10 @@ def _proxy_router_fallback() -> "Router | None":
     return _proxy_router
 
 
+def _router_or_proxy_fallback(requested: "Router | None") -> "Router | None":
+    return requested if requested is not None else _proxy_router_fallback()
+
+
 def _extract_proxy_litellm_metadata(
     kwargs: Mapping[str, object],
 ) -> "tuple[dict[str, object], UserAPIKeyAuth | None] | tuple[None, None]":
@@ -89,6 +107,31 @@ def _extract_proxy_litellm_metadata(
     return litellm_metadata, user_api_key_auth
 
 
+def _requested_router(kwargs: Mapping[str, object]) -> "Router | None":
+    from litellm.router import Router
+
+    requested: Final = kwargs.get("litellm_router")
+    return requested if isinstance(requested, Router) else None
+
+
+def request_safeguards_evaluator(
+    kwargs: Mapping[str, object], messages: Sequence[Mapping[str, object]]
+) -> SafeguardsEvaluator | None:
+    safeguards: Final = kwargs.get("safeguards")
+    if requested_dangerous_tool_use(safeguards) is None or read_classifier_model_setting() is None:
+        return None
+    proxy_litellm_metadata, user_api_key_auth = _extract_proxy_litellm_metadata(kwargs)
+    return build_safeguards_evaluator(
+        safeguards=safeguards,
+        messages=messages,
+        litellm_metadata=proxy_litellm_metadata,
+        user_api_key_auth=user_api_key_auth,
+        llm_router=_router_or_proxy_fallback(_requested_router(kwargs)),
+        logging_kwargs=proxy_sub_call_logging_kwargs(kwargs),
+        parent_trace_id=proxy_sub_call_trace_id(kwargs),
+    )
+
+
 async def _prepare_context_managed_request(
     *,
     model: str,
@@ -100,6 +143,8 @@ async def _prepare_context_managed_request(
     additional_drop_params: list[str] | None,
     llm_router: "Router | None",
     user_api_key_auth: "UserAPIKeyAuth | None" = None,
+    sub_call_logging_kwargs: ProxySubCallLoggingKwargs | None = None,
+    parent_trace_id: str | None = None,
 ) -> PolyfillResult | None:
     """Apply client compaction history, then optional context_management polyfill."""
     from litellm.llms.anthropic.pass_through.context_management.editors.compact import (
@@ -139,6 +184,8 @@ async def _prepare_context_managed_request(
         additional_drop_params=additional_drop_params,
         llm_router=llm_router,
         user_api_key_auth=user_api_key_auth,
+        sub_call_logging_kwargs=sub_call_logging_kwargs,
+        parent_trace_id=parent_trace_id,
     )
 
     if polyfill_result is not None:
@@ -261,6 +308,8 @@ async def _run_polyfill_if_enabled(
     additional_drop_params: list[str] | None,
     llm_router: "Router | None",
     user_api_key_auth: "UserAPIKeyAuth | None" = None,
+    sub_call_logging_kwargs: ProxySubCallLoggingKwargs | None = None,
+    parent_trace_id: str | None = None,
 ) -> PolyfillResult | None:
     """Run the async context_management polyfill if a spec is present.
 
@@ -287,6 +336,8 @@ async def _run_polyfill_if_enabled(
             litellm_metadata=litellm_metadata,
             llm_router=llm_router,
             user_api_key_auth=user_api_key_auth,
+            sub_call_logging_kwargs=sub_call_logging_kwargs,
+            parent_trace_id=parent_trace_id,
         )
     except AnthropicContextManagementError:
         # Surface validation errors so the endpoint can emit an Anthropic-format
@@ -316,6 +367,11 @@ async def _run_polyfill_if_enabled(
 # init adapter
 ANTHROPIC_ADAPTER: Final = AnthropicAdapter()
 ########################################################
+
+
+def _record_bridged_model_response(logging_obj: LiteLLMLoggingObject | None, completion_response: object) -> None:
+    if logging_obj is not None and isinstance(completion_response, ModelResponse):
+        logging_obj.record_bridged_model_response(completion_response)
 
 
 class LiteLLMMessagesToCompletionTransformationHandler:
@@ -411,7 +467,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             return None
         if resolved_provider == "litellm_proxy":
             return None
-        from litellm.main import responses_api_bridge_check
+        from litellm.responses.bridge_check import responses_api_bridge_check
 
         web_search_options: Final = completion_kwargs.get("web_search_options")
         tools: Final = completion_kwargs.get("tools")
@@ -564,7 +620,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         # Maintainability: when adding a new Anthropic-only request param to
         # ``AnthropicMessagesRequestOptionalParams``, also extend
         # ``ANTHROPIC_ONLY_REQUEST_KEYS`` here so it doesn't silently leak.
-        excluded_keys: Final = ANTHROPIC_ONLY_REQUEST_KEYS | {"anthropic_messages"}
+        excluded_keys: Final = ANTHROPIC_ONLY_REQUEST_KEYS | CONVERTED_STREAM_KEYS | {"anthropic_messages"}
         # NOTE: extra_kwargs was already coerced from None to {} at the top of
         # this method (line ~220). It is guaranteed to be a dict here.
         for key, value in extra_kwargs.items():
@@ -621,12 +677,12 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         """Handle non-Anthropic models asynchronously using the adapter"""
         context_management: Final = kwargs.pop("context_management", None)
         additional_drop_params: Final[list[str] | None] = kwargs.get("additional_drop_params", None)
-        requested_router: Final[Router | None] = kwargs.pop("litellm_router", None)
-        litellm_router: Final[Router | None] = (
-            requested_router if requested_router is not None else _proxy_router_fallback()
-        )
+        litellm_router: Final[Router | None] = _router_or_proxy_fallback(kwargs.pop("litellm_router", None))
 
         proxy_litellm_metadata, user_api_key_auth = _extract_proxy_litellm_metadata(kwargs)
+        request_kwargs: Final = _REQUEST_KWARGS.validate_python(kwargs)
+        sub_call_logging_kwargs: Final = proxy_sub_call_logging_kwargs(request_kwargs)
+        sub_call_trace_id: Final = proxy_sub_call_trace_id(request_kwargs)
 
         polyfill_result: Final = await _prepare_context_managed_request(
             model=model,
@@ -638,10 +694,21 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             additional_drop_params=additional_drop_params,
             llm_router=litellm_router,
             user_api_key_auth=user_api_key_auth,
+            sub_call_logging_kwargs=sub_call_logging_kwargs,
+            parent_trace_id=sub_call_trace_id,
         )
 
         effective_messages: Final = polyfill_result.messages if polyfill_result is not None else messages
         effective_system: Final = polyfill_result.system if polyfill_result is not None else system
+        safeguards_evaluator: Final = build_safeguards_evaluator(
+            safeguards=kwargs.get("safeguards"),
+            messages=messages,
+            litellm_metadata=proxy_litellm_metadata,
+            user_api_key_auth=user_api_key_auth,
+            llm_router=litellm_router,
+            logging_kwargs=sub_call_logging_kwargs,
+            parent_trace_id=sub_call_trace_id,
+        )
 
         (
             completion_kwargs,
@@ -665,6 +732,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         )
 
         completion_response: Final = await litellm.acompletion(**completion_kwargs)
+        logging_obj: Final = litellm_logging_obj_from_kwargs(kwargs)
 
         if stream:
             transformed_stream: Final = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
@@ -673,19 +741,21 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
                 is_async=True,
-                litellm_logging_obj=litellm_logging_obj_from_kwargs(kwargs),
+                litellm_logging_obj=logging_obj,
+                safeguards_evaluator=safeguards_evaluator,
             )
             if transformed_stream is not None:
                 return transformed_stream
             raise ValueError("Failed to transform streaming response")
         else:
+            _record_bridged_model_response(logging_obj, completion_response)
             anthropic_response: Final = ANTHROPIC_ADAPTER.translate_completion_output_params(
                 cast(ModelResponse, completion_response),
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
             )
             if anthropic_response is not None:
-                return anthropic_response
+                return await with_safeguard_results(anthropic_response, safeguards_evaluator)
             raise ValueError("Failed to transform response to Anthropic format")
 
     @staticmethod
@@ -762,6 +832,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             polyfill_result: PolyfillResult | None = None
         else:
             proxy_litellm_metadata, user_api_key_auth = _extract_proxy_litellm_metadata(kwargs)
+            request_kwargs: Final = _REQUEST_KWARGS.validate_python(kwargs)
             polyfill_result = run_async_function(
                 _prepare_context_managed_request,
                 model=model,
@@ -773,6 +844,8 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 additional_drop_params=additional_drop_params,
                 llm_router=litellm_router,
                 user_api_key_auth=user_api_key_auth,
+                sub_call_logging_kwargs=proxy_sub_call_logging_kwargs(request_kwargs),
+                parent_trace_id=proxy_sub_call_trace_id(request_kwargs),
             )
 
         effective_messages: Final = polyfill_result.messages if polyfill_result is not None else messages
@@ -800,6 +873,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         )
 
         completion_response: Final = litellm.completion(**completion_kwargs)
+        logging_obj: Final = litellm_logging_obj_from_kwargs(kwargs)
 
         if stream:
             transformed_stream: Final = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
@@ -808,12 +882,13 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 tool_name_mapping=tool_name_mapping,
                 polyfill_result=polyfill_result,
                 is_async=False,
-                litellm_logging_obj=litellm_logging_obj_from_kwargs(kwargs),
+                litellm_logging_obj=logging_obj,
             )
             if transformed_stream is not None:
                 return transformed_stream
             raise ValueError("Failed to transform streaming response")
         else:
+            _record_bridged_model_response(logging_obj, completion_response)
             anthropic_response: Final = ANTHROPIC_ADAPTER.translate_completion_output_params(
                 cast(ModelResponse, completion_response),
                 tool_name_mapping=tool_name_mapping,
