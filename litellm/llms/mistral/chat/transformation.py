@@ -476,6 +476,8 @@ class MistralConfig(OpenAIGPTConfig):
         """
         from litellm.types.llms.openai import ChatCompletionAssistantMessage
 
+        if message.get("role") != "assistant":
+            return False
         set_keys: Final = get_type_hints(ChatCompletionAssistantMessage).keys()
 
         all_expected_values_are_empty = True
