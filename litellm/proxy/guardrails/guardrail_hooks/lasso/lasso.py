@@ -49,6 +49,7 @@ from litellm.proxy.guardrails._content_utils import (
     has_non_string_content,
 )
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import CallTypesLiteral
 
 
 class LassoResponse(TypedDict):
@@ -177,18 +178,7 @@ class LassoGuardrail(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,  # Deprecated, use global_cache instead (kept to align with CustomGuardrail interface)
         data: dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ) -> Exception | str | dict | None:
         """
         Runs before the LLM API call to validate and potentially modify input.
@@ -210,16 +200,7 @@ class LassoGuardrail(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal[
-            "completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "responses",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
         cache: DualCache,
     ):
         """

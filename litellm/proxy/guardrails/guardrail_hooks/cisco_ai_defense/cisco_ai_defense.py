@@ -22,7 +22,7 @@ import os
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from fastapi import HTTPException
@@ -45,6 +45,7 @@ from litellm.proxy.common_utils.callback_utils import (
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
+    CallTypesLiteral,
     Choices,
     LLMResponseTypes,
     ModelResponse,
@@ -299,18 +300,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ) -> Exception | str | dict | None:
         # Trust proxy call_type, not caller-controlled request shape.
         is_mcp: Final = self._is_mcp_call_type(call_type)
@@ -350,16 +340,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal[
-            "completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "responses",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ) -> Exception | str | dict | None:
         is_mcp: Final = self._is_mcp_call_type(call_type)
 
