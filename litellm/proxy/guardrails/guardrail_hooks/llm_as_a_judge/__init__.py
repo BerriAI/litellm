@@ -113,6 +113,7 @@ def _call_id_sample_draw(call_id: str) -> float:
     """Deterministic uniform draw in [0, 1) for a litellm_call_id, stable across hooks and workers."""
     return int.from_bytes(hashlib.sha256(call_id.encode()).digest()[:8], "big") / 2**64
 
+
 _ParamT = TypeVar("_ParamT")
 
 
@@ -204,14 +205,8 @@ def _build_judge_prompt(
     prompt_head: Final = f"Criteria to evaluate:\n{criteria_block}\n\n"
     subject: Final = f"{_JUDGE_SUBJECT_LABELS[input_type]}:\n"
     if max_input_chars is not None:
-        conv_wrapper: Final = len("Conversation:\n") + 2
-        budget: Final = max(
-            0, max_input_chars - len(prompt_head) - len(subject) - conv_wrapper
-        )
-        conversation, capped_text = _cap_judged_context(rendered_conversation, text_under_review, budget)
-        capped_block: Final = (
-            f"Conversation:\n{conversation}\n\n" if conversation or input_type == "response" else ""
-        )
+        conversation, capped_text = _cap_judged_context(rendered_conversation, text_under_review, max_input_chars)
+        capped_block: Final = f"Conversation:\n{conversation}\n\n" if conversation or input_type == "response" else ""
         return f"{prompt_head}{capped_block}{subject}{capped_text}"
     conversation_block: Final = (
         f"Conversation:\n{rendered_conversation}\n\n" if rendered_conversation or input_type == "response" else ""

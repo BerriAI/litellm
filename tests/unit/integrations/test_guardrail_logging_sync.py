@@ -162,3 +162,22 @@ def test_syncs_eval_information_to_logging_obj():
     assert (
         logging_obj.model_call_details["litellm_params"]["metadata"]["eval_information"] == eval_info
     )
+
+
+def test_second_judge_eval_overwrites_stale_logging_copy():
+    first = [{"eval_name": "pre-judge", "overall_score": 90.0, "passed": True}]
+    both = first + [{"eval_name": "post-judge", "overall_score": 20.0, "passed": False}]
+    request_data = {
+        "metadata": {
+            "standard_logging_guardrail_information": [_make_slg_entry()],
+            "eval_information": first,
+        }
+    }
+    logging_obj = _FakeLogging()
+
+    _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
+    request_data["metadata"]["eval_information"] = both
+    _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
+
+    assert logging_obj.litellm_params["metadata"]["eval_information"] == both
+    assert logging_obj.litellm_params["metadata"]["eval_information"] is both

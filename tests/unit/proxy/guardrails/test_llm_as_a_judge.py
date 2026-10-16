@@ -974,17 +974,19 @@ def test_cap_judged_context_text_keeps_its_head_not_its_tail():
     assert text == "HEADxxxxxx"
 
 
-def test_build_judge_prompt_stays_within_max_input_chars():
-    cap: Final = 120
+def test_build_judge_prompt_criteria_and_labels_do_not_eat_the_cap():
+    cap: Final = 50
     prompt: Final = _build_judge_prompt(
-        [{"name": "work", "weight": 100, "description": "work?"}],
+        [{"name": "work", "weight": 100, "description": "x" * 500}],
         [{"role": "user", "content": "8" * 200}],
-        "7" * 200,
+        "7" * 30,
         "request",
         max_input_chars=cap,
     )
-    assert len(prompt) <= cap
-    assert "7" in prompt
+    assert "x" * 500 in prompt
+    assert "7" * 30 in prompt
+    assert "8" * 20 in prompt
+    assert "8" * 21 not in prompt
 
 
 def test_build_judge_prompt_unset_cap_is_byte_identical():
@@ -1005,8 +1007,8 @@ async def test_apply_guardrail_caps_judged_request_context_without_mutating_mess
         router_provider=lambda: router,
     )
     sent: Final[list[dict[str, object]]] = [
-        {"role": "system", "content": "s" * 100},
-        {"role": "user", "content": "u" * 100},
+        {"role": "system", "content": "s" * 300},
+        {"role": "user", "content": "u" * 300},
         {"role": "assistant", "content": "a" * 100},
         {"role": "user", "content": "d" * 50},
     ]
@@ -1017,11 +1019,11 @@ async def test_apply_guardrail_caps_judged_request_context_without_mutating_mess
 
     content: Final = router.acompletion.call_args.kwargs["messages"][1]["content"]
     assert "d" * 50 in content
+    assert "SYSTEM:" not in content
     assert "s" * 100 not in content
-    assert "u" * 100 not in content
-    assert sent[1]["content"] == "u" * 100
+    assert sent[1]["content"] == "u" * 300
     assert sent[3]["content"] == "d" * 50
-    assert request_data["messages"][1]["content"] == "u" * 100
+    assert request_data["messages"][1]["content"] == "u" * 300
 
 
 @pytest.mark.asyncio
@@ -1042,8 +1044,8 @@ async def test_apply_guardrail_caps_judged_response_context():
     await guardrail.apply_guardrail(inputs, request_data, "response")
 
     content: Final = router.acompletion.call_args.kwargs["messages"][1]["content"]
-    assert "e" * 200 in content
-    assert "e" * 400 not in content
+    assert "e" * 400 in content
+    assert "e" * 401 not in content
     assert "u" * 100 not in content
 
 

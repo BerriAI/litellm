@@ -165,10 +165,12 @@ def _statuses(row: Mapping[str, JsonValue], name: str) -> list[JsonValue]:
 
 def _judge_prompt_chars(request: Request, letters: str) -> Mapping[str, int]:
     body: Final = json.loads(request.body)
-    text: Final = "\n".join(
-        str(message.get("content", "")) for message in body["messages"] if isinstance(message, dict)
-    )
-    return {letter: text.count(letter) for letter in letters}
+    user_prompt: Final = str(body["messages"][-1].get("content", ""))
+    return {letter: user_prompt.count(letter) for letter in letters}
+
+
+def _scaffold_chars(labels: str, letters: str) -> int:
+    return sum(labels.count(letter) for letter in letters)
 
 
 def test_sample_rate_bounds_judge_calls_and_marks_not_run(gateway: Gateway, tmp_path: Path) -> None:
@@ -326,7 +328,14 @@ def test_max_input_chars_caps_judged_request_context(gateway: Gateway, tmp_path:
             assert response.status_code == 200, response.text
             judge_requests: Final = eventually(lambda: judge.drain(), lambda v: len(v) == 1, seconds=60)
             counts: Final = _judge_prompt_chars(judge_requests[0], "abcd")
-            assert sum(counts.values()) <= cap, f"judge saw {counts} of capped letters, cap {cap}"
+            scaffold: Final = _scaffold_chars(
+                "Criteria to evaluate:\n- work (weight 100%): Is this request work related?\n\n"
+                "Conversation:\nLatest request turn to evaluate:\n",
+                "abcd",
+            )
+            assert sum(counts.values()) - scaffold <= cap, (
+                f"judge saw {counts} of capped letters ({scaffold} in fixed labels), cap {cap}"
+            )
             assert counts["d"] > 0, "latest user turn missing from judge prompt"
             work_requests: Final = eventually(lambda: work.drain(), lambda v: len(v) == 1, seconds=60)
             assert json.loads(work_requests[0].body)["messages"] == sent
@@ -361,8 +370,49 @@ def test_max_input_chars_caps_judged_response_context(gateway: Gateway, tmp_path
             assert response.status_code == 200, response.text
             judge_requests: Final = eventually(lambda: judge.drain(), lambda v: len(v) == 1, seconds=120)
             counts: Final = _judge_prompt_chars(judge_requests[0], "abcde")
-            assert sum(counts.values()) <= cap, f"judge saw {counts} of capped letters, cap {cap}"
+            scaffold: Final = _scaffold_chars(
+                "Criteria to evaluate:\n- work (weight 100%): Is this request work related?\n\n"
+                "Conversation:\nAssistant response to evaluate:\n",
+                "abcde",
+            )
+            assert sum(counts.values()) - scaffold <= cap, (
+                f"judge saw {counts} of capped letters ({scaffold} in fixed labels), cap {cap}"
+            )
             assert counts["e"] > 0, "response text missing from judge prompt"
+
+
+def test_two_judges_on_one_request_both_record_eval_information(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with wire_server(_judge_scoring(95)) as judge, wire_server(_work_handler) as work:
+        config, gname = _write_config(
+            tmp_path,
+            work.url,
+            judge.url,
+            {**BASE_JUDGE_PARAMS, "mode": "pre_call", "sample_rate": 1.0},
+        )
+        loaded: Final = yaml.safe_load(config.read_text())
+        loaded["guardrails"].append(
+            {
+                "guardrail_name": f"{gname}-post",
+                "litellm_params": {**BASE_JUDGE_PARAMS, "mode": "post_call", "sample_rate": 1.0},
+            }
+        )
+        config.write_text(yaml.safe_dump(loaded))
+        with owned_proxy(gateway, tmp_path, {}, config=config) as candidate:
+            call_id: Final = f"lit8332-dual-{RUN_TOKEN}"
+            _send(candidate, call_id)
+            rows: Final = eventually(
+                lambda: _spend_rows([call_id]),
+                lambda values: len(values) == 1,
+                seconds=120,
+            )
+            entries: Final = _eval_entries(_meta(rows[0]))
+            assert len(entries) == 2, (
+                f"spend row eval_information has {len(entries)} entries, expected 2 "
+                f"(one per pre_call + post_call judge): {entries}"
+            )
+            assert len(judge.drain()) == 2
 
 
 def test_log_only_judge_failure_never_blocks(gateway: Gateway, tmp_path: Path) -> None:

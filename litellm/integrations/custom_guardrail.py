@@ -1656,7 +1656,7 @@ def _setdefault_eval_information(
     metadata_bucket: Final = cast(  # cast-ok: litellm_params["metadata"] is a heterogeneous dict
         dict[str, object], lp.setdefault("metadata", {})
     )
-    metadata_bucket.setdefault("eval_information", eval_info)
+    metadata_bucket["eval_information"] = eval_info
 
 
 def _sync_guardrail_info_to_logging_obj(request_data: dict, logging_obj: object) -> None:
@@ -1681,9 +1681,9 @@ def _sync_guardrail_info_to_logging_obj(request_data: dict, logging_obj: object)
     _append_slg_to_litellm_params(getattr(logging_obj, "litellm_params", None), entries)
     _append_slg_to_litellm_params(mcd.get("litellm_params"), entries)
 
-    eval_info: Final = cast(dict[str, object], meta_src).get(  # cast-ok: the request metadata bucket is a heterogeneous dict
-        "eval_information"
-    )
+    eval_info: Final = cast(  # cast-ok: the request metadata bucket is a heterogeneous dict
+        dict[str, object], meta_src
+    ).get("eval_information")
     if eval_info is None:
         return
     for lp in (getattr(logging_obj, "litellm_params", None), mcd.get("litellm_params")):
