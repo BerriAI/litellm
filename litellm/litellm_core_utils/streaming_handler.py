@@ -1783,10 +1783,11 @@ class CustomStreamWrapper:
             return
         ## ASYNC LOGGING
         loop: Final = self.logging_loop if self.logging_loop is not None else _background_logging_loop()
-        asyncio.run_coroutine_threadsafe(
+        future: Final = asyncio.run_coroutine_threadsafe(
             self.logging_obj.async_success_handler(processed_chunk, None, None, cache_hit),
             loop=loop,
-        ).result()
+        )
+        future.result()
         ## SYNC LOGGING — only for sync SDK entrypoints; async proxy paths export via async_success_handler
         litellm_params: Final = self.logging_obj.model_call_details.get("litellm_params", {})
         if self.logging_obj.is_sync_litellm_request(litellm_params):

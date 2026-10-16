@@ -17,6 +17,8 @@ from litellm.litellm_core_utils.streaming_handler import (
     CustomStreamWrapper,
     _ProviderChunkEarlyReturn,
     _ProviderChunkParsed,
+    _background_logging_loop,
+    _stop_background_logging_loop,
 )
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.utils import (
@@ -6662,3 +6664,20 @@ def test_sync_stream_runs_each_async_chunk_callback_in_a_fresh_context(monkeypat
 
     assert len(logger.seen) == len(received)
     assert set(logger.seen) == {"unset"}
+
+
+def test_background_logging_loop_is_shared_within_a_process() -> None:
+    first: Final = _background_logging_loop()
+    assert _background_logging_loop() is first
+    assert first.is_running()
+
+
+def test_stopping_a_background_logging_loop_joins_its_thread_and_closes_it() -> None:
+    loop: Final = asyncio.new_event_loop()
+    thread: Final = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+
+    _stop_background_logging_loop(loop, thread)
+
+    assert not thread.is_alive()
+    assert loop.is_closed()
