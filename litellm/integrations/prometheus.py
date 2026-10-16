@@ -3368,7 +3368,7 @@ class PrometheusLogger(CustomLogger):
                 label_context=label_context,
             )
 
-            if remaining_requests:
+            if isinstance(remaining_requests, int):
                 """
                 "model_group",
                 "api_provider",
@@ -3382,7 +3382,7 @@ class PrometheusLogger(CustomLogger):
                 )
                 self.litellm_remaining_requests_metric.labels(**_labels).set(remaining_requests)
 
-            if remaining_tokens:
+            if isinstance(remaining_tokens, int):
                 _labels = prometheus_label_factory(
                     supported_enum_labels=self.get_labels_for_metric(metric_name="litellm_remaining_tokens_metric"),
                     enum_values=enum_values,

@@ -20,6 +20,7 @@ Tests cover:
 - llm_router unavailable / model_group missing / router raises → silent no-op.
 """
 
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -293,3 +294,42 @@ class TestRouterFallbackDefensivePaths:
             )
 
         prometheus_logger.litellm_remaining_tokens_metric.labels.assert_not_called()
+
+
+def _sample_values(sample_name: str) -> list[float]:
+    return [
+        sample.value
+        for metric in REGISTRY.collect()
+        for sample in metric.samples
+        if sample.name == sample_name
+    ]
+
+
+def test_unparseable_provider_ratelimit_header_skips_only_its_own_gauge(
+    prometheus_logger,
+):
+    payload = _build_payload(
+        model_group="groq-group",
+        custom_llm_provider="groq",
+        additional_headers={
+            "x_ratelimit_remaining_requests": 0,
+            "x_ratelimit_remaining_tokens": "856, abc",
+        },
+    )
+    request_kwargs = {
+        "litellm_params": {"custom_llm_provider": "groq", "metadata": {}},
+        "model": "llama-3.1-8b-instant",
+        "standard_logging_object": payload,
+    }
+
+    prometheus_logger.set_llm_deployment_success_metrics(
+        request_kwargs=request_kwargs,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        enum_values=_enum_values(model_group="groq-group"),
+        output_tokens=2.0,
+    )
+
+    assert _sample_values("litellm_remaining_requests_metric") == [0.0]
+    assert _sample_values("litellm_remaining_tokens_metric") == []
+    assert _sample_values("litellm_deployment_success_responses_total") == [1.0]
