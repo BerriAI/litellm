@@ -153,6 +153,42 @@ func TestResourceLiteLLMModelReadDisplayName(t *testing.T) {
 	}
 }
 
+func TestResourceLiteLLMModelReadEmptyBodyKeepsState(t *testing.T) {
+	cases := []struct {
+		name       string
+		serverBody string
+	}{
+		{name: "empty body"},
+		{name: "null body", serverBody: "null"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/model/info" {
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				}
+				_, _ = w.Write([]byte(tc.serverBody))
+			}))
+			defer srv.Close()
+
+			d := schema.TestResourceDataRaw(t, resourceLiteLLMModel().Schema, map[string]interface{}{
+				"model_name":          "sonnet-4-5-anthropic",
+				"custom_llm_provider": "anthropic",
+				"base_model":          "claude-sonnet-4-5",
+				"display_name":        "Saved Name",
+			})
+			d.SetId("model-123")
+
+			if err := resourceLiteLLMModelRead(d, NewClient(srv.URL, "test-key", true)); err == nil {
+				t.Fatal("expected read error for empty response body")
+			}
+			if got := d.Get("display_name").(string); got != "Saved Name" {
+				t.Errorf("expected display_name to remain %q, got %q", "Saved Name", got)
+			}
+		})
+	}
+}
+
 func updateResourceData(t *testing.T, oldDisplayName, newDisplayName string) *schema.ResourceData {
 	t.Helper()
 	res := resourceLiteLLMModel()

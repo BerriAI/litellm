@@ -25,7 +25,7 @@ from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from tests.integration._support.client import eventually
-from tests.integration._support.process import _free_port as free_port
+from tests.integration._support.ports import allocate_port
 from tests.integration._support.process import stop_process_group
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[3]
@@ -94,7 +94,7 @@ def _unreachable_database_url(database_url: str) -> str:
         parsed.path.lstrip("/"),
         encode_password=False,
     )
-    return _replace_port(url, free_port())
+    return _replace_port(url, allocate_port())
 
 
 @contextmanager
@@ -388,7 +388,7 @@ def test_unreachable_database_recovers_after_postgres_forwarder_starts(
         port: Final = admin.port
         assert hostname is not None and port is not None
         target_host: Final = "127.0.0.1" if hostname == "localhost" else hostname
-        forwarding_port: Final = free_port()
+        forwarding_port: Final = allocate_port()
         forwarded_url: Final = _replace_port(database_url, forwarding_port, "127.0.0.1")
         command, environment = _migration_invocation(forwarded_url, tmp_path, {})
         output_path: Final = _migration_log_path(request.node.name, tmp_path)
