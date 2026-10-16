@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, Mock
 
@@ -419,3 +420,72 @@ async def test_only_client_initiated_listeners_consume_server_rate_limit(
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_legacy_listener_catalog_refreshes_do_not_consume_server_rate_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mcp.types import ListToolsResult, ServerCapabilities, Tool, ToolsCapability
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import catalog, operations
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import ServerListOk
+    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+
+    server: Final = MCPServer(server_id="list-changed", name="list-changed", transport=MCPTransport.http)
+    caller: Final = UserAPIKeyAuth(api_key="list-changed-key", user_id="alice")
+    windows: Final = {("alice", "list-changed"): asyncio.Semaphore(1)}
+
+    async def enforce(user: UserAPIKeyAuth | None, limited: MCPServer) -> None:
+        window: Final = windows[(user.user_id if user is not None else None, limited.server_id)]
+        if window.locked():
+            raise ProxyRateLimitError(detail="list-changed RPM exceeded")
+        await window.acquire()
+
+    listed: Final = asyncio.Queue[None]()
+
+    async def fetch_tools(_: MCPServer, **__: object) -> tuple[ListToolsResult, ServerListOk]:
+        listed.put_nowait(None)
+        return ListToolsResult(tools=[Tool(name="add", inputSchema={"type": "object"})]), ServerListOk(tool_count=1)
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "list-changed-test-key")
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", SimpleNamespace(enforce_mcp_server_rate_limits=enforce))
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(operations.global_mcp_server_manager, "registry", {server.server_id: server})
+    monkeypatch.setattr(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server]))
+    monkeypatch.setattr(catalog, "get_filtered_server_tools", fetch_tools)
+
+    upstream: Final = Mock()
+    upstream.server_capabilities = ServerCapabilities(tools=ToolsCapability(list_changed=True))
+    upstream.protocol_version = "2025-11-25"
+    upstream.send_ping = AsyncMock()
+
+    async def run_with_session(connected, **_: object) -> None:
+        await connected(upstream)
+
+    client: Final = Mock(spec=MCPClient)
+    client.run_with_session = AsyncMock(side_effect=run_with_session)
+    target: Final = subscriptions.SubscriptionTarget(server, client, "synthetic-fingerprint")
+
+    async def resolve(_: OperationContext) -> tuple[subscriptions.SubscriptionTarget, ...]:
+        return (target,)
+
+    initial: Final = operations.prepare_context(user_api_key_auth=caller, mcp_servers=[server.server_id])
+    authorize: Final = AsyncMock(return_value=initial)
+    session: Final = Mock(spec=ServerSession)
+    session.client_params = Mock()
+    service: Final = subscriptions.GatewaySubscriptions(resolve_targets=resolve)
+    listener: Final = asyncio.create_task(
+        service.legacy_session(
+            context(session, "2025-11-25"),
+            subscriptions.SubscriptionAuthorization(initial, authorize, lambda *_: "alice"),
+        )
+    )
+    try:
+        for _ in range(2):
+            await asyncio.wait_for(listed.get(), 5)
+        assert await operations._mcp_server_rate_limit_rejection(server, caller) is None
+    finally:
+        listener.cancel()
+        await asyncio.gather(listener, return_exceptions=True)
