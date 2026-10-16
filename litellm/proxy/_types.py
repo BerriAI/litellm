@@ -1270,6 +1270,9 @@ class KeyRequest(LiteLLMPydanticObjectBase):
         return values
 
 
+from litellm.models.model import LiteLLM_ProxyModelTable  # noqa: E402
+
+
 # MCP Types
 class SpecialMCPServerName(str, enum.Enum):
     all_team_servers = "all-team-mcpservers"
@@ -1287,6 +1290,7 @@ class MCPApprovalStatus(str, enum.Enum):
 
 from litellm.models.mcp_server import (  # noqa: E402  # noqa: E402
     MCPEnvVar,
+    MCPEnvVarScope,
 )
 
 
@@ -1655,6 +1659,7 @@ class MCPSubmissionsSummary(LiteLLMPydanticObjectBase):
 
 
 from litellm.models.skills import (  # noqa: E402  # public re-export
+    LiteLLM_SkillsTable,
     NewSkillRequest as NewSkillRequest,  # noqa: PLC0414  # public re-export
 )
 
@@ -2120,8 +2125,12 @@ class TeamCallbackMetadata(LiteLLMPydanticObjectBase):
 from litellm.models.object_permission import (  # noqa: E402
     LiteLLM_ObjectPermissionTable,
 )
+from litellm.types.object_permission import ObjectPermissionDict  # noqa: E402
 from litellm.models.team import (  # noqa: E402  # noqa: E402
+    LiteLLM_DeletedTeamTable,
+    LiteLLM_ModelTable,
     LiteLLM_TeamTable,  # noqa: E402
+    LiteLLM_TeamTableCachedObj,
 )
 
 
@@ -3073,6 +3082,7 @@ class ConfigYAML(LiteLLMPydanticObjectBase):
 
 from litellm.models.verification_token import (  # noqa: E402  # noqa: E402
     LiteLLM_DeletedVerificationToken,
+    LiteLLM_VerificationToken,
 )
 from litellm.types.proxy.auth.user_api_key_auth import (  # noqa: E402  # re-export after the definitions above
     LiteLLM_VerificationTokenView as LiteLLM_VerificationTokenView,  # noqa: PLC0414  # public re-export
@@ -3311,12 +3321,14 @@ class LiteLLM_UserTableFiltered(LiteLLMBaseModel):  # done to avoid exposing sen
     user_email: str | None = None
 
 
+from litellm.models.access_group import LiteLLM_AccessGroupTable  # noqa: E402
 from litellm.models.end_user import (  # noqa: E402
     LiteLLM_EndUserTable,
 )
 from litellm.models.spend_logs import (  # noqa: E402  # noqa: E402
     LiteLLM_SpendLogs,
 )
+from litellm.models.tag import LiteLLM_TagTable  # noqa: E402
 from litellm.types.proxy.management_endpoints.user_requests import (  # noqa: E402  # re-export after the definitions above
     LiteLLM_UserTableWithKeyCount as LiteLLM_UserTableWithKeyCount,  # noqa: PLC0414  # public re-export
 )
