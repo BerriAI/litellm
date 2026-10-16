@@ -195,7 +195,7 @@ def fail_closed_rate_limit_enforcement_enabled(general_settings: Mapping[str, ob
         return False
 
 
-def _fail_closed_rate_limit_enforcement_from_general_settings() -> bool:
+def fail_closed_rate_limit_enforcement_from_general_settings() -> bool:
     from litellm.proxy.proxy_server import general_settings
 
     return fail_closed_rate_limit_enforcement_enabled(general_settings)
@@ -849,7 +849,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         ptu_team_ceiling_resolver: Callable[
             [str, str], PTUTeamCeiling | None
         ] = _resolve_ptu_team_ceiling_via_proxy_router,
-        fail_closed_resolver: Callable[[], bool] = _fail_closed_rate_limit_enforcement_from_general_settings,
+        fail_closed_resolver: Callable[[], bool] = fail_closed_rate_limit_enforcement_from_general_settings,
         force_hash_tag_grouping_resolver: Callable[[], bool] = _force_redis_hash_tag_grouping_from_litellm_settings,
     ):
         self.internal_usage_cache = internal_usage_cache
@@ -1555,10 +1555,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     def _reject_if_rate_limit_unverifiable(self, failed_operation: str, error: BaseException) -> None:
         from litellm.proxy.hooks.rate_limit_failure_metrics import (
-            _increment_rate_limiter_failure_counter,
+            increment_rate_limiter_failure_counter,
         )
 
-        _increment_rate_limiter_failure_counter(limiter_type="parallel_v3", error_type=type(error).__name__)
+        increment_rate_limiter_failure_counter(limiter_type="parallel_v3", error_type=type(error).__name__)
         if not self._fail_closed_resolver():
             return
         log_redis_failure(
