@@ -8,7 +8,7 @@ from typing import Annotated, Final, Literal, Protocol, TypeAlias
 
 import httpx
 from fastapi import APIRouter, Depends
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -18,7 +18,7 @@ from litellm.types.llms.base import LiteLLMBaseModel
 router: Final = APIRouter()
 
 LATEST_RELEASE_URL: Final = "https://api.github.com/repos/BerriAI/litellm/releases/latest"
-RECENT_RELEASES_URL: Final = "https://api.github.com/repos/BerriAI/litellm/releases?per_page=100"
+RELEASE_BY_TAG_URL: Final = "https://api.github.com/repos/BerriAI/litellm/releases/tags/{tag}"
 LATEST_RELEASE_FETCH_TIMEOUT_SECONDS: Final = 5
 LATEST_RELEASE_CACHE_TTL_SECONDS: Final = 60 * 60
 LATEST_RELEASE_UNAVAILABLE_CACHE_TTL_SECONDS: Final = 5 * 60
@@ -48,12 +48,9 @@ class LatestReleaseUnavailable:
 class _GitHubRelease(LiteLLMBaseModel):
     tag_name: str
     html_url: str
-    body: str
+    body: str | None
     prerelease: bool = False
     draft: bool = False
-
-
-_GitHubReleaseList: Final = TypeAdapter(tuple[_GitHubRelease, ...])
 
 
 class _AsyncGetClient(Protocol):
@@ -99,28 +96,17 @@ def _stable_version(tag_name: str) -> tuple[int, int, int] | None:
     return None if match is None else (int(match.group(1)), int(match.group(2)), int(match.group(3)))
 
 
-def earlier_releases_in_line(
-    latest: _GitHubRelease, releases: tuple[_GitHubRelease, ...]
-) -> tuple[_GitHubRelease, ...]:
-    """Stable releases on the same major.minor line as ``latest`` that shipped before it (v1.105.0 for v1.105.1)."""
-    latest_version: Final = _stable_version(latest.tag_name)
-    if latest_version is None:
-        return ()
-    return tuple(
-        release
-        for release in releases
-        if not release.prerelease
-        and not release.draft
-        and (version := _stable_version(release.tag_name)) is not None
-        and version[:2] == latest_version[:2]
-        and version[2] < latest_version[2]
-    )
+def earlier_patch_tags(version: tuple[int, int, int]) -> tuple[str, ...]:
+    """Tags of the patches that precede ``version`` on its minor line (v1.105.0 for v1.105.1)."""
+    major, minor, patch = version
+    return tuple(f"v{major}.{minor}.{earlier}" for earlier in range(patch))
 
 
 def summarize_release_line(latest: _GitHubRelease, earlier: tuple[_GitHubRelease, ...]) -> LatestReleaseInfo:
     """A patch release's notes only list its backports, so count the whole minor line it belongs to."""
     counts: Final = sum(
-        (Counter[_Bucket](count_release_bullets(release.body)) for release in (latest, *earlier)), Counter[_Bucket]()
+        (Counter[_Bucket](count_release_bullets(release.body or "")) for release in (latest, *earlier)),
+        Counter[_Bucket](),
     )
     return LatestReleaseInfo(
         version=latest.tag_name.removeprefix("v"),
@@ -140,13 +126,15 @@ def parse_github_release(response: httpx.Response) -> _GitHubRelease | LatestRel
         return LatestReleaseUnavailable(reason=f"GitHub release payload was not the expected shape: {e}")
 
 
-def parse_github_release_list(response: httpx.Response) -> tuple[_GitHubRelease, ...] | LatestReleaseUnavailable:
-    if response.status_code != 200:
-        return LatestReleaseUnavailable(reason=f"GitHub release list responded with status {response.status_code}")
-    try:
-        return _GitHubReleaseList.validate_json(response.content)
-    except ValidationError as e:
-        return LatestReleaseUnavailable(reason=f"GitHub release list payload was not the expected shape: {e}")
+async def _fetch_earlier_release(client: _AsyncGetClient, tag: str) -> _GitHubRelease | LatestReleaseUnavailable | None:
+    """The stable release for ``tag``, or None when that patch was never published as one."""
+    response: Final = await client.get(RELEASE_BY_TAG_URL.format(tag=tag), timeout=LATEST_RELEASE_FETCH_TIMEOUT_SECONDS)
+    if response.status_code == 404:
+        return None
+    release: Final = parse_github_release(response)
+    if isinstance(release, _GitHubRelease) and (release.prerelease or release.draft):
+        return None
+    return release
 
 
 async def fetch_latest_release(client: _AsyncGetClient) -> LatestReleaseInfo | LatestReleaseUnavailable:
@@ -157,16 +145,17 @@ async def fetch_latest_release(client: _AsyncGetClient) -> LatestReleaseInfo | L
         if isinstance(latest, LatestReleaseUnavailable):
             return latest
         version: Final = _stable_version(latest.tag_name)
-        if version is None or version[2] == 0:
+        if version is None:
             return summarize_release_line(latest, ())
-        releases: Final = parse_github_release_list(
-            await client.get(RECENT_RELEASES_URL, timeout=LATEST_RELEASE_FETCH_TIMEOUT_SECONDS)
+        earlier: Final = await asyncio.gather(
+            *(_fetch_earlier_release(client, tag) for tag in earlier_patch_tags(version))
         )
     except httpx.HTTPError as e:
         return LatestReleaseUnavailable(reason=f"{type(e).__name__}: {e}")
-    if isinstance(releases, LatestReleaseUnavailable):
-        return releases
-    return summarize_release_line(latest, earlier_releases_in_line(latest, releases))
+    unavailable: Final = next((release for release in earlier if isinstance(release, LatestReleaseUnavailable)), None)
+    if unavailable is not None:
+        return unavailable
+    return summarize_release_line(latest, tuple(release for release in earlier if isinstance(release, _GitHubRelease)))
 
 
 async def get_latest_release_info(
