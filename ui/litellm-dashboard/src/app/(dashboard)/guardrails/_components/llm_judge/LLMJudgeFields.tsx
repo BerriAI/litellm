@@ -180,7 +180,7 @@ const LLMJudgeFields: React.FC<LLMJudgeFieldsProps> = ({ availableModels, contro
             aria-invalid={ariaInvalid}
             aria-describedby={ariaDescribedBy}
             value={asText(value)}
-            onChange={(event) => onChange(event.target.value === "" ? null : Number(event.target.value))}
+            onChange={(event) => onChange(event.target.value === "" ? null : event.target.value)}
             onBlur={onBlur}
           />
         )}
@@ -204,7 +204,7 @@ const LLMJudgeFields: React.FC<LLMJudgeFieldsProps> = ({ availableModels, contro
             aria-invalid={ariaInvalid}
             aria-describedby={ariaDescribedBy}
             value={asText(value)}
-            onChange={(event) => onChange(event.target.value === "" ? null : Number(event.target.value))}
+            onChange={(event) => onChange(event.target.value === "" ? null : event.target.value)}
             onBlur={onBlur}
           />
         )}

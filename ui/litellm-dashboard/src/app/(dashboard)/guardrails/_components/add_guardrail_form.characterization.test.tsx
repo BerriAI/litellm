@@ -349,6 +349,27 @@ describe("AddGuardrailForm create payload characterization", () => {
     });
   });
 
+  it("keeps the raw text while typing a decimal into Sample rate and submits it as a number", async () => {
+    const user = userEvent.setup({ delay: null });
+    renderForm();
+
+    await user.type(await screen.findByLabelText("Guardrail Name"), "judge-decimal");
+    await pickProvider(user, "LiteLLM LLM as a Judge");
+    await user.click(screen.getByRole("button", { name: "Next" }));
+
+    await user.type(await screen.findByPlaceholderText("Criterion name (e.g. Policy accuracy)"), "Accuracy");
+    await user.type(screen.getByPlaceholderText("What should the judge check for this criterion?"), "Is it right");
+    await user.click(screen.getByLabelText("Judge Model"));
+    await user.click(await screen.findByTitle("gpt-5"));
+    const sampleRate = screen.getByLabelText(/Sample rate/);
+    await user.type(sampleRate, "0.05");
+    expect(sampleRate).toHaveDisplayValue("0.05");
+    await user.click(screen.getByRole("button", { name: "Create Guardrail" }));
+
+    await waitFor(() => expect(networking.createGuardrailCall).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(networking.createGuardrailCall).mock.calls.at(-1)?.[1].litellm_params.sample_rate).toBe(0.05);
+  });
+
   it("omits sample_rate and max_input_chars when left blank", async () => {
     const user = userEvent.setup({ delay: null });
     renderForm();
