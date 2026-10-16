@@ -999,6 +999,24 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 _computer_tool["display_number"] = _display_number
 
             returned_tool = _computer_tool
+        # Before the hosted-tools prefix match so the advisor keeps its model validation.
+        elif tool["type"] == ANTHROPIC_ADVISOR_TOOL_TYPE:
+            from litellm.types.llms.anthropic import AnthropicAdvisorTool
+
+            _tool_dict: Final = cast(dict, tool)
+            advisor_model: Final = _tool_dict.get("model")
+            if not isinstance(advisor_model, str):
+                raise ValueError("Advisor tool must have a valid model")
+            _advisor_tool: Final = AnthropicAdvisorTool(
+                type=ANTHROPIC_ADVISOR_TOOL_TYPE,
+                name="advisor",
+                model=advisor_model,
+            )
+            if _tool_dict.get("max_uses") is not None:
+                _advisor_tool["max_uses"] = _tool_dict["max_uses"]
+            if _tool_dict.get("caching") is not None:
+                _advisor_tool["caching"] = _tool_dict["caching"]
+            returned_tool = _advisor_tool
         elif any(tool["type"].startswith(t) for t in ANTHROPIC_HOSTED_TOOLS):
             function_name_obj: Final = tool.get("name", tool.get("function", {}).get("name"))
             if function_name_obj is None or not isinstance(function_name_obj, str):
@@ -1043,23 +1061,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 type="tool_search_tool_bm25_20251119",
                 name=tool_name,
             )
-        elif tool["type"] == ANTHROPIC_ADVISOR_TOOL_TYPE:
-            from litellm.types.llms.anthropic import AnthropicAdvisorTool
-
-            _tool_dict: Final = cast(dict, tool)
-            advisor_model: Final = _tool_dict.get("model")
-            if not isinstance(advisor_model, str):
-                raise ValueError("Advisor tool must have a valid model")
-            _advisor_tool: Final = AnthropicAdvisorTool(
-                type=ANTHROPIC_ADVISOR_TOOL_TYPE,
-                name="advisor",
-                model=advisor_model,
-            )
-            if _tool_dict.get("max_uses") is not None:
-                _advisor_tool["max_uses"] = _tool_dict["max_uses"]
-            if _tool_dict.get("caching") is not None:
-                _advisor_tool["caching"] = _tool_dict["caching"]
-            returned_tool = _advisor_tool
         if returned_tool is None and mcp_server is None:
             raise ValueError(f"Unsupported tool type: {tool['type']}")
 

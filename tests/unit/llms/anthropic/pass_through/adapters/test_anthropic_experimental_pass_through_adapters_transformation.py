@@ -2832,6 +2832,20 @@ def test_translate_anthropic_tools_to_openai_passes_openai_function_tools_throug
     assert result == [openai_tool]
 
 
+def test_translate_anthropic_tools_to_openai_keeps_advisor_tool_native():
+    """The advisor_20260301 server tool has no OpenAI equivalent and must pass through verbatim."""
+    advisor_tool = {
+        "type": "advisor_20260301",
+        "name": "advisor",
+        "model": "claude-opus-4-6",
+        "defer_loading": True,
+    }
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result, tool_name_mapping = adapter.translate_anthropic_tools_to_openai(tools=[advisor_tool], model=None)
+    assert result == [advisor_tool]
+    assert tool_name_mapping == {}
+
+
 def test_translate_completion_input_params_keeps_provider_native_tools():
     """/v1/messages request translation must keep router-merged provider-native tools in kwargs['tools'] (LIT-6286)."""
     adapter = AnthropicAdapter()
