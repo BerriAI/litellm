@@ -61,15 +61,17 @@ class OpenrouterConfig(OpenAIGPTConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: Mapping[str, object] | None = None,
-        litellm_params: Mapping[str, object] | None = None,
+        optional_params: dict,
+        litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
+        casted_optional_params: Final[Mapping[str, object]] = cast(Mapping[str, object], optional_params)
+        casted_litellm_params: Final[Mapping[str, object]] = cast(Mapping[str, object], litellm_params)
         resolved_base: Final = resolve_openrouter_api_base(
             api_base=api_base,
             region=self.region,
-            litellm_params=litellm_params,
-            optional_params=optional_params,
+            litellm_params=casted_litellm_params,
+            optional_params=casted_optional_params,
         ).rstrip("/")
         endpoint: Final = "chat/completions"
         if endpoint in resolved_base:

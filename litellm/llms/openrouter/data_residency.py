@@ -39,22 +39,21 @@ _OPENROUTER_REGIONAL_HOSTNAMES: Final[Mapping[str, str]] = MappingProxyType(
 _DEFAULT_OPENROUTER_API_BASE: Final[str] = "https://openrouter.ai/api/v1"
 
 
-def _extract_region_value(params: object) -> str | None:
-    if not isinstance(params, Mapping):
+def _extract_region_value(params: Mapping[str, object] | None) -> str | None:
+    if params is None or not isinstance(params, Mapping):
         return None
     for key in ("region", "region_name", "data_residency"):
-        if key in params:
-            val: Final[object] = params[key]
-            if isinstance(val, str) and val.strip():
-                return val.strip()
+        val: Final[object] = params.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
     return None
 
 
 def resolve_openrouter_api_base(
     api_base: str | None = None,
     region: str | None = None,
-    litellm_params: object = None,
-    optional_params: object = None,
+    litellm_params: Mapping[str, object] | None = None,
+    optional_params: Mapping[str, object] | None = None,
 ) -> str:
     """
     Resolve the OpenRouter API base URL based on custom api_base, explicit region, or environment.
