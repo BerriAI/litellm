@@ -4350,6 +4350,64 @@ async def test_async_data_generator_midstream_error():
     mock_proxy_logging_obj.post_call_failure_hook.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_async_data_generator_yields_to_event_loop_while_chunks_are_buffered() -> None:
+    """
+    Draining a buffered chunk backlog must not monopolize the event loop. Other
+    scheduled tasks (health probes, concurrent requests) need to run between
+    chunks, so the probe task's progress must advance while the stream is
+    still being consumed
+    """
+    from collections.abc import AsyncIterator
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import async_data_generator
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    num_chunks = 200
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_request_data = {"messages": [{"role": "user", "content": "test"}]}
+
+    async def buffered_source() -> AsyncIterator[ModelResponseStream]:
+        for i in range(num_chunks):
+            yield ModelResponseStream(
+                id="chatcmpl-test-backlog",
+                choices=[StreamingChoices(index=0, delta=Delta(content=f"tok{i} "))],
+                model="gpt-test",
+            )
+
+    probe_progress = {"steps": 0}
+
+    async def probe() -> None:
+        while probe_progress["steps"] < num_chunks:
+            probe_progress["steps"] += 1
+            await asyncio.sleep(0)
+
+    mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging_obj.needs_iterator_wrap.return_value = False
+    mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj), patch(
+        "litellm.proxy.proxy_server.llm_router", None
+    ):
+
+        async def consume() -> list[int]:
+            return [
+                probe_progress["steps"]
+                async for _ in async_data_generator(
+                    buffered_source(), mock_user_api_key_dict, mock_request_data
+                )
+            ]
+
+        _, observed_progress = await asyncio.gather(probe(), consume())
+
+    assert observed_progress[0] < observed_progress[-1], (
+        f"Event loop starved while {num_chunks} buffered chunks were drained, "
+        f"probe progress stayed at {observed_progress[0]} the whole stream"
+    )
+
+
 def _has_nested_none_values(obj, path="root"):
     """
     Recursively check if an object contains nested None values.
