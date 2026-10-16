@@ -44,6 +44,7 @@ from tests.integration._support.database_relay import (
 from tests.integration._support.runtime import configure_executor
 from tests.integration._support.sharding import ShardExecution, shard_errors
 from tests.integration._support.wire import Reply, wire_server
+from tests.integration._support.ports import allocate_port
 from tests.integration.run import _without_provider_api_keys
 
 
@@ -105,6 +106,82 @@ def test_runner_environment_drops_inherited_provider_api_keys() -> None:
     assert inherited["OPENAI_API_KEY"] == "ambient-openai"
 
 
+@pytest.mark.parametrize("fails", (False, True), ids=("passing-test", "failing-test"))
+def test_sdk_teardown_delivers_logging_before_restoring_callbacks(tmp_path: Path, fails: bool) -> None:
+    root: Final = Path(__file__).resolve().parents[3]
+    events: Final = tmp_path / "callbacks.json"
+    probe: Final = tmp_path / "test_callback_teardown.py"
+    probe.write_text(
+        "import asyncio, json, litellm, pytest\n"
+        "from pathlib import Path\n"
+        "from litellm.integrations.custom_logger import CustomLogger\n"
+        f"EVENTS = Path({str(events)!r})\n"
+        "ORIGINAL = tuple(litellm.callbacks)\n"
+        "@pytest.fixture\n"
+        "def release():\n"
+        "    gate = asyncio.Event()\n"
+        "    yield gate\n"
+        "    gate.set()\n"
+        "async def test_request(release):\n"
+        "    started = asyncio.Event()\n"
+        "    request_loop = asyncio.get_running_loop()\n"
+        "    class Recorder(CustomLogger):\n"
+        "        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):\n"
+        "            started.set()\n"
+        "            await release.wait()\n"
+        "            EVENTS.write_text(json.dumps({\n"
+        "                'registered': self in litellm.callbacks,\n"
+        "                'same_loop': asyncio.get_running_loop() is request_loop,\n"
+        "                'call_id': kwargs['litellm_call_id'],\n"
+        "            }))\n"
+        "    litellm.callbacks.append(Recorder())\n"
+        "    response = await litellm.acompletion(model='gpt-4o-mini',\n"
+        "        messages=[{'role': 'user', 'content': 'teardown'}],\n"
+        "        mock_response='done', litellm_call_id='teardown-request')\n"
+        "    await asyncio.wait_for(started.wait(), timeout=5)\n"
+        "    assert response.choices[0].message.content == 'done'\n"
+        "    assert not EVENTS.exists()\n"
+        f"    assert not {fails}, 'intentional test failure'\n"
+        "def test_next():\n"
+        "    assert EVENTS.exists(), 'logging did not finish before the next test'\n"
+        "    assert json.loads(EVENTS.read_text()) == {\n"
+        "        'registered': True, 'same_loop': True, 'call_id': 'teardown-request'}\n"
+        "    assert tuple(litellm.callbacks) == ORIGINAL\n"
+    )
+    result: Final = subprocess.run(
+        (
+            sys.executable,
+            "-P",
+            "-m",
+            "pytest",
+            str(probe),
+            "--noconftest",
+            "-p",
+            "tests.integration.sdk.conftest",
+            "-o",
+            "addopts=",
+            "-o",
+            "asyncio_mode=auto",
+            "-o",
+            "asyncio_default_fixture_loop_scope=session",
+            f"--junitxml={tmp_path / 'junit.xml'}",
+            "-q",
+        ),
+        cwd=root,
+        env=_nested_pytest_environment(os.environ),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == (1 if fails else 0), result.stdout + result.stderr
+    cases: Final = ElementTree.parse(tmp_path / "junit.xml").findall(".//testcase")
+    assert tuple(case.attrib["name"] for case in cases) == ("test_request", "test_next")
+    assert all(case.find("error") is None for case in cases), result.stdout + result.stderr
+    assert (cases[0].find("failure") is not None) == fails, result.stdout + result.stderr
+    assert cases[1].find("failure") is None, result.stdout + result.stderr
+
+
 def test_owned_readiness_rejects_a_healthy_listener_from_another_process(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -143,10 +220,11 @@ async def _unused_peer(reader: asyncio.StreamReader, writer: asyncio.StreamWrite
 
 
 def test_relay_bind_failure_closes_its_loop_and_allows_repeated_cleanup() -> None:
+    port: Final = allocate_port()
     with socket.socket() as occupied:
-        occupied.bind(("127.0.0.1", 0))
+        occupied.bind(("127.0.0.1", port))
         occupied.listen()
-        relay: Final = LoopbackServer(occupied.getsockname()[1], _unused_peer)
+        relay: Final = LoopbackServer(port, _unused_peer)
         with pytest.raises(OSError, match=os.strerror(errno.EADDRINUSE).lower()):
             relay.start()
         relay.stop()
@@ -156,7 +234,7 @@ def test_relay_bind_failure_closes_its_loop_and_allows_repeated_cleanup() -> Non
 def test_upstream_readiness_failure_reaps_the_started_process(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(process_support, "_UPSTREAM_READY_SECONDS", 0)
     children_before: Final = frozenset(child.pid for child in psutil.Process().children(recursive=True))
-    slot: Final = process_support.UpstreamSlot(tmp_path, process_support._free_port(), process_support._harness_root())
+    slot: Final = process_support.UpstreamSlot(tmp_path, allocate_port(), process_support._harness_root())
     try:
         with pytest.raises(AssertionError, match="readiness deadline exceeded"):
             slot.start()

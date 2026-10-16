@@ -17,6 +17,7 @@ from openai.types.responses.response_function_web_search import (
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.constants import CALLER_SESSION_ID_METADATA_KEY
 from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS, AnthropicCacheControlHook
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -3109,7 +3110,6 @@ class TestToolTransformation:
             ("bedrock/converse/global.anthropic.claude-sonnet-5", "bedrock_converse"),
             ("anthropic.claude-sonnet-4-5-20250929-v1:0", "bedrock"),
             ("claude-sonnet-5", "vertex_ai"),
-            ("gemini-3.1-pro-preview", "vertex_ai"),
             ("moonshotai.kimi-k2-thinking", "bedrock_mantle"),
         ],
     )
@@ -3117,8 +3117,8 @@ class TestToolTransformation:
         """
         A Responses request carrying ``reasoning.summary`` must still reach a chat provider as a
         plain ``reasoning_effort`` string. ``summary`` is Responses-only, and forwarding the whole
-        object turns reasoning off: Bedrock Converse and Vertex silently discard a non-string
-        ``reasoning_effort``, and Bedrock Mantle rejects the request outright.
+        object turns reasoning off: Bedrock Converse and Claude on Vertex silently discard a
+        non-string ``reasoning_effort``, and Bedrock Mantle rejects the request outright.
         """
         responses_api_request = {"reasoning": {"effort": "medium", "summary": "auto"}}
 
@@ -3130,6 +3130,42 @@ class TestToolTransformation:
         )
 
         assert result["reasoning_effort"] == "medium"
+
+    @pytest.mark.parametrize(
+        "model, custom_llm_provider",
+        [("gemini-3.1-pro-preview", "vertex_ai"), ("gemini-2.5-flash", "gemini")],
+    )
+    @pytest.mark.parametrize(
+        "reasoning, sends_thoughts",
+        [({"effort": "medium", "summary": "auto"}, True), ({"effort": "medium"}, False)],
+    )
+    def test_a_summary_ask_turns_gemini_thoughts_on_over_the_gateway_default(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        model: str,
+        custom_llm_provider: str,
+        reasoning: dict[str, str],
+        sends_thoughts: bool,
+    ) -> None:
+        from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+        from litellm.utils import reasoning_effort_with_summary_alias
+
+        monkeypatch.setattr(litellm, "gemini_include_thoughts_default", False)
+        bridged: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input="hi",
+            responses_api_request={"reasoning": reasoning},
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        gemini: Final = VertexGeminiConfig()
+        reasoning_effort: Final = reasoning_effort_with_summary_alias(
+            bridged["reasoning_effort"], bridged, accepts_summary=gemini.accepts_reasoning_summary_in_reasoning_effort
+        )
+        mapped: Final = gemini.map_openai_params({"reasoning_effort": reasoning_effort}, {}, model, True)
+
+        assert mapped["thinkingConfig"]["includeThoughts"] is sends_thoughts
+        assert bridged["reasoning_effort"] == "medium"
 
     @pytest.mark.parametrize(
         "model, custom_llm_provider",
@@ -6620,3 +6656,69 @@ def test_summary_replay_drops_the_history_its_compaction_item_replaces() -> None
         _SUMMARY_AS_TEXT,
         {"role": "user", "content": "And Osaka?"},
     ]
+
+
+def _continued_chain_request(request_kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
+        assert previous_response_id == "resp_turn_1"
+        return ChatCompletionSession(
+            messages=[{"role": "user", "content": "turn 1"}], litellm_session_id="chain-session"
+        )
+
+    return asyncio.run(
+        LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+            previous_response_id="resp_turn_1",
+            litellm_completion_request={
+                "model": _CLAUDE_ON_BEDROCK,
+                "custom_llm_provider": "bedrock",
+                "messages": [{"role": "user", "content": "turn 2"}],
+                "metadata": request_kwargs.get("metadata"),
+            },
+            instructions=None,
+            session_lookup=session_lookup,
+            request_kwargs=request_kwargs,
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("request_kwargs", "logged_metadata_key"),
+    [
+        (
+            {
+                "metadata": {"tag": "client"},
+                "litellm_metadata": {CALLER_SESSION_ID_METADATA_KEY: "turn-session", "user_api_key": "hashed"},
+            },
+            "litellm_metadata",
+        ),
+        ({"metadata": {"user_api_key": "hashed"}}, "metadata"),
+    ],
+)
+def test_a_continued_chain_logs_its_spend_under_the_chain_session_with_request_correlation(
+    monkeypatch: pytest.MonkeyPatch, request_kwargs: Mapping[str, object], logged_metadata_key: str
+):
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    sent_kwargs: Final = deepcopy(request_kwargs)
+
+    request: Final = _continued_chain_request(request_kwargs)
+
+    assert request["litellm_trace_id"] == "chain-session"
+    assert "litellm_session_id" not in request
+    assert request[logged_metadata_key] == {
+        **TypeAdapter(dict[str, object]).validate_python(request_kwargs[logged_metadata_key]),
+        CALLER_SESSION_ID_METADATA_KEY: "chain-session",
+    }
+    assert request_kwargs == sent_kwargs
+
+
+def test_a_continued_chain_leaves_the_turns_metadata_alone_without_request_correlation(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", False)
+    caller_metadata: Final = {CALLER_SESSION_ID_METADATA_KEY: "turn-session", "user_api_key": "hashed"}
+
+    request: Final = _continued_chain_request({"metadata": caller_metadata, "litellm_metadata": caller_metadata})
+
+    assert request["litellm_trace_id"] == "chain-session"
+    assert "litellm_metadata" not in request
+    assert request["metadata"] == {CALLER_SESSION_ID_METADATA_KEY: "turn-session", "user_api_key": "hashed"}

@@ -2,6 +2,7 @@ import json
 import re
 import time
 from collections.abc import Collection, Mapping, Sequence
+from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
 from typing import (
@@ -9,6 +10,7 @@ from typing import (
     Any,
     Final,
     Literal,
+    TypeAlias,
     get_args,
 )
 
@@ -1800,6 +1802,9 @@ class PromptTokensDetailsWrapper(
 
     tool_use_tokens: int | None = None
     """Prompt tokens consumed by server-side tool use (e.g. Gemini grounding via googleSearch)."""
+
+    initial_prompt_tokens: int | None = None
+    """The first hop's prompt tokens on a Gemini long decode, the real context size when prompt_tokens sums every hop."""
 
     character_count: int | None = None
     """Character count sent to the model. Used for Vertex AI multimodal embeddings."""
@@ -4041,7 +4046,9 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
 
 DEPLOYMENT_SCOPED_PRICING_FIELDS: Final[frozenset[str]] = frozenset({"off_peak_pricing"})
 
-DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset({"supports_regex_lookaround"})
+DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset(
+    {"supports_regex_lookaround", "supports_assistant_prefill"}
+)
 
 SHARED_BACKEND_MODEL_INFO_FIELDS: Final[frozenset[str]] = (
     frozenset(ModelInfoBase.__required_keys__ | ModelInfoBase.__optional_keys__)
@@ -4305,6 +4312,7 @@ class LlmProviders(str, Enum):
     TRITON = "triton"
     PREDIBASE = "predibase"
     DATABRICKS = "databricks"
+    DATABRICKS_AGENT = "databricks_agent"
     EMPOWER = "empower"
     GITHUB = "github"
     RAGFLOW = "ragflow"
@@ -4467,6 +4475,15 @@ class LiteLLMLoggingBaseClass:
         pass
 
 
+TokenCountMessagesFormat: TypeAlias = Literal["openai", "anthropic"]
+
+
+@dataclass(frozen=True, slots=True)
+class CountContextManagement:
+    spec: JsonValue
+    drop_invalid_edits: bool
+
+
 class TokenCountResponse(LiteLLMPydanticObjectBase):
     total_tokens: int
     request_model: str
@@ -4579,6 +4596,7 @@ class LiteLLMRealtimeStreamLoggingObject(LiteLLMPydanticObjectBase):
     results: SkipValidation[OpenAIRealtimeStreamList]
     usage: Usage
     service_tier: str | None = None
+    id: str | None = None
     _hidden_params: dict = {}
 
     @property

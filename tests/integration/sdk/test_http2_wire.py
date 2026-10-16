@@ -10,7 +10,7 @@ import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, cast
+from typing import Final
 
 import pytest
 from cryptography import x509
@@ -22,6 +22,7 @@ from hypercorn.asyncio import (
 )
 from hypercorn.config import Config
 from hypercorn.typing import ASGIReceiveCallable, ASGISendCallable, HTTPResponseBodyEvent, HTTPResponseStartEvent, Scope
+from integration._support.ports import allocate_port
 
 STREAM_CHUNKS: Final = 3
 
@@ -102,9 +103,7 @@ async def _peer(scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallab
 @pytest.fixture(scope="module")
 def http2_tls_peer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     cert_file, key_file = _write_self_signed_cert(tmp_path_factory.mktemp("h2certs"))
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port: Final = cast(int, sock.getsockname()[1])
+    port: Final = allocate_port()
     shutdown: Final = threading.Event()
 
     def _serve() -> None:

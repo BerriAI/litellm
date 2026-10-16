@@ -14,8 +14,8 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 import litellm
 import litellm.constants as litellm_constants
 import litellm.proxy.spend_tracking.spend_tracking_utils as spend_tracking_utils
-from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD, LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE, LITTELM_CLI_SERVICE_ACCOUNT_NAME, LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME, MAX_SPEND_LOG_MODEL_NAME_LENGTH, REDACTED_BY_LITELM_STRING, SESSION_ID_OMITTED_METADATA_KEY, UNKNOWN_MODEL_SPEND_LOG_MODEL
-from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY, MANAGED_BACKGROUND_RESPONSE_METADATA_KEY
+from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD, LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE, LITTELM_CLI_SERVICE_ACCOUNT_NAME, LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME, MAX_SPEND_LOG_MODEL_NAME_LENGTH, REDACTED_BY_LITELM_STRING, SESSION_ID_GENERATED_METADATA_KEY, SESSION_ID_OMITTED_METADATA_KEY, UNKNOWN_MODEL_SPEND_LOG_MODEL
+from litellm.constants import CALLER_SESSION_ID_METADATA_KEY, INTERNAL_CALL_ORIGIN_METADATA_KEY, MANAGED_BACKGROUND_RESPONSE_METADATA_KEY
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.llms.base_llm.ocr.transformation import OCRResponse, OCRUsageInfo
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -241,6 +241,82 @@ def test_batch_session_outranks_the_per_request_trace_id():
         batch_trace_session_id="batch-uid-1",
     )
     assert session_id == "batch-uid-1"
+
+
+def _chat_session_id(
+    monkeypatch: pytest.MonkeyPatch,
+    litellm_params: Mapping[str, object],
+    correlation_in_logs: bool = True,
+    batch_trace_session_id: str | None = None,
+    metadata: Mapping[str, object] = MappingProxyType({}),
+) -> str | None:
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", correlation_in_logs)
+    return _get_session_id_for_spend_log(
+        kwargs={"litellm_trace_id": "trace-abc", "litellm_params": litellm_params},
+        metadata=metadata,
+        standard_logging_payload=_TRACE_ONLY_STANDARD_LOGGING,
+        omit_when_missing=False,
+        batch_trace_session_id=batch_trace_session_id,
+    )
+
+
+_CALLER_SESSION_PARAMS: Final = MappingProxyType({"litellm_session_id": "sess-1", "metadata": {"trace_id": "otel-1"}})
+
+
+def test_caller_session_wins_over_the_per_request_trace_id(monkeypatch: pytest.MonkeyPatch):
+    assert _chat_session_id(monkeypatch, _CALLER_SESSION_PARAMS) == "sess-1"
+
+
+def test_batch_session_outranks_a_caller_session(monkeypatch: pytest.MonkeyPatch):
+    assert _chat_session_id(monkeypatch, _CALLER_SESSION_PARAMS, batch_trace_session_id="batch-uid-1") == "batch-uid-1"
+
+
+def test_caller_session_keeps_the_legacy_trace_id_with_correlation_logging_off(monkeypatch: pytest.MonkeyPatch):
+    assert _chat_session_id(monkeypatch, _CALLER_SESSION_PARAMS, correlation_in_logs=False) == "trace-abc"
+
+
+@pytest.mark.parametrize(("correlation_in_logs", "expected_session_id"), [(True, "convo-1"), (False, "trace-abc")])
+def test_session_displaced_by_a_trace_header_wins_only_with_correlation_logging(
+    monkeypatch: pytest.MonkeyPatch, correlation_in_logs: bool, expected_session_id: str
+):
+    header_chain: Final = {"litellm_session_id": "trace-abc", "metadata": {"trace_id": "trace-abc", "session_id": "trace-abc"}}
+    session_id: Final = _chat_session_id(
+        monkeypatch,
+        header_chain,
+        correlation_in_logs=correlation_in_logs,
+        metadata={CALLER_SESSION_ID_METADATA_KEY: "convo-1"},
+    )
+    assert session_id == expected_session_id
+
+
+@pytest.mark.parametrize(
+    ("litellm_params", "metadata"),
+    [
+        pytest.param({"litellm_session_id": "convo\x00x"}, {}, id="body-session"),
+        pytest.param({"litellm_session_id": "trace-abc"}, {CALLER_SESSION_ID_METADATA_KEY: "convo\x00x"}, id="beside-trace-header"),
+    ],
+)
+def test_caller_session_postgres_cannot_store_keeps_the_trace_id(
+    monkeypatch: pytest.MonkeyPatch, litellm_params: Mapping[str, object], metadata: Mapping[str, object]
+):
+    assert _chat_session_id(monkeypatch, litellm_params, metadata=metadata) == "trace-abc"
+
+
+@pytest.mark.parametrize(
+    "litellm_params",
+    [
+        pytest.param({"metadata": {}}, id="no-session"),
+        pytest.param(
+            {"litellm_session_id": "minted-1", "metadata": {"session_id": "minted-1", SESSION_ID_GENERATED_METADATA_KEY: True}},
+            id="minted-by-generate-policy",
+        ),
+        pytest.param({"litellm_session_id": "job-7", "metadata": {"trace_id": "job-7"}}, id="copied-from-trace-id"),
+    ],
+)
+def test_session_that_is_not_a_caller_conversation_keeps_the_trace_id(
+    monkeypatch: pytest.MonkeyPatch, litellm_params: Mapping[str, object]
+):
+    assert _chat_session_id(monkeypatch, litellm_params) == "trace-abc"
 
 
 def test_omit_policy_still_suppresses_batch_sessions():
@@ -4099,6 +4175,36 @@ def test_get_logging_payload_cache_hit_keeps_raw_litellm_call_id():
     assert json.loads(payload["metadata"])["litellm_call_id"] != payload["request_id"]
 
 
+@pytest.mark.parametrize("cached", [True, False])
+def test_get_logging_payload_gives_a_response_served_from_the_cache_a_unique_request_id(cached: bool):
+    """A parent call that returns an internal sub-call's cached response reuses the cached response's id,
+    and SpendLogs skips a duplicate request_id, so the row would be dropped unless its id is made unique."""
+    from litellm.litellm_core_utils.hidden_params import set_hidden_params
+
+    response_obj: Final = litellm.ModelResponse(
+        id="chatcmpl-cached-src",
+        model="gpt-5.6",
+        usage=litellm.Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    )
+    set_hidden_params(response_obj, {"cache_hit": True, "response_cost": 0.0} if cached else {})
+    now: Final = datetime.datetime.now(timezone.utc)
+
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "openai/gpt-5.6",
+            "call_type": "aresponses",
+            "litellm_call_id": "parent-call-id",
+            "litellm_params": {"metadata": {"user_api_key": "sk-test"}},
+        },
+        response_obj=response_obj,
+        start_time=now,
+        end_time=now,
+    )
+
+    assert payload["request_id"].startswith("chatcmpl-cached-src_cache_hit") is cached
+    assert (payload["request_id"] == "chatcmpl-cached-src") is not cached
+
+
 class TestSpendLogKeyRedaction:
     """Regression: plaintext API keys with Bearer prefix were stored in
     SpendLogs for failed requests (LIT-4121)"""
@@ -6976,3 +7082,24 @@ def test_failure_error_information_masks_addresses_after_labels_and_before_ports
         "error_code": "500",
         "error_message": stored,
     }
+
+
+@pytest.mark.parametrize(("tracking_disabled", "expected_end_user"), [(True, ""), (None, "session-abc123")])
+def test_get_logging_payload_stores_end_user_only_while_end_user_cost_tracking_is_on(
+    monkeypatch: pytest.MonkeyPatch, tracking_disabled: bool | None, expected_end_user: str
+):
+    monkeypatch.setattr(litellm, "disable_end_user_cost_tracking", tracking_disabled)
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+            "standard_logging_object": cast(
+                StandardLoggingPayload,
+                {**_TRACE_ONLY_STANDARD_LOGGING, "metadata": {"user_api_key_end_user_id": "session-abc123"}},
+            ),
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-test", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    assert payload["end_user"] == expected_end_user

@@ -482,6 +482,24 @@ async def test_async_post_call_failure_hook_keeps_a_guardrail_verdict_recorded_a
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("tracking_disabled", "expected_end_user_id"), [(True, None), (None, "session-abc123")])
+async def test_async_post_call_failure_hook_records_end_user_only_while_end_user_cost_tracking_is_on(
+    monkeypatch: pytest.MonkeyPatch, tracking_disabled: bool | None, expected_end_user_id: str | None
+):
+    monkeypatch.setattr(litellm, "disable_end_user_cost_tracking", tracking_disabled)
+    writer: Final = MagicMock(spec=DBSpendUpdateWriter)
+    writer.update_database = AsyncMock()
+
+    await ProxyDBLogger(spend_writer=lambda: writer).async_post_call_failure_hook(
+        request_data={"model": "gpt-5.4-mini", "messages": [{"role": "user", "content": "Hello"}]},
+        original_exception=Exception("provider rejected the key"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key", end_user_id="session-abc123"),
+    )
+
+    assert writer.update_database.call_args.kwargs["end_user_id"] == expected_end_user_id
+
+
+@pytest.mark.asyncio
 async def test_async_post_call_failure_hook_non_llm_route():
     # Setup
     logger = ProxyDBLogger()
