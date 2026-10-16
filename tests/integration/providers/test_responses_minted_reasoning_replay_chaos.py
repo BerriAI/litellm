@@ -1,7 +1,6 @@
 import asyncio
 import json
 import re
-import socket
 import threading
 import time
 import uuid
@@ -25,6 +24,7 @@ from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, owned_proxy_process
 from integration._support.tls import server_context, write_self_signed_cert
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from pydantic import JsonValue
 
 _GPT: Final = "gpt-5.6"
@@ -226,12 +226,6 @@ def _assert_each_lands_once(
         assert by_status[match] == "success", rows
 
 
-def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.bind(("127.0.0.1", 0))
-        return int(probe.getsockname()[1])
-
-
 def _health_counts(gateway: Gateway, model: str) -> tuple[int, int]:
     response: Final = gateway.request("GET", f"/health?model={model}", None)
     assert response.status_code in (200, 503), response.text
@@ -249,7 +243,7 @@ def _marked(received: tuple[Request, ...]) -> dict[str, Request]:
 async def test_vendor_outage_fails_each_replay_cleanly_and_the_recovered_vendor_gets_them_without_minted_items(
     gateway: Gateway,
 ) -> None:
-    port: Final = _free_port()
+    port: Final = allocate_port()
     while_down: Final = _calls(15, ("responses", "chat", "messages"))
     after: Final = _calls(15, ("responses", "chat", "messages"))
     with gateway.scenario() as scenario:

@@ -1,8 +1,9 @@
 import base64
+import builtins
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
-from itertools import groupby
+from itertools import chain, groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional, TypeAlias, TypedDict, Union, cast
 
@@ -118,6 +119,7 @@ class _BaseChunk(TypedDict, total=False):
     created: ReadOnly[int]
     model: ReadOnly[str]
     system_fingerprint: ReadOnly[str | None]
+    provider_specific_fields: ReadOnly[Mapping[str, builtins.object] | None]
     service_tier: ReadOnly[str | None]
     choices: ReadOnly[Required[Sequence[StreamingChoices]]]
     _hidden_params: ReadOnly[_ChunkHiddenParams]
@@ -430,6 +432,11 @@ class ChunkProcessor:
                 "created": created,
                 "model": model,
                 "system_fingerprint": system_fingerprint,
+                **(
+                    {"provider_specific_fields": chunks[0].get("provider_specific_fields")}
+                    if system_fingerprint == "fp_ollama"
+                    else {}
+                ),
                 **(
                     MappingProxyType({"service_tier": service_tier})
                     if service_tier is not None
@@ -1306,12 +1313,16 @@ def _stream_builder_model_map_cost(response: ModelResponse) -> float | None:
         return None
 
 
+def _set_hidden_response_cost(response: ModelResponse, response_cost: float) -> None:
+    hidden_params: Final = response._hidden_params  # pyright: ignore[reportPrivateUsage]  # no public accessor
+    hidden_params["response_cost"] = response_cost
+
+
 def _set_stream_builder_response_cost(response: ModelResponse, logging_obj: Optional["Logging"]) -> None:
     response_cost: Final = _stream_builder_response_cost(response, logging_obj)
     if response_cost is None:
         return
-    hidden_params: Final = response._hidden_params  # pyright: ignore[reportPrivateUsage]  # no public accessor
-    hidden_params["response_cost"] = response_cost
+    _set_hidden_response_cost(response, response_cost)
 
 
 def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_obj: Optional["Logging"]) -> None:
@@ -1320,14 +1331,35 @@ def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_o
     if isinstance(getattr(usage, "cost", None), (int, float)):
         return
     computed_cost: Final = logging_obj.response_cost_calculator(result=response)
-    if isinstance(computed_cost, (int, float)) and computed_cost > 0:
-        setattr(usage, "cost", computed_cost)
+    if not isinstance(computed_cost, (int, float)) or computed_cost <= 0:
+        return
+    setattr(usage, "cost", computed_cost)
+    _set_hidden_response_cost(response, float(computed_cost))
+
+
+def _field_of(value: object, name: str) -> object:
+    if isinstance(value, dict):
+        return cast(Mapping[str, object], value).get(name)  # cast-ok: chunk dicts are untyped JSON
+    return getattr(value, name, None)
+
+
+def _delta_reasoning_items(delta: object) -> Sequence[object]:
+    items: Final = _field_of(delta, "reasoning_items")
+    return cast(Sequence[object], items) if isinstance(items, list) else ()  # cast-ok: items forwarded verbatim
+
+
+def _chunk_reasoning_items(chunk: object) -> Sequence[object]:
+    choices: Final = _field_of(chunk, "choices")
+    if not isinstance(choices, list) or not choices:
+        return ()
+    return _delta_reasoning_items(_field_of(cast(Sequence[object], choices)[0], "delta"))  # cast-ok: untyped chunk
 
 
 _NON_TEXT_DELTA_FIELDS: Final = (
     "tool_calls",
     "function_call",
     "reasoning_content",
+    "reasoning_items",
     "thinking_blocks",
     "annotations",
     "audio",
@@ -1503,6 +1535,11 @@ def stream_chunk_builder(
             response["choices"][0]["message"]["reasoning_content"] = processor.get_combined_reasoning_content(
                 reasoning_chunks
             )
+
+        typed_chunks: Final = cast(Sequence[object], chunks)  # cast-ok: chunks are untyped upstream
+        reasoning_items: Final = tuple(chain.from_iterable(_chunk_reasoning_items(chunk) for chunk in typed_chunks))
+        if reasoning_items:
+            response["choices"][0]["message"]["reasoning_items"] = list(reasoning_items)
 
         annotation_chunks: Final = [
             chunk

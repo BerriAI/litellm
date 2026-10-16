@@ -390,6 +390,7 @@ def _daily_tag_metrics(
     return {
         "spend": spend,
         "flat_cost": 0.0,
+        "ptu_hours": 0.0,
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
         "cache_read_input_tokens": 0,

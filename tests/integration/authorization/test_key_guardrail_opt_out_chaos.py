@@ -1,5 +1,4 @@
 import json
-import socket
 import threading
 import time
 import uuid
@@ -15,6 +14,7 @@ from integration._support.client import Gateway, eventually, string_value
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy, owned_proxy_process
 from integration._support.timing import assert_cut_short, timed
+from integration._support.ports import allocate_port
 from integration.authorization._guardrail_opt_out import (
     chat,
     guardrail_config,
@@ -34,13 +34,8 @@ class _GuardrailSink:
         self._action: Final = action
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
-        self._port: Final = self._claim_port()
+        self._port: Final = allocate_port()
         self.start()
-
-    def _claim_port(self) -> int:
-        with socket.socket() as probe:
-            probe.bind(("127.0.0.1", 0))
-            return probe.getsockname()[1]
 
     @property
     def url(self) -> str:

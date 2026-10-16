@@ -2,6 +2,7 @@ import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from functools import partial
 from itertools import chain
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional, cast
 
 import httpx
@@ -43,7 +44,8 @@ def _plain_text_delta(chunk: ModelResponseStream) -> str | None:
     choice: Final = chunk.choices[0]
     if choice.finish_reason or choice.logprobs is not None:
         return None
-    populated: Final = frozenset(key for key, value in choice.delta.model_dump().items() if value is not None)
+    delta_fields: Final[Mapping[str, object]] = MappingProxyType(choice.delta.model_dump())
+    populated: Final = frozenset(key for key, value in delta_fields.items() if value is not None)
     if not populated <= _TEXT_ONLY_DELTA_FIELDS:
         return None
     content: Final = choice.delta.get("content")

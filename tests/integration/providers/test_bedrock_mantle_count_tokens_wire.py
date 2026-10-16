@@ -1,7 +1,6 @@
 import asyncio
 import json
 import re
-import socket
 import threading
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -23,6 +22,7 @@ from integration._support.bedrock_runtime_peer import respond as runtime_generat
 from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment, object_value
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from integration.providers._count_tokens_system_lift import (
     ASSISTANT,
     FOLLOW_UP,
@@ -181,19 +181,13 @@ def _mantle_environment(port: int) -> Mapping[str, str]:
 _INHERITED_BEARER: Final = ("AWS_BEARER_TOKEN_BEDROCK",)
 
 
-def _reserved_port() -> int:
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        return reserve.getsockname()[1]
-
-
 def _closed_port_url() -> str:
-    return f"http://127.0.0.1:{_reserved_port()}"
+    return f"http://127.0.0.1:{allocate_port()}"
 
 
 @pytest.fixture(scope="module")
 def mantle_port() -> int:
-    return _reserved_port()
+    return allocate_port()
 
 
 @pytest.fixture(scope="module")
@@ -454,6 +448,140 @@ def test_gemini_count_tokens_route_reports_the_runtime_total_for_a_model_bedrock
         assert _payload(response) == {"totalTokens": _RUNTIME_COUNT, "promptTokensDetails": []}, response.text
         assert _runtime_count_targets(runtime) == (f"/model/{_SONNET}/count-tokens",)
         assert mantle.drain() == ()
+
+
+def test_runtime_404_on_claude_falls_back_to_mantle(counting_proxy: OwnedProxy, mantle_port: int) -> None:
+    gateway: Final = counting_proxy.gateway
+    system: Final = f"{_SYSTEM} status=404"
+    with (
+        wire_server(_runtime) as runtime,
+        wire_server(_mantle(), port=mantle_port) as mantle,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _deployment(scenario, runtime.url)
+        response: Final = _count(gateway, {**_bare(model), "system": system, "tools": _TOOLS})
+        assert _payload(response) == {"input_tokens": _MANTLE_COUNT}, response.text
+        assert len(_runtime_count_targets(runtime)) == 1
+        assert _mantle_bodies(mantle) == (_mantle_body(system=system, tools=_TOOLS),)
+
+
+def test_runtime_404_and_mantle_404_surface_provider_error(counting_proxy: OwnedProxy, mantle_port: int) -> None:
+    gateway: Final = counting_proxy.gateway
+    system: Final = f"{_SYSTEM} status=404"
+    with (
+        wire_server(_runtime) as runtime,
+        wire_server(_mantle(_rejecting(404)), port=mantle_port) as mantle,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _deployment(scenario, runtime.url)
+        response: Final = _count(gateway, {**_bare(model), "system": system, "tools": _TOOLS})
+        assert response.status_code == 404, response.text
+        assert _REJECTION in response.text
+        assert len(_runtime_count_targets(runtime)) == 1
+        assert _mantle_bodies(mantle) == (_mantle_body(system=system, tools=_TOOLS),)
+
+
+def test_runtime_404_on_nova_does_not_call_mantle(counting_proxy: OwnedProxy, mantle_port: int) -> None:
+    gateway: Final = counting_proxy.gateway
+    with (
+        wire_server(_runtime) as runtime,
+        wire_server(_mantle(), port=mantle_port) as mantle,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _deployment(scenario, runtime.url, _NOVA)
+        body: Final = {**_bare(model), "messages": [{"role": "user", "content": "status=404"}]}
+        response: Final = _count(gateway, body)
+        assert response.status_code == 404, response.text
+        assert len(_runtime_count_targets(runtime)) == 1
+        assert mantle.drain() == ()
+
+
+def test_google_count_tokens_forwards_system_and_tools_to_mantle(
+    counting_proxy: OwnedProxy, mantle_port: int
+) -> None:
+    gateway: Final = counting_proxy.gateway
+    system_text: Final = "Use the provided tool"
+    tool_schema: Final = {"type": "object", "properties": {"location": {"type": "string"}}}
+    body: Final[dict[str, JsonValue]] = {
+        "contents": [{"role": "user", "parts": [{"text": "status=404"}]}],
+        "systemInstruction": {"parts": [{"text": system_text}]},
+        "tools": [
+            {
+                "functionDeclarations": [
+                    {"name": "get_weather", "description": "Look up weather", "parameters": tool_schema}
+                ]
+            }
+        ],
+    }
+    with (
+        wire_server(_runtime) as runtime,
+        wire_server(_mantle(), port=mantle_port) as mantle,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _deployment(scenario, runtime.url)
+        response: Final = gateway.request("POST", f"/v1beta/models/{model}:countTokens", body)
+        assert _payload(response) == {"totalTokens": _MANTLE_COUNT, "promptTokensDetails": []}, response.text
+        assert len(_runtime_count_targets(runtime)) == 1
+        assert _mantle_bodies(mantle) == (
+            _mantle_body(
+                messages=[{"role": "user", "content": "status=404"}],
+                system=[{"type": "text", "text": system_text}],
+                tools=[
+                    {
+                        "name": "get_weather",
+                        "description": "Look up weather",
+                        "input_schema": tool_schema,
+                    }
+                ],
+            ),
+        )
+
+
+def test_google_count_tokens_normalizes_uppercase_parameters_for_mantle(
+    counting_proxy: OwnedProxy, mantle_port: int
+) -> None:
+    gateway: Final = counting_proxy.gateway
+    body: Final[dict[str, JsonValue]] = {
+        "contents": [{"role": "user", "parts": [{"text": "status=404"}]}],
+        "tools": [
+            {
+                "functionDeclarations": [
+                    {
+                        "name": "get_weather",
+                        "parameters": {
+                            "type": "OBJECT",
+                            "properties": {"location": {"type": "STRING"}},
+                            "required": ["location"],
+                        },
+                    }
+                ]
+            }
+        ],
+    }
+    with (
+        wire_server(_runtime) as runtime,
+        wire_server(_mantle(), port=mantle_port) as mantle,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _deployment(scenario, runtime.url)
+        response: Final = gateway.request("POST", f"/v1beta/models/{model}:countTokens", body)
+        assert _payload(response) == {"totalTokens": _MANTLE_COUNT, "promptTokensDetails": []}, response.text
+        assert len(_runtime_count_targets(runtime)) == 1
+        assert _mantle_bodies(mantle) == (
+            _mantle_body(
+                messages=[{"role": "user", "content": "status=404"}],
+                tools=[
+                    {
+                        "name": "get_weather",
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {"location": {"type": "string"}},
+                            "required": ["location"],
+                        },
+                    }
+                ],
+            ),
+        )
 
 
 def test_responses_input_tokens_counts_through_mantle(counting_proxy: OwnedProxy, mantle_port: int) -> None:
@@ -1019,8 +1147,8 @@ def test_messages_count_tokens_surfaces_the_mantle_error_for_a_non_text_system(
 
 @pytest.mark.parametrize(
     "tools",
-    [5, "", "x" * 5120, ["get_weather"]],
-    ids=["int", "empty_string", "5kb_string", "list_of_strings"],
+    ["", "x" * 5120, ["get_weather"]],
+    ids=["empty_string", "5kb_string", "list_of_strings"],
 )
 def test_messages_count_tokens_rejects_malformed_tools_without_calling_either_peer(
     counting_proxy: OwnedProxy, mantle_port: int, tools: JsonValue

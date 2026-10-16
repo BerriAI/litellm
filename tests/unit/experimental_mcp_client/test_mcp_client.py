@@ -2821,6 +2821,8 @@ async def test_discovery_auth_fingerprint_tracks_effective_credentials(resolved:
     repeated: Final = await client("private-original-credential").discovery_auth_fingerprint()
     replaced: Final = await client("private-replaced-credential").discovery_auth_fingerprint()
     assert original == repeated
+    assert await client("private-original-credential").subscription_auth_fingerprint() == original
+    assert await client("private-replaced-credential").subscription_auth_fingerprint() == replaced
     assert original != replaced
     assert len(original) == 64
     assert "private-original-credential" not in original
@@ -2843,6 +2845,8 @@ async def test_discovery_auth_fingerprint_tracks_aws_sigv4_credential_identity()
     repeated: Final = await client("AKIAORIGINAL").discovery_auth_fingerprint()
     rotated: Final = await client("AKIAROTATED").discovery_auth_fingerprint()
     assert original == repeated
+    assert await client("AKIAORIGINAL").subscription_auth_fingerprint() == original
+    assert await client("AKIAROTATED").subscription_auth_fingerprint() == rotated
     assert original != rotated
     assert "AKIAORIGINAL" not in original
 
@@ -5018,3 +5022,122 @@ async def test_persistent_session_releases_the_current_requests_scope_response(s
             active_mcp_request_ctx_var.reset(token)
             session.close()
             await asyncio.wait_for(session.wait_closed(), 5)
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy_callback", [False, True])
+async def test_tool_progress_preserves_message_and_legacy_callback(legacy_callback: bool) -> None:
+    received = AsyncMock()
+
+    async def legacy(progress: float, total: float | None) -> None:
+        await received(progress, total)
+
+    async def modern(progress: float, total: float | None, message: str | None) -> None:
+        await received(progress, total, message)
+
+    async def call_tool(**kwargs):
+        await kwargs["progress_callback"](1.0, 2.0, "halfway")
+        return CallToolResult(content=[])
+
+    session = AsyncMock(spec=ClientSession, call_tool=AsyncMock(side_effect=call_tool))
+
+    async def run(operation, **kwargs):
+        return await operation(session)
+
+    persistent = MagicMock(spec=PersistentMCPSession, run=AsyncMock(side_effect=run))
+    client = MCPClient(server_url="https://example.com/mcp")
+    result = await client.call_tool(
+        CallToolRequestParams(name="slow"),
+        host_progress_callback=legacy if legacy_callback else modern,
+        persistent_session=persistent,
+    )
+    assert not result.is_error
+    if legacy_callback:
+        received.assert_awaited_once_with(1.0, 2.0)
+    else:
+        received.assert_awaited_once_with(1.0, 2.0, "halfway")
+
+
+@pytest.mark.asyncio
+async def test_cancelling_persistent_operation_stops_work_and_keeps_session_usable() -> None:
+    app: Final = _stateful_upstream()
+    async with app.router.lifespan_context(app):
+        client, session = _client_with_session(app)
+        started: Final = asyncio.Event()
+        stopped: Final = asyncio.Event()
+
+        async def slow_operation(_: ClientSession) -> None:
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                stopped.set()
+
+        waiter: Final = asyncio.create_task(session.run(slow_operation))
+        try:
+            await asyncio.wait_for(started.wait(), 5)
+            waiter.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await waiter
+            await asyncio.sleep(0.1)
+            assert stopped.is_set(), "Caller cancellation must stop the running upstream operation"
+            result: Final = await asyncio.wait_for(
+                client.call_tool(
+                    CallToolRequestParams(name="select_project", arguments={"name": "after-cancellation"}),
+                    persistent_session=session,
+                ),
+                5,
+            )
+            assert not result.is_error
+        finally:
+            session.close()
+            await asyncio.wait_for(session.wait_closed(), 5)
+            await asyncio.gather(waiter, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("header_name", ["Authorization", "x-upstream-token"])
+async def test_subscription_fingerprint_preserves_context_across_managed_renewal(header_name):
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.client_credentials import ClientCredentialsBearerAuth
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.types import ClientCredentialsConfig
+
+    async def refetch(token: str) -> str | None:
+        return None
+
+    config = ClientCredentialsConfig(client_id="service", header_name=header_name)
+
+    def client(token, *, scopes=("read",), url="https://upstream.example/mcp", tenant="alice"):
+        return MCPClient(
+            server_url=url,
+            extra_headers={"x-tenant": tenant},
+            resolved_auth=ClientCredentialsBearerAuth(token, refetch, config, granted_scopes=scopes),
+        )
+
+    original = client("original")
+    fingerprint = await original.subscription_auth_fingerprint()
+    assert fingerprint == await client("renewed").subscription_auth_fingerprint()
+    assert fingerprint != await client("renewed", scopes=("write",)).subscription_auth_fingerprint()
+    assert fingerprint != await client("renewed", url="https://other.example/mcp").subscription_auth_fingerprint()
+    assert fingerprint != await client("renewed", tenant="bob").subscription_auth_fingerprint()
+    assert await original.discovery_auth_fingerprint() != await client("renewed").discovery_auth_fingerprint()
+    assert fingerprint != await client("renewed", scopes=None).subscription_auth_fingerprint()
+    assert await client("original", scopes=None).subscription_auth_fingerprint() != await client("renewed", scopes=None).subscription_auth_fingerprint()
+    assert (await original.prepare_request_auth()).headers[header_name] == "Bearer original"
+
+
+@pytest.mark.asyncio
+async def test_notification_callback_keeps_stream_errors_separate_from_protocol_errors() -> None:
+    from litellm.experimental_mcp_client.client import _receive_session_message
+
+    stream_error = asyncio.get_running_loop().create_future()
+    receiver = AsyncMock()
+    await _receive_session_message(
+        MCPError(code=-32602, message="Unsupported request"), stream_error=stream_error, on_notification=receiver
+    )
+    assert not stream_error.done()
+    receiver.assert_not_awaited()
+    first = OSError("Original transport failure")
+    for failure in (first, ValueError("Later parser failure")):
+        with pytest.raises(RuntimeError, match="MCP response stream failed"):
+            await _receive_session_message(failure, stream_error=stream_error, on_notification=receiver)
+    assert stream_error.result() is first
+    receiver.assert_not_awaited()

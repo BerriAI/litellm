@@ -1,10 +1,8 @@
-import errno
 import json
 import threading
 import os
 import re
 import signal
-import socket
 import subprocess
 import sys
 import time
@@ -33,6 +31,7 @@ from pydantic import TypeAdapter
 
 from tests.integration._support.budget import import_seconds, readiness_for, readiness_seconds
 from tests.integration._support.client import GATEWAY_LIMITS, Gateway
+from tests.integration._support.ports import allocate_port
 
 DB_PUSH: Final = ("--use_prisma_db_push",)
 MIGRATE_DEPLOY: Final = ()
@@ -406,16 +405,6 @@ def _stop(process: subprocess.Popen[bytes]) -> None:
         raise
 
 
-_PORT_ATTEMPTS: Final = 3
-_BIND_COLLISION: Final = os.strerror(errno.EADDRINUSE).lower()
-
-
-def _free_port() -> int:
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        return reserve.getsockname()[1]
-
-
 @dataclass(frozen=True, slots=True)
 class _Launch:
     process: subprocess.Popen[bytes]
@@ -458,7 +447,7 @@ def _stop_launch(launch: _Launch) -> None:
 
 
 def _launch(command: tuple[str, ...], root: Path, environment: Mapping[str, str], output: Path) -> _Launch:
-    port: Final = _free_port()
+    port: Final = allocate_port()
     log_path: Final = output / f"owned-proxy-{uuid.uuid4().hex}.log"
     started: Final = time.monotonic()
     with log_path.open("w") as log:
@@ -471,10 +460,6 @@ def _launch(command: tuple[str, ...], root: Path, environment: Mapping[str, str]
             start_new_session=True,
         )
     return _Launch(process, port, log_path, started)
-
-
-def _lost_port_race(exit_code: int | None, log: Path) -> bool:
-    return exit_code is not None and _BIND_COLLISION in log.read_text().lower()
 
 
 def _owns_listener(launch: _Launch) -> bool:
@@ -600,42 +585,36 @@ def _wait_until_ready(launch: _Launch, workers: int = 1) -> BootPhases | None:
     )
 
 
-def _launch_until_bound(
-    command: tuple[str, ...], root: Path, environment: Mapping[str, str], output: Path, attempts: int, workers: int
+def _launch_until_ready(
+    command: tuple[str, ...], root: Path, environment: Mapping[str, str], output: Path, workers: int
 ) -> _Launch:
     launch: Final = _launch(command, root, environment, output)
     try:
         phases: Final = _wait_until_ready(launch, workers)
-        exit_code: Final = launch.process.poll()
-        assert exit_code is None or (attempts > 1 and _lost_port_race(exit_code, launch.log)), (
-            "Owned proxy exited before readiness"
-        )
+        assert launch.process.poll() is None, "Owned proxy exited before readiness"
     except BaseException:
         _stop_launch(launch)
         raise
-    if exit_code is None:
-        assert phases is not None
-        launch.log.with_suffix(".startup.json").write_text(
-            json.dumps(
-                {
-                    "root_pid": launch.process.pid,
-                    "readiness_seconds": time.monotonic() - launch.started,
-                    "logical_cpus": os.cpu_count(),
-                    "workers": workers,
-                    "spawned_at": _wall_clock(launch.started),
-                    "phases": {
-                        "prisma_started": phases.prisma_started,
-                        "prisma_finished": phases.prisma_finished,
-                        "listening": phases.listening,
-                        "first_ready": phases.first_ready,
-                    },
-                }
-            )
-            + "\n"
+    assert phases is not None
+    launch.log.with_suffix(".startup.json").write_text(
+        json.dumps(
+            {
+                "root_pid": launch.process.pid,
+                "readiness_seconds": time.monotonic() - launch.started,
+                "logical_cpus": os.cpu_count(),
+                "workers": workers,
+                "spawned_at": _wall_clock(launch.started),
+                "phases": {
+                    "prisma_started": phases.prisma_started,
+                    "prisma_finished": phases.prisma_finished,
+                    "listening": phases.listening,
+                    "first_ready": phases.first_ready,
+                },
+            }
         )
-        return launch
-    _stop_launch(launch)
-    return _launch_until_bound(command, root, environment, output, attempts - 1, workers)
+        + "\n"
+    )
+    return launch
 
 
 def _proxy_root() -> Path:
@@ -757,6 +736,7 @@ def owned_proxy_process(
     coverage_file: Path | None = None,
     healthcheck: WorkerHealthcheck = WorkerHealthcheck.STRICT,
     inherited: Mapping[str, str] = os.environ,
+    client_timeout: float = 15,
 ) -> Iterator[OwnedProxy]:
     assert "--timeout_worker_healthcheck" not in extra_arguments, "Choose the worker healthcheck with `healthcheck`"
     root: Final = _proxy_root()
@@ -784,13 +764,52 @@ def owned_proxy_process(
         *database_setup,
         *extra_arguments,
     )
-    launch: Final = _launch_until_bound(command, root, environment, output, _PORT_ATTEMPTS, workers)
+    launch: Final = _launch_until_ready(command, root, environment, output, workers)
     process: Final = launch.process
+    try:
+        with httpx.Client(
+            base_url=f"http://127.0.0.1:{launch.port}", timeout=client_timeout, trust_env=False, limits=GATEWAY_LIMITS
+        ) as client:
+            yield OwnedProxy(Gateway(client, gateway.key, gateway.upstream_url), process, launch.log, healthcheck)
+    finally:
+        _stop_launch(launch)
+
+
+@contextmanager
+def configless_proxy_process(
+    gateway: Gateway,
+    directory: Path,
+    overrides: Mapping[str, str],
+    *,
+    model: str,
+    api_base: str,
+    workers: int = 1,
+) -> Iterator[OwnedProxy]:
+    environment: Final = _proxy_environment(gateway, {**overrides, "STORE_MODEL_IN_DB": "False"}, ())
+    output: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR", str(directory)))
+    output.mkdir(parents=True, exist_ok=True)
+    command: Final = (
+        sys.executable,
+        "-m",
+        "integration._support.proxy",
+        "--model",
+        model,
+        "--api_base",
+        api_base,
+        "--host",
+        "127.0.0.1",
+        "--num_workers",
+        str(workers),
+        "--timeout_worker_healthcheck",
+        str(healthcheck_seconds(WorkerHealthcheck.STRICT)),
+        *DB_PUSH,
+    )
+    launch: Final = _launch_until_ready(command, _proxy_root(), environment, output, workers)
     try:
         with httpx.Client(
             base_url=f"http://127.0.0.1:{launch.port}", timeout=15, trust_env=False, limits=GATEWAY_LIMITS
         ) as client:
-            yield OwnedProxy(Gateway(client, gateway.key, gateway.upstream_url), process, launch.log, healthcheck)
+            yield OwnedProxy(Gateway(client, gateway.key, gateway.upstream_url), launch.process, launch.log)
     finally:
         _stop_launch(launch)
 
@@ -818,7 +837,7 @@ def owned_gateway_image(
         "--timeout-worker-healthcheck",
         str(int(graceful_stop_seconds())),
     )
-    launch: Final = _launch_until_bound(command, root, environment, output, _PORT_ATTEMPTS, workers)
+    launch: Final = _launch_until_ready(command, root, environment, output, workers)
     try:
         with httpx.Client(
             base_url=f"http://127.0.0.1:{launch.port}", timeout=15, trust_env=False, limits=GATEWAY_LIMITS
@@ -1000,7 +1019,7 @@ def owned_upstream(
     directory: Path, *, tls: bool = False, port: int | None = None, inherited: Mapping[str, str] = os.environ
 ) -> Generator[UpstreamSlot]:
     certificate: Final = self_signed_certificate(directory) if tls else None
-    slot: Final = UpstreamSlot(directory, port or _free_port(), _harness_root(), certificate, inherited)
+    slot: Final = UpstreamSlot(directory, port or allocate_port(), _harness_root(), certificate, inherited)
     try:
         slot.start()
         yield slot

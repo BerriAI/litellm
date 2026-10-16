@@ -1,5 +1,4 @@
 import concurrent.futures
-import socket
 import threading
 import uuid
 from contextlib import ExitStack
@@ -13,6 +12,7 @@ from integration._support.client import Gateway, Scenario, eventually
 from integration._support.database import read_rows
 from integration._support.redis_process import owned_redis
 from integration._support.wire import Wire, wire_server
+from integration._support.ports import allocate_port
 from integration.observability.azure_dispatch_support import (
     ATTACK_MARKER,
     AzureBehavior,
@@ -251,9 +251,7 @@ def test_x1_azure_server_stop_restart_during_mixed_burst(
     with ExitStack() as resources:
         redis: Final = resources.enter_context(owned_redis(tmp_path))
         provider: Final = resources.enter_context(wire_server(provider_handler))
-        with socket.socket() as reservation:
-            reservation.bind(("127.0.0.1", 0))
-            azure_port: Final = int(reservation.getsockname()[1])
+        azure_port: Final = allocate_port()
         first_azure_lifetime: Final = ExitStack()
         try:
             azure: Final = first_azure_lifetime.enter_context(wire_server(azure_handler(), port=azure_port))

@@ -689,6 +689,69 @@ async def test_expired_key_error_log_names_the_key_owner(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "looked_up, logged_fragment, absent_fragment",
+    [
+        pytest.param(
+            "d748053a" * 8,
+            "Exception occured - Authentication Error, Invalid proxy server token passed. key="
+            + "d748053a" * 8
+            + ", not found in db. Create key via `/key/generate` call.",
+            None,
+            id="operator_wording_and_hash_kept_in_log",
+        ),
+        pytest.param(
+            "abc\nforged log line",
+            "key=abc\\nforged log line, not found in db",
+            "\nforged log line",
+            id="control_chars_in_hash_cannot_forge_log_lines",
+        ),
+    ],
+)
+async def test_unknown_key_error_log_keeps_the_operator_wording_the_401_hides(
+    looked_up, logged_fragment, absent_fragment, caplog
+):
+    """A wrong key gets a generic 401, while the one auth failure log line keeps the
+    operator wording and the hash that was looked up, next to the requester IP."""
+    from litellm.constants import INVALID_API_KEY_ERROR_MESSAGE
+    from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
+
+    with (
+        patch(  # test-quality-ok: handler reads proxy_server globals at call time
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch("litellm.proxy.auth.auth_exception_handler.seed_request_identity"),
+        patch(  # test-quality-ok: handler reads proxy_server globals at call time
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": False},
+        ),
+    ):
+        verbose_proxy_logger.propagate = True
+        try:
+            with caplog.at_level("ERROR", logger="LiteLLM Proxy"), pytest.raises(ProxyException) as exc_info:
+                await UserAPIKeyAuthExceptionHandler().handle_authentication_error(
+                    KeyNotFoundError(looked_up),
+                    MagicMock(),
+                    {"model": "gpt-4o"},
+                    "/v1/chat/completions",
+                    None,
+                    "sk-raw-key",
+                )
+        finally:
+            verbose_proxy_logger.propagate = False
+
+    assert exc_info.value.message == INVALID_API_KEY_ERROR_MESSAGE
+    records = [r for r in caplog.records if "user_api_key_auth(): Exception occured" in r.getMessage()]
+    assert len(records) == 1, [r.getMessage() for r in caplog.records]
+    logged = records[0].getMessage()
+    assert "Requester IP Address:" in logged and logged_fragment in logged, logged
+    if absent_fragment is not None:
+        assert absent_fragment not in logged, logged
+
+
+@pytest.mark.asyncio
 async def test_auth_failure_without_resolved_identity_still_logs():
     """When auth fails before any identity is resolved (e.g. an unknown key),
     the handler must still log a usable object carrying the raw api key and

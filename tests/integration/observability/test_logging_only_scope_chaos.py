@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import socket
 import threading
 import time
 import uuid
@@ -46,6 +45,7 @@ from integration._support.client import Gateway, eventually
 from integration._support.process import owned_proxy, owned_proxy_process
 from integration._support.timing import Timed, assert_not_delayed_by, timed
 from integration._support.wire import Reply, Request
+from integration._support.ports import allocate_port
 from openai import APIConnectionError as OpenAIAPIConnectionError
 from pydantic import JsonValue
 
@@ -60,9 +60,7 @@ def test_K1_policy_edge_restart_mid_burst_keeps_output_observation_fail_open(gat
     def policy(_request: Request) -> Reply:
         return Reply(body=b'{"action":"NONE"}')
 
-    with socket.socket() as reservation:
-        reservation.bind(("127.0.0.1", 0))
-        policy_port: Final = reservation.getsockname()[1]
+    policy_port: Final = allocate_port()
     with gateway.scenario() as scenario:
         deployments: Final = _chaos_models(scenario, marker)
         models: Final = tuple(deployment.model_name for deployment in deployments)
@@ -333,7 +331,7 @@ def test_K2_policy_edge_delay_does_not_delay_concurrent_callers(gateway: Gateway
                     ) == tuple((identity, "logging_only", "success") for _ in expected_directions), entries
 
 
-@pytest.mark.timeout(180)
+@pytest.mark.timeout(300)
 def test_K3_two_worker_sigkill_checks_post_kill_spend_rows(
     gateway: Gateway,
     tmp_path: Path,

@@ -9,7 +9,6 @@ from pathlib import Path
 from queue import SimpleQueue
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
-from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -19,6 +18,7 @@ from integration._support import responses_vendor as rv
 from integration._support.client import Gateway, eventually, gateway_from_environment, string_value
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from pydantic import JsonValue
 
 pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
@@ -213,13 +213,6 @@ def _health(gateway: Gateway, model: str) -> Mapping[str, JsonValue]:
     return rv.JSON_OBJECT.validate_json(response.text)
 
 
-def _free_port() -> int:
-    with wire_server(pcb.respond) as probe:
-        port: Final = urlsplit(probe.url).port
-    assert port is not None, probe.url
-    return port
-
-
 def _chat(gateway: Gateway, model: str, marker: str, breakpoint: JsonValue) -> httpx.Response:
     return gateway.request("POST", "/v1/chat/completions", dict(_body(model, _Call("chat", False, marker), breakpoint)))
 
@@ -285,7 +278,7 @@ async def test_mixed_burst_carries_every_marker_once(gateway: Gateway, spend: pc
 async def test_upstream_outage_fails_cleanly_and_the_restarted_upstream_serves_marked_calls(
     gateway: Gateway, spend: pcb.SpendLogs
 ) -> None:
-    port: Final = _free_port()
+    port: Final = allocate_port()
     while_down: Final = _calls(12, _ENDPOINTS)
     after: Final = _calls(12, _ENDPOINTS)
     with gateway.scenario() as scenario:

@@ -170,3 +170,77 @@ describe("MCPServerSelector all-proxy-mcpservers option", () => {
     expect(optionByLabel("Server One")).toHaveAttribute("aria-disabled", "true");
   });
 });
+
+describe("MCPServerSelector scoping", () => {
+  const catalog = [
+    { server_id: "srv-a", server_name: "Wiki A", mcp_access_groups: ["g1"] },
+    { server_id: "srv-b", server_name: "Wiki B", mcp_access_groups: ["g1", "g2"] },
+    { server_id: "srv-c", server_name: "Tools C", mcp_access_groups: ["g2"] },
+    { server_id: "srv-d", server_name: "Solo D" },
+    { server_id: "srv-e", server_name: "Public E", allow_all_keys: true },
+  ];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseMCPServers.mockReturnValue({ data: catalog, isLoading: false } as any);
+    mockUseMCPAccessGroups.mockReturnValue({ data: ["g1", "g2"], isLoading: false } as any);
+    mockUseMCPToolsets.mockReturnValue({ data: [], isLoading: false } as any);
+  });
+
+  it("asks the server list for the team and user scope it was given", () => {
+    renderWithProviders(
+      <MCPServerSelector
+        accessToken="tok"
+        onChange={vi.fn()}
+        value={{ servers: [], accessGroups: [] }}
+        teamId="team-1"
+        userId="user-1"
+      />,
+    );
+
+    expect(mockUseMCPServers).toHaveBeenCalledWith("team-1", "user-1");
+  });
+
+  it("lists every server while no access group is selected", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <MCPServerSelector accessToken="tok" onChange={vi.fn()} value={{ servers: [], accessGroups: [] }} />,
+    );
+
+    await openSelector(user);
+
+    expect(["Wiki A", "Wiki B", "Tools C", "Solo D", "Public E"].map(optionByLabel).every(Boolean)).toBe(true);
+  });
+
+  it("narrows the servers to members of the selected access groups, keeping allow-all and granted ones", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <MCPServerSelector accessToken="tok" onChange={vi.fn()} value={{ servers: ["srv-d"], accessGroups: ["g1"] }} />,
+    );
+
+    await openSelector(user);
+
+    expect(optionByLabel("Wiki A")).toBeDefined();
+    expect(optionByLabel("Wiki B")).toBeDefined();
+    expect(optionByLabel("Public E")).toBeDefined();
+    expect(optionByLabel("Solo D")).toBeDefined();
+    expect(optionByLabel("Tools C")).toBeUndefined();
+  });
+
+  it("widens again once the access group is deselected", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const { rerender } = renderWithProviders(
+      <MCPServerSelector accessToken="tok" onChange={onChange} value={{ servers: [], accessGroups: ["g2"] }} />,
+    );
+
+    await openSelector(user);
+    expect(optionByLabel("Wiki A")).toBeUndefined();
+    await user.keyboard("{Escape}");
+
+    rerender(<MCPServerSelector accessToken="tok" onChange={onChange} value={{ servers: [], accessGroups: [] }} />);
+    await openSelector(user);
+
+    expect(optionByLabel("Wiki A")).toBeDefined();
+  });
+});
