@@ -11192,6 +11192,87 @@ GPT_5_6_SLASH_ALIAS_STREAM: Final = GPT_5_6_STREAM.model_copy(
     update={"name": "gpt-5.6-slash_alias_stream", "alias": "openai/custom/gpt-5.6-$MARKER"}
 )
 
+GPT_5_6_RESPONSES_IMAGE_GENERATION_TOOL_TOKENS: Final = CostTrackingTestCase(
+    name="gpt-5.6-responses_image_generation_tool_tokens",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-5.6",
+    endpoint="/v1/responses",
+    request={
+        "model": "$MODEL",
+        "input": "draw a duck",
+        "tools": [{"type": "image_generation", "model": "gpt-image-next", "quality": "low", "size": "1024x1024"}],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "resp_$REQUEST_ID",
+            "object": "response",
+            "created_at": 1700000000,
+            "status": "completed",
+            "model": "gpt-5.6",
+            "tools": [
+                {
+                    "type": "image_generation",
+                    "background": "auto",
+                    "model": "gpt-image-next",
+                    "moderation": "auto",
+                    "n": 1,
+                    "output_compression": 100,
+                    "output_format": "png",
+                    "quality": "low",
+                    "size": "1024x1024",
+                }
+            ],
+            "output": [
+                {
+                    "type": "image_generation_call",
+                    "id": "ig_$REQUEST_ID",
+                    "status": "completed",
+                    "action": "generate",
+                    "background": "opaque",
+                    "output_format": "png",
+                    "quality": "low",
+                    "revised_prompt": "a duck",
+                    "size": "1024x1024",
+                    "result": "AAAA",
+                },
+                {
+                    "type": "message",
+                    "id": "msg_$REQUEST_ID",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "scripted response", "annotations": []}],
+                },
+            ],
+            "usage": {
+                "input_tokens": 1840,
+                "output_tokens": 412,
+                "total_tokens": 2252,
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens_details": {"reasoning_tokens": 0},
+            },
+            "tool_usage": {
+                "image_gen": {
+                    "input_tokens": 32,
+                    "input_tokens_details": {"image_tokens": 0, "text_tokens": 32},
+                    "output_tokens": 196,
+                    "output_tokens_details": {"image_tokens": 196, "text_tokens": 0},
+                    "total_tokens": 228,
+                },
+                "web_search": {"num_requests": 0},
+            },
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.01004232,
+        input_cost=0.00322,
+        output_cost=0.005768,
+        prompt_tokens=1840,
+        completion_tokens=412,
+        tool_usage_cost=0.00105432,
+    ),
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GPT_5_6_SLASH_ALIAS,
     GPT_5_6_SLASH_ALIAS_STREAM,
@@ -11336,6 +11417,7 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GPT_5_6_RESPONSES_WEB_SEARCH_REPORTED_COUNT_MIXED_ACTIONS,
     GPT_5_6_RESPONSES_WEB_SEARCH_REPORTED_COUNT_OPEN_PAGE_ONLY,
     GPT_5_6_RESPONSES_WEB_SEARCH_REPORTED_COUNT_MIXED_ACTIONS_STREAM,
+    GPT_5_6_RESPONSES_IMAGE_GENERATION_TOOL_TOKENS,
     GPT_5_3_CODEX_RESPONSES_FILE_SEARCH,
     GPT_5_6_RESPONSES_SERVICE_TIER_FLEX,
     GPT_5_6_RESPONSES_SERVICE_TIER_PRIORITY,
