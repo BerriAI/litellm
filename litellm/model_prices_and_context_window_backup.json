@@ -75163,5 +75163,21 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
+    },
+    "wandb/nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B": {
+        "cache_read_input_token_cost": 2e-08,
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "wandb",
+        "max_input_tokens": 1049000,
+        "max_tokens": 943718,
+        "mode": "chat",
+        "output_cost_per_token": 7.5e-07,
+        "source": "https://openrouter.ai/api/v1/models/nvidia/nemotron-3.5-super-vl/endpoints",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
     }
 }
