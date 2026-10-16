@@ -22,6 +22,80 @@ if TYPE_CHECKING:
     from litellm.types.utils import ModelResponse
 
 
+def test_responses_message_phase_is_exposed_on_chat_message():
+    handler = LiteLLMResponsesTransformationHandler()
+
+    choice, _ = handler._handle_raw_dict_response_item(
+        {
+            "type": "message",
+            "role": "assistant",
+            "phase": "commentary",
+            "content": [{"type": "output_text", "text": "Here is a preamble."}],
+        },
+        0,
+    )
+
+    assert choice is not None
+    assert choice.message.provider_specific_fields == {"phase": "commentary"}
+
+
+def test_chat_assistant_phase_is_replayed_to_responses_input():
+    handler = LiteLLMResponsesTransformationHandler()
+
+    response, _ = handler.convert_chat_completion_messages_to_responses_api(
+        [
+            {
+                "role": "assistant",
+                "content": "The final answer.",
+                "provider_specific_fields": {"phase": "final_answer"},
+            }
+        ]
+    )
+
+    assert response == [
+        {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "input_text", "text": "The final answer."}],
+            "phase": "final_answer",
+        }
+    ]
+
+
+def test_streaming_responses_message_phase_is_retained_for_text_deltas():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    added = iterator.chunk_parser(
+        {
+            "type": "response.output_item.added",
+            "output_index": 2,
+            "item": {
+                "type": "message",
+                "role": "assistant",
+                "phase": "commentary",
+                "content": [],
+            },
+        }
+    )
+    delta = iterator.chunk_parser(
+        {
+            "type": "response.output_text.delta",
+            "output_index": 2,
+            "delta": "Preamble",
+        }
+    )
+
+    assert added.choices[0].delta.provider_specific_fields == {"phase": "commentary"}
+    assert delta.choices[0].delta.content == "Preamble"
+    assert delta.choices[0].delta.provider_specific_fields == {"phase": "commentary"}
+
+
 def test_convert_chat_completion_messages_to_responses_api_image_input():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         LiteLLMResponsesTransformationHandler,
