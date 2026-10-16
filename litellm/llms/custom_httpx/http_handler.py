@@ -1355,7 +1355,7 @@ class AsyncHTTPHandler:
         )
 
         def session_factory() -> ClientSession:
-            pool_wait_trace_config = build_pool_wait_trace_config()
+            pool_wait_trace_config: Final = build_pool_wait_trace_config()
             return ClientSession(
                 connector=TCPConnector(**transport_connector_kwargs),
                 cookie_jar=DummyCookieJar(),

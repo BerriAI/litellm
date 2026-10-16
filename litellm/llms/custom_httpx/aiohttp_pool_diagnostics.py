@@ -11,7 +11,7 @@ limits, and how long the request waited for a connection slot.
 import time
 from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_logger
 from litellm.constants import (
@@ -25,22 +25,22 @@ if TYPE_CHECKING:
 
 
 async def _on_request_start(session: "ClientSession", ctx: SimpleNamespace, params: object) -> None:
-    url = getattr(params, "url", None)
-    ctx.pool_wait_host = getattr(url, "host", None) or "unknown"
+    url: Final = getattr(params, "url", None)
+    ctx.pool_wait_host = getattr(url, "host", None) or "unknown"  # rebind-ok: aiohttp trace ctx holds per-request state
 
 
 async def _on_connection_queued_start(session: "ClientSession", ctx: SimpleNamespace, params: object) -> None:
-    ctx.pool_wait_started_at = time.monotonic()
+    ctx.pool_wait_started_at = time.monotonic()  # rebind-ok: aiohttp trace ctx holds per-request state
 
 
 def _make_on_connection_queued_end(
     threshold_seconds: float,
 ) -> Callable[["ClientSession", SimpleNamespace, object], Awaitable[None]]:
     async def _on_connection_queued_end(session: "ClientSession", ctx: SimpleNamespace, params: object) -> None:
-        started_at = getattr(ctx, "pool_wait_started_at", None)
+        started_at: Final = getattr(ctx, "pool_wait_started_at", None)
         if started_at is None:
             return
-        waited = time.monotonic() - started_at
+        waited: Final = time.monotonic() - started_at
         if waited < threshold_seconds:
             return
         verbose_logger.warning(
@@ -66,14 +66,13 @@ def build_pool_wait_trace_config(
     connection longer than ``threshold_seconds`` (defaults to
     ``AIOHTTP_POOL_WAIT_WARNING_SECONDS``). Returns None when disabled.
     """
-    if threshold_seconds is None:
-        threshold_seconds = AIOHTTP_POOL_WAIT_WARNING_SECONDS
-    if threshold_seconds <= 0:
+    effective_threshold: Final = AIOHTTP_POOL_WAIT_WARNING_SECONDS if threshold_seconds is None else threshold_seconds
+    if effective_threshold <= 0:
         return None
     from aiohttp import TraceConfig
 
-    trace_config = TraceConfig()
+    trace_config: Final = TraceConfig()
     trace_config.on_request_start.append(_on_request_start)
     trace_config.on_connection_queued_start.append(_on_connection_queued_start)
-    trace_config.on_connection_queued_end.append(_make_on_connection_queued_end(threshold_seconds))
+    trace_config.on_connection_queued_end.append(_make_on_connection_queued_end(effective_threshold))
     return trace_config
