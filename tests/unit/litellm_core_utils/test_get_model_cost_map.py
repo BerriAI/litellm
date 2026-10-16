@@ -998,6 +998,14 @@ class TestGetModelCostMapFallback:
         assert result.keys() == _backup_keys()
         assert source["source"] == "local"
 
+    def test_should_fallback_when_fetched_json_is_not_object(self, monkeypatch):
+        result, fetches, source = _fetch_with_single_outcome(monkeypatch, httpx.Response(200, content=b"[]"))
+
+        assert fetches == 1
+        assert result.keys() == _backup_keys()
+        assert source["source"] == "local"
+        assert source["fallback_reason"] == f"Remote fetch failed: expected a JSON object from {_URL}, got list"
+
     def test_should_fallback_when_fetched_map_shrinks_dramatically(self, monkeypatch):
         """When upstream returns far fewer models than backup, should fall back."""
         tiny_map = {f"model-{i}": {"litellm_provider": "test"} for i in range(11)}
