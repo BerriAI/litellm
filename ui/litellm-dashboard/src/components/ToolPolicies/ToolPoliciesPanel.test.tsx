@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { NuqsTestingAdapter } from "nuqs/adapters/testing";
 
 import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import type { ToolRow } from "@/components/networking";
@@ -131,9 +132,11 @@ describe("ToolPoliciesPanel data loading", () => {
   it("should not refetch when the window regains focus", async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
-      <QueryClientProvider client={client}>
-        <ToolPoliciesPanel accessToken="sk-token" onSelectTool={vi.fn()} />
-      </QueryClientProvider>,
+      <NuqsTestingAdapter>
+        <QueryClientProvider client={client}>
+          <ToolPoliciesPanel accessToken="sk-token" onSelectTool={vi.fn()} />
+        </QueryClientProvider>
+      </NuqsTestingAdapter>,
     );
     await waitForRows();
 
