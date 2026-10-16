@@ -36,6 +36,7 @@ class LiteLLMCompletionTransformationHandler:
         _is_async: bool = False,
         stream: bool | None = None,
         extra_headers: Mapping[str, object] | None = None,
+        previous_response_client_ids: tuple[str, ...] = (),
         **kwargs,
     ) -> (
         ResponsesAPIResponse
@@ -64,6 +65,7 @@ class LiteLLMCompletionTransformationHandler:
                 litellm_completion_request=litellm_completion_request,
                 request_input=bridged_input,
                 responses_api_request=bridged_request,
+                previous_response_client_ids=previous_response_client_ids,
                 **kwargs,
             )
 
@@ -103,6 +105,7 @@ class LiteLLMCompletionTransformationHandler:
         litellm_completion_request: dict,
         request_input: str | ResponseInputParam,
         responses_api_request: ResponsesAPIOptionalRequestParams,
+        previous_response_client_ids: tuple[str, ...] = (),
         **kwargs,
     ) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
         previous_response_id: Final[str | None] = responses_api_request.get("previous_response_id")
@@ -112,6 +115,7 @@ class LiteLLMCompletionTransformationHandler:
                 litellm_completion_request=litellm_completion_request,
                 instructions=responses_api_request.get("instructions"),
                 request_kwargs=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
+                previous_response_client_ids=previous_response_client_ids,
             )
 
         acompletion_args: Final = {}

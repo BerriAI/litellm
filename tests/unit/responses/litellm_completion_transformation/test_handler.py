@@ -13,7 +13,8 @@ kwargs lack the flag and these tests fail.
 """
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import patch
 
@@ -25,6 +26,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD
 
@@ -223,3 +225,69 @@ async def test_bridged_follow_up_turn_keeps_the_addressed_response_id_off_the_pr
     )
     assert isinstance(response, ResponsesAPIResponse)
     assert [item.type for item in response.output] == ["message"]
+
+
+class _StoredTurns:
+    def __init__(self, rows: tuple[Mapping[str, object], ...]) -> None:
+        self.rows: Final = rows
+
+    async def query_raw(self, query: str, request_ids: Sequence[str]) -> list[dict[str, object]]:
+        sessions: Final = {row["session_id"] for row in self.rows if row["request_id"] in request_ids}
+        return [dict(row) for row in self.rows if row["session_id"] in sessions]
+
+
+def _stored_mcp_turn(request_id: str) -> Mapping[str, object]:
+    return {
+        "request_id": request_id,
+        "call_type": "aresponses",
+        "session_id": "turn-one-session",
+        "proxy_server_request": {"input": "My favorite number is 7.", "model": "claude-sonnet-4-6"},
+        "response": {
+            "id": request_id,
+            "object": "response",
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "Noted.", "annotations": []}],
+                },
+                {"type": "mcp_tools_fetched", "tools": [{"name": "demo-echo"}]},
+            ],
+        },
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stored_under", ["litellm_encoded_id", "proxy_issued_id"])
+async def test_bridged_next_turn_replays_a_turn_stored_under_the_id_the_client_holds(stored_under: str):
+    litellm_encoded_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="azure_ai", model_id="deployment-a", response_id="chatcmpl-turn-one"
+    )
+    proxy_issued_id: Final = "resp_proxy-issued-turn-one"
+    stored_turns: Final = _StoredTurns(
+        (_stored_mcp_turn(litellm_encoded_id if stored_under == "litellm_encoded_id" else proxy_issued_id),)
+    )
+    provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+
+    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=stored_turns)):
+        await litellm.aresponses(
+            model="azure_ai/claude-sonnet-4-6",
+            api_base="https://fake-foundry-resource.services.ai.azure.com",
+            api_key="fake-api-key",
+            input="Double it",
+            previous_response_id=litellm_encoded_id,
+            client=client,
+            **{ADDRESSED_RESPONSE_ID_FIELD: proxy_issued_id},
+        )
+
+    assert provider.request_body is not None, "the bridged turn never reached the provider"
+    assert [
+        (message["role"], json.dumps(message["content"])) for message in provider.request_body["messages"]
+    ] == [
+        ("user", json.dumps([{"type": "text", "text": "My favorite number is 7."}])),
+        ("assistant", json.dumps([{"type": "text", "text": "Noted."}])),
+        ("user", json.dumps([{"type": "text", "text": "Double it"}])),
+    ]

@@ -1,4 +1,5 @@
 import json
+from collections.abc import Sequence
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, patch
@@ -127,7 +128,7 @@ async def test_get_chat_completion_message_history_for_previous_response_id():
         )
 
         # Verify the mock was called with correct parameters
-        mock_get_spend_logs.assert_called_once_with(previous_response_id)
+        mock_get_spend_logs.assert_called_once_with(previous_response_id, ())
 
         # Verify the returned ChatCompletionSession structure
         assert "messages" in result
@@ -461,8 +462,8 @@ class _FakePrismaDB:
         self._results = list(results)
         self.calls = []
 
-    async def query_raw(self, query, *args):
-        self.calls.append(args)
+    async def query_raw(self, query, request_ids):
+        self.calls.append(tuple(request_ids))
         if not self._results:
             return []
         return list(self._results.pop(0))
@@ -631,7 +632,7 @@ class _StoredSpendLogs:
     def __init__(self, rows: tuple[dict, ...]) -> None:
         self.rows = rows
 
-    async def query_raw(self, query: str, *request_ids: str) -> list[dict]:
+    async def query_raw(self, query: str, request_ids: Sequence[str]) -> list[dict]:
         sessions: Final = {row["session_id"] for row in self.rows if row["request_id"] in request_ids}
         return [row for row in self.rows if row["session_id"] in sessions]
 

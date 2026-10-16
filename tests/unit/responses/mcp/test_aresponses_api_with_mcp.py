@@ -1767,11 +1767,7 @@ class _ListingRecorder(CustomLogger):
             self.listings = (*self.listings, kwargs)
 
 
-@pytest.mark.asyncio
-async def test_non_stream_auto_execute_tool_listing_log_continues_the_request_trace(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
-):
-    _serve_rounds(respx_mock, monkeypatch, (_ROUND_ONE_BODY, _ROUND_TWO_BODY))
+def _serve_the_demo_mcp_listing(monkeypatch: pytest.MonkeyPatch) -> _ListingRecorder:
     echo_tool: Final = MCPTool.model_validate(
         {"name": "echo", "inputSchema": {"type": "object", "properties": {"value": {"type": "string"}}}},
         by_name=False,
@@ -1804,6 +1800,29 @@ async def test_non_stream_auto_execute_tool_listing_log_continues_the_request_tr
     )
     listing_recorder: Final = _ListingRecorder()
     monkeypatch.setattr(litellm, "_async_success_callback", [listing_recorder])
+    return listing_recorder
+
+
+async def _assert_the_listing_logs_in_the_request_trace(
+    listing_recorder: _ListingRecorder, request_recorder: _RoundRecorder
+) -> None:
+    await _settle(lambda: len(request_recorder.logged) > 0 and len(listing_recorder.listings) > 0)
+    request_trace_id: Final = request_recorder.logged[0]["trace_id"]
+    assert len(listing_recorder.listings) == 1
+    listing: Final = listing_recorder.listings[0]
+    listing_row: Final = cast(StandardLoggingPayload, listing["standard_logging_object"])
+    assert listing_row["trace_id"] == request_trace_id
+    assert cast(Mapping[str, Mapping[str, object]], listing["litellm_params"])["metadata"][
+        "existing_trace_id"
+    ] == request_trace_id
+
+
+@pytest.mark.asyncio
+async def test_non_stream_auto_execute_tool_listing_log_continues_the_request_trace(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    _serve_rounds(respx_mock, monkeypatch, (_ROUND_ONE_BODY, _ROUND_TWO_BODY))
+    listing_recorder: Final = _serve_the_demo_mcp_listing(monkeypatch)
     request_recorder: Final = _RoundRecorder()
 
     await litellm.aresponses(
@@ -1813,18 +1832,48 @@ async def test_non_stream_auto_execute_tool_listing_log_continues_the_request_tr
         api_key="sk-mcp-rounds",
         api_base="https://mcp-rounds.example.com/v1",
         litellm_call_id="mcp-listing-trace",
+        litellm_trace_id="router-trace",
         litellm_logging_obj=_rounds_logging_obj(request_recorder, "mcp-listing-trace"),
     )
-    await _settle(lambda: len(request_recorder.logged) > 0 and len(listing_recorder.listings) > 0)
 
-    request_trace_id: Final = request_recorder.logged[0]["trace_id"]
-    assert len(listing_recorder.listings) == 1
-    listing: Final = listing_recorder.listings[0]
-    listing_row: Final = cast(StandardLoggingPayload, listing["standard_logging_object"])
-    assert listing_row["trace_id"] == request_trace_id
-    assert cast(Mapping[str, Mapping[str, object]], listing["litellm_params"])["metadata"][
-        "existing_trace_id"
-    ] == request_trace_id
+    await _assert_the_listing_logs_in_the_request_trace(listing_recorder, request_recorder)
+
+
+@pytest.mark.asyncio
+async def test_bridged_auto_execute_tool_listing_log_continues_the_request_trace(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post("https://mcp-rounds.example.com/v1/messages").mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                json=_anthropic_message(
+                    "msg_tool_round",
+                    ({"type": "tool_use", "id": "toolu_echo", "name": "echo", "input": {"value": "PING"}},),
+                    "tool_use",
+                ),
+            ),
+            httpx.Response(200, json=_anthropic_message("msg_answer", ({"type": "text", "text": "PING"},), "end_turn")),
+        ]
+    )
+    listing_recorder: Final = _serve_the_demo_mcp_listing(monkeypatch)
+    request_recorder: Final = _RoundRecorder()
+
+    await litellm.aresponses(
+        model="anthropic/claude-haiku-4-5",
+        input="Call echo with PING",
+        tools=[dict(_ECHO_MCP_TOOL)],
+        api_key="sk-mcp-rounds",
+        api_base="https://mcp-rounds.example.com",
+        litellm_call_id="mcp-bridged-listing-trace",
+        litellm_trace_id="router-trace",
+        litellm_logging_obj=_rounds_logging_obj(request_recorder, "mcp-bridged-listing-trace"),
+    )
+
+    await _assert_the_listing_logs_in_the_request_trace(listing_recorder, request_recorder)
 
 
 @pytest.mark.asyncio
@@ -1923,7 +1972,7 @@ class _SpendLogs:
         self.rows: Final = tuple(rows)
         self.asked: tuple[frozenset[str], ...] = ()
 
-    async def query_raw(self, query: str, *request_ids: str) -> list[dict[str, object]]:
+    async def query_raw(self, query: str, request_ids: Sequence[str]) -> list[dict[str, object]]:
         self.asked = (*self.asked, frozenset(request_ids))
         return [dict(row) for row in self.rows if row["request_id"] in request_ids]
 

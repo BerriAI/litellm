@@ -71,7 +71,7 @@ from litellm.llms.openai.data_residency import infer_openai_data_residency
 from litellm.types.responses.main import *
 from litellm.types.responses.streaming_websocket import ResponsesWebSocketRequestDefaults
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import all_litellm_params
+from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD, all_litellm_params
 from litellm.utils import (
     ProviderConfigManager,
     client,
@@ -185,6 +185,12 @@ def _request_trace_id(request_kwargs: Mapping[str, object]) -> str | None:
     return _client_trace_id(request_kwargs)
 
 
+def _listing_trace_id(request_kwargs: Mapping[str, object], *, bridged_first_turn: bool) -> str | None:
+    if bridged_first_turn:
+        return _client_trace_id(request_kwargs) or _request_trace_id(request_kwargs)
+    return _request_trace_id(request_kwargs)
+
+
 async def aresponses_api_with_mcp(
     input: str | ResponseInputParam,
     model: str,
@@ -250,6 +256,12 @@ async def aresponses_api_with_mcp(
     request_kwargs: Final = _REQUEST_KWARGS.validate_python(kwargs)
     logging_obj: Final = request_kwargs.get("litellm_logging_obj")
     joins_request_trace: Final = isinstance(logging_obj, LiteLLMLoggingObj)
+    bridged_first_turn: Final = (
+        joins_request_trace
+        and not stream
+        and previous_response_id is None
+        and not _provider_stores_the_first_round(model, custom_llm_provider, kwargs)
+    )
 
     # Get original MCP tools (for events) and OpenAI tools (for LLM) by reusing existing methods
     (
@@ -258,7 +270,9 @@ async def aresponses_api_with_mcp(
     ) = await LiteLLM_Proxy_MCP_Handler.process_mcp_tools_without_openai_transform(
         user_api_key_auth=user_api_key_auth,
         mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
-        litellm_trace_id=_client_trace_id(request_kwargs) if stream else _request_trace_id(request_kwargs),
+        litellm_trace_id=_client_trace_id(request_kwargs)
+        if stream
+        else _listing_trace_id(request_kwargs, bridged_first_turn=bridged_first_turn),
         joins_request_trace=joins_request_trace and not stream,
         mcp_auth_header=mcp_auth_header,
         mcp_server_auth_headers=mcp_server_auth_headers,
@@ -478,6 +492,18 @@ def _bridges_to_chat_completions(
 
 
 _RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED: Final = frozenset({"client_metadata"})
+
+
+def _previous_response_client_ids(previous_response_id: str | None, kwargs: Mapping[str, object]) -> tuple[str, ...]:
+    """The forms of the previous response's id the client held, which its spend log row can be stored under."""
+    if not previous_response_id:
+        return ()
+    addressed_id: Final = kwargs.get(ADDRESSED_RESPONSE_ID_FIELD)
+    return (
+        (previous_response_id, addressed_id)
+        if isinstance(addressed_id, str) and addressed_id
+        else (previous_response_id,)
+    )
 
 
 def _bridge_kwargs(
@@ -1543,6 +1569,7 @@ def responses(
                 extra_body=extra_body,
                 timeout=timeout if timeout is not None else request_timeout,
                 allowed_openai_params=allowed_openai_params,
+                previous_response_client_ids=_previous_response_client_ids(previous_response_id, kwargs),
                 **bridge_kwargs,
             )
 
