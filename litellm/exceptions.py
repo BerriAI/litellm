@@ -233,14 +233,14 @@ class OpenRouterRegionNotSupportedError(NotFoundError):
         message: str,
         model: str,
         llm_provider: str = "openrouter",
-        response: httpx.Response | None = None,
+        response: httpx.Response | None = None,  # pyright: ignore[reportUnknownMemberType,reportUnknownParameterType]  # httpx.Response type is untyped
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
         num_retries: int | None = None,
         region: str | None = None,
     ) -> None:
         self.region = region
-        super().__init__(
+        super().__init__(  # pyright: ignore[reportUnknownMemberType]  # NotFoundError.__init__ is untyped
             message=message,
             model=model,
             llm_provider=llm_provider,

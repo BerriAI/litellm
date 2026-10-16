@@ -54,7 +54,7 @@ class OpenrouterConfig(OpenAIGPTConfig):
         region: str | None = None,
     ) -> None:
         self.region = region
-        super().__init__()
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]  # OpenAIGPTConfig.__init__ is untyped
 
     def get_complete_url(
         self,
