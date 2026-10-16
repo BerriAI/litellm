@@ -1101,7 +1101,7 @@ async def google_login(
         general_settings,
         premium_user,
         prisma_client,
-        user_api_key_cache,
+        saml_sso_cache,
         user_custom_ui_sso_sign_in_handler,
     )
 
@@ -1169,7 +1169,7 @@ async def google_login(
         verbose_proxy_logger.info("Redirecting to SAML SSO login")
         return await SAMLAuthHandler.build_login_redirect(
             request=request,
-            cache=user_api_key_cache,
+            cache=saml_sso_cache,
             relay_state=return_to,
         )
 
@@ -2257,20 +2257,20 @@ async def auth_callback(request: Request, state: str | None = None):
 @router.get("/sso/saml/login", tags=["experimental"], include_in_schema=False)
 async def saml_login(request: Request, return_to: str | None = None):
     """SP-initiated SAML login. Redirects the user to the configured IdP."""
-    from litellm.proxy.proxy_server import user_api_key_cache
+    from litellm.proxy.proxy_server import saml_sso_cache
 
     if is_admin_ui_disabled():
         return admin_ui_disabled()
 
-    return await SAMLAuthHandler.build_login_redirect(request=request, cache=user_api_key_cache, relay_state=return_to)
+    return await SAMLAuthHandler.build_login_redirect(request=request, cache=saml_sso_cache, relay_state=return_to)
 
 
 @router.get("/sso/saml/metadata", tags=["experimental"], include_in_schema=False)
 async def saml_metadata(request: Request):
     """Service Provider metadata XML, for registering this proxy at the IdP."""
-    from litellm.proxy.proxy_server import user_api_key_cache
+    from litellm.proxy.proxy_server import saml_sso_cache
 
-    metadata: Final = await SAMLAuthHandler.build_sp_metadata(request=request, cache=user_api_key_cache)
+    metadata: Final = await SAMLAuthHandler.build_sp_metadata(request=request, cache=saml_sso_cache)
     return Response(content=metadata, media_type="application/xml")
 
 
@@ -2283,7 +2283,7 @@ async def saml_callback(request: Request):
         master_key,
         premium_user,
         prisma_client,
-        user_api_key_cache,
+        saml_sso_cache,
     )
 
     if is_admin_ui_disabled():
@@ -2303,7 +2303,7 @@ async def saml_callback(request: Request):
     if "SAMLResponse" not in post_data:
         raise HTTPException(status_code=400, detail="Missing SAMLResponse in callback request.")
 
-    result: Final = await SAMLAuthHandler.handle_acs(request=request, cache=user_api_key_cache, post_data=post_data)
+    result: Final = await SAMLAuthHandler.handle_acs(request=request, cache=saml_sso_cache, post_data=post_data)
 
     await _raise_if_sso_exceeds_free_user_limit(premium_user, prisma_client)
 

@@ -5,7 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 import litellm
-from litellm.rust_bridge.responses.route_host import connection_defaults, map_failure, response
+from litellm.rust_bridge.host.routes.responses import connection_defaults, map_failure, response
 from litellm.types.llms.openai import ResponsesAPIResponse
 
 
