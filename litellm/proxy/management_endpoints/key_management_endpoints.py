@@ -4641,6 +4641,7 @@ async def info_key_fn(
         ),
     ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    include_effective_models: bool = False,
 ):
     """
     Retrieve information about a key.
@@ -4649,6 +4650,12 @@ async def info_key_fn(
     - key: str | None (query parameter) - The key to look up. Accepts the plaintext key or its hash;
       prefer the hash, since a query parameter is recorded verbatim by any HTTP access log in front
       of the proxy. Defaults to the key in the Authorization header.
+
+    Set include_effective_models=true to add info.effective_models: known, registered
+    model names resolved from the target key's grants and native model restrictions.
+    Stored info.models is unchanged. Inactive keys return an empty list. This is
+    model eligibility, not a check of budgets, provider health or request-context policies.
+    Only explicitly registered routes are listed; wildcard routes are not enumerated.
 
     Returns:
     - key: str - The key that was looked up, echoed back as it was passed in
@@ -4695,8 +4702,12 @@ async def info_key_fn(
     ```
     """
     from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
         model_max_budget_limiter,
         prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
     )
 
     try:
@@ -4744,6 +4755,22 @@ async def info_key_fn(
         key_info_dict["status"] = (
             "deleted" if live_key_info is None else _derive_key_status(key_info_dict, now=datetime.now(timezone.utc))
         )
+
+        if include_effective_models:
+            from litellm.proxy.management_endpoints.key_model_access import effective_key_models
+
+            key_info_dict["effective_models"] = list(  # mutable-ok: preserve the JSON models-list response shape
+                await effective_key_models(
+                    key=UserAPIKeyAuth.model_validate(key_info.model_dump(exclude_none=True)),
+                    router=llm_router,
+                    prisma_client=prisma_client,
+                    cache=user_api_key_cache,
+                    logging=proxy_logging_obj,
+                    settings=TypeAdapter(Mapping[str, object]).validate_python(general_settings),
+                )
+                if key_info_dict["status"] == "active"
+                else ()
+            )
 
         model_max_budget = key_info_dict.get("model_max_budget") or {}
         budget_table: Final = key_info_dict.get("litellm_budget_table") or {}
