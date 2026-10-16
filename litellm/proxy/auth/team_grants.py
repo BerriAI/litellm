@@ -10,7 +10,7 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Annotated, Final
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BeforeValidator, ConfigDict, TypeAdapter, ValidationError
 from pydantic.main import IncEx
 from typing_extensions import ReadOnly, TypedDict
 
@@ -20,6 +20,7 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     Member,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 
 _MODEL_ALIASES_ADAPTER: Final = TypeAdapter(dict[str, str])
 _JSON_COLUMNS: Final[Mapping[str, IncEx | bool]] = MappingProxyType(
@@ -37,13 +38,13 @@ def _decode_model_aliases(value: object) -> object:
         return None
 
 
-class TeamModelAliasTable(BaseModel):
+class TeamModelAliasTable(LiteLLMBaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
     model_aliases: Annotated[Mapping[str, str] | None, BeforeValidator(_decode_model_aliases)] = None
 
 
-class _TeamJsonColumns(BaseModel):
+class _TeamJsonColumns(LiteLLMBaseModel):
     """The two loosely typed columns on ``LiteLLM_TeamTable``, re-read with the shape the badge needs."""
 
     metadata: Mapping[str, object] | None = None
@@ -59,6 +60,7 @@ class TeamGrants(TypedDict, total=False):
     team_tpd_limit: ReadOnly[int | None]
     team_max_budget: ReadOnly[float | None]
     team_soft_budget: ReadOnly[float | None]
+    team_model_max_budget: ReadOnly[dict[str, object] | None]
     team_spend: ReadOnly[float | None]
     team_models: ReadOnly[Sequence[str]]
     team_blocked: ReadOnly[bool]
@@ -101,6 +103,7 @@ def team_grants(
         team_tpd_limit=team_object.tpd_limit,
         team_max_budget=team_object.max_budget,
         team_soft_budget=team_object.soft_budget,
+        team_model_max_budget=team_object.model_max_budget,
         team_spend=team_object.spend,
         team_models=tuple(team_object.models),
         team_blocked=team_object.blocked,

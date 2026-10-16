@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { z } from "zod/v4";
+import dayjs from "dayjs";
+import utc from "dayjs/plugin/utc";
+import { z } from "zod";
 import NumericalInput from "../shared/numerical_input";
 import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
 import { FieldGroup } from "@/components/ui/field";
@@ -9,16 +11,23 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { UtcDateTimeInput } from "@/components/shared/form/UtcDateTimeInput";
+import { ModelMaxBudgetEditor } from "../key_team_helpers/ModelMaxBudgetEditor";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import {
   buildMemberFormData,
   buildMemberFormValues,
   emptyMemberFormValues,
+  isModelMaxBudget,
+  TEMP_BUDGET_PAIR_MESSAGE,
+  tempBudgetPairError,
   type MemberAdditionalField,
   type MemberFieldsConfig,
   type MemberFormValues,
 } from "./memberFormValues";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+
+dayjs.extend(utc);
 
 interface BaseMember {
   user_email?: string;
@@ -41,9 +50,14 @@ interface MemberModalProps<T extends BaseMember> {
 
 const ROLE_REQUIRED_MESSAGE = "Please select a role!";
 
-const isEmailish = (value: string): boolean => value === "" || z.email().safeParse(value).success;
+const isEmailish = (value: string): boolean =>
+  value === "" || z.email({ pattern: z.regexes.html5Email }).safeParse(value).success;
 
-const memberFieldSchema = z.union([z.string(), z.number(), z.null(), z.array(z.string())]).optional();
+const modelMaxBudgetSchema = z.record(z.string(), z.looseObject({ budget_limit: z.number(), time_period: z.string() }));
+
+const memberFieldSchema = z
+  .union([z.string(), z.number(), z.null(), z.array(z.string()), modelMaxBudgetSchema])
+  .optional();
 
 const buildMemberSchema = (config: ModalConfig): z.ZodType<MemberFormValues, MemberFormValues> => {
   const shape = {
@@ -53,7 +67,10 @@ const buildMemberSchema = (config: ModalConfig): z.ZodType<MemberFormValues, Mem
     ...Object.fromEntries((config.additionalFields ?? []).map((field) => [field.name, memberFieldSchema])),
   };
 
-  return z.object(shape);
+  return z.object(shape).superRefine((values, ctx) => {
+    const path = tempBudgetPairError(values);
+    if (path !== null) ctx.addIssue({ code: "custom", path: [path], message: TEMP_BUDGET_PAIR_MESSAGE });
+  });
 };
 
 const MemberModal = <T extends BaseMember>({
@@ -158,6 +175,26 @@ const MemberModal = <T extends BaseMember>({
                 id={id}
                 value={typeof value === "string" ? value : null}
                 onChange={(next) => onChange(mode === "add" ? next ?? undefined : next)}
+              />
+            );
+          case "model-max-budget":
+            return (
+              <ModelMaxBudgetEditor
+                key={`${visible}-${initialData?.user_id ?? initialData?.user_email ?? ""}`}
+                value={isModelMaxBudget(value) ? value : {}}
+                onChange={onChange}
+                availableModels={field.availableModels ?? []}
+                premiumUser={field.premiumUser ?? false}
+              />
+            );
+          case "utc-datetime":
+            return (
+              <UtcDateTimeInput
+                {...rest}
+                id={id}
+                ref={ref}
+                value={typeof value === "string" && value !== "" ? dayjs.utc(value) : null}
+                onChange={(next) => onChange(next === null ? null : next.toISOString())}
               />
             );
           default:

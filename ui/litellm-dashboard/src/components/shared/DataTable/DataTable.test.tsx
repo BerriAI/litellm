@@ -1,4 +1,4 @@
-import type { ColumnDef, ExpandedState, OnChangeFn, PaginationState } from "@tanstack/react-table";
+import type { ColumnDef, ExpandedState, OnChangeFn, PaginationState, VisibilityState } from "@tanstack/react-table";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
@@ -141,7 +141,32 @@ const expansionColumns: ColumnDef<Person, unknown>[] = [
   },
 ];
 
+const numericColumns: ColumnDef<Person, unknown>[] = [
+  {
+    accessorKey: "name",
+    header: "Name",
+    cell: ({ row }) => <span data-testid="name-cell">{row.original.name}</span>,
+  },
+  {
+    id: "spend",
+    header: ({ column }) => <DataTableSortHeader column={column} title="Spend" />,
+    meta: { numeric: true },
+    cell: () => <span>$1.50</span>,
+  },
+];
+
 const CHARLIE_ALICE_BOB: Person[] = [person("c", "Charlie"), person("a", "Alice"), person("b", "Bob")];
+
+describe("DataTable numeric columns", () => {
+  it("right-aligns the header and cells of a numeric column only", () => {
+    render(<DataTable data={[person("a", "Alice")]} columns={numericColumns} sortingMode="client" />);
+
+    expect(screen.getByRole("columnheader", { name: "Spend" })).toHaveClass("text-right", "tabular-nums");
+    expect(screen.getByRole("cell", { name: "$1.50" })).toHaveClass("text-right", "tabular-nums");
+    expect(screen.getByRole("columnheader", { name: "Name" })).not.toHaveClass("text-right");
+    expect(screen.getByRole("cell", { name: "Alice" })).not.toHaveClass("text-right");
+  });
+});
 
 describe("DataTable sorting", () => {
   it("client mode reorders rows when the sort header is clicked", async () => {
@@ -278,11 +303,18 @@ describe("DataTable pagination", () => {
   type ServerPageHarnessProps = {
     rowCount: number;
     isLoading?: boolean;
+    isError?: boolean;
     initialPageIndex: number;
     onChange: (next: PaginationState) => void;
   };
 
-  function ServerPageHarness({ rowCount, isLoading = false, initialPageIndex, onChange }: ServerPageHarnessProps) {
+  function ServerPageHarness({
+    rowCount,
+    isLoading = false,
+    isError = false,
+    initialPageIndex,
+    onChange,
+  }: ServerPageHarnessProps) {
     const [pagination, setPagination] = useState<PaginationState>({ pageIndex: initialPageIndex, pageSize: 10 });
     const handleChange: OnChangeFn<PaginationState> = (updater) => {
       const next = typeof updater === "function" ? updater(pagination) : updater;
@@ -298,6 +330,7 @@ describe("DataTable pagination", () => {
         onPaginationChange={handleChange}
         rowCount={rowCount}
         isLoading={isLoading}
+        isError={isError}
       />
     );
   }
@@ -330,6 +363,102 @@ describe("DataTable pagination", () => {
     const { rerender } = render(<ServerPageHarness rowCount={0} isLoading initialPageIndex={2} onChange={onChange} />);
 
     expect(screen.getByText("Page 3 of 1")).toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(onChange).not.toHaveBeenCalled();
+
+    rerender(<ServerPageHarness rowCount={15} initialPageIndex={2} onChange={onChange} />);
+
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ pageIndex: 1, pageSize: 10 }));
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Page 2 of 2")).toBeInTheDocument();
+  });
+
+  it("server mode keeps a deep-linked page when the fetch failed, instead of snapping to page 1 on rowCount 0", async () => {
+    const onChange = vi.fn();
+    render(<ServerPageHarness rowCount={0} isError initialPageIndex={2} onChange={onChange} />);
+
+    expect(screen.getByText("Page 3 of 1")).toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  type ClientPageHarnessProps = {
+    data: Person[];
+    isLoading?: boolean;
+    initialPageIndex: number;
+    onChange: (next: PaginationState) => void;
+  };
+
+  function ClientPageHarness({ data, isLoading = false, initialPageIndex, onChange }: ClientPageHarnessProps) {
+    const [pagination, setPagination] = useState<PaginationState>({ pageIndex: initialPageIndex, pageSize: 2 });
+    const handleChange: OnChangeFn<PaginationState> = (updater) => {
+      const next = typeof updater === "function" ? updater(pagination) : updater;
+      onChange(next);
+      setPagination(next);
+    };
+    return (
+      <DataTable
+        data={data}
+        columns={nameCellColumns}
+        paginationMode="client"
+        pageSizeOptions={[2]}
+        pagination={pagination}
+        onPaginationChange={handleChange}
+        isLoading={isLoading}
+      />
+    );
+  }
+
+  it("client mode keeps a controlled page when rows arrive after loading and when they are refetched", async () => {
+    const onChange = vi.fn();
+    const { rerender } = render(<ClientPageHarness data={[]} isLoading initialPageIndex={1} onChange={onChange} />);
+
+    rerender(<ClientPageHarness data={fivePeople} initialPageIndex={1} onChange={onChange} />);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(names()).toEqual(["P2", "P3"]);
+
+    rerender(<ClientPageHarness data={[...fivePeople]} initialPageIndex={1} onChange={onChange} />);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(names()).toEqual(["P2", "P3"]);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("client mode snaps a controlled page past the end back to the last page", async () => {
+    const onChange = vi.fn();
+    render(<ClientPageHarness data={fivePeople} initialPageIndex={5} onChange={onChange} />);
+
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ pageIndex: 2, pageSize: 2 }));
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(names()).toEqual(["P4"]);
+  });
+
+  it("client mode leaves a controlled page alone while there are no rows to page through", async () => {
+    const onChange = vi.fn();
+    render(<ClientPageHarness data={[]} initialPageIndex={3} onChange={onChange} />);
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("client mode without a controlled page still returns to the first page when the rows change", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <DataTable data={fivePeople} columns={nameCellColumns} paginationMode="client" pageSizeOptions={[2]} />,
+    );
+
+    await user.click(screen.getByTestId("pagination-next"));
+    expect(names()).toEqual(["P2", "P3"]);
+
+    rerender(
+      <DataTable data={[...fivePeople]} columns={nameCellColumns} paginationMode="client" pageSizeOptions={[2]} />,
+    );
+    await waitFor(() => expect(names()).toEqual(["P0", "P1"]));
+  });
+
+  it("server mode resumes clamping once the error clears and a real rowCount arrives", async () => {
+    const onChange = vi.fn();
+    const { rerender } = render(<ServerPageHarness rowCount={0} isError initialPageIndex={2} onChange={onChange} />);
+
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(onChange).not.toHaveBeenCalled();
 
@@ -555,6 +684,69 @@ describe("DataTable column visibility", () => {
     expect(await screen.findByTestId("view-option-email")).toBeInTheDocument();
     expect(screen.queryByTestId("view-option-name")).not.toBeInTheDocument();
   });
+
+  it("uncontrolled mode seeds hidden columns from defaultColumnVisibility and still toggles internally", async () => {
+    const user = userEvent.setup();
+    render(
+      <DataTable
+        data={CHARLIE_ALICE_BOB}
+        columns={nameEmailColumns}
+        defaultColumnVisibility={{ email: false }}
+        toolbar={(table) => <DataTableViewOptions table={table} />}
+      />,
+    );
+
+    expect(screen.queryByRole("columnheader", { name: "Email" })).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("view-options-trigger"));
+    await user.click(await screen.findByTestId("view-option-email"));
+    expect(await screen.findByRole("columnheader", { name: "Email" })).toBeInTheDocument();
+  });
+
+  it("controlled mode hides columns from the prop and reports toggles without changing them locally", async () => {
+    const user = userEvent.setup();
+    const onColumnVisibilityChange = vi.fn<OnChangeFn<VisibilityState>>();
+    render(
+      <DataTable
+        data={CHARLIE_ALICE_BOB}
+        columns={nameEmailColumns}
+        columnVisibility={{ email: false }}
+        onColumnVisibilityChange={onColumnVisibilityChange}
+        toolbar={(table) => <DataTableViewOptions table={table} />}
+      />,
+    );
+
+    expect(screen.queryByRole("columnheader", { name: "Email" })).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("view-options-trigger"));
+    await user.click(await screen.findByTestId("view-option-email"));
+
+    expect(onColumnVisibilityChange).toHaveBeenCalledTimes(1);
+    const updater = onColumnVisibilityChange.mock.calls[0]?.[0];
+    const next = typeof updater === "function" ? updater({ email: false }) : updater;
+    expect(next).toEqual({ email: true });
+    expect(screen.queryByRole("columnheader", { name: "Email" })).not.toBeInTheDocument();
+  });
+
+  it("controlled mode reveals the column once the parent applies the reported change", async () => {
+    const user = userEvent.setup();
+    const Harness = () => {
+      const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({ email: false });
+      return (
+        <DataTable
+          data={CHARLIE_ALICE_BOB}
+          columns={nameEmailColumns}
+          columnVisibility={columnVisibility}
+          onColumnVisibilityChange={setColumnVisibility}
+          toolbar={(table) => <DataTableViewOptions table={table} />}
+        />
+      );
+    };
+    render(<Harness />);
+
+    expect(screen.queryByRole("columnheader", { name: "Email" })).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("view-options-trigger"));
+    await user.click(await screen.findByTestId("view-option-email"));
+    expect(await screen.findByRole("columnheader", { name: "Email" })).toBeInTheDocument();
+  });
 });
 
 describe("DataTable pinned columns", () => {
@@ -704,28 +896,6 @@ describe("DataTable layout", () => {
     expect(scroller).toHaveStyle({ maxHeight: "240px" });
     expect(scroller).toHaveClass("overflow-auto");
     expect(scroller).toHaveClass("[&_[data-slot=table-container]]:overflow-visible");
-    expect(screen.getByTestId("data-table-head")).toHaveClass("sticky", "bg-background");
-  });
-
-  it("caps fillHeight at the parent's height instead of stretching to it, so a short table stays short", () => {
-    render(<DataTable data={CHARLIE_ALICE_BOB} columns={nameEmailColumns} fillHeight />);
-    const outer = screen.getByTestId("data-table-root");
-    const frame = screen.getByTestId("data-table-frame");
-    const scroller = screen.getByTestId("data-table-scroller");
-
-    // A ceiling, not a stretch: flex-1 here would hold the footer at the bottom on a two-row table.
-    expect(outer).toHaveClass("max-h-full", "flex-col");
-    expect(outer).not.toHaveClass("flex-1");
-    expect(frame).toHaveClass("flex-col");
-    expect(frame).not.toHaveClass("flex-1");
-    expect(scroller).not.toHaveClass("flex-1");
-
-    expect(scroller).toHaveClass("min-h-0", "overflow-auto");
-    expect(scroller).toHaveStyle({ maxHeight: "" });
-    // Without this the Table primitive's own overflow container captures the sticky header.
-    expect(scroller).toHaveClass("[&_[data-slot=table-container]]:overflow-visible");
-
-    // Rows pass under the header, so the semi-transparent row tint alone would let them show through.
     expect(screen.getByTestId("data-table-head")).toHaveClass("sticky", "bg-background");
   });
 

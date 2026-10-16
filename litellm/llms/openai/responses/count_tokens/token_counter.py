@@ -81,12 +81,14 @@ class OpenAITokenCounter(BaseTokenCounter):
             )
 
             if result is not None:
-                return TokenCountResponse(
-                    total_tokens=result.get("input_tokens", 0),
-                    request_model=request_model,
-                    model_used=model_to_use,
-                    tokenizer_type="openai_api",
-                    original_response=result,
+                return TokenCountResponse.model_validate(
+                    {
+                        "total_tokens": result.get("input_tokens", 0),
+                        "request_model": request_model,
+                        "model_used": model_to_use,
+                        "tokenizer_type": "openai_api",
+                        "original_response": result,
+                    }
                 )
         except OpenAIError as e:
             verbose_logger.warning("OpenAI CountTokens API error: status=%s, message=%s", e.status_code, e.message)
