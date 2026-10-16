@@ -225,6 +225,8 @@ def _provider_hidden_params(
 
 
 class CustomStreamWrapper:
+    _on_complete: Callable[[object], None] | None = None
+
     @property
     def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
         return self._hidden_params
@@ -1743,11 +1745,15 @@ class CustomStreamWrapper:
         if not cache_hit and self.logging_obj.llm_caching_handler is not None:
             await self.logging_obj.llm_caching_handler.add_streaming_response_to_cache(processed_chunk)
 
+    def hand_completion_to(self, on_complete: Callable[[object], None]) -> None:
+        """A bridge whose own client stream logs the request takes the assembled response instead of the logger."""
+        self._on_complete = on_complete
+
     def run_success_logging_and_cache_storage(self, processed_chunk, cache_hit: bool):
         """
         Runs success logging in a thread and adds the response to the cache
         """
-        if litellm.disable_streaming_logging is True:
+        if litellm.disable_streaming_logging is True or self._on_complete is not None:
             """
             [NOT RECOMMENDED]
             Set this via `litellm.disable_streaming_logging = True`.
@@ -1962,13 +1968,18 @@ class CustomStreamWrapper:
                         processed_chunk=_cache_copy,
                         cache_hit=cache_hit,
                     )
-                    executor.submit(
-                        self.logging_obj.success_handler,
-                        _log_copy,
-                        None,
-                        None,
-                        cache_hit,
-                    )
+                    if self._on_complete is not None:
+                        self._on_complete(_log_copy)
+                    else:
+                        executor.submit(
+                            self.logging_obj.success_handler,
+                            _log_copy,
+                            None,
+                            None,
+                            cache_hit,
+                        )
+                elif self._on_complete is not None:
+                    self._on_complete(response)
                 else:
                     executor.submit(
                         self.logging_obj.success_handler,
@@ -2246,7 +2257,9 @@ class CustomStreamWrapper:
                 "_on_deferred_stream_complete",
                 None,
             )
-            if _deferred_cb is not None:
+            if self._on_complete is not None:
+                self._on_complete(complete_streaming_response)
+            elif _deferred_cb is not None:
                 # Proxy has post-call guardrails. Store the assembled
                 # response so the outer streaming consumer
                 # (ProxyLogging.async_post_call_streaming_iterator_hook)
@@ -2254,10 +2267,7 @@ class CustomStreamWrapper:
                 # end-of-stream blocks complete.  Scheduling here via
                 # create_task would race with unified_guardrail's
                 # end-of-stream block for short-stream providers.
-                self.logging_obj._deferred_stream_complete_args = (
-                    complete_streaming_response,
-                    cache_hit,
-                )
+                self.logging_obj.hold_stream_completion((complete_streaming_response, cache_hit))
             else:
                 # prefer_async_handlers routes CustomLogger to async_success_handler
                 # when consumers use ``async for`` on sync-SDK streams. Legacy string

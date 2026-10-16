@@ -18,6 +18,7 @@ import asyncio
 import logging
 from collections.abc import Callable, Mapping
 from datetime import datetime
+from functools import partial
 from typing import Any, Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -59,6 +60,7 @@ def _attach_mock_success_dispatch(mock_logging_obj, async_success_fn):
 
     mock_logging_obj.dispatch_success_handlers = dispatch_success_handlers
     mock_logging_obj.async_success_handler = async_success_fn
+    mock_logging_obj.hold_stream_completion = partial(Logging.hold_stream_completion, mock_logging_obj)
 
 
 async def _wait_until(condition: Callable[[], bool]) -> None:
@@ -617,6 +619,7 @@ class TestDeferredStreamingClosure:
         response args on logging_obj instead of calling the closure directly."""
         mock_logging_obj = MagicMock()
         mock_logging_obj._on_deferred_stream_complete = MagicMock()
+        mock_logging_obj.hold_stream_completion = partial(Logging.hold_stream_completion, mock_logging_obj)
 
         resp = await litellm.acompletion(
             model="gpt-3.5-turbo",
@@ -1434,6 +1437,7 @@ class TestResponsesIteratorDeferredLogging:
 
         logging_obj = MagicMock()
         logging_obj.dispatch_success_handlers = dispatch_success_handlers
+        logging_obj.hold_stream_completion = partial(Logging.hold_stream_completion, logging_obj)
         return logging_obj, recorded
 
     @pytest.mark.asyncio
