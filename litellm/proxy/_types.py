@@ -3814,6 +3814,16 @@ class ModelAccessDeniedProxyException(ProxyException):
         return self.internal_message.replace("\r", "").replace("\n", "")
 
 
+class AwsErrorTypeProxyException(Exception):
+    """A ProxyException answered to an AWS SDK, which reads the error code from the ``x-amzn-errortype`` header and
+    the message from a top-level ``message`` field."""
+
+    def __init__(self, error: ProxyException, aws_error_type: str) -> None:
+        super().__init__(error.message)
+        self.error: Final = error
+        self.aws_error_type: Final = aws_error_type
+
+
 from litellm.types.proxy.common_proxy_errors import (  # noqa: E402  # public re-export
     CommonProxyErrors as CommonProxyErrors,  # noqa: PLC0414  # public re-export
 )
