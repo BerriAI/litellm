@@ -5,15 +5,11 @@ This test file tests the Generic Guardrail API implementation,
 specifically focusing on metadata extraction and passing.
 """
 
-import asyncio
-import contextlib
-import functools
 import logging
 import logging.handlers
 import os
-import socket
-from collections.abc import AsyncIterator
-from typing import Final, Literal, TypeAlias
+from collections.abc import Callable
+from typing import Final, Literal, TypeAlias, assert_never
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -24,6 +20,7 @@ from litellm import ModelResponse
 from litellm._logging import verbose_proxy_logger
 from litellm._version import version as litellm_version
 from litellm.exceptions import GuardrailRaisedException, Timeout
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     GenericGuardrailAPI,
@@ -1954,7 +1951,7 @@ class TestToolSupport:
         assert forwarded_tools == tools
 
 
-_EndpointBehavior: TypeAlias = Literal["refuse", "hang", "fail_500"]
+_GuardrailFailure: TypeAlias = Literal["refused", "timed_out", "status_500"]
 
 
 class TestFailOnError:
@@ -2063,37 +2060,36 @@ class TestFailOnError:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        ("behavior", "status_suffix", "error_type"),
+        ("failure", "status_suffix", "error_type"),
         [
-            ("refuse", "", "ConnectError"),
-            ("hang", "", "Timeout"),
-            ("fail_500", " http_status_code=500", "HTTPStatusError"),
+            ("refused", "", "ConnectError"),
+            ("timed_out", "", "Timeout"),
+            ("status_500", " http_status_code=500", "HTTPStatusError"),
         ],
     )
     async def test_fail_open_log_line_appends_the_error_type(
-        self, behavior: _EndpointBehavior, status_suffix: str, error_type: str
+        self, failure: _GuardrailFailure, status_suffix: str, error_type: str
     ) -> None:
         """The pre-existing text stays intact and contiguous, so alerts that matched it still
         match, and error_type tells a timeout from a refused connection from an upstream status."""
+        guardrail: Final = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            guardrail_name="test-fail-open-guardrail",
+            event_hook="pre_call",
+            fail_on_error=False,
+        )
+        guardrail.async_handler = AsyncHTTPHandler(transport=httpx.MockTransport(_failing_guardrail(failure)))
         handler: Final = logging.handlers.MemoryHandler(capacity=100, flushLevel=logging.CRITICAL + 1)
         handler.setLevel(logging.CRITICAL)
-        async with _guardrail_endpoint(behavior) as api_base:
-            guardrail: Final = GenericGuardrailAPI(
-                api_base=api_base,
-                guardrail_name="test-fail-open-guardrail",
-                event_hook="pre_call",
-                fail_on_error=False,
-                timeout=0.5,
+        verbose_proxy_logger.addHandler(handler)
+        try:
+            result: Final = await guardrail.apply_guardrail(
+                inputs={"texts": ["hi"]},
+                request_data={},
+                input_type="request",
             )
-            verbose_proxy_logger.addHandler(handler)
-            try:
-                result: Final = await guardrail.apply_guardrail(
-                    inputs={"texts": ["hi"]},
-                    request_data={},
-                    input_type="request",
-                )
-            finally:
-                verbose_proxy_logger.removeHandler(handler)
+        finally:
+            verbose_proxy_logger.removeHandler(handler)
 
         assert result == {"texts": ["hi"]}
         assert [record.getMessage() for record in handler.buffer] == [
@@ -2103,38 +2099,16 @@ class TestFailOnError:
         ]
 
 
-async def _answer_guardrail_check(
-    behavior: _EndpointBehavior, released: asyncio.Event, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-) -> None:
-    head: Final = await reader.readuntil(b"\r\n\r\n")
-    content_length: Final = next(
-        (int(line.split(b":", 1)[1]) for line in head.lower().split(b"\r\n") if line.startswith(b"content-length:")),
-        0,
-    )
-    await reader.readexactly(content_length)
-    if behavior == "hang":
-        await released.wait()
-    else:
-        writer.write(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-        await writer.drain()
-    writer.close()
-    await writer.wait_closed()
+def _failing_guardrail(failure: _GuardrailFailure) -> Callable[[httpx.Request], httpx.Response]:
+    def answer(request: httpx.Request) -> httpx.Response:
+        match failure:
+            case "refused":
+                raise httpx.ConnectError("connection refused", request=request)
+            case "timed_out":
+                raise httpx.ReadTimeout("read timed out", request=request)
+            case "status_500":
+                return httpx.Response(500, request=request)
+            case _:
+                assert_never(failure)
 
-
-@contextlib.asynccontextmanager
-async def _guardrail_endpoint(behavior: _EndpointBehavior) -> AsyncIterator[str]:
-    if behavior == "refuse":
-        with socket.socket() as probe:
-            probe.bind(("127.0.0.1", 0))
-            closed_port: Final = probe.getsockname()[1]
-        yield f"http://127.0.0.1:{closed_port}"
-        return
-    released: Final = asyncio.Event()
-    server: Final = await asyncio.start_server(
-        functools.partial(_answer_guardrail_check, behavior, released), "127.0.0.1", 0
-    )
-    async with server:
-        try:
-            yield f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}"
-        finally:
-            released.set()
+    return answer
