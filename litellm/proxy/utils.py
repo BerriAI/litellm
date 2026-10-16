@@ -2426,13 +2426,17 @@ class ProxyLogging:
 
         return data
 
-    def has_pre_call_guardrails(self, request_metadata: Mapping[str, object]) -> bool:
+    def has_pre_call_guardrails(
+        self, request_metadata: Mapping[str, object], request_body: Mapping[str, object] | None = None
+    ) -> bool:
         """
         Whether anything configured would inspect the content of a request carrying this metadata.
 
         Evaluated with the same predicate the pre-call loop uses, so a proxy configured only with
         post-call guardrails answers False. Callers that must pay a real cost to build the hook's
         input, such as streaming a batch input file off disk, use this to skip that work.
+        ``request_body`` supplies the request's top-level fields, such as ``stream``, that a
+        guardrail scoped to streaming or non-streaming requests reads.
 
         A content-enforcing ``CustomLogger`` counts too. It is not a guardrail and has no event
         hook to consult, but it judges the payload the same way, so a proxy configured only with
@@ -2443,7 +2447,7 @@ class ProxyLogging:
         caps: Final = ProxyLogging.callback_capabilities()
         if caps.has_content_enforcer:
             return True
-        probe: Final = {"metadata": dict(request_metadata)}
+        probe: Final = {**(request_body or {}), "metadata": dict(request_metadata)}
         return any(
             isinstance(callback, CustomGuardrail)
             and callback.should_run_guardrail(data=probe, event_type=GuardrailEventHooks.pre_call)
@@ -2460,6 +2464,7 @@ class ProxyLogging:
         guardrails_only: bool = False,
         skip_guardrails: bool = False,
         endpoint_type: EndpointType = EndpointType.GENERIC,
+        before_guardrails: Callable[[dict[str, object]], Awaitable[None]] | None = None,  # mutable-ok: request payload
     ) -> None:
         pass
 
@@ -2472,6 +2477,7 @@ class ProxyLogging:
         guardrails_only: bool = False,
         skip_guardrails: bool = False,
         endpoint_type: EndpointType = EndpointType.GENERIC,
+        before_guardrails: Callable[[dict[str, object]], Awaitable[None]] | None = None,  # mutable-ok: request payload
     ) -> dict:
         pass
 
@@ -2483,6 +2489,7 @@ class ProxyLogging:
         guardrails_only: bool = False,
         skip_guardrails: bool = False,
         endpoint_type: EndpointType = EndpointType.GENERIC,
+        before_guardrails: Callable[[dict[str, object]], Awaitable[None]] | None = None,  # mutable-ok: request payload
     ) -> dict | None:
         """
         Allows users to modify/reject the incoming request to the proxy, without having to deal with parsing Request body.
@@ -2495,6 +2502,10 @@ class ProxyLogging:
         With ``guardrails_only`` the walk is limited to guardrails and guardrail pipelines: rate
         limiting, budget accounting, prompt templates and hanging-request alerting are skipped.
         Use it to scan a payload that is not itself a request, such as one record of a batch file.
+
+        ``before_guardrails`` is awaited once with the request, right before the first guardrail
+        pipeline, guardrail or content enforcer that runs on it, or after the other callbacks when
+        none does. An exception it raises ends the hook.
         """
         verbose_proxy_logger.debug("Inside Proxy Logging Pre-call hook!")
 
@@ -2545,9 +2556,16 @@ class ProxyLogging:
         raw_request_snapshot: Final[dict | None] = (  # mutable-ok: same request-payload shape as data
             independent_snapshot(data) if needs_raw_request_snapshot else None
         )
+        pending_before_guardrails: Final = [before_guardrails] if before_guardrails is not None else []
+
+        async def reach_guardrails(request: dict[str, object]) -> None:  # mutable-ok: request payload
+            while pending_before_guardrails:
+                await pending_before_guardrails.pop()(request)
 
         try:
             if not skip_guardrails:
+                if any(pipeline.mode == "pre_call" for _, pipeline in _policy_pipelines(data)):
+                    await reach_guardrails(data)
                 data, _ = await self._maybe_execute_pipelines(  # rebind-ok: pipeline edits feed the callback loop below
                     data=data,
                     user_api_key_dict=user_api_key_dict,
@@ -2573,6 +2591,7 @@ class ProxyLogging:
                 and (guardrails_only or not caps.has_pre_call_override)
             ):
                 if data is not None:
+                    await reach_guardrails(data)
                     self._process_guardrail_metadata(data)
                 return data
 
@@ -2603,6 +2622,13 @@ class ProxyLogging:
                         if getattr(_callback, "run_in_parallel", False):
                             continue
 
+                        if (
+                            pending_before_guardrails
+                            and _callback.should_run_guardrail(data=data, event_type=GuardrailEventHooks.pre_call)
+                            is True
+                        ):
+                            await reach_guardrails(data)
+
                         data = await self._run_sequential_guardrail_callback(
                             callback=_callback,
                             data=data,
@@ -2620,6 +2646,9 @@ class ProxyLogging:
                     ):
                         if call_type in MCP_GUARDRAIL_CALL_TYPES and user_api_key_dict is None:
                             continue
+
+                        if _callback.enforces_request_content and data is not None:
+                            await reach_guardrails(data)
 
                         response: Exception | str | Mapping[str, object] | None = (
                             await _callback.async_pre_call_hook(
@@ -2663,6 +2692,9 @@ class ProxyLogging:
                         start_time=start_time,
                         end_time=end_time,
                     )
+
+            if data is not None:
+                await reach_guardrails(data)
 
             if deferred_route_exc is not None and data is not None:
                 data = await self._handle_sensitive_data_route_exception(deferred_route_exc, data, user_api_key_dict)
