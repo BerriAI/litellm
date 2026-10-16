@@ -1593,6 +1593,9 @@ async def _common_key_generation_helper(
 
     _validate_key_alias_format(key_alias=data_json.get("key_alias", None))
 
+    if data_json.get("user_id", None) is None:
+        data_json["user_id"] = user_api_key_dict.user_id
+
     await _enforce_unique_key_alias(
         key_alias=data_json.get("key_alias", None),
         prisma_client=prisma_client,
