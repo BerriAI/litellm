@@ -68,8 +68,8 @@ class OpenrouterConfig(OpenAIGPTConfig):
         resolved_base: Final = resolve_openrouter_api_base(
             api_base=api_base,
             region=self.region,
-            litellm_params=litellm_params,
-            optional_params=optional_params,
+            litellm_params=litellm_params,  # pyright: ignore[reportUnknownArgumentType]  # overrides untyped OpenAIGPTConfig signature
+            optional_params=optional_params,  # pyright: ignore[reportUnknownArgumentType]  # overrides untyped OpenAIGPTConfig signature
         ).rstrip("/")
         endpoint: Final = "chat/completions"
         if endpoint in resolved_base:
