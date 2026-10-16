@@ -422,7 +422,7 @@ async def test_concurrent_pre_call_hooks_stress(monkeypatch):
     rate_limited_requests = []
 
     # Mock saturation check to return high saturation (forces strict mode)
-    async def mock_get_cache(key, litellm_parent_otel_span=None, local_only=False):
+    async def mock_get_cache(key, litellm_parent_otel_span=None, local_only=False, ttl=None):
         """Mock cache to simulate high saturation."""
         # Return high usage to trigger strict mode (>80% saturation)
         if ":requests" in key or ":tokens" in key:

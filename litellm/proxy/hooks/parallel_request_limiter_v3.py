@@ -181,7 +181,10 @@ _FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_FLAG: Final = TypeAdapter(bool | None)
 def fail_closed_rate_limit_enforcement_enabled(general_settings: Mapping[str, object]) -> bool:
     raw_value: Final = general_settings.get(FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_SETTING)
     try:
-        return _FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_FLAG.validate_python(raw_value) is True
+        validated: Final = _FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_FLAG.validate_python(raw_value)
+        if validated is None:
+            return True
+        return validated is True
     except ValidationError:
         verbose_proxy_logger.warning(
             "general_settings.%s=%r is not a boolean, treating it as disabled",
