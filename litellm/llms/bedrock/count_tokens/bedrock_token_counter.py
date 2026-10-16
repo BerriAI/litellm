@@ -16,10 +16,11 @@ from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
 from litellm.llms.bedrock.count_tokens.mantle_handler import BedrockMantleCountTokensHandler
 from litellm.llms.bedrock_mantle.common_utils import is_mantle_claude_model
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.types.utils import LiteLLMPydanticObjectBase, LlmProviders, TokenCountResponse
+from litellm.types.utils import LiteLLMPydanticObjectBase, LlmProviders, TokenCountMessagesFormat, TokenCountResponse
 
 RUNTIME_TOKENIZER_TYPE: Final = "bedrock_api"
 MANTLE_TOKENIZER_TYPE: Final = "bedrock_mantle_api"
+_RUNTIME_FALLBACK_STATUSES: Final = frozenset({400, 404})
 
 
 class _CountTokensReply(LiteLLMPydanticObjectBase):
@@ -46,14 +47,14 @@ CountTokensOutcome = CountedTokens | CountTokensFailure
 def _runtime_rejected_claude_model(outcome: CountTokensOutcome, resolved_model: str) -> bool:
     return (
         isinstance(outcome, CountTokensFailure)
-        and outcome.status_code == 400
+        and outcome.status_code in _RUNTIME_FALLBACK_STATUSES
         and is_mantle_claude_model(resolved_model)
     )
 
 
 class BedrockTokenCounter(BaseTokenCounter):
     """Token counter for AWS Bedrock: bedrock-runtime CountTokens first, and Anthropic's count_tokens
-    on bedrock-mantle for the Claude models bedrock-runtime answers 400 for"""
+    on bedrock-mantle for Claude models bedrock-runtime answers 400 or 404 for"""
 
     def __init__(
         self,
@@ -106,6 +107,8 @@ class BedrockTokenCounter(BaseTokenCounter):
         request_model: str = "",
         tools: Sequence[Mapping[str, object]] | None = None,
         system: object | None = None,
+        messages_format: TokenCountMessagesFormat = "anthropic",
+        output_format: JsonValue = None,
     ) -> TokenCountResponse | None:
         if not messages:
             return None

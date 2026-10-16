@@ -8,4 +8,4 @@ Python state Rust needs but does not own, behind one module per question. Rust i
 - The module path and function signature are a contract. The Rust side pins the path in a `const MODULE` in the crate that asks (`python-bridge/src/routes/messages/host.rs`, `python-bridge/src/secrets/`, `callbacks-legacy-python/src/python.rs`); change both sides together and keep `tests/unit/rust_bridge/host/` green
 - Inputs and outputs use values and frozen snapshots. Retain caller-owned clients and caches as opaque references when identity is required; Rust never discovers them through module globals
 - Moving a question into Rust means replacing the function body with a native call, not adding a second resolver. The Python signature stays
-- A `*/route_host.py` module is not this: it projects one route's kwargs and maps that route's failures. Shared questions belong here
+- `routes/<route>.py` holds the questions one route asks, under the same function names on every route (`response`, `map_failure`, `connection_defaults`), so Rust names only the module. A question two routes ask goes in a top-level module here instead

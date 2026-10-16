@@ -3237,6 +3237,7 @@ class TestJWTOAuth2Coexistence:
         jwt_handler.auth_jwt = AsyncMock(return_value={"sub": "mapped-user"})
         jwt_handler.get_user_email = MagicMock(return_value="mapped@example.com")
         jwt_handler.get_user_id = MagicMock(return_value="mapped-user")
+        jwt_handler.get_end_user_id = MagicMock(return_value=None)
         jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
             virtual_key_claim_field="sub",
             user_email_jwt_field="sub",
@@ -3312,6 +3313,7 @@ class TestJWTOAuth2Coexistence:
         jwt_handler.auth_jwt = AsyncMock(return_value={"sub": "jwt-principal"})
         jwt_handler.get_user_email = MagicMock(return_value="principal@example.com")
         jwt_handler.get_user_id = MagicMock(return_value="jwt-principal")
+        jwt_handler.get_end_user_id = MagicMock(return_value=None)
         jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
             virtual_key_claim_field="sub",
             user_email_jwt_field="sub",
@@ -3388,6 +3390,7 @@ class TestJWTOAuth2Coexistence:
         jwt_handler.auth_jwt = AsyncMock(return_value={"sub": "mapped-user"})
         jwt_handler.get_user_email = MagicMock(return_value="mapped@example.com")
         jwt_handler.get_user_id = MagicMock(return_value="mapped-user")
+        jwt_handler.get_end_user_id = MagicMock(return_value=None)
         jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
             virtual_key_claim_field="sub",
             user_email_jwt_field="sub",
@@ -8133,6 +8136,31 @@ async def test_builder_returns_401_when_db_lookup_reports_missing_key():
 
 
 @pytest.mark.asyncio
+async def test_builder_401_for_unknown_key_discloses_nothing_about_the_lookup():
+    """A wrong key reaches an unauthenticated caller, so its 401 body must carry no key
+    hash, no verification table, and no key-minting endpoint. Regression for the 401 that
+    shipped the key hash plus "Unable to find token in cache or
+    LiteLLM_VerificationTokenTable" to anyone who probed a public deployment. The hash the
+    operator still needs is on the auth failure log line, covered in test_auth_exception_handler."""
+    from litellm.constants import INVALID_API_KEY_ERROR_MESSAGE
+    from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
+    from litellm.proxy.proxy_server import hash_token
+
+    submitted_key = "sk-db-lookup-test"
+    key_hash = hash_token(token=submitted_key)
+    get_key_object = AsyncMock(side_effect=KeyNotFoundError(key_hash))
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_builder_with_key_lookup(get_key_object)
+
+    body = json.dumps(exc_info.value.to_dict())
+    assert int(exc_info.value.code) == status.HTTP_401_UNAUTHORIZED
+    assert exc_info.value.message == INVALID_API_KEY_ERROR_MESSAGE
+    for leaked in (key_hash, "VerificationToken", "/key/generate", submitted_key[-4:]):
+        assert leaked not in body, f"401 body leaks {leaked!r}: {body}"
+
+
+@pytest.mark.asyncio
 async def test_builder_succeeds_when_db_lookup_returns_valid_token():
     """Regression guard: a valid key still authenticates. Proves the 503
     conversion only fires on the failure path and never intercepts success."""
@@ -11263,6 +11291,7 @@ def _per_issuer_virtual_key_jwt_handler(
 ) -> MagicMock:
     jwt_handler = MagicMock()
     jwt_handler.is_jwt.return_value = True
+    jwt_handler.get_end_user_id.return_value = None
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
         virtual_key_claim_field=global_claim_field,
         unregistered_jwt_client_behavior=global_behavior,

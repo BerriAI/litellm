@@ -3756,7 +3756,11 @@ async def test_owner_fingerprint_hashes_custom_api_keys():
 
 
 @pytest.mark.asyncio
-async def test_stateful_mcp_session_owner_mismatch_returns_403():
+@pytest.mark.parametrize("body", [
+    b'{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}',
+    b'{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":0}}',
+])
+async def test_stateful_mcp_session_owner_mismatch_returns_403(body: bytes):
     """
     A stateful mcp-session-id is bound to its creator. A different
     authenticated caller presenting the same session_id must be rejected
@@ -3791,7 +3795,7 @@ async def test_stateful_mcp_session_owner_mismatch_returns_403():
     receive = AsyncMock(
         return_value={
             "type": "http.request",
-            "body": b'{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}',
+            "body": body,
             "more_body": False,
         }
     )
@@ -4121,6 +4125,18 @@ async def test_truncated_jsonrpc_response_with_nested_method_skips_lock(
     )
     mcp_server._stateful_session_owners[session_id] = mcp_server._owner_fingerprint_for(owner_auth)
 
+    class _RecordingLock(asyncio.Lock):
+        def __init__(self) -> None:
+            super().__init__()
+            self.contended = asyncio.Event()
+
+        async def acquire(self) -> bool:
+            if self.locked():
+                self.contended.set()
+            return await super().acquire()
+
+    session_lock: Final = _RecordingLock()
+    mcp_server._stateful_session_locks[session_id] = session_lock
     gate = asyncio.Event()
     request_in_handle = asyncio.Event()
     response_handled = asyncio.Event()
@@ -4186,12 +4202,19 @@ async def test_truncated_jsonrpc_response_with_nested_method_skips_lock(
             ),
         ):
             req_task = asyncio.create_task(call(request_body))
-            await asyncio.wait_for(request_in_handle.wait(), timeout=1.0)
+            await request_in_handle.wait()
 
             resp_task = asyncio.create_task(call(response_body))
-            # Under a flat substring heuristic the response would acquire the
-            # lock held by req_task and this wait would time out (deadlock).
-            await asyncio.wait_for(response_handled.wait(), timeout=1.0)
+            response_handled_task: Final = asyncio.create_task(response_handled.wait())
+            contended_task: Final = asyncio.create_task(session_lock.contended.wait())
+            _, pending = await asyncio.wait(
+                (response_handled_task, contended_task),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for event_task in pending:
+                event_task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            assert response_handled.is_set(), "response POST contended for the request's session lock"
 
             await resp_task
             assert not req_task.done()
@@ -4207,6 +4230,7 @@ async def test_truncated_jsonrpc_response_with_nested_method_skips_lock(
     finally:
         gate.set()
         mcp_server._stateful_session_auth_contexts.pop(session_id, None)
+        mcp_server._stateful_session_auth_context_last_seen.pop(session_id, None)
         mcp_server._stateful_session_owners.pop(session_id, None)
         mcp_server._stateful_session_locks.pop(session_id, None)
         mcp_server._stateful_session_active_request_counts.pop(session_id, None)
@@ -11675,3 +11699,124 @@ async def test_streamable_http_admission_auth_sees_only_peeked_jsonrpc_method() 
     assert downstream_bodies == [_INITIALIZE]
     stateless_handle.assert_not_awaited()
     send.assert_not_awaited()
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload, valid",
+    [
+        (b"{", False),
+        (b"\xff", False),
+        ({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 0}}, True),
+        ({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": "call"}}, True),
+        ({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {}}, True),
+        ({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": False}}, False),
+        ({"jsonrpc": "2.0", "id": 4, "method": "notifications/cancelled", "params": {"requestId": 0}}, False),
+        ({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}, False),
+    ],
+)
+async def test_stateful_cancellation_does_not_wait_for_call_or_change_its_auth(payload, valid):
+    from litellm.proxy._experimental.mcp_server import server as mcp_server
+
+    session_id = "cancellation-isolation-session"
+    owner = UserAPIKeyAuth(api_key="owner-key", user_id="owner")
+    original = mcp_server.MCPAuthenticatedUser(user_api_key_auth=owner, raw_headers={"x-call": "active"})
+    mcp_server._stateful_session_auth_contexts[session_id] = original
+    mcp_server._stateful_session_owners[session_id] = mcp_server._owner_fingerprint_for(owner)
+    lock = asyncio.Lock()
+    mcp_server._stateful_session_locks[session_id] = lock
+    reached = asyncio.Event()
+
+    async def handle(scope, receive, send):
+        assert lock.locked(), "The active call must still own its session lock"
+        assert mcp_server._stateful_session_auth_contexts[session_id] is original
+        assert original.raw_headers == {"x-call": "active"}
+        assert mcp_server.auth_context_var.get() is not original
+        reached.set()
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp",
+        "headers": [(b"mcp-session-id", session_id.encode())],
+    }
+    receive = AsyncMock(
+        return_value={
+            "type": "http.request",
+            "more_body": False,
+            "body": payload if isinstance(payload, bytes) else json.dumps(payload).encode(),
+        }
+    )
+    try:
+        with (
+            patch.object(
+                mcp_server,
+                "extract_mcp_auth_context",
+                new_callable=AsyncMock,
+                return_value=(owner, None, None, None, None, {"x-control": "cancel"}),
+            ),
+            patch.object(mcp_server, "_SESSION_MANAGERS_INITIALIZED", True),
+            patch.object(mcp_server.session_manager_stateful, "handle_request", side_effect=handle),
+            patch.object(mcp_server.session_manager_stateful, "_server_instances", {session_id: MagicMock()}),
+        ):
+            async with lock:
+                task = asyncio.create_task(mcp_server.handle_streamable_http_mcp(scope, receive, AsyncMock()))
+                try:
+                    done, _ = await asyncio.wait((task,), timeout=0.5)
+                    if valid:
+                        assert task in done, "Cancellation waited behind the active tool call"
+                        await task
+                        assert reached.is_set()
+                    else:
+                        assert not done, "Only a valid cancellation notification may bypass the call lock"
+                        assert not reached.is_set()
+                finally:
+                    if not task.done():
+                        task.cancel()
+                        await asyncio.gather(task, return_exceptions=True)
+    finally:
+        mcp_server._remove_stateful_session_tracking(session_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["MASK", "BLOCK"])
+@pytest.mark.parametrize("message", [None, "", "halfway"])
+@pytest.mark.parametrize("selected", [False, True])
+async def test_progress_text_obeys_request_output_guardrails(monkeypatch, action, message, selected):
+    import litellm
+
+    from litellm.caching.caching import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.operations import _guarded_progress_callback
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.types.guardrails import BlockedWord, ContentFilterAction, GuardrailEventHooks
+
+    policy = ContentFilterGuardrail(
+        guardrail_name="progress-policy", event_hook=GuardrailEventHooks.post_mcp_call,
+        blocked_words=[BlockedWord(keyword="halfway", action=ContentFilterAction(action))],
+        keyword_redaction_tag="[masked]", default_on=False,
+    )
+    monkeypatch.setattr(litellm, "callbacks", [policy])
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
+    delivered = AsyncMock()
+    caller = UserAPIKeyAuth(user_id="progress-user")
+    callback = _guarded_progress_callback(
+        delivered, None, caller, {"metadata": {"guardrails": ["progress-policy"] if selected else []}}
+    )
+    assert callback is not None
+    await callback(0, None, message)
+    expected = ("[masked]" if action == "MASK" else None) if selected and message == "halfway" else message
+    delivered.assert_awaited_once_with(0, None, expected)
+
+
+@pytest.mark.asyncio
+async def test_progress_callback_preserves_absence_and_cancellation():
+    import asyncio
+
+    from litellm.proxy._experimental.mcp_server.operations import _guarded_progress_callback
+
+    assert _guarded_progress_callback(None, None, None, {}) is None
+    callback = _guarded_progress_callback(AsyncMock(side_effect=asyncio.CancelledError), None, None, {})
+    assert callback is not None
+    with pytest.raises(asyncio.CancelledError):
+        await callback(0, 0, None)
