@@ -54,6 +54,9 @@ _AWAITED_TABLES: Final = frozenset(
 _PLUMBING_VERBS: Final = frozenset({"BEGIN", "COMMIT", "ROLLBACK", "DEALLOCATE", "SET", "SHOW"})
 _REDIS_READS: Final = frozenset({"GET", "MGET", "HGET", "HGETALL", "EXISTS", "TTL", "PTTL"})
 _REDIS_NAMESPACE: Final = "litellm.caching:"
+_REDIS_WRITES: Final = frozenset(
+    {"SET", "SETEX", "DEL", "EXPIRE", "INCRBYFLOAT", "INCR", "RPUSH", "LPUSH", "LPOP", "RPOP", "LTRIM", "HSET", "SADD"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,20 +103,21 @@ class RedisCommand:
     @property
     def bucket(self) -> Bucket:
         """Budget reads, cooldown reads and the rate-limiter script (with every command it issues) happen
-        before the request is forwarded. Spend increments, token counters, config rewrites and cache
-        invalidations (PUBLISH, DEL) happen after the response or on a timer."""
+        before the request is forwarded. Spend increments, token counters, config rewrites, cache
+        invalidations (PUBLISH, DEL), the spend buffers the pods flush and any other write happen after the
+        response or on a timer. Reads on keys these rules do not know stay unclassified and count in neither."""
         key: Final = self.key.removeprefix(_REDIS_NAMESPACE)
         if self.inside_script or self.command in {"EVALSHA", "EVAL"}:
             return "awaited"
         if self.command in {"PUBLISH", "DEL", "SCRIPT", "INFO", "MONITOR"} or key.startswith(
-            ("litellm_config:", "daily_")
+            ("litellm_config:", "daily_", "cronjob_lock:", "litellm_spend", "litellm_daily")
         ):
             return "background"
         if key.startswith("spend:"):
             return "awaited" if self.command in _REDIS_READS else "background"
         if key.startswith("deployment:") or key.endswith(("}:requests", "}:window")):
             return "awaited"
-        if key.endswith("}:tokens"):
+        if key.endswith("}:tokens") or self.command in _REDIS_WRITES:
             return "background"
         return "unclassified"
 
