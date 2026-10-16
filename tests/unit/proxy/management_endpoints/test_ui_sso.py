@@ -16,7 +16,7 @@ from fastapi import HTTPException, Request
 import litellm
 from litellm._uuid import uuid
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.proxy._types import LiteLLM_UserTable, NewUserResponse
+from litellm.proxy._types import LiteLLM_UserTable, NewUserResponse, SSOUserDefinedValues
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
 from litellm.proxy.management_endpoints.types import CustomOpenID
@@ -1778,7 +1778,7 @@ async def test_get_user_info_from_db_user_not_exists_creates_user():
     from litellm.proxy._types import NewUserResponse, SSOUserDefinedValues
     from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
 
-    prisma_client = MagicMock()
+    prisma_client = MagicMock(**{"db.litellm_usertable.count": AsyncMock(return_value=0)})
     user_api_key_cache = MagicMock()
     proxy_logging_obj = MagicMock()
     user_email = "newuser@example.com"
@@ -2015,6 +2015,7 @@ async def test_get_user_info_from_db_fails_with_500_when_the_database_drops_whil
         **{
             "db.litellm_usertable.find_unique": AsyncMock(return_value=None),
             "db.litellm_usertable.find_first": AsyncMock(return_value=None),
+            "db.litellm_usertable.count": AsyncMock(return_value=0),
         }
     )
 
@@ -9140,6 +9141,111 @@ async def test_saml_callback_enforces_free_sso_user_limit_after_validation():
 
     assert str(exc.value.code) == "403"
     assert call_order == ["validate", "count"]
+
+
+def _prisma_with_users(total_users: int) -> MagicMock:
+    prisma_client: Final = MagicMock()
+    user_table: Final = prisma_client.db.litellm_usertable
+    user_table.count = AsyncMock(side_effect=lambda where=None: total_users if where is None else 0)
+    user_table.find_unique = AsyncMock(return_value=None)
+    user_table.find_first = AsyncMock(return_value=None)
+    prisma_client.insert_data = AsyncMock(return_value=MagicMock())
+    return prisma_client
+
+
+def _inserted_tables(prisma_client: MagicMock) -> list[str]:
+    return [call.kwargs["table_name"] for call in prisma_client.insert_data.await_args_list]
+
+
+def _sso_login(user_id: str) -> tuple[CustomOpenID, SSOUserDefinedValues]:
+    email: Final = f"{user_id}@litellm.ai"
+    openid: Final = CustomOpenID(
+        id=user_id,
+        email=email,
+        first_name=None,
+        last_name=None,
+        display_name=user_id,
+        picture=None,
+        provider="microsoft",
+        team_ids=[],
+    )
+    user_defined_values: Final = SSOUserDefinedValues(
+        models=[],
+        user_id=user_id,
+        user_email=email,
+        user_role=None,
+        max_budget=None,
+        budget_duration=None,
+    )
+    return openid, user_defined_values
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("premium_user", "existing_users", "refused"),
+    [(False, 5, True), (False, 4, False), (True, 5, False)],
+)
+async def test_free_tier_sso_refuses_the_sixth_user_instead_of_locking_everyone_out(
+    premium_user: bool, existing_users: int, refused: bool
+) -> None:
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
+
+    openid, user_defined_values = _sso_login("new-hire")
+    prisma_client: Final = _prisma_with_users(existing_users)
+    with (
+        patch("litellm.proxy.proxy_server.premium_user", premium_user),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+    ):
+        try:
+            await get_user_info_from_db(
+                result=openid,
+                prisma_client=prisma_client,
+                user_api_key_cache=UserApiKeyCache(),
+                proxy_logging_obj=MagicMock(),
+                user_email=openid.email,
+                user_defined_values=user_defined_values,
+                alternate_user_id="new-hire",
+            )
+            error_code = None
+        except ProxyException as e:
+            error_code = str(e.code)
+
+    expected: Final = ("403", []) if refused else (None, ["user"])
+    assert (error_code, _inserted_tables(prisma_client)) == expected, (
+        f"premium={premium_user}, {existing_users} existing users: expected (error code, inserted tables) {expected}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_free_tier_sso_at_the_user_limit_still_lets_existing_users_log_in() -> None:
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
+
+    openid, user_defined_values = _sso_login("existing-admin")
+    existing_row: Final = LiteLLM_UserTable(
+        user_id="existing-admin", user_email=openid.email, user_role="proxy_admin", max_budget=None
+    )
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(key="existing-admin", value=existing_row)
+
+    prisma_client: Final = _prisma_with_users(5)
+    with (
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+    ):
+        user_info = await get_user_info_from_db(
+            result=openid,
+            prisma_client=prisma_client,
+            user_api_key_cache=cache,
+            proxy_logging_obj=MagicMock(),
+            user_email=openid.email,
+            user_defined_values=user_defined_values,
+            alternate_user_id="existing-admin",
+        )
+
+    assert (user_info, _inserted_tables(prisma_client)) == (existing_row, [])
 
 
 @pytest.mark.asyncio
