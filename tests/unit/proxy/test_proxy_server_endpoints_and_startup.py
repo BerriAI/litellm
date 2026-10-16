@@ -4402,9 +4402,14 @@ async def test_async_data_generator_yields_to_event_loop_while_chunks_are_buffer
 
         _, observed_progress = await asyncio.gather(probe(), consume())
 
-    assert observed_progress[0] < observed_progress[-1], (
+    assert observed_progress[-1] >= num_chunks // 2, (
         f"Event loop starved while {num_chunks} buffered chunks were drained, "
-        f"probe progress stayed at {observed_progress[0]} the whole stream"
+        f"probe only reached {observed_progress[-1]} steps"
+    )
+    sustained_advances = sum(1 for a, b in zip(observed_progress, observed_progress[1:]) if b > a)
+    assert sustained_advances >= num_chunks // 4, (
+        f"Probe advanced in only {sustained_advances} of {num_chunks} chunks, "
+        f"the drain yields once at the start and then monopolizes the loop again"
     )
 
 
