@@ -6,6 +6,7 @@ from typing import Annotated, Any, Final, Literal, Union, get_args, get_origin
 
 import orjson
 from fastapi import Request, UploadFile, status
+from pydantic import TypeAdapter
 from starlette._utils import get_route_path
 from starlette.requests import HTTPConnection
 from typing_extensions import NotRequired, ReadOnly, Required, assert_never
@@ -29,6 +30,7 @@ _FORM_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-www-form-
 _BINARY_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-protobuf", "application/protobuf"})
 
 _ANNOTATION_QUALIFIERS: Final[frozenset[object]] = frozenset({Annotated, NotRequired, ReadOnly, Required})
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def resolve_inference_model(
@@ -545,7 +547,7 @@ async def convert_upload_files_to_file_data(
     return data
 
 
-async def get_request_body(request: Request) -> dict[str, Any]:
+async def get_request_body(request: Request) -> dict[str, object]:
     """
     Read the request body and parse it as JSON.
     """
@@ -665,7 +667,7 @@ def get_tags_from_request_body(request_body: Mapping[str, object]) -> list[str]:
     if isinstance(metadata, str):
         from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 
-        parsed: Final[object] = safe_json_loads(metadata)
+        parsed: Final[object] = _DECODED_JSON.validate_python(safe_json_loads(metadata))
         metadata = parsed if isinstance(parsed, dict) else {}
     elif not isinstance(metadata, dict):
         metadata = {}

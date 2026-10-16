@@ -458,16 +458,24 @@ def test_client_private_key_encrypted_at_rest():
     private_key = (
         "-----BEGIN PRIVATE KEY-----\nsensitive-rsa-material\n-----END PRIVATE KEY-----"
     )
-    credentials = {"client_secret": "shh", "client_private_key": private_key}
+    resource_client_secret: Final = "resource-client-secret"
+    credentials = {
+        "client_secret": "shh",
+        "client_private_key": private_key,
+        "id_jag_resource_client_secret": resource_client_secret,
+    }
 
     encrypted = encrypt_credentials(dict(credentials), encryption_key=None)
     assert encrypted["client_private_key"] != private_key
     assert private_key not in encrypted["client_private_key"]
     assert encrypted["client_secret"] != "shh"
+    assert encrypted["id_jag_resource_client_secret"] != resource_client_secret
+    assert resource_client_secret not in encrypted["id_jag_resource_client_secret"]
 
     decrypted = decrypt_credentials(dict(encrypted))
     assert decrypted["client_private_key"] == private_key
     assert decrypted["client_secret"] == "shh"
+    assert decrypted["id_jag_resource_client_secret"] == resource_client_secret
 
 
 @pytest.fixture(params=["xsalsa20-poly1305", "aes-256-gcm"])

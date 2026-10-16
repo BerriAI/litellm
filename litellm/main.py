@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 import dotenv
 import httpx
 import openai
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import assert_never, overload
 
 import litellm
@@ -86,6 +86,9 @@ from litellm.litellm_core_utils.get_litellm_params import (
     InvalidControlOption,
     parse_control_options,
     with_control_options,
+)
+from litellm.litellm_core_utils.get_llm_provider_logic import (
+    invalid_provider_routing_hints_message,
 )
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
@@ -137,8 +140,10 @@ from litellm.types.litellm_params import ControlOptions, RetryStrategy
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
+    BaseUrlRoutingHint,
     CustomPricingLiteLLMParams,
     ModelResponseStream,
+    ProviderRoutingHints,
     RawRequestTypedDict,
     StreamingChoices,
     is_decisions_model_mode,
@@ -1087,6 +1092,23 @@ def _is_claude_tool_target(custom_llm_provider: str | None, model: str) -> bool:
     if custom_llm_provider == "azure_ai" or custom_llm_provider == "vertex_ai":
         return "claude" in model_lower
     return False
+
+
+def _history_without_unanswered_tool_search_calls(
+    messages: Sequence[object], custom_llm_provider: str | None, provider_config: BaseConfig
+) -> tuple[object, ...] | None:
+    from litellm.responses.litellm_completion_transformation.tool_search import (
+        chat_messages_without_tool_search_calls,
+        chat_route_rejects_unanswered_tool_calls,
+        unanswered_tool_search_call_ids,
+    )
+
+    if not chat_route_rejects_unanswered_tool_calls(custom_llm_provider, provider_config):
+        return None
+    unanswered_search_call_ids: Final = unanswered_tool_search_call_ids(messages)
+    if not unanswered_search_call_ids:
+        return None
+    return chat_messages_without_tool_search_calls(messages, unanswered_search_call_ids)
 
 
 def _without_anthropic_only_tool_keys(tool: dict[str, object]) -> dict[str, object]:
@@ -4102,6 +4124,9 @@ def _complete_sagemaker(ctx: CompletionDispatchContext) -> _CompletionDispatchRe
 
 _ADDITIONAL_DROP_PARAMS_ADAPTER: Final = TypeAdapter(list[str])
 _OPTIONAL_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
+_REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
+_BASE_URL_HINT: Final = TypeAdapter(BaseUrlRoutingHint)
 
 
 def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
@@ -5119,6 +5144,33 @@ def _complete_langflow(ctx: CompletionDispatchContext) -> _CompletionDispatchRes
     )
 
 
+def _complete_databricks_agent(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
+    from litellm.llms.databricks.agent.transformation import DatabricksAgentConfig
+
+    api_base, api_key = DatabricksAgentConfig.resolve_api_base_and_key(
+        api_base=ctx.api_base or litellm.api_base,
+        api_key=ctx.api_key or litellm.api_key,
+    )
+    return base_llm_http_handler.completion(
+        model=ctx.model,
+        stream=ctx.stream,
+        messages=ctx.messages,
+        acompletion=ctx.acompletion,
+        api_base=api_base,
+        model_response=ctx.model_response,
+        optional_params=ctx.optional_params,
+        litellm_params={**ctx.litellm_params, "api_base": api_base},
+        shared_session=ctx.shared_session,
+        custom_llm_provider=ctx.custom_llm_provider,
+        timeout=ctx.timeout,
+        headers=ctx.headers or litellm.headers,
+        encoding=_get_encoding(),
+        api_key=api_key,
+        logging_obj=ctx.logging,
+        client=_dispatch_client_http(ctx),
+    )
+
+
 @tracer.wrap()
 @client
 def completion(
@@ -5556,7 +5608,13 @@ def completion(
             )
 
         if provider_config is not None:
-            messages = provider_config.translate_developer_role_to_system_role(messages=messages)
+            translated_messages: Final = provider_config.translate_developer_role_to_system_role(messages=messages)
+            history_for_route: Final = _history_without_unanswered_tool_search_calls(
+                translated_messages, custom_llm_provider, provider_config
+            )
+            messages = (  # rebind-ok: completion() rewrites messages step by step for the provider
+                translated_messages if history_for_route is None else list(history_for_route)
+            )
 
         if (
             supports_system_message is not None
@@ -5641,7 +5699,15 @@ def completion(
             functions_unsupported_model: Final[list[object]] = TypeAdapter(list[object]).validate_python(
                 optional_params.pop("functions_unsupported_model")
             )
-            messages = function_call_prompt(messages=messages, functions=functions_unsupported_model)
+            request_kwargs: Final = _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
+            messages = function_call_prompt(
+                messages=messages,
+                functions=functions_unsupported_model,
+                model=model,
+                llm_provider=custom_llm_provider,
+                drop_params=litellm.drop_params is True
+                or normalize_drop_params(request_kwargs.get("drop_params")) is True,
+            )
 
         # For logging - save the values of the litellm-specific params passed in
         requested_litellm_params: Final = get_litellm_params(
@@ -6070,6 +6136,9 @@ def completion(
         elif custom_llm_provider == "langflow":
             # LangFlow - Visual AI Agent Platform
             response = _complete_langflow(_dispatch_ctx)
+
+        elif custom_llm_provider == "databricks_agent":
+            response = _complete_databricks_agent(_dispatch_ctx)  # rebind-ok: dispatch chain binds response per branch
 
         else:
             raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
@@ -6774,7 +6843,7 @@ def embedding(
             response = huggingface_embed.embedding(
                 model=model,
                 input=input,
-                encoding=sys.modules[__name__].encoding,
+                encoding=_load_module_encoding(),
                 api_key=api_key,
                 api_base=api_base,
                 logging_obj=logging,
@@ -7895,6 +7964,13 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
     ### PASS ARGS TO Image Generation ###
     kwargs["atranscription"] = True
     file: Final = kwargs.get("file", None)
+    try:
+        provider_hints: Final = _PROVIDER_ROUTING_HINTS.validate_python(kwargs)
+        api_base_hint: Final = provider_hints.get("api_base") or _BASE_URL_HINT.validate_python(kwargs).get("base_url")
+    except ValidationError as error:
+        raise litellm.BadRequestError(
+            message=invalid_provider_routing_hints_message(error), model=model, llm_provider=""
+        ) from error
     custom_llm_provider = None
     try:
         # Use a partial function to pass your keyword arguments
@@ -7904,7 +7980,11 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
         ctx: Final = contextvars.copy_context()
         func_with_context: Final = partial(ctx.run, func)
 
-        _, custom_llm_provider, _, _ = get_llm_provider(model=model, api_base=kwargs.get("api_base", None))
+        _, custom_llm_provider, _, _ = get_llm_provider(
+            model=model,
+            custom_llm_provider=provider_hints.get("custom_llm_provider"),
+            api_base=api_base_hint,
+        )
 
         # Await normally
         init_response: Final = await loop.run_in_executor(None, func_with_context)
@@ -8223,7 +8303,14 @@ async def aspeech(*args, **kwargs) -> HttpxBinaryResponseContent:
     model: Final = args[0] if len(args) > 0 else kwargs["model"]
     ### PASS ARGS TO Image Generation ###
     kwargs["aspeech"] = True
-    custom_llm_provider = kwargs.get("custom_llm_provider", None)
+    try:
+        provider_hints: Final = _PROVIDER_ROUTING_HINTS.validate_python(kwargs)
+        api_base_hint: Final = provider_hints.get("api_base") or _BASE_URL_HINT.validate_python(kwargs).get("base_url")
+    except ValidationError as error:
+        raise litellm.BadRequestError(
+            message=invalid_provider_routing_hints_message(error), model=model, llm_provider=""
+        ) from error
+    custom_llm_provider = provider_hints.get("custom_llm_provider")
     try:
         # Use a partial function to pass your keyword arguments
         func: Final = partial(speech, *args, **kwargs)
@@ -8232,7 +8319,11 @@ async def aspeech(*args, **kwargs) -> HttpxBinaryResponseContent:
         ctx: Final = contextvars.copy_context()
         func_with_context: Final = partial(ctx.run, func)
 
-        _, custom_llm_provider, _, _ = get_llm_provider(model=model, api_base=kwargs.get("api_base", None))
+        _, custom_llm_provider, _, _ = get_llm_provider(
+            model=model,
+            custom_llm_provider=provider_hints.get("custom_llm_provider"),
+            api_base=api_base_hint,
+        )
 
         # Await normally
         init_response: Final = await loop.run_in_executor(None, func_with_context)
@@ -8982,9 +9073,9 @@ _encoding_cache: Tokenizer | None = None
 
 
 def _load_module_encoding() -> Tokenizer:
-    import sys
+    from litellm import main as litellm_main
 
-    return sys.modules[__name__].encoding
+    return litellm_main.encoding
 
 
 def _get_encoding() -> Tokenizer:
@@ -9007,8 +9098,6 @@ def __getattr__(name: str) -> Tokenizer:
     if name == "encoding":
         _encoding: Final = _load_default_encoding()
         # Cache it in the module's __dict__ for subsequent accesses
-        import sys
-
         sys.modules[__name__].__dict__["encoding"] = _encoding
         global _encoding_cache
         _encoding_cache = _encoding

@@ -1,9 +1,10 @@
+import asyncio
 import json
-import os
 import re
-from collections.abc import Iterator
 from datetime import datetime, timezone
 from importlib.resources import files
+from itertools import chain
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -19,7 +20,7 @@ from litellm.router_strategy.complexity_router.fuse_presets import get_fuse_pres
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
 )
-from litellm.types.proxy.public_endpoints.public_endpoints import ProviderCreateInfo, WhatsNewResponse
+from litellm.types.proxy.public_endpoints.public_endpoints import ProviderCreateInfo, ProviderCredentialField
 from litellm.types.utils import LlmProviders
 
 
@@ -78,7 +79,6 @@ def test_get_provider_create_fields():
 def test_get_litellm_model_cost_map_catalog_only_excludes_runtime_registered_entries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import litellm
     from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 
     monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
@@ -471,6 +471,31 @@ def test_strands_decider_provider_fields():
     assert fields_by_key["api_key"].field_type == "password"
 
 
+@pytest.mark.parametrize(
+    ("provider", "display_name", "litellm_provider", "model_placeholder"),
+    (
+        ("Laya", "Laya", LlmProviders.LAYA.value, "laya/english"),
+        ("Bespoke", "Bespoke Nimble", LlmProviders.BESPOKE.value, "bespoke/nimble"),
+    ),
+)
+def test_oss_decisions_provider_fields(
+    provider: str, display_name: str, litellm_provider: str, model_placeholder: str
+) -> None:
+    entry: Final = _decisions_provider_entry(provider)
+
+    assert entry.provider_display_name == display_name
+    assert entry.litellm_provider == litellm_provider
+    assert entry.default_model_placeholder == model_placeholder
+
+    fields_by_key: Final = {f.key: f for f in entry.credential_fields}
+
+    assert fields_by_key["api_base"].required is True
+    assert fields_by_key["api_base"].field_type == "text"
+
+    assert fields_by_key["api_key"].required is False
+    assert fields_by_key["api_key"].field_type == "password"
+
+
 ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
     {
         "a2a",
@@ -482,6 +507,7 @@ ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
         "charity_engine",
         "chutes",
         "darkbloom",
+        "databricks_agent",
         "gdc",
         "helicone",
         "inception",
@@ -1540,157 +1566,94 @@ async def test_fetch_remote_autorouter_presets_parses_and_rejects_empty(monkeypa
         await _fetch_remote_autorouter_presets("https://example.test/presets.json")
 
 
-@pytest.fixture
-def reset_whats_new_cache() -> Iterator[None]:
-    from litellm.proxy.public_endpoints.public_endpoints import _WhatsNewCache
-
-    _WhatsNewCache.launches = None
-    _WhatsNewCache.lock = None
-    yield
-    _WhatsNewCache.launches = None
-    _WhatsNewCache.lock = None
+# ---------------------------------------------------------------------------
+# /public/agents/fields inherited provider credentials
+# ---------------------------------------------------------------------------
 
 
-def _remote_whats_new() -> WhatsNewResponse:
-    return WhatsNewResponse.model_validate(
-        {
-            "launches": [
-                {
-                    "icon": "sparkles",
-                    "title": "Remote Launch",
-                    "description": "from the remote list",
-                    "href": "https://docs.litellm.ai/blog/remote",
-                    "published_on": "2026-10-11",
-                }
-            ]
+def test_get_agent_fields_merge_does_not_compound_across_requests():
+    """The inherited-credentials merge runs once, so credential_fields cannot grow per request.
+
+    Caching the raw file contents instead of the merged result would let the merge
+    append inherited fields again on every request.
+    """
+    client = _make_client()
+
+    def counts():
+        return {
+            agent["agent_type"]: len(agent.get("credential_fields") or [])
+            for agent in client.get("/public/agents/fields").json()
         }
+
+    first = counts()
+    assert first, "expected at least one agent type"
+    assert first == counts() == counts()
+
+
+def test_get_agent_fields_appends_inherited_provider_credential_fields():
+    client: Final = _make_client()
+    providers: Final = {p["provider"]: p for p in client.get("/public/providers/fields").json()}
+    agents: Final = client.get("/public/agents/fields").json()
+    bundled: Final = json.loads(
+        files("litellm.proxy.public_endpoints").joinpath("agent_create_fields.json").read_text(encoding="utf-8")
     )
+    own_counts: Final = {agent["agent_type"]: len(agent["credential_fields"]) for agent in bundled}
+    expected_inherited: Final = {
+        agent["agent_type"]: providers.get(agent.get("inherit_credentials_from_provider"), {}).get(
+            "credential_fields", []
+        )
+        for agent in bundled
+    }
+    inherited: Final = {
+        agent["agent_type"]: agent["credential_fields"][own_counts[agent["agent_type"]] :] for agent in agents
+    }
+
+    assert any(expected_inherited.values()), "expected at least one agent to inherit provider credential fields"
+    assert all("inherit_credentials_from_provider" not in agent for agent in agents)
+    assert {
+        agent_type: [
+            {key: field[key] for key in field if key in ProviderCredentialField.model_fields} for field in fields
+        ]
+        for agent_type, fields in inherited.items()
+    } == expected_inherited
+    assert all(field["include_in_litellm_params"] is True for field in chain.from_iterable(inherited.values()))
 
 
-def test_get_whats_new_local_mode_serves_bundled_list(
-    monkeypatch: pytest.MonkeyPatch, reset_whats_new_cache: None
-) -> None:
-    monkeypatch.setenv("LITELLM_LOCAL_WHATS_NEW", "True")
-    app = FastAPI()
+@pytest.mark.parametrize("preference", ["auto_install", None])
+def test_public_skill_hub_echoes_registered_installation_preference(preference):
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketplace import register_plugin
+    from litellm.types.proxy.claude_code_endpoints import RegisterPluginRequest
+
+    table: Final = MagicMock()
+    table.find_unique = AsyncMock(return_value=None)
+    table.create = AsyncMock(side_effect=lambda data: SimpleNamespace(id="plugin-id", **data))
+    table.find_many = AsyncMock(
+        side_effect=lambda where: [SimpleNamespace(id="plugin-id", **table.create.call_args.kwargs["data"])]
+    )
+    prisma: Final = MagicMock()
+    prisma.db.litellm_claudecodeplugintable = table
+    app: Final = FastAPI()
     app.include_router(router)
-    client = TestClient(app)
 
-    response = client.get("/public/whats_new")
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        asyncio.run(
+            register_plugin(
+                request=RegisterPluginRequest(
+                    name="security-review",
+                    source={
+                        "source": "archive",
+                        "url": "https://plugins.example.com/security-review-1.0.0.zip",
+                        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                    },
+                    installation_preference=preference,
+                ),
+                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
+            )
+        )
+        response: Final = TestClient(app).get("/public/skill_hub")
 
     assert response.status_code == 200
-    served: Final = WhatsNewResponse.model_validate_json(response.content)
-    bundled: Final = WhatsNewResponse.model_validate_json(
-        files("litellm.proxy.public_endpoints").joinpath("whats_new.json").read_text(encoding="utf-8")
-    )
-    assert served == bundled
-    assert len(served.launches) > 0
-
-
-@pytest.mark.asyncio
-async def test_get_whats_new_serves_bundled_list_without_fetching_when_no_url_is_configured(
-    monkeypatch: pytest.MonkeyPatch, reset_whats_new_cache: None
-) -> None:
-    from litellm.proxy.public_endpoints.public_endpoints import _load_bundled_whats_new, get_whats_new
-
-    monkeypatch.delenv("LITELLM_LOCAL_WHATS_NEW", raising=False)
-
-    async def forbidden_fetch(url: str) -> WhatsNewResponse:
-        raise AssertionError(f"no URL is configured, so nothing may be fetched, got {url}")
-
-    served = await get_whats_new(url=None, fetch=forbidden_fetch)
-
-    assert served == _load_bundled_whats_new()
-    assert len(served.launches) > 0
-
-
-def test_whats_new_url_default_mirrors_the_env_var_so_no_remote_url_is_baked_in() -> None:
-    assert litellm.whats_new_url == os.environ.get("LITELLM_WHATS_NEW_URL")
-
-
-@pytest.mark.asyncio
-async def test_public_whats_new_route_serves_the_bundled_list_without_fetching_when_no_url_is_configured(
-    monkeypatch: pytest.MonkeyPatch, reset_whats_new_cache: None
-) -> None:
-    from litellm.proxy.public_endpoints import public_endpoints
-    from litellm.proxy.public_endpoints.public_endpoints import _load_bundled_whats_new, get_public_whats_new
-
-    monkeypatch.delenv("LITELLM_LOCAL_WHATS_NEW", raising=False)
-
-    async def forbidden_fetch(url: str) -> bytes:
-        raise AssertionError(f"no URL is configured, so the route may not fetch, got {url}")
-
-    monkeypatch.setattr(public_endpoints, "_fetch_remote_bytes", forbidden_fetch)
-
-    served = await get_public_whats_new()
-
-    assert served == _load_bundled_whats_new()
-    assert len(served.launches) > 0
-
-
-@pytest.mark.asyncio
-async def test_get_whats_new_fetches_once_per_process(
-    monkeypatch: pytest.MonkeyPatch, reset_whats_new_cache: None
-) -> None:
-    from litellm.proxy.public_endpoints.public_endpoints import get_whats_new
-
-    monkeypatch.delenv("LITELLM_LOCAL_WHATS_NEW", raising=False)
-    remote = _remote_whats_new()
-    calls: Final[list[str]] = []
-
-    async def fake_fetch(url: str) -> WhatsNewResponse:
-        calls.append(url)
-        return remote
-
-    first = await get_whats_new(url="https://example.test/whats_new.json", fetch=fake_fetch)
-    second = await get_whats_new(url="https://example.test/whats_new.json", fetch=fake_fetch)
-
-    assert first == remote
-    assert second == remote
-    assert calls == ["https://example.test/whats_new.json"]
-
-
-@pytest.mark.asyncio
-async def test_get_whats_new_caches_bundled_fallback_when_remote_is_unreachable(
-    monkeypatch: pytest.MonkeyPatch, reset_whats_new_cache: None
-) -> None:
-    from litellm.proxy.public_endpoints.public_endpoints import _load_bundled_whats_new, get_whats_new
-
-    monkeypatch.delenv("LITELLM_LOCAL_WHATS_NEW", raising=False)
-    calls: Final[list[str]] = []
-
-    async def unreachable_fetch(url: str) -> WhatsNewResponse:
-        calls.append(url)
-        raise OSError("network is unreachable")
-
-    first = await get_whats_new(url="https://example.test/whats_new.json", fetch=unreachable_fetch)
-    second = await get_whats_new(url="https://example.test/whats_new.json", fetch=unreachable_fetch)
-
-    assert first == _load_bundled_whats_new()
-    assert second == first
-    assert len(calls) == 1
-
-
-@pytest.mark.asyncio
-async def test_fetch_remote_whats_new_rejects_a_malformed_list_so_the_bundled_one_is_served(
-    monkeypatch: pytest.MonkeyPatch, reset_whats_new_cache: None
-) -> None:
-    import httpx
-
-    from litellm.proxy.public_endpoints import public_endpoints
-
-    monkeypatch.delenv("LITELLM_LOCAL_WHATS_NEW", raising=False)
-    request = httpx.Request("GET", "https://example.test/whats_new.json")
-    client = MagicMock()
-    client.get = AsyncMock(
-        return_value=httpx.Response(
-            200,
-            request=request,
-            content=b'{"launches": [{"icon": "box", "title": "No date", "description": "d", "href": "https://x"}]}',
-        )
-    )
-
-    with patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client", return_value=client):
-        served = await public_endpoints.get_whats_new(url="https://example.test/whats_new.json")
-
-    assert served == public_endpoints._load_bundled_whats_new()
-    client.get.assert_awaited_once_with("https://example.test/whats_new.json", timeout=5.0)
+    assert [(p["name"], p["installation_preference"]) for p in response.json()["plugins"]] == [
+        ("security-review", preference)
+    ]

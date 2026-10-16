@@ -26,6 +26,11 @@ Each case asserts the feature actually happened, not just a 200. Coverage matrix
   cacheable prefix goes out as a plain system string with a ``prompt_cache_key``
   and the second call must report ``prompt_tokens_details.cached_tokens`` > 0.
 
+- OpenAI (gpt-5.6) in explicit cache mode: OpenAI caches nothing unless a
+  breakpoint reaches it, so a ``cache_control`` mark on a system part, a string
+  system message, a user part or a tool result must write the cache on the
+  first call and read it on the second.
+
 service_tier lives in test_provider_features_e2e.py.
 
 The provider-native cache_control request shape is not expressible with the
@@ -46,7 +51,24 @@ from e2e_config import unique_marker
 from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from e2e_http import Result, UnknownApiError, unwrap
 from lifecycle import ResourceManager
-from models import CacheControl, ChatBody, ChatMessage, ChatResponse, LiteLLMParamsBody, RichMessage, TextBlock, Usage
+from models import (
+    CacheControl,
+    ChatAssistantTurn,
+    ChatBody,
+    ChatMessage,
+    ChatResponse,
+    ChatTool,
+    ChatToolFunction,
+    ChatToolResultTurn,
+    LiteLLMParamsBody,
+    PromptCacheOptions,
+    RichMessage,
+    TextBlock,
+    TextContentPart,
+    ToolCall,
+    ToolCallFunction,
+    Usage,
+)
 from passthrough_client import PassthroughClient
 import os
 
@@ -155,6 +177,30 @@ def _assert_cache_read_on_second_call(
         f"{model}: second identical call reported no cache-read tokens "
         f"({second.usage}); prompt caching did not take effect"
     )
+
+
+def _cache_write_tokens(usage: Usage | None) -> int:
+    if usage is None or usage.prompt_tokens_details is None:
+        return 0
+    return usage.prompt_tokens_details.cache_write_tokens or 0
+
+
+def _assert_openai_writes_then_reads_cache(client: PassthroughClient, key: str, body: ChatBody) -> None:
+    first: Final = unwrap(client.proxy.chat(key, body))
+    assert _cache_write_tokens(first.usage) > 0, (
+        f"{body.model}: the first call on a never-seen prefix wrote no cache ({first.usage}), "
+        "so the cache_control mark never reached OpenAI as a breakpoint"
+    )
+
+    deadline: Final = time.monotonic() + 30.0
+    while True:
+        second = unwrap(client.proxy.chat(key, body))
+        read_tokens = _cached_read_tokens(second.usage)
+        if read_tokens > 0 or time.monotonic() >= deadline:
+            break
+        time.sleep(3.0)
+
+    assert read_tokens > 0, f"{body.model}: the identical second call read no cache ({second.usage})"
 
 
 def _cold_cache_call(send: Callable[[str], Result[ChatResponse]]) -> ChatResponse | None:
@@ -412,3 +458,96 @@ class TestCacheControl:
         _assert_cache_read_on_second_call(
             model, lambda prefix: _plain_cache_chat(client, key, model, prefix, cache_key)
         )
+
+
+@pytest.mark.covers("llm.chat_completions.openai.prompt_cache_5m.nonstream.works")
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.CHAT_COMPLETIONS,
+        providers=(Provider.OPENAI,),
+        models=(OPENAI_MODEL,),
+        capabilities=(Capability.PROMPT_CACHING,),
+        mode=Mode.NONSTREAM,
+    )
+)
+class TestCacheControlOnOpenAIExplicitCaching:
+    @pytest.fixture
+    def model(self, client: PassthroughClient, resources: ResourceManager) -> str:
+        name: Final = f"e2e-openai-explicit-cache-{unique_marker()}"
+        model_id: Final = client.proxy.create_model(
+            name,
+            LiteLLMParamsBody(
+                model=OPENAI_MODEL,
+                api_key="os.environ/OPENAI_API_KEY",
+                prompt_cache_options=PromptCacheOptions(mode="explicit"),
+            ),
+        )
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+        return name
+
+    def test_cache_control_on_a_system_text_part(self, client: PassthroughClient, scoped_key: str, model: str) -> None:
+        body: Final = ChatBody(
+            model=model,
+            max_tokens=64,
+            messages=[
+                ChatMessage(
+                    role="system",
+                    content=[TextContentPart(text=_cacheable_prefix(), cache_control=CacheControl())],
+                ),
+                ChatMessage(role="user", content="Reply with one word."),
+            ],
+        )
+        _assert_openai_writes_then_reads_cache(client, scoped_key, body)
+
+    def test_cache_control_on_a_string_system_message(
+        self, client: PassthroughClient, scoped_key: str, model: str
+    ) -> None:
+        body: Final = ChatBody(
+            model=model,
+            max_tokens=64,
+            messages=[
+                ChatMessage(role="system", content=_cacheable_prefix(), cache_control=CacheControl()),
+                ChatMessage(role="user", content="Reply with one word."),
+            ],
+        )
+        _assert_openai_writes_then_reads_cache(client, scoped_key, body)
+
+    def test_cache_control_on_a_user_text_part(self, client: PassthroughClient, scoped_key: str, model: str) -> None:
+        body: Final = ChatBody(
+            model=model,
+            max_tokens=64,
+            messages=[
+                ChatMessage(
+                    role="user",
+                    content=[
+                        TextContentPart(text=_cacheable_prefix(), cache_control=CacheControl()),
+                        TextContentPart(text="Reply with one word."),
+                    ],
+                ),
+            ],
+        )
+        _assert_openai_writes_then_reads_cache(client, scoped_key, body)
+
+    def test_cache_control_on_a_tool_result(self, client: PassthroughClient, scoped_key: str, model: str) -> None:
+        body: Final = ChatBody(
+            model=model,
+            max_tokens=64,
+            reasoning_effort="none",
+            tools=[ChatTool(function=ChatToolFunction(name="fetch_report", parameters={"type": "object"}))],
+            messages=[
+                ChatMessage(role="user", content="Fetch the report and summarize it in one sentence."),
+                ChatAssistantTurn(
+                    tool_calls=[
+                        ToolCall(
+                            id="call_1", type="function", function=ToolCallFunction(name="fetch_report", arguments="{}")
+                        )
+                    ]
+                ),
+                ChatToolResultTurn(
+                    tool_call_id="call_1",
+                    content=[TextContentPart(text=_cacheable_prefix(), cache_control=CacheControl())],
+                ),
+            ],
+        )
+        _assert_openai_writes_then_reads_cache(client, scoped_key, body)
