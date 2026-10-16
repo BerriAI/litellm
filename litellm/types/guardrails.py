@@ -1410,18 +1410,16 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
         if isinstance(max_input_chars, bool):
             raise ValueError(f"max_input_chars must be a positive integer, got {max_input_chars!r}")  # noqa: TRY004  # pydantic surfaces ValueError as 422, TypeError escapes as 500
         mode: Final = fields.get("mode")
-        mode_items: Final = (
-            cast(list[object], mode) if isinstance(mode, list) else None
-        )  # cast-ok: callers hand mode as a list of hook-name strings
+        mode_items: Final = cast(list[object], mode) if isinstance(mode, list) else None  # cast-ok: hook names
         judge_cannot_block: Final = fields.get("on_failure") == "log" or bool(
             mode == GuardrailEventHooks.logging_only.value
             if mode_items is None
             else len(mode_items) == 1 and mode_items[0] == GuardrailEventHooks.logging_only.value
         )
+        rate: Final = float(sample_rate) if isinstance(sample_rate, (int, float)) else 1.0
+        is_sampled: Final = sample_rate not in (None, "") and rate < 1
         if not judge_cannot_block:
-            if (
-                sample_rate is not None and sample_rate != "" and cast(float, sample_rate) < 1
-            ):  # cast-ok: the range check above guarantees sample_rate is numeric here
+            if is_sampled:
                 raise ValueError(
                     "sample_rate below 1 requires on_failure: log, a blocking judge must evaluate every request"
                 )
