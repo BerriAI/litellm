@@ -27,7 +27,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO,
 )
 from litellm.exceptions import UnsupportedParamsError
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
 from litellm.litellm_core_utils.prompt_templates.factory import (
     encode_tool_call_id_with_signature,
@@ -212,11 +212,11 @@ _GEMINI_SPEECH_CONFIG_KEY_MAP: Final[Mapping[str, str]] = MappingProxyType(
 )
 
 
-def _normalize_gemini_speech_config_item(value: Mapping[str, object]) -> dict[str, object]:
-    normalized: Final[dict[str, object]] = {}
+def _normalize_gemini_speech_config_item(value: Mapping[str, object]) -> Mapping[str, object]:
+    normalized: Final[dict[str, object]] = {}  # mutable-ok: iterative traversal fills nested output without recursion
 
     pending: Final[  # mutable-ok: the explicit worklist must grow while avoiding recursive traversal
-        list[tuple[dict[str, object] | list[object], Mapping[object, object] | list[object]]]
+        list[tuple[dict[str, object] | list[object], Mapping[str, object] | list[object]]]
     ] = [(normalized, value)]
     while pending:
         target, source = pending.pop()
@@ -251,13 +251,13 @@ def _normalize_gemini_speech_config_item(value: Mapping[str, object]) -> dict[st
 def normalize_gemini_speech_config(
     value: Mapping[str, object],
 ) -> dict[str, object]:  # mutable-ok: provider request serialization requires a concrete dict
-    nested_config: Final = value.get("speechConfig", value.get("speech_config"))
+    nested_config: Final = as_str_mapping(value.get("speechConfig", value.get("speech_config")))
     config: Final = (
         {
             **{key: item for key, item in value.items() if key not in ("speechConfig", "speech_config", "format")},
             **nested_config,
         }
-        if isinstance(nested_config, Mapping)
+        if nested_config is not None
         else value
     )
     normalized: Final = _normalize_gemini_speech_config_item(
@@ -270,7 +270,7 @@ def normalize_gemini_speech_config(
     if "voiceConfig" in normalized or "multiSpeakerVoiceConfig" in normalized:
         return {key: item for key, item in normalized.items() if key not in ("name", "voiceName", "voice")}
     if voice_name is None:
-        return normalized
+        return {**normalized}
     return {
         **{key: item for key, item in normalized.items() if key not in ("name", "voiceName", "voice", "modelName")},
         "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice_name}},
@@ -1237,7 +1237,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 status_code=400,
             )
 
-    def _map_audio_params(self, value: dict) -> dict:
+    def _map_audio_params(self, value: Mapping[str, object]) -> Mapping[str, object]:
         """
         Expected input:
         {
@@ -1281,7 +1281,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             {
                 "voiceConfig": {
                     "prebuiltVoiceConfig": {
-                        "voiceName": OPENAI_TO_GEMINI_TTS_VOICES.get(voice.lower(), voice) if isinstance(voice, str) else voice,
+                        "voiceName": OPENAI_TO_GEMINI_TTS_VOICES.get(voice.lower(), voice)
+                        if isinstance(voice, str)
+                        else voice,
                     }
                 }
             }
@@ -1301,7 +1303,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         self,
         value: dict[str, object],  # mutable-ok: mirrors override contract
     ) -> dict[str, object]:  # mutable-ok: mirrors override contract
-        return self._map_audio_params(value)
+        return {**self._map_audio_params(value)}
 
     @staticmethod
     def _apply_include_server_side_tool_invocations(

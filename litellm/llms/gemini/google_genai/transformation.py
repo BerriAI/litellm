@@ -2,12 +2,14 @@
 Transformation for Calling Google models in their native format.
 """
 
+from collections.abc import Mapping
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
@@ -24,13 +26,11 @@ from litellm.types.router import GenericLiteLLMParams
 
 if TYPE_CHECKING:
     from litellm.types.google_genai.main import (
-        GenerateContentConfigDict,
         GenerateContentContentListUnionDict,
         GenerateContentResponse,
         ToolConfigDict,
     )
 else:
-    GenerateContentConfigDict = Any
     GenerateContentContentListUnionDict = Any
     GenerateContentResponse = Any
     ToolConfigDict = Any
@@ -102,9 +102,9 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
 
     def map_generate_content_optional_params(
         self,
-        generate_content_config_dict: GenerateContentConfigDict,
+        generate_content_config_dict: Mapping[str, object],
         model: str,
-    ) -> dict[str, object]:
+    ) -> dict[str, object]:  # mutable-ok: inherited provider interface returns a request dictionary
         """
         Map Google GenAI parameters to provider-specific format.
 
@@ -143,8 +143,8 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
             if is_supported:
                 # Always output in camelCase for Google GenAI API
                 output_key = param_camel if param != param_camel else param
-                if param_snake == "speech_config" and isinstance(value, dict):
-                    _generate_content_config_dict[output_key] = normalize_gemini_speech_config(value)
+                if param_snake == "speech_config" and (speech_config := as_str_mapping(value)) is not None:
+                    _generate_content_config_dict[output_key] = normalize_gemini_speech_config(speech_config)
                 else:
                     _generate_content_config_dict[output_key] = value
         return _generate_content_config_dict
