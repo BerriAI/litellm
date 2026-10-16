@@ -13,7 +13,6 @@ from openai.types.completion_usage import CompletionUsage
 from pydantic import BaseModel
 
 import litellm
-import litellm.cost_calculator as cost_calculator_module
 from litellm import TranscriptionResponse, model_cost
 from litellm.constants import REALTIME_METERED_USAGE_KEY
 from litellm.cost_calculator import BaseTokenUsageProcessor, RealtimeAPITokenUsageProcessor, ResponsesWebSocketTokenUsageProcessor, batch_cost_calculator, completion_cost, cost_per_token, handle_realtime_stream_cost_calculation, response_cost_calculator
@@ -258,28 +257,30 @@ def test_completion_cost_keeps_priced_generalization_before_later_exact_candidat
     assert cost == pytest.approx(usage.prompt_tokens * 0.0000321 + usage.completion_tokens * 0.0000765)
 
 
-def test_completion_cost_skips_candidate_lookups_with_custom_pricing(
+def test_completion_cost_skips_huggingface_config_request_with_custom_pricing(
     _local_model_cost_map: None,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    model: Final = "unmapped-cost-regression-org/unmapped-model"
     usage: Final = Usage(prompt_tokens=17, completion_tokens=9, total_tokens=26)
     response: Final = ModelResponse(
-        model="explicit-pricing-model",
+        model=model,
         choices=[],
         usage=usage,
     )
-    cost_map_lookup: Final = MagicMock(wraps=cost_calculator_module._cost_map_model_info)
-    monkeypatch.setattr(cost_calculator_module, "_cost_map_model_info", cost_map_lookup)
 
-    cost: Final = completion_cost(
-        completion_response=response,
-        model="explicit-pricing-model",
-        custom_llm_provider="openai",
-        custom_pricing=True,
-        custom_cost_per_token={"input_cost_per_token": 0.001, "output_cost_per_token": 0.002},
-    )
+    with respx.mock(assert_all_called=False) as huggingface:
+        huggingface.get(host="huggingface.co").mock(
+            return_value=httpx.Response(200, json={"max_position_embeddings": 4096})
+        )
+        cost: Final = completion_cost(
+            completion_response=response,
+            model=model,
+            custom_llm_provider="huggingface",
+            custom_pricing=True,
+            custom_cost_per_token={"input_cost_per_token": 0.001, "output_cost_per_token": 0.002},
+        )
 
-    cost_map_lookup.assert_not_called()
+        assert len(huggingface.calls) == 0
     assert cost == pytest.approx(usage.prompt_tokens * 0.001 + usage.completion_tokens * 0.002)
 
 
