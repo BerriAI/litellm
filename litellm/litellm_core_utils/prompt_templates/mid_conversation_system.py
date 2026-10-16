@@ -414,10 +414,11 @@ def _assistant_renders(message: object, answered: frozenset[str]) -> bool:
 def _renders(message: object, answered: frozenset[str]) -> bool:
     """Whether ``anthropic_messages_pt`` puts a block on the wire for this message.
 
-    A tool message always becomes a ``tool_result`` and a user message with string
-    content always becomes a text block (empty text gets a placeholder). A user list
-    renders only through parts of a type the converter emits; ``None``, an empty list,
-    and a list of other parts vanish. Assistant messages follow ``_assistant_renders``.
+    A tool message always becomes a ``tool_result``, and a user message with string or
+    missing content (``None``, an empty list) always puts its turn on the wire, an empty
+    turn getting a placeholder. A user list renders only through parts of a type the
+    converter emits, so a list of only other parts vanishes. Assistant messages follow
+    ``_assistant_renders``.
     """
     role: Final = message_field(message, "role")
     if role in _TOOL_ROLES:
@@ -425,8 +426,10 @@ def _renders(message: object, answered: frozenset[str]) -> bool:
     if role == "assistant":
         return _assistant_renders(message, answered)
     content: Final = message_field(message, "content")
-    return isinstance(content, str) or any(
-        message_field(part, "type") in _RENDERED_PART_TYPES for part in parts_of(content)
+    return (
+        isinstance(content, str)
+        or not content
+        or any(message_field(part, "type") in _RENDERED_PART_TYPES for part in parts_of(content))
     )
 
 

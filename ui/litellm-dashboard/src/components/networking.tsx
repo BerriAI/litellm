@@ -4840,12 +4840,13 @@ export const fetchDiscoverableMCPServers = async (accessToken: string) => {
 };
 
 export interface ConnectFlowStatus {
-  state: "unscoped" | "interactive" | "m2m" | "stale";
+  state: "unscoped" | "interactive" | "m2m" | "multi" | "stale";
   client_origin: string;
   server_id: string | null;
   server_name: string | null;
   connected: boolean | null;
   requested_scopes?: string[];
+  servers: { server_id: string; server_name: string; connected: boolean }[] | null;
 }
 
 /**

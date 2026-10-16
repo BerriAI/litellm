@@ -31,6 +31,94 @@ from litellm import completion
 from typing import Tuple
 
 
+@pytest.mark.parametrize("async_stream", [False, True])
+@pytest.mark.parametrize("transport", ["sdk", "http_handler"])
+@pytest.mark.parametrize("fingerprint", ["fp_ollama", "fp_openai", None])
+async def test_ollama_stream_ids_match_usage_and_spend_logs(
+    async_stream: bool,
+    transport: str,
+    fingerprint: str | None,
+) -> None:
+    from datetime import datetime
+
+    from openai.types.chat import ChatCompletionChunk
+
+    from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import convert_to_model_response_object
+    from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+    parser: Final = OpenAIChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
+    bodies: Final = [
+        {"choices": [{"index": 0, "delta": {"role": "assistant", "content": "h"}, "finish_reason": None}]},
+        {"choices": [{"index": 0, "delta": {"content": "i"}, "finish_reason": None}]},
+        {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+        {"choices": [], "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6}},
+    ]
+    raw_chunks: Final = [
+        {
+            "id": "chatcmpl-0",
+            "object": "chat.completion.chunk",
+            "model": "gpt-oss:20b",
+            "created": 1,
+            "system_fingerprint": fingerprint,
+            **body,
+        }
+        for body in bodies
+    ]
+    chunks: Final = [
+        ChatCompletionChunk(**body) if transport == "sdk" else parser.chunk_parser(body) for body in raw_chunks
+    ]
+    streams: Final = [
+        CustomStreamWrapper(
+            completion_stream=ModelResponseListIterator(model_responses=chunks),
+            model="gpt-oss:20b",
+            custom_llm_provider="openai",
+            stream_options={"include_usage": True},
+            logging_obj=Logging(
+                model="gpt-oss:20b",
+                messages=[{"role": "user", "content": "hi"}],
+                stream=True,
+                call_type="acompletion",
+                start_time=1.0,
+                litellm_call_id="same-client-call-id",
+                function_id="test",
+            ),
+        )
+        for _ in range(2)
+    ]
+    received_streams: Final = (
+        [chunk async for chunk in streams[0]] if async_stream else list(streams[0]),
+        [chunk async for chunk in streams[1]] if async_stream else list(streams[1]),
+    )
+    for received in received_streams:
+        assembled: Final = litellm.stream_chunk_builder(chunks=received)
+        assert assembled.choices[0].message.content == "hi"
+        assert assembled.usage.total_tokens == 6
+        assert len({chunk.id for chunk in received}) == 1
+        assert received[-1].usage.total_tokens == 6
+        assert assembled.id == received[0].id
+        reparsed: Final = convert_to_model_response_object(
+            response_object=assembled.model_dump(),
+            model_response_object=ModelResponse(),
+        )
+        assert reparsed.id == assembled.id
+        logged: Final = get_logging_payload(
+            kwargs={"call_type": "acompletion", "litellm_call_id": "same-client-call-id", "response_cost": 0.01},
+            response_obj=assembled,
+            start_time=datetime(2025, 1, 1),
+            end_time=datetime(2025, 1, 1),
+        )
+        assert logged["request_id"] == assembled.id
+        if fingerprint == "fp_ollama":
+            assert assembled.id != "chatcmpl-0"
+            assert received[0].provider_specific_fields == {"original_response_id": "chatcmpl-0"}
+            assert assembled.provider_specific_fields == {"original_response_id": "chatcmpl-0"}
+        else:
+            assert assembled.id == "chatcmpl-0"
+    assert len({chunks[0].id for chunks in received_streams}) == (2 if fingerprint == "fp_ollama" else 1)
+    assert all(chunk.id == "chatcmpl-0" for chunk in chunks)
+
+
 @pytest.fixture
 def initialized_custom_stream_wrapper() -> CustomStreamWrapper:
     streaming_handler = CustomStreamWrapper(

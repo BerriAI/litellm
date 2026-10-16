@@ -10,13 +10,14 @@ line), paces to `PERF_RPS` over `PERF_USERS` users, and quits once the last requ
 from __future__ import annotations
 
 import os
+import random
 import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Final, cast
 
 import gevent
-from locust import FastHttpUser, constant_throughput, task
+from locust import FastHttpUser, task
 from locust.contrib.fasthttp import FastResponse, ResponseContextManager
 from setup.wire import Endpoint, WireRecord, WireRequest, request_body
 from pydantic import TypeAdapter
@@ -28,6 +29,9 @@ _RECORDS_PATH: Final = Path(os.environ["PERF_RECORDS_FILE"])
 _RPS: Final = float(os.environ["PERF_RPS"])
 _USERS: Final = int(os.environ["PERF_USERS"])
 _NEXT: Final[Iterator[WireRequest]] = iter(_PLAN)
+_INTERVAL_S: Final = _USERS / _RPS
+_JITTER: Final = 0.25
+_RNG: Final = random.Random(_PLAN[0].marker if _PLAN else "empty-plan")
 _RECORDS: Final = _RECORDS_PATH.open("a", encoding="utf-8")
 _written = 0
 BLOCK_REASON: Final = "perf-test-block"
@@ -82,6 +86,32 @@ def delta_of_event(endpoint: Endpoint, payload: dict[str, object]) -> str:
         text: Final = _as_dict(payload.get("delta")).get("text")
         return text if isinstance(text, str) else ""
     return ""
+
+
+_RESPONSES_TOKEN_EVENTS: Final = frozenset(
+    {
+        "response.output_text.delta",
+        "response.refusal.delta",
+        "response.reasoning_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.function_call_arguments.delta",
+    }
+)
+
+
+def token_in_event(endpoint: Endpoint, payload: dict[str, object]) -> bool:
+    """Whether one SSE event carries a generated token of any kind: visible text, reasoning or tool-call arguments.
+    The first such event is the stream's first token. `delta_of_event` stays visible text only because the body
+    check compares it with the text the mock generated, and a tool-call reply has none."""
+    if delta_of_event(endpoint, payload):
+        return True
+    if endpoint == "chat_completions":
+        choices: Final = _as_list(payload.get("choices"))
+        delta: Final = _as_dict(_as_dict(choices[0]).get("delta")) if choices else {}
+        return any(delta.get(key) for key in ("reasoning_content", "reasoning", "tool_calls", "function_call"))
+    if endpoint == "responses":
+        return payload.get("type") in _RESPONSES_TOKEN_EVENTS
+    return payload.get("type") == "content_block_delta"
 
 
 def _events(buffer: bytes) -> tuple[list[dict[str, object]], bytes]:
@@ -169,11 +199,25 @@ def _authorization(user: FastHttpUser, item: WireRequest) -> str:
 
 
 class PlanUser(FastHttpUser):
-    """One simulated client; all users share the plan and together hold the planned rate."""
+    """One simulated client; all users share the plan and together hold the planned rate. Each user starts at
+    a random point of its first interval and jitters every later interval by up to `_JITTER` either way, so the
+    users never fire in lockstep; the mean interval is unchanged and `rps` stays the total rate."""
 
-    wait_time = constant_throughput(_RPS / _USERS)
     network_timeout = 120.0
     connection_timeout = 30.0
+
+    def on_start(self) -> None:
+        self._last_run = 0.0
+        self._last_wait = 0.0
+        gevent.sleep(_RNG.uniform(0.0, _INTERVAL_S))
+
+    def wait_time(self) -> float:
+        target: Final = _INTERVAL_S * _RNG.uniform(1.0 - _JITTER, 1.0 + _JITTER)
+        now: Final = time.monotonic()
+        run_s: Final = now - self._last_run - self._last_wait if self._last_run else 0.0
+        self._last_wait = max(0.0, target - run_s)
+        self._last_run = now
+        return self._last_wait
 
     @task
     def send(self) -> None:
@@ -221,11 +265,9 @@ class PlanUser(FastHttpUser):
                         buffer += line
                         events, buffer = _events(buffer)
                         for event in events:
-                            delta = delta_of_event(item.endpoint, event)
-                            if delta:
-                                if first_token_s is None:
-                                    first_token_s = now
-                                text += delta
+                            if first_token_s is None and token_in_event(item.endpoint, event):
+                                first_token_s = now
+                            text += delta_of_event(item.endpoint, event)
                 else:
                     body_text = context.text or ""
                     first_byte_s = time.perf_counter() - started

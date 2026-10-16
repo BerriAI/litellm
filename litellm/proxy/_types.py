@@ -2897,6 +2897,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="MCP client applications admitted by the gateway, each an {alias, value} pair where alias is the name shown in the dashboard and logs and value is the identity that must match exactly. When set, every MCP request must carry a client identity equal to one of the values: a JWT caller is identified by the claim named in litellm_jwtauth.mcp_client_id_jwt_field, any other caller by the header named in mcp_client_id_header. A request with no resolvable identity, or an unlisted one, is rejected with 403. Unset means every client is admitted.",
     )
+    mcp_require_explicit_server_scope: bool = Field(
+        default=False,
+        description="Require aggregate MCP requests to include x-mcp-servers unless a toolset or gateway OAuth session already scopes the server. Off by default.",
+    )
     mcp_client_id_header: str | None = Field(
         None,
         description="Request header whose value names the calling MCP client application (for example 'x-mcp-client') for callers that did not authenticate with a JWT, used only while mcp_allowed_clients is set. The client picks this value itself, so it is a policy control rather than a security boundary; prefer litellm_jwtauth.mcp_client_id_jwt_field where callers use JWTs.",
@@ -3021,6 +3025,13 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "where a team-scoped key is governed only by the team and team-member "
             "budgets and the key owner's personal max_budget does not apply "
             "(see GitHub issue #12905)."
+        ),
+    )
+    agent_access_default_deny: bool = Field(
+        False,
+        description=(
+            "When true, a key with no agent grants on itself or its team can reach no agents instead of all agents. "
+            "Proxy admins are exempt."
         ),
     )
     user_url_validation: bool | None = Field(
@@ -3801,6 +3812,16 @@ class ModelAccessDeniedProxyException(ProxyException):
 
     def sanitized_internal_message(self) -> str:
         return self.internal_message.replace("\r", "").replace("\n", "")
+
+
+class AwsErrorTypeProxyException(Exception):
+    """A ProxyException answered to an AWS SDK, which reads the error code from the ``x-amzn-errortype`` header and
+    the message from a top-level ``message`` field."""
+
+    def __init__(self, error: ProxyException, aws_error_type: str) -> None:
+        super().__init__(error.message)
+        self.error: Final = error
+        self.aws_error_type: Final = aws_error_type
 
 
 from litellm.types.proxy.common_proxy_errors import (  # noqa: E402  # public re-export

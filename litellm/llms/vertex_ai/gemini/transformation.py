@@ -6,7 +6,7 @@ Why separate file? Make it easy to see how transformation works
 
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from urllib.parse import quote
 
@@ -1234,6 +1234,9 @@ def transform_request_body(
             else:
                 data["serviceTier"] = service_tier
 
+        if continuation_token := optional_params.pop("continuation_token", None):
+            data["continuationToken"] = continuation_token
+
         # Only add labels for Vertex AI endpoints (not Google GenAI/AI Studio) and only if non-empty
         if labels and custom_llm_provider != LlmProviders.GEMINI:
             data["labels"] = labels
@@ -1316,6 +1319,10 @@ def _vertex_inlines(media: RemoteMedia) -> bool:
     )
 
 
+def should_inline_remote_media(custom_llm_provider: str) -> Callable[[RemoteMedia], bool]:
+    return _ai_studio_inlines if custom_llm_provider == "gemini" else _vertex_inlines
+
+
 async def async_transform_request_body(
     gemini_api_key: str | None,
     messages: list[AllMessageValues],
@@ -1358,7 +1365,7 @@ async def async_transform_request_body(
     )
 
     inlined_messages: Final = await async_inline_remote_media(
-        messages, should_inline=_ai_studio_inlines if custom_llm_provider == "gemini" else _vertex_inlines
+        messages, should_inline=should_inline_remote_media(custom_llm_provider)
     )
 
     if _openai_messages_may_need_sync_gcs_metadata_fetch(inlined_messages):

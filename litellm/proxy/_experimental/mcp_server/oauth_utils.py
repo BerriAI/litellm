@@ -3,10 +3,12 @@
 
 import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from ipaddress import ip_address
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, NoReturn
-from urllib.parse import ParseResult, urlparse, urlsplit, urlunparse, urlunsplit
+from urllib.parse import ParseResult, parse_qsl, urlencode, urlparse, urlsplit, urlunparse, urlunsplit
 
 from fastapi import HTTPException, Request
 from starlette.types import Scope
@@ -55,6 +57,9 @@ _TRUSTED_NATIVE_REDIRECT_URIS_ENV: Final = "MCP_TRUSTED_NATIVE_REDIRECT_URIS"
 _DEFAULT_NATIVE_REDIRECT_URIS: Final[list[str]] = [
     "cursor://anysphere.cursor-mcp/oauth/callback",
 ]
+
+_GOOGLE_AUTHORIZATION_HOSTS: Final = frozenset({"accounts.google.com"})
+_GOOGLE_OFFLINE_ACCESS_PARAMS: Final = MappingProxyType({"access_type": "offline", "prompt": "consent"})
 
 _warned_invalid_proxy_base_url: str | None = None
 
@@ -110,6 +115,17 @@ def redact_mcp_resource_url(url: str | None) -> str | None:
 
 
 _redact_mcp_resource_url: Final = redact_mcp_resource_url
+
+
+def build_upstream_authorize_url(authorization_url: str, params: Mapping[str, str]) -> str:
+    parsed: Final = urlparse(authorization_url)
+    provider_defaults: Final = (
+        _GOOGLE_OFFLINE_ACCESS_PARAMS
+        if parsed.hostname in _GOOGLE_AUTHORIZATION_HOSTS
+        else MappingProxyType[str, str]({})
+    )
+    merged: Final = {**provider_defaults, **dict(parse_qsl(parsed.query)), **params}
+    return urlunparse(parsed._replace(query=urlencode(merged)))
 
 
 def _resolve_proxy_base_url_env() -> str | None:
