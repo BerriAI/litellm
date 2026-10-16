@@ -895,6 +895,40 @@ async def test_parameters_reach_the_wire_unpacked_whether_sent_top_level_or_in_e
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "extra_body,expected",
+    [
+        ({"size": "1920x1080"}, {"resolution": "1080p"}),
+        ({"seconds": "8"}, {"duration": 8}),
+        ({"user": "someone"}, {"safety_identifier": "someone"}),
+    ],
+    ids=["size", "seconds", "user"],
+)
+async def test_an_extra_body_field_litellm_maps_itself_is_honoured_and_its_leftover_copy_ignored(
+    extra_body: dict[str, object], expected: dict[str, object]
+):
+    """The shared request builder copies extra_body onto the top-level params, where this adapter maps it, and then
+    merges the raw extra_body back over the mapped params, returning the same key a second time as a field of its
+    own. The second copy has to be ignored rather than rejected as a field litellm never sends."""
+    body = await _wire_body(
+        model=f"volcengine/{SEEDANCE_2_5}",
+        prompt="p",
+        seconds="4",
+        size="1280x720",
+        extra_body=extra_body,
+    )
+
+    assert body == {
+        "model": SEEDANCE_2_5,
+        "content": [{"type": "text", "text": "p"}],
+        "ratio": "16:9",
+        "resolution": "720p",
+        "duration": 4,
+        **expected,
+    }
+
+
+@pytest.mark.asyncio
 async def test_an_extra_body_duration_of_minus_one_is_rejected_before_anything_is_sent():
     with pytest.raises(UnsupportedParamsError, match="Ark-picked length"):
         _ = await _wire_body(model=f"volcengine/{SEEDANCE_2_5}", prompt="p", extra_body={"duration": -1})

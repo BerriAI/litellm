@@ -142,11 +142,23 @@ _CREATE_PASSTHROUGH_KEYS: Final = (
     "omni_reference_task_type",
 )
 
-_CREATE_HANDLED_KEYS: Final = frozenset({*_CREATE_PASSTHROUGH_KEYS, "content", "input_reference", "frames"})
-
 _REQUEST_METADATA: Final = frozenset({"model", "prompt", "user", "extra_headers", "extra_query", "extra_body"})
 _UNSUPPORTED_BY_VOLCENGINE: Final = frozenset({"characters", "image"})
 _MAPPED_ELSEWHERE: Final = frozenset({*_REQUEST_METADATA, *_UNSUPPORTED_BY_VOLCENGINE, "seconds", "size", "parameters"})
+
+# litellm/videos/utils.py merges the caller's raw ``extra_body`` back over the mapped params, which returns the keys
+# this adapter maps itself (``size``, ``seconds``, ``user``) a second time, as fields of their own. They are already
+# accounted for, so they count as handled rather than unknown. ``characters`` and ``image`` stay out, since Ark has
+# no equivalent and accepting them would hide a parameter that never took effect.
+_CREATE_HANDLED_KEYS: Final = frozenset(
+    {
+        *_CREATE_PASSTHROUGH_KEYS,
+        "content",
+        "input_reference",
+        "frames",
+        *(_MAPPED_ELSEWHERE - _UNSUPPORTED_BY_VOLCENGINE),
+    }
+)
 
 _VIDEO_INPUT_UNSUPPORTED: Final = (
     "{operation} is not supported through litellm: Ark bills a task with a video input at a different rate per "
