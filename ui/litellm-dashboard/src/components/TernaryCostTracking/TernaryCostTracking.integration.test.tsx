@@ -147,13 +147,14 @@ describe("TernaryCostTracking", () => {
     expect(mockPost).toHaveBeenCalledWith("/ternary/dry-run", { accessToken: "test-token", body: { limit: 500 } });
   });
 
-  it("exports the scheduled window after confirmation and shows what was sent", async () => {
+  it("exports the scheduled window after confirmation and lists the days sent", async () => {
     mockGet.mockResolvedValue(CONFIGURED_VIEW);
     mockPost.mockResolvedValue({
-      message: "Ternary export completed",
+      message: "Ternary export uploaded 2 day(s)",
       status: "success",
       start_time_utc: "2026-10-13T00:00:00Z",
       end_time_utc: "2026-10-15T22:00:00Z",
+      days_uploaded: ["2026-10-14", "2026-10-15"],
     });
     const user = userEvent.setup();
     renderTab();
@@ -161,7 +162,53 @@ describe("TernaryCostTracking", () => {
     await user.click(await screen.findByRole("button", { name: "Export Now" }));
     await user.click(await screen.findByRole("button", { name: "Export" }));
 
-    expect(await screen.findByText(/from 2026-10-13T00:00:00Z to 2026-10-15T22:00:00Z/)).toBeInTheDocument();
+    expect(await screen.findByText("Export complete")).toBeInTheDocument();
+    expect(screen.getByText(/Uploaded 2 day\(s\), one file each: 2026-10-14, 2026-10-15/)).toBeInTheDocument();
     expect(mockPost).toHaveBeenCalledWith("/ternary/export", { accessToken: "test-token", body: {} });
+  });
+
+  it("says nothing was sent when the window had no usage", async () => {
+    mockGet.mockResolvedValue(CONFIGURED_VIEW);
+    mockPost.mockResolvedValue({
+      message: "No usage to upload in this window",
+      status: "success",
+      start_time_utc: "2026-10-13T00:00:00Z",
+      end_time_utc: "2026-10-15T22:00:00Z",
+      days_uploaded: [],
+    });
+    const user = userEvent.setup();
+    renderTab();
+
+    await user.click(await screen.findByRole("button", { name: "Export Now" }));
+    await user.click(await screen.findByRole("button", { name: "Export" }));
+
+    expect(await screen.findByText("Nothing to export")).toBeInTheDocument();
+    expect(screen.getByText(/No usage between 2026-10-13T00:00:00Z and 2026-10-15T22:00:00Z/)).toBeInTheDocument();
+    expect(screen.queryByText("Export complete")).not.toBeInTheDocument();
+  });
+
+  it("shows a config-file setup read-only but still lets the admin preview and export", async () => {
+    mockGet.mockResolvedValue({ ...EMPTY_VIEW, status: "config_file" });
+    renderTab();
+
+    expect(await screen.findByText(/sets up Ternary in its config file/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add Ternary Integration" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Export Now" })).toBeEnabled();
+  });
+
+  it("asks for the API key again before moving the integration to a new base URL", async () => {
+    mockGet.mockResolvedValue(CONFIGURED_VIEW);
+    const user = userEvent.setup();
+    renderTab();
+
+    await user.click(await screen.findByRole("button", { name: "Edit" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText("Base URL"), { target: { value: "https://collector.example.net" } });
+    await user.click(within(dialog).getByRole("button", { name: "Update" }));
+
+    expect(await within(dialog).findByText("Enter the API key again when changing the base URL")).toBeInTheDocument();
+    expect(mockPut).not.toHaveBeenCalled();
   });
 });

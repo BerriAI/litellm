@@ -4,6 +4,7 @@ import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timezone
 from decimal import Decimal
+from types import SimpleNamespace
 
 import polars as pl
 import pytest
@@ -14,9 +15,10 @@ import litellm
 import litellm.proxy.proxy_server as ps
 from litellm.integrations.focus.destinations.base import FocusTimeWindow
 from litellm.integrations.ternary.export_engine import FocusFrame
-from litellm.integrations.ternary.ternary_logger import TernaryLogger
+from litellm.integrations.ternary.ternary_logger import SettingsTernaryLogger, TernaryLogger
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import is_request_body_safe
+from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.spend_tracking.ternary_endpoints import (
     TERNARY_SETTINGS_PARAM_NAME,
     TernarySettingsStore,
@@ -38,9 +40,21 @@ _TAGS = TypeAdapter(Mapping[str, str])
 SETTINGS = TernarySettings(api_key=API_KEY, connection_id="conn-123", ternary_base_url="https://api.ternary.app")
 
 
+class MemoryTable:
+    def __init__(self, rows: dict[str, object], error: Exception | None = None) -> None:
+        self.rows = rows
+        self.error = error
+
+    async def delete(self, *, where: Mapping[str, str]) -> object:
+        if self.error is not None:
+            raise self.error
+        return self.rows.pop(str(where["param_name"]))
+
+
 class MemoryConfig:
     def __init__(self) -> None:
         self.rows: dict[str, object] = {}
+        self.table = MemoryTable(self.rows)
 
     async def get_param(self, param_name: str) -> ConfigParam | None:
         if param_name not in self.rows:
@@ -50,9 +64,6 @@ class MemoryConfig:
     async def set_param(self, param_name: str, param_value: object) -> ConfigParam:
         self.rows[param_name] = param_value
         return ConfigParam(param_name=param_name, param_value=param_value)
-
-    async def delete_param(self, param_name: str) -> bool:
-        return self.rows.pop(param_name, None) is not None
 
 
 def _frame(columns: Mapping[str, Sequence[object]]) -> FocusFrame:
@@ -72,20 +83,22 @@ class UsageSource:
 
 
 class RecordingExporter:
-    def __init__(self, error: Exception | None = None) -> None:
+    def __init__(self, error: Exception | None = None, days: Sequence[str] = ("2026-10-14",)) -> None:
         self.logger = TernaryLogger(api_key=API_KEY, connection_id="conn-123", base_url="https://api.ternary.app")
         self.error = error
-        self.calls: list[tuple[int | None, datetime | None, datetime | None]] = []
+        self.days = days
+        self.calls: list[tuple[int | None, datetime, datetime]] = []
 
     def scheduled_window(self, now: datetime) -> FocusTimeWindow:
         return self.logger.scheduled_window(now)
 
-    async def export_usage_data(
-        self, *, limit: int | None, start_time_utc: datetime | None, end_time_utc: datetime | None
-    ) -> None:
+    async def export_days(
+        self, *, start_time_utc: datetime, end_time_utc: datetime, limit: int | None
+    ) -> Sequence[str]:
         self.calls.append((limit, start_time_utc, end_time_utc))
         if self.error is not None:
             raise self.error
+        return self.days
 
 
 def _usage_columns() -> Mapping[str, Sequence[object]]:
@@ -141,9 +154,15 @@ def client(store: TernarySettingsStore, role: list[LitellmUserRoles]) -> Iterato
             ps.app.dependency_overrides.pop(dependency, None)
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def clean_callbacks(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "callbacks", [])
+
+
+def _config_file_logger() -> TernaryLogger:
+    logger = TernaryLogger(api_key="cfg-key", connection_id="cfg-conn", base_url="https://api.ternary.app")
+    litellm.logging_callback_manager.add_litellm_callback(logger)
+    return logger
 
 
 def _use(dependency: Callable[..., object], value: object) -> None:
@@ -267,12 +286,10 @@ async def test_update_with_no_fields_is_rejected(client: TestClient, store: Tern
 
 
 @pytest.mark.asyncio
-async def test_delete_removes_settings_and_deregisters_the_logger(
-    client: TestClient, store: TernarySettingsStore, clean_callbacks: None
-):
+async def test_delete_removes_settings_and_deregisters_the_logger(client: TestClient, store: TernarySettingsStore):
     await store.save(SETTINGS)
     litellm.logging_callback_manager.add_litellm_callback(
-        TernaryLogger(api_key=API_KEY, connection_id="conn-123", base_url="https://api.ternary.app")
+        SettingsTernaryLogger(api_key=API_KEY, connection_id="conn-123", base_url="https://api.ternary.app")
     )
 
     response = client.delete("/ternary/delete")
@@ -284,6 +301,53 @@ async def test_delete_removes_settings_and_deregisters_the_logger(
 
 def test_delete_without_settings_is_not_found(client: TestClient):
     assert client.delete("/ternary/delete").status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_a_failed_delete_is_a_server_error_not_a_missing_row(
+    client: TestClient, store: TernarySettingsStore, config: MemoryConfig
+):
+    await store.save(SETTINGS)
+    config.table.error = RuntimeError("connection reset by peer")
+
+    response = client.delete("/ternary/delete")
+
+    assert response.status_code == 500
+    assert "connection reset by peer" in response.text
+    assert await store.get() == SETTINGS
+
+
+@pytest.mark.asyncio
+async def test_the_config_file_owns_the_destination_when_it_sets_the_callback(
+    client: TestClient, store: TernarySettingsStore, config: MemoryConfig
+):
+    await store.save(SETTINGS)
+    config_logger = _config_file_logger()
+    stored_before = dict(config.rows)
+
+    view = TernarySettingsView.model_validate_json(client.get("/ternary/settings").content)
+    init = client.post("/ternary/init", json={"api_key": API_KEY, "connection_id": "conn-456"})
+    update = client.put("/ternary/settings", json={"connection_id": "conn-456"})
+    delete = client.delete("/ternary/delete")
+
+    assert view == TernarySettingsView(status="config_file")
+    assert [init.status_code, update.status_code, delete.status_code] == [409, 409, 409]
+    assert config.rows == stored_before
+    assert litellm.callbacks == [config_logger]
+    assert await ternary_exporter(store) is config_logger
+
+
+@pytest.mark.asyncio
+async def test_changing_the_base_url_needs_the_api_key_again(client: TestClient, store: TernarySettingsStore):
+    await store.save(SETTINGS)
+    moved = {"ternary_base_url": "https://collector.example.net"}
+
+    without_key = client.put("/ternary/settings", json=moved)
+    same_url = client.put("/ternary/settings", json={"ternary_base_url": SETTINGS.ternary_base_url})
+    with_key = client.put("/ternary/settings", json={**moved, "api_key": "new-key"})
+
+    assert [without_key.status_code, same_url.status_code, with_key.status_code] == [400, 200, 200]
+    assert await store.get() == SETTINGS.model_copy(update={**moved, "api_key": "new-key"})
 
 
 @pytest.mark.parametrize(
@@ -368,7 +432,8 @@ def test_export_without_bounds_sends_the_scheduled_window(client: TestClient):
     assert (start.hour, start.minute, start.second, start.microsecond) == (0, 0, 0, 0)
     assert (before.date() - start.date()).days == 2
     assert before <= end <= after
-    assert TernaryExportResponse.model_validate_json(response.content).start_time_utc == start
+    body = TernaryExportResponse.model_validate_json(response.content)
+    assert (body.start_time_utc, body.days_uploaded) == (start, ["2026-10-14"])
 
 
 def test_export_passes_explicit_bounds_through(client: TestClient):
@@ -401,6 +466,15 @@ def test_export_rejects_incomplete_or_reversed_bounds(client: TestClient, body: 
     assert exporter.calls == []
 
 
+def test_export_says_when_there_was_nothing_to_upload(client: TestClient):
+    _use(ternary_exporter, RecordingExporter(days=()))
+
+    body = TernaryExportResponse.model_validate_json(client.post("/ternary/export", json={}).content)
+
+    assert body.days_uploaded == []
+    assert body.message == "No usage to upload in this window"
+
+
 def test_export_reports_failed_days_as_a_bad_gateway(client: TestClient):
     _use(ternary_exporter, RecordingExporter(RuntimeError("Ternary export: 1 day(s) failed to upload: 2026-10-14")))
 
@@ -410,14 +484,12 @@ def test_export_reports_failed_days_as_a_bad_gateway(client: TestClient):
     assert "2026-10-14" in response.text
 
 
-def test_export_without_settings_is_not_found(client: TestClient, clean_callbacks: None):
+def test_export_without_settings_is_not_found(client: TestClient):
     assert client.post("/ternary/export", json={}).status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_exporter_is_built_from_stored_settings_when_none_is_registered(
-    store: TernarySettingsStore, clean_callbacks: None
-):
+async def test_exporter_is_built_from_stored_settings_when_none_is_registered(store: TernarySettingsStore):
     await store.save(SETTINGS.model_copy(update={"frequency": "interval", "interval_seconds": 120}))
 
     exporter = await ternary_exporter(store)
@@ -428,16 +500,22 @@ async def test_exporter_is_built_from_stored_settings_when_none_is_registered(
 
 
 @pytest.mark.asyncio
-async def test_exporter_prefers_the_registered_logger(store: TernarySettingsStore, clean_callbacks: None):
-    await store.save(SETTINGS)
-    registered = TernaryLogger(api_key="other", connection_id="conn-999", base_url="https://api.ternary.app")
-    litellm.logging_callback_manager.add_litellm_callback(registered)
+async def test_exporter_uses_the_current_settings_not_the_logger_started_with_older_ones(
+    store: TernarySettingsStore,
+):
+    started_with = SettingsTernaryLogger(api_key=API_KEY, connection_id="conn-123", base_url="https://api.ternary.app")
+    litellm.logging_callback_manager.add_litellm_callback(started_with)
+    await store.save(SETTINGS.model_copy(update={"frequency": "interval", "interval_seconds": 120}))
 
-    assert await ternary_exporter(store) is registered
+    exporter = await ternary_exporter(store)
+
+    assert exporter is not started_with
+    assert isinstance(exporter, TernaryLogger)
+    assert (exporter.frequency, exporter.interval_seconds) == ("interval", 120)
 
 
 @pytest.mark.asyncio
-async def test_startup_registers_a_logger_from_stored_settings(store: TernarySettingsStore, clean_callbacks: None):
+async def test_startup_registers_a_logger_from_stored_settings(store: TernarySettingsStore):
     await store.save(SETTINGS.model_copy(update={"frequency": "interval", "interval_seconds": 90}))
 
     await register_ternary_logger_from_db(store)
@@ -447,22 +525,75 @@ async def test_startup_registers_a_logger_from_stored_settings(store: TernarySet
 
 
 @pytest.mark.asyncio
-async def test_startup_leaves_config_file_setup_alone(store: TernarySettingsStore, clean_callbacks: None):
+async def test_startup_leaves_config_file_setup_alone(store: TernarySettingsStore):
     await store.save(SETTINGS)
-    litellm.callbacks.append("ternary")
+    config_logger = _config_file_logger()
 
     await register_ternary_logger_from_db(store)
 
-    assert litellm.callbacks == ["ternary"]
+    assert litellm.callbacks == [config_logger]
 
 
 @pytest.mark.asyncio
-async def test_startup_survives_an_undecryptable_row(
-    store: TernarySettingsStore, clean_callbacks: None, monkeypatch: pytest.MonkeyPatch
-):
+async def test_startup_survives_an_undecryptable_row(store: TernarySettingsStore, monkeypatch: pytest.MonkeyPatch):
     await store.save(SETTINGS)
     monkeypatch.setenv("LITELLM_SALT_KEY", "sk-a-different-salt")
 
     await register_ternary_logger_from_db(store)
 
     assert litellm.callbacks == []
+
+
+class _ConfigRowTable:
+    def __init__(self, rows: Mapping[str, str]) -> None:
+        self.rows = rows
+
+    async def find_unique(self, where: Mapping[str, object], **_: object) -> SimpleNamespace | None:
+        name = str(where.get("param_name"))
+        return SimpleNamespace(param_name=name, param_value=self.rows[name]) if name in self.rows else None
+
+    async def find_first(self, where: Mapping[str, object] | None = None, **_: object) -> SimpleNamespace | None:
+        return await self.find_unique(where or {})
+
+    async def find_many(self, *_: object, **__: object) -> list[object]:
+        return []
+
+
+class _StartupDb:
+    def __init__(self, config_rows: Mapping[str, str]) -> None:
+        self.litellm_config = _ConfigRowTable(config_rows)
+
+    def __getattr__(self, table: str) -> _ConfigRowTable:
+        return _ConfigRowTable({})
+
+
+class _StartupPrisma:
+    def __init__(self, config_rows: Mapping[str, str]) -> None:
+        self.db = _StartupDb(config_rows)
+
+
+class _RecordingScheduler:
+    def __init__(self) -> None:
+        self.jobs: list[Callable[[], object]] = []
+
+    def add_job(self, func: Callable[[], object], *_: object, **__: object) -> None:
+        self.jobs.append(func)
+
+
+@pytest.mark.asyncio
+async def test_proxy_startup_schedules_the_export_from_stored_settings(monkeypatch: pytest.MonkeyPatch):
+    stored = SETTINGS.model_copy(
+        update={"api_key": encrypt_value_helper(API_KEY), "frequency": "interval", "interval_seconds": 45}
+    )
+    monkeypatch.setattr(ps, "prisma_client", _StartupPrisma({TERNARY_SETTINGS_PARAM_NAME: stored.model_dump_json()}))
+    scheduler = _RecordingScheduler()
+
+    await ps.ProxyStartupEvent._initialize_spend_tracking_background_jobs(
+        scheduler=scheduler  # pyright: ignore[reportArgumentType]  # records add_job calls instead of running APScheduler
+    )
+
+    ternary_jobs = [job for job in scheduler.jobs if isinstance(getattr(job, "__self__", None), SettingsTernaryLogger)]
+    assert len(ternary_jobs) == 1
+    logger = getattr(ternary_jobs[0], "__self__")
+    assert isinstance(logger, SettingsTernaryLogger)
+    assert (logger.frequency, logger.interval_seconds) == ("interval", 45)

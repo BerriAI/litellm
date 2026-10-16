@@ -6,7 +6,7 @@ import {
   createSchema,
   EMPTY_TERNARY_FORM_VALUES,
   formValuesFromSettings,
-  updateSchema,
+  updateSchemaFor,
   type TernaryFormValues,
 } from "./ternaryPayload";
 
@@ -17,6 +17,8 @@ const filled: TernaryFormValues = {
   frequency: "daily",
   interval_seconds: "",
 };
+
+const updateSchema = updateSchemaFor("https://api.ternary.app");
 
 const issuesFor = (schema: typeof createSchema | typeof updateSchema, values: TernaryFormValues) => {
   const result = schema.safeParse(values);
@@ -79,6 +81,17 @@ describe("form schemas", () => {
 
   it("starts a new integration on the default base URL and daily exports", () => {
     expect(issuesFor(createSchema, { ...EMPTY_TERNARY_FORM_VALUES, api_key: "k", connection_id: "c" })).toEqual([]);
+  });
+});
+
+describe("updateSchemaFor", () => {
+  it("asks for the API key again only when the base URL changes", () => {
+    const keepingKey = { ...filled, api_key: "" };
+    expect(issuesFor(updateSchema, keepingKey)).toEqual([]);
+    expect(issuesFor(updateSchema, { ...keepingKey, ternary_base_url: "https://collector.example.net" })).toEqual([
+      "api_key",
+    ]);
+    expect(issuesFor(updateSchema, { ...filled, ternary_base_url: "https://collector.example.net" })).toEqual([]);
   });
 });
 
