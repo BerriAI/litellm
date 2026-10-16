@@ -7,7 +7,6 @@ import base64
 import hashlib
 import json
 import time
-import zlib
 from collections import UserDict
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, MutableMapping, Sequence
 from contextlib import ExitStack, asynccontextmanager
@@ -18,17 +17,15 @@ from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Generic, ParamSpec, TypeAlias, TypeVar, cast
 
-import anyio
-from mcp.types import CacheableResult, ListToolsResult
+from mcp.types import CacheableResult
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.proxy._experimental.mcp_server.faults.list_outcomes import classify_list_exception, serves_stale_listing
 from litellm.proxy._experimental.mcp_server.result_conversion import age_freshness, aggregate_freshness
 
 if TYPE_CHECKING:
-    from mcp.types import PaginatedRequestParams, PaginatedResult
+    from mcp.types import ListToolsResult, PaginatedRequestParams, PaginatedResult
 
     from litellm.proxy._experimental.mcp_server.contracts import CatalogListRequest, CatalogListResult, OperationContext
     from litellm.proxy._experimental.mcp_server.db import OAuthCredentialPayload
@@ -1380,72 +1377,3 @@ class _DiscoveryCache(Generic[_DiscoveryPage]):
         finally:
             if self._pending.get(key) is asyncio.current_task():
                 self._pending.pop(key)
-
-
-ToolListingKey: TypeAlias = tuple[str, str, bool, str | None]
-_STALE_TOOLS_MAX_BYTES: Final = 128 * 1024
-
-
-@dataclass(frozen=True, slots=True)
-class _StaleToolListing:
-    stored_at: float
-    payload: bytes
-
-
-class StaleToolListings:
-    """RFC 5861 stale-if-error for tools/list. Each caller's last good upstream page is kept for
-    ``max_stale`` seconds and served only when a live listing hits an upstream outage. Pages are kept
-    as upstream sent them, so guardrails and prefixing still run on a stale page."""
-
-    def __init__(self, max_stale: float, stale_wait: float, clock: Callable[[], float]) -> None:
-        self._max_stale = max_stale
-        self._stale_wait = stale_wait
-        self._clock = clock
-        self._entries: MappingProxyType[ToolListingKey, _StaleToolListing] = MappingProxyType({})
-
-    def invalidate(self, server_id: str) -> None:
-        self._entries = MappingProxyType({key: entry for key, entry in self._entries.items() if key[0] != server_id})
-
-    def _fresh_entry(self, key: ToolListingKey) -> _StaleToolListing | None:
-        entry: Final = self._entries.get(key)
-        if entry is None or self._clock() - entry.stored_at > self._max_stale:
-            return None
-        return entry
-
-    def _store(self, key: ToolListingKey, entry: _StaleToolListing | None) -> None:
-        now: Final = self._clock()
-        kept: Final = tuple(
-            (other, value)
-            for other, value in self._entries.items()
-            if other != key and now - value.stored_at <= self._max_stale
-        )
-        added: Final = () if entry is None else ((key, entry),)
-        evicted: Final = max(len(kept) + len(added) - _DISCOVERY_CACHE_LIMIT, 0)
-        self._entries = MappingProxyType(dict((*kept[evicted:], *added)))
-
-    async def get(
-        self, key: ToolListingKey, server_name: str, fetch: Callable[[], Awaitable[ListToolsResult]]
-    ) -> ListToolsResult:
-        if self._max_stale <= 0:
-            return await fetch()
-        stale: Final = self._fresh_entry(key)
-        try:
-            with anyio.fail_after(self._stale_wait if stale is not None and self._stale_wait > 0 else None):
-                page: Final = await fetch()
-        except Exception as error:
-            fault: Final = classify_list_exception(error)
-            if fault.tag in ("auth_required", "forbidden"):
-                self._store(key, None)
-            if stale is None or not serves_stale_listing(fault):
-                raise
-            verbose_logger.warning(
-                "Serving the last good tools/list for MCP server %s from %.0fs ago because the live listing failed: %s",
-                server_name,
-                self._clock() - stale.stored_at,
-                fault.tag,
-            )
-            listing: Final = ListToolsResult.model_validate_json(zlib.decompress(stale.payload))
-            return listing.model_copy(update={"ttl_ms": 0})
-        payload: Final = zlib.compress(page.model_dump_json(by_alias=True).encode())
-        self._store(key, _StaleToolListing(self._clock(), payload) if len(payload) <= _STALE_TOOLS_MAX_BYTES else None)
-        return page

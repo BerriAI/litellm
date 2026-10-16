@@ -10,7 +10,7 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from datetime import datetime
 from pathlib import Path
-from types import SimpleNamespace
+from types import EllipsisType, SimpleNamespace
 from typing import Any, Dict, Final, Literal, Optional, TypeVar, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -36,6 +36,7 @@ from mcp.server.context import ServerRequestContext
 from mcp.types import (
     CallToolRequestParams as MCPCallToolRequestParams,
     CallToolResult,
+    ListToolsResult,
     GetPromptResult,
     Prompt,
     ResourceTemplate,
@@ -226,6 +227,12 @@ async def test_sampling_callbacks_isolate_callers_and_cancellation():
     assert [result.message for result in results[:2]] == ["alpha", "bravo"]
     assert isinstance(results[2], asyncio.CancelledError)
     assert cancelled.is_set()
+
+
+def _listing_client() -> AsyncMock:
+    client: Final = AsyncMock()
+    client.discovery_auth_fingerprint = AsyncMock(return_value="test-credential-hash")
+    return client
 
 
 def _reload_mcp_manager_module():
@@ -2119,10 +2126,10 @@ class TestMCPServerManager:
             server, mcp_auth_header, extra_headers, stdio_env, subject_token=None, **kwargs
         ):  # pragma: no cover - helper
             captured["subject_token"] = subject_token
-            return AsyncMock()
+            return _listing_client()
 
         manager.create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
-        manager._fetch_tools_with_timeout = AsyncMock(return_value=[])
+        manager._fetch_tools_with_timeout = AsyncMock(return_value=ListToolsResult(tools=[]))
         await manager._get_tools_from_server(server=server, oauth2_headers=oauth2_headers, raw_headers=raw_headers)
         return captured["subject_token"]
 
@@ -2936,7 +2943,7 @@ class TestMCPServerManager:
             server, mcp_auth_header, extra_headers, stdio_env, subject_token=None, **kwargs
         ):  # pragma: no cover - helper
             captured["subject_token"] = subject_token
-            return AsyncMock()
+            return _listing_client()
 
         manager.create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
         await call(manager)
@@ -6198,7 +6205,7 @@ class TestMCPServerManager:
         )
 
         # Mock client creation and fetching tools
-        manager.create_mcp_client = AsyncMock(return_value=object())
+        manager.create_mcp_client = AsyncMock(return_value=_listing_client())
 
         # Tools returned upstream (unprefixed from provider)
         upstream_tool = MCPTool(
@@ -6207,7 +6214,7 @@ class TestMCPServerManager:
             inputSchema={},
         )
 
-        manager._fetch_tools_with_timeout = AsyncMock(return_value=[upstream_tool])
+        manager._fetch_tools_with_timeout = AsyncMock(return_value=ListToolsResult(tools=[upstream_tool]))
 
         # Case 1: add_prefix=True (default for multi-server) -> expect prefixed
         tools_prefixed = await manager._get_tools_from_server(server, add_prefix=True)
@@ -6236,8 +6243,8 @@ class TestMCPServerManager:
             transport=MCPTransport.http,
         )
 
-        manager.create_mcp_client = AsyncMock(return_value=object())
-        manager._fetch_tools_with_timeout = AsyncMock(return_value=[])
+        manager.create_mcp_client = AsyncMock(return_value=_listing_client())
+        manager._fetch_tools_with_timeout = AsyncMock(return_value=ListToolsResult(tools=[]))
 
         user_auth = UserAPIKeyAuth(api_key="sk-test", user_id="alice")
 
@@ -7559,9 +7566,9 @@ class TestMCPServerManager:
         async def fetch(client, name):
             fetch_started.set()
             await release_fetch.wait()
-            return [MCPTool(name="turn", description="before save", inputSchema={})]
+            return ListToolsResult(tools=[MCPTool(name="turn", description="before save", inputSchema={})])
 
-        manager.create_mcp_client = AsyncMock(return_value=AsyncMock())
+        manager.create_mcp_client = AsyncMock(return_value=_listing_client())
         manager._fetch_tools_with_timeout = fetch
         caller = ListedToolsCaller(user_api_key_auth=user)
 
@@ -7577,7 +7584,7 @@ class TestMCPServerManager:
         assert manager.get_listed_tool(server, "turn", caller) is None
 
         manager._fetch_tools_with_timeout = AsyncMock(
-            return_value=[MCPTool(name="turn", description="after save", inputSchema={})]
+            return_value=ListToolsResult(tools=[MCPTool(name="turn", description="after save", inputSchema={})])
         )
         await manager._get_tools_from_server(server=server, user_api_key_auth=user, record_listing=True)
         listed = manager.get_listed_tool(server, "turn", caller)
@@ -7813,9 +7820,9 @@ class TestMCPServerManager:
             auth_type=MCPAuth.api_key,
         )
         user = UserAPIKeyAuth(api_key="sk-litellm", user_id="byok-cold-user")
-        manager.create_mcp_client = AsyncMock(return_value=AsyncMock())
+        manager.create_mcp_client = AsyncMock(return_value=_listing_client())
         manager._fetch_tools_with_timeout = AsyncMock(
-            return_value=[MCPTool(name="turn", description="listed while db down", inputSchema={})]
+            return_value=ListToolsResult(tools=[MCPTool(name="turn", description="listed while db down", inputSchema={})])
         )
 
         with (
@@ -7863,11 +7870,11 @@ class TestMCPServerManager:
         )
         manager.registry = {"byok-catalog": server}
         user = UserAPIKeyAuth(api_key="sk-litellm", user_id="byok-user")
-        mock_client = AsyncMock()
+        mock_client = _listing_client()
         mock_client.call_tool.return_value = MagicMock(spec=CallToolResult, content=[], isError=False)
         manager.create_mcp_client = AsyncMock(return_value=mock_client)
         manager._fetch_tools_with_timeout = AsyncMock(
-            return_value=[MCPTool(name="turn", description="stored cred catalog", inputSchema={})]
+            return_value=ListToolsResult(tools=[MCPTool(name="turn", description="stored cred catalog", inputSchema={})])
         )
         proxy_logging_obj = _mock_proxy_logging()
         proxy_logging_obj.create_mcp_request_object_from_kwargs = MagicMock(return_value={})
@@ -7908,9 +7915,9 @@ class TestMCPServerManager:
             url="http://byok-catalog",
             is_byok=True,
         )
-        manager.create_mcp_client = AsyncMock(return_value=AsyncMock())
+        manager.create_mcp_client = AsyncMock(return_value=_listing_client())
         manager._fetch_tools_with_timeout = AsyncMock(
-            return_value=[MCPTool(name="turn", description="t", inputSchema={})]
+            return_value=ListToolsResult(tools=[MCPTool(name="turn", description="t", inputSchema={})])
         )
 
         with patch("litellm.proxy.proxy_server.prisma_client", None):
@@ -7971,9 +7978,9 @@ class TestMCPServerManager:
             **server_auth,
         )
         alice = UserAPIKeyAuth(api_key="sk-alice", user_id="alice")
-        manager.create_mcp_client = AsyncMock(return_value=AsyncMock())
+        manager.create_mcp_client = AsyncMock(return_value=_listing_client())
         manager._fetch_tools_with_timeout = AsyncMock(
-            return_value=[MCPTool(name="echo", description="listed catalog", inputSchema={})]
+            return_value=ListToolsResult(tools=[MCPTool(name="echo", description="listed catalog", inputSchema={})])
         )
         signer_headers = AsyncMock(return_value={"Authorization": "Bearer signed-jwt"})
         cache_byok_credential("alice", "cc1", "BYOK-ALICE-SECRET")
@@ -8189,10 +8196,10 @@ class TestMCPServerManager:
                 )
             ],
         }
-        mock_client = AsyncMock()
+        mock_client = _listing_client()
         mock_client.call_tool.return_value = MagicMock(spec=CallToolResult, content=[], isError=False)
         manager.create_mcp_client = AsyncMock(return_value=mock_client)
-        manager._fetch_tools_with_timeout = AsyncMock(side_effect=lambda client, name: catalogs[client.workspace])
+        manager._fetch_tools_with_timeout = AsyncMock(side_effect=lambda client, name: ListToolsResult(tools=catalogs[client.workspace]))
         for workspace in ("A", "B"):
             manager.create_mcp_client.return_value.workspace = workspace
             await manager._get_tools_from_server(
@@ -11480,7 +11487,7 @@ class TestMCPToolsListAuthSurfacing:
         manager = MCPServerManager()
         challenge = 'Bearer resource_metadata="https://upstream.example/.well-known/oauth-protected-resource"'
         client = MagicMock()
-        client.list_tools = AsyncMock(side_effect=_upstream_status_error(401, challenge))
+        client.list_tools_result = AsyncMock(side_effect=_upstream_status_error(401, challenge))
 
         with pytest.raises(MCPUpstreamAuthError) as exc_info:
             await manager._fetch_tools_with_timeout(client, "static-key-server")
@@ -11498,7 +11505,7 @@ class TestMCPToolsListAuthSurfacing:
         manager = MCPServerManager()
         challenge = 'Bearer error="insufficient_scope", scope="read:tools"'
         client = MagicMock()
-        client.list_tools = AsyncMock(side_effect=_upstream_status_error(403, challenge))
+        client.list_tools_result = AsyncMock(side_effect=_upstream_status_error(403, challenge))
 
         with pytest.raises(MCPUpstreamAuthError) as exc_info:
             await manager._fetch_tools_with_timeout(client, "forbidden-server")
@@ -11515,7 +11522,7 @@ class TestMCPToolsListAuthSurfacing:
         own fault ("internal")."""
         manager = MCPServerManager()
         client = MagicMock()
-        client.list_tools = AsyncMock(side_effect=RuntimeError("upstream 500"))
+        client.list_tools_result = AsyncMock(side_effect=RuntimeError("upstream 500"))
 
         with pytest.raises(MCPServerListError) as exc_info:
             await manager._fetch_tools_with_timeout(client, "srv")
@@ -11662,7 +11669,8 @@ class TestMCPToolsListAuthSurfacing:
         )
         upstream_challenge = 'Bearer resource_metadata="https://upstream.example/.well-known/oauth-protected-resource"'
         client = MagicMock()
-        client.list_tools = AsyncMock(side_effect=_upstream_status_error(401, upstream_challenge))
+        client.discovery_auth_fingerprint = AsyncMock(return_value="test-credential-hash")
+        client.list_tools_result = AsyncMock(side_effect=_upstream_status_error(401, upstream_challenge))
         manager.create_mcp_client = AsyncMock(return_value=client)
 
         with pytest.raises(MCPUpstreamAuthError) as exc_info:
@@ -14009,7 +14017,9 @@ class TestClientForwardedDiscoveryFailureIsNotFatal:
         server = await self._registered(manager, auth_type, None)
         manager._set_oauth_discovery_deferred(server.server_id, True)
         manager._fetch_tools_with_timeout = AsyncMock(
-            return_value=[MCPTool(name="list_reports", description="d", inputSchema={"type": "object"})]
+            return_value=ListToolsResult(
+                tools=[MCPTool(name="list_reports", description="d", inputSchema={"type": "object"})]
+            )
         )
 
         with patch.object(manager, "_discover_oauth_metadata_for_server", new=AsyncMock(return_value=None)):
@@ -14917,6 +14927,7 @@ class TestLitellmAdmissionKeyIsNeverTheSubjectToken:
         manager: Final = MCPServerManager()
         client: Final = AsyncMock()
         client.call_tool = AsyncMock(return_value=CallToolResult(content=[], isError=False))
+        client.discovery_auth_fingerprint = AsyncMock(return_value="test-credential-hash")
         client.list_prompts_result = AsyncMock(return_value=ListPromptsResult(prompts=[]))
         client.read_resource = AsyncMock(return_value=ReadResourceResult(contents=[]))
         manager.create_mcp_client = AsyncMock(return_value=client)
@@ -15033,7 +15044,7 @@ class TestLitellmAdmissionKeyIsNeverTheSubjectToken:
     @pytest.mark.asyncio
     async def test_tools_list_with_only_the_litellm_key_has_no_subject(self):
         manager: Final = self._manager_with_recording_client()
-        manager._fetch_tools_with_timeout = AsyncMock(return_value=[])
+        manager._fetch_tools_with_timeout = AsyncMock(return_value=ListToolsResult(tools=[]))
         await manager._get_tools_from_server(
             server=self._token_exchange_server("te-list-key"),
             oauth2_headers={"Authorization": f"Bearer {self._ADMISSION_KEY}"},
@@ -15623,6 +15634,7 @@ class _DiscoveryUpstream:
         self.requests: tuple[tuple[str, str], ...] = ()
         self.outcome = "supported"
         self.ttl_ms = 60000
+        self.last_page_ttl_ms = 60000
         self.entered = asyncio.Event()
         self.release = asyncio.Event()
         self.release.set()
@@ -15682,7 +15694,9 @@ class _DiscoveryUpstream:
             "resources/templates/list": {
                 "resourceTemplates": [{"name": "example", "uriTemplate": "test://{name}", "description": "original"}]
             },
-            "tools/list": {"tools": []},
+            "tools/list": {
+                "tools": [{"name": "example", "description": "original", "inputSchema": {"type": "object"}}]
+            },
         }[payload.method]
         continuation: Final = (
             {"nextCursor": "last-page"}
@@ -15697,7 +15711,7 @@ class _DiscoveryUpstream:
                 "result": {
                     **result,
                     **continuation,
-                    "ttlMs": self.ttl_ms,
+                    "ttlMs": self.last_page_ttl_ms if (payload.params or {}).get("cursor") else self.ttl_ms,
                     "cacheScope": "private",
                     "resultType": "complete",
                 },
@@ -15747,6 +15761,100 @@ async def test_discovery_cache_reuses_raw_results_and_expires(kind: str) -> None
         assert upstream.initializes == 1
         clock.now = 60.001
         assert (await operation(server, None))[0].name == "discovery-example"
+        assert upstream.initializes == 2
+
+
+def _list_discovery_tools(manager: MCPServerManager, cursor: str | None | EllipsisType = ..., **kwargs):
+    from mcp.types import PaginatedRequestParams
+
+    params: Final = None if cursor is ... else PaginatedRequestParams(cursor=cursor)
+    return manager.get_tools_page(_discovery_server(), params=params, **kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cursor", (..., None), ids=("full_walk", "first_page"))
+async def test_tools_list_is_served_from_cache_within_the_upstream_ttl(cursor: str | None | EllipsisType) -> None:
+    clock: Final = _DiscoveryClock()
+    manager: Final = MCPServerManager(discovery_clock=clock)
+    upstream: Final = _DiscoveryUpstream()
+    upstream.ttl_ms = 30000
+    with _mcp_upstream(upstream.respond):
+        first: Final = await _list_discovery_tools(manager, cursor)
+        assert [tool.name for tool in first.tools] == ["discovery-example"]
+        assert 29000 < first.ttl_ms <= 30000
+        clock.now = 29.9
+        cached: Final = await _list_discovery_tools(manager, cursor, add_prefix=False)
+        assert [tool.name for tool in cached.tools] == ["example"]
+        assert 0 < cached.ttl_ms <= 100
+        assert upstream.initializes == 1
+        clock.now = 30.001
+        assert [tool.name for tool in (await _list_discovery_tools(manager, cursor)).tools] == ["discovery-example"]
+        assert upstream.initializes == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cursor", (..., None), ids=("full_walk", "first_page"))
+async def test_tools_list_is_not_cached_without_an_upstream_ttl(cursor: str | None | EllipsisType) -> None:
+    manager: Final = MCPServerManager(discovery_clock=_DiscoveryClock())
+    upstream: Final = _DiscoveryUpstream()
+    upstream.ttl_ms = 0
+    with _mcp_upstream(upstream.respond):
+        for _ in range(2):
+            assert len((await _list_discovery_tools(manager, cursor)).tools) == 1
+        assert upstream.initializes == 2
+
+
+@pytest.mark.asyncio
+async def test_tools_list_full_walk_takes_the_shortest_page_ttl_and_keys_pages_by_cursor() -> None:
+    clock: Final = _DiscoveryClock()
+    manager: Final = MCPServerManager(discovery_clock=clock)
+    upstream: Final = _DiscoveryUpstream()
+    upstream.outcome = "paged"
+    upstream.last_page_ttl_ms = 20000
+    with _mcp_upstream(upstream.respond):
+        walk: Final = await _list_discovery_tools(manager)
+        assert len(walk.tools) == 2
+        assert 19000 < walk.ttl_ms <= 20000
+        clock.now = 20.001
+        assert len((await _list_discovery_tools(manager)).tools) == 2
+        assert upstream.initializes == 2
+        first_page: Final = await _list_discovery_tools(manager, None)
+        last_page: Final = await _list_discovery_tools(manager, "last-page")
+        assert first_page.next_cursor == "last-page"
+        assert last_page.next_cursor is None
+        assert upstream.initializes == 4
+        assert (await _list_discovery_tools(manager, "last-page")).next_cursor is None
+        assert (await _list_discovery_tools(manager, None)).next_cursor == "last-page"
+        assert upstream.initializes == 4
+
+
+@pytest.mark.asyncio
+async def test_tools_list_cache_isolates_callers_and_is_invalidated_with_the_server() -> None:
+    manager: Final = MCPServerManager(discovery_clock=_DiscoveryClock())
+    upstream: Final = _DiscoveryUpstream()
+    with _mcp_upstream(upstream.respond):
+        for credential in ("first-secret", "second-secret", "first-secret"):
+            assert len((await _list_discovery_tools(manager, extra_headers={"Authorization": credential})).tools) == 1
+        assert upstream.initializes == 2
+        assert {auth for method, auth in upstream.requests if method == "tools/list"} == {
+            "first-secret",
+            "second-secret",
+        }
+        manager.invalidate_discovery_lists("discovery")
+        assert len((await _list_discovery_tools(manager, extra_headers={"Authorization": "first-secret"})).tools) == 1
+        assert upstream.initializes == 3
+
+
+@pytest.mark.asyncio
+async def test_tools_list_failures_are_not_cached() -> None:
+    manager: Final = MCPServerManager(discovery_clock=_DiscoveryClock())
+    upstream: Final = _DiscoveryUpstream()
+    upstream.outcome = "failure"
+    with _mcp_upstream(upstream.respond):
+        with pytest.raises(MCPServerListError):
+            await _list_discovery_tools(manager)
+        upstream.outcome = "supported"
+        assert len((await _list_discovery_tools(manager)).tools) == 1
         assert upstream.initializes == 2
 
 
@@ -18897,8 +19005,8 @@ def catalog_guardrail(monkeypatch):
 
 def _catalog_manager(*upstream_tools: MCPTool) -> MCPServerManager:
     manager = MCPServerManager()
-    manager.create_mcp_client = AsyncMock(return_value=object())
-    manager._fetch_tools_with_timeout = AsyncMock(return_value=list(upstream_tools))
+    manager.create_mcp_client = AsyncMock(return_value=_listing_client())
+    manager._fetch_tools_with_timeout = AsyncMock(return_value=ListToolsResult(tools=list(upstream_tools)))
     return manager
 
 
@@ -19058,14 +19166,14 @@ class TestToolCatalogGuard:
             await manager._get_tools_from_server(_notes_server(), add_prefix=False, proxy_logging_obj=proxy_logging_obj)
         assert send_alert.await_count == 1
 
-        manager._fetch_tools_with_timeout = AsyncMock(return_value=[LIST_NOTES])
+        manager._fetch_tools_with_timeout = AsyncMock(return_value=ListToolsResult(tools=[LIST_NOTES]))
         recovered = await manager._get_tools_from_server(
             _notes_server(), add_prefix=False, proxy_logging_obj=proxy_logging_obj
         )
         assert [tool.name for tool in recovered] == ["list_notes"]
         assert send_alert.await_count == 1
 
-        manager._fetch_tools_with_timeout = AsyncMock(return_value=[LIST_NOTES, POISONED_DELETE])
+        manager._fetch_tools_with_timeout = AsyncMock(return_value=ListToolsResult(tools=[LIST_NOTES, POISONED_DELETE]))
         await manager._get_tools_from_server(_notes_server(), add_prefix=False, proxy_logging_obj=proxy_logging_obj)
         assert send_alert.await_count == 2
 
@@ -19271,12 +19379,12 @@ class TestToolCatalogGuard:
         )
         while send_alert.await_count == 0:
             await asyncio.sleep(0)
-        manager._fetch_tools_with_timeout = AsyncMock(return_value=[LIST_NOTES])
+        manager._fetch_tools_with_timeout = AsyncMock(return_value=ListToolsResult(tools=[LIST_NOTES]))
         await manager._get_tools_from_server(_notes_server(), add_prefix=False, proxy_logging_obj=proxy_logging_obj)
         gate.set()
         await poisoned_listing
 
-        manager._fetch_tools_with_timeout = AsyncMock(return_value=[LIST_NOTES, POISONED_DELETE])
+        manager._fetch_tools_with_timeout = AsyncMock(return_value=ListToolsResult(tools=[LIST_NOTES, POISONED_DELETE]))
         await manager._get_tools_from_server(_notes_server(), add_prefix=False, proxy_logging_obj=proxy_logging_obj)
         assert send_alert.await_count == 2
 
@@ -19883,6 +19991,7 @@ async def test_catalog_page_registers_bare_routes_only_for_complete_initial_disc
     manager.registry = {server.server_id: server, other.server_id: other}
     manager._create_prefixed_tools([LIST_NOTES], other)
     manager.create_mcp_client.return_value = SimpleNamespace(
+        discovery_auth_fingerprint=AsyncMock(return_value="test-credential-hash"),
         list_tools_page=AsyncMock(return_value=ListToolsResult(tools=[LIST_NOTES], next_cursor=next_cursor))
     )
 
@@ -19908,7 +20017,7 @@ async def test_paginated_listing_keeps_earlier_tool_metadata_and_caller_isolatio
     server = MCPServer(server_id="pages", name="pages", transport=MCPTransport.http)
     manager = MCPServerManager()
     manager.registry = {server.server_id: server}
-    client = AsyncMock()
+    client = _listing_client()
     client._last_initialize_instructions = None
     client.list_tools_page.side_effect = [
         ListToolsResult(tools=[first], next_cursor="next"),
@@ -19988,7 +20097,7 @@ async def test_failed_aggregate_continuation_preserves_only_delivered_tool_metad
     servers = [MCPServer(server_id=name, name=name, transport=MCPTransport.http) for name in ("alpha", "beta")]
     manager = MCPServerManager()
     manager.registry = {server.server_id: server for server in servers}
-    clients = {server.server_id: AsyncMock() for server in servers}
+    clients = {server.server_id: _listing_client() for server in servers}
     for client in clients.values():
         client._last_initialize_instructions = None
         client.list_tools_page.side_effect = [
@@ -20030,7 +20139,7 @@ async def test_aggregate_publishes_complete_bare_routes_only_after_delivering_a_
     servers = [MCPServer(server_id=name, name=name, transport=MCPTransport.http) for name in ("alpha", "beta")]
     manager = MCPServerManager()
     manager.registry = {server.server_id: server for server in servers}
-    clients = {server.server_id: AsyncMock() for server in servers}
+    clients = {server.server_id: _listing_client() for server in servers}
     for name, client in clients.items():
         client._last_initialize_instructions = None
         client.list_tools_page.return_value = ListToolsResult(tools=[tool], next_cursor="next" if name == "beta" else None)
@@ -20276,35 +20385,3 @@ async def test_legacy_upstream_elicitation_rejects_modern_downstream_without_con
     finally:
         active_mcp_request_ctx_var.reset(request_token)
         legacy_server.active_mcp_session_var.reset(session_token)
-
-
-@pytest.mark.asyncio
-async def test_tools_list_serves_each_callers_last_good_catalog_through_an_upstream_timeout(monkeypatch) -> None:
-    from mcp.types import ListToolsResult, PaginatedRequestParams
-
-    from litellm.proxy._experimental.mcp_server.catalog import StaleToolListings
-
-    monkeypatch.setenv("LITELLM_SALT_KEY", "stale-tools-test")
-    clock: Final = _DiscoveryClock()
-    manager: Final = MCPServerManager(stale_tool_listings=StaleToolListings(900, 10, clock))
-    server: Final = _notes_server()
-    manager.registry = {server.server_id: server}
-    client: Final = AsyncMock()
-    client._last_initialize_instructions = None
-    client.list_tools_page.return_value = ListToolsResult(tools=[LIST_NOTES])
-    manager.create_mcp_client = AsyncMock(return_value=client)
-    alice: Final = UserAPIKeyAuth(api_key="alice-key", user_id="alice")
-    bob: Final = UserAPIKeyAuth(api_key="bob-key", user_id="bob")
-    params: Final = PaginatedRequestParams()
-
-    await manager.get_tools_page(server, user_api_key_auth=alice, params=params)
-    client.list_tools_page.side_effect = MCPServerListError(ServerListFault(tag="timeout"), server.name)
-
-    served: Final = await manager.get_tools_page(server, user_api_key_auth=alice, params=params)
-    assert [tool.name for tool in served.tools] == ["notes-list_notes"]
-    with pytest.raises(MCPServerListError):
-        await manager.get_tools_page(server, user_api_key_auth=bob, params=params)
-
-    manager.invalidate_server_definition_caches(server.server_id)
-    with pytest.raises(MCPServerListError):
-        await manager.get_tools_page(server, user_api_key_auth=alice, params=params)
