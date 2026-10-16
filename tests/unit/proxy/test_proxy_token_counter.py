@@ -1233,3 +1233,75 @@ async def test_anthropic_count_tokens_drops_a_malformed_tool_result_text_when_dr
     assert response == {"input_tokens": 9}
     sent: Final = json.loads(route.calls.last.request.content)
     assert {"type": "function_call_output", "call_id": "toolu_log", "output": "build ok"} in sent["input"]
+
+
+def _build_log_messages(log_text: JsonValue) -> list[dict[str, JsonValue]]:
+    return [
+        {"role": "user", "content": "run the build"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_log", "name": "bash", "input": {"cmd": "make"}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_log",
+                    "content": [{"type": "text", "text": "build ok"}, {"type": "text", "text": log_text}],
+                }
+            ],
+        },
+    ]
+
+
+async def _count_on_a_model_without_a_count_api(
+    monkeypatch: pytest.MonkeyPatch, body: dict[str, JsonValue]
+) -> JSONResponse | dict[str, JsonValue]:
+    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
+    import litellm.proxy.proxy_server as proxy_server
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "mistral-tool-result",
+                "litellm_params": {"model": "mistral/mistral-small-latest", "api_key": "sk-test"},
+            }
+        ]
+    )
+    request: Final = MagicMock(spec=Request)
+    request.headers = {"user-agent": "python-httpx/0.28.1"}
+    monkeypatch.setattr(anthropic_endpoints, "read_request_body", AsyncMock(return_value=body))
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "proxy_config", proxy_server.ProxyConfig())
+    with respx.mock:
+        return await anthropic_count_tokens(request, MagicMock())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("log_text", (None, 5))
+async def test_count_tokens_without_a_count_api_rejects_a_non_string_tool_result_text(
+    monkeypatch: pytest.MonkeyPatch, log_text: JsonValue
+) -> None:
+    response: Final = await _count_on_a_model_without_a_count_api(
+        monkeypatch, {"model": "mistral-tool-result", "messages": _build_log_messages(log_text)}
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    assert json.loads(bytes(response.body))["error"] == {
+        "type": "invalid_request_error",
+        "message": "tool_result toolu_log content.1.text: Input should be a valid string",
+    }
+
+
+@pytest.mark.asyncio
+async def test_count_tokens_without_a_count_api_counts_a_non_string_tool_result_text_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response: Final = await _count_on_a_model_without_a_count_api(
+        monkeypatch, {"model": "mistral-tool-result", "drop_params": True, "messages": _build_log_messages(None)}
+    )
+
+    assert isinstance(response, dict)
+    assert isinstance(response["input_tokens"], int) and response["input_tokens"] > 0
