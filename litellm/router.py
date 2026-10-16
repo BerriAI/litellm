@@ -13186,13 +13186,6 @@ class Router:
         skip_inline_token_count: bool,
         has_countable_input: bool,
     ) -> int | None:
-        """Best-effort input token count for the context-window check below.
-
-        None means the count is unavailable, whether because it was never needed, the
-        caller already gave up on an off-loop count, or counting raised - every case
-        just skips the context-window check; RPM, region and invalid-params checks
-        still run for every deployment regardless.
-        """
         if input_token_count is not None:
             return input_token_count
         if not has_countable_input or skip_inline_token_count:

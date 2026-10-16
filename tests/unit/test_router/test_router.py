@@ -26777,9 +26777,7 @@ _PRE_CALL_CHECK_UNPARSEABLE_MESSAGES: Final = [
 
 
 def test_pre_call_checks_filters_deployment_when_token_count_exceeds_limit():
-    """The restructured input-token resolution must still filter out a deployment whose
-    context window a successfully-counted prompt exceeds, same as before the refactor."""
-    model_list = [
+    model_list: Final = [
         {
             "model_name": "fake-openai-endpoint",
             "litellm_params": {"model": "openai/my-fake-model", "api_key": "my-fake-key"},
@@ -26791,9 +26789,9 @@ def test_pre_call_checks_filters_deployment_when_token_count_exceeds_limit():
             "model_info": {"id": "large", "max_input_tokens": 10000},
         },
     ]
-    router = Router(model_list=model_list, set_verbose=True, enable_pre_call_checks=True, num_retries=0)
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
 
-    filtered = router._pre_call_checks(
+    filtered: Final = router._pre_call_checks(
         model="fake-openai-endpoint",
         healthy_deployments=model_list,
         messages=[{"role": "user", "content": " ".join(["word"] * 100)}],
@@ -26803,28 +26801,16 @@ def test_pre_call_checks_filters_deployment_when_token_count_exceeds_limit():
 
 
 def test_pre_call_checks_rpm_check_still_enforced_when_token_counting_fails():
-    """A token-counting failure must not bypass the RPM check for every deployment.
-
-    With rpm=0, the single deployment is always over its RPM limit, so
-    _pre_call_checks() is expected to filter it out (and raise, since no
-    deployment survives) regardless of whether the token count itself succeeded.
-    """
     from litellm.types.router import RouterRateLimitErrorBasic
 
-    model_list = [
+    model_list: Final = [
         {
             "model_name": "fake-openai-endpoint",
-            "litellm_params": {
-                "model": "openai/my-fake-model",
-                "api_key": "my-fake-key",
-                "rpm": 0,
-            },
-            # A declared context window is required to make _pre_call_checks
-            # attempt a token count at all.
+            "litellm_params": {"model": "openai/my-fake-model", "api_key": "my-fake-key", "rpm": 0},
             "model_info": {"max_input_tokens": 100},
         },
     ]
-    router = Router(model_list=model_list, set_verbose=True, enable_pre_call_checks=True, num_retries=0)
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
 
     with pytest.raises(RouterRateLimitErrorBasic):
         router._pre_call_checks(
@@ -26835,27 +26821,48 @@ def test_pre_call_checks_rpm_check_still_enforced_when_token_counting_fails():
 
 
 def test_pre_call_checks_context_window_check_is_skipped_but_not_fatal_when_token_counting_fails():
-    """A token-counting failure should not raise/crash the request - it should just
-    be treated as "context window unknown" for that request, same as before."""
-    model_list = [
+    model_list: Final = [
         {
             "model_name": "fake-openai-endpoint",
-            "litellm_params": {
-                "model": "openai/my-fake-model",
-                "api_key": "my-fake-key",
-            },
+            "litellm_params": {"model": "openai/my-fake-model", "api_key": "my-fake-key"},
             "model_info": {"max_input_tokens": 100},
         },
     ]
-    router = Router(model_list=model_list, set_verbose=True, enable_pre_call_checks=True, num_retries=0)
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
 
-    filtered = router._pre_call_checks(
+    filtered: Final = router._pre_call_checks(
         model="fake-openai-endpoint",
         healthy_deployments=model_list,
         messages=_PRE_CALL_CHECK_UNPARSEABLE_MESSAGES,
     )
 
     assert len(filtered) == 1
+
+
+def test_pre_call_checks_keeps_unsupported_param_filter_when_token_counting_fails(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    no_json_mode_model: Final = "gpt-3.5-turbo-16k"
+    assert "response_format" not in (
+        litellm.get_supported_openai_params(model=no_json_mode_model, custom_llm_provider="openai") or []
+    )
+    model_list: Final = [
+        {
+            "model_name": "fake-openai-endpoint",
+            "litellm_params": {"model": f"openai/{deployment_model}", "api_key": "my-fake-key"},
+            "model_info": {"id": deployment_model, "max_input_tokens": 100},
+        }
+        for deployment_model in (no_json_mode_model, "gpt-4o")
+    ]
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
+
+    filtered: Final = router._pre_call_checks(
+        model="fake-openai-endpoint",
+        healthy_deployments=model_list,
+        messages=_PRE_CALL_CHECK_UNPARSEABLE_MESSAGES,
+        request_kwargs={"response_format": {"type": "json_object"}},
+    )
+
+    assert [d["model_info"]["id"] for d in filtered] == ["gpt-4o"]
 
 
 async def test_async_get_healthy_deployments_keeps_region_check_when_token_counting_fails():
