@@ -1,0 +1,43 @@
+Real Noma v2 (api.noma.security /litellm/guardrail, guardrail noma_v2 pre_call), real AWS Bedrock claude-haiku-4-5, one proxy per tree at two workers, 2026-10-16
+Columns: main b5870df967 | previous PR head a3a33cb293 | this PR head 0a7aa7be37
+
+converse | card 4111 1111 1111 1111 | no request fields
+  main: 200, Bedrock got the masked card
+  a3a33cb293: 200, Bedrock got the masked card
+  0a7aa7be37: 200, Bedrock got the masked card
+converse | card 4111 1111 1111 1111 | additionalModelRequestFields.thinking enabled
+  main: 200, Bedrock got the masked card
+  a3a33cb293: 200, Bedrock got the RAW card
+  0a7aa7be37: 200, Bedrock got the masked card
+converse | card 4111 1111 1111 1111 | additionalModelRequestFields.anthropic_beta
+  main: 200, Bedrock got the masked card
+  a3a33cb293: 200, Bedrock got the RAW card
+  0a7aa7be37: 200, Bedrock got the masked card
+converse | prompt injection | no request fields
+  main: 400 blocked, no Bedrock call
+  a3a33cb293: 400 blocked, no Bedrock call
+  0a7aa7be37: 400 blocked, no Bedrock call
+converse | prompt injection | additionalModelRequestFields.thinking enabled
+  main: 400 blocked, no Bedrock call
+  a3a33cb293: 200, Bedrock got the request
+  0a7aa7be37: 400 blocked, no Bedrock call
+converse | prompt injection | additionalModelRequestFields.anthropic_beta
+  main: 400 blocked, no Bedrock call
+  a3a33cb293: 200, Bedrock got the request
+  0a7aa7be37: 400 blocked, no Bedrock call
+chat | card 4111 1111 1111 1111 | chat completions with thinking
+  main: 200, Bedrock got the masked card
+  a3a33cb293: 200, Bedrock got the masked card
+  0a7aa7be37: 200, Bedrock got the masked card
+chat | prompt injection | chat completions with thinking
+  main: 400 blocked, no Bedrock call
+  a3a33cb293: 400 blocked, no Bedrock call
+  0a7aa7be37: 400 blocked, no Bedrock call
+converse | card 4111 1111 1111 1111 | clean prompt, the text sits in additionalModelRequestFields.system
+  main: 200, Bedrock got the RAW card
+  a3a33cb293: not run
+  0a7aa7be37: 200, Bedrock got the masked card
+converse | prompt injection | clean prompt, the text sits in additionalModelRequestFields.system
+  main: 200, Bedrock got the request
+  a3a33cb293: not run
+  0a7aa7be37: 400 blocked, no Bedrock call
