@@ -18,6 +18,7 @@ import pytest
 
 
 import litellm
+from litellm.litellm_core_utils.get_model_cost_map import _expand_model_aliases
 from litellm.main import _build_custom_pricing_entry
 from litellm.utils import _invalidate_model_cost_lowercase_map
 
@@ -981,6 +982,46 @@ def test_register_model_leaves_the_entry_a_lookup_is_walking_intact(monkeypatch:
         }
         assert litellm.get_model_info(catalog_key)["input_cost_per_token"] == 1e-06
         assert litellm.get_model_info(catalog_key)["supports_vision"] is True
+    finally:
+        _invalidate_model_cost_lowercase_map()
+
+
+@pytest.mark.parametrize("registered_key", ["lit-5853-canonical-model", "lit-5853-alias-model"])
+def test_register_model_prices_every_alias_of_the_registered_entry(
+    monkeypatch: pytest.MonkeyPatch, registered_key: str
+) -> None:
+    """A cost map entry declared with ``aliases`` is one model under several names, so a price registered on
+    any of them must bill under all of them."""
+    canonical_key: Final = "lit-5853-canonical-model"
+    alias_key: Final = "lit-5853-alias-model"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        _expand_model_aliases(
+            {
+                **litellm.get_model_cost_map(url=""),
+                canonical_key: {
+                    "aliases": [alias_key],
+                    "litellm_provider": "openai",
+                    "mode": "chat",
+                    "input_cost_per_token": 2e-06,
+                    "output_cost_per_token": 8e-06,
+                },
+            }
+        ),
+    )
+    _invalidate_model_cost_lowercase_map()
+
+    try:
+        litellm.register_model(
+            {registered_key: {"litellm_provider": "openai", "input_cost_per_token": 1e-06}},
+            persist_across_reloads=False,
+        )
+        assert {
+            name: (litellm.get_model_info(name)["input_cost_per_token"], litellm.get_model_info(name)["output_cost_per_token"])
+            for name in (canonical_key, alias_key)
+        } == {canonical_key: (1e-06, 8e-06), alias_key: (1e-06, 8e-06)}
     finally:
         _invalidate_model_cost_lowercase_map()
 

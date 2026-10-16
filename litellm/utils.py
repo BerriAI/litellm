@@ -3268,6 +3268,16 @@ def _builtin_cost_map() -> Mapping[str, dict[str, object]]:
     return cast(Mapping[str, dict[str, object]], litellm.model_cost)
 
 
+def _replace_cost_map_entry(key: str, entry: dict[str, object]) -> None:
+    current: Final = _builtin_cost_map().get(key)
+    sharing_keys: Final = (
+        tuple(name for name, shared in (*_builtin_cost_map().items(),) if shared is current)
+        if current is not None
+        else ()
+    )
+    litellm.model_cost.update(dict.fromkeys((key, *sharing_keys), {**(current or {}), **entry}))
+
+
 def _without_synthesized_costs(
     model_info: Mapping[str, object], key: str, value: Mapping[str, object]
 ) -> Mapping[str, object]:
@@ -3594,7 +3604,7 @@ def register_model(
             existing_model.pop("litellm_provider", None)
         ## override / add new keys to the existing model cost dictionary
         updated_dictionary = update_dictionary(existing_model, value)
-        litellm.model_cost[model_cost_key] = {**_builtin_cost_map().get(model_cost_key, {}), **updated_dictionary}
+        _replace_cost_map_entry(model_cost_key, updated_dictionary)
 
         # Invalidate case-insensitive lookup map since model_cost was modified
         _invalidate_model_cost_lowercase_map()
