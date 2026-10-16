@@ -80,13 +80,13 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
                 api_key=api_key,
                 litellm_params=litellm_params,
             )
-            if not {"x-api-key", "api-key", "Authorization"} & headers.keys():
+            if not {"x-api-key", "Authorization"} & headers.keys():
                 raise AnthropicError(
                     status_code=401,
                     message=(
                         f"No Azure AI API key or Entra ID credential is set for model {model}, so tokens can't be "
-                        "counted. Set api_key or an Entra ID credential on the deployment, or AZURE_AI_API_KEY in "
-                        "the proxy environment."
+                        "counted. Set api_key or an Entra ID credential on the deployment, or AZURE_AI_API_KEY or "
+                        "AZURE_API_KEY in the proxy environment."
                     ),
                 )
 

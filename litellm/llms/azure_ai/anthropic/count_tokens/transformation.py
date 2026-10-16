@@ -58,8 +58,9 @@ class AzureAIAnthropicCountTokensConfig(AnthropicCountTokensConfig):
         # Get Azure auth headers (api-key or Authorization)
         azure_headers = BaseAzureLLM.base_validate_azure_environment(headers={}, litellm_params=litellm_params_obj)
 
-        # Merge Azure auth headers
         headers.update(azure_headers)
+        if "api-key" in azure_headers:
+            headers.setdefault("x-api-key", azure_headers["api-key"])
 
         return headers
 

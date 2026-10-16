@@ -11,7 +11,12 @@ from litellm.litellm_core_utils.json_validation_rule import normalize_json_schem
 from litellm.proxy._types import *
 from litellm.proxy._types import ProxyException, TokenCountRequest
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
-from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing, proxy_exception_from_route_error
+from litellm.proxy.common_request_processing import (
+    ProxyBaseLLMRequestProcessing,
+    log_llm_api_exception,
+    proxy_exception_from_route_error,
+    resolve_litellm_call_id,
+)
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     read_request_body,
@@ -293,7 +298,10 @@ async def google_count_tokens(request: Request, model_name: str):
 
     try:
         token_response: Final = await internal_token_counter(request=token_request, call_endpoint=True)
+    except ProxyException as error:
+        return _google_error_response(request, error)
     except Exception as error:
+        log_llm_api_exception(error, resolve_litellm_call_id(request.headers.get("x-litellm-call-id")))
         return _google_error_response(request, proxy_exception_from_route_error(error))
     original_response: Final[dict] = token_response.original_response or {}
     return TokenCountDetailsResponse(

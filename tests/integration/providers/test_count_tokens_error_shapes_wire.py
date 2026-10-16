@@ -18,6 +18,12 @@ _PROVIDER_KEY_VARIABLES: Final = (
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
     "AZURE_AI_API_KEY",
+    "AZURE_API_KEY",
+    "AZURE_OPENAI_API_KEY",
+    "AZURE_AD_TOKEN",
+    "AZURE_CLIENT_ID",
+    "AZURE_CLIENT_SECRET",
+    "AZURE_TENANT_ID",
     "OPENAI_API_KEY",
 )
 
@@ -31,6 +37,21 @@ def keyless_proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[OwnedPro
             tmp_path_factory.mktemp("count-tokens-error-shapes"),
             {},
             remove_environment=_PROVIDER_KEY_VARIABLES,
+            workers=1,
+        ) as owned,
+    ):
+        yield owned
+
+
+@pytest.fixture(scope="module")
+def azure_environment_key_proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[OwnedProxy]:
+    with (
+        gateway_from_environment() as gateway,
+        owned_proxy_process(
+            gateway,
+            tmp_path_factory.mktemp("count-tokens-azure-environment-key"),
+            {"AZURE_API_KEY": "synthetic-azure-env-key"},
+            remove_environment=tuple(name for name in _PROVIDER_KEY_VARIABLES if name != "AZURE_API_KEY"),
             workers=1,
         ) as owned,
     ):
@@ -69,6 +90,26 @@ def test_anthropic_count_without_a_provider_credential_is_an_anthropic_401(
         }
         assert missing in raised.value.message, raised.value.message
         assert wire.drain() == ()
+
+
+def test_azure_ai_anthropic_count_sends_the_azure_environment_key_as_x_api_key(
+    azure_environment_key_proxy: OwnedProxy,
+) -> None:
+    gateway: Final = azure_environment_key_proxy.gateway
+
+    def count(request: Request) -> Reply:
+        assert request.headers.get("x-api-key") == "synthetic-azure-env-key", request.headers
+        return Reply(body=json.dumps({"input_tokens": 58}).encode())
+
+    with wire_server(count) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="azure_ai/claude-sonnet-4-6",
+            api_base=wire.url,
+            api_key=None,
+            num_retries=0,
+        )
+        result: Final = _anthropic(gateway).messages.count_tokens(model=model, messages=_MESSAGES)
+        assert result.input_tokens == 58
 
 
 def test_azure_ai_anthropic_count_authenticates_with_an_entra_token(keyless_proxy: OwnedProxy) -> None:
