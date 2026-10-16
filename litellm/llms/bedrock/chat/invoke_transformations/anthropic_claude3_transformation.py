@@ -22,6 +22,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     AmazonInvokeConfig,
 )
 from litellm.llms.bedrock.common_utils import (
+    BedrockModelInfo,
     apply_bedrock_invoke_structured_output,
     bedrock_supports_tool_search,
     get_anthropic_beta_from_headers,
@@ -225,6 +226,10 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
                 output_config=filtered_params["output_config"],
             )
         filtered_params = self._normalize_bedrock_tool_search_tools(filtered_params)
+        if "max_tokens" not in filtered_params:
+            filtered_params["max_tokens"] = AnthropicConfig.get_config(model=BedrockModelInfo.get_base_model(model))[
+                "max_tokens"
+            ]
 
         anthropic_request: Final = AnthropicConfig.transform_request(
             self,

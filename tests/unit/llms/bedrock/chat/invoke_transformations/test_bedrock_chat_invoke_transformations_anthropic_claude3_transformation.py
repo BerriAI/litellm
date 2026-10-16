@@ -1796,3 +1796,39 @@ def test_refusal_stop_details_kept_through_bedrock_invoke_transform():
     provider_fields: Final = result.choices[0].message.provider_specific_fields
     assert provider_fields["stop_reason"] == "refusal"
     assert provider_fields["stop_details"] == ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]
+
+
+LATEST_BEDROCK_SONNET_BASE_ID: Final = "anthropic.claude-sonnet-5-5"
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        f"invoke/us.{LATEST_BEDROCK_SONNET_BASE_ID}",
+        f"invoke/{LATEST_BEDROCK_SONNET_BASE_ID}",
+    ],
+)
+def test_bedrock_invoke_claude_default_max_tokens_comes_from_base_model(model: str):
+    body: Final = AmazonAnthropicClaudeConfig().transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert body["max_tokens"] == litellm.get_max_tokens(
+        LATEST_BEDROCK_SONNET_BASE_ID
+    ), f"default max_tokens should be resolved from the base model id, got {body['max_tokens']} for {model}"
+
+
+def test_bedrock_invoke_claude_explicit_max_tokens_is_kept():
+    body: Final = AmazonAnthropicClaudeConfig().transform_request(
+        model=f"invoke/us.{LATEST_BEDROCK_SONNET_BASE_ID}",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"max_tokens": 123},
+        litellm_params={},
+        headers={},
+    )
+
+    assert body["max_tokens"] == 123, f"explicit max_tokens must not be overridden, got {body['max_tokens']}"
