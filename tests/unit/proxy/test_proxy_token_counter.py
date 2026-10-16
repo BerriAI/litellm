@@ -33,7 +33,7 @@ from litellm.proxy._types import ProxyException, TokenCountRequest
 from litellm.proxy.anthropic_endpoints.endpoints import (
     count_tokens as anthropic_count_tokens,
 )
-from litellm.proxy.proxy_server import token_counter
+from litellm.proxy.proxy_server import count_request_tokens, token_counter
 from litellm.types.utils import TokenCountResponse
 
 
@@ -137,6 +137,45 @@ async def test_gpt_token_counting():
 
     assert response.tokenizer_type == "openai_tokenizer"  # SHOULD use the OpenAI tokenizer
     assert response.request_model == "gpt-4"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_info", "expected_api_calls"),
+    (({"use_token_counting_api": False}, 0), ({}, 1)),
+    ids=("deployment-opts-out", "deployment-default"),
+)
+async def test_count_request_tokens_respects_deployment_use_token_counting_api(
+    model_info: dict[str, JsonValue], expected_api_calls: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    llm_router: Final = Router(
+        model_list=[
+            {
+                "model_name": "nova",
+                "litellm_params": {
+                    "model": "bedrock/us.amazon.nova-pro-v1:0",
+                    "aws_region_name": "us-east-1",
+                },
+                "model_info": model_info,
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
+
+    mock_count_tokens: Final = AsyncMock(return_value={"input_tokens": 999})
+    with patch(
+        "litellm.llms.bedrock.count_tokens.handler.BedrockCountTokensHandler.handle_count_tokens_request",
+        new=mock_count_tokens,
+    ):
+        response: Final = await count_request_tokens(
+            TokenCountRequest(model="nova", messages=[{"role": "user", "content": "hello there"}]),
+            call_endpoint=True,
+        )
+
+    assert mock_count_tokens.await_count == expected_api_calls
+    assert response.total_tokens > 0
+    assert (response.total_tokens == 999) is (expected_api_calls == 1)
+    assert (response.tokenizer_type == "bedrock_api") is (expected_api_calls == 1)
 
 
 @pytest.mark.asyncio
