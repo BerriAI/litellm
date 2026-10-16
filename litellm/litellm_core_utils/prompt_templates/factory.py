@@ -2582,15 +2582,23 @@ def _with_native_redacted_data(
 _AnthropicMessageList: TypeAlias = list[AllAnthropicPassThroughMessageValues]
 
 
-def _empty_user_turn_placeholder(span: Sequence[AllMessageValues]) -> AnthropicMessagesTextParam | None:
-    empty_user_message: Final = next(
-        (message for message in reversed(span) if message["role"] == "user" and not message.get("content")), None
+def _tool_result_follows(rest: Sequence[AllMessageValues], replaced_server_tool_answers: frozenset[str]) -> bool:
+    same_turn: Final = itertools.takewhile(lambda message: message["role"] in ("user", "tool", "function"), rest)
+    return any(
+        message["role"] in ("tool", "function")
+        and message_field(message, "tool_call_id") not in replaced_server_tool_answers
+        for message in same_turn
     )
-    if empty_user_message is None:
-        return None
+
+
+def _empty_user_message_blocks(
+    messages: Sequence[AllMessageValues], index: int, replaced_server_tool_answers: frozenset[str]
+) -> tuple[AnthropicMessagesTextParam, ...]:
+    if _tool_result_follows(messages[index + 1 :], replaced_server_tool_answers):
+        return ()
     placeholder: Final = AnthropicMessagesTextParam(type="text", text=_EMPTY_TEXT_PLACEHOLDER)
-    add_cache_control_to_content(anthropic_content_element=placeholder, original_content_element=empty_user_message)
-    return placeholder
+    add_cache_control_to_content(anthropic_content_element=placeholder, original_content_element=messages[index])
+    return (placeholder,)
 
 
 def anthropic_messages_pt(
@@ -2659,7 +2667,9 @@ def anthropic_messages_pt(
                 ChatCompletionToolMessage | ChatCompletionUserMessage | ChatCompletionFunctionMessage
             ) = messages[msg_i]
             if user_message_types_block["role"] == "user":
-                if isinstance(user_block_content := user_message_types_block.get("content"), list):
+                if not (user_block_content := user_message_types_block.get("content")):
+                    user_content.extend(_empty_user_message_blocks(messages, msg_i, replaced_server_tool_answers))
+                elif isinstance(user_block_content, list):
                     for m in user_block_content:
                         if m.get("type", "") == "image_url":
                             m = cast(ChatCompletionImageObject, m)
@@ -2758,8 +2768,6 @@ def anthropic_messages_pt(
 
         if user_content:
             new_messages.append({"role": "user", "content": user_content})
-        elif (placeholder := _empty_user_turn_placeholder(messages[init_msg_i:msg_i])) is not None:
-            new_messages.append({"role": "user", "content": [placeholder]})
 
         # Track unique tool IDs in this merge block to avoid duplication
         unique_tool_ids: set[str] = set()

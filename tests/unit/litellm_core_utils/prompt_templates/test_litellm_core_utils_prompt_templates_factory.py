@@ -861,6 +861,42 @@ def test_anthropic_messages_pt_empty_user_message_keeps_cache_control_like_an_em
     assert last_turn(empty_user_message) == last_turn({"role": "user", "content": ""})
 
 
+
+EMPTY_USER_MESSAGE_NEIGHBORS = pytest.mark.parametrize(
+    "build_messages",
+    [
+        lambda empty: [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+            {"role": "user", "content": "long document"},
+            {**empty, "cache_control": {"type": "ephemeral"}},
+        ],
+        lambda empty: [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}, empty, empty],
+        lambda empty: [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "toolu_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}],
+            },
+            {"role": "tool", "tool_call_id": "toolu_1", "content": "ok"},
+            empty,
+        ],
+    ],
+    ids=["after-user-text-with-cache-control", "two-in-a-row", "after-tool-result"],
+)
+
+
+@EMPTY_USER_MESSAGES
+@EMPTY_USER_MESSAGE_NEIGHBORS
+def test_anthropic_messages_pt_empty_user_message_beside_other_content_matches_an_empty_string(
+    empty_user_message, build_messages
+):
+    def convert(empty):
+        return anthropic_messages_pt(messages=build_messages(empty), model="claude-opus-5", llm_provider="vertex_ai")
+
+    assert convert(empty_user_message) == convert({"role": "user", "content": ""})
+
 def test_convert_to_azure_openai_messages():
     """Test coverting image_url to azure_openai spec"""
 
