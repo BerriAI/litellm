@@ -11,7 +11,6 @@ from the whole file named by `E2E_PERF_GATEWAY_LOG_FILE` (no time window, so sta
 
 from __future__ import annotations
 
-import json
 import os
 import re
 from collections.abc import Iterable
@@ -22,7 +21,7 @@ from pathlib import Path
 from typing import Final
 from urllib.parse import quote
 
-import httpx
+from e2e_http import AuthHeaders, NetworkError, Success, get_external, get_text_external
 from pydantic import BaseModel
 
 from setup.podcpu import SELECTOR_ENV, in_cluster
@@ -159,9 +158,11 @@ class _PodList(BaseModel):
     items: list[_Pod]
 
 
-def _get(url: str, token: str, ca_bundle: str) -> str:
-    response: Final = httpx.get(url, headers={"Authorization": f"Bearer {token}"}, verify=ca_bundle, timeout=60.0)
-    return response.raise_for_status().text
+def _pod_log_lines(url: str, headers: AuthHeaders, ca_bundle: str) -> tuple[str, ...]:
+    text: Final = get_text_external(url, headers=headers, timeout=60.0, ca_bundle=ca_bundle)
+    if isinstance(text, NetworkError):
+        raise RuntimeError(f"gateway pod log unreadable: {text.message}")
+    return tuple(text.splitlines())
 
 
 def _pod_logs(since: datetime) -> tuple[str, ...] | None:
@@ -170,16 +171,23 @@ def _pod_logs(since: datetime) -> tuple[str, ...] | None:
     if cluster is None or not selector:
         return None
     token, ca_bundle, namespace = cluster
-    pods: Final = _PodList.model_validate(
-        json.loads(_get(f"{_API}/{namespace}/pods?labelSelector={quote(selector)}", token, ca_bundle))
+    headers: Final = AuthHeaders(authorization=f"Bearer {token}")
+    pods: Final = get_external(
+        f"{_API}/{namespace}/pods?labelSelector={quote(selector)}",
+        response_type=_PodList,
+        headers=headers,
+        timeout=60.0,
+        ca_bundle=ca_bundle,
     )
+    if not isinstance(pods, Success):
+        raise RuntimeError(f"gateway pod list unreadable: {pods}")
     since_param: Final = quote(since.strftime("%Y-%m-%dT%H:%M:%SZ"))
     return tuple(
         line
-        for pod in pods.items
-        for line in _get(
-            f"{_API}/{namespace}/pods/{pod.metadata.name}/log?sinceTime={since_param}", token, ca_bundle
-        ).splitlines()
+        for pod in pods.data.items
+        for line in _pod_log_lines(
+            f"{_API}/{namespace}/pods/{pod.metadata.name}/log?sinceTime={since_param}", headers, ca_bundle
+        )
     )
 
 
