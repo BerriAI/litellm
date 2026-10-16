@@ -20,6 +20,7 @@ from litellm.llms.anthropic.pass_through.context_management import (
     PolyfillResult,
     apply_context_management,
 )
+from litellm.llms.anthropic.pass_through.held_stream_completion import hold_completion_of
 from litellm.llms.anthropic.pass_through.safeguards import (
     SafeguardsEvaluator,
     build_safeguards_evaluator,
@@ -743,6 +744,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 is_async=True,
                 litellm_logging_obj=logging_obj,
                 safeguards_evaluator=safeguards_evaluator,
+                held_completion=None if planned_chat is None else hold_completion_of(completion_response, logging_obj),
             )
             if transformed_stream is not None:
                 return transformed_stream
@@ -885,6 +887,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 polyfill_result=polyfill_result,
                 is_async=False,
                 litellm_logging_obj=logging_obj,
+                held_completion=None if planned_chat is None else hold_completion_of(completion_response, logging_obj),
             )
             if transformed_stream is not None:
                 return transformed_stream

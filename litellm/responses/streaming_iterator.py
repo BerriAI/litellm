@@ -31,6 +31,7 @@ from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_b
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     update_response_metadata,
 )
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.responses.litellm_completion_transformation.transformation import (
@@ -315,6 +316,7 @@ def dispatch_stream_success(
     end_time: datetime | None,
     cache_hit: bool | None,
     is_async: bool,
+    client_detached: bool = False,
 ) -> None:
     if not is_async:
         run_async_function(
@@ -339,6 +341,9 @@ def dispatch_stream_success(
         cache_hit=cache_hit,
         prefer_async_handlers=True,
     )
+    if client_detached:
+        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=logging_coroutine)
+        return
     if getattr(logging_obj, "_on_deferred_stream_complete", None) is not None:
         # End-of-stream guardrail scans write guardrail_information after
         # the terminal event; dispatching now would snapshot metadata early.
