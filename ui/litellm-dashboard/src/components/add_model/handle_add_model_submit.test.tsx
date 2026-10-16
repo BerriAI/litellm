@@ -52,6 +52,29 @@ describe("prepareModelAddRequest", () => {
     expect(deployment.litellmParamsObj.cache_creation_input_token_cost_above_1hr).toBeCloseTo(0.000006, 12);
   });
 
+  it("converts the pricing once when several models are added together", async () => {
+    const formValues = {
+      model_mappings: [
+        { public_name: "claude-sonnet", litellm_model: "anthropic/claude-sonnet-4-6" },
+        { public_name: "claude-opus", litellm_model: "anthropic/claude-opus-4-2" },
+      ],
+      model_name: "anthropic/claude-sonnet-4-6",
+      custom_pricing: true,
+      input_cost_per_token: "3",
+      cache_creation_input_token_cost: "3.75",
+      cache_creation_input_token_cost_above_1hr: "6",
+    };
+
+    const deployments = (await prepareModelAddRequest({ ...formValues }, "token", null))!;
+
+    expect(deployments).toHaveLength(2);
+    for (const deployment of deployments) {
+      expect(deployment.litellmParamsObj.input_cost_per_token).toBeCloseTo(0.000003, 12);
+      expect(deployment.litellmParamsObj.cache_creation_input_token_cost).toBeCloseTo(0.00000375, 12);
+      expect(deployment.litellmParamsObj.cache_creation_input_token_cost_above_1hr).toBeCloseTo(0.000006, 12);
+    }
+  });
+
   it("leaves the 1 hour cache write tier unset when its field is blank", async () => {
     const formValues = {
       model_mappings: [{ public_name: "claude-sonnet", litellm_model: "anthropic/claude-sonnet-4-6" }],

@@ -1695,7 +1695,7 @@ describe("ModelInfoView", () => {
       const [cacheRead, cacheWrite] = screen.getAllByPlaceholderText("Defaults to Input Cost if blank");
       await user.type(cacheRead, "5");
       await user.type(cacheWrite, "9");
-      await user.type(screen.getByPlaceholderText("Defaults to Cache Write Cost if blank"), "15");
+      await user.type(screen.getByPlaceholderText("Defaults to the cost map 1 hour rate, else Cache Write Cost"), "15");
 
       const payload = await save(user);
 
@@ -1735,7 +1735,7 @@ describe("ModelInfoView", () => {
         const user = userEvent.setup();
         await enterEditMode(user);
 
-        const oneHour = screen.getByPlaceholderText("Defaults to Cache Write Cost if blank");
+        const oneHour = screen.getByPlaceholderText("Defaults to the cost map 1 hour rate, else Cache Write Cost");
         expect(oneHour).toHaveValue(6);
         await user.clear(oneHour);
 

@@ -537,8 +537,8 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
             {pricingField(
               "cache_write_cost_1h",
               "Cache Write Cost (1 hour, per 1M tokens)",
-              "Defaults to Cache Write Cost if blank",
-              "Rate for prompt cache writes with a 1 hour TTL. If left blank on save, defaults to Cache Write Cost.",
+              "Defaults to the cost map 1 hour rate, else Cache Write Cost",
+              "Rate for prompt cache writes with a 1 hour TTL. If left blank on save, known models use their cost map 1 hour rate, otherwise Cache Write Cost.",
             )}
 
             {textField("api_base", "API Base", "Enter API base", localModelData.litellm_params?.api_base)}
