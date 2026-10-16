@@ -11687,9 +11687,13 @@ class ProxyStartupEvent:
         prisma_client: PrismaClient,
     ):
         """Initialize Slack alerting background jobs for spend reports."""
+        from litellm.proxy.spend_tracking.spend_report_email import get_spend_report_email_settings
+
+        email_settings: Final = get_spend_report_email_settings()
+        has_email_alerts: Final = any(a.enabled and a.recipient_emails for a in email_settings.alerts)
         if (
             proxy_logging_obj is not None
-            and proxy_logging_obj.slack_alerting_instance.alerting is not None
+            and (proxy_logging_obj.slack_alerting_instance.alerting is not None or has_email_alerts)
             and prisma_client is not None
         ):
             print("Alerting: Initializing Weekly/Monthly Spend Reports")  # noqa: T201

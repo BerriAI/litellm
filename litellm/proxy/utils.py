@@ -7405,11 +7405,13 @@ async def send_email(
         raise ValueError(f"No HTML body provided for SMTP email. {html}")
 
     ## EMAIL SETUP ##
+    clean_receiver_email: Final = str(receiver_email).strip().replace("\r", "").replace("\n", "")
+    clean_subject: Final = str(subject).strip().replace("\r", "").replace("\n", "")
     email_message: Final = MIMEMultipart()
     email_message["From"] = sender_email
-    email_message["To"] = receiver_email
-    email_message["Subject"] = subject
-    verbose_proxy_logger.debug("sending email from %s to %s", sender_email, receiver_email)
+    email_message["To"] = clean_receiver_email
+    email_message["Subject"] = clean_subject
+    verbose_proxy_logger.debug("sending email via SMTP")
 
     if smtp_host is None:
         raise ValueError("Trying to use SMTP, but SMTP_HOST is not set")
@@ -7427,12 +7429,12 @@ async def send_email(
             smtp_username=smtp_username,
             smtp_password=smtp_password,
             sender_email=sender_email,
-            receiver_email=receiver_email,
+            receiver_email=clean_receiver_email,
             timeout=smtp_timeout,
         )
 
-    except Exception as e:
-        verbose_proxy_logger.exception("An error occurred while sending the email:" + str(e))
+    except Exception:
+        verbose_proxy_logger.error("An error occurred while sending the email")
 
 
 def hash_token(token: str):

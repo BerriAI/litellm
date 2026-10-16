@@ -6,7 +6,7 @@
  * Works at 1m+ spend logs, by querying an aggregate table instead.
  */
 
-import { Download, Search, Sparkles, X } from "lucide-react";
+import { Download, Mail, Search, Sparkles, X } from "lucide-react";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -22,23 +22,28 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { hasCapability } from "@/utils/capabilities";
-import { all_admin_roles, internalUserRoles } from "@/utils/roles";
+import { all_admin_roles, internalUserRoles, isProxyAdminRole } from "@/utils/roles";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
 import CloudZeroExportModal from "@/components/cloudzero_export_modal";
 import UserDropdown from "@/components/common_components/UserDropdown";
 import EntityUsageExportModal from "@/components/EntityUsageExport";
+import EmailSpendSummaryModal from "@/components/EmailSpendSummaryModal";
 import KeyActivityPanel from "@/components/UsagePage/components/KeyActivityPanel";
 import TopUsersView from "@/components/UsagePage/components/TopUsersView";
 import UserActivityPanel from "@/components/UsagePage/components/UserActivityPanel";
 import { filterModelActivity } from "@/components/UsagePage/modelActivityFilter";
 import { Team } from "@/components/key_team_helpers/key_list";
 import {
+  formatDate,
   gatewayDailyActivityCall,
+  getSpendReportEmailStatus,
   Organization,
   requestErrorActivityCall,
+  type SpendReportEmailStatusResponse,
   tagListCall,
   userDailyActivityUserPageCall,
 } from "@/components/networking";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { Tag } from "@/components/tag_management/types";
 import UserAgentActivity from "@/components/user_agent_activity";
@@ -102,6 +107,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const { data: agentsResponse } = useAgents();
   const { data: currentUser } = useCurrentUser();
   const isAdmin = all_admin_roles.includes(userRole || "");
+  const isProxyAdmin = isProxyAdminRole(userRole || "");
   const canViewTagUsage = isAdmin || internalUserRoles.includes(userRole || "");
   const isOrgAdmin = useIsOrgAdmin();
   const canViewOrganizationUsage = hasCapability(userRole, "viewOrganizationUsage", isOrgAdmin);
@@ -114,6 +120,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const [modelQuery, setModelQuery] = useState("");
   const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
   const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);
+  const [isEmailSummaryModalOpen, setIsEmailSummaryModalOpen] = useState(false);
+  const [emailStatus, setEmailStatus] = useState<SpendReportEmailStatusResponse | null>(null);
   const [isAiChatOpen, setIsAiChatOpen] = useState(false);
   const [selectedUsageView, setUsageView] = useState<UsageOption>("global");
   // Org-admin membership is read from the server, so unlike the other usage
@@ -125,6 +133,20 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
 
   const [showCredentialBanner, setShowCredentialBanner] = useState(true);
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
+  useEffect(() => {
+    if (!accessToken || !isProxyAdmin) return;
+    let active = true;
+    getSpendReportEmailStatus(accessToken)
+      .then((status) => {
+        if (active) setEmailStatus(status);
+      })
+      .catch(() => {
+        if (active) setEmailStatus({ configured: false, provider: null });
+      });
+    return () => {
+      active = false;
+    };
+  }, [accessToken, isProxyAdmin]);
   // Sync selectedUserId when auth state settles (isAdmin/userID may be null on initial render)
   useEffect(() => {
     if (!isAdmin && userID) {
@@ -423,6 +445,25 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                       <Download />
                       Export Data
                     </Button>
+                    {isProxyAdmin && (
+                      <SimpleTooltip
+                        content={
+                          emailStatus && !emailStatus.configured
+                            ? "Email delivery is not configured. Configure SMTP server settings in Alerts settings or set SENDGRID_API_KEY environment variable."
+                            : undefined
+                        }
+                      >
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setIsEmailSummaryModalOpen(true)}
+                          disabled={emailStatus !== null && !emailStatus.configured}
+                        >
+                          <Mail />
+                          Email Summary
+                        </Button>
+                      </SimpleTooltip>
+                    )}
                   </div>
                 </div>
                 <TabsContent value="cost" keepMounted>
@@ -702,6 +743,19 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         selectedFilters={[]}
         customTitle="Export Usage Data"
       />
+
+      {/* Email Spend Summary Modal */}
+      {isProxyAdmin && (
+        <EmailSpendSummaryModal
+          isOpen={isEmailSummaryModalOpen}
+          onClose={() => setIsEmailSummaryModalOpen(false)}
+          accessToken={accessToken}
+          startDate={startTime ? formatDate(startTime) : undefined}
+          endDate={endTime ? formatDate(endTime) : undefined}
+          teams={teams}
+          emailStatus={emailStatus}
+        />
+      )}
 
       {/* AI Chat Panel */}
       <UsageAIChatPanel open={isAiChatOpen} onClose={() => setIsAiChatOpen(false)} accessToken={accessToken} />

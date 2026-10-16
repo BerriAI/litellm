@@ -57,6 +57,11 @@ from litellm.proxy.spend_tracking.spend_capture_rate import (
     ProviderBillingRequestFailed,
     capture_rate_report,
 )
+from litellm.proxy.spend_tracking.spend_report_email import (
+    SpendReportEmailSendRequest,
+    SpendReportEmailStatusResponse,
+    SpendReportSendResult,
+)
 
 # NOTE: Avoid module-level import from common_utils: proxy_server imports this
 # module while common_utils may pull proxy_server during init, which can leave
@@ -2250,54 +2255,44 @@ async def get_spend_report_for_time_range(
         )
         return None
 
-    # Normalize string inputs to tz-aware UTC datetimes so Prisma serializes
-    # them with an explicit +00:00 suffix. Raw strings get bound as untyped
-    # text, which forces Postgres to parse `::timestamptz` using the DB
-    # session timezone and drifts the window by the offset even with the
-    # AT TIME ZONE 'UTC' wrap below.
-    start_date_obj: Final = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    end_date_obj: Final = datetime.strptime(end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-
     try:
         sql_query = """
         SELECT
-            t.team_alias,
+            COALESCE(t.team_alias, s.team_id, 'No Team') AS team_alias,
             SUM(s.spend) AS total_spend
         FROM
-            "LiteLLM_SpendLogs" s
+            "LiteLLM_DailyTeamSpend" s
         LEFT JOIN
             "LiteLLM_TeamTable" t ON s.team_id = t.team_id
         WHERE
-            s."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
-            AND s."startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
+            s.date >= $1 AND s.date <= $2
         GROUP BY
-            t.team_alias
+            COALESCE(t.team_alias, s.team_id, 'No Team')
         ORDER BY
             total_spend DESC;
         """
         response: Final[Sequence[_TeamSpendRow] | None] = await _query_raw_or_none(
-            prisma_client, sql_query, start_date_obj, end_date_obj
+            prisma_client, sql_query, start_date, end_date
         )
 
         # get spend per tag for today
         sql_query = """
         SELECT
-        jsonb_array_elements_text(request_tags) AS individual_request_tag,
-        SUM(spend) AS total_spend
-        FROM "LiteLLM_SpendLogs"
-        WHERE "startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
-          AND "startTime" <  (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
-        GROUP BY individual_request_tag
+            s.tag AS individual_request_tag,
+            SUM(s.spend) AS total_spend
+        FROM "LiteLLM_DailyTagSpend" s
+        WHERE s.date >= $1 AND s.date <= $2
+        GROUP BY s.tag
         ORDER BY total_spend DESC;
         """
 
         spend_per_tag: Final[Sequence[_TagSpendRow] | None] = await _query_raw_or_none(
-            prisma_client, sql_query, start_date_obj, end_date_obj
+            prisma_client, sql_query, start_date, end_date
         )
 
         return response, spend_per_tag
-    except Exception as e:
-        verbose_proxy_logger.error("Exception in _get_daily_spend_reports %s", e)
+    except Exception:
+        verbose_proxy_logger.error("Exception in _get_daily_spend_reports")
 
 
 _get_spend_report_for_time_range: Final = get_spend_report_for_time_range
@@ -5089,3 +5084,69 @@ async def _assert_user_owns_cold_storage_payload(
     owner_user, owner_team_id = _cold_storage_payload_owner(payload)
     if not await _user_can_view_spend_log_owner(prisma_client, user_api_key_dict, owner_user, owner_team_id):
         raise _spend_log_forbidden(request_id)
+
+
+@router.post(
+    "/spend/report/email/send",
+    tags=["spend tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=SpendReportSendResult,
+)
+async def trigger_spend_report_email(
+    request: SpendReportEmailSendRequest,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> SpendReportSendResult:
+    """
+    Trigger sending a spend report email immediately.
+    """
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admins can send spend report emails.",
+        )
+
+    from litellm.proxy.spend_tracking.spend_report_email import send_spend_report_email
+
+    clean_team_id: Final = (
+        request.team_id.strip().replace("\r", "").replace("\n", "") if request.team_id is not None else None
+    )
+    clean_start_date: Final = (
+        request.start_date.strip().replace("\r", "").replace("\n", "") if request.start_date is not None else None
+    )
+    clean_end_date: Final = (
+        request.end_date.strip().replace("\r", "").replace("\n", "") if request.end_date is not None else None
+    )
+    clean_recipients: Final = (
+        tuple(r.strip().replace("\r", "").replace("\n", "") for r in request.recipient_emails)
+        if request.recipient_emails is not None
+        else None
+    )
+
+    return await send_spend_report_email(
+        frequency=request.frequency,
+        recipient_emails=clean_recipients,
+        group_by=request.group_by,
+        start_date=clean_start_date,
+        end_date=clean_end_date,
+        team_id=clean_team_id,
+    )
+
+
+@router.get(
+    "/spend/report/email/status",
+    tags=["spend tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=SpendReportEmailStatusResponse,
+)
+async def get_spend_report_email_status(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> SpendReportEmailStatusResponse:
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admins can view spend report email status.",
+        )
+
+    from litellm.proxy.spend_tracking.spend_report_email import check_spend_report_email_status
+
+    return check_spend_report_email_status()

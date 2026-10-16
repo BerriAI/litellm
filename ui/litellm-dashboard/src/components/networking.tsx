@@ -5875,6 +5875,74 @@ export const resetEmailEventSettings = async (accessToken: string) => {
   }
 };
 
+export interface SpendReportEmailAlertItem {
+  id: string;
+  name: string;
+  enabled: boolean;
+  frequency: "daily" | "weekly" | "monthly";
+  day_of_week?: string | null;
+  send_time: string;
+  recipient_emails: string[];
+  group_by: ("team" | "team_key" | "team_model" | "team_key_model")[];
+  team_id?: string | null;
+}
+
+export interface SpendReportEmailSettingsValues {
+  alerts?: SpendReportEmailAlertItem[];
+}
+
+export interface SpendReportEmailSettingsResponse {
+  values: SpendReportEmailSettingsValues;
+  field_schema: Record<string, any>;
+  server_timezone?: string | null;
+}
+
+export const getSpendReportEmailSettings = async (accessToken: string): Promise<SpendReportEmailSettingsResponse> => {
+  return await apiClient.get<SpendReportEmailSettingsResponse>("/get/spend_report_email_settings", { accessToken });
+};
+
+export const updateSpendReportEmailSettings = async (
+  accessToken: string,
+  settings: SpendReportEmailSettingsValues,
+): Promise<any> => {
+  return await apiClient.patch("/update/spend_report_email_settings", {
+    accessToken,
+    body: settings,
+  });
+};
+
+export const sendSpendReportEmailTest = async (
+  accessToken: string,
+  payload: {
+    frequency?: "daily" | "weekly" | "monthly";
+    recipient_emails?: string[];
+    group_by?: string[];
+    start_date?: string;
+    end_date?: string;
+    team_id?: string | null;
+  },
+): Promise<any> => {
+  return await apiClient.post("/spend/report/email/send", {
+    accessToken,
+    body: payload,
+  });
+};
+
+export interface SpendReportEmailStatusResponse {
+  configured: boolean;
+  provider?: "smtp" | "sendgrid" | "resend" | null;
+  message?: string;
+  server_timezone?: string | null;
+}
+
+export const getSpendReportEmailStatus = async (accessToken: string): Promise<SpendReportEmailStatusResponse> => {
+  try {
+    return await apiClient.get<SpendReportEmailStatusResponse>("/spend/report/email/status", { accessToken });
+  } catch {
+    return { configured: false, provider: null, message: "Unable to verify email configuration" };
+  }
+};
+
 export { type Team } from "./key_team_helpers/key_list"; // Re-export Team
 
 export const deleteAgentCall = async (accessToken: string, agentId: string) => {

@@ -18,10 +18,22 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useUrlTab } from "@/hooks/useUrlTab";
 import EmailSettings from "./email_settings";
 import MSTeamsSettings from "./MSTeamsSettings";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { toast } from "@/lib/toast";
+
+const SETTINGS_TABS = [
+  "logging-callbacks",
+  "cloudzero-cost-tracking",
+  "alerting-types",
+  "alerting-settings",
+  "email-alerts",
+  "ms-teams-alerts",
+] as const;
+
+type SettingsTab = (typeof SETTINGS_TABS)[number];
 
 import AlertingSettings from "./alerting/alerting_settings";
 import CloudZeroCostTracking from "./CloudZeroCostTracking/CloudZeroCostTracking";
@@ -293,6 +305,7 @@ const buildCallbackPayload = (formValues: Record<string, any>, callbackName: str
 };
 
 const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, premiumUser }) => {
+  const [selectedTab, setSelectedTab] = useUrlTab(SETTINGS_TABS, "logging-callbacks");
   const [callbacks, setCallbacks] = useState<AlertingObject[]>([]);
   const [isLoadingCallbacks, setIsLoadingCallbacks] = useState(true);
   const [alerts, setAlerts] = useState<any[]>([]);
@@ -366,11 +379,10 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   }, [showEditCallback, selectedEditCallback, editForm, callbackConfigs]);
 
   const handleSwitchChange = (alertName: string) => {
-    if (activeAlerts.includes(alertName)) {
-      setActiveAlerts(activeAlerts.filter((alert) => alert !== alertName));
-    } else {
-      setActiveAlerts([...activeAlerts, alertName]);
-    }
+    setActiveAlerts((prev) => {
+      const current = prev ?? [];
+      return current.includes(alertName) ? current.filter((alert) => alert !== alertName) : [...current, alertName];
+    });
   };
   const alerts_to_UI_NAME: Record<string, string> = {
     llm_exceptions: "LLM Exceptions",
@@ -403,8 +415,8 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
             let _alert_info = alerts_data[0];
             let catch_all_webhook = _alert_info.variables.SLACK_WEBHOOK_URL;
 
-            let active_alerts = _alert_info.active_alerts;
-            setActiveAlerts(active_alerts);
+            let active_alerts = _alert_info?.active_alerts;
+            setActiveAlerts(Array.isArray(active_alerts) ? active_alerts : []);
             setCatchAllWebhookURL(catch_all_webhook);
             setAlertToWebhooks(_alert_info.alerts_to_webhook);
           }
@@ -418,8 +430,8 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     fetchCallbacks();
   }, [accessToken, userRole, userID]);
 
-  const isAlertOn = (alertName: string) => {
-    return activeAlerts && activeAlerts.includes(alertName);
+  const isAlertOn = (alertName: string): boolean => {
+    return Boolean(activeAlerts && activeAlerts.includes(alertName));
   };
 
   // Shared handler for callback form submission
@@ -570,7 +582,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   return (
     <div className="mx-4">
       <div className="grid grid-cols-1 gap-2 p-8 w-full mt-2">
-        <Tabs defaultValue="logging-callbacks">
+        <Tabs value={selectedTab} onValueChange={(val) => setSelectedTab(val as SettingsTab)}>
           <TabsList variant="line">
             <TabsTrigger value="logging-callbacks">Logging Callbacks</TabsTrigger>
             <TabsTrigger value="cloudzero-cost-tracking">CloudZero Cost Tracking</TabsTrigger>
@@ -694,7 +706,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
             <AlertingSettings accessToken={accessToken} premiumUser={premiumUser} />
           </TabsContent>
           <TabsContent value="email-alerts" keepMounted>
-            <EmailSettings accessToken={accessToken} premiumUser={premiumUser} alerts={alerts} />
+            <EmailSettings accessToken={accessToken} premiumUser={premiumUser} alerts={alerts} userRole={userRole} />
           </TabsContent>
           <TabsContent value="ms-teams-alerts" keepMounted>
             <MSTeamsSettings accessToken={accessToken} userID={userID} userRole={userRole} alerts={alerts} />

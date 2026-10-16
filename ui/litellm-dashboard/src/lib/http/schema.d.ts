@@ -5885,6 +5885,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/get/spend_report_email_settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Spend Report Email Settings
+         * @description Get email spend report settings from litellm_settings.
+         */
+        get: operations["get_spend_report_email_settings_get_spend_report_email_settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/get/sso_settings": {
         parameters: {
             query?: never;
@@ -15625,6 +15645,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/spend/report/email/send": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Trigger Spend Report Email
+         * @description Trigger sending a spend report email immediately.
+         */
+        post: operations["trigger_spend_report_email_spend_report_email_send_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/spend/report/email/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Spend Report Email Status */
+        get: operations["get_spend_report_email_status_spend_report_email_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/spend/tags": {
         parameters: {
             query?: never;
@@ -18102,6 +18159,26 @@ export interface paths {
          *     Settings will be picked up by all pods within approximately 10 seconds via background polling.
          */
         patch: operations["update_mcp_tool_search_settings_update_mcp_tool_search_settings_patch"];
+        trace?: never;
+    };
+    "/update/spend_report_email_settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Spend Report Email Settings
+         * @description Update email spend report settings in litellm_settings and reschedule jobs.
+         */
+        patch: operations["update_spend_report_email_settings_update_spend_report_email_settings_patch"];
         trace?: never;
     };
     "/update/sso_settings": {
@@ -45491,6 +45568,165 @@ export interface components {
              */
             total_tokens: number;
         };
+        /** SpendReportEmailAlert */
+        SpendReportEmailAlert: {
+            /**
+             * Day Of Week
+             * @description Day of week for weekly alerts (e.g. 'monday', 'friday'). Defaults to 'monday'
+             * @default monday
+             */
+            day_of_week: string | null;
+            /**
+             * Enabled
+             * @description Whether this alert is enabled
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Frequency
+             * @description Alert frequency: 'daily', 'weekly', or 'monthly'
+             * @default daily
+             * @enum {string}
+             */
+            frequency: "daily" | "weekly" | "monthly";
+            /**
+             * Group By
+             * @description Cumulative groupings to include: 'team', 'team_key', 'team_model', 'team_key_model'
+             */
+            group_by?: ("team" | "team_key" | "team_model" | "team_key_model")[];
+            /**
+             * Id
+             * @description Unique identifier for this alert
+             */
+            id?: string;
+            /**
+             * Name
+             * @description Descriptive name for the alert
+             * @default Spend Report Alert
+             */
+            name: string;
+            /**
+             * Recipient Emails
+             * @description Target email addresses for this alert
+             */
+            recipient_emails?: string[];
+            /**
+             * Send Time
+             * @description Send time in HH:MM (24-hour server format)
+             * @default 09:00
+             */
+            send_time: string;
+            /**
+             * Team Id
+             * @description Optional team filter to report only on a specific team
+             */
+            team_id?: string | null;
+        };
+        /** SpendReportEmailSendRequest */
+        SpendReportEmailSendRequest: {
+            /**
+             * End Date
+             * @description Optional YYYY-MM-DD end date override
+             */
+            end_date?: string | null;
+            /**
+             * Frequency
+             * @description Report frequency to generate: 'daily', 'weekly', or 'monthly'
+             * @default daily
+             * @enum {string}
+             */
+            frequency: "daily" | "weekly" | "monthly";
+            /**
+             * Group By
+             * @description Optional list of groupings to include in the report
+             */
+            group_by?: ("team" | "team_key" | "team_model" | "team_key_model")[] | null;
+            /**
+             * Recipient Emails
+             * @description Optional list of recipients. Defaults to configured recipient_emails
+             */
+            recipient_emails?: string[] | null;
+            /**
+             * Start Date
+             * @description Optional YYYY-MM-DD start date override
+             */
+            start_date?: string | null;
+            /**
+             * Team Id
+             * @description Optional team filter to report only on a specific team
+             */
+            team_id?: string | null;
+        };
+        /** SpendReportEmailSettings */
+        SpendReportEmailSettings: {
+            /**
+             * Alerts
+             * @description Configured spend report alert instances
+             */
+            alerts?: components["schemas"]["SpendReportEmailAlert"][];
+        };
+        /**
+         * SpendReportEmailSettingsResponse
+         * @description Response model for spend report email settings
+         */
+        SpendReportEmailSettingsResponse: {
+            /** Field Schema */
+            field_schema: {
+                [key: string]: unknown;
+            };
+            /** Server Timezone */
+            server_timezone?: string | null;
+            /** Values */
+            values: {
+                [key: string]: unknown;
+            };
+        };
+        /** SpendReportEmailStatusResponse */
+        SpendReportEmailStatusResponse: {
+            /**
+             * Configured
+             * @description Whether email delivery (SMTP, SendGrid, or Resend) is configured
+             * @default false
+             */
+            configured: boolean;
+            /**
+             * Message
+             * @description Informational message about email delivery readiness
+             * @default
+             */
+            message: string;
+            /**
+             * Provider
+             * @description Active email provider being used
+             */
+            provider?: ("smtp" | "sendgrid" | "resend") | null;
+            /**
+             * Server Timezone
+             * @description Server or container local timezone name or abbreviation
+             */
+            server_timezone?: string;
+        };
+        /** SpendReportSendResult */
+        SpendReportSendResult: {
+            /** End Date */
+            end_date: string;
+            /** Frequency */
+            frequency: string;
+            /** Message */
+            message: string;
+            /** Recipients */
+            recipients: string[];
+            /** Start Date */
+            start_date: string;
+            /** Status */
+            status: string;
+            /** Team Id */
+            team_id?: string | null;
+            /** Total Requests */
+            total_requests: number;
+            /** Total Spend */
+            total_spend: number;
+        };
         /** StandardLoggingHeuristicV2Forecast */
         StandardLoggingHeuristicV2Forecast: {
             /** Predicted Tier */
@@ -59763,6 +59999,26 @@ export interface operations {
             };
         };
     };
+    get_spend_report_email_settings_get_spend_report_email_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendReportEmailSettingsResponse"];
+                };
+            };
+        };
+    };
     get_sso_settings_get_sso_settings_get: {
         parameters: {
             query?: never;
@@ -71498,6 +71754,59 @@ export interface operations {
             };
         };
     };
+    trigger_spend_report_email_spend_report_email_send_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SpendReportEmailSendRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendReportSendResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_spend_report_email_status_spend_report_email_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendReportEmailStatusResponse"];
+                };
+            };
+        };
+    };
     view_spend_tags_spend_tags_get: {
         parameters: {
             query?: {
@@ -74877,6 +75186,41 @@ export interface operations {
                 content: {
                     "application/json": {
                         [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_spend_report_email_settings_update_spend_report_email_settings_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SpendReportEmailSettings"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: components["schemas"]["JsonValue"];
                     };
                 };
             };
