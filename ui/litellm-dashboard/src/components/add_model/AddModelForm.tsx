@@ -14,7 +14,7 @@ import { Info } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { Button } from "@/components/ui/button";
 import React, { useEffect, useMemo, useState } from "react";
-import { FormProvider, useWatch, type UseFormReturn } from "react-hook-form";
+import { FormProvider, useFormState, useWatch, type UseFormReturn } from "react-hook-form";
 import TeamDropdown from "../common_components/team_dropdown";
 import { requiredRule } from "../common_components/formRules";
 import { labelWithHint } from "@/components/shared/form/LabelWithHint";
@@ -113,6 +113,8 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
   const canCreateFederatedCredential =
     isProxyAdminRole(userRole ?? "") && federatedProviderOf(selectedProvider) !== null;
   const selectedAuthType = authTypesFor(selectedProvider).find(({ id }) => id === selectedAuthTypeId);
+  const { isValid } = useFormState({ control: form.control });
+  const isFormIncomplete = !isValid || (selectedAuthType?.credentialOnly === true && !selectedCredentialName);
 
   const handleCreateCredential = async (submission: CredentialSubmission) => {
     const credential = buildCredential(submission, submission.credential_values);
@@ -490,15 +492,20 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                       </a>
                     </SimpleTooltip>
                     <div className="space-x-2">
-                      <Button
-                        variant="outline"
-                        data-testid="test-connect-btn"
-                        onClick={handleTestConnection}
-                        disabled={isTestingConnection}
-                        aria-busy={isTestingConnection}
+                      <SimpleTooltip
+                        content={isFormIncomplete ? "Fill in the required fields to test the connection" : ""}
+                        side="top"
                       >
-                        Test Connect
-                      </Button>
+                        <Button
+                          variant="outline"
+                          data-testid="test-connect-btn"
+                          onClick={handleTestConnection}
+                          disabled={isTestingConnection || isFormIncomplete}
+                          aria-busy={isTestingConnection}
+                        >
+                          Test Connect
+                        </Button>
+                      </SimpleTooltip>
                       <Button data-testid="add-model-btn" type="submit">
                         Add Model
                       </Button>

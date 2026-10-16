@@ -10,7 +10,7 @@ import {
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { Team } from "../key_team_helpers/key_list";
-import { credentialCreateCall, modelCreateCall, type CredentialItem } from "../networking";
+import { credentialCreateCall, modelCreateCall, testConnectionRequest, type CredentialItem } from "../networking";
 import { Providers } from "../provider_info_helpers";
 import { projectMountedValues, useMountRegistry, type MountedFormValues } from "../common_components/MountedFormField";
 import { useForm } from "react-hook-form";
@@ -53,7 +53,17 @@ vi.mock("../networking", async () => {
         provider_display_name: "OpenAI",
         litellm_provider: "openai",
         default_model_placeholder: "gpt-3.5-turbo",
-        credential_fields: [],
+        credential_fields: [{ key: "api_key", label: "OpenAI API Key", field_type: "password", required: true }],
+      },
+      {
+        provider: "Azure",
+        provider_display_name: "Azure",
+        litellm_provider: "azure",
+        default_model_placeholder: "my-deployment",
+        credential_fields: [
+          { key: "api_base", label: "API Base", field_type: "text", required: true },
+          { key: "api_key", label: "Azure API Key", field_type: "password" },
+        ],
       },
       {
         provider: "MICROSOFT_365_COPILOT",
@@ -98,7 +108,17 @@ vi.mock("@/app/(dashboard)/hooks/providers/useProviderFields", () => ({
         provider_display_name: "OpenAI",
         litellm_provider: "openai",
         default_model_placeholder: "gpt-3.5-turbo",
-        credential_fields: [],
+        credential_fields: [{ key: "api_key", label: "OpenAI API Key", field_type: "password", required: true }],
+      },
+      {
+        provider: "Azure",
+        provider_display_name: "Azure",
+        litellm_provider: "azure",
+        default_model_placeholder: "my-deployment",
+        credential_fields: [
+          { key: "api_base", label: "API Base", field_type: "text", required: true },
+          { key: "api_key", label: "Azure API Key", field_type: "password" },
+        ],
       },
       {
         provider: "MICROSOFT_365_COPILOT",
@@ -251,6 +271,22 @@ const createTestProps = (userRole = "proxy_admin", userId = "user-1", isTeamAdmi
     userId,
   };
 };
+
+type User = ReturnType<typeof userEvent.setup>;
+
+const pickProvider = async (user: User, name: RegExp) => {
+  await user.click(screen.getByRole("combobox", { name: /provider/i }));
+  await user.click(await screen.findByRole("option", { name }));
+};
+
+const pickModel = async (user: User, name: string) => {
+  await user.click(await screen.findByPlaceholderText("Select models"));
+  await user.click(await screen.findByRole("option", { name }));
+  await user.keyboard("{Escape}");
+};
+
+const fillApiKey = (label: string) =>
+  fireEvent.change(screen.getByLabelText(new RegExp(label)), { target: { value: "sk-test" } });
 
 describe("AddModelForm", () => {
   it("should render", async () => {
@@ -444,10 +480,17 @@ describe("AddModelForm", () => {
   it("shows only the Close button in the connection test dialog footer", async () => {
     const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
     mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser("proxy_admin", "user-1", true));
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
 
     renderWithProviders(<AddModelForm {...createTestProps()} />);
+    await screen.findByText("Provider");
+    await pickProvider(user, /OpenAI/);
+    fillApiKey("OpenAI API Key");
+    await pickModel(user, "gpt-4");
 
-    await userEvent.click(await screen.findByTestId("test-connect-btn"));
+    const testConnect = screen.getByTestId("test-connect-btn");
+    await waitFor(() => expect(testConnect).toBeEnabled());
+    await user.click(testConnect);
 
     const dialog = await screen.findByRole("dialog");
     const footer = dialog.querySelector('[data-slot="dialog-footer"]');
@@ -783,6 +826,113 @@ describe("AddModelForm", () => {
       expect(vi.mocked(modelCreateCall).mock.calls[0][1].litellm_params).toMatchObject({
         api_key: "shared-device-token",
       });
+    });
+  });
+
+  describe("the Test Connect gate", () => {
+    const renderGate = async (selectedProvider: Providers = Providers.OpenAI) => {
+      const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
+      mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser("proxy_admin", "user-1", true));
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+      const props = { ...createTestProps(), selectedProvider };
+      renderWithProviders(<AddModelForm {...props} />);
+      await screen.findByText("Provider");
+      return { user, props, testConnect: () => screen.getByTestId("test-connect-btn") };
+    };
+
+    it("is disabled on a fresh form and explains why on hover", async () => {
+      const { user, testConnect } = await renderGate();
+      expect(testConnect()).toBeDisabled();
+
+      await user.hover(testConnect());
+
+      expect(await screen.findByText("Fill in the required fields to test the connection")).toBeInTheDocument();
+    });
+
+    it("runs the connection test once provider, auth and model are filled in", async () => {
+      vi.mocked(testConnectionRequest).mockClear();
+      const { user, testConnect } = await renderGate();
+      await pickProvider(user, /OpenAI/);
+      fillApiKey("OpenAI API Key");
+      expect(testConnect()).toBeDisabled();
+      await pickModel(user, "gpt-4");
+
+      await waitFor(() => expect(testConnect()).toBeEnabled());
+      await user.click(testConnect());
+
+      expect(await screen.findByTestId("connection-success-msg")).toBeInTheDocument();
+      expect(testConnectionRequest).toHaveBeenCalledWith(
+        "test-access-token",
+        expect.objectContaining({ api_key: "sk-test", model: "gpt-4" }),
+        expect.anything(),
+        undefined,
+      );
+    });
+
+    it("is disabled again and shows emptied inputs after a successful Add Model resets the form", async () => {
+      const { user, props, testConnect } = await renderGate();
+      props.handleOk.mockImplementation(async () => {
+        props.form.reset({ litellm_credential_name: null });
+        return true;
+      });
+      await pickProvider(user, /OpenAI/);
+      fillApiKey("OpenAI API Key");
+      await pickModel(user, "gpt-4");
+      await waitFor(() => expect(testConnect()).toBeEnabled());
+
+      await user.click(screen.getByTestId("add-model-btn"));
+
+      await waitFor(() => expect(testConnect()).toBeDisabled());
+      expect(props.handleOk).toHaveBeenCalledOnce();
+      expect(screen.getByLabelText(/OpenAI API Key/)).toHaveValue("");
+    });
+
+    it("is enabled for the provider wildcard once auth is filled in", async () => {
+      const { user, testConnect } = await renderGate();
+      await pickProvider(user, /OpenAI/);
+      await pickModel(user, "All OpenAI Models (Wildcard)");
+      expect(testConnect()).toBeDisabled();
+
+      fillApiKey("OpenAI API Key");
+
+      await waitFor(() => expect(testConnect()).toBeEnabled());
+    });
+
+    it("stays disabled for a custom model until its name is entered", async () => {
+      const { user, testConnect } = await renderGate();
+      await pickProvider(user, /OpenAI/);
+      fillApiKey("OpenAI API Key");
+      await pickModel(user, "Custom Model Name (Enter below)");
+      const customName = await screen.findByPlaceholderText("Enter custom model name");
+      expect(testConnect()).toBeDisabled();
+
+      fireEvent.change(customName, { target: { value: "my-fine-tune" } });
+
+      await waitFor(() => expect(testConnect()).toBeEnabled());
+    });
+
+    it("is enabled for an Azure deployment name once auth is filled in", async () => {
+      const { user, testConnect } = await renderGate(Providers.Azure);
+      await pickProvider(user, /Azure/);
+      fireEvent.change(screen.getByLabelText(/API Base/), { target: { value: "https://example.openai.azure.com" } });
+      expect(testConnect()).toBeDisabled();
+
+      fireEvent.change(screen.getByLabelText(/LiteLLM Model Name/), { target: { value: "my-deployment" } });
+
+      await waitFor(() => expect(testConnect()).toBeEnabled());
+    });
+
+    it("stays disabled for a credential-only auth type until a credential is selected", async () => {
+      const { user, testConnect } = await renderGate(Providers.MICROSOFT_365_COPILOT);
+      await pickProvider(user, /Microsoft 365 Copilot/);
+      await pickModel(user, "gpt-4");
+      expect(await screen.findByRole("button", { name: "Create credential" })).toBeInTheDocument();
+      expect(testConnect()).toBeDisabled();
+
+      await user.click(screen.getByPlaceholderText("Select or search for existing credentials"));
+      await user.click(await screen.findByRole("option", { name: /test-credential/ }));
+
+      await waitFor(() => expect(testConnect()).toBeEnabled());
     });
   });
 
