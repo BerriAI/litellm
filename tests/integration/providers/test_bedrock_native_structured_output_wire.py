@@ -107,6 +107,23 @@ _UNCLEANED_SCHEMA: Final[dict[str, JsonValue]] = {
     "required": ["tier", "summary"],
     "additionalProperties": False,
 }
+_NUMERIC_FORMATS_SCHEMA: Final[dict[str, JsonValue]] = {
+    "type": "object",
+    "properties": {
+        "tier": {"type": "integer", "format": "int32"},
+        "score": {"type": "number", "format": "double"},
+        "summary": {"type": "string"},
+    },
+    "required": ["tier", "score", "summary"],
+    "additionalProperties": False,
+}
+_WIDE_FIELDS: Final = tuple(f"field_{index:02d}" for index in range(65))
+_WIDE_SCHEMA: Final[dict[str, JsonValue]] = {
+    "type": "object",
+    "properties": {name: {"type": "string"} for name in _WIDE_FIELDS},
+    "required": list(_WIDE_FIELDS),
+    "additionalProperties": False,
+}
 _USER_TOOL_SPEC: Final[dict[str, JsonValue]] = {
     "type": "function",
     "function": {
@@ -722,3 +739,34 @@ def test_malformed_schema_on_a_native_model_reaches_bedrock_once_without_a_proxy
         assert fault is None or fault.split(": ", 1)[1] in response.text, response.text
         assert (native is None) is (_JSON_TOOL in _tools(body, False)), body
         assert gateway.request("GET", "/health/liveliness").status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("route", "backend", "thinking", "schema", "native"),
+    [
+        ("converse", _SONNET, False, _NUMERIC_FORMATS_SCHEMA, True),
+        ("invoke", _HAIKU, True, _NUMERIC_FORMATS_SCHEMA, True),
+        ("converse", _SONNET, False, _WIDE_SCHEMA, True),
+        ("converse", _HAIKU, True, _WIDE_SCHEMA, False),
+    ],
+    ids=["numeric_formats_old_key", "numeric_formats_new_key_invoke", "wide_old_key", "wide_new_key"],
+)
+def test_numeric_formats_and_wide_schemas_follow_the_bedrock_native_key(
+    gateway: Gateway, route: str, backend: str, thinking: bool, schema: dict[str, JsonValue], native: bool
+) -> None:
+    marker, marker_hex = _marker()
+    extra: Final[dict[str, JsonValue]] = {"thinking": _ADAPTIVE} if thinking else {}
+    with wire_server(_bedrock) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire, route, backend)
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            _chat_body(model, marker, response_format=_response_format(schema), **extra),
+        )
+        assert _content_json(_chat_message(response)) == _payload(marker_hex), response.text
+        _, body = _one_call(wire, marker_hex)
+        invoke: Final = route == "invoke"
+        assert (_native_schema(body, invoke) == schema) is native, body
+        tools: Final = _tools(body, invoke)
+        assert (_JSON_TOOL in tools) is not native, body
+        assert native or tools[_JSON_TOOL]["properties"] == schema["properties"], body
