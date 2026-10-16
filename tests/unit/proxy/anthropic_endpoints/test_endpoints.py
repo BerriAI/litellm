@@ -285,8 +285,6 @@ class TestProxyExceptionAnthropicEnvelope:
 
     @pytest.mark.asyncio
     async def test_count_tokens_answers_a_503_as_529_overloaded_error(self):
-        from fastapi import HTTPException
-
         import litellm.proxy.anthropic_endpoints.endpoints as ep
         import litellm.proxy.proxy_server as proxy_server
         from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -304,16 +302,16 @@ class TestProxyExceptionAnthropicEnvelope:
                 new=AsyncMock(return_value={"model": "claude-sonnet", "messages": [{"role": "user", "content": "hi"}]}),
             ),
             patch.object(
-                proxy_server, "token_counter", new=AsyncMock(side_effect=unavailable)
+                proxy_server, "count_request_tokens", new=AsyncMock(side_effect=unavailable)
             ),  # test-quality-ok: module global imported at call time; the test targets the endpoint's except block
         ):
-            with pytest.raises(HTTPException) as raised:
-                await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+            response = await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
 
-        assert raised.value.status_code == 529
-        assert raised.value.detail["type"] == "error"
-        assert raised.value.detail["error"]["type"] == "overloaded_error"
-        assert raised.value.detail["error"]["message"] == "Bedrock is unable to process your request."
+        body = json.loads(response.body)
+        assert response.status_code == 529
+        assert body["type"] == "error"
+        assert body["error"]["type"] == "overloaded_error"
+        assert body["error"]["message"] == "Bedrock is unable to process your request."
 
     @staticmethod
     def _call_id_error_response(general_settings, provider_specific_fields=None):
@@ -573,7 +571,9 @@ class TestErrorLogCarriesCallId:
                 "read_request_body",
                 new=AsyncMock(return_value={"model": "claude-sonnet", "messages": [{"role": "user", "content": "hi"}]}),
             ),
-            patch.object(proxy_server, "token_counter", new=AsyncMock(side_effect=RuntimeError("tokenizer down"))),  # test-quality-ok: module global imported at call time; the test targets the endpoint's except block
+            patch.object(
+                proxy_server, "count_request_tokens", new=AsyncMock(side_effect=RuntimeError("tokenizer down"))
+            ),  # test-quality-ok: module global imported at call time; the test targets the endpoint's except block
             caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"),
             pytest.raises(HTTPException) as raised,
         ):

@@ -36,11 +36,17 @@ async def exercise():
     releaser = asyncio.create_task(release())
     execution = await_execution(CustomAwaitable())
     try:
-        execution.resume_value(None)
+        execution.throw(ValueError("early"))
     except RuntimeError:
         pass
     else:
         raise AssertionError("resumed an unstarted execution")
+    try:
+        execution.send(1)
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("sent a value into an unstarted execution")
     wrapped = drive(execution)
     try:
         wrapped.send(1)
@@ -129,7 +135,7 @@ async def exercise():
 
     def reenter():
         try:
-            active.start()
+            active.send(None)
         except RuntimeError as error:
             observed.append(str(error))
         return result
@@ -151,7 +157,7 @@ async def exercise():
         execution = calling_execution(callback)
         callback.owner = execution
         if started:
-            assert execution.start().value is result
+            assert execution.send(None).value is result
         return weakref.ref(callback)
 
     for started in (False, True):

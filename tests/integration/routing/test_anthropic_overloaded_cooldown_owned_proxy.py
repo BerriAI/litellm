@@ -206,9 +206,9 @@ def _assert_overloaded_json(response: httpx.Response) -> None:
 
 def _count_tokens_error(response: httpx.Response, status: int) -> dict[str, JsonValue]:
     assert response.status_code == status, response.text
-    detail: Final = object_value(object_value(json.loads(response.content))["detail"])
-    assert detail["type"] == "error", response.text
-    return object_value(detail["error"])
+    envelope: Final = object_value(json.loads(response.content))
+    assert envelope["type"] == "error", response.text
+    return object_value(envelope["error"])
 
 
 def test_an_overloaded_deployment_is_cooled_down_by_the_internal_server_error_allowed_fails_policy(rig: _Rig) -> None:
@@ -247,7 +247,7 @@ def test_count_tokens_whose_upstream_answers_503_answers_529_overloaded_error(ri
         pytest.param(_COUNT_RATE_LIMITED_GROUP, 429, "rate_limit_error", id="429"),
     ),
 )
-def test_count_tokens_keeps_other_upstream_statuses_and_their_detail_body(
+def test_count_tokens_keeps_other_upstream_statuses_and_their_error_body(
     rig: _Rig, group: str, status: int, error_type: str
 ) -> None:
     response: Final = rig.count_tokens(group)
