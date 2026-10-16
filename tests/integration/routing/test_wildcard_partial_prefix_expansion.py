@@ -29,7 +29,8 @@ ROUTES: Final = MappingProxyType(
     }
 )
 SAMPLED_IDS_PER_ROUTE: Final = 6
-MANY_STARS: Final = "*" * 7 + "!"
+MANY_STARS: Final = "*" * 8
+LISTED_NAME_FIELDS: Final = MappingProxyType({"/v1/models": "id", "/model/info": "model_name"})
 CONTROL_LISTINGS: Final = 3
 LISTING_SLOWDOWN_FACTOR: Final = 25
 LISTING_TIMEOUT_SECONDS: Final = 120
@@ -213,13 +214,19 @@ def test_each_wildcard_row_names_the_deployment_its_id_routes_to(
     assert [entry for entry in served if entry[1] != entry[2]] == []
 
 
-def test_key_scoped_to_a_wildcard_lists_an_id_a_narrower_route_sends_to_the_same_model(gateway: Gateway) -> None:
+@pytest.mark.parametrize(
+    "narrow_model", ("openai/gpt-4.1*", "openai/gpt-4o-mini"), ids=("same_model", "different_model")
+)
+def test_key_scoped_to_a_wildcard_lists_an_id_a_narrower_route_serves_only_if_it_reaches_the_named_model(
+    gateway: Gateway, narrow_model: str
+) -> None:
     namespace: Final = f"keyscope-{uuid.uuid4().hex[:12]}"
-    narrowly_served: Final = f"{namespace}/gpt-4.1"
+    named_model: Final = "gpt-4.1"
+    narrowly_served: Final = f"{namespace}/{named_model}"
 
     with wire_server(OPENAI_UPSTREAM) as wire, gateway.scenario() as scenario:
         _register(scenario, f"{namespace}/*", "openai/*", f"{wire.url}/v1")
-        _register(scenario, f"{namespace}/gpt-4.1*", "openai/gpt-4.1*", f"{wire.url}/v1")
+        _register(scenario, f"{namespace}/{named_model}*", narrow_model, f"{wire.url}/v1")
         key: Final = scenario.key(models=[f"{namespace}/*"])
         listing: Final = gateway.request("GET", "/v1/models", key=key)
         wire.drain()
@@ -232,13 +239,15 @@ def test_key_scoped_to_a_wildcard_lists_an_id_a_narrower_route_sends_to_the_same
         upstream_model: Final = _upstream_model(wire)
 
     assert call.status_code == 200, call.text
-    assert upstream_model == "gpt-4.1"
+    assert upstream_model == narrow_model.removeprefix("openai/").removesuffix("*")
     assert listing.status_code == 200, listing.text
     listed: Final = tuple(
         string_value(object_value(entry)["id"])
         for entry in list_value(JSON_OBJECT.validate_json(listing.content)["data"])
     )
-    assert narrowly_served in listed, sorted(model_id for model_id in listed if model_id.startswith(namespace))
+    in_namespace: Final = sorted(model_id for model_id in listed if model_id.startswith(namespace))
+    assert f"{namespace}/gpt-4o-mini" in listed, in_namespace
+    assert (narrowly_served in listed) is (upstream_model == named_model), in_namespace
 
 
 def test_overlapping_deployments_of_one_wildcard_list_each_id_once(gateway: Gateway) -> None:
@@ -275,27 +284,32 @@ def test_wildcard_health_check_probes_a_model_its_pattern_names(
     assert probe.startswith(pattern.removesuffix("*")) is probes_match, probe
 
 
-def _namespace_listing_seconds(gateway: Gateway, namespace: str) -> float:
+def _namespace_listing_seconds(gateway: Gateway, path: str, namespace: str) -> float:
     listing: Final = timed(
         lambda: gateway.client.get(
-            "/v1/models", headers={"Authorization": f"Bearer {gateway.key}"}, timeout=LISTING_TIMEOUT_SECONDS
+            path, headers={"Authorization": f"Bearer {gateway.key}"}, timeout=LISTING_TIMEOUT_SECONDS
         )
     )
     assert listing.value.status_code == 200, listing.value.text
     assert any(
-        string_value(object_value(entry)["id"]).startswith(f"{namespace}/")
+        string_value(object_value(entry)[LISTED_NAME_FIELDS[path]]).startswith(f"{namespace}/")
         for entry in list_value(JSON_OBJECT.validate_json(listing.value.content)["data"])
     )
     return listing.seconds
 
 
-def test_wildcard_listing_answers_promptly_beside_a_route_with_many_stars(gateway: Gateway) -> None:
+@pytest.mark.parametrize("path", tuple(LISTED_NAME_FIELDS), ids=("v1_models", "model_info"))
+@pytest.mark.parametrize("route_tail", ("!", "g"), ids=("tail_in_no_listed_id", "tail_early_in_listed_ids"))
+def test_wildcard_listing_answers_promptly_beside_a_route_with_many_stars(
+    gateway: Gateway, path: str, route_tail: str
+) -> None:
     namespace: Final = f"stars-{uuid.uuid4().hex[:12]}"
+    many_stars_route: Final = f"{namespace}/{MANY_STARS}{route_tail}"
 
     with gateway.scenario() as scenario:
         _register(scenario, f"{namespace}/*", "openai/*", UNREACHABLE_API_BASE)
-        control: Final = max(_namespace_listing_seconds(gateway, namespace) for _ in range(CONTROL_LISTINGS))
-        _register(scenario, f"{namespace}/{MANY_STARS}", f"openai/{MANY_STARS}", UNREACHABLE_API_BASE)
-        observed: Final = _namespace_listing_seconds(gateway, namespace)
+        control: Final = max(_namespace_listing_seconds(gateway, path, namespace) for _ in range(CONTROL_LISTINGS))
+        _register(scenario, many_stars_route, f"openai/{MANY_STARS}{route_tail}", UNREACHABLE_API_BASE)
+        observed: Final = _namespace_listing_seconds(gateway, path, namespace)
 
     assert_within_factor_of_control(observed, control=control, factor=LISTING_SLOWDOWN_FACTOR)
