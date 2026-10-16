@@ -196,6 +196,7 @@ VOICE_BLOCK_FRAMES: Final = (
     "conversation.item.create",
     "response.create",
 )
+XAI_VOICE_BLOCK_FRAMES: Final = ("response.cancel", "conversation.item.create", "response.create")
 CREATED_SECONDS: Final = 60.0
 STEP_SECONDS: Final = 15.0
 SDK_SECONDS: Final = 45.0
@@ -1272,7 +1273,9 @@ def test_client_response_cancel_error_still_reaches_the_client(guardrail_proxy: 
         assert _error_event_ids(session) == (CLIENT_CANCEL_ID,), session
 
 
-def _xai_blocked_session(guardrail_proxy: OwnedProxy, scenario: Scenario) -> tuple[Session, tuple[JsonValue, ...]]:
+def _xai_blocked_session(
+    guardrail_proxy: OwnedProxy, scenario: Scenario
+) -> tuple[Session, tuple[dict[str, JsonValue], ...]]:
     handle: Final = _scripted(scenario, _xai_voice_scenario(BLOCKED_TRANSCRIPT))
     key: Final = scenario.key()
     model: Final = scenario.model(model=f"xai/{XAI_VOICE_MODEL}", api_key=handle.scenario_id)
@@ -1280,17 +1283,29 @@ def _xai_blocked_session(guardrail_proxy: OwnedProxy, scenario: Scenario) -> tup
     session: Final = asyncio.run(
         _talked_until_the_proxy_answer(_ws_base(_owned_url(guardrail_proxy)), f"model={model}", key, frames)
     )
-    observed: Final = _observed(guardrail_proxy.gateway.upstream_url, handle.scenario_id)
-    return session, _upstream_turn_detections(observed)
+    return session, _observed(guardrail_proxy.gateway.upstream_url, handle.scenario_id)
 
 
 def test_xai_voice_session_gets_untyped_gates_and_no_unguarded_answer(guardrail_proxy: OwnedProxy) -> None:
     with guardrail_proxy.gateway.scenario() as scenario:
-        session, turn_detections = _xai_blocked_session(guardrail_proxy, scenario)
+        session, observed = _xai_blocked_session(guardrail_proxy, scenario)
+        turn_detections: Final = _upstream_turn_detections(observed)
         assert turn_detections == (UNTYPED_GATE, UNTYPED_GATE), turn_detections
         assert session.transcripts == (BLOCKED_TRANSCRIPT,), session
         assert GUARDRAIL_VIOLATION in session.errors, session
         assert not any(response.startswith(AUTO_ANSWER_PREFIX) for response in _response_ids(session)), session
+
+
+def test_xai_voice_session_block_sends_xai_no_item_delete(guardrail_proxy: OwnedProxy) -> None:
+    with guardrail_proxy.gateway.scenario() as scenario:
+        session, observed = _xai_blocked_session(guardrail_proxy, scenario)
+        assert session.transcripts == (BLOCKED_TRANSCRIPT,), session
+        assert _sent_types(observed) == (
+            "session.update",
+            "session.update",
+            "input_audio_buffer.commit",
+            *XAI_VOICE_BLOCK_FRAMES,
+        ), _sent(observed)
 
 
 @pytest.mark.xfail(

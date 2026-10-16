@@ -84,7 +84,10 @@ class XAIRealtimeNormalizer:
 
     @property
     def deletes_conversation_items(self) -> bool:
-        """xAI answers ``conversation.item.delete`` for an audio input item with ``Item not found``."""
+        """xAI answers ``conversation.item.delete`` with ``Item not found`` until it commits the audio item.
+
+        The guardrail blocks on an interim transcript, before that commit.
+        """
         return False
 
     def patch_outgoing_session(self, session: dict) -> dict:
