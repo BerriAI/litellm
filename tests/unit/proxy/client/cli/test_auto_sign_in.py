@@ -7,11 +7,13 @@ from typing import Final
 import pytest
 import requests
 from click.testing import CliRunner, Result
+from requests_mock import Mocker
 
 from litellm.proxy.client.cli import cli
 from litellm.proxy.client.cli.commands.auth import CliTokenData, get_stored_api_key, save_token
 from litellm.proxy.client.cli.commands.auto_sign_in import pkce_browser_sign_in
 from litellm.proxy.client.cli.commands.pkce_login import PkceCredential, PkceFailure, pkce_token_record
+from tests.unit.litellm_core_utils.fake_secret_vault import FakeSecretVault
 
 BASE_URL: Final = "https://proxy.example.com"
 SIGNED_IN_KEY: Final = "sk-signed-in"
@@ -77,24 +79,22 @@ def _bearers(route) -> list[str | None]:
     return [request.headers.get("Authorization") for request in route.request_history]
 
 
-def _key_check(requests_mock, status_code: int, public: bool = False):
-    def respond(request, context) -> dict[str, list[str]]:
-        context.status_code = status_code if public or "Authorization" in request.headers else 401
-        return {"data": []}
-
-    return requests_mock.get(f"{BASE_URL}/v1/models", json=respond)
+def _key_check(requests_mock, status_code: int):
+    return requests_mock.get(f"{BASE_URL}/key/info", status_code=status_code, json={"info": {}})
 
 
 def test_a_401_without_a_login_signs_in_once_stores_the_key_and_finishes_the_command(
-    requests_mock, secret_vault_factory
-):
-    route = requests_mock.post(
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault]
+) -> None:
+    route: Final = requests_mock.post(
         f"{BASE_URL}/key/generate", [{"status_code": 401, "json": REJECTED}, {"status_code": 200, "json": GENERATED}]
     )
-    vault = secret_vault_factory()
-    sign_in = FakeBrowserSignIn(_credential())
+    vault: Final = secret_vault_factory()
+    sign_in: Final = FakeBrowserSignIn(_credential())
 
-    result = _lite(["keys", "generate", "--models", "gpt-5.4-mini", "--key-alias", "experiment-1"], vault, sign_in)
+    result: Final = _lite(
+        ["keys", "generate", "--models", "gpt-5.4-mini", "--key-alias", "experiment-1"], vault, sign_in
+    )
 
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout) == GENERATED
@@ -114,18 +114,18 @@ def test_a_401_without_a_login_signs_in_once_stores_the_key_and_finishes_the_com
     ids=["rejected", "unavailable", "unreachable"],
 )
 def test_a_stored_login_the_proxy_rejects_is_replaced_by_one_sign_in_with_only_json_on_stdout(
-    requests_mock, secret_vault_factory, key_check
-):
-    vault = secret_vault_factory()
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault], key_check: dict[str, object]
+) -> None:
+    vault: Final = secret_vault_factory()
     save_token(pkce_token_record(BASE_URL, _credential("sk-stale")), vault=vault)
-    requests_mock.get(f"{BASE_URL}/v1/models", **key_check)
-    revoke = requests_mock.post(f"{BASE_URL}/v1/cli/revoke", status_code=500)
-    route = requests_mock.post(
+    requests_mock.get(f"{BASE_URL}/key/info", **key_check)
+    revoke: Final = requests_mock.post(f"{BASE_URL}/v1/cli/revoke", status_code=500)
+    route: Final = requests_mock.post(
         f"{BASE_URL}/key/generate", [{"status_code": 401, "json": REJECTED}, {"status_code": 200, "json": GENERATED}]
     )
-    sign_in = FakeBrowserSignIn(_credential())
+    sign_in: Final = FakeBrowserSignIn(_credential())
 
-    result = _lite(["keys", "generate"], vault, sign_in)
+    result: Final = _lite(["keys", "generate"], vault, sign_in)
 
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout) == GENERATED
@@ -136,31 +136,33 @@ def test_a_stored_login_the_proxy_rejects_is_replaced_by_one_sign_in_with_only_j
     assert get_stored_api_key(BASE_URL, vault=vault) == SIGNED_IN_KEY
 
 
-def test_a_login_for_another_proxy_is_never_replaced_by_an_automatic_sign_in(requests_mock, secret_vault_factory):
-    other_proxy = "https://other.example.com"
-    vault = secret_vault_factory()
+def test_a_login_for_another_proxy_is_never_replaced_by_an_automatic_sign_in(
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault]
+) -> None:
+    other_proxy: Final = "https://other.example.com"
+    vault: Final = secret_vault_factory()
     save_token({**_classic_login("sk-other"), "base_url": other_proxy}, vault=vault)
-    route = requests_mock.post(f"{BASE_URL}/key/generate", status_code=401, json=REJECTED)
-    sign_in = FakeBrowserSignIn(_credential())
+    route: Final = requests_mock.post(f"{BASE_URL}/key/generate", status_code=401, json=REJECTED)
+    sign_in: Final = FakeBrowserSignIn(_credential())
 
-    result = _lite(["keys", "generate"], vault, sign_in)
+    result: Final = _lite(["keys", "generate"], vault, sign_in)
 
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit)
     assert f"lite keeps one stored login and it is for {other_proxy}" in result.stderr
-    assert f"Run `lite --base-url {BASE_URL} login`" in result.stderr
+    assert f"Run `lite --base-url {BASE_URL} login --pkce`" in result.stderr
     assert sign_in.calls == []
     assert _bearers(route) == [None]
     assert get_stored_api_key(other_proxy, vault=vault) == "sk-other"
 
 
-def test_the_browser_sign_in_fails_at_once_on_a_machine_without_a_browser(requests_mock):
+def test_the_browser_sign_in_fails_at_once_on_a_machine_without_a_browser(requests_mock: Mocker) -> None:
     def no_browser() -> webbrowser.BaseBrowser:
         raise webbrowser.Error("could not locate runnable browser")
 
     echoed: list[str] = []
 
-    outcome = pkce_browser_sign_in(BASE_URL, echoed.append, find_browser=no_browser, environ={})
+    outcome: Final = pkce_browser_sign_in(BASE_URL, echoed.append, find_browser=no_browser, environ={})
 
     assert outcome == PkceFailure("no web browser is available on this machine")
     assert requests_mock.call_count == 0
@@ -168,13 +170,13 @@ def test_the_browser_sign_in_fails_at_once_on_a_machine_without_a_browser(reques
 
 
 @pytest.mark.parametrize("ci", ["true", "1", "True"])
-def test_the_browser_sign_in_never_looks_for_a_browser_in_ci(requests_mock, ci):
+def test_the_browser_sign_in_never_looks_for_a_browser_in_ci(requests_mock: Mocker, ci: str) -> None:
     def browser_lookup() -> webbrowser.BaseBrowser:
         raise AssertionError("looked for a browser while CI is set")
 
     echoed: list[str] = []
 
-    outcome = pkce_browser_sign_in(BASE_URL, echoed.append, find_browser=browser_lookup, environ={"CI": ci})
+    outcome: Final = pkce_browser_sign_in(BASE_URL, echoed.append, find_browser=browser_lookup, environ={"CI": ci})
 
     assert outcome == PkceFailure("the CI environment variable is set, so lite does not open a browser")
     assert requests_mock.call_count == 0
@@ -182,10 +184,10 @@ def test_the_browser_sign_in_never_looks_for_a_browser_in_ci(requests_mock, ci):
 
 
 @pytest.mark.parametrize("name", ["www-browser", "links", "elinks", "lynx", "w3m"])
-def test_a_text_mode_browser_counts_as_no_browser(requests_mock, name):
+def test_a_text_mode_browser_counts_as_no_browser(requests_mock: Mocker, name: str) -> None:
     echoed: list[str] = []
 
-    outcome = pkce_browser_sign_in(
+    outcome: Final = pkce_browser_sign_in(
         BASE_URL, echoed.append, find_browser=lambda: webbrowser.GenericBrowser(name), environ={"TERM": "xterm"}
     )
 
@@ -194,16 +196,44 @@ def test_a_text_mode_browser_counts_as_no_browser(requests_mock, name):
     assert echoed == []
 
 
-@pytest.mark.parametrize(
-    "environ",
-    [{"BROWSER": "w3m"}, {"CI": "false", "BROWSER": "w3m"}, {"CI": "0", "BROWSER": "w3m"}],
-    ids=["browser-picks-it", "ci-false", "ci-zero"],
-)
-def test_a_browser_the_user_picked_starts_the_sign_in_and_names_how_long_it_waits(requests_mock, environ):
-    discovery = requests_mock.get(f"{BASE_URL}/.well-known/litellm-cli-auth", status_code=404)
+@pytest.mark.parametrize("ssh_variable", ["SSH_CONNECTION", "SSH_TTY"])
+def test_an_ssh_session_without_a_display_never_opens_a_browser_on_the_remote_screen(
+    requests_mock: Mocker, ssh_variable: str
+) -> None:
+    def browser_lookup() -> webbrowser.BaseBrowser:
+        raise AssertionError("looked for a browser in an SSH session without a display")
+
     echoed: list[str] = []
 
-    outcome = pkce_browser_sign_in(
+    outcome: Final = pkce_browser_sign_in(
+        BASE_URL, echoed.append, find_browser=browser_lookup, environ={ssh_variable: "203.0.113.7 52144 10.0.0.5 22"}
+    )
+
+    assert outcome == PkceFailure(
+        "this is an SSH session without a display, so a browser would open where you cannot see it"
+    )
+    assert requests_mock.call_count == 0
+    assert echoed == []
+
+
+@pytest.mark.parametrize(
+    "environ",
+    [
+        {"BROWSER": "w3m"},
+        {"CI": "false", "BROWSER": "w3m"},
+        {"CI": "0", "BROWSER": "w3m"},
+        {"SSH_CONNECTION": "203.0.113.7 52144 10.0.0.5 22", "BROWSER": "w3m"},
+        {"SSH_CONNECTION": "203.0.113.7 52144 10.0.0.5 22", "DISPLAY": "localhost:10.0", "BROWSER": "w3m"},
+    ],
+    ids=["browser-picks-it", "ci-false", "ci-zero", "ssh-with-a-browser-forwarder", "ssh-with-x11-forwarding"],
+)
+def test_a_browser_the_user_picked_starts_the_sign_in_and_names_how_long_it_waits(
+    requests_mock: Mocker, environ: dict[str, str]
+) -> None:
+    discovery: Final = requests_mock.get(f"{BASE_URL}/.well-known/litellm-cli-auth", status_code=404)
+    echoed: list[str] = []
+
+    outcome: Final = pkce_browser_sign_in(
         BASE_URL, echoed.append, find_browser=lambda: webbrowser.GenericBrowser("w3m"), environ=environ
     )
 
@@ -228,14 +258,19 @@ def test_a_browser_the_user_picked_starts_the_sign_in_and_names_how_long_it_wait
     ],
 )
 def test_every_proxy_command_group_signs_in_on_a_401_and_reruns_with_the_new_key(
-    requests_mock, secret_vault_factory, command, method, path, body
-):
-    route = requests_mock.register_uri(
+    requests_mock: Mocker,
+    secret_vault_factory: type[FakeSecretVault],
+    command: list[str],
+    method: str,
+    path: str,
+    body: object,
+) -> None:
+    route: Final = requests_mock.register_uri(
         method, f"{BASE_URL}{path}", [{"status_code": 401, "json": REJECTED}, {"status_code": 200, "json": body}]
     )
-    sign_in = FakeBrowserSignIn(_credential())
+    sign_in: Final = FakeBrowserSignIn(_credential())
 
-    result = _lite(command, secret_vault_factory(), sign_in)
+    result: Final = _lite(command, secret_vault_factory(), sign_in)
 
     assert result.exit_code == 0, result.output
     assert sign_in.calls == [BASE_URL]
@@ -243,18 +278,18 @@ def test_every_proxy_command_group_signs_in_on_a_401_and_reruns_with_the_new_key
 
 
 def test_models_import_signs_in_instead_of_reporting_models_it_never_added(
-    requests_mock, secret_vault_factory, tmp_path: Path
-):
-    models_file = tmp_path / "models.yaml"
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault], tmp_path: Path
+) -> None:
+    models_file: Final = tmp_path / "models.yaml"
     models_file.write_text(
         "model_list:\n  - model_name: gpt-5.4-mini\n    litellm_params:\n      model: openai/gpt-5.4-mini\n"
     )
-    route = requests_mock.post(
+    route: Final = requests_mock.post(
         f"{BASE_URL}/model/new", [{"status_code": 401, "json": REJECTED}, {"status_code": 200, "json": {}}]
     )
-    sign_in = FakeBrowserSignIn(_credential())
+    sign_in: Final = FakeBrowserSignIn(_credential())
 
-    result = _lite(["models", "import", str(models_file)], secret_vault_factory(), sign_in)
+    result: Final = _lite(["models", "import", str(models_file)], secret_vault_factory(), sign_in)
 
     assert result.exit_code == 0, result.output
     assert sign_in.calls == [BASE_URL]
@@ -262,20 +297,20 @@ def test_models_import_signs_in_instead_of_reporting_models_it_never_added(
 
 
 def test_a_401_partway_through_models_import_stops_without_signing_in_or_adding_models_twice(
-    requests_mock, secret_vault_factory, tmp_path: Path
-):
-    models_file = tmp_path / "models.yaml"
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault], tmp_path: Path
+) -> None:
+    models_file: Final = tmp_path / "models.yaml"
     models_file.write_text(
         "model_list:\n"
         "  - model_name: gpt-5.4-mini\n    litellm_params:\n      model: openai/gpt-5.4-mini\n"
         "  - model_name: gpt-5.4\n    litellm_params:\n      model: openai/gpt-5.4\n"
     )
-    route = requests_mock.post(
+    route: Final = requests_mock.post(
         f"{BASE_URL}/model/new", [{"status_code": 200, "json": {}}, {"status_code": 401, "json": REJECTED}]
     )
-    sign_in = FakeBrowserSignIn(_credential())
+    sign_in: Final = FakeBrowserSignIn(_credential())
 
-    result = _lite(["models", "import", str(models_file)], secret_vault_factory(), sign_in)
+    result: Final = _lite(["models", "import", str(models_file)], secret_vault_factory(), sign_in)
 
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit)
@@ -284,12 +319,14 @@ def test_a_401_partway_through_models_import_stops_without_signing_in_or_adding_
     assert [request.json()["model_name"] for request in route.request_history] == ["gpt-5.4-mini", "gpt-5.4"]
 
 
-def test_a_401_from_the_keys_import_source_never_signs_in_to_the_destination(requests_mock, secret_vault_factory):
-    source = "https://source.example.com"
+def test_a_401_from_the_keys_import_source_never_signs_in_to_the_destination(
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault]
+) -> None:
+    source: Final = "https://source.example.com"
     requests_mock.get(f"{source}/key/list", status_code=401, json=REJECTED)
-    sign_in = FakeBrowserSignIn(_credential())
+    sign_in: Final = FakeBrowserSignIn(_credential())
 
-    result = _lite(
+    result: Final = _lite(
         ["keys", "import", "--source-base-url", source, "--source-api-key", "sk-source"],
         secret_vault_factory(),
         sign_in,
@@ -306,46 +343,55 @@ def test_a_401_from_the_keys_import_source_never_signs_in_to_the_destination(req
     ids=["flag", "env"],
 )
 def test_a_rejected_explicit_key_fails_cleanly_without_opening_a_browser(
-    requests_mock, secret_vault_factory, monkeypatch: pytest.MonkeyPatch, global_args, env
-):
+    requests_mock: Mocker,
+    secret_vault_factory: type[FakeSecretVault],
+    monkeypatch: pytest.MonkeyPatch,
+    global_args: list[str],
+    env: dict[str, str],
+) -> None:
     for name, value in env.items():
         monkeypatch.setenv(name, value)
-    route = requests_mock.post(f"{BASE_URL}/key/generate", status_code=401, json=REJECTED)
-    _key_check(requests_mock, 401)
-    vault = secret_vault_factory()
-    sign_in = FakeBrowserSignIn(_credential())
+    route: Final = requests_mock.post(f"{BASE_URL}/key/generate", status_code=401, json=REJECTED)
+    vault: Final = secret_vault_factory()
+    sign_in: Final = FakeBrowserSignIn(_credential())
 
-    result = _lite(["keys", "generate"], vault, sign_in, global_args)
+    result: Final = _lite(["keys", "generate"], vault, sign_in, global_args)
 
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit)
-    assert "rejected the API key from --api-key or LITELLM_PROXY_API_KEY" in result.stderr
+    assert "with HTTP 401 for the API key from --api-key or LITELLM_PROXY_API_KEY" in result.stderr
+    assert "has the role this command needs" in result.stderr
     assert sign_in.calls == []
     assert _bearers(route) == ["Bearer sk-explicit"]
+    assert [request.path for request in requests_mock.request_history] == ["/key/generate"]
     assert vault.writes == []
 
 
-def test_a_failed_sign_in_names_the_reason_and_points_at_lite_login(requests_mock, secret_vault_factory):
-    route = requests_mock.post(f"{BASE_URL}/key/generate", status_code=401, json=REJECTED)
-    vault = secret_vault_factory()
-    sign_in = FakeBrowserSignIn(PkceFailure("timed out waiting for the browser sign-in to finish"))
+def test_a_failed_sign_in_names_the_reason_and_points_at_lite_login(
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault]
+) -> None:
+    route: Final = requests_mock.post(f"{BASE_URL}/key/generate", status_code=401, json=REJECTED)
+    vault: Final = secret_vault_factory()
+    sign_in: Final = FakeBrowserSignIn(PkceFailure("timed out waiting for the browser sign-in to finish"))
 
-    result = _lite(["keys", "generate"], vault, sign_in)
+    result: Final = _lite(["keys", "generate"], vault, sign_in)
 
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit)
     assert "timed out waiting for the browser sign-in to finish" in result.stderr
-    assert "Run `lite login` from a terminal, or set LITELLM_PROXY_API_KEY." in result.stderr
+    assert "Run `lite login --pkce` from a terminal on a machine with a browser" in result.stderr
     assert sign_in.calls == [BASE_URL]
     assert route.call_count == 1
     assert get_stored_api_key(BASE_URL, vault=vault) is None
 
 
-def test_a_signed_in_key_the_proxy_also_rejects_is_not_followed_by_another_sign_in(requests_mock, secret_vault_factory):
-    route = requests_mock.post(f"{BASE_URL}/key/generate", status_code=401, json=REJECTED)
-    sign_in = FakeBrowserSignIn(_credential())
+def test_a_signed_in_key_the_proxy_also_rejects_is_not_followed_by_another_sign_in(
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault]
+) -> None:
+    route: Final = requests_mock.post(f"{BASE_URL}/key/generate", status_code=401, json=REJECTED)
+    sign_in: Final = FakeBrowserSignIn(_credential())
 
-    result = _lite(["keys", "generate"], secret_vault_factory(), sign_in)
+    result: Final = _lite(["keys", "generate"], secret_vault_factory(), sign_in)
 
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit)
@@ -363,17 +409,19 @@ def _rejected_while_a_sibling_signs_in(vault):
     return respond
 
 
-def test_a_key_a_sibling_process_stored_meanwhile_is_used_before_any_browser(requests_mock, secret_vault_factory):
-    vault = secret_vault_factory()
+def test_a_key_a_sibling_process_stored_meanwhile_is_used_before_any_browser(
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault]
+) -> None:
+    vault: Final = secret_vault_factory()
     save_token(_classic_login("sk-stale"), vault=vault)
     _key_check(requests_mock, 401)
-    route = requests_mock.post(
+    route: Final = requests_mock.post(
         f"{BASE_URL}/key/generate",
         [{"json": _rejected_while_a_sibling_signs_in(vault)}, {"status_code": 200, "json": GENERATED}],
     )
-    sign_in = FakeBrowserSignIn(_credential())
+    sign_in: Final = FakeBrowserSignIn(_credential())
 
-    result = _lite(["keys", "generate"], vault, sign_in)
+    result: Final = _lite(["keys", "generate"], vault, sign_in)
 
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout) == GENERATED
@@ -381,11 +429,13 @@ def test_a_key_a_sibling_process_stored_meanwhile_is_used_before_any_browser(req
     assert _bearers(route) == ["Bearer sk-stale", "Bearer sk-sibling"]
 
 
-def test_a_sibling_key_the_proxy_also_rejects_falls_through_to_one_sign_in(requests_mock, secret_vault_factory):
-    vault = secret_vault_factory()
+def test_a_sibling_key_the_proxy_also_rejects_falls_through_to_one_sign_in(
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault]
+) -> None:
+    vault: Final = secret_vault_factory()
     save_token(_classic_login("sk-stale"), vault=vault)
     _key_check(requests_mock, 401)
-    route = requests_mock.post(
+    route: Final = requests_mock.post(
         f"{BASE_URL}/key/generate",
         [
             {"json": _rejected_while_a_sibling_signs_in(vault)},
@@ -393,9 +443,9 @@ def test_a_sibling_key_the_proxy_also_rejects_falls_through_to_one_sign_in(reque
             {"status_code": 200, "json": GENERATED},
         ],
     )
-    sign_in = FakeBrowserSignIn(_credential())
+    sign_in: Final = FakeBrowserSignIn(_credential())
 
-    result = _lite(["keys", "generate"], vault, sign_in)
+    result: Final = _lite(["keys", "generate"], vault, sign_in)
 
     assert result.exit_code == 0, result.output
     assert sign_in.calls == [BASE_URL]
@@ -403,56 +453,73 @@ def test_a_sibling_key_the_proxy_also_rejects_falls_through_to_one_sign_in(reque
     assert get_stored_api_key(BASE_URL, vault=vault) == SIGNED_IN_KEY
 
 
-@pytest.mark.parametrize(
-    ("explicit", "accepted"), [(False, "your stored login"), (True, "this API key")], ids=["stored", "explicit"]
-)
-def test_a_401_for_a_key_the_proxy_accepts_elsewhere_reports_a_missing_role_without_a_browser(
-    requests_mock, secret_vault_factory, explicit, accepted
-):
-    vault = secret_vault_factory()
+def test_a_stored_login_the_proxy_accepts_but_a_command_refuses_reports_a_missing_role_without_a_browser(
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault]
+) -> None:
+    vault: Final = secret_vault_factory()
     save_token(_classic_login("sk-member"), vault=vault)
-    route = requests_mock.get(f"{BASE_URL}/credentials", status_code=401, json=REJECTED)
-    key_check = _key_check(requests_mock, 200)
-    sign_in = FakeBrowserSignIn(_credential())
-    writes_before = list(vault.writes)
+    requests_mock.get(f"{BASE_URL}/v1/models", status_code=200, json={"data": []})
+    route: Final = requests_mock.get(f"{BASE_URL}/credentials", status_code=401, json=REJECTED)
+    key_check: Final = _key_check(requests_mock, 200)
+    sign_in: Final = FakeBrowserSignIn(_credential())
+    writes_before: Final = list(vault.writes)
 
-    result = _lite(["credentials", "list"], vault, sign_in, ["--api-key", "sk-member"] if explicit else [])
+    result: Final = _lite(["credentials", "list"], vault, sign_in)
 
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit)
-    assert f"accepts {accepted} but refused `cli credentials list` with HTTP 401" in result.stderr
+    assert "accepts your stored login but refused `cli credentials list` with HTTP 401" in result.stderr
     assert "Set LITELLM_PROXY_API_KEY to a key that has it" in result.stderr
     assert sign_in.calls == []
     assert route.call_count == 1
-    assert _bearers(key_check) == ["Bearer sk-member", None]
+    assert _bearers(key_check) == ["Bearer sk-member"]
     assert vault.writes == writes_before
     assert "sk-member" not in result.output
 
 
-def test_a_public_models_route_never_passes_a_rejected_stored_login_off_as_a_missing_role(
-    requests_mock, secret_vault_factory
-):
-    vault = secret_vault_factory()
-    save_token(_classic_login("sk-stale"), vault=vault)
-    _key_check(requests_mock, 200, public=True)
-    route = requests_mock.get(
-        f"{BASE_URL}/credentials",
-        [{"status_code": 401, "json": REJECTED}, {"status_code": 200, "json": {"credentials": []}}],
-    )
-    sign_in = FakeBrowserSignIn(_credential())
+class SiblingSignsInWhileThisCommandWaits:
+    def __init__(self, vault) -> None:
+        self.vault = vault
+        self.held = False
 
-    result = _lite(["credentials", "list", "--format", "json"], vault, sign_in)
+    def __call__(self) -> "SiblingSignsInWhileThisCommandWaits":
+        return self
+
+    def __enter__(self) -> None:
+        save_token(_classic_login("sk-sibling"), vault=self.vault)
+        self.held = True
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.held = False
+
+
+def test_a_command_that_waits_for_another_commands_sign_in_uses_its_login_instead_of_a_second_browser(
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault]
+) -> None:
+    vault: Final = secret_vault_factory()
+    route: Final = requests_mock.post(
+        f"{BASE_URL}/key/generate", [{"status_code": 401, "json": REJECTED}, {"status_code": 200, "json": GENERATED}]
+    )
+    sign_in: Final = FakeBrowserSignIn(_credential())
+    sibling: Final = SiblingSignsInWhileThisCommandWaits(vault)
+
+    result: Final = CliRunner().invoke(
+        cli,
+        ["--base-url", BASE_URL, "keys", "generate"],
+        obj={"secret_vault": vault, "browser_sign_in": sign_in, "sign_in_lock": sibling},
+    )
 
     assert result.exit_code == 0, result.output
-    assert sign_in.calls == [BASE_URL]
-    assert _bearers(route) == ["Bearer sk-stale", f"Bearer {SIGNED_IN_KEY}"]
-    assert get_stored_api_key(BASE_URL, vault=vault) == SIGNED_IN_KEY
+    assert json.loads(result.stdout) == GENERATED
+    assert sign_in.calls == []
+    assert _bearers(route) == [None, "Bearer sk-sibling"]
+    assert sibling.held is False
 
 
-def test_help_never_signs_in(requests_mock, secret_vault_factory):
-    sign_in = FakeBrowserSignIn(_credential())
+def test_help_never_signs_in(requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault]) -> None:
+    sign_in: Final = FakeBrowserSignIn(_credential())
 
-    result = _lite(["keys", "generate", "--help"], secret_vault_factory(), sign_in)
+    result: Final = _lite(["keys", "generate", "--help"], secret_vault_factory(), sign_in)
 
     assert result.exit_code == 0
     assert "Generate a new API key" in result.stdout
@@ -461,11 +528,13 @@ def test_help_never_signs_in(requests_mock, secret_vault_factory):
 
 
 @pytest.mark.parametrize("status", [403, 500])
-def test_an_error_other_than_401_never_signs_in(requests_mock, secret_vault_factory, status):
-    route = requests_mock.post(f"{BASE_URL}/key/generate", status_code=status, json={"error": "refused"})
-    sign_in = FakeBrowserSignIn(_credential())
+def test_an_error_other_than_401_never_signs_in(
+    requests_mock: Mocker, secret_vault_factory: type[FakeSecretVault], status: int
+) -> None:
+    route: Final = requests_mock.post(f"{BASE_URL}/key/generate", status_code=status, json={"error": "refused"})
+    sign_in: Final = FakeBrowserSignIn(_credential())
 
-    result = _lite(["keys", "generate"], secret_vault_factory(), sign_in)
+    result: Final = _lite(["keys", "generate"], secret_vault_factory(), sign_in)
 
     assert result.exit_code == 1
     assert f"Error: HTTP {status}" in result.stderr

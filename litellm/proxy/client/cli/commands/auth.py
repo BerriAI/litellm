@@ -53,6 +53,7 @@ from .claude_settings import (
     settings_file_owners,
 )
 from .pkce_login import (
+    LOGIN_TIMEOUT_SECONDS,
     Http,
     PkceFailure,
     RevocationUnavailable,
@@ -1090,8 +1091,9 @@ def whoami(ctx: click.Context):
 
     if not token_data:
         click.echo(
-            "Not authenticated. Run the command you need, such as 'lite keys generate', "
-            "and lite opens your browser to sign in. To sign in first from a terminal, run 'lite login'."
+            "Not authenticated. Run the command you need, such as 'lite keys generate', and lite opens your browser "
+            f"to sign in and waits up to {LOGIN_TIMEOUT_SECONDS // 60} minutes for you to approve it. "
+            "To sign in first from a terminal, run 'lite login --pkce'."
         )
         return
 
