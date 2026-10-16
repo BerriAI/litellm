@@ -489,10 +489,30 @@ def _new_router_budget_limiter(
     budget_limiter.redis_increment_operation_queue = (
         list(redis_increment_operation_queue) if redis_increment_operation_queue is not None else []
     )
+    budget_limiter._increments_awaiting_redis = {}
     budget_limiter._redis_increment_queue_lock = queue_lock if queue_lock is not None else asyncio.Lock()
     budget_limiter._redis_increment_flush_lock = asyncio.Lock()
     budget_limiter._detached_increment_operations = None
     return budget_limiter
+
+
+@pytest.mark.asyncio
+async def test_redis_attached_after_traffic_receives_the_spend_recorded_before_it(disable_budget_sync) -> None:
+    dual_cache: Final = DualCache()
+    budget_limiter: Final = RouterBudgetLimiting(
+        dual_cache=dual_cache,
+        provider_budget_config={"openai": {"budget_limit": 500.0, "time_period": "1d"}},
+    )
+    for _ in range(5):
+        await budget_limiter._increment_spend_in_current_window(spend_key=_SPEND_KEY, response_cost=10.0, ttl=86400)
+
+    redis_cache: Final = _MockRedisCache(initial_values={})
+    dual_cache.redis_cache = redis_cache
+    await budget_limiter._increment_spend_in_current_window(spend_key=_SPEND_KEY, response_cost=10.0, ttl=86400)
+    await budget_limiter._sync_in_memory_spend_with_redis()
+
+    assert redis_cache.values[_SPEND_KEY] == 60.0
+    assert await dual_cache.in_memory_cache.async_get_cache(_SPEND_KEY) == 60.0
 
 
 @pytest.mark.asyncio

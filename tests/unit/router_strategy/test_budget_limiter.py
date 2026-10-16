@@ -366,17 +366,20 @@ async def test_new_budget_window_sets_spend_and_start_time() -> None:
 
 
 @pytest.mark.asyncio
-async def test_redis_less_limiter_tracks_spend_without_queueing_redis_increments(disable_budget_sync) -> None:
-    """With no Redis there is nothing to flush to, so queued increments would be retained for the life of the process."""
+async def test_redis_less_limiter_keeps_one_merged_increment_per_key(disable_budget_sync) -> None:
+    """With no Redis there is nothing to flush to, so the queue must not grow with every request."""
     limiter: Final = RouterBudgetLimiting(
         dual_cache=DualCache(),
-        provider_budget_config={"openai": {"budget_limit": 10.0, "time_period": "1d"}},
+        provider_budget_config={"openai": {"budget_limit": 100.0, "time_period": "1d"}},
     )
 
-    for _ in range(3):
+    for _ in range(50):
         await _log_success(limiter, _success_kwargs(provider_in_litellm_params="openai", provider_in_payload="openai"))
 
-    assert await limiter.dual_cache.async_get_cache("provider_spend:openai:1d") == pytest.approx(0.75)
+    assert await limiter.dual_cache.async_get_cache("provider_spend:openai:1d") == pytest.approx(12.5)
+    assert [(op["key"], op["increment_value"]) for op in limiter._increments_awaiting_redis.values()] == [
+        ("provider_spend:openai:1d", pytest.approx(12.5))
+    ]
     assert limiter.redis_increment_operation_queue == []
 
 
