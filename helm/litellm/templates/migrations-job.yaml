@@ -15,8 +15,11 @@ metadata:
   name: {{ include "litellm.fullname" . }}-migrations
   labels:
     {{- include "litellm.commonLabels" . | nindent 4 }}
+    {{- with .Values.migrationJob.jobLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
     app.kubernetes.io/component: migrations
-  {{- if or .Values.migrationJob.hooks.helm.enabled .Values.migrationJob.hooks.argocd.enabled }}
+  {{- if or .Values.migrationJob.hooks.helm.enabled .Values.migrationJob.hooks.argocd.enabled .Values.migrationJob.jobAnnotations }}
   annotations:
     {{- if .Values.migrationJob.hooks.helm.enabled }}
     helm.sh/hook: pre-install,pre-upgrade
@@ -26,6 +29,9 @@ metadata:
     {{- if .Values.migrationJob.hooks.argocd.enabled }}
     argocd.argoproj.io/hook: PreSync
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    {{- end }}
+    {{- with .Values.migrationJob.jobAnnotations }}
+    {{- toYaml . | nindent 4 }}
     {{- end }}
   {{- end }}
 spec:

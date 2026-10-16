@@ -5,7 +5,14 @@ metadata:
   name: {{ include "litellm.gateway.fullname" . }}
   labels:
     {{- include "litellm.commonLabels" . | nindent 4 }}
+    {{- with .Values.gateway.deploymentLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
     app.kubernetes.io/component: gateway
+  {{- with .Values.gateway.deploymentAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   {{- if and (not .Values.gateway.hpa.enabled) (not (kindIs "invalid" .Values.gateway.replicaCount)) }}
   replicas: {{ .Values.gateway.replicaCount }}

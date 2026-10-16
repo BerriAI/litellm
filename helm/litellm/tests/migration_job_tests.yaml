@@ -254,3 +254,35 @@ tests:
           path: spec.template.spec.nodeSelector
       - isNull:
           path: spec.template.spec.tolerations
+
+  - it: applies commonLabels, jobLabels and jobAnnotations to the Job
+    set:
+      commonLabels:
+        team: platform
+      migrationJob.jobLabels:
+        custom/label: job-label
+      migrationJob.jobAnnotations:
+        custom/annotation: job-annotation
+    asserts:
+      - isSubset:
+          path: metadata.labels
+          content:
+            team: platform
+            custom/label: job-label
+            app.kubernetes.io/component: migrations
+      - equal:
+          path: metadata.annotations["custom/annotation"]
+          value: job-annotation
+
+  - it: keeps hook annotations alongside custom jobAnnotations
+    set:
+      migrationJob.hooks.helm.enabled: true
+      migrationJob.jobAnnotations:
+        custom/annotation: job-annotation
+    asserts:
+      - equal:
+          path: metadata.annotations["custom/annotation"]
+          value: job-annotation
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-install,pre-upgrade
