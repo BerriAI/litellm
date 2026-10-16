@@ -298,6 +298,10 @@ def _requested_output_format(data: Mapping[str, JsonValue]) -> JsonValue:
     return output_config.get("format")
 
 
+def _requested_count_options(data: Mapping[str, JsonValue]) -> tuple[JsonValue, JsonValue]:
+    return _requested_output_format(data), data.get("drop_params")
+
+
 @router.post(
     "/v1/messages/count_tokens",
     tags=["[beta] Anthropic Messages Token Counting"],
@@ -354,11 +358,13 @@ async def count_tokens(
             system=data.get("system"),
         )
 
+        output_format, drop_params = _requested_count_options(data)
         token_response: Final = await count_request_tokens(
             request=token_request,
             call_endpoint=True,
             messages_format="anthropic",
-            output_format=_requested_output_format(data),
+            output_format=output_format,
+            drop_params=drop_params,
         )
     except HTTPException:
         raise

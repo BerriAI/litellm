@@ -392,11 +392,9 @@ async def test_undecodable_count_body_becomes_a_500_error_response_carrying_the_
 
 
 MALFORMED_TEXT_BLOCKS: Final = [
-    pytest.param({"type": "text", "text": None}, "Input should be a valid string", id="null"),
-    pytest.param({"type": "text", "text": 7}, "Input should be a valid string", id="number"),
-    pytest.param({"type": "text"}, "Field required", id="missing"),
+    pytest.param({"type": "text", "text": None}, id="null"),
+    pytest.param({"type": "text", "text": 7}, id="number"),
 ]
-MALFORMED_TEXT_BLOCKS_ONLY: Final = [pytest.param(case.values[0], id=case.id) for case in MALFORMED_TEXT_BLOCKS]
 
 
 def _tool_result_turns_with(text_block: Mapping[str, object]) -> list[dict[str, object]]:
@@ -437,9 +435,9 @@ async def _count_tool_result_turns(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("text_block", "error"), MALFORMED_TEXT_BLOCKS)
+@pytest.mark.parametrize("text_block", MALFORMED_TEXT_BLOCKS)
 async def test_anthropic_format_malformed_tool_result_text_answers_400_without_calling_openai(
-    monkeypatch: pytest.MonkeyPatch, text_block: Mapping[str, object], error: str
+    monkeypatch: pytest.MonkeyPatch, text_block: Mapping[str, object]
 ) -> None:
     result, route = await _count_tool_result_turns(monkeypatch, text_block, {"api_key": "sk-test"})
 
@@ -448,12 +446,12 @@ async def test_anthropic_format_malformed_tool_result_text_answers_400_without_c
     assert (result.error, result.status_code, result.error_message) == (
         True,
         400,
-        f"tool_result toolu_log content.1.text: {error}",
+        "tool_result toolu_log content.1.text: Input should be a valid string",
     )
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("text_block", MALFORMED_TEXT_BLOCKS_ONLY)
+@pytest.mark.parametrize("text_block", MALFORMED_TEXT_BLOCKS)
 async def test_anthropic_format_drop_params_counts_the_tool_result_without_the_malformed_text(
     monkeypatch: pytest.MonkeyPatch, text_block: Mapping[str, object]
 ) -> None:
@@ -465,3 +463,15 @@ async def test_anthropic_format_drop_params_counts_the_tool_result_without_the_m
     assert (result.error, result.total_tokens) == (False, 9)
     sent: Final = json.loads(route.calls.last.request.content)
     assert {"type": "function_call_output", "call_id": "toolu_log", "output": "build ok\ndone"} in sent["input"]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_format_tool_result_text_block_without_text_still_counts_as_empty_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, route = await _count_tool_result_turns(monkeypatch, {"type": "text"}, {"api_key": "sk-test"})
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 9)
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert {"type": "function_call_output", "call_id": "toolu_log", "output": "build ok\n\ndone"} in sent["input"]

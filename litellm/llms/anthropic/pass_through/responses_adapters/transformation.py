@@ -231,22 +231,24 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         return _OBJECTS.validate_python(value) if isinstance(value, list) else ()
 
     @staticmethod
-    def _text_block_error(block: object) -> str | None:
+    def _has_non_string_text(block: object) -> bool:
         match block:
             case {"type": "text", "text": str()}:
-                return None
+                return False
             case {"type": "text", "text": object()}:
-                return "Input should be a valid string"
-            case {"type": "text"}:
-                return "Field required"
+                return True
             case _:
-                return None
+                return False
 
     @staticmethod
     def _tool_result_text_part(block: object) -> str | None:
         match block:
             case {"type": "text", "text": str(text)}:
                 return text
+            case {"type": "text", "text": object()}:
+                return None
+            case {"type": "text"}:
+                return ""
             case _:
                 return None
 
@@ -264,9 +266,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         match block:
             case {"type": "tool_result", "tool_use_id": object() as tool_use_id, "content": object() as content}:
                 return (
-                    f"tool_result {tool_use_id} content.{index}.text: {error}"
-                    for index, error in enumerate(map(cls._text_block_error, cls._list_items(content)))
-                    if error is not None
+                    f"tool_result {tool_use_id} content.{index}.text: Input should be a valid string"
+                    for index, text_block in enumerate(cls._list_items(content))
+                    if cls._has_non_string_text(text_block)
                 )
             case _:
                 return iter(())
@@ -274,7 +276,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     @classmethod
     def malformed_tool_result_text_error(cls, messages: Iterable[Mapping[str, object]]) -> str | None:
         blocks: Final = chain.from_iterable(map(cls._user_content_blocks, messages))
-        return "; ".join(chain.from_iterable(map(cls._tool_result_text_errors, blocks))) or None
+        return next(chain.from_iterable(map(cls._tool_result_text_errors, blocks)), None)
 
     @staticmethod
     def _translate_midturn_system_content_to_responses(

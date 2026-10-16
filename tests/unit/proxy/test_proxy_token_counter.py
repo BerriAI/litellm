@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import respx
 from dotenv import load_dotenv
 from pydantic import JsonValue
 
@@ -169,7 +170,7 @@ async def test_anthropic_messages_count_tokens_endpoint():
     anthropic_endpoints.read_request_body = mock_read_request_body
 
     # Mock the internal token_counter function to return a controlled response
-    async def mock_token_counter(request, call_endpoint=False, messages_format="openai", output_format=None):
+    async def mock_token_counter(request, call_endpoint=False, messages_format="openai", output_format=None, drop_params=None):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "claude-3-sonnet-20240229"
         assert request.messages == [{"role": "user", "content": "Hello Claude!"}]
@@ -241,7 +242,7 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
     anthropic_endpoints.read_request_body = mock_read_request_body
 
     # Mock the internal token_counter function to return a controlled response
-    async def mock_token_counter(request, call_endpoint=True, messages_format="openai", output_format=None):
+    async def mock_token_counter(request, call_endpoint=True, messages_format="openai", output_format=None, drop_params=None):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "gpt-4"
         assert request.messages == [{"role": "user", "content": "Hello GPT!"}]
@@ -1055,7 +1056,7 @@ async def test_anthropic_endpoint_returns_anthropic_error_format():
     original_token_counter = proxy_server.count_request_tokens
 
     # Mock token_counter to raise ProxyException with Bedrock-style error
-    async def mock_token_counter_error(request, call_endpoint=False, messages_format="openai", output_format=None):
+    async def mock_token_counter_error(request, call_endpoint=False, messages_format="openai", output_format=None, drop_params=None):
         raise ProxyException(
             message='{"detail":{"message":"Input is too long for requested model."}}',
             type="token_counting_error",
@@ -1105,7 +1106,7 @@ async def test_anthropic_endpoint_403_permission_error_format():
     original_token_counter = proxy_server.count_request_tokens
 
     # Mock token_counter to raise ProxyException with 403 error
-    async def mock_token_counter_error(request, call_endpoint=False, messages_format="openai", output_format=None):
+    async def mock_token_counter_error(request, call_endpoint=False, messages_format="openai", output_format=None, drop_params=None):
         raise ProxyException(
             message='{"Message":"Bearer Token has expired"}',
             type="token_counting_error",
@@ -1155,7 +1156,7 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
     original_token_counter = proxy_server.count_request_tokens
 
     # Mock token_counter to raise ProxyException with 429 error
-    async def mock_token_counter_error(request, call_endpoint=False, messages_format="openai", output_format=None):
+    async def mock_token_counter_error(request, call_endpoint=False, messages_format="openai", output_format=None, drop_params=None):
         raise ProxyException(
             message="Rate limit exceeded",
             type="token_counting_error",
@@ -1177,3 +1178,53 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
     finally:
         anthropic_endpoints.read_request_body = original_read_request_body
         proxy_server.count_request_tokens = original_token_counter
+
+
+@pytest.mark.asyncio
+async def test_anthropic_count_tokens_drops_a_malformed_tool_result_text_when_the_body_sets_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
+    import litellm.proxy.proxy_server as proxy_server
+
+    body: Final = {
+        "model": "gpt-tool-result",
+        "drop_params": True,
+        "messages": [
+            {"role": "user", "content": "run the build"},
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "toolu_log", "name": "bash", "input": {"cmd": "make"}}],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_log",
+                        "content": [{"type": "text", "text": "build ok"}, {"type": "text", "text": None}],
+                    }
+                ],
+            },
+        ],
+    }
+    router: Final = Router(
+        model_list=[
+            {"model_name": "gpt-tool-result", "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-test"}}
+        ]
+    )
+    request: Final = MagicMock(spec=Request)
+    request.headers = {}
+    monkeypatch.setattr(anthropic_endpoints, "read_request_body", AsyncMock(return_value=body))
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    with respx.mock:
+        route: Final = respx.post("https://api.openai.com/v1/responses/input_tokens").mock(
+            return_value=httpx.Response(200, json={"input_tokens": 9})
+        )
+        response: Final = await anthropic_count_tokens(request, MagicMock())
+
+    assert response == {"input_tokens": 9}
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert {"type": "function_call_output", "call_id": "toolu_log", "output": "build ok"} in sent["input"]

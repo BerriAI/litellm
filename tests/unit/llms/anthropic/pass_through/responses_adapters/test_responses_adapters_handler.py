@@ -556,11 +556,9 @@ def test_client_cache_control_changes_nothing_for_a_deployment_that_does_not_rea
 
 
 MALFORMED_TEXT_BLOCKS: Final = [
-    pytest.param({"type": "text", "text": None}, "Input should be a valid string", id="null"),
-    pytest.param({"type": "text", "text": 7}, "Input should be a valid string", id="number"),
-    pytest.param({"type": "text"}, "Field required", id="missing"),
+    pytest.param({"type": "text", "text": None}, id="null"),
+    pytest.param({"type": "text", "text": 7}, id="number"),
 ]
-MALFORMED_TEXT_BLOCKS_ONLY: Final = [pytest.param(case.values[0], id=case.id) for case in MALFORMED_TEXT_BLOCKS]
 
 
 def _tool_result_turn_with(text_block: Mapping[str, object]) -> list[dict[str, object]]:
@@ -578,8 +576,8 @@ def _tool_result_turn_with(text_block: Mapping[str, object]) -> list[dict[str, o
     ]
 
 
-@pytest.mark.parametrize(("text_block", "error"), MALFORMED_TEXT_BLOCKS)
-def test_malformed_tool_result_text_answers_400_naming_the_block(text_block: Mapping[str, object], error: str) -> None:
+@pytest.mark.parametrize("text_block", MALFORMED_TEXT_BLOCKS)
+def test_malformed_tool_result_text_answers_400_naming_the_block(text_block: Mapping[str, object]) -> None:
     with pytest.raises(litellm.BadRequestError) as rejected:
         _build_responses_kwargs(
             model="openai/gpt-5.6",
@@ -589,10 +587,33 @@ def test_malformed_tool_result_text_answers_400_naming_the_block(text_block: Map
         )
 
     assert rejected.value.status_code == 400
-    assert f"tool_result toolu_log content.1.text: {error}" in rejected.value.message
+    assert "tool_result toolu_log content.1.text: Input should be a valid string" in rejected.value.message
 
 
-@pytest.mark.parametrize("text_block", MALFORMED_TEXT_BLOCKS_ONLY)
+def test_many_malformed_tool_result_texts_answer_one_bounded_error() -> None:
+    tool_use_id: Final = "toolu_" + "x" * 4096
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content": [{"type": "text", "text": None}] * 2048,
+                }
+            ],
+        }
+    ]
+
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        _build_responses_kwargs(model="openai/gpt-5.6", extra_kwargs=OPENAI_API, max_tokens=1024, messages=messages)
+
+    assert rejected.value.status_code == 400
+    assert f"tool_result {tool_use_id} content.0.text: Input should be a valid string" in rejected.value.message
+    assert rejected.value.message.count(tool_use_id) == 1
+
+
+@pytest.mark.parametrize("text_block", MALFORMED_TEXT_BLOCKS)
 def test_drop_params_drops_a_malformed_tool_result_text(text_block: Mapping[str, object]) -> None:
     responses_kwargs: Final = _build_responses_kwargs(
         model="openai/gpt-5.6",
@@ -603,4 +624,17 @@ def test_drop_params_drops_a_malformed_tool_result_text(text_block: Mapping[str,
 
     assert responses_kwargs["input"] == [
         {"type": "function_call_output", "call_id": "toolu_log", "output": "build ok\ndone"},
+    ]
+
+
+def test_tool_result_text_block_without_text_still_reaches_the_model_as_empty_text() -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        model="openai/gpt-5.6",
+        extra_kwargs=OPENAI_API,
+        max_tokens=1024,
+        messages=_tool_result_turn_with({"type": "text"}),
+    )
+
+    assert responses_kwargs["input"] == [
+        {"type": "function_call_output", "call_id": "toolu_log", "output": "build ok\n\ndone"},
     ]

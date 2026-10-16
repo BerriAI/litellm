@@ -14413,6 +14413,19 @@ def _get_provider_token_counter(
     return None, None, None
 
 
+_DEPLOYMENT_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
+
+
+def _deployment_with_request_drop_params(
+    deployment: dict[str, object] | None,  # mutable-ok: BaseTokenCounter.count_tokens takes a dict deployment
+    drop_params: JsonValue,
+) -> dict[str, object] | None:  # mutable-ok: BaseTokenCounter.count_tokens takes a dict deployment
+    if deployment is None or drop_params is None:
+        return deployment
+    litellm_params: Final = _DEPLOYMENT_LITELLM_PARAMS.validate_python(deployment.get("litellm_params") or {})
+    return {**deployment, "litellm_params": {**litellm_params, "drop_params": drop_params}}
+
+
 async def _try_provider_token_count(
     provider_counter: "BaseTokenCounter",
     custom_llm_provider: str | None,
@@ -14490,6 +14503,7 @@ async def count_request_tokens(
     call_endpoint: bool = False,
     messages_format: TokenCountMessagesFormat = "openai",
     output_format: JsonValue = None,
+    drop_params: JsonValue = None,
 ) -> TokenCountResponse:
     prompt: Final = request.prompt
     messages: Final = request.messages
@@ -14545,7 +14559,7 @@ async def count_request_tokens(
             model_to_use=model_to_use,
             messages=messages,
             contents=contents,
-            deployment=deployment,
+            deployment=_deployment_with_request_drop_params(deployment, drop_params),
             request_model=request.model,
             tools=tools,
             system=system,
