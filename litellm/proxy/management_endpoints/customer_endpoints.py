@@ -60,7 +60,6 @@ from litellm.types.proxy.management_endpoints.customer_endpoints import (
 
 _RowT_co: Final = TypeVar("_RowT_co", covariant=True)
 _STR_OBJECT_DICT: Final = TypeAdapter(dict[str, object])
-_STRING_IDS: Final = TypeAdapter(tuple[str, ...])
 _CLEARABLE_LIST_FIELDS: Final = frozenset({"models"})
 
 
@@ -268,27 +267,26 @@ async def unblock_user(data: BlockUsers) -> UnblockUsersResponse:
     configured_hook: Final = _configured_blocked_user_hook()
 
     requested_ids: Final = frozenset(data.user_ids)
-    file_ids: Final = (
-        _STRING_IDS.validate_python(configured_hook.blocked_user_list or ())
-        if isinstance(litellm.blocked_user_list, str)
-        else ()
-    )
-    if requested_ids.intersection(file_ids):
+    if isinstance(litellm.blocked_user_list, str) and requested_ids.intersection(
+        configured_hook.blocked_user_list or ()
+    ):
         raise HTTPException(
             status_code=400,
             detail={
                 "error": "These customers are blocked by a file. Update the file and restart the proxy to unblock them."
             },
         )
-    table: Final = _typed_table(EndUserRepository(prisma_client)) if prisma_client is not None else None
-    if table is not None:
-        await update_many_in(table, "user_id", data.user_ids, data={"blocked": False}, atomicity="per_chunk_ok")
-    configured_ids: Final = (
-        file_ids
-        if isinstance(litellm.blocked_user_list, str)
-        else _STRING_IDS.validate_python(litellm.blocked_user_list or ())
+    if prisma_client is not None:
+        await update_many_in(
+            _typed_table(EndUserRepository(prisma_client)),
+            "user_id",
+            data.user_ids,
+            data={"blocked": False},
+            atomicity="per_chunk_ok",
+        )
+    remaining_legacy_ids: Final = tuple(
+        user_id for user_id in configured_hook.blocked_user_list or () if user_id not in requested_ids
     )
-    remaining_legacy_ids: Final = tuple(user_id for user_id in configured_ids if user_id not in requested_ids)
     if isinstance(litellm.blocked_user_list, list):
         litellm.blocked_user_list[:] = remaining_legacy_ids
     await _evict_end_user_cache_keys(_end_user_cache_keys(data.user_ids))
