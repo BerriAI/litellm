@@ -4,6 +4,8 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Final, Protocol, cast
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.batch_utils import batch_cost_is_final
@@ -87,6 +89,9 @@ _CAPTURED_IDENTITY_CALL_TYPES: Final[frozenset[str]] = frozenset(
 )
 
 
+_OBJECT_MAPPING: Final = TypeAdapter(ObjectMapping)
+
+
 def _proxy_stamped_used_client_oauth_token(
     request_data: Mapping[str, object], request_route: str | None
 ) -> bool | None:
@@ -110,6 +115,18 @@ def _failure_snapshot_with_guardrails_recorded_after_it(
     ):
         return None
     return {**failure_snapshot, "guardrail_information": recorded_guardrail_information}
+
+
+def _failure_metadata_lifted_from_litellm_metadata(
+    litellm_metadata: ObjectMapping, *, guardrail_info_already_set: bool
+) -> ObjectMapping:
+    guardrail_info: Final = litellm_metadata.get("standard_logging_guardrail_information")
+    request_headers: Final = litellm_metadata.get("headers")
+    keeps_guardrail_info: Final = guardrail_info is not None and not guardrail_info_already_set
+    return {
+        **({"standard_logging_guardrail_information": guardrail_info} if keeps_guardrail_info else {}),
+        **({"headers": request_headers} if isinstance(request_headers, dict) else {}),
+    }
 
 
 def _proxy_spend_writer() -> DBSpendUpdateWriter:
@@ -226,13 +243,14 @@ class _ProxyDBLogger(CustomLogger):
         existing_metadata.update(_metadata)
 
         litellm_metadata_bucket: Final = request_data.get("litellm_metadata")
-        if (
-            isinstance(litellm_metadata_bucket, dict)
-            and "standard_logging_guardrail_information" not in existing_metadata
-        ):
-            guardrail_info: Final = litellm_metadata_bucket.get("standard_logging_guardrail_information")
-            if guardrail_info is not None:
-                existing_metadata["standard_logging_guardrail_information"] = guardrail_info
+        existing_metadata.update(
+            _failure_metadata_lifted_from_litellm_metadata(
+                _OBJECT_MAPPING.validate_python(litellm_metadata_bucket)
+                if isinstance(litellm_metadata_bucket, dict)
+                else {},
+                guardrail_info_already_set="standard_logging_guardrail_information" in existing_metadata,
+            )
+        )
 
         if "litellm_params" not in request_data:
             request_data["litellm_params"] = {}

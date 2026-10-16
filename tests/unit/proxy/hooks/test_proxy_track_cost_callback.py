@@ -163,6 +163,46 @@ async def test_async_post_call_failure_hook_does_not_clobber_guardrail_info_in_m
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "request_headers, code_word_is_stored",
+    [({"x-litellm-enable-message-redaction": "true"}, False), ({}, True)],
+)
+async def test_async_post_call_failure_hook_honors_the_redaction_header_on_a_litellm_metadata_route(
+    monkeypatch: pytest.MonkeyPatch, request_headers: dict[str, str], code_word_is_stored: bool
+):
+    monkeypatch.setenv("STORE_PROMPTS_IN_SPEND_LOGS", "true")
+    writer: Final = MagicMock(spec=DBSpendUpdateWriter)
+    writer.update_database = AsyncMock()
+    logger: Final = ProxyDBLogger(spend_writer=lambda: writer)
+    request_input: Final = "The code word is VERMILION-42. Reply OK."
+
+    await logger.async_post_call_failure_hook(
+        request_data={
+            "model": "gpt-5.6",
+            "input": request_input,
+            "metadata": {"caller_tag": "kept"},
+            "litellm_metadata": {"headers": request_headers},
+            "proxy_server_request": {
+                "url": "http://localhost/v1/responses",
+                "body": {"model": "gpt-5.6", "input": request_input, "temperature": 7},
+            },
+        },
+        original_exception=Exception("temperature must be at most 2"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
+    )
+
+    row: Final = get_logging_payload(
+        kwargs=writer.update_database.call_args.kwargs["kwargs"],
+        response_obj={},
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    stored_request: Final = json.loads(row["proxy_server_request"])
+    assert stored_request["temperature"] == 7
+    assert ("VERMILION-42" in row["proxy_server_request"]) is code_word_is_stored
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "used_client_oauth_token, custom_llm_provider, expected",
     [(True, "anthropic", True), (True, "bedrock", False), (False, "anthropic", False)],
 )
