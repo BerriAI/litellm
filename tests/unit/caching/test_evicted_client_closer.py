@@ -83,40 +83,6 @@ def make_closer(clock: FakeClock, grace_seconds: float = 60.0) -> EvictedClientC
     return EvictedClientCloser(grace_seconds=grace_seconds, clock=clock)
 
 
-async def _schedule_client(closer: EvictedClientCloser, client: RecordingAsyncClient) -> None:
-    closer.schedule(client)
-
-
-async def _reap_and_yield(closer: EvictedClientCloser) -> None:
-    closer.reap()
-    await asyncio.sleep(0)
-
-
-def _reap_after_loop_id_reuse(
-    closer: EvictedClientCloser,
-    client: RecordingAsyncClient,
-    loop_ids: frozenset[int],
-    attempts: int,
-) -> bool:
-    if attempts == 0:
-        return False
-    loop: Final = asyncio.new_event_loop()
-    loop_id: Final = id(loop)
-    if loop_id in loop_ids:
-        try:
-            loop.run_until_complete(_reap_and_yield(closer))
-        finally:
-            loop.close()
-        return True
-    try:
-        loop.run_until_complete(_schedule_client(closer, client))
-    finally:
-        loop.close()
-    del loop
-    gc.collect()
-    return _reap_after_loop_id_reuse(closer, client, loop_ids | {loop_id}, attempts - 1)
-
-
 @pytest.mark.asyncio
 async def test_redis_client_is_closed_only_after_its_subscription_releases_the_connection():
     closer = EvictedClientCloser(grace_seconds=0)
@@ -309,13 +275,12 @@ def test_sync_client_evicted_outside_an_event_loop_is_still_closed():
     assert closer.pending_count == 0
 
 
-def test_async_client_from_collected_loop_is_not_closed_by_a_loop_reusing_its_id() -> None:
+def test_async_client_from_collected_loop_is_not_closed_by_fresh_loops() -> None:
     clock: Final = FakeClock()
     closer: Final = EvictedClientCloser(grace_seconds=0, clock=clock)
     client: Final = RecordingAsyncClient()
     closer.mark_owned(client)
     loop_a: Final = asyncio.new_event_loop()
-    loop_a_id: Final = id(loop_a)
 
     async def schedule() -> None:
         closer.schedule(client)
@@ -326,12 +291,60 @@ def test_async_client_from_collected_loop_is_not_closed_by_a_loop_reusing_its_id
         loop_a.close()
     del loop_a
     gc.collect()
-    assert closer.pending_count == 1
 
-    reused_loop_id: Final = _reap_after_loop_id_reuse(closer, client, frozenset({loop_a_id}), attempts=50)
-    assert reused_loop_id, "new event loops did not reuse a collected loop's id"
+    async def reap() -> None:
+        closer.reap()
+        await asyncio.sleep(0)
+
+    def reap_on_new_loop() -> None:
+        loop: Final = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(reap())
+        finally:
+            loop.close()
+        del loop
+        gc.collect()
+
+    for _ in range(50):
+        reap_on_new_loop()
 
     assert client.close_calls == 0
+
+
+def test_closes_queued_on_a_collected_loop_free_capacity() -> None:
+    clock: Final = FakeClock()
+    closer: Final = EvictedClientCloser(grace_seconds=0, max_pending=1, clock=clock)
+    first: Final = RecordingAsyncClient()
+    closer.mark_owned(first)
+    loop_a: Final = asyncio.new_event_loop()
+
+    async def schedule_first() -> None:
+        closer.schedule(first)
+
+    try:
+        loop_a.run_until_complete(schedule_first())
+    finally:
+        loop_a.close()
+    del loop_a
+    gc.collect()
+
+    second: Final = RecordingAsyncClient()
+    closer.mark_owned(second)
+    loop_b: Final = asyncio.new_event_loop()
+
+    async def schedule_and_reap_second() -> None:
+        closer.schedule(second)
+        closer.reap()
+        await asyncio.sleep(0)
+
+    try:
+        loop_b.run_until_complete(schedule_and_reap_second())
+    finally:
+        loop_b.close()
+
+    assert first.close_calls == 0
+    assert second.close_calls == 1
+    assert closer.pending_count == 0
 
 
 @pytest.mark.asyncio
@@ -357,8 +370,7 @@ async def test_an_async_client_waits_for_a_loop_rather_than_being_dropped():
 
 
 @pytest.mark.asyncio
-async def test_a_client_evicted_on_another_event_loop_is_left_alone():
-    """Closing a client bound to a different loop would schedule work on that loop."""
+async def test_a_client_evicted_on_a_collected_loop_is_dropped():
     clock = FakeClock()
     closer = make_closer(clock)
     client = AsyncClient()
@@ -378,7 +390,7 @@ async def test_a_client_evicted_on_another_event_loop_is_left_alone():
     await asyncio.sleep(0.05)
 
     assert client.closed is False
-    assert closer.pending_count == 1
+    assert closer.pending_count == 0
 
 
 @pytest.mark.asyncio

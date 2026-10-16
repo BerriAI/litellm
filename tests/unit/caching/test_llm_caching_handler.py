@@ -35,16 +35,30 @@ async def _get_and_set_cache(cache: LLMClientCache) -> object | None:
     return cached
 
 
-def _cache_result_on_new_loop(cache: LLMClientCache) -> tuple[int, object | None]:
+def _cache_result_on_new_loop(cache: LLMClientCache) -> object | None:
     loop: Final = asyncio.new_event_loop()
-    loop_id: Final = id(loop)
     try:
         result: Final = loop.run_until_complete(_get_and_set_cache(cache))
     finally:
         loop.close()
     del loop
     gc.collect()
-    return loop_id, result
+    return result
+
+
+async def _get_cache_key(cache: LLMClientCache) -> str:
+    return cache.update_cache_key_with_event_loop("client")
+
+
+def _cache_key_on_new_loop(cache: LLMClientCache) -> str:
+    loop: Final = asyncio.new_event_loop()
+    try:
+        key: Final = loop.run_until_complete(_get_cache_key(cache))
+    finally:
+        loop.close()
+    del loop
+    gc.collect()
+    return key
 
 
 class MockAsyncClient:
@@ -70,10 +84,15 @@ class MockSyncClient:
 def test_async_client_cache_does_not_reuse_clients_between_collected_loops() -> None:
     cache: Final = LLMClientCache()
     results: Final = tuple(_cache_result_on_new_loop(cache) for _ in range(50))
-    loop_ids: Final = tuple(loop_id for loop_id, _ in results)
 
-    assert all(result is None for _, result in results)
-    assert len(set(loop_ids)) < len(loop_ids)
+    assert all(result is None for result in results)
+
+
+def test_async_client_cache_keys_differ_for_every_collected_loop() -> None:
+    cache: Final = LLMClientCache()
+    keys: Final = tuple(_cache_key_on_new_loop(cache) for _ in range(50))
+
+    assert len(set(keys)) == len(keys)
 
 
 @pytest.mark.asyncio
