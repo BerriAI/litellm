@@ -43,6 +43,12 @@ _BLOCK_LIST: Final = TypeAdapter(list[dict[str, object]])
 _ADAPTER: Final = LiteLLMAnthropicToResponsesAPIAdapter()
 
 
+def _record_bridged_response(responses_kwargs: Mapping[str, object], result: ResponsesAPIResponse) -> None:
+    logging_obj: Final = litellm_logging_obj_from_kwargs(responses_kwargs)
+    if logging_obj is not None:
+        logging_obj.record_bridged_responses_api_response(result)
+
+
 def _forwarded_kwargs(extra_kwargs: Mapping[str, object] | None) -> Mapping[str, object]:
     """The litellm-specific kwargs forwarded verbatim onto the Responses API request."""
     return extra_kwargs or {}
@@ -301,6 +307,7 @@ class LiteLLMMessagesToResponsesAPIHandler:
         if not isinstance(result, ResponsesAPIResponse):
             raise ValueError(f"Expected ResponsesAPIResponse, got {type(result)}")
 
+        _record_bridged_response(responses_kwargs, result)
         return await with_safeguard_results(_ADAPTER.translate_response(result), safeguards_evaluator)
 
     @staticmethod
