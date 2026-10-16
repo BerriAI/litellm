@@ -1716,6 +1716,28 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         yield convert_model_response_to_streaming(assembled_model_response)
 
+    async def _handle_non_chat_stream_chunk(
+        self,
+        chunk: object,
+        pii_tokens: dict[str, str],
+        remaining_chunks: list[ModelResponseStream],
+    ) -> AsyncGenerator[object, None]:
+        """
+        A chunk that is neither a ``ModelResponseStream`` nor raw SSE bytes
+        (a ``/v1/responses`` event). A mixed stream can't be reassembled, so
+        any chat-completion chunks buffered so far are flushed in order
+        first rather than dropped (a no-op once already flushed, since
+        nothing more is ever buffered after this point), then this chunk is
+        unmasked in place if needed.
+        """
+        for buffered_chunk in remaining_chunks:
+            yield buffered_chunk
+        remaining_chunks.clear()
+        chunk_type = getattr(chunk, "type", None)
+        if pii_tokens and chunk_type in ("response.completed", "response.incomplete"):
+            self._unmask_responses_api_completed_chunk(chunk, pii_tokens)
+        yield chunk
+
     async def _stream_pii_unmasking(
         self,
         response: AsyncIterable[object],
@@ -1747,42 +1769,30 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         yield chunk
                     continue
                 else:
-                    # /v1/responses events: unmask response.completed text in-place.
-                    # A mixed stream can't be reassembled, so flush buffered chat
-                    # chunks in order before passthrough instead of dropping them.
-                    if remaining_chunks and not saw_non_chat_chunk:
-                        for buffered_chunk in remaining_chunks:
-                            yield buffered_chunk
-                        remaining_chunks = []
-                    chunk_type = getattr(chunk, "type", None)
-                    if chunk_type in ("response.completed", "response.incomplete") and pii_tokens:
-                        self._unmask_responses_api_completed_chunk(chunk, pii_tokens)
+                    async for out in self._handle_non_chat_stream_chunk(chunk, pii_tokens, remaining_chunks):
+                        yield out
                     saw_non_chat_chunk = True
-                    yield chunk
 
-            for flushed in self._flush_pending_sse(
-                pending_sse_text,
-                pending_sse_bytes,
-                pii_tokens,  # pyright: ignore[reportUnknownArgumentType]  # request_data is an untyped dict
-            ):
-                yield flushed
-
-            if not saw_non_chat_chunk:
-                async for chunk in self._finalize_non_sse_stream(
-                    remaining_chunks,
-                    request_data,  # pyright: ignore[reportUnknownArgumentType]  # request_data is an untyped dict
-                ):
-                    yield chunk
-
+            had_error = False
         except Exception as e:
             verbose_proxy_logger.error("Error in PII streaming processing: %s", e)
+            had_error = True
+        finally:
             for flushed in self._flush_pending_sse(
                 pending_sse_text,
                 pending_sse_bytes,
                 pii_tokens,  # pyright: ignore[reportUnknownArgumentType]  # request_data is an untyped dict
             ):
                 yield flushed
+
+        if had_error:
             for chunk in remaining_chunks:
+                yield chunk
+        elif not saw_non_chat_chunk:
+            async for chunk in self._finalize_non_sse_stream(
+                remaining_chunks,
+                request_data,  # pyright: ignore[reportUnknownArgumentType]  # request_data is an untyped dict
+            ):
                 yield chunk
 
     async def async_post_call_streaming_iterator_hook(
