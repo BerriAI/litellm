@@ -224,9 +224,14 @@ def test_regional_bedrock_alias_requires_canonical_converse_metadata(
     _enforce_bedrock_converse_models(model_cost, ())
 
 
+def _is_govcloud(model_key: str) -> bool:
+    return model_key.startswith("us-gov.") or any(part.startswith("us-gov-") for part in model_key.split("/"))
+
+
 def test_get_model_info_bedrock_models():
     """
     Check for drift in base model info for bedrock models and regional model info for bedrock models.
+    GovCloud regions may lag their commercial base on a capability, never lead it.
     """
     from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
@@ -261,6 +266,9 @@ def test_get_model_info_bedrock_models():
                     assert (
                         base_model_key in v
                     ), f"{base_model_key} is not in model cost map for {k}"
+                    if _is_govcloud(k):
+                        assert base_model_value or not v[base_model_key], f"{base_model_key} is on {k} but not its base"
+                        continue
                     assert (
                         v[base_model_key] == base_model_value
                     ), f"{base_model_key} is not equal to {base_model_value} for model {k}"
@@ -297,6 +305,8 @@ def test_get_model_info_bedrock_cross_region_capability_parity():
     """
     Cross-region inference profiles carry litellm_provider "bedrock_converse", so the
     regional drift check above (which filters on "bedrock") never reaches them.
+    GovCloud is a separate AWS partition that gets features later, so a us-gov profile
+    may lack a capability its commercial base has but never claims one the base lacks.
     """
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -318,6 +328,9 @@ def test_get_model_info_bedrock_cross_region_capability_parity():
             if not cap.startswith("supports_"):
                 continue
             assert cap in v, f"{cap} is on {base_model_key} but missing from {k}"
+            if _is_govcloud(k):
+                assert base_value or not v[cap], f"{cap} is on {k} but not on {base_model_key}"
+                continue
             assert (
                 v[cap] == base_value
             ), f"{cap} is {v[cap]} on {k} but {base_value} on {base_model_key}"

@@ -4841,24 +4841,6 @@ def test_translate_response_format_native_output_config(monkeypatch):
             monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", old_env)
 
 
-BEDROCK_OPUS_4_7_AND_4_8_MODELS: Final = (
-    "anthropic.claude-opus-4-7",
-    "global.anthropic.claude-opus-4-7",
-    "us.anthropic.claude-opus-4-7",
-    "eu.anthropic.claude-opus-4-7",
-    "au.anthropic.claude-opus-4-7",
-    "jp.anthropic.claude-opus-4-7",
-    "anthropic.claude-opus-4-8",
-    "global.anthropic.claude-opus-4-8",
-    "us.anthropic.claude-opus-4-8",
-    "eu.anthropic.claude-opus-4-8",
-    "au.anthropic.claude-opus-4-8",
-    "jp.anthropic.claude-opus-4-8",
-    "us-gov.anthropic.claude-opus-4-8",
-    "us-gov-west-1/anthropic.claude-opus-4-8",
-    "us-gov-east-1/anthropic.claude-opus-4-8",
-)
-
 CAPITAL_RESPONSE_FORMAT: Final = {
     "type": "json_schema",
     "json_schema": {
@@ -4891,21 +4873,56 @@ def _converse_request_for_json_schema(model: str, stream: bool) -> tuple[dict, d
     return optional_params, request
 
 
-@pytest.mark.parametrize("model", BEDROCK_OPUS_4_7_AND_4_8_MODELS)
+@pytest.mark.parametrize(
+    ("native_profile", "tool_profile"),
+    [
+        ("us.anthropic.claude-opus-4-8", "anthropic.claude-opus-4-8"),
+        ("global.anthropic.claude-opus-4-7", "us.anthropic.claude-opus-4-7"),
+        ("anthropic.claude-opus-4-8", "us-gov.anthropic.claude-opus-4-8"),
+    ],
+)
 @pytest.mark.parametrize("stream", [False, True])
-def test_opus_4_7_and_4_8_json_schema_sent_as_forced_tool_not_output_config(monkeypatch, model, stream):
-    """Regression for issue #27846: Bedrock rejects outputConfig on Opus 4.7 and 4.8
-    (``output_config.format: Extra inputs are not permitted``), so json_schema has to
-    go out as the forced json_tool_call tool, streamed through fake_stream."""
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+def test_json_schema_shape_follows_each_inference_profile_own_native_output_flag(
+    set_native_structured_output, native_profile, tool_profile, stream
+):
+    set_native_structured_output(native_profile, True)
+    set_native_structured_output(tool_profile, False)
 
-    optional_params, request = _converse_request_for_json_schema(model=model, stream=stream)
+    native_params, native_request = _converse_request_for_json_schema(model=native_profile, stream=stream)
+    tool_params, tool_request = _converse_request_for_json_schema(model=tool_profile, stream=stream)
 
-    assert "outputConfig" not in request
-    assert [tool["toolSpec"]["name"] for tool in request["toolConfig"]["tools"]] == ["json_tool_call"]
-    assert request["toolConfig"]["toolChoice"] == {"tool": {"name": "json_tool_call"}}
-    assert optional_params.get("fake_stream", False) is stream
+    assert native_request["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["name"] == "capital"
+    assert "toolConfig" not in native_request
+    assert "fake_stream" not in native_params
+    assert "outputConfig" not in tool_request
+    assert [tool["toolSpec"]["name"] for tool in tool_request["toolConfig"]["tools"]] == ["json_tool_call"]
+    assert tool_request["toolConfig"]["toolChoice"] == {"tool": {"name": "json_tool_call"}}
+    assert tool_params.get("fake_stream", False) is stream
+
+
+def test_adaptive_thinking_is_kept_next_to_json_schema_on_a_native_output_profile(set_native_structured_output):
+    model: Final = "us.anthropic.claude-opus-5"
+    set_native_structured_output(model, True)
+    config: Final = AmazonConverseConfig()
+    thinking: Final = {"type": "adaptive", "display": "summarized"}
+
+    optional_params: Final = config.map_openai_params(
+        non_default_params={"response_format": CAPITAL_RESPONSE_FORMAT, "thinking": thinking},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    request: Final = config._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Name the capital of France."}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["additionalModelRequestFields"]["thinking"] == thinking
+    assert request["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["name"] == "capital"
+    assert "toolConfig" not in request
 
 
 def test_sonnet_4_6_json_schema_still_uses_native_output_config(monkeypatch):
@@ -8008,10 +8025,13 @@ def test_unforced_tool_choice_unaffected_on_fable_5_1_converse(local_model_cost_
     "model",
     ["anthropic.claude-fable-5-1", "us.anthropic.claude-fable-5-1"],
 )
-def test_response_format_avoids_native_and_forced_tool_choice_on_fable_5_1_converse(local_model_cost_map, model):
-    """Regression: Bedrock rejects both ``outputConfig`` structured output and forced
-    tool_choice for Fable 5.1, so response_format must map to a tool without a forced
-    tool_choice."""
+def test_response_format_avoids_native_and_forced_tool_choice_on_fable_5_1_converse(
+    set_native_structured_output, model
+):
+    """Regression: Bedrock rejects forced tool_choice for Fable 5.1, so on a profile
+    without native structured output response_format must map to a tool without a
+    forced tool_choice."""
+    set_native_structured_output(model, False)
     config = AmazonConverseConfig()
 
     result = config.map_openai_params(

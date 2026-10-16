@@ -2,7 +2,7 @@ import asyncio
 import base64
 import importlib
 import os
-from collections.abc import Coroutine, Iterator
+from collections.abc import Callable, Coroutine, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
@@ -306,6 +306,17 @@ def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     litellm.get_model_info.cache_clear()
     yield
     litellm.get_model_info.cache_clear()
+
+
+@pytest.fixture
+def set_native_structured_output(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> Callable[[str, bool], None]:
+    def set_flag(model_cost_key: str, supported: bool) -> None:
+        monkeypatch.setitem(litellm.model_cost[model_cost_key], "supports_native_structured_output", supported)
+        litellm.get_model_info.cache_clear()
+
+    return set_flag
 
 
 @pytest.fixture

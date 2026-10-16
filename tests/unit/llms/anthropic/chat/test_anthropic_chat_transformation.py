@@ -9366,17 +9366,26 @@ def test_map_openai_params_lets_a_native_anthropic_search_tool_replace_the_opena
 
 
 @pytest.mark.parametrize(
-    ("config", "model", "provider"),
+    ("config", "model", "provider", "model_cost_key"),
     [
-        pytest.param(AmazonAnthropicClaudeConfig(), "us.anthropic.claude-sonnet-5-5", "bedrock", id="bedrock-invoke"),
-        pytest.param(VertexAIAnthropicConfig(), "claude-sonnet-5-5", "vertex_ai", id="vertex_ai"),
+        pytest.param(
+            AmazonAnthropicClaudeConfig(),
+            "us.anthropic.claude-sonnet-5-5",
+            "bedrock",
+            "us.anthropic.claude-sonnet-5-5",
+            id="bedrock-invoke",
+        ),
+        pytest.param(
+            VertexAIAnthropicConfig(), "claude-sonnet-5-5", "vertex_ai", "vertex_ai/claude-sonnet-5-5", id="vertex_ai"
+        ),
     ],
 )
 def test_map_openai_params_judges_tool_search_on_the_real_model_when_tool_based_response_format_swaps_it(
-    config, model, provider
+    set_native_structured_output, config, model, provider, model_cost_key
 ):
     from litellm.responses.litellm_completion_transformation.tool_search import anthropic_tool_search_chat_tool
 
+    set_native_structured_output(model_cost_key, False)
     assert litellm.supports_tool_search(model, provider)
     mapped: Final = config.map_openai_params(
         non_default_params={

@@ -504,10 +504,12 @@ def test_output_config_format_converted_for_bedrock_chat_invoke_request():
 
 
 @pytest.mark.parametrize("model", ["anthropic.claude-opus-4-7", "us.anthropic.claude-opus-4-8"])
-def test_output_config_format_inlined_for_bedrock_chat_invoke_opus_4_7_and_4_8(local_model_cost_map, model):
-    """Bedrock rejects ``output_config.format`` on Claude Opus 4.7 and 4.8, so the
-    Invoke chat path inlines the schema into the last user message and keeps effort,
-    driven by the cost map alone (no capability stub)."""
+def test_output_config_format_inlined_for_bedrock_chat_invoke_profile_without_native_output(
+    set_native_structured_output, model
+):
+    """On a profile without native structured output the Invoke chat path inlines the
+    schema into the last user message and keeps effort."""
+    set_native_structured_output(model, False)
     schema = {"type": "object", "properties": {"answer": {"type": "string"}}}
 
     result = AmazonAnthropicClaudeConfig().transform_request(
@@ -713,10 +715,11 @@ def test_bedrock_chat_invoke_drop_params_still_inlines_for_non_native(local_mode
     "model",
     ["us.anthropic.claude-fable-5-1", "anthropic.claude-fable-5-1"],
 )
-def test_bedrock_chat_invoke_fable_5_1_response_format_avoids_forced_tool_choice(local_model_cost_map, model):
-    """Regression: Bedrock rejects both native ``output_config.format`` and forced
-    tool_choice for Fable 5.1, so invoke must use the tool-based path without a
+def test_bedrock_chat_invoke_fable_5_1_response_format_avoids_forced_tool_choice(set_native_structured_output, model):
+    """Regression: Bedrock rejects forced tool_choice for Fable 5.1, so on a profile
+    without native structured output invoke must use the tool-based path without a
     forced ``tool_choice``."""
+    set_native_structured_output(model, False)
     result = AmazonAnthropicClaudeConfig().map_openai_params(
         non_default_params={
             "response_format": {
@@ -738,7 +741,10 @@ def test_bedrock_chat_invoke_fable_5_1_response_format_avoids_forced_tool_choice
 
 
 @pytest.mark.parametrize("model", ["us.anthropic.claude-sonnet-5", "us.anthropic.claude-fable-5-1"])
-def test_bedrock_chat_invoke_tool_based_response_format_still_upgrades_legacy_thinking(local_model_cost_map, model):
+def test_bedrock_chat_invoke_tool_based_response_format_still_upgrades_legacy_thinking(
+    set_native_structured_output, model
+):
+    set_native_structured_output(model, False)
     result = AmazonAnthropicClaudeConfig().map_openai_params(
         non_default_params={
             "response_format": {
@@ -761,9 +767,10 @@ def test_bedrock_chat_invoke_tool_based_response_format_still_upgrades_legacy_th
     assert result["output_config"] == {"effort": "high"}
 
 
-def test_bedrock_chat_invoke_adaptive_thinking_keeps_the_forced_response_format_tool(local_model_cost_map):
+def test_bedrock_chat_invoke_adaptive_thinking_keeps_the_forced_response_format_tool(set_native_structured_output):
     """Anthropic accepts a forced tool_choice next to adaptive thinking, and dropping
     it lets the model answer in prose instead of the requested JSON."""
+    set_native_structured_output("us.anthropic.claude-opus-5", False)
     result = AmazonAnthropicClaudeConfig().map_openai_params(
         non_default_params={
             "response_format": {

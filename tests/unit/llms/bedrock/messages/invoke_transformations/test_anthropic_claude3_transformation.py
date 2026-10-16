@@ -3162,11 +3162,12 @@ def test_bedrock_messages_forwards_output_config_format_natively(local_model_cos
     assert "zebra_count" not in json.dumps(result["messages"])
 
 
-def test_bedrock_messages_inlines_schema_for_claude_5(local_model_cost_map):
-    """Bedrock rejects ``output_config.format`` for the Claude 5 family, so the
-    schema falls back to the inline-text path instead of a deterministic 400."""
+def test_bedrock_messages_inlines_schema_for_a_profile_without_native_output(set_native_structured_output):
+    """On a profile without native structured output the schema falls back to the
+    inline-text path instead of a deterministic 400."""
     from litellm.types.router import GenericLiteLLMParams
 
+    set_native_structured_output("us.anthropic.claude-sonnet-5", False)
     cfg = AmazonAnthropicClaudeMessagesConfig()
     schema = {
         "type": "object",
