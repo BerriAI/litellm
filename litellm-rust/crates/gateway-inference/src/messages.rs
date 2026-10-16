@@ -15,7 +15,7 @@ use litellm_inference_messages::{MessagesCall, messages_body, route::Messages};
 use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use serde_json::{Map, Value};
 
-use crate::{Deployment, Error, Gateway, JsonObject, RequestId, request};
+use crate::{Deployment, Error, Gateway, JsonBody, RequestId, request};
 
 /// Client headers Python forwards to Anthropic-speaking providers on every call.
 const ANTHROPIC_API_HEADERS: [&str; 2] = ["anthropic-version", "anthropic-beta"];
@@ -31,10 +31,10 @@ pub async fn create(
     identity: AuthenticatedRequest,
     RequestId(request_id): RequestId,
     headers: HeaderMap,
-    body: Result<JsonObject, Error>,
+    body: Result<JsonBody, Error>,
 ) -> impl IntoResponse {
     let result = match body {
-        Ok(JsonObject(body)) => handle(&gateway, &identity, &headers, body).await,
+        Ok(body) => handle(&gateway, &identity, &headers, body).await,
         Err(error) => Err(error),
     };
     result.map_err(|error| (error.status(), Json(error.body(request_id.as_deref()))))
@@ -44,11 +44,14 @@ async fn handle(
     gateway: &Gateway,
     identity: &AuthenticatedRequest,
     headers: &HeaderMap,
-    body: Map<String, Value>,
+    JsonBody { object, raw }: JsonBody,
 ) -> Result<Response, Error> {
-    let deployment = request::resolve_deployment(gateway, &body)?;
-    request::authorize_model(identity, deployment, &body).await?;
-    let (body, cache_options) = crate::caching::prepare(identity, body)?;
+    let group = request::resolve_group(gateway, &object)?;
+    let name = request::model_name(&object)?.to_owned();
+    let (body, cache_options) = crate::caching::prepare(identity, object)?;
+    let reparse = || -> Result<Map<String, Value>, Error> {
+        Ok(crate::caching::prepare(identity, request::object(&raw)?)?.0)
+    };
     let route = gateway.messages.clone();
     let route = match &gateway.cache {
         Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(
@@ -58,13 +61,35 @@ async fn handle(
         None => route,
     };
 
-    let call = project(deployment, body, headers)?;
-    let machine = route.machine(call, cache_options.policy);
-    let stream =
-        Sse::<Messages, _, _>::new(Json, |error| Bytes::from(Error::from(error).sse_frame()));
-    let headers = crate::caching::CacheHeaders::default();
-    let response = litellm_host_http::serve(machine, (), headers.clone(), stream, None).await?;
-    Ok(headers.apply(response))
+    let cache_headers = crate::caching::CacheHeaders::default();
+    let mut body = Some(body);
+    let routed = gateway
+        .models
+        .route(
+            group,
+            |attempt| {
+                // Every attempt hands its body to the provider. The first takes the parsed
+                // body and a retry parses the request again, so no request clones a body
+                // that can hold a million tokens.
+                let body = body.take().map_or_else(&reparse, Ok);
+                let route = route.clone();
+                let cache_headers = cache_headers.clone();
+                let name = name.as_str();
+                async move {
+                    crate::observe::record(name, attempt.deployment);
+                    request::authorize(identity, name, attempt.deployment).await?;
+                    let call = project(attempt.deployment, body?, headers)?;
+                    let machine = route.machine(call, cache_options.policy);
+                    let stream = Sse::<Messages, _, _>::new(Json, |error| {
+                        Bytes::from(Error::from(error).sse_frame())
+                    });
+                    Ok(litellm_host_http::serve(machine, (), cache_headers, stream, None).await?)
+                }
+            },
+            Error::failure,
+        )
+        .await?;
+    Ok(cache_headers.apply(request::hold(routed)))
 }
 
 fn project(

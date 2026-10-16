@@ -101,5 +101,3 @@ gateway re-encodes as Anthropic SSE. Bedrock hits show up as `bedrock-<g>-<i>` i
   (`KEY=` for `cloud-run.sh`). Once keys are read from Postgres, drop it and set `create_postgres`.
 - `/v1/messages` auth: `-messages-auth x-api-key` sends the key the way the Anthropic SDK does.
   The gateway reads only `Authorization: Bearer` today.
-- Routing: deployments sharing a model name overwrite each other, so all of a group's traffic goes
-  to its last deployment (visible in the mock's `/stats`).

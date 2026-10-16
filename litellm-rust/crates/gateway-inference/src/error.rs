@@ -6,6 +6,7 @@ use axum::{
 use litellm_http::transport::Error as TransportError;
 use litellm_inference::RouteError;
 use litellm_llms::base_llm::ocr::error::Error as OcrError;
+use litellm_router::Failure;
 use serde_json::{Map, Value, json};
 
 #[derive(Debug, thiserror::Error)]
@@ -118,6 +119,23 @@ impl Error {
             _ => envelope(self.status(), &raw),
         };
         Value::Object(with_request_id(envelope, request_id))
+    }
+
+    /// How the router counts this error against the deployment that produced it, if at all.
+    pub fn failure(&self) -> Option<Failure> {
+        match self {
+            Self::Route(RouteError::Transport(TransportError::Http { status, .. })) => match status
+            {
+                429 => Some(Failure::RateLimited),
+                401 | 402 | 404 => Some(Failure::Rejected),
+                408 | 500.. => Some(Failure::Unavailable),
+                _ => None,
+            },
+            Self::Route(RouteError::Transport(
+                TransportError::Network(_) | TransportError::Connect(_),
+            )) => Some(Failure::Unavailable),
+            _ => None,
+        }
     }
 
     /// An `event: error` frame, for a stream that fails after its headers went out.
@@ -274,5 +292,31 @@ mod tests {
     )]
     fn status_follows_who_is_at_fault(#[case] error: Error, #[case] status: StatusCode) {
         assert_eq!(error.status(), status);
+    }
+
+    #[rstest]
+    #[case::rate_limited(upstream(429, ""), Some(Failure::RateLimited))]
+    #[case::bad_key(upstream(401, ""), Some(Failure::Rejected))]
+    #[case::unknown_upstream_model(upstream(404, ""), Some(Failure::Rejected))]
+    #[case::request_timeout(upstream(408, ""), Some(Failure::Unavailable))]
+    #[case::server_error(upstream(500, ""), Some(Failure::Unavailable))]
+    #[case::overloaded(upstream(529, ""), Some(Failure::Unavailable))]
+    #[case::bad_request(upstream(400, ""), None)]
+    #[case::too_large(upstream(413, ""), None)]
+    #[case::refused(
+        Error::Route(RouteError::Transport(TransportError::Connect("refused".into()))),
+        Some(Failure::Unavailable)
+    )]
+    #[case::reset(
+        Error::Route(RouteError::Transport(TransportError::Network("reset".into()))),
+        Some(Failure::Unavailable)
+    )]
+    #[case::caller_mistake(Error::InvalidBody("x".into()), None)]
+    #[case::rejected_request(Error::Route(RouteError::InvalidRequest("top_k".into())), None)]
+    fn failure_marks_what_another_deployment_could_serve(
+        #[case] error: Error,
+        #[case] failure: Option<Failure>,
+    ) {
+        assert_eq!(error.failure(), failure);
     }
 }

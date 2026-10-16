@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 640" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="14">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker>
+  </defs>
+  <rect width="1000" height="640" fill="#ffffff"/>
+  <text x="24" y="34" font-size="18" font-weight="600" fill="#0f172a">Routing one request across a model group</text>
+  <text x="24" y="56" font-size="13" fill="#475569">Router::route in crates/router, called by the /v1/messages and /v1/chat/completions handlers</text>
+
+  <!-- request -->
+  <rect x="24" y="84" width="220" height="56" rx="8" fill="#f1f5f9" stroke="#64748b"/>
+  <text x="134" y="107" text-anchor="middle" fill="#0f172a">POST {"model": "claude-x-0"}</text>
+  <text x="134" y="127" text-anchor="middle" font-size="12" fill="#475569">resolve_group: HashMap lookup</text>
+  <path d="M244 112H300" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- group -->
+  <rect x="304" y="76" width="380" height="150" rx="8" fill="#eff6ff" stroke="#3b82f6"/>
+  <text x="318" y="98" font-weight="600" fill="#1e3a8a">ModelGroup "claude-x-0" (config order)</text>
+  <g font-size="12" fill="#0f172a">
+    <rect x="318" y="108" width="352" height="24" rx="4" fill="#ffffff" stroke="#93c5fd"/>
+    <text x="326" y="124">d0  weight 1   in_flight 3   healthy</text>
+    <rect x="318" y="136" width="352" height="24" rx="4" fill="#fef2f2" stroke="#fca5a5"/>
+    <text x="326" y="152">d1  weight 1   in_flight 0   cooling until t+30s</text>
+    <rect x="318" y="164" width="352" height="24" rx="4" fill="#ffffff" stroke="#93c5fd"/>
+    <text x="326" y="180">d2  weight 2   in_flight 1   healthy</text>
+    <rect x="318" y="192" width="352" height="24" rx="4" fill="#ffffff" stroke="#93c5fd"/>
+    <text x="326" y="208">d3  weight 0   in_flight 2   healthy</text>
+  </g>
+  <text x="700" y="128" font-size="12" fill="#475569">Health per deployment is atomics only:</text>
+  <text x="700" y="146" font-size="12" fill="#475569">in_flight, successes, failures,</text>
+  <text x="700" y="164" font-size="12" fill="#475569">window, cooldown_until (ms)</text>
+  <text x="700" y="182" font-size="12" fill="#475569">No lock on the request path</text>
+
+  <!-- choose -->
+  <path d="M494 226V262" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+  <rect x="304" y="266" width="380" height="112" rx="8" fill="#f0fdf4" stroke="#22c55e"/>
+  <text x="318" y="288" font-weight="600" fill="#14532d">choose(strategy, now, tried)</text>
+  <text x="318" y="310" font-size="12" fill="#0f172a">1. candidates = not tried and not cooling</text>
+  <text x="318" y="328" font-size="12" fill="#0f172a">2. none left: candidates = not tried (cooling allowed)</text>
+  <text x="318" y="346" font-size="12" fill="#0f172a">simple-shuffle: random by weight, else rpm, else tpm, else uniform</text>
+  <text x="318" y="364" font-size="12" fill="#0f172a">least-busy: lowest in_flight, ties broken at random</text>
+
+  <!-- attempt -->
+  <path d="M494 378V414" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+  <rect x="304" y="418" width="380" height="64" rx="8" fill="#f1f5f9" stroke="#64748b"/>
+  <text x="494" y="442" text-anchor="middle" font-weight="600" fill="#0f172a">attempt on deployment</text>
+  <text x="494" y="462" text-anchor="middle" font-size="12" fill="#475569">in_flight += 1, body cloned unless this is the last attempt</text>
+
+  <!-- outcomes -->
+  <path d="M684 450H760" stroke="#16a34a" stroke-width="1.5" marker-end="url(#a)"/>
+  <rect x="764" y="410" width="212" height="80" rx="8" fill="#f0fdf4" stroke="#22c55e"/>
+  <text x="776" y="432" font-weight="600" fill="#14532d">Ok: response or stream head</text>
+  <text x="776" y="452" font-size="12" fill="#0f172a">record_success, return</text>
+  <text x="776" y="470" font-size="12" fill="#0f172a">in_flight held until body ends</text>
+  <text x="776" y="486" font-size="12" fill="#0f172a">never retried after this point</text>
+
+  <path d="M494 482V518" stroke="#dc2626" stroke-width="1.5" marker-end="url(#a)"/>
+  <rect x="304" y="522" width="380" height="96" rx="8" fill="#fef2f2" stroke="#ef4444"/>
+  <text x="318" y="544" font-weight="600" fill="#7f1d1d">Err before any byte reached the client</text>
+  <text x="318" y="564" font-size="12" fill="#0f172a">Error::failure classifies it:</text>
+  <text x="318" y="582" font-size="12" fill="#0f172a">429 RateLimited, 401/402/404 Rejected, 408/5xx/connect Unavailable</text>
+  <text x="318" y="600" font-size="12" fill="#0f172a">record_failure (may start cooldown), tried.push(index)</text>
+
+  <path d="M684 570H760" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+  <rect x="764" y="522" width="212" height="96" rx="8" fill="#f8fafc" stroke="#94a3b8"/>
+  <text x="776" y="544" font-weight="600" fill="#0f172a">Return the error</text>
+  <text x="776" y="564" font-size="12" fill="#0f172a">not a failure (400, 413, auth), or</text>
+  <text x="776" y="582" font-size="12" fill="#0f172a">num_retries + 1 attempts made,</text>
+  <text x="776" y="600" font-size="12" fill="#0f172a">or every deployment tried</text>
+
+  <!-- retry loop -->
+  <path d="M304 600H170V322H300" fill="none" stroke="#475569" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#a)"/>
+  <text x="40" y="440" font-size="12" fill="#475569">retry on a</text>
+  <text x="40" y="456" font-size="12" fill="#475569">deployment</text>
+  <text x="40" y="472" font-size="12" fill="#475569">not yet tried</text>
+</svg>

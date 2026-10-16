@@ -16,46 +16,50 @@ use litellm_inference_chat::{
 };
 use serde_json::{Map, Value};
 
-use crate::{Deployment, Error, Gateway, JsonObject, request};
+use crate::{Deployment, Error, Gateway, JsonBody, request};
 
 pub(crate) async fn create(
     State(gateway): State<Arc<Gateway>>,
     identity: AuthenticatedRequest,
-    JsonObject(body): JsonObject,
+    body: JsonBody,
 ) -> Result<impl IntoResponse, Error> {
-    handle(&gateway, &identity, body).await
+    handle(&gateway, &identity, body, None).await
 }
 
 pub(crate) async fn create_from_model_path(
     State(gateway): State<Arc<Gateway>>,
     identity: AuthenticatedRequest,
     Path(model): Path<String>,
-    JsonObject(body): JsonObject,
+    body: JsonBody,
 ) -> Result<impl IntoResponse, Error> {
-    let body = match body.get("model") {
-        None | Some(Value::Null) => body
+    handle(&gateway, &identity, body, Some(&model)).await
+}
+
+/// The body, naming the model from the request path when it names none itself.
+fn with_model(body: Map<String, Value>, model: Option<&str>) -> Map<String, Value> {
+    match (body.get("model"), model) {
+        (None | Some(Value::Null), Some(model)) => body
             .into_iter()
-            .chain([("model".into(), Value::String(model))])
+            .chain([("model".into(), Value::from(model))])
             .collect(),
-        Some(_) => body,
-    };
-    handle(&gateway, &identity, body).await
+        _ => body,
+    }
 }
 
 async fn handle(
     gateway: &Gateway,
     identity: &AuthenticatedRequest,
-    body: Map<String, Value>,
+    JsonBody { object, raw }: JsonBody,
+    model: Option<&str>,
 ) -> Result<Response, Error> {
-    let deployment = request::resolve_deployment(gateway, &body)?;
-    request::authorize_model(identity, deployment, &body).await?;
+    let body = with_model(object, model);
+    let group = request::resolve_group(gateway, &body)?;
+    let name = request::model_name(&body)?.to_owned();
     let (body, cache_options) = crate::caching::prepare(identity, body)?;
-    if ChatCompletionsRoute::serves_openai(
-        &deployment.model,
-        deployment.custom_llm_provider.as_deref(),
-    ) {
-        return openai(gateway, deployment, body).await;
-    }
+    let reparse = || -> Result<Map<String, Value>, Error> {
+        let body = with_model(request::object(&raw)?, model);
+        Ok(crate::caching::prepare(identity, body)?.0)
+    };
     let route = gateway.chat_completions.clone();
     let route = match &gateway.cache {
         Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(
@@ -65,32 +69,63 @@ async fn handle(
         None => route,
     };
 
-    let messages = body.get("messages").cloned().unwrap_or_default();
-    let headers = crate::caching::CacheHeaders::default();
-    let response = litellm_host_http::serve_unary(
-        route.machine(
-            ChatCompletionsCall {
-                model: deployment.model.clone(),
-                messages,
-                optional_params: body
-                    .into_iter()
-                    .filter(|(name, _)| !matches!(name.as_str(), "model" | "messages"))
-                    .collect(),
-                api_key: deployment.api_key.clone(),
-                api_base: deployment.api_base.clone(),
-                custom_llm_provider: deployment.custom_llm_provider.clone(),
-                extra_headers: None,
-                timeout: deployment.timeout,
+    let cache_headers = crate::caching::CacheHeaders::default();
+    let mut body = Some(body);
+    let routed = gateway
+        .models
+        .route(
+            group,
+            |attempt| {
+                // Every attempt hands its body to the provider. The first takes the parsed
+                // body and a retry parses the request again, so no request clones a body
+                // that can hold a million tokens.
+                let body = body.take().map_or_else(&reparse, Ok);
+                let route = route.clone();
+                let cache_headers = cache_headers.clone();
+                let name = name.as_str();
+                async move {
+                    let deployment = attempt.deployment;
+                    crate::observe::record(name, deployment);
+                    request::authorize(identity, name, deployment).await?;
+                    let body = body?;
+                    if ChatCompletionsRoute::serves_openai(
+                        &deployment.model,
+                        deployment.custom_llm_provider.as_deref(),
+                    ) {
+                        return openai(gateway, deployment, body).await;
+                    }
+                    let (messages, optional_params) = split(body);
+                    let call = ChatCompletionsCall {
+                        model: deployment.model.clone(),
+                        messages,
+                        optional_params,
+                        api_key: deployment.api_key.clone(),
+                        api_base: deployment.api_base.clone(),
+                        custom_llm_provider: deployment.custom_llm_provider.clone(),
+                        extra_headers: None,
+                        timeout: deployment.timeout,
+                    };
+                    Ok(litellm_host_http::serve_unary(
+                        route.machine(call, cache_options.policy),
+                        (),
+                        cache_headers,
+                        litellm_host_http::Unary::new(Json),
+                        None,
+                    )
+                    .await?)
+                }
             },
-            cache_options.policy,
-        ),
-        (),
-        headers.clone(),
-        litellm_host_http::Unary::new(Json),
-        None,
-    )
-    .await?;
-    Ok(headers.apply(response))
+            Error::failure,
+        )
+        .await?;
+    Ok(cache_headers.apply(request::hold(routed)))
+}
+
+/// The `messages` array and the remaining optional params of a chat request.
+fn split(mut body: Map<String, Value>) -> (Value, Map<String, Value>) {
+    let messages = body.remove("messages").unwrap_or_default();
+    body.remove("model");
+    (messages, body)
 }
 
 async fn openai(

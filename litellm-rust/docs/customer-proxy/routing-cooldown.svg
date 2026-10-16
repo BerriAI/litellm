@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 470" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="14">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker>
+  </defs>
+  <rect width="1000" height="470" fill="#ffffff"/>
+  <text x="24" y="34" font-size="18" font-weight="600" fill="#0f172a">Deployment cooldown state machine</text>
+  <text x="24" y="56" font-size="13" fill="#475569">Health::record_failure / record_success in crates/router/src/health.rs, times in ms since start</text>
+
+  <!-- healthy -->
+  <rect x="40" y="120" width="300" height="130" rx="12" fill="#f0fdf4" stroke="#22c55e" stroke-width="1.5"/>
+  <text x="190" y="148" text-anchor="middle" font-weight="600" fill="#14532d">Healthy</text>
+  <text x="56" y="174" font-size="12" fill="#0f172a">cooldown_until &lt;= now</text>
+  <text x="56" y="194" font-size="12" fill="#0f172a">eligible for choose()</text>
+  <text x="56" y="214" font-size="12" fill="#0f172a">successes / failures counted per window</text>
+  <text x="56" y="234" font-size="12" fill="#0f172a">window resets both counters (CAS on window id)</text>
+
+  <!-- cooling -->
+  <rect x="640" y="120" width="320" height="130" rx="12" fill="#fef2f2" stroke="#ef4444" stroke-width="1.5"/>
+  <text x="800" y="148" text-anchor="middle" font-weight="600" fill="#7f1d1d">Cooling down</text>
+  <text x="656" y="174" font-size="12" fill="#0f172a">cooldown_until = max(cur, now + cooldown_time)</text>
+  <text x="656" y="194" font-size="12" fill="#0f172a">skipped while another deployment is eligible</text>
+  <text x="656" y="214" font-size="12" fill="#0f172a">still tried if every untried deployment cools</text>
+  <text x="656" y="234" font-size="12" fill="#0f172a">(fall back rather than fail the request)</text>
+
+  <!-- transitions -->
+  <path d="M340 160H636" stroke="#dc2626" stroke-width="1.5" marker-end="url(#a)"/>
+  <text x="488" y="110" text-anchor="middle" font-size="12" font-weight="600" fill="#7f1d1d">failure that trips the rule</text>
+  <text x="488" y="128" text-anchor="middle" font-size="12" fill="#0f172a">allowed_fails set: failures in window &gt; allowed_fails</text>
+  <text x="488" y="146" text-anchor="middle" font-size="12" fill="#0f172a">(window = cooldown_time, as Python v1)</text>
+
+  <path d="M636 220H340" stroke="#16a34a" stroke-width="1.5" marker-end="url(#a)"/>
+  <text x="488" y="242" text-anchor="middle" font-size="12" font-weight="600" fill="#14532d">now passes cooldown_until</text>
+  <text x="488" y="260" text-anchor="middle" font-size="12" fill="#0f172a">no timer, checked by the next choose()</text>
+
+  <path d="M120 250C120 300 260 300 260 254" fill="none" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+  <text x="190" y="314" text-anchor="middle" font-size="12" fill="#475569">success, or a failure under the threshold</text>
+
+  <!-- rules box -->
+  <rect x="40" y="340" width="920" height="110" rx="8" fill="#f8fafc" stroke="#94a3b8"/>
+  <text x="56" y="364" font-weight="600" fill="#0f172a">Rule without allowed_fails (Python v2 defaults, window 60s)</text>
+  <text x="56" y="386" font-size="12" fill="#0f172a">429 cools the deployment when the group has another one; 401/402/404 always cool it</text>
+  <text x="56" y="406" font-size="12" fill="#0f172a">otherwise cool when failures / total &gt; 50% over at least 5 calls (group of 2+), or 1000 straight failures (single deployment)</text>
+  <text x="56" y="426" font-size="12" fill="#0f172a">router_settings: routing_strategy, num_retries (default 2), allowed_fails, cooldown_time (default 5s), timeout</text>
+</svg>

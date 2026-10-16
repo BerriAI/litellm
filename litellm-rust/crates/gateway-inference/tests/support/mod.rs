@@ -108,6 +108,37 @@ fn configured_app(
     ))
 }
 
+/// An app whose `public/model` group holds one deployment of `model` per api base.
+pub fn app_with_group(model: &str, api_bases: &[&str]) -> Router {
+    let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
+    let http = Resolution::from(&HttpSettings::default()).config;
+    let gateway = Gateway::new(
+        CoreResources::new(pool),
+        http,
+        Arc::new(NoSecrets),
+        api_bases
+            .iter()
+            .map(|api_base| {
+                (
+                    "public/model".to_owned(),
+                    Deployment {
+                        model: model.into(),
+                        api_base: Some((*api_base).into()),
+                        api_key: Some("test-key".into()),
+                        timeout: Some(Duration::from_secs(5)),
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect(),
+    )
+    .unwrap();
+    router(Arc::new(gateway)).layer(axum::middleware::from_fn_with_state(
+        (litellm_gateway_auth::Permissions::All, None),
+        test_identity,
+    ))
+}
+
 async fn test_identity(
     axum::extract::State((permissions, principal)): axum::extract::State<(
         litellm_gateway_auth::Permissions,
