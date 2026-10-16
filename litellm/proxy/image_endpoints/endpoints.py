@@ -1,9 +1,9 @@
 import asyncio
 import io
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from itertools import chain
 from types import MappingProxyType
-from typing import Final, get_type_hints
+from typing import Annotated, Final, get_type_hints
 
 import orjson
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
@@ -20,6 +20,7 @@ from litellm.proxy.common_request_processing import (
     log_llm_api_exception,
     resolve_litellm_call_id,
 )
+from litellm.proxy.common_utils.custom_openapi_spec import inline_request_body
 from litellm.proxy.common_utils.http_parsing_utils import (
     coerce_numeric_form_fields,
     numeric_form_fields,
@@ -32,13 +33,29 @@ from litellm.proxy.common_utils.openai_error_payload import (
     openai_error_type,
 )
 from litellm.proxy.route_llm_request import route_request
-from litellm.types.images.main import ImageEditRequestParams
+from litellm.types.images.main import (
+    ImageEditRequestParams,
+    ImageVariationRequest,
+    ImageVariationRequestParams,
+)
 from litellm.types.llms.openai import ChatCompletionUserMessage
+from litellm.types.utils import ImageResponse
 
 router: Final = APIRouter()
 
 IMAGE_EDIT_NUMERIC_FORM_FIELDS: Final = numeric_form_fields(get_type_hints(ImageEditRequestParams))
 IMAGE_EDIT_OPTIONAL_FIELD_DEFAULTS: Final = MappingProxyType({"prompt": None, "image": None})
+IMAGE_VARIATION_NUMERIC_FORM_FIELDS: Final = numeric_form_fields(get_type_hints(ImageVariationRequestParams))
+IMAGE_VARIATION_OPTIONAL_FIELD_DEFAULTS: Final = MappingProxyType({"image": None})
+_IMAGE_VARIATION_REQUEST_BODY: Final = inline_request_body(
+    ImageVariationRequest,
+    {
+        "model": "dall-e-2",
+        "n": 2,
+        "image": "image.png",
+        "size": "1024x1024",
+    },
+)
 
 IMAGE_ARRAY_FIELD: Final = "image[]"
 MASK_ARRAY_FIELD: Final = "mask[]"
@@ -65,6 +82,52 @@ async def batch_to_bytesio(
     if not uploads:
         return None
     return [await uploadfile_to_bytesio(u) for u in uploads]
+
+
+def _extract_request_path_model(request: Request) -> str | None:
+    model: Final = request.path_params.get("model")
+    if isinstance(model, str) and model.strip():
+        return model.strip()
+    return None
+
+
+def _extract_request_query_model(request: Request) -> str | None:
+    scope: Final = getattr(request, "scope", None)
+    if isinstance(scope, Mapping) and "query_string" in scope:
+        model: Final = request.query_params.get("model")
+        if isinstance(model, str) and model.strip():
+            return model.strip()
+    return None
+
+
+def _validate_image_endpoint_model_sources(
+    data: Mapping[str, object],
+    request: Request,
+) -> None:
+    """Ensure consistency across body, path, and query model sources to prevent authorization bypass."""
+    body_model_val: Final = data.get("model")
+    body_model: Final = body_model_val.strip() if isinstance(body_model_val, str) and body_model_val.strip() else None
+    path_model: Final = _extract_request_path_model(request)
+    query_model: Final = _extract_request_query_model(request)
+
+    models_by_source: Final[Mapping[str, str]] = {
+        source: model
+        for source, model in (("body", body_model), ("path", path_model), ("query", query_model))
+        if model is not None
+    }
+
+    if len(set(models_by_source.values())) > 1:
+        sources_str: Final = ", ".join(f"{src}='{m}'" for src, m in models_by_source.items())
+        raise HTTPException(
+            status_code=400,
+            detail=f"Conflicting model sources specified ({sources_str}). Model must match across path, query, and request body.",
+        )
+
+    if path_model is None and query_model is not None and body_model is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Query parameter 'model' is not supported on this endpoint. Specify 'model' in the request body.",
+        )
 
 
 @router.post(
@@ -345,6 +408,125 @@ async def image_edit_api(
             version=version,
         )
     except Exception as e:
+        raise await processor.handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            version=version,
+        )
+
+
+@router.post(
+    "/v1/images/variations",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["images"],
+    summary="Create image variations",
+    responses={200: {"model": ImageResponse}},
+    openapi_extra={"requestBody": _IMAGE_VARIATION_REQUEST_BODY},
+)
+@router.post(
+    "/images/variations",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["images"],
+    summary="Create image variations",
+    responses={200: {"model": ImageResponse}},
+    openapi_extra={"requestBody": _IMAGE_VARIATION_REQUEST_BODY},
+)
+@router.post(
+    "/openai/deployments/{model:path}/images/variations",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["images"],
+    summary="Create image variations",
+    responses={200: {"model": ImageResponse}},
+    openapi_extra={"requestBody": _IMAGE_VARIATION_REQUEST_BODY},
+)  # azure compatible endpoint
+async def image_variation_api(
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    image: Annotated[Sequence[UploadFile] | None, File()] = None,
+    image_array: Annotated[Sequence[UploadFile] | None, File(alias=IMAGE_ARRAY_FIELD)] = None,
+    model: str | None = None,
+) -> object:
+    """
+    Follows the OpenAI Images API spec: https://platform.openai.com/docs/api-reference/images/createVariation
+
+    ```bash
+    curl -X POST "http://localhost:4000/v1/images/variations" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+        -F "model=dall-e-2" \
+        -F "image=@image.png" \
+        -F "n=2"
+    ```
+    """
+    if image is not None and image_array is not None:
+        raise HTTPException(status_code=422, detail="Cannot specify both 'image' and 'image[]'")
+    input_images: Final = image_array if image is None else image
+
+    from litellm.proxy.proxy_server import (
+        general_settings,  # pyright: ignore[reportUnknownVariableType]  # dynamic proxy setting
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        read_request_body,  # pyright: ignore[reportUnknownVariableType]  # request body reader
+        select_data_generator,  # pyright: ignore[reportUnknownVariableType]  # streaming data generator
+        user_api_base,  # pyright: ignore[reportUnknownVariableType]  # dynamic user api base
+        user_max_tokens,
+        user_model,  # pyright: ignore[reportUnknownVariableType]  # dynamic user model
+        user_request_timeout,
+        user_temperature,  # pyright: ignore[reportUnknownVariableType]  # dynamic user temperature
+        version,
+    )
+
+    #########################################################
+    # Read request body and convert UploadFiles to BytesIO
+    #########################################################
+    form_fields: Final = coerce_numeric_form_fields(
+        parsed_body=await read_request_body(request=request),  # pyright: ignore[reportUnknownArgumentType]  # untyped request body dict
+        numeric_fields=IMAGE_VARIATION_NUMERIC_FORM_FIELDS,
+    )
+    data: Final = {
+        key: value
+        for key, value in chain(IMAGE_VARIATION_OPTIONAL_FIELD_DEFAULTS.items(), form_fields.items())
+        if key not in BRACKETED_FILE_FIELDS
+    }
+    image_files: Final = await batch_to_bytesio(input_images)
+    if image_files:
+        data["image"] = image_files
+
+    if "image" in data and isinstance(data["image"], str):
+        raise HTTPException(
+            status_code=422,
+            detail="'image' must be provided as a multipart file upload, not a string.",
+        )
+
+    _validate_image_endpoint_model_sources(data=data, request=request)
+
+    #########################################################
+    # Process request
+    #########################################################
+
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+    try:
+        return await processor.base_process_llm_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            route_type="aimage_variation",
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,  # pyright: ignore[reportUnknownArgumentType]  # dynamic proxy setting
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,  # pyright: ignore[reportUnknownArgumentType]  # dynamic streaming generator
+            model=model,
+            user_model=user_model,  # pyright: ignore[reportUnknownArgumentType]  # dynamic user model
+            user_temperature=user_temperature,  # pyright: ignore[reportUnknownArgumentType]  # dynamic user temperature
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,  # pyright: ignore[reportUnknownArgumentType]  # dynamic user api base
+            version=version,
+        )
+    except Exception as e:  # noqa: BLE001  # translate any exception to proxy exception response
         raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,

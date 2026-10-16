@@ -2286,6 +2286,10 @@ class Router:
         )
         self.afile_list = self.factory_function(litellm.afile_list, call_type="alist_files")
         self.aimage_edit = self.factory_function(litellm.aimage_edit, call_type="aimage_edit")
+        self.aimage_variation = self.factory_function(  # pyright: ignore[reportUnknownMemberType]  # dynamic router factory binding
+            litellm.aimage_variation,  # pyright: ignore[reportUnknownMemberType]  # dynamic router factory binding
+            call_type="aimage_variation",
+        )
         self.allm_passthrough_route = self.factory_function(
             litellm.allm_passthrough_route, call_type="allm_passthrough_route"
         )
@@ -7365,6 +7369,7 @@ class Router:
             "aretrieve_fine_tuning_job",
             "alist_files",
             "aimage_edit",
+            "aimage_variation",
             "allm_passthrough_route",
             "alist_input_items",
             "agenerate_content",
@@ -7641,6 +7646,7 @@ class Router:
                 "aretrieve_fine_tuning_job",
                 "alist_files",
                 "aimage_edit",
+                "aimage_variation",
                 "agenerate_content",
                 "agenerate_content_stream",
                 "aocr",

@@ -5,7 +5,7 @@ import threading
 import time
 from collections.abc import Callable, Generator, Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from queue import SimpleQueue
 from types import MappingProxyType
@@ -60,7 +60,7 @@ class Reply:
     abort_after: int | None = None
     gate_after_first: threading.Event | None = None
     pause_between_chunks: float = 0
-    headers: Mapping[str, str] = MappingProxyType({})
+    headers: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     drop_connection: bool = False
 
 

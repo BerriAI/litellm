@@ -89,6 +89,7 @@ ROUTE_ENDPOINT_MAPPING: Final = {
     "_aresponses_websocket": "/responses",
     "alist_input_items": "/responses/{response_id}/input_items",
     "aimage_edit": "/images/edits",
+    "aimage_variation": "/images/variations",
     "acancel_responses": "/responses/{response_id}/cancel",
     "acompact_responses": "/responses/compact",
     "aocr": "/ocr",
@@ -517,6 +518,7 @@ RouteType = Literal[
     "acreate_realtime_transcription_session",
     "_aresponses_websocket",  # private function for responses WebSocket mode
     "aimage_edit",
+    "aimage_variation",
     "agenerate_content",
     "agenerate_content_stream",
     "allm_passthrough_route",
