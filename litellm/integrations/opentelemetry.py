@@ -3415,12 +3415,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         construction. The malformed entry is never logged: it may be a bare
         ingest key, which ``redact_string`` does not scrub.
         """
-        pairs: Final[Iterable[tuple[str, str]]] = (
-            OpenTelemetry._parse_otel_header_pairs(headers)
-            if isinstance(headers, str)
-            else headers.items() if isinstance(headers, Mapping) else ()
-        )
-        return dict(pairs)
+        if isinstance(headers, str):
+            return dict(OpenTelemetry._parse_otel_header_pairs(headers))
+        if isinstance(headers, Mapping):
+            return dict(headers)
+        return {}
 
     @staticmethod
     def _parse_otel_header_pairs(headers: str) -> "Iterable[tuple[str, str]]":
