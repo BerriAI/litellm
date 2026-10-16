@@ -25,7 +25,7 @@ def _non_negative_int(value: object) -> int | None:
 
 def _requested_results(optional_params: Mapping[str, object]) -> int:
     for key in ("max_results", "numResults"):
-        requested: Final = _non_negative_int(optional_params.get(key))
+        requested = _non_negative_int(optional_params.get(key))
         if requested is not None:
             return requested
     return EXA_AI_INCLUDED_RESULTS
