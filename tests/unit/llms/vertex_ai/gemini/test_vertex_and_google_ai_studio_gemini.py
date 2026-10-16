@@ -6356,3 +6356,37 @@ def test_gemini_multi_candidate_messages_do_not_share_state():
     assert resp.choices[1].message.tool_calls is None
     assert getattr(resp.choices[1].message, "reasoning_content", None) is None
     assert resp.choices[1].provider_specific_fields["native_finish_reason"] == "STOP"
+
+
+def test_map_openai_params_tools_not_mutated_in_place():
+    """
+    Ensure VertexGeminiConfig.map_openai_params does not mutate caller's tool schemas in place.
+    Fixes issue #46921 where shallow copying tool definitions mutated original parameter dicts.
+    """
+    import copy
+
+    tags = {
+        "anyOf": [{"type": "array", "items": {"type": "string"}}, {"type": "null"}],
+        "default": None,
+        "description": "Optional tags.",
+        "title": "Tags",
+    }
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "test_func",
+                "description": "test function",
+                "parameters": {"type": "object", "properties": {"tags": tags}},
+            },
+        }
+    ]
+    before = copy.deepcopy(tools)
+    VertexGeminiConfig().map_openai_params(
+        non_default_params={"tools": tools},
+        optional_params={},
+        model="gemini-2.5-flash",
+        drop_params=False,
+    )
+    assert tools == before
+

@@ -610,6 +610,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         googleMaps: dict | None = None
         google_maps_retrieval_config: dict | None = None
         computerUse: dict | None = None
+        # Make a deep copy so caller's original tool definitions are not mutated
+        value = deepcopy(value)
         # remove 'additionalProperties' from tools
         value = _remove_additional_properties(value)
         # remove 'strict' from tools
@@ -625,7 +627,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     and _openai_function_object["parameters"] is not None
                     and isinstance(_openai_function_object["parameters"], dict)
                 ):  # OPENAI accepts JSON Schema, Google accepts OpenAPI schema.
-                    _openai_function_object["parameters"] = _build_vertex_schema(_openai_function_object["parameters"])
+                    _openai_function_object["parameters"] = _build_vertex_schema(
+                        deepcopy(_openai_function_object["parameters"])
+                    )
 
                 openai_function_object = _openai_function_object
 
