@@ -500,11 +500,13 @@ async def _arealtime(
         )
         return
 
+    drop_params: Final = litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True
     provider_config: BaseRealtimeConfig | None = None
     if _custom_llm_provider in LlmProviders._member_map_.values():
         provider_config = ProviderConfigManager.get_provider_realtime_config(
             model=model,
             provider=LlmProviders(_custom_llm_provider),
+            drop_params=drop_params,
         )
     if provider_config is not None:
         await base_llm_http_handler.async_realtime(
@@ -585,7 +587,6 @@ async def _arealtime(
         aws_bedrock_runtime_endpoint: Final = kwargs.get("aws_bedrock_runtime_endpoint")
         aws_external_id: Final = kwargs.get("aws_external_id")
         aws_session_tags: Final = kwargs.get("aws_session_tags")
-        drop_params: Final = litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True
 
         await bedrock_realtime.async_realtime(
             model=model,
@@ -671,6 +672,7 @@ async def _arealtime(
             resolve_access_token=resolve_vertex_access_token,
             project=resolved_project,
             location=vertex_location,
+            drop_params=drop_params,
         )
 
         await base_llm_http_handler.async_realtime(

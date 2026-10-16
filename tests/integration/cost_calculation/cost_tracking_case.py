@@ -235,6 +235,8 @@ class RealtimeResponse(BaseModel):
     session_type: str | None = None
     created_event: Literal["session.created", "transcription_session.created"] = "session.created"
     created_repeats: int = 1
+    created_after_first_frame: bool = False
+    dialect: Literal["openai", "xai"] = "openai"
 
 
 StoredResponse: TypeAlias = Annotated[
