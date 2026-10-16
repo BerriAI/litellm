@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.core_helpers import (
     budget_reservation_from_metadata,
     drop_params_env_flag,
     drop_params_flag,
+    filter_internal_params,
     get_parent_otel_span_from_kwargs,
     get_or_create_metadata_bucket,
     get_provider_response_headers_from_hidden_params,
@@ -143,6 +144,27 @@ class TestGetOrCreateMetadataBucket:
         assert key == "litellm_metadata"
         assert isinstance(request_data["litellm_metadata"], dict)
         assert bucket is request_data["litellm_metadata"]
+
+
+def test_filter_internal_params_drops_only_the_mcp_handler_keys() -> None:
+    rest_of_the_call: Final = {
+        "api_key": "sk-test",
+        "guardrails": ["default"],
+        "metadata": {"team": "search"},
+        "stream_chunk_size": 64,
+        "temperature": 0.2,
+    }
+
+    filtered: Final = filter_internal_params(
+        {
+            **rest_of_the_call,
+            "_skip_mcp_handler": True,
+            "skip_mcp_handler": True,
+            "mcp_handler_context": {"server": "docs"},
+        }
+    )
+
+    assert filtered == rest_of_the_call
 
 
 def test_reconstruct_model_name_prefers_deployment_value():

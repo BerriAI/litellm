@@ -411,6 +411,8 @@ def test_provider_specific_cache_key_ignores_litellm_owned_kwargs(monkeypatch: p
 
     assert cache.get_cache_key(**request, _litellm_control={"stream_chunk_size": 64}) == base_key
     assert cache.get_cache_key(**request, litellm_trace_id="trace-1") == base_key
+    assert cache.get_cache_key(**request, _skip_mcp_handler=True) == base_key
+    assert cache.get_cache_key(**request, fake_stream=True) == base_key
     assert cache.get_cache_key(**{**request, "top_k": 6}) != base_key
 
 

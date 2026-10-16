@@ -142,6 +142,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     BaseUrlRoutingHint,
     CustomPricingLiteLLMParams,
+    DynamicPromptManagementParamLiteral,
     ModelResponseStream,
     ProviderRoutingHints,
     RawRequestTypedDict,
@@ -6470,7 +6471,9 @@ def embedding(
         "encoding_format",
     ]
     default_params: Final = [*openai_params, "aembedding", "extra_headers"]
-    non_default_params: Final = filter_out_litellm_params(kwargs, excluding=default_params)
+    non_default_params: Final = filter_out_litellm_params(
+        kwargs, excluding=(*default_params, *DynamicPromptManagementParamLiteral.list_all_params())
+    )
 
     litellm_params_dict: Final = get_litellm_params(**kwargs)
 

@@ -30,6 +30,7 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_httpx_client,
 )
+from litellm.types.litellm_params import MCP_HANDLER_KWARG_NAMES
 from litellm.types.llms.bedrock import GuardrailConfigBlock
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, Usage
@@ -202,7 +203,11 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             custom_prompt_dict=custom_prompt_dict,
         )
         inference_params = copy.deepcopy(optional_params)
-        inference_params = {k: v for k, v in inference_params.items() if k not in self.aws_authentication_params}
+        inference_params = {
+            k: v
+            for k, v in inference_params.items()
+            if k not in self.aws_authentication_params and k not in MCP_HANDLER_KWARG_NAMES
+        }
         request_data: dict = {}
         if provider == "cohere":
             if model.startswith("cohere.command-r"):

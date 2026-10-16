@@ -17,9 +17,11 @@ from botocore.credentials import Credentials
 from botocore.exceptions import ClientError
 
 import litellm
+from litellm.constants import CONTROL_OPTIONS_KEY
 from litellm.llms.bedrock.chat.converse_handler import BedrockConverseLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.rust_bridge import configuration
+from litellm.types.litellm_params import ControlOptions
 from litellm.types.utils import ModelResponse
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 from tests.unit.llms.bedrock.slow_upstream import (
@@ -180,6 +182,26 @@ def _sync_client_returning_converse_response():
     )
     client.__class__ = HTTPHandler
     return client
+
+
+def test_a_caller_fake_stream_calls_converse_and_replays_the_answer_as_chunks():
+    client: Final = MagicMock()
+    client.post.side_effect = lambda *_args, **_kwargs: httpx.Response(
+        200,
+        json=CONVERSE_RESPONSE,
+        request=httpx.Request("POST", "https://bedrock-runtime.us-west-2.amazonaws.com"),
+    )
+    client.__class__ = HTTPHandler
+
+    response: Final = _run(
+        optional_params={"maxTokens": 16, "stream": True},
+        litellm_params={CONTROL_OPTIONS_KEY: ControlOptions(fake_stream=True)},
+        client=client,
+    )
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in response) == "hi"
+    assert client.post.call_args.args[0].endswith("/converse"), client.post.call_args
+    assert client.post.call_args.kwargs["stream"] is False, client.post.call_args
 
 
 def test_the_sync_python_path_logs_pre_call_once():
