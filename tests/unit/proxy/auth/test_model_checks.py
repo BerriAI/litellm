@@ -540,28 +540,67 @@ def test_gemini_model_info_partial_wildcard_has_unique_model_names(
     assert len(model_names) == len(set(model_names))
 
 
-def test_static_databricks_partial_wildcard_splices_cost_map_ids(
-    monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
+@pytest.mark.parametrize(
+    ("model_name", "deployment_model"),
+    [
+        ("cloudflare/@cf/*", "cloudflare/@cf/*"),
+        ("gemini/gemini-2.5*", "gemini/gemini-2.5*"),
+        ("vertex_ai/gemini-*", "vertex_ai/gemini-*"),
+        ("fireworks_ai/accounts/fireworks/models/llama*", "fireworks_ai/accounts/fireworks/models/llama*"),
+        ("genai/test/*", "openai/*"),
+        ("custom/gemini-*", "gemini/*"),
+        ("team/claude-*", "anthropic/claude-*"),
+    ],
+)
+def test_every_listed_partial_wildcard_id_routes_to_a_known_provider_model(
+    monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None, model_name: str, deployment_model: str
+) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", False)
+    provider: Final = deployment_model.partition("/")[0]
+    known_ids: Final = frozenset(
+        model_id.removeprefix(f"{provider}/") for model_id in litellm.models_by_provider[provider]
+    )
+    router: Final = PatternMatchRouter()
+    router.add_pattern(model_name, {"model_name": model_name, "litellm_params": {"model": deployment_model}})
+
+    listed: Final = get_known_models_from_wildcard(
+        wildcard_model=model_name,
+        litellm_params=LiteLLM_Params(model=deployment_model),
+    )
+    routed_ids: Final = tuple(
+        str((router.route(model_id) or [{}])[0].get("litellm_params", {}).get("model", "")) for model_id in listed
+    )
+
+    assert listed
+    assert len(listed) == len(set(listed))
+    assert [routed for routed in routed_ids if routed.removeprefix(f"{provider}/") not in known_ids] == []
+
+
+@pytest.mark.parametrize(
+    "wildcard",
+    ["databricks/system.ai.*", "openai/ft:gpt-4o*", "anthropic/claude-nonexistent-*"],
+)
+def test_partial_wildcard_matching_no_known_model_lists_nothing(
+    monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None, wildcard: str
 ) -> None:
     import litellm
     from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
     from litellm.types.router import LiteLLM_Params
 
     monkeypatch.setattr(litellm, "check_provider_endpoint", False)
-    wildcard: Final = "databricks/system.ai.*"
-    provider_ids: Final = tuple(litellm.models_by_provider["databricks"])
-    expected_ids: Final = frozenset(
-        f"databricks/system.ai.{model_id.partition('/')[-1]}" for model_id in provider_ids
-    )
 
-    result: Final = get_known_models_from_wildcard(
-        wildcard_model=wildcard,
-        litellm_params=LiteLLM_Params(model=wildcard, api_key="x", api_base="https://example.invalid"),
+    assert (
+        get_known_models_from_wildcard(
+            wildcard_model=wildcard,
+            litellm_params=LiteLLM_Params(model=wildcard, api_key="x", api_base="https://example.invalid"),
+        )
+        == []
     )
-
-    assert result
-    assert frozenset(result) == expected_ids
-    assert all(model_id.startswith("databricks/system.ai.") for model_id in result)
 
 
 def test_wildcard_credential_hydration_preserves_missing_credential_name(

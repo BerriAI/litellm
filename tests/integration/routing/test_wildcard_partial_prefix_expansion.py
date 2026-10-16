@@ -1,5 +1,5 @@
-"""Partial-prefix wildcards like ``databricks/system.ai.*`` must splice the literal
-prefix onto provider-stripped cost-map ids, never onto the provider-prefixed key."""
+"""Partial wildcards like ``cloudflare/@cf/*`` list each callable id once on /v1/models and /model/info,
+and a partial wildcard that matches no known id, like ``databricks/system.ai.*``, lists no guessed ids."""
 
 from collections.abc import Iterator
 from typing import Final
@@ -8,7 +8,7 @@ import pytest
 
 from integration._support.client import Gateway, object_value, string_value
 
-PATTERNS: Final = ("databricks/system.ai.*", "databricks/*")
+PATTERNS: Final = ("cloudflare/@cf/*", "databricks/system.ai.*", "databricks/*")
 
 
 def _registered_model_id(gateway: Gateway, pattern: str) -> str:
@@ -42,30 +42,32 @@ def _listed_model_ids(gateway: Gateway) -> tuple[str, ...]:
     return tuple(string_value(object_value(entry)["id"]) for entry in data)
 
 
-def test_partial_prefix_wildcard_expands_to_unity_catalog_names(gateway: Gateway, wildcard_deployments: None) -> None:
-    prefixed: Final = tuple(
-        model_id for model_id in _listed_model_ids(gateway) if model_id.startswith("databricks/system.ai.")
-    )
-    assert prefixed
-    assert all("/" not in model_id.removeprefix("databricks/system.ai.") for model_id in prefixed)
+def _model_info_names(gateway: Gateway) -> tuple[str, ...]:
+    data: Final = gateway.get("/model/info")["data"]
+    assert isinstance(data, list)
+    return tuple(string_value(object_value(entry)["model_name"]) for entry in data)
+
+
+def test_partial_wildcard_lists_provider_ids_once_on_both_endpoints(
+    gateway: Gateway, wildcard_deployments: None
+) -> None:
+    listed: Final = tuple(model_id for model_id in _listed_model_ids(gateway) if model_id.startswith("cloudflare/"))
+    model_info: Final = tuple(name for name in _model_info_names(gateway) if name.startswith("cloudflare/"))
+
+    assert listed
+    assert all(model_id.startswith("cloudflare/@cf/") and model_id.count("@cf/") == 1 for model_id in listed)
+    assert len(listed) == len(set(listed))
+    assert sorted(model_info) == sorted(listed)
+
+
+def test_partial_wildcard_matching_no_known_id_lists_no_guessed_ids(
+    gateway: Gateway, wildcard_deployments: None
+) -> None:
+    assert [model_id for model_id in _listed_model_ids(gateway) if model_id.startswith("databricks/system.ai.")] == []
+    assert [name for name in _model_info_names(gateway) if name.startswith("databricks/system.ai.")] == [
+        "databricks/system.ai.*"
+    ]
 
 
 def test_provider_wildcard_still_expands_to_cost_map_names(gateway: Gateway, wildcard_deployments: None) -> None:
     assert any(model_id.startswith("databricks/databricks-") for model_id in _listed_model_ids(gateway))
-
-
-def test_model_info_keeps_provider_model_for_expanded_deployments(gateway: Gateway, wildcard_deployments: None) -> None:
-    data: Final = gateway.get("/model/info")["data"]
-    assert isinstance(data, list)
-    expanded: Final = [
-        row
-        for row in (object_value(entry) for entry in data)
-        if string_value(row["model_name"]).startswith("databricks/system.ai.")
-    ]
-    assert expanded, "model/info returned no expanded rows for databricks/system.ai.*"
-    bad: Final = [
-        row["model_name"]
-        for row in expanded
-        if "system.ai.databricks/" in string_value(object_value(row["litellm_params"])["model"])
-    ]
-    assert not bad, f"litellm_params.model carries the corrupted expanded name: {bad}"

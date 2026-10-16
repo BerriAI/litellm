@@ -274,32 +274,26 @@ def _strip_known_provider_prefix(model: str, known_providers: frozenset[str]) ->
     return model_suffix if sep and leading in known_providers else model
 
 
-def _apply_partial_wildcard_prefix(
+def _deployment_wildcard_literal(wildcard_literal: str, litellm_params: LiteLLM_Params | None) -> str:
+    if litellm_params is None or not _check_wildcard_routing(litellm_params.model):
+        return wildcard_literal
+    _, sep, deployment_suffix = litellm_params.model.partition("/")
+    return deployment_suffix.replace("*", "") if sep else wildcard_literal
+
+
+def _expand_partial_wildcard(
     provider_models: Sequence[str],
-    model_prefix: str,
+    wildcard_provider_prefix: str,
+    wildcard_literal: str,
+    deployment_literal: str,
     known_providers: frozenset[str],
-    live_model_listing: bool,
 ) -> tuple[str, ...]:
-    matching_provider_models: Final = tuple(
-        model
-        for model in provider_models
-        if _strip_known_provider_prefix(model, known_providers).startswith(model_prefix)
+    stripped_models: Final = (_strip_known_provider_prefix(model, known_providers) for model in provider_models)
+    return tuple(
+        f"{wildcard_provider_prefix}/{wildcard_literal}{stripped.removeprefix(deployment_literal)}"
+        for stripped in stripped_models
+        if stripped.startswith(deployment_literal)
     )
-    if matching_provider_models:
-        return matching_provider_models
-    if live_model_listing:
-        return ()
-    return tuple(f"{model_prefix}{_strip_known_provider_prefix(model, known_providers)}" for model in provider_models)
-
-
-def _provider_has_live_model_listing(provider: str) -> bool:
-    if not litellm.check_provider_endpoint:
-        return False
-    try:
-        llm_provider: Final = LlmProviders(provider)
-    except ValueError:
-        return False
-    return ProviderConfigManager.get_provider_model_info(model=None, provider=llm_provider) is not None
 
 
 def _normalize_known_wildcard_model(
@@ -344,27 +338,27 @@ def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_
         return []
 
     known_providers: Final = frozenset(provider.value for provider in LlmProviders)
+    wildcard_literal: Final = wildcard_suffix.replace("*", "")
 
     wildcard_models: Final = (
-        provider_models
+        tuple(
+            _normalize_known_wildcard_model(
+                model=model,
+                wildcard_provider_prefix=wildcard_provider_prefix,
+                known_providers=known_providers,
+            )
+            for model in provider_models
+        )
         if wildcard_suffix == "*"
-        else _apply_partial_wildcard_prefix(
+        else _expand_partial_wildcard(
             provider_models=provider_models,
-            model_prefix=wildcard_suffix.replace("*", ""),
-            known_providers=known_providers,
-            live_model_listing=_provider_has_live_model_listing(provider),
-        )
-    )
-
-    normalized_wildcard_models: Final = tuple(
-        _normalize_known_wildcard_model(
-            model=model,
             wildcard_provider_prefix=wildcard_provider_prefix,
+            wildcard_literal=wildcard_literal,
+            deployment_literal=_deployment_wildcard_literal(wildcard_literal, litellm_params),
             known_providers=known_providers,
         )
-        for model in wildcard_models
     )
-    return list(dict.fromkeys(normalized_wildcard_models))
+    return list(dict.fromkeys(wildcard_models))
 
 
 def expand_wildcard_deployments_for_model_info(

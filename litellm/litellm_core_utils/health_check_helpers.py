@@ -93,10 +93,10 @@ def _wildcard_health_check_models(
     known_providers: Final = frozenset(provider.value for provider in LlmProviders)
     literal_prefix: Final = wildcard_suffix.replace("*", "")
     stripped_ids: Final = tuple(_strip_known_provider_prefix(model, known_providers) for model in candidate_models)
-    matching: Final = [stripped for stripped in stripped_ids if stripped.startswith(literal_prefix)]
+    matching: Final = tuple(stripped for stripped in stripped_ids if stripped.startswith(literal_prefix))
     if matching:
         return tuple(f"{custom_llm_provider}/{stripped}" for stripped in matching[:3])
-    return tuple(f"{custom_llm_provider}/{wildcard_suffix.replace('*', stripped, 1)}" for stripped in stripped_ids[:3])
+    return tuple(candidate_models[:3])
 
 
 class HealthCheckHelpers:

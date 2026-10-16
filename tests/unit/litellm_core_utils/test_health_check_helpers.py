@@ -1525,16 +1525,18 @@ def test_wildcard_health_check_models_partial_prefix_filters_candidates_to_liter
     ) == ("openai/gpt-4o-mini", "openai/gpt-4.1-mini", "openai/gpt-4o")
 
 
-def test_wildcard_health_check_models_partial_prefix_splices_suffix_around_star():
-    assert _wildcard_health_check_models("ft:*", "openai", ["gpt-4o-mini"]) == ("openai/ft:gpt-4o-mini",)
+def test_wildcard_health_check_models_partial_prefix_matching_nothing_keeps_cheapest_candidates():
+    assert _wildcard_health_check_models("ft:*", "openai", ["gpt-4o-mini", "gpt-4.1-nano"]) == (
+        "gpt-4o-mini",
+        "gpt-4.1-nano",
+    )
 
 
 @pytest.mark.asyncio
-async def test_ahealth_check_partial_prefix_wildcard_probes_spliced_model_id():
+async def test_ahealth_check_partial_prefix_wildcard_never_probes_a_spliced_model_id():
     from litellm.litellm_core_utils.llm_request_utils import pick_cheapest_chat_models_from_llm_provider
 
     cheapest: Final = pick_cheapest_chat_models_from_llm_provider(custom_llm_provider="databricks", n=3)
-    stripped: Final = tuple(model_id.partition("/")[-1] for model_id in cheapest)
 
     captured: dict[str, object] = {}
 
@@ -1547,5 +1549,5 @@ async def test_ahealth_check_partial_prefix_wildcard_probes_spliced_model_id():
             mode="chat",
         )
 
-    assert captured["model"] == f"databricks/system.ai.{stripped[0]}"
-    assert captured["fallbacks"] == [f"databricks/system.ai.{model_id}" for model_id in stripped[1:]]
+    assert captured["model"] == cheapest[0]
+    assert captured["fallbacks"] == list(cheapest[1:])
