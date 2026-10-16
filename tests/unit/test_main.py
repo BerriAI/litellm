@@ -8,7 +8,7 @@ import logging
 import os
 import threading
 import urllib.parse
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
@@ -1106,6 +1106,32 @@ def test_a_breakpoint_drop_params_drops_leaves_key_auto_caching_on(respx_mock: r
             id="anthropic-namespace",
         ),
         pytest.param(
+            "anthropic/claude-opus-5-5",
+            r"https://api\.anthropic\.com/v1/messages",
+            _CLAUDE_REPLY,
+            {"api_key": "fake"},
+            {
+                "type": "namespace",
+                "name": "agents",
+                "tools": [{"type": "web_search_20250305", "cache_control": _FIVE_MINUTES}],
+            },
+            id="anthropic-nameless-namespace-member",
+        ),
+        pytest.param(
+            "bedrock/converse/us.anthropic.claude-opus-5-5",
+            _CONVERSE_ROUTE,
+            _CONVERSE_REPLY,
+            _FAKE_AWS,
+            {
+                "type": "namespace",
+                "name": "agents",
+                "tools": [
+                    {"name": "spawn", "input_schema": {"type": "object"}, "cache_control": _FIVE_MINUTES}
+                ],
+            },
+            id="converse-namespace-member",
+        ),
+        pytest.param(
             "bedrock/invoke/us.anthropic.claude-opus-5-5",
             _INVOKE_ROUTE,
             _CLAUDE_REPLY,
@@ -1216,6 +1242,68 @@ def test_a_marked_past_server_tool_call_takes_a_slot_from_operator_injection_poi
     )
 
     assert _converse_cache_points(json.loads(route.calls.last.request.content)) == ("message",) * 4
+
+
+@pytest.mark.parametrize(
+    ("key", "mark"),
+    [("prompt_cache_breakpoint", _BREAKPOINT), ("cache_control", {"type": "ephemeral"})],
+    ids=["breakpoint", "cache_control"],
+)
+def test_a_marked_past_server_tool_call_leaves_the_operator_system_point_in_place_on_openrouter(
+    respx_mock: respx.MockRouter, openai_api_response: Mapping[str, object], key: str, mark: Mapping[str, str]
+):
+    route: Final = respx_mock.post("https://openrouter.ai/api/v1/chat/completions").respond(json=openai_api_response)
+
+    litellm.completion(
+        model="openrouter/anthropic/claude-opus-5-5",
+        messages=[
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": [{"type": "text", "text": str(index), key: mark} for index in range(3)]},
+            {
+                "role": "assistant",
+                "content": "Searching.",
+                "tool_calls": [{**_SERVER_SEARCH_CALL, key: mark}],
+                "provider_specific_fields": {
+                    "web_search_results": [
+                        {"type": "web_search_tool_result", "tool_use_id": _SERVER_SEARCH_CALL["id"], "content": []}
+                    ]
+                },
+            },
+            {"role": "tool", "tool_call_id": _SERVER_SEARCH_CALL["id"], "content": "Sunny"},
+            {"role": "user", "content": "Thanks"},
+        ],
+        cache_control_injection_points=[
+            {"location": "message", "role": "system"},
+            {"location": "message", "index": -1},
+        ],
+        api_key="fake",
+    )
+
+    assert "cache_control" in json.dumps(json.loads(route.calls.last.request.content)["messages"][0])
+
+
+def test_a_tuple_additional_drop_params_places_the_same_breakpoints_as_a_list(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post(url__regex=_CONVERSE_ROUTE).respond(json=_CONVERSE_REPLY)
+
+    def sent_with(additional_drop_params: Sequence[str]) -> object:
+        litellm.completion(
+            model="bedrock/chat_completions/us.anthropic.claude-opus-5-5",
+            messages=[
+                {"role": "system", "content": [{"type": "text", "text": "sys", "prompt_cache_breakpoint": _BREAKPOINT}]},
+                *(
+                    {"role": role, "content": [{"type": "text", "text": role, "prompt_cache_breakpoint": _BREAKPOINT}]}
+                    for role in ("user", "assistant", "user")
+                ),
+            ],
+            tools=[{**_WEATHER_TOOL, "function": {**_WEATHER_TOOL["function"], "cache_control": _FIVE_MINUTES}}],
+            reasoning_effort="none",
+            drop_params=True,
+            additional_drop_params=additional_drop_params,
+            **_FAKE_AWS,
+        )
+        return json.loads(route.calls.last.request.content)
+
+    assert sent_with(("reasoning_effort",)) == sent_with(["reasoning_effort"])
 
 
 def test_completion_keeps_a_function_call_whose_id_only_looks_like_a_claude_server_tool(

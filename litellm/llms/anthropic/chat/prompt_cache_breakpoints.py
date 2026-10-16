@@ -157,13 +157,19 @@ def _member_mark(member: _Fields) -> object:
     return own if own is not None else (_fields(member.get("function")) or {}).get("cache_control")
 
 
+def _transform_sends_member(member: _Fields) -> bool:
+    return "input_schema" in member or "function" in member or "name" in member
+
+
 def _namespace_member_marks(tools: Sequence[object], route: ClaudeRoute) -> tuple[tuple[_Path, object, _Kind], ...]:
     if route == "converse":
         return ()
     return tuple(
         (path, mark, "written")
         for path, member in _namespace_members(tools)
-        if tool_mark_reaches_claude(member, route) and (mark := _member_mark(member)) is not None
+        if _transform_sends_member(member)
+        and tool_mark_reaches_claude(member, route)
+        and (mark := _member_mark(member)) is not None
     )
 
 
@@ -225,11 +231,16 @@ def prompt_cache_breakpoint_is_usable(marker: object) -> bool:
     return not isinstance(mark, UnsupportedPromptCacheParam) or mark.fallback is not None
 
 
+def _is_computer_use_tool(tool: object) -> bool:
+    tool_type: Final = (_fields(tool) or {}).get("type")
+    return isinstance(tool_type, str) and tool_type.startswith(BEDROCK_COMPUTER_USE_TOOLS)
+
+
 def _converse_sends_tool_mark(tool: _Fields) -> bool:
     tool_type: Final = tool.get("type")
     if tool_type in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES:
         return False
-    if isinstance(tool_type, str) and tool_type.startswith(BEDROCK_COMPUTER_USE_TOOLS):
+    if isinstance(tool_type, str) and _is_computer_use_tool(tool):
         return not (tool_type.startswith("computer_") and "function" in tool)
     return "function" in tool or "input_schema" in tool
 
@@ -450,16 +461,18 @@ def _leading_system_count(messages: Sequence[object]) -> int:
     return next((index for index, message in enumerate(messages) if _role(message) not in _SYSTEM_ROLES), len(messages))
 
 
-def _wire_position(path: _Path, leading_system_count: int) -> tuple[int, ...]:
-    """Where Claude reads a mark: tool definitions, then the cachePoint a route appends after them, then the leading
-    system messages it hoists, then every other message in place, with a message-level mark on the message's text,
-    after its content parts and before its tool calls, and last the request-level mark."""
+def _wire_position(path: _Path, leading_system_count: int, late_tools: frozenset[int]) -> tuple[int, ...]:
+    """Where Claude reads a mark: tool definitions, then the cachePoint a route appends after them, then the
+    ``late_tools`` a route sends apart from the others, then the leading system messages it hoists, then every other
+    message in place, with a message-level mark on the message's text, after its content parts and before its tool
+    calls, and last the request-level mark."""
     if path == _TOOL_CONFIG:
         return (1,)
     if path == _REQUEST:
         return (4,)
     if path[0] == "tools":
-        return (0, *(index for index in path if isinstance(index, int)))
+        indices: Final = tuple(index for index in path if isinstance(index, int))
+        return (1, 1, *indices) if indices[0] in late_tools else (0, *indices)
     index: Final = int(path[1])
     group: Final = 2 if index < leading_system_count else 3
     block: Final = (1,) if len(path) == 2 else (0 if path[2] == "content" else 2, int(path[3]))
@@ -482,12 +495,16 @@ def _run_ends(messages: Sequence[object]) -> tuple[int, ...]:
 
 
 def _last_read(
-    path: _Path, messages: Sequence[object], leading_system_count: int, run_ends: Sequence[int]
+    path: _Path,
+    messages: Sequence[object],
+    leading_system_count: int,
+    run_ends: Sequence[int],
+    late_tools: frozenset[int],
 ) -> tuple[int, ...]:
     """The transforms may move a system message after the conversation start behind the user, tool and function
     turns that follow it, never past the next assistant turn, so Claude may read its marks as late as the end of
     those turns."""
-    position: Final = _wire_position(path, leading_system_count)
+    position: Final = _wire_position(path, leading_system_count, late_tools)
     index: Final = int(path[1]) if path[0] == "messages" else -1
     if index < leading_system_count or _role(messages[index]) not in _SYSTEM_ROLES:
         return position
@@ -658,6 +675,9 @@ def claude_prompt_cache(
     translated: Final = _translated(hoisted_messages, hoisted_tools)
     leading_system_count: Final = _leading_system_count(messages)
     run_ends: Final = _run_ends(messages)
+    late_tools: Final = frozenset(
+        index for index, tool in enumerate(renamed_tools) if route == "converse" and _is_computer_use_tool(tool)
+    )
     unsent_call_ids: Final = frozenset() if pairs_unanswered_tool_calls else unanswered_tool_search_call_ids(messages)
     request_mark: Final = params.get("cache_control")
     placements: Final[tuple[tuple[_Path, object, _Kind], ...]] = (
@@ -676,8 +696,8 @@ def claude_prompt_cache(
                 path,
                 _ttl(cache_control),
                 kind,
-                _wire_position(path, leading_system_count),
-                _last_read(path, messages, leading_system_count, run_ends),
+                _wire_position(path, leading_system_count, late_tools),
+                _last_read(path, messages, leading_system_count, run_ends, late_tools),
             )
             for path, cache_control, kind in placements
         ),

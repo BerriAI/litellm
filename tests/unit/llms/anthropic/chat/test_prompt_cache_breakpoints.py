@@ -704,6 +704,23 @@ def test_a_malformed_breakpoint_beside_a_valid_one_on_a_tool_result_keeps_the_va
     ]
 
 
+def test_a_malformed_breakpoint_beside_one_whose_ttl_drop_params_drops_keeps_that_one_under_drop_params():
+    messages: Final = [
+        {
+            "role": "tool",
+            "tool_call_id": "c1",
+            "content": [
+                _part("r0", prompt_cache_breakpoint={"mode": "implicit"}),
+                _part("r1", prompt_cache_breakpoint=_THIRTY_MINUTES),
+            ],
+        }
+    ]
+
+    assert list(_resolved(messages, drop_params=True).messages) == [
+        {"role": "tool", "tool_call_id": "c1", "content": [_part("r0"), _part("r1")], "cache_control": _EPHEMERAL},
+    ]
+
+
 @pytest.mark.parametrize("malformed", [5, [], "", {"mode": "implicit"}])
 def test_a_malformed_breakpoint_on_a_messages_last_part_keeps_the_messages_own_breakpoint_under_drop_params(
     malformed: object,
@@ -1078,3 +1095,24 @@ def test_a_tool_config_cache_point_settles_after_the_tools_under_drop_params(
     assert list(result.messages) == [
         {"role": "user", "content": [_part("ask") if sent_ask is None else _part("ask", cache_control=sent_ask)]}
     ]
+
+
+@pytest.mark.parametrize(
+    ("route", "sent_bash_mark"),
+    [("anthropic", _ONE_HOUR), ("converse", _EPHEMERAL)],
+    ids=["route_sends_tools_in_order", "route_sends_bash_after_functions"],
+)
+def test_an_hour_on_a_bash_tool_listed_before_a_five_minute_function_is_dropped_only_where_bash_is_sent_last(
+    route: ClaudeRoute, sent_bash_mark: dict[str, object]
+):
+    bash: Final = {"type": "bash_20250124", "name": "bash"}
+    function: Final = {"type": "function", "function": {"name": "t"}, "cache_control": _FIVE_MINUTES}
+
+    result: Final = _resolved(
+        [{"role": "user", "content": [_part("ask")]}],
+        [{**bash, "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}}, function],
+        drop_params=True,
+        route=route,
+    )
+
+    assert list(result.tools or ()) == [{**bash, "cache_control": sent_bash_mark}, function]

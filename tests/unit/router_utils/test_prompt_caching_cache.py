@@ -1,4 +1,5 @@
 import asyncio
+from itertools import chain
 from typing import Final
 
 import pytest
@@ -284,6 +285,41 @@ def test_sync_one_hour_message_level_pin_outlives_the_five_minute_window() -> No
     clock.advance(PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS - PROMPT_CACHE_PIN_TTL_SECONDS)
     assert cache.get_model_id(messages=one_hour, tools=None) is None
 
+
+
+def _tool_call(call_id: str) -> dict[str, object]:
+    return {"id": call_id, "type": "function", "function": {"name": "lookup_clause", "arguments": "{}"}}
+
+
+def _answered_tool_call(call_id: str) -> tuple[AllMessageValues, AllMessageValues]:
+    return (
+        {"role": "assistant", "content": None, "tool_calls": [_tool_call(call_id)]},
+        {"role": "tool", "tool_call_id": call_id, "content": "Section 9."},
+    )
+
+
+def _tool_call_turn(*answered_call_ids: str, marked_call_id: str) -> list[AllMessageValues]:
+    marked_call: Final = {**_tool_call(marked_call_id), "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}}
+    return [
+        {"role": "system", "content": "Here is the full text of a complex legal agreement" * 200},
+        {"role": "user", "content": "Find the termination clause."},
+        *chain.from_iterable(map(_answered_tool_call, answered_call_ids)),
+        {"role": "assistant", "content": None, "tool_calls": [marked_call]},
+    ]
+
+
+def test_a_one_hour_breakpoint_on_a_tool_call_keeps_the_pin_after_the_mark_moves_to_the_next_call() -> None:
+    clock: Final = _ManualClock()
+    cache: Final = _pin_cache(clock)
+
+    cache.add_model_id(
+        model_id="deployment-1h", messages=_tool_call_turn(marked_call_id="call_1"), tools=None, honors_one_hour_ttl=True
+    )
+    clock.advance(PROMPT_CACHE_PIN_TTL_SECONDS + 1)
+
+    assert cache.get_model_id(messages=_tool_call_turn("call_1", marked_call_id="call_2"), tools=None) == {
+        "model_id": "deployment-1h"
+    }
 
 async def _first_non_none(read):
     while True:

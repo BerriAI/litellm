@@ -28,7 +28,10 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     cache_control_as_prompt_cache_breakpoint,
     with_prompt_cache_breakpoint,
 )
-from litellm.litellm_core_utils.prompt_templates.factory import tool_call_ids_answered_by_client
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    tool_call_ids_answered_by_client,
+    tool_call_ids_answered_in,
+)
 from litellm.llms.anthropic.chat.prompt_cache_breakpoints import (
     prompt_cache_breakpoint_is_usable,
     tool_mark_may_reach_claude,
@@ -255,7 +258,11 @@ def _tool_call_ids_sent_as_tool_calls_when_a_server_tool_call_is_marked(
     if not _marks_a_server_tool_call(messages):
         return frozenset()
     if model is not None and not _builds_anthropic_messages(model, custom_llm_provider):
-        return _tool_call_ids(messages)
+        return (
+            _tool_call_ids(messages)
+            if _served_by_bedrock(model, custom_llm_provider)
+            else tool_call_ids_answered_in(messages)
+        )
     return tool_call_ids_answered_by_client(messages, _keeps_mid_conversation_system(model, custom_llm_provider))
 
 
@@ -272,6 +279,18 @@ def _tool_call_ids(messages: Sequence[object]) -> frozenset[str]:
 
 def _marks_a_server_tool_call(messages: Sequence[object]) -> bool:
     return any(_is_marked_server_tool_call(tool_call) for tool_call in _tool_calls(messages))
+
+
+def _served_by_bedrock(model: str, custom_llm_provider: str | None) -> bool:
+    from litellm.exceptions import BadRequestError
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+    from litellm.types.utils import LlmProviders
+
+    try:
+        _, provider, _, _ = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+    except (BadRequestError, ValueError):
+        return False
+    return provider == LlmProviders.BEDROCK.value
 
 
 def _builds_anthropic_messages(model: str, custom_llm_provider: str | None) -> bool:

@@ -1134,9 +1134,9 @@ def _claude_route(provider_config: BaseConfig | None, reaches_converse: bool) ->
 
 
 def _listed_drop_params(additional_drop_params: object) -> tuple[str, ...]:
-    if not isinstance(additional_drop_params, list):
+    if not isinstance(additional_drop_params, (list, tuple)):
         return ()
-    listed: Final = cast(list[object], additional_drop_params)  # cast-ok: elements checked below
+    listed: Final = cast(Sequence[object], additional_drop_params)  # cast-ok: elements checked below
     return tuple(param for param in listed if isinstance(param, str))
 
 

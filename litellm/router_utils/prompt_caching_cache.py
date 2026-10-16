@@ -44,6 +44,7 @@ _MARK_KEYS: Final = frozenset({"cache_control", "prompt_cache_breakpoint"})
 _ENVELOPE_SKIPPED_KEYS: Final = _MARK_KEYS | {"content"}
 _PREFIX_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, JsonValue], ...])
 _TOOLS_ADAPTER: Final = TypeAdapter(tuple[JsonValue, ...])
+_OBJECTS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 _PINS_ADAPTER: Final[TypeAdapter[tuple[JsonValue, ...] | None]] = TypeAdapter(tuple[JsonValue, ...] | None)
 
 
@@ -77,6 +78,19 @@ def _carries_cache_mark(block: Mapping[str, object]) -> bool:
     return _mark_pin_ttl_seconds(block) is not None
 
 
+def _carries_marked_tool_call(message: Mapping[str, object]) -> bool:
+    tool_calls: Final = _OBJECTS_ADAPTER.validate_python(message.get("tool_calls") or ())
+    return any(_carries_cache_mark(call) for call in tool_calls)
+
+
+def _unmarked(block: JsonValue) -> JsonValue:
+    return {key: value for key, value in block.items() if key not in _MARK_KEYS} if isinstance(block, dict) else block
+
+
+def _envelope_value(key: str, value: JsonValue) -> JsonValue:
+    return [_unmarked(call) for call in value] if key == "tool_calls" and isinstance(value, list) else value
+
+
 def _block_unit(
     envelope: tuple[tuple[str, JsonValue], ...], message_run_type: str | None, block: JsonValue
 ) -> tuple[bytes, str | None]:
@@ -89,7 +103,9 @@ def _block_unit(
 
 
 def _message_units(message: Mapping[str, JsonValue]) -> tuple[tuple[bytes, str | None], ...]:
-    envelope: Final = _sorted_pairs(item for item in message.items() if item[0] not in _ENVELOPE_SKIPPED_KEYS)
+    envelope: Final = _sorted_pairs(
+        (key, _envelope_value(key, value)) for key, value in message.items() if key not in _ENVELOPE_SKIPPED_KEYS
+    )
     message_run_type: Final = "tool_result" if message.get("role") == "tool" else None
     content: Final = message.get("content")
     if isinstance(content, list) and content:
@@ -142,7 +158,12 @@ def _breakpoint_pin_ttl_seconds(carrier: JsonValue | Mapping[str, JsonValue]) ->
 
 def _breakpoint_carriers(message: Mapping[str, JsonValue]) -> tuple[JsonValue | Mapping[str, JsonValue], ...]:
     content: Final = message.get("content")
-    return (message, *content) if isinstance(content, list) else (message,)
+    tool_calls: Final = message.get("tool_calls")
+    return (
+        message,
+        *(content if isinstance(content, list) else ()),
+        *(tool_calls if isinstance(tool_calls, list) else ()),
+    )
 
 
 def _pinned_value(value: JsonValue) -> PromptCachingCacheValue | None:
@@ -199,13 +220,15 @@ class PromptCachingCache:
                 last_cacheable_content_idx = None
 
             # Also check for cache_control within content blocks (when content is a list)
-            if not isinstance(content, list):
-                continue
+            if isinstance(content, list):
+                for content_idx, content_block in enumerate(content):
+                    if isinstance(content_block, dict) and _carries_cache_mark(content_block):
+                        last_cacheable_message_idx = msg_idx
+                        last_cacheable_content_idx = content_idx
 
-            for content_idx, content_block in enumerate(content):
-                if isinstance(content_block, dict) and _carries_cache_mark(content_block):
-                    last_cacheable_message_idx = msg_idx
-                    last_cacheable_content_idx = content_idx
+            if _carries_marked_tool_call(message):
+                last_cacheable_message_idx = msg_idx
+                last_cacheable_content_idx = None
 
         # If no cacheable block found, return empty list (no cacheable prefix)
         if last_cacheable_message_idx is None:
