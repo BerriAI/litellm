@@ -125,12 +125,14 @@ class TestAThinkingSummaryAskReachesGemini:
     ) -> None:
         monkeypatch.setattr(litellm, "gemini_include_thoughts_default", False)
 
-        sent = _completion_kwargs_for_thinking(model, provider, thinking)
-        gemini = VertexGeminiConfig()
-        reasoning_effort = reasoning_effort_with_summary_alias(
+        sent: Final = _completion_kwargs_for_thinking(model, provider, thinking)
+        gemini: Final = VertexGeminiConfig()
+        reasoning_effort: Final = reasoning_effort_with_summary_alias(
             sent.get("reasoning_effort"), sent, accepts_summary=gemini.accepts_reasoning_summary_in_reasoning_effort
         )
-        mapped = gemini.map_openai_params({"reasoning_effort": reasoning_effort}, {}, model.split("/", 1)[1], True)
+        mapped: Final = gemini.map_openai_params(
+            {"reasoning_effort": reasoning_effort}, {}, model.split("/", 1)[1], True
+        )
 
         assert mapped["thinkingConfig"]["includeThoughts"] is sends_thoughts
         assert not isinstance(sent.get("reasoning_effort"), dict)
@@ -141,12 +143,12 @@ class TestAThinkingSummaryAskReachesGemini:
         monkeypatch.setattr(litellm, "gemini_include_thoughts_default", False)
         monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
 
-        sent = _reasoning_effort_sent_for_thinking("gemini/gemini-3.1-pro-preview", "gemini", PLAIN_THINKING)
+        sent: Final = _reasoning_effort_sent_for_thinking("gemini/gemini-3.1-pro-preview", "gemini", PLAIN_THINKING)
 
         assert sent == "high"
 
     def test_a_display_ask_leaves_other_chat_targets_on_the_plain_tier(self, local_model_cost_map: None) -> None:
-        sent = _reasoning_effort_sent_for_thinking(
+        sent: Final = _reasoning_effort_sent_for_thinking(
             "databricks/databricks-qwen35-122b-a10b", "databricks", {**PLAIN_THINKING, "display": "summarized"}
         )
 
@@ -175,7 +177,9 @@ class TestTheSummaryWrappingOnlyRidesTheResponsesBridge:
     ) -> None:
         monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
 
-        sent = _reasoning_effort_sent_for_thinking("databricks/databricks-qwen35-122b-a10b", "databricks", PLAIN_THINKING)
+        sent = _reasoning_effort_sent_for_thinking(
+            "databricks/databricks-qwen35-122b-a10b", "databricks", PLAIN_THINKING
+        )
 
         assert sent == "high"
 
@@ -289,9 +293,7 @@ class TestTheNormalizedTierIsTheTierSent:
             ("us/gpt-6-astra", "azure"),
         ],
     )
-    def test_an_azure_hosted_astra_deployment_drops_to_the_tier_it_accepts(
-        self, local_model_cost_map, model, provider
-    ):
+    def test_an_azure_hosted_astra_deployment_drops_to_the_tier_it_accepts(self, local_model_cost_map, model, provider):
         """The deployment answers ``max`` with a 400 naming ``none`` through ``xhigh``, so the rows
         say so and the adapter sends the tier below instead of the rejected one."""
         assert _reasoning_effort_sent(model, provider, "max") == "xhigh"

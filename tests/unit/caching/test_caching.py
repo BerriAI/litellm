@@ -301,13 +301,13 @@ def test_exact_cache_key_includes_anthropic_messages_params(anthropic_param):
     ],
     ids=["top_level", "top_level_camel", "extra_body", "extra_body_camel"],
 )
-def test_exact_cache_key_includes_the_reasoning_summary_alias(summary_ask):
+def test_exact_cache_key_includes_the_reasoning_summary_alias(summary_ask: dict[str, object]) -> None:
     """The AI SDK summary alias decides whether thought summaries come back, wherever the request
     carries it, so a reply cached without it must not answer a request that asks for one."""
-    cache = Cache(type=LiteLLMCacheType.LOCAL)
-    messages = [{"role": "user", "content": "how much is the ball?"}]
-    no_ask = cache.get_cache_key(model="gemini/gemini-3.8-flash", messages=messages, reasoning_effort="medium")
-    ask = cache.get_cache_key(
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    messages: Final = [{"role": "user", "content": "how much is the ball?"}]
+    no_ask: Final = cache.get_cache_key(model="gemini/gemini-3.8-flash", messages=messages, reasoning_effort="medium")
+    ask: Final = cache.get_cache_key(
         model="gemini/gemini-3.8-flash", messages=messages, reasoning_effort="medium", **summary_ask
     )
     assert no_ask != ask
