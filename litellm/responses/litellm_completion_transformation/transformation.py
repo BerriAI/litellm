@@ -39,7 +39,11 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.caching import InMemoryCache
-from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
+from litellm.constants import (
+    CALLER_SESSION_ID_METADATA_KEY,
+    REDACTED_BY_LITELLM,
+    REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER,
+)
 from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS, AnthropicCacheControlHook
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.get_supported_openai_params import (
@@ -562,6 +566,19 @@ class ChatCompletionSession(TypedDict, total=False):
 ########### End of Initialize Classes used for Responses API  ###########
 
 
+def _continuing_session_fields(chain_session: str, metadata_by_key: Mapping[str, object]) -> Mapping[str, object]:
+    stamped: Final = {
+        key: _STR_KEY_DICT_ADAPTER.validate_python(metadata)
+        for key, metadata in metadata_by_key.items()
+        if isinstance(metadata, dict) and CALLER_SESSION_ID_METADATA_KEY in metadata
+    }
+    without_caller_session: Final = {
+        key: {field: value for field, value in metadata.items() if field != CALLER_SESSION_ID_METADATA_KEY}
+        for key, metadata in stamped.items()
+    }
+    return {"litellm_session_id": chain_session, **without_caller_session}
+
+
 class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def get_supported_openai_params(model: str) -> list:
@@ -1074,8 +1091,6 @@ class LiteLLMCompletionResponsesConfig:
             else:
                 # Both are empty - this likely means function_call_output had empty/invalid call_id
                 # Provide a helpful error message
-                import litellm
-
                 raise litellm.BadRequestError(
                     message=(
                         f"Unable to create messages for completion request. "
@@ -1090,8 +1105,20 @@ class LiteLLMCompletionResponsesConfig:
                 )
 
         litellm_completion_request["messages"] = combined_messages
-        litellm_completion_request["litellm_trace_id"] = chat_completion_session.get("litellm_session_id")
-        return litellm_completion_request
+        chain_session: Final = chat_completion_session.get("litellm_session_id")
+        litellm_completion_request["litellm_trace_id"] = chain_session
+        continuing_session_fields: Final[Mapping[str, object]] = (
+            _continuing_session_fields(
+                chain_session,
+                {
+                    "metadata": request_kwargs.get("metadata"),
+                    "litellm_metadata": request_kwargs.get("litellm_metadata"),
+                },
+            )
+            if chain_session and litellm.request_correlation_in_logs
+            else MappingProxyType({})
+        )
+        return {**litellm_completion_request, **continuing_session_fields}
 
     @staticmethod
     def _transform_response_input_param_to_chat_completion_message(
