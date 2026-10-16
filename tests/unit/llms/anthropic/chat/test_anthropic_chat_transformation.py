@@ -6763,11 +6763,7 @@ def test_chat_flagged_model_converts_system_with_no_following_user_turn(local_mo
     assert _texts(result["messages"][2]) == [CONVERTED_SYSTEM_NOTE, REMINDER_TEXT]
 
 
-@pytest.mark.parametrize(
-    "empty_content",
-    [[], None, [{"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}}]],
-    ids=["empty-list", "none", "unsupported-part-only"],
-)
+@pytest.mark.parametrize("empty_content", [[], None], ids=["empty-list", "none"])
 def test_chat_flagged_model_anchors_a_system_on_an_empty_user_turn(local_model_cost_map, empty_content):
     messages = [
         {"role": "system", "content": "You are terse."},
@@ -6781,6 +6777,21 @@ def test_chat_flagged_model_anchors_a_system_on_an_empty_user_turn(local_model_c
 
     assert [m["role"] for m in result["messages"]] == ["user", "system", "assistant", "user"]
     assert _texts(result["messages"][1]) == [REMINDER_TEXT]
+
+
+def test_chat_flagged_model_converts_a_system_behind_a_user_turn_that_sends_nothing(local_model_cost_map):
+    messages = [
+        {"role": "system", "content": "You are terse."},
+        {"role": "user", "content": [{"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}}]},
+        {"role": "system", "content": REMINDER_TEXT},
+        {"role": "assistant", "content": "First answer"},
+        {"role": "user", "content": "Second question"},
+    ]
+
+    result = _chat_request(AnthropicConfig(), FLAGGED_CLAUDE, messages)
+
+    assert [m["role"] for m in result["messages"]] == ["user", "assistant", "user"]
+    assert _texts(result["messages"][0]) == [CONVERTED_SYSTEM_NOTE, REMINDER_TEXT]
 
 
 USER_PART_BY_TYPE = {

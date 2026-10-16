@@ -29,11 +29,8 @@ def _texts(message: dict) -> list[str]:
     return [block["text"] for block in message["content"]]
 
 
-EMPTY_USER_CONTENT = pytest.mark.parametrize(
-    "empty_content",
-    [[], None, [{"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}}]],
-    ids=["empty-list", "none", "unsupported-part-only"],
-)
+EMPTY_USER_CONTENT = pytest.mark.parametrize("empty_content", [[], None], ids=["empty-list", "none"])
+UNSUPPORTED_PART_ONLY = [{"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}}]
 
 
 def test_split_leading_system_run_keeps_later_system_messages_in_the_conversation():
@@ -243,6 +240,36 @@ def test_flagged_placement_anchors_a_run_on_a_following_empty_user_turn(empty_co
 
     assert _roles(placed) == ["user", "assistant", "user", "system"]
     assert _texts(placed[3]) == ["reminder"]
+
+
+def test_flagged_placement_converts_a_run_whose_preceding_user_turn_sends_nothing():
+    placed = place_mid_conversation_system(
+        [
+            {"role": "user", "content": UNSUPPORTED_PART_ONLY},
+            {"role": "system", "content": "reminder"},
+            {"role": "assistant", "content": "a1"},
+            {"role": "user", "content": "q2"},
+        ],
+        supports_mid_conversation_system=True,
+    )
+
+    assert _roles(placed) == ["user", "user", "assistant", "user"]
+    assert _texts(placed[1]) == [CONVERTED_SYSTEM_NOTE, "reminder"]
+
+
+def test_flagged_placement_converts_a_run_whose_following_user_turn_sends_nothing():
+    placed = place_mid_conversation_system(
+        [
+            {"role": "user", "content": "q1"},
+            {"role": "assistant", "content": "a1"},
+            {"role": "system", "content": "reminder"},
+            {"role": "user", "content": UNSUPPORTED_PART_ONLY},
+        ],
+        supports_mid_conversation_system=True,
+    )
+
+    assert _roles(placed) == ["user", "assistant", "user", "user"]
+    assert _texts(placed[2]) == [CONVERTED_SYSTEM_NOTE, "reminder"]
 
 
 def test_flagged_placement_keeps_a_system_behind_a_user_turn_merged_with_an_empty_one():

@@ -2582,6 +2582,17 @@ def _with_native_redacted_data(
 _AnthropicMessageList: TypeAlias = list[AllAnthropicPassThroughMessageValues]
 
 
+def _empty_user_turn_placeholder(span: Sequence[AllMessageValues]) -> AnthropicMessagesTextParam | None:
+    empty_user_message: Final = next(
+        (message for message in reversed(span) if message["role"] == "user" and not message.get("content")), None
+    )
+    if empty_user_message is None:
+        return None
+    placeholder: Final = AnthropicMessagesTextParam(type="text", text=_EMPTY_TEXT_PLACEHOLDER)
+    add_cache_control_to_content(anthropic_content_element=placeholder, original_content_element=empty_user_message)
+    return placeholder
+
+
 def anthropic_messages_pt(
     messages: list[AllMessageValues],
     model: str,
@@ -2747,10 +2758,8 @@ def anthropic_messages_pt(
 
         if user_content:
             new_messages.append({"role": "user", "content": user_content})
-        elif any(message["role"] == "user" for message in messages[init_msg_i:msg_i]):
-            new_messages.append(
-                {"role": "user", "content": [AnthropicMessagesTextParam(type="text", text=_EMPTY_TEXT_PLACEHOLDER)]}
-            )
+        elif (placeholder := _empty_user_turn_placeholder(messages[init_msg_i:msg_i])) is not None:
+            new_messages.append({"role": "user", "content": [placeholder]})
 
         # Track unique tool IDs in this merge block to avoid duplication
         unique_tool_ids: set[str] = set()

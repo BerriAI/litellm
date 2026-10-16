@@ -844,6 +844,23 @@ def test_anthropic_messages_pt_empty_user_message_beside_tool_result_keeps_tool_
     assert [block["type"] for block in result[-1]["content"]] == ["tool_result"]
 
 
+@EMPTY_USER_MESSAGES
+def test_anthropic_messages_pt_empty_user_message_keeps_cache_control_like_an_empty_string(empty_user_message):
+    def last_turn(last_user_message):
+        return anthropic_messages_pt(
+            messages=[
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},
+                {**last_user_message, "cache_control": {"type": "ephemeral"}},
+            ],
+            model="claude-opus-5",
+            llm_provider="vertex_ai",
+        )[-1]
+
+    assert last_turn(empty_user_message)["content"][0]["cache_control"] == {"type": "ephemeral"}
+    assert last_turn(empty_user_message) == last_turn({"role": "user", "content": ""})
+
+
 def test_convert_to_azure_openai_messages():
     """Test coverting image_url to azure_openai spec"""
 
