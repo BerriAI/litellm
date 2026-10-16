@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import threading
+import time
 import urllib.parse
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -413,6 +414,63 @@ def test_completion_strips_eager_input_streaming_before_openai(respx_mock: respx
     sent_tool: Final = json.loads(respx_mock.calls[0].request.content)["tools"][0]
     assert "eager_input_streaming" not in sent_tool
     assert sent_tool["function"]["name"] == "write_file"
+
+
+class _SyncSuccessCounter(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[str] = []  # mutable-ok: test recorder of success-callback events
+
+    def log_success_event(self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object):
+        self.calls.append(str(kwargs.get("call_type")))
+
+
+def _settled_success_calls(counter: _SyncSuccessCounter, expected: int) -> int:
+    for _ in range(50):
+        if len(counter.calls) >= expected:
+            break
+        time.sleep(0.02)
+    return len(counter.calls)
+
+
+def test_execute_chat_calls_the_provider_without_logging(
+    respx_mock: respx.MockRouter, openai_api_response, monkeypatch: pytest.MonkeyPatch
+):
+    counter: Final = _SyncSuccessCounter()
+    monkeypatch.setattr(litellm, "callbacks", [counter])
+    api_base: Final = "http://localhost:12347/v1"
+    mock_route: Final = respx_mock.post(url__regex=rf"{api_base}/chat/completions.*").mock(
+        return_value=httpx.Response(status_code=200, json=openai_api_response)
+    )
+    messages: Final = [{"role": "user", "content": "hi"}]
+    logging_obj: Final = LiteLLMLogging(
+        model="hosted_vllm/served-model",
+        messages=messages,
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id="execute-chat-call",
+        function_id="execute-chat-fn",
+    )
+
+    response: Final = litellm_main.execute_chat(
+        model="hosted_vllm/served-model",
+        messages=list(messages),
+        kwargs={"api_base": api_base, "api_key": "sk-x", "litellm_logging_obj": logging_obj},
+        non_default_params={},
+        control_options=ControlOptions(),
+        skip_responses_api_bridge=False,
+        prompt_id=None,
+        prompt_variables=None,
+    )
+
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.id == openai_api_response["id"]
+    assert mock_route.call_count == 1
+    assert _settled_success_calls(counter, expected=1) == 0
+
+    litellm.completion(model="hosted_vllm/served-model", messages=messages, api_base=api_base, api_key="sk-x")
+    assert _settled_success_calls(counter, expected=1) == 1
 
 
 _CLAUDE_TOOL_SEARCH_CALL: Final = {
