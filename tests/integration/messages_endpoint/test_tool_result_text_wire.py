@@ -1,6 +1,7 @@
 import json
+import re
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from email.parser import BytesParser
 from email.policy import HTTP
 from types import MappingProxyType
@@ -401,18 +402,28 @@ def test_valid_tool_result_text_reaches_the_upstream(gateway: Gateway, provider:
             assert _tool_message_text(_only(requests, "/chat/completions")) == _WEATHER
 
 
-def _redacted(content: JsonValue) -> JsonValue:
+def _rewritten(content: JsonValue, rewrite: Callable[[str], str]) -> JsonValue:
     if isinstance(content, str):
-        return content.replace(_CITY, _REDACTED_CITY)
+        return rewrite(content)
     if isinstance(content, list):
-        return [_redacted(part) for part in content]
-    if isinstance(content, dict) and isinstance(content.get("text"), str):
-        return {**content, "text": _redacted(content["text"])}
+        return [_rewritten(part, rewrite) for part in content]
+    if isinstance(content, dict) and isinstance(text := content.get("text"), str):
+        return {**content, "text": rewrite(text)}
     return content
+
+
+def _redacted(content: JsonValue) -> JsonValue:
+    return _rewritten(content, lambda text: text.replace(_CITY, _REDACTED_CITY))
 
 
 def _redacted_row(row: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
     return {**row, "content": _redacted(row["content"])} if "content" in row else dict(row)
+
+
+def _digits_masked_row(row: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    if "content" not in row:
+        return dict(row)
+    return {**row, "content": _rewritten(row["content"], lambda text: re.sub(r"\d", "#", text))}
 
 
 def _joined_tool_row(row: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
@@ -426,11 +437,14 @@ def _joined_tool_row(row: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
     return {**redacted, "content": " | ".join(str(text) for text in texts)}
 
 
+_ROW_REWRITES: Final = MappingProxyType({"join": _joined_tool_row, "digits": _digits_masked_row})
+
+
 def _guardrail_peer(request: Request) -> Reply:
     rows: Final = _JSON_OBJECTS.validate_python(_json(request).get("structured_messages") or [])
     if request.target.startswith("/none/") or not rows:
         return Reply(body=json.dumps({"action": "NONE"}).encode())
-    rewrite: Final = _joined_tool_row if request.target.startswith("/join/") else _redacted_row
+    rewrite: Final = _ROW_REWRITES.get(request.target.split("/")[1], _redacted_row)
     verdict: Final = {"action": "GUARDRAIL_INTERVENED", "structured_messages": [rewrite(row) for row in rows]}
     return Reply(body=json.dumps(verdict).encode())
 
@@ -660,14 +674,12 @@ def _listed_models(gateway: Gateway) -> frozenset[str]:
     return frozenset(string_value(entry["id"]) for entry in entries)
 
 
-def test_batch_upload_behind_a_rewriting_guardrail_keeps_the_malformed_text(gateway: Gateway) -> None:
-    with (
-        wire_server(_files_peer) as provider,
-        wire_server(_guardrail_peer) as guard,
-        gateway.scenario() as scenario,
-    ):
+def _uploaded_batch_body(
+    gateway: Gateway, scenario: Scenario, guard: Wire, mode: str, messages: list[JsonValue]
+) -> dict[str, JsonValue]:
+    with wire_server(_files_peer) as provider:
         model: Final = _openai_model(scenario, provider)
-        key: Final = scenario.key(metadata={"guardrails": [_guardrail(gateway, scenario, guard, "rows")]})
+        key: Final = scenario.key(metadata={"guardrails": [_guardrail(gateway, scenario, guard, mode)]})
         eventually(
             lambda: tuple(_listed_models(gateway) for _ in range(8)),
             lambda listings: all(model in listing for listing in listings),
@@ -677,7 +689,7 @@ def test_batch_upload_behind_a_rewriting_guardrail_keeps_the_malformed_text(gate
             "custom_id": f"weather-{uuid.uuid4().hex}",
             "method": "POST",
             "url": "/v1/messages",
-            "body": _body(model, _NUMBER_THEN_WEATHER, max_tokens=64),
+            "body": _body(model, messages, max_tokens=64),
         }
         uploaded: Final = gateway.request_multipart(
             "/v1/files",
@@ -687,13 +699,18 @@ def test_batch_upload_behind_a_rewriting_guardrail_keeps_the_malformed_text(gate
         )
         assert uploaded.status_code == 200, uploaded.text
         uploads: Final = tuple(request for request in provider.drain() if request.target.endswith("/files"))
-        assert len(uploads) == 1, [request.target for request in uploads]
-        (forwarded,) = _uploaded_records(uploads[0])
-        assert forwarded["custom_id"] == record["custom_id"], forwarded
-        forwarded_body: Final = _JSON_OBJECT.validate_python(forwarded["body"])
-        first_turn: Final = _first_turn(forwarded_body["messages"])
-        assert _REDACTED_CITY in first_turn and _CITY not in first_turn, first_turn
-        assert _forwarded_tool_result(forwarded_body) == [_text(5), _text(_WEATHER)], forwarded_body
+    assert len(uploads) == 1, [request.target for request in uploads]
+    (forwarded,) = _uploaded_records(uploads[0])
+    assert forwarded["custom_id"] == record["custom_id"], forwarded
+    return _JSON_OBJECT.validate_python(forwarded["body"])
+
+
+def test_batch_upload_behind_a_rewriting_guardrail_keeps_the_malformed_text(gateway: Gateway) -> None:
+    with wire_server(_guardrail_peer) as guard, gateway.scenario() as scenario:
+        forwarded_body: Final = _uploaded_batch_body(gateway, scenario, guard, "rows", _NUMBER_THEN_WEATHER)
+    first_turn: Final = _first_turn(forwarded_body["messages"])
+    assert _REDACTED_CITY in first_turn and _CITY not in first_turn, first_turn
+    assert _forwarded_tool_result(forwarded_body) == [_text(5), _text(_WEATHER)], forwarded_body
 
 
 def test_guardrail_that_rewrites_nothing_forwards_a_null_tool_result_text_unchanged(gateway: Gateway) -> None:
@@ -730,18 +747,20 @@ def test_mistral_receives_the_tool_reply_whose_only_text_drop_params_dropped(gat
         assert _tool_message_text({"messages": list(turns)}) == "", turns
 
 
+_WEATHER_CALL: Final[dict[str, JsonValue]] = {
+    "id": "call_weather",
+    "type": "function",
+    "function": {"name": "get_weather", "arguments": json.dumps({"city": _CITY})},
+}
+
+
 def test_mistral_chat_completions_keeps_an_empty_tool_reply(gateway: Gateway) -> None:
     ask: Final = f"What is the weather in {_CITY}? {uuid.uuid4().hex}"
-    call: Final[dict[str, JsonValue]] = {
-        "id": "call_weather",
-        "type": "function",
-        "function": {"name": "get_weather", "arguments": json.dumps({"city": _CITY})},
-    }
     messages: Final[list[JsonValue]] = [
         {"role": "system", "content": ""},
         {"role": "user", "content": ask},
         {"role": "assistant", "content": ""},
-        {"role": "assistant", "content": None, "tool_calls": [call]},
+        {"role": "assistant", "content": None, "tool_calls": [_WEATHER_CALL]},
         {"role": "tool", "tool_call_id": "call_weather", "content": ""},
         {"role": "user", "content": ""},
     ]
@@ -756,3 +775,94 @@ def test_mistral_chat_completions_keeps_an_empty_tool_reply(gateway: Gateway) ->
             ("tool", ""),
         ], turns
         assert turns[2]["tool_call_id"] == "call_weather", turns
+
+
+def test_mistral_chat_completions_drops_an_orphan_tool_message_and_sends_a_null_tool_reply_as_empty_text(
+    gateway: Gateway,
+) -> None:
+    ask: Final = f"What is the weather in {_CITY}? {uuid.uuid4().hex}"
+    messages: Final[list[JsonValue]] = [
+        {"role": "user", "content": ask},
+        {"role": "tool", "tool_call_id": "call_orphan", "content": ""},
+        {"role": "assistant", "content": None, "tool_calls": [_WEATHER_CALL]},
+        {"role": "tool", "tool_call_id": "call_weather", "content": None},
+    ]
+    with wire_server(_chat_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _mistral_model(scenario, wire)
+        response: Final = gateway.request("POST", "/v1/chat/completions", {"model": model, "messages": messages})
+        assert response.status_code == 200, response.text
+        turns: Final = _forwarded_chat_turns(wire)
+    assert [(turn["role"], turn.get("tool_call_id"), turn.get("content")) for turn in turns] == [
+        ("user", None, ask),
+        ("assistant", None, None),
+        ("tool", "call_weather", ""),
+    ], turns
+
+
+_NATIVE_DROP_PARAMS_CASES: Final = MappingProxyType(
+    {
+        "body": (_DROP_SOURCES["body"], [_text(_WEATHER)]),
+        "deployment": (_DROP_SOURCES["deployment"], [_text(_WEATHER)]),
+        "explicit-false": (
+            (MappingProxyType({"drop_params": True}), MappingProxyType({"drop_params": False}), _CLAUDE_CODE),
+            [_text(5), _text(_WEATHER)],
+        ),
+    }
+)
+
+
+@pytest.mark.parametrize("case", sorted(_NATIVE_DROP_PARAMS_CASES))
+def test_native_anthropic_resolves_drop_params_the_same_way_on_both_routes(gateway: Gateway, case: str) -> None:
+    (deployment, extra, headers), forwarded = _NATIVE_DROP_PARAMS_CASES[case]
+    with wire_server(_anthropic_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _anthropic_model(scenario, wire, **deployment)
+        body: Final = _body(model, _NUMBER_THEN_WEATHER, **extra)
+        created: Final = gateway.request("POST", "/v1/messages", {**body, "max_tokens": 64}, headers=headers)
+        counted: Final = gateway.request("POST", "/v1/messages/count_tokens", body, headers=headers)
+        assert created.status_code == 200, created.text
+        assert counted.status_code == 200, counted.text
+        assert _JSON_OBJECT.validate_json(counted.content)["input_tokens"] == _ANTHROPIC_COUNT, counted.text
+        requests: Final = wire.drain()
+    assert _forwarded_tool_result(_only(requests, "/v1/messages")) == forwarded
+    assert _forwarded_tool_result(_only(requests, "/v1/messages/count_tokens")) == forwarded
+
+
+_CARD_NUMBER: Final = 4111111111111111
+_CARD_NULL_WEATHER: Final = _messages(_text(_CARD_NUMBER), _text(None), _text(_WEATHER))
+_SCANNED_CARD_NULL_WEATHER: Final = ("4111111111111111", "null", _WEATHER)
+_MASKED_CARD_NULL_WEATHER: Final = [_text("################"), _text(None), _text("sunny, ##C")]
+
+
+def _scanned_tool_texts(guard: Wire) -> tuple[JsonValue, ...]:
+    requests: Final = guard.drain()
+    assert len(requests) == 1, [request.target for request in requests]
+    rows: Final = _JSON_OBJECTS.validate_python(_json(requests[0])["structured_messages"])
+    tool_rows: Final = tuple(row for row in rows if row.get("role") == "tool")
+    assert len(tool_rows) == 1, rows
+    return _texts(tool_rows[0]["content"])
+
+
+def test_masking_guardrail_scans_a_numeric_tool_result_text_before_anthropic_gets_it(gateway: Gateway) -> None:
+    with (
+        wire_server(_anthropic_peer) as provider,
+        wire_server(_guardrail_peer) as guard,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _anthropic_model(scenario, provider)
+        guardrail: Final = _guardrail(gateway, scenario, guard, "digits")
+        created: Final = gateway.request(
+            "POST", "/v1/messages", _body(model, _CARD_NULL_WEATHER, max_tokens=64, guardrails=[guardrail])
+        )
+        assert created.status_code == 200, created.text
+        scanned: Final = _scanned_tool_texts(guard)
+        forwarded: Final = _forwarded_tool_result(_only(provider.drain(), "/v1/messages"))
+    assert scanned == _SCANNED_CARD_NULL_WEATHER, scanned
+    assert forwarded == _MASKED_CARD_NULL_WEATHER, forwarded
+
+
+def test_masking_guardrail_scans_a_numeric_tool_result_text_in_a_batch_upload(gateway: Gateway) -> None:
+    with wire_server(_guardrail_peer) as guard, gateway.scenario() as scenario:
+        forwarded_body: Final = _uploaded_batch_body(gateway, scenario, guard, "digits", _CARD_NULL_WEATHER)
+        scanned: Final = _scanned_tool_texts(guard)
+    assert scanned == _SCANNED_CARD_NULL_WEATHER, scanned
+    assert _forwarded_tool_result(forwarded_body) == _MASKED_CARD_NULL_WEATHER, forwarded_body
