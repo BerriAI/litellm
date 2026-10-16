@@ -297,7 +297,9 @@ def _fake_stream_with_thinking(thinking_blocks: list[dict[str, str]]) -> MockRes
     return MockResponseIterator(model_response=model_response)
 
 
-def _anthropic_sdk_final_content(completion_stream: MockResponseIterator) -> list[dict[str, object]]:
+def _anthropic_sdk_final_content(
+    completion_stream: "MockResponseIterator | AsyncIterator[ModelResponseStream]",
+) -> list[dict[str, object]]:
     sse: Final = _collect_async(AnthropicStreamWrapper(completion_stream=completion_stream, model="claude"))
     transport: Final = httpx.MockTransport(
         lambda request: httpx.Response(200, content=sse.encode(), headers={"content-type": "text/event-stream"})
@@ -320,10 +322,48 @@ def _anthropic_sdk_final_content(completion_stream: MockResponseIterator) -> lis
             {"type": "redacted_thinking", "data": "OPAQUE"},
             {"type": "thinking", "thinking": "visible", "signature": "SIG_C"},
         ],
+        [
+            {"type": "thinking", "thinking": "unsigned", "signature": ""},
+            {"type": "thinking", "thinking": "signed", "signature": "SIG_D"},
+        ],
     ],
-    ids=["two_signed_thinking_blocks", "redacted_then_signed_thinking"],
+    ids=["two_signed_thinking_blocks", "redacted_then_signed_thinking", "unsigned_then_signed_thinking"],
 )
 def test_fake_stream_gives_each_thinking_block_its_own_content_block(thinking_blocks: list[dict[str, str]]):
     content: Final = _anthropic_sdk_final_content(_fake_stream_with_thinking(thinking_blocks))
 
     assert content == [*thinking_blocks, {"type": "text", "text": '{"a": 1}'}]
+
+
+def _native_thinking_chunk(thinking: str, index: int, signature: str | None = None) -> ModelResponseStream:
+    block: Final = {"type": "thinking", "thinking": thinking, "index": index, **({"signature": signature} if signature else {})}
+    return ModelResponseStream(
+        choices=[StreamingChoices(index=0, delta=Delta(reasoning_content=thinking or None, thinking_blocks=[block]))]
+    )
+
+
+async def _native_stream_with_two_thinking_blocks() -> "AsyncIterator[ModelResponseStream]":
+    for chunk in (
+        _native_thinking_chunk("ab", 0),
+        _native_thinking_chunk("cd", 0),
+        _native_thinking_chunk("", 0, "SIG_A"),
+        _native_thinking_chunk("ef", 1),
+        _native_thinking_chunk("gh", 1),
+        _native_thinking_chunk("", 1, "SIG_B"),
+        ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(content="hi"))]),
+        ModelResponseStream(
+            choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="stop")],
+            usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        ),
+    ):
+        yield chunk
+
+
+def test_native_stream_thinking_blocks_keep_their_text_once():
+    content: Final = _anthropic_sdk_final_content(_native_stream_with_two_thinking_blocks())
+
+    assert content == [
+        {"type": "thinking", "thinking": "abcd", "signature": "SIG_A"},
+        {"type": "thinking", "thinking": "efgh", "signature": "SIG_B"},
+        {"type": "text", "text": "hi"},
+    ]

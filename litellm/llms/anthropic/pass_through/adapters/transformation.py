@@ -1676,7 +1676,7 @@ class LiteLLMAnthropicMessagesAdapter:
                         assert isinstance(signature, str)
 
                         return "thinking", ChatCompletionThinkingBlock(
-                            type="thinking", thinking=thinking, signature=signature
+                            type="thinking", thinking=thinking if signature else "", signature=signature
                         )
             # OpenAI-compatible reasoning backends (e.g. vLLM/SGLang reasoning
             # parsers) populate ``reasoning_content`` without ``thinking_blocks``.

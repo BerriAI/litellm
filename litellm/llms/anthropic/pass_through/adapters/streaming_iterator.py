@@ -393,13 +393,8 @@ class _CombinedChunkSplitter:
     ) -> "ModelResponseStream":
         piece: Final = copy.deepcopy(chunk)
         role: Final = getattr(piece.choices[0].delta, "role", None) if keep_role else None
-        replayable: Final = block["type"] == "redacted_thinking" or bool(block.get("signature"))
         thinking: Final = block.get("thinking") if block["type"] == "thinking" else None
-        piece.choices[0].delta = Delta(
-            role=role,
-            reasoning_content=thinking or None,
-            thinking_blocks=[block] if replayable else None,
-        )
+        piece.choices[0].delta = Delta(role=role, reasoning_content=thinking or None, thinking_blocks=[block])
         return piece
 
     @staticmethod
