@@ -36,7 +36,7 @@ import h2.connection
 import h2.events
 import h2.exceptions
 from integration._support.async_server import Handler, LoopbackServer
-from integration._support.process import _free_port
+from integration._support.ports import allocate_port
 from integration._support.tls import server_context
 from integration._support.upstream import aws_event_stream_frame
 from pydantic import JsonValue, TypeAdapter
@@ -417,7 +417,7 @@ def bedrock_realtime_peer(turns: tuple[Turn, ...], cert: tuple[Path, Path]) -> I
     `cert` is the self-signed pair the owned proxy already trusts via SSL_CERT_FILE.
     SigV4 headers are ignored; the stream closes cleanly when the client ends it.
     """
-    port: Final = _free_port()
+    port: Final = allocate_port()
     context: Final = server_context(cert[0], cert[1])
     context.set_alpn_protocols(["h2"])
     state: Final = _PeerState(turns)
