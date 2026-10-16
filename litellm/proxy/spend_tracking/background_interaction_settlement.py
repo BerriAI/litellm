@@ -162,10 +162,13 @@ class PrismaBackgroundSettlementStore:
     takes, so a live settler is never overtaken. The settler before may have
     billed and then died or failed to record it, so a takeover bills only when
     the interaction has no spend row yet, and otherwise records it as billed.
+    With spend logs off there is no row to tell, so a takeover bills nothing
+    rather than risk billing twice.
     """
 
     table: _SettlementTableActions
     spend_logs: _SpendLogLookup
+    spend_logs_kept: Callable[[], bool]
     claimed_by: str
     claim_lease_seconds: float = BACKGROUND_INTERACTION_SETTLEMENT_CLAIM_LEASE_SECONDS
 
@@ -199,7 +202,7 @@ class PrismaBackgroundSettlementStore:
                 claimed_at=_Before(lt=datetime.now(timezone.utc) - self._lease),
             )
         )
-        return took_over and not await self._already_billed(interaction_id)
+        return took_over and await self._left_unbilled(interaction_id)
 
     async def _claim_where(self, where: _UnclaimedRowKey | _ExpiredClaimRowKey) -> bool:
         claimed_rows: Final = await _read_from_a_table_that_may_not_exist(
@@ -210,11 +213,19 @@ class PrismaBackgroundSettlementStore:
         )
         return claimed_rows == 1
 
-    async def _already_billed(self, interaction_id: str) -> bool:
-        if await self.spend_logs.find_unique(where=_SpendLogKey(request_id=interaction_id)) is None:
+    async def _left_unbilled(self, interaction_id: str) -> bool:
+        if not self.spend_logs_kept():
+            verbose_proxy_logger.warning(
+                "Background interaction %s lost its settler mid-settle, and with spend logs off nothing shows "
+                "whether it was billed, so it is left unbilled rather than risk billing it twice",
+                interaction_id,
+            )
+            await self.record_outcome(interaction_id, "unsettled")
             return False
+        if await self.spend_logs.find_unique(where=_SpendLogKey(request_id=interaction_id)) is None:
+            return True
         await self.record_outcome(interaction_id, "billed")
-        return True
+        return False
 
     @property
     def _lease(self) -> timedelta:
@@ -247,11 +258,35 @@ class PrismaBackgroundSettlementStore:
         return tuple(chain.from_iterable(_pending_row(row, self._claim_expires_at(row)) for row in rows))
 
 
-def _deployment_credentials(router: "Router | None", deployment_id: str | None) -> CredentialLiteLLMParams | None:
-    if router is None or deployment_id is None:
-        return None
+def _provider_credentials(router: "Router", deployment_id: str, custom_llm_provider: str) -> Mapping[str, object]:
     credentials: Final = router.get_deployment_credentials_with_provider(model_id=deployment_id)
-    return None if credentials is None else CredentialLiteLLMParams.model_validate(credentials)
+    if credentials is None or credentials.get("custom_llm_provider") != custom_llm_provider:
+        return MappingProxyType({})
+    return MappingProxyType(credentials)
+
+
+def _group_deployment_credentials(router: "Router", context: BackgroundInteractionPollContext) -> Mapping[str, object]:
+    if context.model_group is None:
+        return MappingProxyType({})
+    candidates: Final = tuple(
+        credentials
+        for deployment_id in router.get_model_ids(model_name=context.model_group)
+        if (credentials := _provider_credentials(router, deployment_id, context.custom_llm_provider))
+    )
+    return candidates[0] if len(candidates) == 1 else MappingProxyType({})
+
+
+def _deployment_credentials(
+    router: "Router | None", context: BackgroundInteractionPollContext
+) -> CredentialLiteLLMParams | None:
+    if router is None:
+        return None
+    serving: Final = (
+        _provider_credentials(router, context.deployment_id, context.custom_llm_provider)
+        if context.deployment_id is not None and router.get_deployment(model_id=context.deployment_id) is not None
+        else _group_deployment_credentials(router, context)
+    )
+    return CredentialLiteLLMParams.model_validate(serving) if serving else None
 
 
 def fetch_with_deployment_credentials(
@@ -260,16 +295,19 @@ def fetch_with_deployment_credentials(
     """
     A resumed poll has no request to take credentials from, and they are never
     stored, so it fetches with the credentials of the deployment that served
-    the create, looked up on the live router at each fetch so a deployment
-    loaded from the database after startup is found too. A deployment the
-    router no longer has falls back to the provider's environment credentials.
+    the create, looked up by its id on the live router at each fetch so a
+    deployment loaded from the database after startup is found too. Editing a
+    deployment changes its id, so a missing id falls back to the create's model
+    group when exactly one of its deployments serves the same provider. Anything
+    else falls back to the provider's environment credentials, never to a
+    wildcard route, whose key belongs to whatever provider it routes to.
     """
 
     async def fetch(context: BackgroundInteractionPollContext) -> InteractionsAPIResponse:
-        credentials: Final = _deployment_credentials(router(), context.deployment_id)
+        credentials: Final = _deployment_credentials(router(), context)
         if credentials is None:
             return await fetch_interaction(context)
-        return await fetch_interaction(replace(context, api_key=credentials.api_key, api_base=credentials.api_base))
+        return await fetch_interaction(replace(context, credentials=credentials))
 
     return fetch
 
@@ -277,13 +315,16 @@ def fetch_with_deployment_credentials(
 async def configure_background_interaction_settlement(
     table: _SettlementTableActions,
     spend_logs: _SpendLogLookup,
+    spend_logs_kept: Callable[[], bool],
     claimed_by: str,
     fetch_interaction: FetchInteraction = fetch_background_interaction,
     schedule: PollSchedule = DEFAULT_POLL_SCHEDULE,
 ) -> tuple["asyncio.Task[SettlementOutcome | None]", ...]:
     if not BACKGROUND_INTERACTION_COST_POLLING_ENABLED:
         return ()
-    store: Final = PrismaBackgroundSettlementStore(table=table, spend_logs=spend_logs, claimed_by=claimed_by)
+    store: Final = PrismaBackgroundSettlementStore(
+        table=table, spend_logs=spend_logs, spend_logs_kept=spend_logs_kept, claimed_by=claimed_by
+    )
     configure_background_settlement_store(store)
     resumed: Final = await resume_unsettled_background_interactions(store, fetch_interaction, schedule)
     if resumed:
@@ -292,12 +333,13 @@ async def configure_background_interaction_settlement(
 
 
 async def install_background_interaction_settlement(
-    prisma_client: "PrismaClient", router: Callable[[], "Router | None"]
+    prisma_client: "PrismaClient", router: Callable[[], "Router | None"], spend_logs_kept: Callable[[], bool]
 ) -> None:
     try:
         await configure_background_interaction_settlement(
             table=BackgroundInteractionSettlementRepository(prisma_client).table,
             spend_logs=SpendLogsRepository(prisma_client).table,
+            spend_logs_kept=spend_logs_kept,
             claimed_by=f"{socket.gethostname()}:{os.getpid()}",
             fetch_interaction=fetch_with_deployment_credentials(router),
         )

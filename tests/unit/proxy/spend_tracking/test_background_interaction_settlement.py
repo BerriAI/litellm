@@ -107,6 +107,20 @@ class _FakeSpendLogs:
         return where["request_id"] if where["request_id"] in self.request_ids else None
 
 
+def _store(
+    table,
+    claimed_by: str,
+    claim_lease_seconds: float = BACKGROUND_INTERACTION_SETTLEMENT_CLAIM_LEASE_SECONDS,
+) -> PrismaBackgroundSettlementStore:
+    return PrismaBackgroundSettlementStore(
+        table=table,
+        spend_logs=_FakeSpendLogs(),
+        spend_logs_kept=lambda: True,
+        claimed_by=claimed_by,
+        claim_lease_seconds=claim_lease_seconds,
+    )
+
+
 def _logging_obj(metadata: Optional[dict] = None) -> LitellmLogging:
     logging_obj = LitellmLogging(
         model="gemini-2.5-flash",
@@ -185,7 +199,7 @@ def _capturing_fetch():
 @pytest.mark.asyncio
 async def test_registered_row_reads_back_as_the_same_pending_interaction():
     table = _FakeSettlementTable()
-    store = PrismaBackgroundSettlementStore(table=table, spend_logs=_FakeSpendLogs(), claimed_by="replica-a:1")
+    store = _store(table, claimed_by="replica-a:1")
     pending = _pending("interactions/bg-1")
 
     await store.register(pending)
@@ -197,8 +211,8 @@ async def test_registered_row_reads_back_as_the_same_pending_interaction():
 @pytest.mark.asyncio
 async def test_claim_is_won_by_exactly_one_settler():
     table = _FakeSettlementTable()
-    replica_a = PrismaBackgroundSettlementStore(table=table, spend_logs=_FakeSpendLogs(), claimed_by="replica-a:1")
-    replica_b = PrismaBackgroundSettlementStore(table=table, spend_logs=_FakeSpendLogs(), claimed_by="replica-b:1")
+    replica_a = _store(table, claimed_by="replica-a:1")
+    replica_b = _store(table, claimed_by="replica-b:1")
     await replica_a.register(_pending("interactions/bg-1"))
 
     assert await replica_b.claim("interactions/bg-1") is True
@@ -241,7 +255,7 @@ class _MissingSettlementTable:
 async def test_a_missing_table_holds_no_rows_and_takes_no_registration():
     from prisma.errors import TableNotFoundError
 
-    store = PrismaBackgroundSettlementStore(table=_MissingSettlementTable(), spend_logs=_FakeSpendLogs(), claimed_by="replica-a:1")
+    store = _store(_MissingSettlementTable(), claimed_by="replica-a:1")
 
     with pytest.raises(TableNotFoundError):
         await store.register(_pending("interactions/bg-1"))
@@ -263,7 +277,7 @@ async def test_unsettled_lists_claimed_rows_with_no_outcome_and_when_their_lease
             _stored_row("interactions/bg-from-the-future", create_context={"schema": "unknown"}),
         )
     )
-    store = PrismaBackgroundSettlementStore(table=table, spend_logs=_FakeSpendLogs(), claimed_by="replica-b:1", claim_lease_seconds=300)
+    store = _store(table, claimed_by="replica-b:1", claim_lease_seconds=300)
 
     unsettled = await store.unsettled()
 
@@ -285,8 +299,8 @@ async def test_a_claim_whose_settler_died_is_taken_over_once_its_lease_runs_out(
             _stored_row("interactions/bg-settled", claimed_at=_minutes_ago(10), settled=True),
         )
     )
-    replica_b = PrismaBackgroundSettlementStore(table=table, spend_logs=_FakeSpendLogs(), claimed_by="replica-b:1", claim_lease_seconds=300)
-    replica_c = PrismaBackgroundSettlementStore(table=table, spend_logs=_FakeSpendLogs(), claimed_by="replica-c:1", claim_lease_seconds=300)
+    replica_b = _store(table, claimed_by="replica-b:1", claim_lease_seconds=300)
+    replica_c = _store(table, claimed_by="replica-c:1", claim_lease_seconds=300)
 
     assert await replica_b.is_claimed("interactions/bg-dead-settler") is False
     assert await replica_b.pending("interactions/bg-dead-settler") is not None
@@ -304,7 +318,7 @@ async def test_a_claim_whose_settler_died_is_taken_over_once_its_lease_runs_out(
 @pytest.mark.asyncio
 async def test_record_outcome_keeps_the_audit_trail_and_drops_the_stored_request_context():
     table = _FakeSettlementTable()
-    store = PrismaBackgroundSettlementStore(table=table, spend_logs=_FakeSpendLogs(), claimed_by="replica-a:1")
+    store = _store(table, claimed_by="replica-a:1")
     await store.register(_pending("interactions/bg-1"))
     assert await store.claim("interactions/bg-1")
     assert table.rows["interactions/bg-1"].create_context
@@ -337,6 +351,7 @@ async def test_a_takeover_records_the_bill_a_settler_wrote_before_dying_instead_
         resumed = await configure_background_interaction_settlement(
             table=table,
             spend_logs=_FakeSpendLogs(request_ids=("interactions/bg-billed-then-died",)),
+            spend_logs_kept=lambda: True,
             claimed_by="replica-b:1",
             fetch_interaction=fetch,
             schedule=FAST_SCHEDULE,
@@ -348,6 +363,40 @@ async def test_a_takeover_records_the_bill_a_settler_wrote_before_dying_instead_
             ("replica-b:1", "billed"),
         ]
         assert await bg._STORE.store.unsettled() == ()
+    finally:
+        configure_background_settlement_store(previous_store)
+
+
+@pytest.mark.asyncio
+async def test_with_spend_logs_off_a_takeover_leaves_the_interaction_unbilled_instead_of_billing_it_twice():
+    """
+    The regression: with spend logs off a settler that billed and then died
+    leaves no spend row to find, so the replica that took over its lapsed
+    claim billed the interaction a second time.
+    """
+    table = _FakeSettlementTable(
+        rows=(
+            _stored_row("interactions/bg-claimed-then-died", claimed_at=_past_the_default_lease()),
+            _stored_row("interactions/bg-orphaned"),
+        )
+    )
+    fetch, _ = _capturing_fetch()
+    previous_store = bg._STORE.store
+    try:
+        resumed = await configure_background_interaction_settlement(
+            table=table,
+            spend_logs=_FakeSpendLogs(),
+            spend_logs_kept=lambda: False,
+            claimed_by="replica-b:1",
+            fetch_interaction=fetch,
+            schedule=FAST_SCHEDULE,
+        )
+
+        assert [await asyncio.wait_for(task, timeout=5) for task in resumed] == [None, "billed"]
+        assert [(row.claimed_by, row.outcome) for row in table.rows.values()] == [
+            ("replica-b:1", "unsettled"),
+            ("replica-b:1", "billed"),
+        ]
     finally:
         configure_background_settlement_store(previous_store)
 
@@ -367,6 +416,7 @@ async def test_configure_installs_the_store_and_resumes_the_orphaned_rows():
         resumed = await configure_background_interaction_settlement(
             table=table,
             spend_logs=_FakeSpendLogs(),
+            spend_logs_kept=lambda: True,
             claimed_by="replica-b:1",
             fetch_interaction=fetch,
             schedule=FAST_SCHEDULE,
@@ -408,7 +458,9 @@ class _PrismaClientWithoutSettlementTable:
 async def test_install_keeps_booting_when_the_settlement_table_is_unreachable():
     previous_store = bg._STORE.store
 
-    await install_background_interaction_settlement(_PrismaClientWithoutSettlementTable(), router=lambda: None)
+    await install_background_interaction_settlement(
+        _PrismaClientWithoutSettlementTable(), router=lambda: None, spend_logs_kept=lambda: True
+    )
 
     assert bg._STORE.store is previous_store
 
@@ -422,7 +474,7 @@ class _JsonLike:
 async def test_a_resumed_row_still_under_a_live_claim_waits_for_the_lease_before_settling():
     claimed_at = datetime.now(timezone.utc)
     table = _FakeSettlementTable(rows=(_stored_row("interactions/bg-mid-settlement", claimed_at=claimed_at),))
-    store = PrismaBackgroundSettlementStore(table=table, spend_logs=_FakeSpendLogs(), claimed_by="replica-b:1", claim_lease_seconds=0.2)
+    store = _store(table, claimed_by="replica-b:1", claim_lease_seconds=0.2)
     fetched_at = []
 
     async def fetch(context):
@@ -452,20 +504,60 @@ def _router_with_a_deployment_scoped_key() -> Router:
     )
 
 
+def _router_with_a_catch_all_route() -> Router:
+    return Router(model_list=[{"model_name": "*", "litellm_params": {"model": "gemini/*", "api_key": "catch-all-key"}}])
+
+
+def _router_with_two_deployments_in_the_group() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "gemini-background",
+                "litellm_params": {"model": "gemini/gemini-2.5-flash", "api_key": f"deployment-key-{index}"},
+                "model_info": {"id": f"deployment-{index}"},
+            }
+            for index in (2, 3)
+        ]
+    )
+
+
+def _router_with_a_vertex_deployment() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "vertex-background",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-flash",
+                    "vertex_project": "deployment-project",
+                    "vertex_location": "europe-west4",
+                    "vertex_credentials": "/secrets/deployment-service-account.json",
+                },
+                "model_info": {"id": "vertex-deployment-1"},
+            }
+        ]
+    )
+
+
 def _create_context_served_by(deployment_id: str) -> dict:
-    metadata = {"user_api_key": "0123456789abcdef" * 4, "model_info": {"id": deployment_id}}
+    metadata = {
+        "user_api_key": "0123456789abcdef" * 4,
+        "model_info": {"id": deployment_id},
+        "model_group": "gemini-background",
+    }
     return _create_context(_logging_obj(metadata), "gemini").model_dump(mode="json")
 
 
+@pytest.mark.parametrize("deployment_id", ["deployment-1", "deployment-1-before-an-edit"])
 @pytest.mark.asyncio
-async def test_a_resumed_poll_fetches_with_the_credentials_of_the_deployment_that_served_the_create():
+async def test_a_resumed_poll_fetches_with_the_credentials_of_the_deployment_that_served_the_create(deployment_id):
     """
     The regression: a resumed poll has no request to take credentials from, so
     it fetched with the environment's key, which a deployment-scoped key is
-    not, and every fetch failed until the row was given up unbilled.
+    not, and every fetch failed until the row was given up unbilled. Editing
+    the deployment since gives it a new id, and its model group still names it.
     """
     table = _FakeSettlementTable(
-        rows=(_stored_row("interactions/bg-1", create_context=_create_context_served_by("deployment-1")),)
+        rows=(_stored_row("interactions/bg-1", create_context=_create_context_served_by(deployment_id)),)
     )
     router = _router_with_a_deployment_scoped_key()
     fetch, captured = _capturing_fetch()
@@ -474,13 +566,14 @@ async def test_a_resumed_poll_fetches_with_the_credentials_of_the_deployment_tha
         (resumed,) = await configure_background_interaction_settlement(
             table=table,
             spend_logs=_FakeSpendLogs(),
+            spend_logs_kept=lambda: True,
             claimed_by="replica-b:1",
             fetch_interaction=fetch_with_deployment_credentials(lambda: router, fetch),
             schedule=FAST_SCHEDULE,
         )
 
         assert await asyncio.wait_for(resumed, timeout=5) == "billed"
-        assert (captured[0].api_key, captured[0].api_base) == (
+        assert (captured[0].credentials.api_key, captured[0].credentials.api_base) == (
             "deployment-scoped-key",
             "https://deployment-scoped.example",
         )
@@ -489,16 +582,20 @@ async def test_a_resumed_poll_fetches_with_the_credentials_of_the_deployment_tha
 
 
 @pytest.mark.parametrize(
-    "router, deployment_id",
+    "router, deployment_id, model_group",
     [
-        (_router_with_a_deployment_scoped_key, "deployment-removed-since"),
-        (_router_with_a_deployment_scoped_key, None),
-        (lambda: None, "deployment-1"),
+        (_router_with_a_deployment_scoped_key, "deployment-removed-since", None),
+        (_router_with_a_deployment_scoped_key, None, None),
+        (lambda: None, "deployment-1", "gemini-background"),
+        (_router_with_a_catch_all_route, "deployment-removed-since", None),
+        (_router_with_two_deployments_in_the_group, "deployment-removed-since", "gemini-background"),
+        (_router_with_a_vertex_deployment, "deployment-removed-since", "vertex-background"),
+        (_router_with_a_vertex_deployment, "vertex-deployment-1", None),
     ],
 )
 @pytest.mark.asyncio
 async def test_a_resumed_poll_without_a_known_deployment_fetches_with_the_environment_credentials(
-    router, deployment_id
+    router, deployment_id, model_group
 ):
     live_router = router()
     fetch, captured = _capturing_fetch()
@@ -507,8 +604,30 @@ async def test_a_resumed_poll_without_a_known_deployment_fetches_with_the_enviro
         custom_llm_provider="gemini",
         logging_obj=_logging_obj(),
         deployment_id=deployment_id,
+        model_group=model_group,
     )
 
     await fetch_with_deployment_credentials(lambda: live_router, fetch)(context)
 
     assert captured == [context]
+
+
+@pytest.mark.asyncio
+async def test_a_resumed_vertex_poll_fetches_with_the_project_location_and_credentials_of_its_deployment():
+    router = _router_with_a_vertex_deployment()
+    fetch, captured = _capturing_fetch()
+    context = BackgroundInteractionPollContext(
+        interaction_id="interactions/bg-1",
+        custom_llm_provider="vertex_ai",
+        logging_obj=_logging_obj(),
+        deployment_id="vertex-deployment-1",
+    )
+
+    await fetch_with_deployment_credentials(lambda: router, fetch)(context)
+
+    credentials = captured[0].credentials
+    assert (credentials.vertex_project, credentials.vertex_location, credentials.vertex_credentials) == (
+        "deployment-project",
+        "europe-west4",
+        "/secrets/deployment-service-account.json",
+    )

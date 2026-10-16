@@ -1507,7 +1507,9 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
                     await asyncio.sleep(5)
 
         asyncio.create_task(_run_agent_grant_id_migration())
-        await install_background_interaction_settlement(prisma_client, router=lambda: llm_router)
+        await install_background_interaction_settlement(
+            prisma_client, router=lambda: llm_router, spend_logs_kept=lambda: disable_spend_logs is False
+        )
 
     ## A coordination_redis block saved from the admin UI lives in the database,
     ## which is only reachable once the prisma client exists. Apply it here, before

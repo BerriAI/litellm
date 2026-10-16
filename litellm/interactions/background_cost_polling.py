@@ -47,6 +47,7 @@ from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias
 
+from openai import APIStatusError
 from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError
 from pydantic_core import PydanticSerializationError, to_jsonable_python
 
@@ -60,6 +61,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.types.interactions import InteractionsAPIResponse
 from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.router import CredentialLiteLLMParams
 from litellm.types.utils import CustomPricingLiteLLMParams
 
 if TYPE_CHECKING:
@@ -172,9 +174,9 @@ class BackgroundInteractionPollContext:
     interaction_id: str
     custom_llm_provider: str
     logging_obj: "LiteLLMLoggingObj"
-    api_key: str | None = None
-    api_base: str | None = None
+    credentials: CredentialLiteLLMParams = field(default_factory=CredentialLiteLLMParams)
     deployment_id: str | None = None
+    model_group: str | None = None
     initial_interval_seconds: float = BACKGROUND_INTERACTION_COST_POLL_INITIAL_INTERVAL_SECONDS
     max_interval_seconds: float = BACKGROUND_INTERACTION_COST_POLL_MAX_INTERVAL_SECONDS
     timeout_seconds: float = BACKGROUND_INTERACTION_COST_POLL_TIMEOUT_SECONDS
@@ -189,13 +191,39 @@ FetchInteraction: TypeAlias = Callable[[BackgroundInteractionPollContext], Await
 async def fetch_background_interaction(context: BackgroundInteractionPollContext) -> InteractionsAPIResponse:
     from litellm.interactions import aget
 
+    credentials: Final = context.credentials
     return await aget(
         interaction_id=context.interaction_id,
         custom_llm_provider=context.custom_llm_provider,
-        api_key=context.api_key,
-        api_base=context.api_base,
+        api_key=credentials.api_key,
+        api_base=credentials.api_base,
+        vertex_project=credentials.vertex_project,
+        vertex_location=credentials.vertex_location,
+        vertex_credentials=credentials.vertex_credentials,
         **{"no-log": True},
     )
+
+
+_FETCH_CREDENTIAL_FIELDS: Final = ("api_key", "api_base", "vertex_project", "vertex_location", "vertex_credentials")
+
+
+def _fetch_credentials(request_kwargs: Mapping[str, object]) -> CredentialLiteLLMParams:
+    try:
+        return CredentialLiteLLMParams.model_validate(
+            {field_name: request_kwargs.get(field_name) for field_name in _FETCH_CREDENTIAL_FIELDS}
+        )
+    except ValidationError:
+        verbose_logger.debug(
+            "Fetching a background interaction with environment credentials: the request's are malformed"
+        )
+        return CredentialLiteLLMParams()
+
+
+_PERMANENT_FETCH_STATUS_CODES: Final = frozenset({400, 401, 403, 404})
+
+
+def _is_permanent_fetch_error(error: Exception) -> bool:
+    return isinstance(error, APIStatusError) and error.status_code in _PERMANENT_FETCH_STATUS_CODES
 
 
 def _poll_intervals(initial: float, maximum: float, timeout: float) -> Iterator[float]:
@@ -269,18 +297,27 @@ def _spend_metadata(logging_obj: "LiteLLMLoggingObj") -> Mapping[str, object]:
     request tags computed once, header-derived ones included, because a
     rebuilt logging object has no request headers to derive them from.
     """
-    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
-
     litellm_params: Final = _OBJECT_DICT.validate_python(logging_obj.model_call_details.get("litellm_params") or {})
-    request_tags: Final = StandardLoggingPayloadSetup.get_request_tags(
-        litellm_params=litellm_params,
-        proxy_server_request=_OBJECT_DICT.validate_python(litellm_params.get("proxy_server_request") or {}),
-    )
     return {
         **_OBJECT_MAPPING.validate_python(litellm_params.get("litellm_metadata") or {}),
         **_OBJECT_MAPPING.validate_python(litellm_params.get("metadata") or {}),
-        "tags": request_tags,
+        **_request_tags(litellm_params),
     }
+
+
+def _request_tags(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    try:
+        return {
+            "tags": StandardLoggingPayloadSetup.get_request_tags(
+                litellm_params=_OBJECT_DICT.validate_python(litellm_params),
+                proxy_server_request=_OBJECT_DICT.validate_python(litellm_params.get("proxy_server_request") or {}),
+            )
+        }
+    except AttributeError:
+        verbose_logger.debug("Keeping a background interaction's request tags as sent: they are not a list")
+        return {}
 
 
 def _create_context(logging_obj: "LiteLLMLoggingObj", custom_llm_provider: str) -> BackgroundInteractionCreateContext:
@@ -351,12 +388,41 @@ async def _claim(context: BackgroundInteractionPollContext) -> bool | None:
         return None
 
 
-async def _record(context: BackgroundInteractionPollContext, outcome: SettlementOutcome) -> SettlementOutcome:
+async def _recorded(context: BackgroundInteractionPollContext, outcome: SettlementOutcome) -> bool:
     try:
         await context.store.record_outcome(context.interaction_id, outcome)
-    except Exception:  # noqa: BLE001  # a takeover of the lapsed claim finds the spend row and records the outcome
+    except Exception:  # noqa: BLE001  # the claim lapses unrecorded and a takeover settles the interaction
         verbose_logger.exception("Could not record the settlement of background interaction %s", context.interaction_id)
+        return False
+    return True
+
+
+async def _bill(context: BackgroundInteractionPollContext, response: InteractionsAPIResponse) -> SettlementOutcome:
+    await _bill_settled_interaction(logging_obj=context.logging_obj, response=response)
+    await _recorded(context, "billed")
+    return "billed"
+
+
+async def _release(
+    context: BackgroundInteractionPollContext, outcome: Literal["released", "unsettled"]
+) -> SettlementOutcome:
+    """
+    A release writes no spend row, so a takeover cannot tell whether the
+    settler before it released. The outcome is recorded first and the
+    reservation released only once it is, which leaves a takeover with
+    nothing to release twice.
+    """
+    if await _recorded(context, outcome):
+        await _release_open_budget_reservation(logging_obj=context.logging_obj)
     return outcome
+
+
+async def _settle(
+    context: BackgroundInteractionPollContext, response: InteractionsAPIResponse | None
+) -> SettlementOutcome:
+    if response is not None and response.status in _TERMINAL_STATUSES and response.usage is not None:
+        return await _bill(context, response)
+    return await _release(context, "released")
 
 
 async def poll_and_log_background_interaction_cost(
@@ -376,6 +442,14 @@ async def poll_and_log_background_interaction_cost(
         try:
             response = await fetch_interaction(context)
         except Exception as e:  # noqa: BLE001  # any fetch error must not kill the billing poll loop
+            if _is_permanent_fetch_error(e):
+                verbose_logger.warning(
+                    "Stopped cost polling for background interaction %s early: the provider answered %s, "
+                    "which no retry changes",
+                    context.interaction_id,
+                    e,
+                )
+                break
             verbose_logger.debug(
                 "Background interaction cost poll for %s failed, will retry: %s",
                 context.interaction_id,
@@ -389,11 +463,11 @@ async def poll_and_log_background_interaction_cost(
             continue
         if not claimed:
             return None
-        return await _record(context, await _settle_terminal(logging_obj=context.logging_obj, response=response))
+        return await _settle(context, response)
     if not await _claim(context):
         return None
     if last_response is not None and last_response.status in _TERMINAL_STATUSES:
-        return await _record(context, await _settle_terminal(logging_obj=context.logging_obj, response=last_response))
+        return await _settle(context, last_response)
     if last_response is not None and last_response.status not in _POLLABLE_STATUSES:
         verbose_logger.error(
             "Gave up cost polling for background interaction %s after %ss: its last status %r is in neither "
@@ -405,20 +479,10 @@ async def poll_and_log_background_interaction_cost(
         )
     else:
         verbose_logger.warning(
-            "Gave up cost polling for background interaction %s after %ss; its usage will not be tracked",
+            "Gave up cost polling for background interaction %s; its usage will not be tracked",
             context.interaction_id,
-            context.timeout_seconds,
         )
-    await _release_open_budget_reservation(logging_obj=context.logging_obj)
-    return await _record(context, "unsettled")
-
-
-async def _settle_terminal(logging_obj: "LiteLLMLoggingObj", response: InteractionsAPIResponse) -> SettlementOutcome:
-    if response.status in _TERMINAL_STATUSES and response.usage is not None:
-        await _bill_settled_interaction(logging_obj=logging_obj, response=response)
-        return "billed"
-    await _release_open_budget_reservation(logging_obj=logging_obj)
-    return "released"
+    return await _release(context, "unsettled")
 
 
 async def _release_open_budget_reservation(logging_obj: "LiteLLMLoggingObj") -> None:
@@ -431,7 +495,9 @@ async def _release_open_budget_reservation(logging_obj: "LiteLLMLoggingObj") -> 
     settlement must release the reservation here or the spend counters stay
     pinned at the estimated cost.
     """
-    metadata: Final = get_litellm_metadata_from_kwargs(kwargs=logging_obj.model_call_details)
+    metadata: Final = _OBJECT_MAPPING.validate_python(
+        get_litellm_metadata_from_kwargs(kwargs=logging_obj.model_call_details)
+    )
     budget_reservation: Final = metadata.get("user_api_key_budget_reservation")
     if not isinstance(budget_reservation, dict):
         return
@@ -585,8 +651,6 @@ async def maybe_schedule_background_interaction_cost_polling(
     logging_obj: Final = create_kwargs.get("litellm_logging_obj")
     if not isinstance(logging_obj, Logging):
         return None
-    api_key: Final = create_kwargs.get("api_key")
-    api_base: Final = create_kwargs.get("api_base")
     pending: Final = PendingBackgroundInteraction(
         interaction_id=response.id,
         custom_llm_provider=custom_llm_provider,
@@ -597,8 +661,7 @@ async def maybe_schedule_background_interaction_cost_polling(
         interaction_id=response.id,
         custom_llm_provider=custom_llm_provider,
         logging_obj=logging_obj,
-        api_key=api_key if isinstance(api_key, str) else None,
-        api_base=api_base if isinstance(api_base, str) else None,
+        credentials=_fetch_credentials(create_kwargs),
         store=await _registered_store(store or _STORE.store, pending),
     )
     return _track_poll(context, fetch_interaction)
@@ -629,10 +692,7 @@ async def _settle_before_delete(
 ) -> SettlementOutcome | None:
     if not await _claim(context):
         return None
-    if response is None:
-        await _release_open_budget_reservation(logging_obj=context.logging_obj)
-        return await _record(context, "released")
-    return await _record(context, await _settle_terminal(logging_obj=context.logging_obj, response=response))
+    return await _settle(context, response)
 
 
 async def maybe_settle_background_interaction_before_delete(
@@ -648,14 +708,11 @@ async def maybe_settle_background_interaction_before_delete(
     pending: Final = await _pending(settlement_store, interaction_id)
     if pending is None:
         return None
-    api_key: Final = delete_kwargs.get("api_key")
-    api_base: Final = delete_kwargs.get("api_base")
     context: Final = BackgroundInteractionPollContext(
         interaction_id=interaction_id,
         custom_llm_provider=pending.custom_llm_provider,
         logging_obj=_rebuild_logging_obj(pending.create_context),
-        api_key=api_key if isinstance(api_key, str) else None,
-        api_base=api_base if isinstance(api_base, str) else None,
+        credentials=_fetch_credentials(delete_kwargs),
         store=settlement_store,
     )
     try:
@@ -694,6 +751,11 @@ def _deployment_id(create_context: BackgroundInteractionCreateContext) -> str | 
     return deployment_id if isinstance(deployment_id, str) else None
 
 
+def _model_group(create_context: BackgroundInteractionCreateContext) -> str | None:
+    model_group: Final = create_context.metadata.get("model_group")
+    return model_group if isinstance(model_group, str) else None
+
+
 def _seconds_until(moment: datetime | None) -> float:
     if moment is None:
         return 0.0
@@ -708,6 +770,7 @@ def _resumed_context(
         custom_llm_provider=row.custom_llm_provider,
         logging_obj=_rebuild_logging_obj(row.create_context),
         deployment_id=_deployment_id(row.create_context),
+        model_group=_model_group(row.create_context),
         initial_interval_seconds=schedule.initial_interval_seconds,
         max_interval_seconds=schedule.max_interval_seconds,
         timeout_seconds=schedule.timeout_seconds,
