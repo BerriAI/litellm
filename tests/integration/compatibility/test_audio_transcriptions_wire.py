@@ -1,15 +1,18 @@
+import io
 import json
 import math
 import mimetypes
 import uuid
+import wave
 from email.message import Message
 from email.parser import BytesParser
 from email.policy import HTTP
+from hashlib import sha256
 from typing import Final, cast
 
 import httpx
 import pytest
-from integration._support.client import Gateway, eventually
+from integration._support.client import JSON_OBJECT, Gateway, eventually, object_value
 from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, wire_server
 from openai import OpenAI
@@ -671,3 +674,172 @@ def test_audio_transcription_bills_audio_tokens_at_the_input_rate_when_no_audio_
             rel_tol=1e-9,
         ), response.text
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/v1/audio/transcriptions")]
+
+
+_GPT_TRANSCRIBE_VERBOSE_JSON_REFUSAL: Final = {
+    "error": {
+        "message": "response_format 'verbose_json' is not compatible with model 'gpt-transcribe'",
+        "type": "invalid_request_error",
+        "param": "response_format",
+        "code": "unsupported_value",
+    }
+}
+_UNDECODABLE_M4A_BYTES: Final = b"\x00\x00\x00\x20ftypM4A \x00\x00\x02\x00M4A isommp42\x00\x00\x00\x08free"
+_DEPLOYMENT_COST_PER_SECOND: Final = 0.0003
+
+
+def _openai_gpt_transcribe_reply(request: Request, reported_seconds: float) -> Reply:
+    fields: Final = dict(_text_parts(_multipart_parts(request)))
+    if fields.get("response_format") == "verbose_json":
+        return Reply(status=400, body=json.dumps(_GPT_TRANSCRIBE_VERBOSE_JSON_REFUSAL).encode())
+    return Reply(
+        body=json.dumps({"text": "hello world", "usage": {"type": "duration", "seconds": reported_seconds}}).encode()
+    )
+
+
+def _uploaded_files(request: Request) -> tuple[tuple[str, str, bytes], ...]:
+    return tuple((name, filename, payload) for name, filename, _, payload in _file_parts(_multipart_parts(request)))
+
+
+def _silent_wav(seconds: float) -> bytes:
+    output: Final = io.BytesIO()
+    with wave.open(output, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(16000)
+        wav.writeframes(b"\x00\x00" * round(16000 * seconds))
+    return output.getvalue()
+
+
+def _advertised_cost_per_second(gateway: Gateway, model: str) -> float:
+    entries: Final = gateway.get("/v2/model/info", {"model": model})["data"]
+    assert isinstance(entries, list) and len(entries) == 1, entries
+    price: Final = object_value(object_value(entries[0])["model_info"])["input_cost_per_second"]
+    assert isinstance(price, float) and price > 0, entries
+    return price
+
+
+def _response_cost(response: httpx.Response) -> float:
+    return float(response.headers["x-litellm-response-cost"]) if "x-litellm-response-cost" in response.headers else 0.0
+
+
+def _logged_spend(call_id: str) -> float:
+    rows: Final = eventually(
+        lambda: read_rows('SELECT spend FROM "LiteLLM_SpendLogs" WHERE request_id = %s', (call_id,)),
+        lambda values: len(values) == 1,
+        seconds=70,
+    )
+    return float(str(rows[0]["spend"]))
+
+
+def test_gpt_transcribe_without_response_format_reaches_openai_without_verbose_json(gateway: Gateway) -> None:
+    upload: Final = _UNDECODABLE_M4A_BYTES + uuid.uuid4().bytes
+
+    with (
+        wire_server(lambda request: _openai_gpt_transcribe_reply(request, 2)) as wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(
+            model="openai/gpt-transcribe", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
+        )
+        with _sdk(gateway, "/v1", gateway.key) as sdk:
+            response: Final = sdk.audio.transcriptions.with_raw_response.create(
+                model=model, file=("a.m4a", upload, "audio/mp4")
+            )
+        requests: Final = wire.drain()
+
+    assert response.status_code == 200, response.text
+    assert JSON_OBJECT.validate_json(response.content)["text"] == "hello world", response.text
+    assert [(request.method, request.target) for request in requests] == [("POST", "/v1/audio/transcriptions")]
+    assert _text_parts(_multipart_parts(requests[0])) == (("model", "gpt-transcribe"),)
+    assert _uploaded_files(requests[0]) == (("file", "a.m4a", upload),)
+
+
+@pytest.mark.parametrize(
+    "configured_cost_per_second",
+    (None, _DEPLOYMENT_COST_PER_SECOND),
+    ids=("cost_map_price", "deployment_price"),
+)
+def test_gpt_transcribe_unmeasurable_upload_bills_the_seconds_openai_reports(
+    gateway: Gateway, configured_cost_per_second: float | None
+) -> None:
+    reported_seconds: Final = 2.0
+    upload: Final = _UNDECODABLE_M4A_BYTES + uuid.uuid4().bytes
+
+    with (
+        wire_server(lambda request: _openai_gpt_transcribe_reply(request, reported_seconds)) as wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = (
+            scenario.model(
+                model="openai/gpt-transcribe",
+                api_base=f"{wire.url}/v1",
+                api_key="synthetic-openai-key",
+                input_cost_per_second=configured_cost_per_second,
+            )
+            if configured_cost_per_second is not None
+            else scenario.model(
+                model="openai/gpt-transcribe", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
+            )
+        )
+        key: Final = scenario.key(models=[model])
+        cost_per_second: Final = (
+            configured_cost_per_second
+            if configured_cost_per_second is not None
+            else _advertised_cost_per_second(gateway, model)
+        )
+        response: Final = gateway.request_multipart(
+            "/v1/audio/transcriptions",
+            {"model": model, "response_format": "json"},
+            {"file": ("a.m4a", upload, "audio/mp4")},
+            key=key,
+        )
+        expected_cost: Final = reported_seconds * cost_per_second
+
+        assert response.status_code == 200, response.text
+        assert JSON_OBJECT.validate_json(response.content)["text"] == "hello world", response.text
+        assert math.isclose(_response_cost(response), expected_cost), (_response_cost(response), expected_cost)
+        assert math.isclose(_logged_spend(response.headers["x-litellm-call-id"]), expected_cost)
+        key_rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT spend FROM "LiteLLM_VerificationToken" WHERE token = %s',
+                (sha256(key.encode()).hexdigest(),),
+            ),
+            lambda rows: len(rows) == 1 and float(str(rows[0]["spend"])) > 0,
+            seconds=70,
+        )
+        assert math.isclose(float(str(key_rows[0]["spend"])), expected_cost), key_rows
+        requests: Final = wire.drain()
+
+    assert [(request.method, request.target) for request in requests] == [("POST", "/v1/audio/transcriptions")]
+    assert _uploaded_files(requests[0]) == (("file", "a.m4a", upload),)
+
+
+def test_gpt_transcribe_measured_upload_bills_the_measured_length_over_reported_seconds(gateway: Gateway) -> None:
+    measured_seconds: Final = 1.0
+    upload: Final = _silent_wav(measured_seconds)
+
+    with (
+        wire_server(lambda request: _openai_gpt_transcribe_reply(request, 7)) as wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(
+            model="openai/gpt-transcribe",
+            api_base=f"{wire.url}/v1",
+            api_key="synthetic-openai-key",
+            input_cost_per_second=_DEPLOYMENT_COST_PER_SECOND,
+        )
+        response: Final = gateway.request_multipart(
+            "/v1/audio/transcriptions",
+            {"model": model, "response_format": "json"},
+            {"file": ("a.wav", upload, _WAV_CONTENT_TYPE)},
+        )
+        expected_cost: Final = measured_seconds * _DEPLOYMENT_COST_PER_SECOND
+
+        assert response.status_code == 200, response.text
+        assert math.isclose(_response_cost(response), expected_cost), (_response_cost(response), expected_cost)
+        assert math.isclose(_logged_spend(response.headers["x-litellm-call-id"]), expected_cost)
+        requests: Final = wire.drain()
+
+    assert [(request.method, request.target) for request in requests] == [("POST", "/v1/audio/transcriptions")]
+    assert _uploaded_files(requests[0]) == (("file", "a.wav", upload),)
