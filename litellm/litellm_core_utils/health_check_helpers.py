@@ -7,7 +7,11 @@ import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal
 
-from litellm.litellm_core_utils.get_llm_provider_logic import model_matches_wildcard, strip_provider_family_prefix
+from litellm.litellm_core_utils.get_llm_provider_logic import (
+    model_matches_wildcard,
+    split_route_type_prefix,
+    strip_provider_family_prefix,
+)
 from litellm.llms.base_llm.ocr.transformation import DocumentType
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.ocr.entrypoints import NATIVE_OCR_HEALTH_CHECK_DOCUMENT
@@ -85,15 +89,16 @@ def _ocr_health_check_document(model: str, custom_llm_provider: str) -> Document
 def _wildcard_health_check_models(
     wildcard_suffix: str, custom_llm_provider: str, candidate_models: Sequence[str]
 ) -> tuple[str, ...]:
-    if wildcard_suffix == "*":
-        return tuple(candidate_models[:3])
-    model_ids: Final = (strip_provider_family_prefix(model, custom_llm_provider) for model in candidate_models)
-    matching: Final = tuple(
-        f"{custom_llm_provider}/{model_id}"
-        for model_id in model_ids
-        if model_matches_wildcard(model_id, wildcard_suffix)
+    route_type_prefix, model_pattern = split_route_type_prefix(wildcard_suffix, custom_llm_provider)
+    model_ids: Final = dict.fromkeys(
+        strip_provider_family_prefix(model, custom_llm_provider) for model in candidate_models
     )
-    return matching[:3] or tuple(candidate_models[:3])
+    matching: Final = tuple(
+        f"{custom_llm_provider}/{route_type_prefix}{model_id}"
+        for model_id in model_ids
+        if model_matches_wildcard(model_id, model_pattern)
+    )
+    return matching[:3] or tuple(dict.fromkeys(candidate_models))[:3]
 
 
 class HealthCheckHelpers:

@@ -1,5 +1,6 @@
 import re
 from fnmatch import fnmatchcase
+from types import MappingProxyType
 from typing import Final, cast
 from urllib.parse import urlparse
 
@@ -20,6 +21,23 @@ from ..types.utils import LlmProviders
 
 _KNOWN_PROVIDERS: Final = frozenset(provider.value for provider in LlmProviders)
 _GLOB_CHARS_OTHER_THAN_STAR: Final = re.compile(r"[\[?]")
+_ROUTE_TYPE_PREFIXES_BY_PROVIDER: Final = MappingProxyType(
+    {
+        "azure": ("o_series/", "gpt5_series/"),
+        "bedrock": (
+            "converse/",
+            "invoke/",
+            "claude_platform/",
+            "converse_like/",
+            "async_invoke/",
+            "openai/",
+            "mantle/",
+            "chat_completions/",
+            "nova/",
+            "nova-2/",
+        ),
+    }
+)
 
 
 def _endpoint_matches_api_base(endpoint: str, api_base: str) -> bool:
@@ -164,6 +182,12 @@ def strip_provider_family_prefix(model: str, custom_llm_provider: str) -> str:
 
 def model_matches_wildcard(model_id: str, wildcard: str) -> bool:
     return fnmatchcase(model_id, _GLOB_CHARS_OTHER_THAN_STAR.sub(r"[\g<0>]", wildcard))
+
+
+def split_route_type_prefix(model_path: str, custom_llm_provider: str) -> tuple[str, str]:
+    prefixes: Final = ("responses/", *_ROUTE_TYPE_PREFIXES_BY_PROVIDER.get(custom_llm_provider, ()))
+    prefix: Final = next((prefix for prefix in prefixes if model_path.startswith(prefix)), "")
+    return prefix, model_path.removeprefix(prefix)
 
 
 def inferred_provider(model: str | None) -> str | None:

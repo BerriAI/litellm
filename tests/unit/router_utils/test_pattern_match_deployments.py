@@ -378,6 +378,25 @@ def test_pattern_matching_router_uses_default_wildcard_for_unmatched_model() -> 
     assert tuple(deployment["model_name"] for deployment in deployments) == ("*",)
 
 
+@pytest.mark.parametrize(
+    ("request_model", "wildcard", "shadowed"),
+    [
+        ("openai/gpt-4o", "*", True),
+        ("openai/gpt-4o", "openai/*", False),
+        ("meta-llama/llama-3-8b", "*", False),
+        ("openai/gpt-4o", "team/*", False),
+    ],
+)
+def test_is_shadowed_only_when_a_more_specific_registered_pattern_serves_the_request(
+    request_model: str, wildcard: str, shadowed: bool
+) -> None:
+    pattern_router: Final = PatternMatchRouter()
+    pattern_router.add_pattern("*", _wildcard_deployment("*"))
+    pattern_router.add_pattern("openai/*", _wildcard_deployment("openai/*"))
+
+    assert pattern_router.is_shadowed(request_model, wildcard) is shadowed
+
+
 def test_sorted_patterns():
     """
     Tests that the pattern specificity is calculated correctly

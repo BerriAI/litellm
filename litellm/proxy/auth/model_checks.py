@@ -4,17 +4,21 @@ import copy
 from collections.abc import Sequence
 from dataclasses import dataclass
 from itertools import chain
-from types import MappingProxyType
 from typing import Final
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
-from litellm.litellm_core_utils.get_llm_provider_logic import model_matches_wildcard, strip_provider_family_prefix
+from litellm.litellm_core_utils.get_llm_provider_logic import (
+    model_matches_wildcard,
+    split_route_type_prefix,
+    strip_provider_family_prefix,
+)
 from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.router import Router
 from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
+from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
 from litellm.types.router import CredentialLiteLLMParams, LiteLLM_Params
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager, get_valid_models
@@ -271,22 +275,10 @@ def _hydrate_litellm_credential_name(
     return litellm_params
 
 
-_RESPONSES_ROUTE_PREFIX: Final = "responses/"
-_ROUTE_TYPE_PREFIXES_BY_PROVIDER: Final = MappingProxyType({"bedrock": ("converse/", "invoke/")})
-
-
 @dataclass(frozen=True, slots=True)
 class _WildcardListing:
     listed_id: str
     routed_model: str
-
-
-def _without_route_type_prefix(deployment_path: str, provider: str) -> str:
-    prefixes: Final = (_RESPONSES_ROUTE_PREFIX, *_ROUTE_TYPE_PREFIXES_BY_PROVIDER.get(provider, ()))
-    return next(
-        (deployment_path.removeprefix(prefix) for prefix in prefixes if deployment_path.startswith(prefix)),
-        deployment_path,
-    )
 
 
 def _single_star_listing(
@@ -319,8 +311,10 @@ def _wildcard_listings(wildcard_model: str, litellm_params: LiteLLM_Params | Non
     if not provider_sep:
         return ()
 
-    model_pattern: Final = _without_route_type_prefix(deployment_path, provider)
-    route_type_prefix: Final = deployment_path.removesuffix(model_pattern)
+    route_type_prefix, model_pattern = split_route_type_prefix(deployment_path, provider)
+    if wildcard_model.count("*") == 1 and "*" not in model_pattern:
+        return (_WildcardListing(listed_id=wildcard_model.replace("*", model_pattern), routed_model=deployment_model),)
+
     route_namespace: Final = wildcard_model.removesuffix(model_pattern)
     is_single_star: Final = wildcard_model.count("*") == 1 and model_pattern.count("*") == 1
     is_same_pattern: Final = (
@@ -345,12 +339,22 @@ def _wildcard_listings(wildcard_model: str, litellm_params: LiteLLM_Params | Non
     return tuple(dict.fromkeys(filter(None, listings)))
 
 
+def _listings_served_by_route(
+    wildcard_model: str, litellm_params: LiteLLM_Params | None, pattern_router: PatternMatchRouter | None
+) -> tuple[_WildcardListing, ...]:
+    listings: Final = _wildcard_listings(wildcard_model, litellm_params)
+    if pattern_router is None:
+        return listings
+    return tuple(listing for listing in listings if not pattern_router.is_shadowed(listing.listed_id, wildcard_model))
+
+
 def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_Params | None = None) -> list[str]:
     return [listing.listed_id for listing in _wildcard_listings(wildcard_model, litellm_params)]
 
 
 def expand_wildcard_deployments_for_model_info(
     deployments: list[dict[str, object]],
+    pattern_router: PatternMatchRouter | None = None,
 ) -> list[dict[str, object]]:
     """Expand wildcard deployments into one row per known provider model.
 
@@ -374,7 +378,7 @@ def expand_wildcard_deployments_for_model_info(
         except Exception:
             expanded.append(deployment)
             continue
-        listings = _wildcard_listings(wildcard_model=model_name, litellm_params=litellm_params)
+        listings = _listings_served_by_route(model_name, litellm_params, pattern_router)
         if not listings:
             expanded.append(deployment)
             continue
@@ -397,18 +401,17 @@ def _models_listed_for_wildcard_route(
     team_id: str | None,
 ) -> tuple[str, ...]:
     model_list: Final = llm_router.get_model_list(model_name=model, team_id=team_id) if llm_router else None
-    expanded: Final = (
+    pattern_router: Final = llm_router.pattern_router if llm_router else None
+    listings: Final = (
         chain.from_iterable(
-            get_known_models_from_wildcard(
-                wildcard_model=model,
-                litellm_params=LiteLLM_Params(**router_model["litellm_params"]),
-            )
+            _listings_served_by_route(model, LiteLLM_Params(**router_model["litellm_params"]), pattern_router)
             for router_model in model_list
         )
         if model_list
-        else get_known_models_from_wildcard(wildcard_model=model, litellm_params=None)
+        else _listings_served_by_route(model, None, pattern_router)
     )
-    return (model, *expanded) if return_wildcard_route else tuple(expanded)
+    expanded: Final = tuple(listing.listed_id for listing in listings)
+    return (model, *expanded) if return_wildcard_route else expanded
 
 
 def _get_wildcard_models(

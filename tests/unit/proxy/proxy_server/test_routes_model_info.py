@@ -24,6 +24,7 @@ import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy import proxy_server
+from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
 from litellm.utils import _invalidate_model_cost_lowercase_map
 
 from .conftest import normalize  # type: ignore[import-not-found]
@@ -480,6 +481,8 @@ def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monkeypatch
     router.get_model_access_groups = MagicMock(return_value={})
     router.get_model_names = MagicMock(return_value=["*"])
     router.get_model_list = MagicMock(return_value=[deployment])
+    router.pattern_router = PatternMatchRouter()
+    router.pattern_router.add_pattern("*", deployment)
     monkeypatch.setattr(model_checks, "get_provider_models", fake_get_provider_models)
 
     expanded_deployments = proxy_server.expand_wildcard_deployments_for_model_info([deployment])
@@ -638,6 +641,7 @@ def model_group_info_router(monkeypatch):
     router.get_model_names.return_value = model_names
     router.get_model_access_groups.return_value = {}
     router.get_model_list.return_value = []
+    router.pattern_router = PatternMatchRouter()
 
     def model_group_info(*, llm_router, all_models_str, model_group):
         return [ModelGroupInfoProxy(model_group=name, providers=[]) for name in all_models_str]

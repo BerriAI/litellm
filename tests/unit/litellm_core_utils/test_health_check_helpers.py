@@ -1555,6 +1555,31 @@ def test_wildcard_health_check_models_with_many_stars_returns_promptly():
     assert _wildcard_health_check_models("*" * 30 + "!", "openai", candidates) == candidates
 
 
+def test_wildcard_health_check_models_probes_each_model_once():
+    candidates: Final = ("gemini/gemini-exp-1206", "gemini-exp-1206", "gemini/gemini-exp-1114", "gemini-2.0-flash")
+
+    assert _wildcard_health_check_models("gemini-exp*", "gemini", candidates) == (
+        "gemini/gemini-exp-1206",
+        "gemini/gemini-exp-1114",
+    )
+
+
+@pytest.mark.parametrize(
+    ("wildcard_suffix", "custom_llm_provider", "expected"),
+    [
+        ("converse/*", "bedrock", ("bedrock/converse/amazon.nova-micro-v1:0", "bedrock/converse/anthropic.claude-v2")),
+        ("nova/amazon.*", "bedrock", ("bedrock/nova/amazon.nova-micro-v1:0",)),
+        ("o_series/*", "azure", ("azure/o_series/amazon.nova-micro-v1:0", "azure/o_series/anthropic.claude-v2")),
+    ],
+)
+def test_wildcard_health_check_models_probes_through_the_route_type_prefix(
+    wildcard_suffix: str, custom_llm_provider: str, expected: tuple[str, ...]
+) -> None:
+    candidates: Final = (f"{custom_llm_provider}/amazon.nova-micro-v1:0", "anthropic.claude-v2")
+
+    assert _wildcard_health_check_models(wildcard_suffix, custom_llm_provider, candidates) == expected
+
+
 def test_wildcard_health_check_models_partial_prefix_matching_nothing_keeps_cheapest_candidates():
     assert _wildcard_health_check_models("ft:*", "openai", ["gpt-4o-mini", "gpt-4.1-nano"]) == (
         "gpt-4o-mini",

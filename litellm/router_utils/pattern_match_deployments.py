@@ -172,6 +172,11 @@ class PatternMatchRouter:
 
         return None  # No matching pattern found
 
+    def is_shadowed(self, request: str, wildcard: str) -> bool:
+        own_regex: Final = self.pattern_to_regex(wildcard)
+        first_match: Final = next((regex for regex in self.patterns if re.match(regex, request)), own_regex)
+        return own_regex in self.patterns and first_match != own_regex
+
     def routes_to_provider(self, request: str, custom_llm_provider: str) -> bool:
         deployments: Final = _ROUTED_DEPLOYMENTS.validate_python(self.route(request) or ())
         return any(

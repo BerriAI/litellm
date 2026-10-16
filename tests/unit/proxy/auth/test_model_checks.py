@@ -1,9 +1,17 @@
-from typing import Final
+from typing import Final, get_args
 from unittest.mock import patch
 
 import httpx
 import pytest
 import respx
+
+from litellm.llms.bedrock.common_utils import BedrockRoute
+
+_BEDROCK_MODEL_ROUTES: Final = (
+    *(route for route in get_args(BedrockRoute) if route not in ("agent", "agentcore")),
+    "nova",
+    "nova-2",
+)
 
 
 def test_get_team_models_for_all_models_and_team_only_models():
@@ -556,8 +564,7 @@ def test_gemini_model_info_partial_wildcard_has_unique_model_names(
         ("*", "cloudflare/@cf/*", ""),
         ("*", "gemini/gemini-2.5*", ""),
         ("openai/*", "openai/responses/*", "responses/"),
-        ("bedrock/*", "bedrock/converse/*", "converse/"),
-        ("bedrock/*", "bedrock/invoke/*", "invoke/"),
+        *(("bedrock/*", f"bedrock/{route}/*", f"{route}/") for route in _BEDROCK_MODEL_ROUTES),
     ],
 )
 def test_every_known_model_a_wildcard_reaches_is_listed_once_under_the_id_that_routes_to_it(
@@ -605,10 +612,27 @@ def test_every_known_model_a_wildcard_reaches_is_listed_once_under_the_id_that_r
     assert [(row["model_name"], row["litellm_params"]["model"]) for row in model_info_rows] == list(zip(listed, routed))
 
 
+@pytest.mark.parametrize("route_type_prefix", ["o_series/", "gpt5_series/", "responses/"])
+def test_azure_route_type_infix_lists_the_same_ids_as_the_route_without_it(
+    monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None, route_type_prefix: str
+) -> None:
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", False)
+
+    without_infix: Final = get_known_models_from_wildcard("azure/*", LiteLLM_Params(model="azure/*"))
+
+    assert without_infix
+    assert get_known_models_from_wildcard("azure/*", LiteLLM_Params(model=f"azure/{route_type_prefix}*")) == (
+        without_infix
+    )
+
+
 @pytest.mark.parametrize(
     ("model_name", "deployment_model"),
     [
-        ("team/*", "openai/gpt-4o-mini"),
         ("*", "*"),
         ("team/*", "openai/fo::*::static::*"),
     ],
@@ -631,6 +655,79 @@ def test_wildcard_route_that_cannot_name_a_known_model_lists_no_ids(
         == []
     )
     assert expand_wildcard_deployments_for_model_info([deployment]) == [deployment]
+
+
+@pytest.mark.parametrize(
+    ("model_name", "deployment_model", "listed_id"),
+    [
+        ("team/*", "openai/gpt-4o-mini", "team/gpt-4o-mini"),
+        ("*", "openai/gpt-4o-mini", "gpt-4o-mini"),
+        ("team/*", "bedrock/converse/amazon.nova-micro-v1:0", "team/amazon.nova-micro-v1:0"),
+    ],
+)
+def test_wildcard_route_over_one_fixed_model_lists_that_model_once(
+    model_name: str, deployment_model: str, listed_id: str
+) -> None:
+    from litellm.proxy.auth.model_checks import (
+        expand_wildcard_deployments_for_model_info,
+        get_known_models_from_wildcard,
+    )
+    from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
+    from litellm.types.router import LiteLLM_Params
+
+    deployment: Final = {"model_name": model_name, "litellm_params": {"model": deployment_model}}
+    router: Final = PatternMatchRouter()
+    router.add_pattern(model_name, deployment)
+
+    assert (
+        get_known_models_from_wildcard(wildcard_model=model_name, litellm_params=LiteLLM_Params(model=deployment_model))
+        == [listed_id]
+    )
+    assert (router.route(listed_id) or [{}])[0]["litellm_params"]["model"] == deployment_model
+    assert [
+        (row["model_name"], row["litellm_params"]["model"])
+        for row in expand_wildcard_deployments_for_model_info([deployment])
+    ] == [(listed_id, deployment_model)]
+
+
+def test_wildcard_lists_no_id_that_a_more_specific_route_serves(
+    monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
+) -> None:
+    import copy
+
+    import litellm
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info, get_complete_model_list
+
+    monkeypatch.setattr(litellm, "check_provider_endpoint", False)
+    monkeypatch.setitem(litellm.models_by_provider, "openrouter", ["openrouter/openai/gpt-4o", "meta-llama/llama-3-8b"])
+    router: Final = Router(
+        model_list=[
+            {"model_name": "*", "litellm_params": {"model": "openrouter/*", "api_key": "key"}},
+            {"model_name": "openai/*", "litellm_params": {"model": "openai/*", "api_key": "key"}},
+        ]
+    )
+
+    def served_by(model_id: str) -> str:
+        return str((router.pattern_router.route(model_id) or [{}])[0]["litellm_params"]["model"])
+
+    listed_by_star: Final = get_complete_model_list(
+        key_models=["*"],
+        team_models=[],
+        proxy_model_list=[],
+        user_model=None,
+        infer_model_from_keys=False,
+        llm_router=router,
+    )
+    model_info_rows: Final = expand_wildcard_deployments_for_model_info(
+        copy.deepcopy(router.model_list), pattern_router=router.pattern_router
+    )
+
+    assert listed_by_star == ["meta-llama/llama-3-8b"]
+    assert "openai/gpt-4o" in [row["model_name"] for row in model_info_rows]
+    assert [
+        row["model_name"] for row in model_info_rows if served_by(row["model_name"]) != row["litellm_params"]["model"]
+    ] == []
 
 
 def test_partial_wildcard_without_a_deployment_lists_the_same_ids_as_with_one(
