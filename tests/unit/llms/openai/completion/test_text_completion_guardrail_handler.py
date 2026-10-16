@@ -2,7 +2,7 @@
 Unit tests for OpenAI Text Completion Guardrail Translation Handler
 """
 
-from typing import List, Optional, Tuple
+from typing import Final, List, Optional, Tuple
 from unittest.mock import MagicMock
 
 import pytest
@@ -111,24 +111,20 @@ class TestInputProcessing:
 
     @pytest.mark.asyncio
     async def test_process_mixed_list_prompts(self):
-        """Test processing a list with non-string items (e.g., token lists)"""
-        handler = OpenAITextCompletionHandler()
-        guardrail = MockGuardrail(guardrail_name="test")
+        """A list mixing strings and token IDs raises instead of partially inspecting"""
+        from litellm.exceptions import GuardrailRaisedException
 
-        data = {
+        handler: Final = OpenAITextCompletionHandler()
+        guardrail: Final = MockGuardrail(guardrail_name="test")
+
+        data: Final = {
             "model": "gpt-3.5-turbo-instruct",
             "prompt": ["String prompt", [1, 2, 3], "Another string"],
             "max_tokens": 50,
         }
 
-        result = await handler.process_input_messages(data, guardrail)
-
-        # String items should be guardrailed, list items unchanged
-        assert result["prompt"] == [
-            "String prompt [GUARDRAILED]",
-            [1, 2, 3],  # Unchanged
-            "Another string [GUARDRAILED]",
-        ]
+        with pytest.raises(GuardrailRaisedException, match="cannot inspect token-ID prompts"):
+            await handler.process_input_messages(data, guardrail)
 
     @pytest.mark.asyncio
     async def test_process_long_prompt(self):
@@ -341,3 +337,41 @@ class TestPIIMaskingScenario:
         assert "[EMAIL_REDACTED]" in result["prompt"][1]
         assert "alice@example.com" not in result["prompt"][0]
         assert "bob@test.org" not in result["prompt"][1]
+
+
+class TestTokenIdPromptRejection:
+    """Token-ID prompts carry no inspectable text, so input guardrails must fail closed"""
+
+    @pytest.mark.asyncio
+    async def test_process_token_id_prompt_rejected(self):
+        """A list[int] prompt raises instead of skipping the guardrail"""
+        from litellm.exceptions import GuardrailRaisedException
+
+        handler: Final = OpenAITextCompletionHandler()
+        guardrail: Final = MockGuardrail(guardrail_name="test")
+
+        data: Final = {
+            "model": "hosted_vllm/Qwen/Qwen3-8B",
+            "prompt": [151644, 872, 198, 14990, 151645],
+            "max_tokens": 4,
+        }
+
+        with pytest.raises(GuardrailRaisedException, match="cannot inspect token-ID prompts"):
+            await handler.process_input_messages(data, guardrail)
+
+    @pytest.mark.asyncio
+    async def test_process_nested_token_id_prompt_rejected(self):
+        """A list[list[int]] prompt raises instead of skipping the guardrail"""
+        from litellm.exceptions import GuardrailRaisedException
+
+        handler: Final = OpenAITextCompletionHandler()
+        guardrail: Final = MockGuardrail(guardrail_name="test")
+
+        data: Final = {
+            "model": "hosted_vllm/Qwen/Qwen3-8B",
+            "prompt": [[151644, 872, 198], [151644, 14990, 151645]],
+            "max_tokens": 4,
+        }
+
+        with pytest.raises(GuardrailRaisedException, match="cannot inspect token-ID prompts"):
+            await handler.process_input_messages(data, guardrail)
