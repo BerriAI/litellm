@@ -2517,7 +2517,9 @@ async def apply_guardrail(
         if litellm_logging_obj is not None:
             _patch_logging_obj_for_guardrail(litellm_logging_obj, request)
 
-        metadata: Final = _guardrail_request_metadata(request.metadata, data.get("metadata"))
+        metadata: Final = _guardrail_request_metadata(
+            request.metadata, _GUARDRAIL_METADATA_ADAPTER.validate_python(data).get("metadata")
+        )
         request_data: Final[dict] = {
             key: value
             for key, value in (
