@@ -867,6 +867,16 @@ def _base_model_pricing_provider(base_model: str, custom_llm_provider: str | Non
     return own_model_info["litellm_provider"]
 
 
+def _pricing_provider_for_cost_candidate(
+    candidate_provider: str | None,
+    request_provider: str | None,
+    current_provider: object,
+) -> str | None:
+    if candidate_provider != request_provider:
+        return candidate_provider
+    return current_provider if isinstance(current_provider, str) else None
+
+
 def select_model_name_for_cost_calc(
     model: str | None,
     completion_response: object | None,
@@ -1928,8 +1938,6 @@ def completion_cost(
                 if litellm_logging_obj is not None:
                     request_model_for_cost = litellm_logging_obj.model
 
-                if pricing_provider == request_pricing_provider:
-                    pricing_provider = custom_llm_provider if isinstance(custom_llm_provider, str) else None
                 (
                     prompt_tokens_cost_usd_dollar,
                     completion_tokens_cost_usd_dollar,
@@ -1937,7 +1945,11 @@ def completion_cost(
                     model=model,
                     prompt_tokens=prompt_tokens or 0,
                     completion_tokens=completion_tokens or 0,
-                    custom_llm_provider=pricing_provider,
+                    custom_llm_provider=_pricing_provider_for_cost_candidate(
+                        candidate_provider=pricing_provider,
+                        request_provider=request_pricing_provider,
+                        current_provider=custom_llm_provider,
+                    ),
                     response_time_ms=response_time_ms,
                     region_name=None if explicit_pricing else region_name,
                     custom_cost_per_second=custom_cost_per_second,
@@ -2036,7 +2048,11 @@ def completion_cost(
                     if cost_per_token_usage_object is not None and model:
                         _token_type_breakdown = get_token_type_cost_breakdown(
                             model=model,
-                            custom_llm_provider=pricing_provider,
+                            custom_llm_provider=_pricing_provider_for_cost_candidate(
+                                candidate_provider=pricing_provider,
+                                request_provider=request_pricing_provider,
+                                current_provider=custom_llm_provider,
+                            ),
                             usage=cost_per_token_usage_object,
                             service_tier=service_tier,
                             data_residency=data_residency,
