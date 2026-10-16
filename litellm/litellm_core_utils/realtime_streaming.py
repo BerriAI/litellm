@@ -1,11 +1,11 @@
 import asyncio
 import json
 import traceback
-from collections.abc import Coroutine, Mapping, Sequence
+from collections.abc import Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum, auto
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypeAlias, TypedDict, cast
 
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly
@@ -132,14 +132,17 @@ def _mapping_field(container: Mapping[str, object], key: str) -> Mapping[str, ob
     return _json_object(container.get(key))
 
 
-def _turn_detection_with_auto_response_off(turn_detection: object, gate: Mapping[str, object]) -> Mapping[str, object]:
+_TurnDetectionGate: TypeAlias = Callable[[object], Mapping[str, object]]
+
+
+def _turn_detection_with_auto_response_off(turn_detection: object) -> Mapping[str, object]:
     client_turn_detection: Final = _json_object(turn_detection)
     if client_turn_detection is None:
-        return dict(gate)
+        return dict(_GUARDRAIL_TURN_DETECTION_GATE)
     return {**client_turn_detection, "create_response": False}
 
 
-def _nested_turn_detection_part(session: Mapping[str, object], gate: Mapping[str, object]) -> Mapping[str, object]:
+def _nested_turn_detection_part(session: Mapping[str, object], gate: _TurnDetectionGate) -> Mapping[str, object]:
     audio: Final = _mapping_field(session, "audio")
     if audio is None:
         return {}
@@ -148,20 +151,16 @@ def _nested_turn_detection_part(session: Mapping[str, object], gate: Mapping[str
         return {}
     gated_input: Final = {
         **audio_input,
-        "turn_detection": _turn_detection_with_auto_response_off(audio_input["turn_detection"], gate),
+        "turn_detection": gate(audio_input["turn_detection"]),
     }
     return {"audio": {**audio, "input": gated_input}}
 
 
 def _with_create_response_disabled(
-    session: Mapping[str, object], gate: Mapping[str, object]
+    session: Mapping[str, object], gate: _TurnDetectionGate
 ) -> Mapping[str, object] | None:
     """``session`` with every turn_detection the client sent unable to auto-respond, or None when it sent none."""
-    flat_part: Final = (
-        {"turn_detection": _turn_detection_with_auto_response_off(session["turn_detection"], gate)}
-        if "turn_detection" in session
-        else {}
-    )
+    flat_part: Final = {"turn_detection": gate(session["turn_detection"])} if "turn_detection" in session else {}
     nested_part: Final = _nested_turn_detection_part(session, gate)
     if not flat_part and not nested_part:
         return None
@@ -169,7 +168,7 @@ def _with_create_response_disabled(
 
 
 def _gate_session_update(
-    session: object, gate: Mapping[str, object], inject_gate_when_absent: bool
+    session: object, gate: _TurnDetectionGate, inject_gate_when_absent: bool
 ) -> Mapping[str, object] | None:
     """The session to forward under a transcript guardrail, or None when the frame needs no change."""
     client_session: Final = _json_object(session)
@@ -178,15 +177,14 @@ def _gate_session_update(
     gated: Final = _with_create_response_disabled(client_session, gate)
     if gated is not None or not inject_gate_when_absent:
         return gated
-    return {**client_session, "turn_detection": dict(gate)}
+    return {**client_session, "turn_detection": gate(None)}
 
 
 class RealtimeEventNormalizer(Protocol):
     def should_drop(self, event: object) -> bool: ...
     def normalize(self, event: dict) -> dict: ...
     def patch_outgoing_session(self, session: dict) -> dict: ...
-    @property
-    def guardrail_turn_detection_gate(self) -> Mapping[str, object]: ...
+    def gate_turn_detection(self, turn_detection: object, /) -> Mapping[str, object]: ...
 
 
 class RealtimeUsageMeter(Protocol):
@@ -280,10 +278,8 @@ class RealTimeStreaming:
         self._is_transcription_session: bool = force_transcription_model is not None
         # Optional per-provider GA event normalizer (e.g. XAIRealtimeNormalizer).
         self._event_normalizer = event_normalizer
-        self._guardrail_turn_detection_gate: Final[Mapping[str, object]] = (
-            _GUARDRAIL_TURN_DETECTION_GATE
-            if event_normalizer is None
-            else event_normalizer.guardrail_turn_detection_gate
+        self._gate_turn_detection: Final[_TurnDetectionGate] = (
+            _turn_detection_with_auto_response_off if event_normalizer is None else event_normalizer.gate_turn_detection
         )
         self._usage_meter = usage_meter
 
@@ -808,7 +804,7 @@ class RealTimeStreaming:
 
     def _make_disable_auto_response_message(self) -> str:
         """Return a session.update that disables VAD auto-response."""
-        turn_detection: Final = dict(self._guardrail_turn_detection_gate)
+        turn_detection: Final = self._gate_turn_detection(None)
         if self._backend_uses_beta_protocol:
             session: dict[str, object] = {"turn_detection": turn_detection}
         else:
@@ -1544,7 +1540,7 @@ class RealTimeStreaming:
                         and (
                             gated_first := _gate_session_update(
                                 client_event.get("session", _EMPTY_SESSION),
-                                self._guardrail_turn_detection_gate,
+                                self._gate_turn_detection,
                                 inject_gate_when_absent=True,
                             )
                         )
@@ -1564,8 +1560,9 @@ class RealTimeStreaming:
                     # initial disable. Covers both the flat beta key and the
                     # nested GA ``audio.input.turn_detection`` shape, since
                     # the GA remap below also accepts either form. A later
-                    # update with no turn_detection is forwarded as is, since
-                    # the provider keeps the earlier disable for an unset field.
+                    # update with no turn_detection is forwarded as is: OpenAI
+                    # keeps the earlier disable for an unset field, and xAI
+                    # falls back to its manual default, which never auto-responds.
                     if (
                         msg_type == "session.update"
                         and not guardrail_turn_detection_injected
@@ -1573,7 +1570,7 @@ class RealTimeStreaming:
                         and (
                             gated_later := _gate_session_update(
                                 client_event.get("session"),
-                                self._guardrail_turn_detection_gate,
+                                self._gate_turn_detection,
                                 inject_gate_when_absent=False,
                             )
                         )

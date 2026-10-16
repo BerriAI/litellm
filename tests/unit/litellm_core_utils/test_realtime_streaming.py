@@ -4007,25 +4007,36 @@ async def test_later_ga_session_update_without_turn_detection_is_forwarded_witho
     assert forwarded[1] == {"type": "realtime", "instructions": "later"}
 
 
+_XAI_TYPED_VAD_SESSION: Final = {
+    "type": "realtime",
+    "audio": {"input": {"turn_detection": {"type": "server_vad", "silence_duration_ms": 700}}},
+}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "client_session",
+    "client_sessions",
     [
-        pytest.param({"type": "realtime", "instructions": "hi"}, id="no-turn-detection"),
-        pytest.param({"type": "realtime", "audio": {"input": {"turn_detection": None}}}, id="push-to-talk"),
+        pytest.param(({"type": "realtime", "instructions": "hi"},), id="no-turn-detection"),
+        pytest.param(({"type": "realtime", "audio": {"input": {"turn_detection": None}}},), id="push-to-talk"),
+        pytest.param((_XAI_TYPED_VAD_SESSION,), id="typed-server-vad"),
+        pytest.param(
+            ({"type": "realtime", "instructions": "hi"}, _XAI_TYPED_VAD_SESSION), id="later-typed-server-vad"
+        ),
     ],
 )
 async def test_xai_session_update_gate_leaves_out_the_vad_type(
-    monkeypatch: pytest.MonkeyPatch, client_session: dict[str, object]
+    monkeypatch: pytest.MonkeyPatch, client_sessions: tuple[dict[str, object], ...]
 ):
     """xAI answers on its own under a typed turn_detection even with create_response off,
-    so the gate the proxy writes for xAI must not carry a type."""
+    so every turn_detection the proxy forwards to xAI under the guardrail must carry no type."""
     forwarded: Final = await _forwarded_ga_session_updates(
-        monkeypatch, client_session, event_normalizer=XAIRealtimeNormalizer()
+        monkeypatch, *client_sessions, event_normalizer=XAIRealtimeNormalizer()
     )
 
-    assert len(forwarded) == 1
-    assert forwarded[0]["audio"]["input"]["turn_detection"] == {"create_response": False}
+    assert [session["audio"]["input"]["turn_detection"] for session in forwarded] == [
+        {"create_response": False}
+    ] * len(client_sessions)
 
 
 @pytest.mark.asyncio

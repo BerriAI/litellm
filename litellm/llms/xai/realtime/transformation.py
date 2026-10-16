@@ -17,10 +17,7 @@ and ``RealTimeStreaming`` stays provider-agnostic.
 """
 
 from collections.abc import Mapping
-from types import MappingProxyType
 from typing import Final
-
-_AUTO_RESPONSE_OFF: Final[Mapping[str, object]] = MappingProxyType({"create_response": False})
 
 
 class XAIRealtimeNormalizer:
@@ -81,10 +78,9 @@ class XAIRealtimeNormalizer:
         event = self._normalize_response_usage_event(event, event_type)
         return event
 
-    @property
-    def guardrail_turn_detection_gate(self) -> Mapping[str, object]:
-        """xAI answers on its own under ``server_vad`` even with ``create_response`` off, so the gate sends no type."""
-        return _AUTO_RESPONSE_OFF
+    def gate_turn_detection(self, _turn_detection: object, /) -> Mapping[str, object]:
+        """xAI auto-answers under ``server_vad`` even with ``create_response`` off, so the gate is always untyped."""
+        return {"create_response": False}
 
     def patch_outgoing_session(self, session: dict) -> dict:
         """Patch a client ``session.update`` payload before forwarding to xAI.
