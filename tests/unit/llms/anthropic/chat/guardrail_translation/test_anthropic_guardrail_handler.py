@@ -2539,6 +2539,45 @@ class TestStructuredWriteBackKeepsToolResults:
             {"type": "text", "text": "log for <EMAIL>"},
         ]
 
+    async def test_rewrite_keeps_each_non_string_text_when_two_tool_use_ids_sanitize_alike(self):
+        data = {
+            "model": "claude-fable-5",
+            "messages": [
+                {"role": "user", "content": "check both logs for bob@example.com"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": "read:log", "name": "Read", "input": {"path": "a.log"}},
+                        {"type": "tool_use", "id": "read_log", "name": "Read", "input": {"path": "b.log"}},
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "read:log",
+                            "content": [{"type": "text", "text": "ok"}, {"type": "text", "text": None}],
+                        },
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "read_log",
+                            "content": [{"type": "text", "text": 5}, {"type": "text", "text": "bob@example.com"}],
+                        },
+                    ],
+                },
+            ],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=MockStructuredMaskingGuardrail()
+        )
+
+        assert [block["content"] for block in data["messages"][2]["content"]] == [
+            [{"type": "text", "text": "ok"}, {"type": "text", "text": None}],
+            [{"type": "text", "text": 5}, {"type": "text", "text": "<EMAIL>"}],
+        ]
+
     @pytest.mark.parametrize(("text", "masked"), [(5, "<NUMBER>"), (None, "<NULL>")], ids=["number", "null"])
     async def test_guardrail_scans_and_masks_a_non_string_tool_result_text(self, text, masked):
         tool_result_content = [{"type": "text", "text": text}, {"type": "text", "text": "log for bob@example.com"}]

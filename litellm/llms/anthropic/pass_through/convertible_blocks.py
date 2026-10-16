@@ -1,7 +1,8 @@
 import json
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import chain
+from itertools import chain, groupby
+from operator import itemgetter
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
@@ -179,6 +180,7 @@ class _KeptPart:
 
 
 _KeptParts: TypeAlias = Mapping[int, _KeptPart]
+_NO_KEPT_PARTS: Final[_KeptParts] = MappingProxyType({})
 
 
 def _scannable_text(text: object) -> str:
@@ -249,10 +251,9 @@ def _non_string_text_parts(content: object) -> _KeptParts:
 
 
 def _tool_result_non_string_texts(block: object) -> tuple[tuple[str, _KeptParts], ...]:
-    match block:
-        case {"type": "tool_result", "tool_use_id": str(tool_use_id), "content": object() as content}:
-            parts: Final = _non_string_text_parts(content)
-            return ((sanitize_anthropic_tool_use_id(tool_use_id), parts),) if parts else ()
+    match as_str_mapping(block):
+        case {"type": "tool_result", "tool_use_id": str(tool_use_id)} as tool_result:
+            return ((sanitize_anthropic_tool_use_id(tool_use_id), _non_string_text_parts(tool_result.get("content"))),)
         case _:
             return ()
 
@@ -281,18 +282,25 @@ def _merged_content(blocks: tuple[object, ...], kept: _KeptParts) -> tuple[objec
     return tuple(_restored_part(block, kept.get(index)) for index, block in enumerate(blocks))
 
 
-def _restored_block(block: object, kept: Mapping[str, _KeptParts]) -> object:
+def _with_kept_parts(block: object, tool_result: Mapping[str, object], parts: _KeptParts) -> object:
+    if not parts:
+        return block
+    return {**tool_result, "content": list(_merged_content(_content_blocks(tool_result.get("content")), parts))}
+
+
+def _restored_block(block: object, kept: Mapping[str, Iterator[_KeptParts]]) -> object:
     match as_str_mapping(block):
         case {"type": "tool_result", "tool_use_id": str(tool_use_id)} as tool_result if (
             sanitize_anthropic_tool_use_id(tool_use_id) in kept
         ):
-            parts: Final = kept[sanitize_anthropic_tool_use_id(tool_use_id)]
-            return {**tool_result, "content": list(_merged_content(_content_blocks(tool_result.get("content")), parts))}
+            return _with_kept_parts(
+                block, tool_result, next(kept[sanitize_anthropic_tool_use_id(tool_use_id)], _NO_KEPT_PARTS)
+            )
         case _:
             return block
 
 
-def _restored_message(message: object, kept: Mapping[str, _KeptParts]) -> object:
+def _restored_message(message: object, kept: Mapping[str, Iterator[_KeptParts]]) -> object:
     match as_str_mapping(message):
         case {"role": "user", "content": list()} as user_message:
             blocks: Final = _list_items(user_message.get("content"))
@@ -304,10 +312,16 @@ def _restored_message(message: object, kept: Mapping[str, _KeptParts]) -> object
 def keep_non_string_tool_result_texts(rewritten: Sequence[object], original: object) -> Sequence[object]:
     original_messages: Final = filter(None, map(as_str_mapping, _list_items(original)))
     blocks: Final = chain.from_iterable(map(_user_content_blocks, original_messages))
-    kept: Final = MappingProxyType(dict(chain.from_iterable(map(_tool_result_non_string_texts, blocks))))
-    if not kept:
+    by_id: Final = tuple(sorted(chain.from_iterable(map(_tool_result_non_string_texts, blocks)), key=itemgetter(0)))
+    if not any(parts for _, parts in by_id):
         return rewritten
-    return [_restored_message(message, kept) for message in rewritten]
+    kept_in_order: Final = MappingProxyType(
+        {
+            tool_use_id: iter(tuple(map(itemgetter(1), group)))
+            for tool_use_id, group in groupby(by_id, key=itemgetter(0))
+        }
+    )
+    return [_restored_message(message, kept_in_order) for message in rewritten]
 
 
 def _without_non_string_text(block: object) -> object:
