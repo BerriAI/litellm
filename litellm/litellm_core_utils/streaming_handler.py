@@ -316,7 +316,7 @@ class CustomStreamWrapper:
         self.response_id: str | None = None
         self._ollama_response_ids = OllamaResponseIdNormalizer()
         self.received_model_id: str | None = None
-        self.logging_loop = None
+        self.logging_loop: asyncio.AbstractEventLoop | None = None
         self.rules = Rules()
         self.stream_options = stream_options or getattr(logging_obj, "stream_options", None)
         self.messages = getattr(logging_obj, "messages", None)
