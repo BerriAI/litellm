@@ -1,6 +1,5 @@
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from functools import reduce
-from itertools import chain
+from itertools import chain, islice
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
@@ -195,15 +194,20 @@ def _content_blocks(content: object) -> tuple[object, ...]:
             return _list_items(content)
 
 
-def _insert_part(blocks: tuple[object, ...], part: tuple[int, object]) -> tuple[object, ...]:
-    index, block = part
-    return (*blocks[:index], block, *blocks[index:])
+def _merged_content(blocks: tuple[object, ...], kept: _IndexedParts) -> tuple[object, ...]:
+    rewritten: Final = iter(blocks)
+    previous_indices: Final = (-1, *(index for index, _ in kept))
+    segments: Final = (
+        (*islice(rewritten, index - previous - 1), part)
+        for previous, (index, part) in zip(previous_indices, kept, strict=False)
+    )
+    return (*chain.from_iterable(segments), *rewritten)
 
 
 def _restored_block(block: object, kept: Mapping[str, _IndexedParts]) -> object:
     match as_str_mapping(block):
         case {"type": "tool_result", "tool_use_id": str(tool_use_id)} as tool_result if tool_use_id in kept:
-            content: Final = reduce(_insert_part, kept[tool_use_id], _content_blocks(tool_result.get("content")))
+            content: Final = _merged_content(_content_blocks(tool_result.get("content")), kept[tool_use_id])
             return {**tool_result, "content": list(content)}
         case _:
             return block

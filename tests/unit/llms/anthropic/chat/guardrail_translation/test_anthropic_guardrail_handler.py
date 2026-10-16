@@ -2484,8 +2484,22 @@ class TestStructuredWriteBackKeepsToolResults:
                 [{"type": "text", "text": "log for <EMAIL>"}, {"type": "text", "text": 73}],
             ),
             ([{"type": "text", "text": None}], [{"type": "text", "text": None}]),
+            (
+                [
+                    {"type": "text", "text": None},
+                    {"type": "text", "text": "log for bob@example.com"},
+                    {"type": "text", "text": 5},
+                    {"type": "text", "text": "bob@example.com again"},
+                ],
+                [
+                    {"type": "text", "text": None},
+                    {"type": "text", "text": "log for <EMAIL>"},
+                    {"type": "text", "text": 5},
+                    {"type": "text", "text": "<EMAIL> again"},
+                ],
+            ),
         ],
-        ids=["null-first", "number-last", "null-only"],
+        ids=["null-first", "number-last", "null-only", "interleaved"],
     )
     async def test_rewrite_keeps_a_non_string_tool_result_text_in_place(
         self, tool_result_content, expected_written_back_content
