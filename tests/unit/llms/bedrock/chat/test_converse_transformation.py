@@ -5010,6 +5010,7 @@ def test_native_output_schema_drops_keywords_bedrock_rejects_and_closes_objects(
     assert sent["properties"]["address"]["additionalProperties"] is False
 
 
+@pytest.mark.parametrize("native_key", ["legacy", "bedrock"])
 @pytest.mark.parametrize(
     ("schema", "kept_keyword"),
     [
@@ -5020,11 +5021,11 @@ def test_native_output_schema_drops_keywords_bedrock_rejects_and_closes_objects(
     ],
     ids=["recursive", "open-object", "lookaround-pattern", "unlisted-format"],
 )
-def test_schema_native_output_cannot_hold_keeps_the_tool_path_on_a_bedrock_native_profile(
-    set_native_structured_output, schema, kept_keyword
+def test_schema_native_output_cannot_hold_keeps_the_tool_path_on_a_native_profile(
+    set_native_structured_output, schema, kept_keyword, native_key
 ):
     model: Final = "us.anthropic.claude-opus-4-8"
-    set_native_structured_output(model, "bedrock")
+    set_native_structured_output(model, native_key)
 
     request: Final = _converse_request_for_schema(model, schema)
 
@@ -5034,40 +5035,36 @@ def test_schema_native_output_cannot_hold_keeps_the_tool_path_on_a_bedrock_nativ
     assert kept_keyword in _schema_keys(tool_spec["inputSchema"]["json"])
 
 
-@pytest.mark.parametrize("schema", [RECURSIVE_TREE_SCHEMA, OPEN_OBJECT_SCHEMA], ids=["recursive", "open-object"])
-def test_schema_native_output_cannot_hold_still_goes_native_on_a_legacy_native_profile(
-    set_native_structured_output, schema
-):
-    model: Final = "us.anthropic.claude-sonnet-4-6"
-    set_native_structured_output(model, "legacy")
-
-    request: Final = _converse_request_for_schema(model, schema)
-
-    sent: Final = json.loads(request["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"])
-    assert sent["properties"] == schema["properties"]
-    assert "toolConfig" not in request
-
-
-def test_union_typed_object_is_closed_in_the_raw_schema_a_legacy_native_profile_gets(set_native_structured_output):
-    model: Final = "us.anthropic.claude-sonnet-4-6"
-    set_native_structured_output(model, "legacy")
-    schema: Final = {
+def _shared_defs_schema(defs_key: str) -> dict:
+    party_ref: Final = {"$ref": f"#/{defs_key}/Party"}
+    return {
         "type": "object",
-        "properties": {"root": {"$ref": "#/$defs/Node"}},
-        "required": ["root"],
-        "$defs": {
-            "Node": {
+        "properties": {"buyer": party_ref, "seller": party_ref, "broker": {"anyOf": [party_ref, {"type": "null"}]}},
+        "required": ["buyer", "seller", "broker"],
+        defs_key: {
+            "Party": {
                 "type": ["object", "null"],
-                "properties": {"children": {"type": "array", "items": {"$ref": "#/$defs/Node"}}},
-                "required": ["children"],
+                "properties": {"name": {"type": "string"}, "email": {"anyOf": [{"type": "string"}, {"type": "null"}]}},
+                "required": ["name", "email"],
             }
         },
     }
 
-    request: Final = _converse_request_for_schema(model, schema)
+
+@pytest.mark.parametrize("defs_key", ["$defs", "definitions"])
+@pytest.mark.parametrize("native_key", ["legacy", "bedrock"])
+def test_shared_defs_reach_native_output_once_instead_of_inlined_per_use(
+    set_native_structured_output, native_key, defs_key
+):
+    model: Final = "us.anthropic.claude-opus-4-8"
+    set_native_structured_output(model, native_key)
+
+    request: Final = _converse_request_for_schema(model, _shared_defs_schema(defs_key))
 
     sent: Final = json.loads(request["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"])
-    assert sent["$defs"]["Node"]["additionalProperties"] is False
+    assert sent["properties"]["buyer"] == {"$ref": f"#/{defs_key}/Party"}
+    assert json.dumps(sent).count('"anyOf"') == 2
+    assert sent[defs_key]["Party"]["additionalProperties"] is False
 
 
 @pytest.mark.parametrize(

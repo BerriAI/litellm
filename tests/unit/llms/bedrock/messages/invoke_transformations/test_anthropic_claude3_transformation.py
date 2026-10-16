@@ -3226,6 +3226,35 @@ def test_bedrock_messages_native_output_drops_schema_keywords_bedrock_rejects(se
     assert sent["additionalProperties"] is False
 
 
+@pytest.mark.parametrize("native_key", ["legacy", "bedrock"])
+def test_bedrock_messages_shared_defs_reach_native_output_once_instead_of_inlined_per_use(
+    set_native_structured_output, native_key
+):
+    model: Final = "us.anthropic.claude-sonnet-5"
+    set_native_structured_output(model, native_key)
+    party_ref: Final = {"$ref": "#/$defs/Party"}
+    schema: Final = {
+        "type": "object",
+        "properties": {"buyer": party_ref, "seller": party_ref},
+        "required": ["buyer", "seller"],
+        "additionalProperties": False,
+        "$defs": {
+            "Party": {
+                "type": "object",
+                "properties": {"email": {"anyOf": [{"type": "string"}, {"type": "null"}]}},
+                "required": ["email"],
+                "additionalProperties": False,
+            }
+        },
+    }
+
+    result: Final = _bedrock_messages_request_with_schema(model, schema)
+
+    sent: Final = result["output_config"]["format"]["schema"]
+    assert sent["properties"]["buyer"] == party_ref
+    assert json.dumps(sent).count('"anyOf"') == 1
+
+
 MESSAGES_TREE_SCHEMA: Final = {
     "type": "object",
     "properties": {"root": {"$ref": "#/$defs/Node"}},

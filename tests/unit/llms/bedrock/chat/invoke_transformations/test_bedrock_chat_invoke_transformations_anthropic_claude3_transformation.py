@@ -552,12 +552,13 @@ def _invoke_params_for_schema(model: str, schema: dict) -> dict:
     )
 
 
+@pytest.mark.parametrize("native_key", ["legacy", "bedrock"])
 @pytest.mark.parametrize("schema", [TREE_SCHEMA, OPEN_OBJECT_SCHEMA], ids=["recursive", "open-object"])
-def test_schema_native_output_cannot_hold_keeps_the_tool_path_on_a_bedrock_native_profile(
-    set_native_structured_output, schema
+def test_schema_native_output_cannot_hold_keeps_the_tool_path_on_a_native_profile(
+    set_native_structured_output, schema, native_key
 ):
     model = "us.anthropic.claude-opus-4-8"
-    set_native_structured_output(model, "bedrock")
+    set_native_structured_output(model, native_key)
 
     result = _invoke_params_for_schema(model, schema)
 
@@ -578,13 +579,29 @@ def test_closed_schema_goes_native_on_either_native_key(set_native_structured_ou
     assert "tools" not in result
 
 
-def test_recursive_schema_still_goes_native_on_a_legacy_native_profile(set_native_structured_output):
-    model = "us.anthropic.claude-sonnet-4-6"
-    set_native_structured_output(model, "legacy")
+@pytest.mark.parametrize("native_key", ["legacy", "bedrock"])
+def test_shared_defs_reach_native_output_once_instead_of_inlined_per_use(set_native_structured_output, native_key):
+    model = "us.anthropic.claude-opus-4-8"
+    set_native_structured_output(model, native_key)
+    party_ref = {"$ref": "#/$defs/Party"}
+    schema = {
+        "type": "object",
+        "properties": {"buyer": party_ref, "seller": party_ref},
+        "required": ["buyer", "seller"],
+        "$defs": {
+            "Party": {
+                "type": "object",
+                "properties": {"email": {"anyOf": [{"type": "string"}, {"type": "null"}]}},
+                "required": ["email"],
+            }
+        },
+    }
 
-    result = _invoke_params_for_schema(model, TREE_SCHEMA)
+    result = _invoke_params_for_schema(model, schema)
 
-    assert '"$ref": "#/$defs/Node"' in json.dumps(result["output_format"]["schema"])
+    sent = result["output_format"]["schema"]
+    assert sent["properties"]["buyer"] == party_ref
+    assert json.dumps(sent).count('"anyOf"') == 1
     assert "tools" not in result
 
 

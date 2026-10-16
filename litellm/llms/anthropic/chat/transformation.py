@@ -821,9 +821,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "else": "conditional (else): {}",
             "not": "must not match: {}",
         }
-        unsupported_fields: Final = set(constraint_labels) - (
-            {"minItems"} if schema.get("minItems") in (0, 1) else set()
+        min_items: Final = schema.get("minItems")
+        enforced_min_items: Final = (
+            isinstance(min_items, int) and not isinstance(min_items, bool) and min_items in (0, 1)
         )
+        unsupported_fields: Final = set(constraint_labels) - ({"minItems"} if enforced_min_items else set())
 
         # Build description additions from removed constraints. Iterating
         # constraint_labels (not the set) keeps the note order deterministic across
@@ -866,7 +868,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 # Already handled above
                 continue
 
-            if key in ("properties", "$defs") and isinstance(value, dict):
+            if key in ("properties", "$defs", "definitions") and isinstance(value, dict):
                 nested_schemas: dict[str, Any] = value  # mutable-ok: filter_anthropic_output_schema takes a dict
                 result[key] = {k: AnthropicConfig.filter_anthropic_output_schema(v) for k, v in nested_schemas.items()}
             elif key == "items" and isinstance(value, dict):
@@ -1654,24 +1656,27 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         unpacked: Final = AnthropicConfig._defs_unpacked(json_schema)
         if (
             schema_has_ref(unpacked)
-            or schema_has_open_object(unpacked)
-            or schema_has_lookaround_pattern(unpacked)
-            or not schema_string_formats(unpacked) <= _NATIVE_OUTPUT_STRING_FORMATS
+            or schema_has_open_object(json_schema)
+            or schema_has_lookaround_pattern(json_schema)
+            or not schema_string_formats(json_schema) <= _NATIVE_OUTPUT_STRING_FORMATS
         ):
             return None
-        return AnthropicConfig.filter_anthropic_output_schema(dict(unpacked))
+        return AnthropicConfig.filter_anthropic_output_schema(dict(json_schema))
 
     def uses_native_structured_output_for_schema(self, model: str, json_schema: Mapping[str, object] | None) -> bool:
         return self.uses_native_structured_output(model)
+
+    def native_output_format_schema(self, json_schema: Mapping[str, object]) -> Mapping[str, object] | None:
+        return self.filter_anthropic_output_schema(dict(self._defs_unpacked(json_schema)))
 
     def map_response_format_to_anthropic_output_format(self, value: dict | None) -> AnthropicOutputSchema | None:
         json_schema: Final = self._extract_json_schema_from_response_format(value)
         if json_schema is None:
             return None
-        return AnthropicOutputSchema(
-            type="json_schema",
-            schema=self.filter_anthropic_output_schema(dict(self._defs_unpacked(json_schema))),
-        )
+        native_schema: Final = self.native_output_format_schema(json_schema)
+        if native_schema is None:
+            return None
+        return AnthropicOutputSchema(type="json_schema", schema=dict(native_schema))
 
     def map_response_format_to_anthropic_tool(
         self, value: dict | None, optional_params: dict, is_thinking_enabled: bool

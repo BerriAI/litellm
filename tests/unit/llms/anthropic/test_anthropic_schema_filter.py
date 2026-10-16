@@ -92,6 +92,15 @@ class TestFilterAnthropicOutputSchema:
             assert result["minItems"] == min_items
             assert "description" not in result
 
+    def test_moves_a_min_items_that_is_not_an_integer_into_the_description(self):
+        for min_items in (True, 1.0):
+            schema = {"type": "array", "items": {"type": "string"}, "minItems": min_items}
+
+            result = AnthropicConfig.filter_anthropic_output_schema(schema)
+
+            assert "minItems" not in result
+            assert "minimum number of items" in result["description"]
+
     def test_handles_nested_schemas(self):
         """Test that nested schemas are also filtered."""
         schema = {
