@@ -2864,7 +2864,12 @@ def _openai_chat_chunks(candidate: Gateway, model: str, prompt: str) -> tuple[Ch
         base_url=str(candidate.client.base_url) + "/v1", api_key=candidate.key, max_retries=0, timeout=30
     ) as client:
         return tuple(
-            client.chat.completions.create(model=model, messages=[{"role": "user", "content": prompt}], stream=True)
+            client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                stream=True,
+                extra_headers={"x-litellm-call-id": prompt},
+            )
         )
 
 
@@ -2874,7 +2879,10 @@ def _async_openai_chat_chunks(candidate: Gateway, model: str, prompt: str) -> tu
             base_url=str(candidate.client.base_url) + "/v1", api_key=candidate.key, max_retries=0, timeout=30
         ) as client:
             stream: Final = await client.chat.completions.create(
-                model=model, messages=[{"role": "user", "content": prompt}], stream=True
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                stream=True,
+                extra_headers={"x-litellm-call-id": prompt},
             )
             return tuple([chunk async for chunk in stream])
 
@@ -2893,11 +2901,13 @@ _PROGRESS_STREAM_READERS: Final = (
 def test_progress_chunk_without_choice_index_streams_and_logs_served_answer(
     gateway: Gateway,
     tmp_path: Path,
+    record_property: Callable[[str, object], None],
     index_fields: dict[str, JsonValue],
     progress_content: str | None,
     read_stream: Callable[[Gateway, str, str], tuple[ChatCompletionChunk, ...]],
 ) -> None:
     identity: Final = "guardrail" + uuid.uuid4().hex
+    record_property("litellm_call_id", identity)
     answer: Final = "synthetic answer " + identity
     reasoning: Final = "backend progress " + identity
     expected: Final = (progress_content or "") + answer
@@ -2930,7 +2940,10 @@ def test_progress_chunk_without_choice_index_streams_and_logs_served_answer(
         config["guardrails"][0]["litellm_params"]["mode"] = "pre_call"
         config["general_settings"]["store_prompts_in_spend_logs"] = True
         path.write_text(yaml.safe_dump(config))
-        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned, owned.gateway.scenario() as scenario:
+        with (
+            owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned,
+            owned.gateway.scenario() as scenario,
+        ):
             candidate: Final = owned.gateway
             model: Final = scenario.model(model_info={"id": identity}, api_base=upstream.url + "/v1")
             eventually(lambda: owned.serves_only_on_every_worker(model, identity), bool, seconds=70)
@@ -2943,17 +2956,20 @@ def test_progress_chunk_without_choice_index_streams_and_logs_served_answer(
             assert len(upstream.drain()) == 1
             rows: Final = eventually(
                 lambda: read_rows(
-                    'SELECT status, response, metadata FROM "LiteLLM_SpendLogs" WHERE model_group=%s', (model,)
+                    'SELECT request_id, status, response, metadata FROM "LiteLLM_SpendLogs" '
+                    "WHERE model_group=%s AND (request_id=%s OR metadata->>'litellm_call_id'=%s)",
+                    (model, identity, identity),
                 ),
                 lambda values: len(values) == 1,
                 seconds=70,
             )
+            record_property("spend_request_id", rows[0]["request_id"])
             assert rows[0]["status"] == "success", rows
             logged_choices: Final = object_value(rows[0]["response"])["choices"]
             assert isinstance(logged_choices, list), rows
-            assert tuple(
-                object_value(object_value(choice)["message"])["content"] for choice in logged_choices
-            ) == (expected,), rows
+            assert tuple(object_value(object_value(choice)["message"])["content"] for choice in logged_choices) == (
+                expected,
+            ), rows
             entries: Final = object_value(rows[0]["metadata"])["guardrail_information"]
             assert isinstance(entries, list), rows
             assert tuple(
@@ -2969,9 +2985,11 @@ def test_progress_chunk_without_choice_index_streams_and_logs_served_answer(
 def test_progress_chunk_without_choice_index_preserves_upstream_stream_error(
     gateway: Gateway,
     tmp_path: Path,
+    record_property: Callable[[str, object], None],
     read_stream: Callable[[Gateway, str, str], tuple[ChatCompletionChunk, ...]],
 ) -> None:
     identity: Final = "guardrail" + uuid.uuid4().hex
+    record_property("litellm_call_id", identity)
     message: Final = "synthetic upstream failure marker " + identity
     frames: Final = (
         _chat_frame(
@@ -2996,7 +3014,10 @@ def test_progress_chunk_without_choice_index_preserves_upstream_stream_error(
         config: Final = yaml.safe_load(path.read_text())
         config["guardrails"][0]["litellm_params"]["mode"] = "pre_call"
         path.write_text(yaml.safe_dump(config))
-        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned, owned.gateway.scenario() as scenario:
+        with (
+            owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned,
+            owned.gateway.scenario() as scenario,
+        ):
             candidate: Final = owned.gateway
             model: Final = scenario.model(model_info={"id": identity}, api_base=upstream.url + "/v1", num_retries=0)
             eventually(lambda: owned.serves_only_on_every_worker(model, identity), bool, seconds=70)
@@ -3006,11 +3027,14 @@ def test_progress_chunk_without_choice_index_preserves_upstream_stream_error(
             assert len(upstream.drain()) == 1
             rows: Final = eventually(
                 lambda: read_rows(
-                    'SELECT status, metadata FROM "LiteLLM_SpendLogs" WHERE model_group=%s', (model,)
+                    'SELECT request_id, status, metadata FROM "LiteLLM_SpendLogs" '
+                    "WHERE model_group=%s AND (request_id=%s OR metadata->>'litellm_call_id'=%s)",
+                    (model, identity, identity),
                 ),
                 lambda values: len(values) == 1,
                 seconds=70,
             )
+            record_property("spend_request_id", rows[0]["request_id"])
             assert rows[0]["status"] == "failure", rows
             error: Final = object_value(rows[0]["metadata"])["error_information"]
             assert message in str(object_value(error)["error_message"]), rows
@@ -3018,12 +3042,15 @@ def test_progress_chunk_without_choice_index_preserves_upstream_stream_error(
             assert len(scans) == 1 and scans[0]["texts"] == [identity], scans
 
 
-
 @pytest.mark.parametrize("index_fields", ({}, {"index": None}), ids=("omitted-index", "null-index"))
 def test_disconnect_after_progress_without_choice_index_logs_only_the_received_prefix(
-    gateway: Gateway, tmp_path: Path, index_fields: dict[str, JsonValue]
+    gateway: Gateway,
+    tmp_path: Path,
+    index_fields: dict[str, JsonValue],
+    record_property: Callable[[str, object], None],
 ) -> None:
     identity: Final = "guardrail" + uuid.uuid4().hex
+    record_property("litellm_call_id", identity)
     prefix: Final = "synthetic received prefix " + identity
     tail: Final = "synthetic withheld tail " + identity
     gate: Final = threading.Event()
@@ -3064,6 +3091,7 @@ def test_disconnect_after_progress_without_choice_index_logs_only_the_received_p
             eventually(lambda: owned.serves_only_on_every_worker(model, identity), bool, seconds=70)
 
             try:
+
                 async def disconnect() -> str:
                     async with AsyncOpenAI(
                         base_url=str(candidate.client.base_url) + "/v1",
@@ -3072,7 +3100,10 @@ def test_disconnect_after_progress_without_choice_index_logs_only_the_received_p
                         timeout=30,
                     ) as client:
                         stream: Final = await client.chat.completions.create(
-                            model=model, messages=[{"role": "user", "content": identity}], stream=True
+                            model=model,
+                            messages=[{"role": "user", "content": identity}],
+                            stream=True,
+                            extra_headers={"x-litellm-call-id": identity},
                         )
                         async for chunk in stream:
                             for choice in chunk.choices:
@@ -3084,17 +3115,20 @@ def test_disconnect_after_progress_without_choice_index_logs_only_the_received_p
                 assert asyncio.run(disconnect()) == prefix
                 rows: Final = eventually(
                     lambda: read_rows(
-                        'SELECT status, response FROM "LiteLLM_SpendLogs" WHERE model_group=%s', (model,)
+                        'SELECT request_id, status, response FROM "LiteLLM_SpendLogs" '
+                        "WHERE model_group=%s AND (request_id=%s OR metadata->>'litellm_call_id'=%s)",
+                        (model, identity, identity),
                     ),
                     lambda values: len(values) == 1,
                     seconds=70,
                 )
+                record_property("spend_request_id", rows[0]["request_id"])
                 assert rows[0]["status"] == "success", rows
                 logged_choices: Final = object_value(rows[0]["response"])["choices"]
                 assert isinstance(logged_choices, list), rows
-                assert tuple(
-                    object_value(object_value(choice)["message"])["content"] for choice in logged_choices
-                ) == (prefix,), rows
+                assert tuple(object_value(object_value(choice)["message"])["content"] for choice in logged_choices) == (
+                    prefix,
+                ), rows
                 assert len(upstream.drain()) == 1
                 scans: Final = tuple(json.loads(request.body) for request in policy.drain())
                 assert len(scans) == 1 and scans[0]["texts"] == [identity], scans
