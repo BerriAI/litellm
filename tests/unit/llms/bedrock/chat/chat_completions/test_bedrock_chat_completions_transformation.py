@@ -2,6 +2,7 @@
 
 import json
 import re
+from collections.abc import Iterable, Mapping
 from typing import Final
 
 import httpx
@@ -609,6 +610,23 @@ def _weather_tool_named(name):
         ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "logprobs": False}, "responses"),
         ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "prompt_cache_key": "k"}, "responses"),
         ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": {"effort": "low", "summary": "auto"}}, "converse"),
+        ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "store": "false"}, "converse"),
+        ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "store": 0}, "converse"),
+        ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "foo_bar": 1}, "converse"),
+        ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "foo_bar": None}, "responses"),
+        (
+            {
+                "tools": [GET_WEATHER_TOOL],
+                "reasoning_effort": "low",
+                "model": "global.openai.gpt-6-sol",
+                "messages": [{"role": "user", "content": "hi"}],
+                "drop_params": True,
+                "aws_region_name": "us-east-1",
+                "metadata": {"team": "a"},
+                "reasoning_summary": "auto",
+            },
+            "responses",
+        ),
         ({"reasoning_effort": "low"}, "chat_completions"),
         ({"tools": None, "reasoning_effort": "low"}, "chat_completions"),
         ({"tools": [], "reasoning_effort": "low"}, "chat_completions"),
@@ -1173,6 +1191,21 @@ async def test_gpt56_and_newer_tools_with_reasoning_effort_bridge_to_runtime_res
     assert response._hidden_params["response_cost"] > 0
 
 
+async def test_a_provider_specific_param_keeps_converse_and_reaches_the_model(local_cost_map, fake_aws_env):
+    requests, client = _async_recording_client(json=CONVERSE_JSON)
+    await litellm.acompletion(
+        model="bedrock/global.openai.gpt-6-sol",
+        messages=[{"role": "user", "content": "weather in Paris"}],
+        tools=[GET_WEATHER_TOOL],
+        reasoning_effort="low",
+        foo_bar=1,
+        client=client,
+    )
+
+    assert [request.url.raw_path for request in requests] == [b"/model/global.openai.gpt-6-sol/converse"]
+    assert json.loads(requests[0].content)["additionalModelRequestFields"]["foo_bar"] == 1
+
+
 async def test_tools_with_reasoning_bridge_stores_only_when_the_caller_asks(local_cost_map, fake_aws_env):
     requests, client = _async_recording_client(json={**RESPONSES_TOOL_CALL_JSON, "model": "global.openai.gpt-6-sol"})
     await litellm.acompletion(
@@ -1263,7 +1296,6 @@ async def test_a_caller_param_named_like_the_bridge_flag_neither_crashes_nor_ste
         messages=[{"role": "user", "content": "weather in Paris"}],
         tools=[GET_WEATHER_TOOL],
         reasoning_effort="low",
-        responses_api_bridge_allowed=False,
         _litellm_responses_api_bridge_allowed=False,
         client=client,
     )
@@ -1310,6 +1342,131 @@ async def test_tools_with_an_object_reasoning_effort_stay_on_converse_like_main(
     )
 
     assert requests[0].url.raw_path.endswith(b"/model/global.openai.gpt-6-sol/converse")
+
+
+def _responses_reply_with_reasoning(encrypted_content: str, model: str) -> dict:
+    return {
+        **RESPONSES_TOOL_CALL_JSON,
+        "model": model,
+        "output": [
+            {"type": "reasoning", "id": "rs_0", "encrypted_content": encrypted_content, "summary": []},
+            *RESPONSES_TOOL_CALL_JSON["output"],
+        ],
+    }
+
+
+def _responses_stream_with_reasoning(encrypted_content: str, model: str) -> bytes:
+    completed: Final = {"type": "response.completed", "response": _responses_reply_with_reasoning(encrypted_content, model)}
+    return f"event: response.completed\ndata: {json.dumps(completed)}\n\n".encode()
+
+
+async def _bedrock_turn(
+    history: list, model: str = "global.openai.gpt-6-sol", **response_kwargs
+) -> tuple[list[httpx.Request], object]:
+    requests, client = _async_recording_client(**response_kwargs)
+    response = await litellm.acompletion(
+        model=f"bedrock/{model}",
+        messages=history,
+        tools=[GET_WEATHER_TOOL],
+        reasoning_effort="low",
+        stream="text/event-stream" in response_kwargs.get("headers", {}).values(),
+        client=client,
+    )
+    return requests, response
+
+
+async def _openai_turn(history: list, reply: dict) -> tuple[list[httpx.Request], object]:
+    requests, client = _async_recording_client(json=reply)
+    response = await litellm.acompletion(
+        model="openai/gpt-5.5-pro",
+        api_key="x",
+        api_base="http://127.0.0.1:9",
+        messages=history,
+        tools=[GET_WEATHER_TOOL],
+        client=client,
+    )
+    return requests, response
+
+
+def _history_after(reasoning_items: Iterable[Mapping[str, object]]) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "weather in Paris"},
+        {
+            "role": "assistant",
+            "content": None,
+            "reasoning_items": [dict(item) for item in reasoning_items],
+            "tool_calls": [
+                {
+                    "id": "call_0",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_0", "content": "14C, light rain"},
+    ]
+
+
+def _replayed_reasoning(request: httpx.Request) -> list:
+    return [
+        item.get("encrypted_content") for item in json.loads(request.content)["input"] if item.get("type") == "reasoning"
+    ]
+
+
+async def _streamed_reasoning_items(response) -> list:
+    deltas: Final = [chunk.choices[0].delta async for chunk in response if chunk.choices]
+    return [item for delta in deltas for item in getattr(delta, "reasoning_items", None) or ()]
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["plain", "streamed"])
+async def test_reasoning_bedrock_minted_replays_to_bedrock_but_never_to_openai(local_cost_map, fake_aws_env, stream):
+    reply_kwargs: Final = (
+        {
+            "content": _responses_stream_with_reasoning("bedrock-minted", "global.openai.gpt-6-sol"),
+            "headers": {"content-type": "text/event-stream"},
+        }
+        if stream
+        else {"json": _responses_reply_with_reasoning("bedrock-minted", "global.openai.gpt-6-sol")}
+    )
+    _, first = await _bedrock_turn([{"role": "user", "content": "weather in Paris"}], **reply_kwargs)
+    reasoning_items: Final = (
+        await _streamed_reasoning_items(first) if stream else list(first.choices[0].message.reasoning_items)
+    )
+    history: Final = _history_after(reasoning_items)
+
+    to_bedrock, _ = await _bedrock_turn(history, json=RESPONSES_TOOL_CALL_JSON)
+    to_openai, _ = await _openai_turn(history, {**RESPONSES_TOOL_CALL_JSON, "model": "gpt-5.5-pro"})
+
+    assert len(reasoning_items) == 1
+    assert _replayed_reasoning(to_bedrock[0]) == ["bedrock-minted"]
+    assert _replayed_reasoning(to_openai[0]) == []
+
+
+async def test_reasoning_one_bedrock_model_minted_never_replays_to_another(local_cost_map, fake_aws_env):
+    _, first = await _bedrock_turn(
+        [{"role": "user", "content": "weather in Paris"}],
+        json=_responses_reply_with_reasoning("gpt-6-minted", "global.openai.gpt-6-sol"),
+    )
+    history: Final = _history_after(first.choices[0].message.reasoning_items)
+
+    to_same_model, _ = await _bedrock_turn(history, json=RESPONSES_TOOL_CALL_JSON)
+    to_other_model, _ = await _bedrock_turn(history, model="us.openai.gpt-5.6-sol", json=RESPONSES_TOOL_CALL_JSON)
+
+    assert _replayed_reasoning(to_same_model[0]) == ["gpt-6-minted"]
+    assert _replayed_reasoning(to_other_model[0]) == []
+
+
+async def test_reasoning_openai_minted_replays_to_openai_but_never_to_bedrock(local_cost_map, fake_aws_env):
+    _, first = await _openai_turn(
+        [{"role": "user", "content": "weather in Paris"}], _responses_reply_with_reasoning("openai-minted", "gpt-5.5-pro")
+    )
+    history: Final = _history_after(first.choices[0].message.reasoning_items)
+
+    to_openai, _ = await _openai_turn(history, {**RESPONSES_TOOL_CALL_JSON, "model": "gpt-5.5-pro"})
+    to_bedrock, _ = await _bedrock_turn(history, json=RESPONSES_TOOL_CALL_JSON)
+
+    assert _replayed_reasoning(to_openai[0]) == ["openai-minted"]
+    assert _replayed_reasoning(to_bedrock[0]) == []
 
 
 async def test_async_tools_with_reasoning_bridge_uses_the_supplied_client(local_cost_map, fake_aws_env):

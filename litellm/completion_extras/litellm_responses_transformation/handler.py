@@ -253,7 +253,7 @@ class ResponsesToCompletionBridgeHandler:
         else:
             if self._is_preformatted_cached_chat_stream(result):
                 return self._apply_post_stream_processing(result, model, custom_llm_provider)
-            from .transformation import is_structured_output_request
+            from .transformation import is_structured_output_request, reasoning_origin_for
 
             completion_stream: Final = self.transformation_handler.get_model_response_iterator(
                 streaming_response=result,
@@ -262,6 +262,7 @@ class ResponsesToCompletionBridgeHandler:
                 structured_output=is_structured_output_request(
                     cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
                 ),
+                reasoning_origin=reasoning_origin_for(custom_llm_provider, model),
             )
             streamwrapper: Final = CustomStreamWrapper(
                 completion_stream=completion_stream,
@@ -357,7 +358,7 @@ class ResponsesToCompletionBridgeHandler:
         else:
             if self._is_preformatted_cached_chat_stream(result):
                 return self._apply_post_stream_processing(result, model, custom_llm_provider)
-            from .transformation import is_structured_output_request
+            from .transformation import is_structured_output_request, reasoning_origin_for
 
             completion_stream: Final = self.transformation_handler.get_model_response_iterator(
                 streaming_response=result,
@@ -366,6 +367,7 @@ class ResponsesToCompletionBridgeHandler:
                 structured_output=is_structured_output_request(
                     cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
                 ),
+                reasoning_origin=reasoning_origin_for(custom_llm_provider, model),
             )
             streamwrapper: Final = CustomStreamWrapper(
                 completion_stream=completion_stream,

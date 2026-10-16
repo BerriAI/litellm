@@ -27,6 +27,7 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
+from litellm.constants import DEFAULT_CHAT_COMPLETION_PARAM_VALUES, OPENAI_CHAT_COMPLETION_PARAMS
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -38,6 +39,7 @@ from litellm.llms.bedrock.request_metadata import bedrock_request_metadata_is_ow
 from litellm.secret_managers.main import get_secret, get_secret_str
 from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+from litellm.types.utils import is_litellm_owned_kwarg
 
 if TYPE_CHECKING:
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -1105,14 +1107,34 @@ def _sets_a_chat_param_the_responses_bridge_drops(request_params: Mapping[str, o
     )
 
 
+_CHAT_PARAM_NAMES: Final = frozenset(
+    {*DEFAULT_CHAT_COMPLETION_PARAM_VALUES, *OPENAI_CHAT_COMPLETION_PARAMS, "extra_body"}
+)
+
+
+def _provider_specific_param(name: str) -> bool:
+    return not (
+        name in _CHAT_PARAM_NAMES
+        or name in _EXTRA_BODY_KEYS_THE_RESPONSES_BRIDGE_CARRIES
+        or name.startswith("aws_")
+        or is_litellm_owned_kwarg(name)
+    )
+
+
+def _passes_a_provider_specific_param(request_params: Mapping[str, object]) -> bool:
+    return any(value is not None and _provider_specific_param(name) for name, value in request_params.items())
+
+
 def _bridgeable_to_responses(model: str, request_params: Mapping[str, object]) -> bool:
     return (
         not request_params.get("functions")
         and request_params.get("aws_bedrock_client") is None
         and _function_tools_only(request_params.get("tools"))
         and _extra_body_bridgeable(request_params.get("extra_body"))
+        and not _passes_a_provider_specific_param(request_params)
         and not _sets_a_chat_param_the_responses_bridge_drops(request_params)
         and isinstance(request_params.get("reasoning_effort"), (str, NoneType))
+        and isinstance(request_params.get("store"), (bool, NoneType))
         and _bedrock_serves_responses(model)
     )
 
