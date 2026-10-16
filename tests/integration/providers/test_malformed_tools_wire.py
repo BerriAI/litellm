@@ -191,6 +191,7 @@ class _Rig:
     gemini_drop_group: str
     mixed_group: str
     field_group: str
+    tools_drop_group: str
 
 
 def _deployment_ids(scenario: Scenario, name: str, deployments: tuple[dict[str, JsonValue], ...]) -> tuple[str, ...]:
@@ -233,6 +234,9 @@ def rig() -> Iterator[_Rig]:
             ),
             mixed_group=_same_name_deployments(scenario, openai_base, ({"drop_params": True}, {})),
             field_group=scenario.model(api_base=openai_base, api_key=_PROVIDER_KEY, additional_drop_params=["tools"]),
+            tools_drop_group=scenario.model(
+                api_base=openai_base, api_key=_PROVIDER_KEY, drop_params=True, tools=[CHAT.tool]
+            ),
         )
         for group, deployments in (
             (built.openai, 1),
@@ -242,6 +246,7 @@ def rig() -> Iterator[_Rig]:
             (built.gemini_drop_group, 1),
             (built.mixed_group, 2),
             (built.field_group, 1),
+            (built.tools_drop_group, 1),
         ):
             wait_for_worker_readiness(gateway, group, deployments, _PROXY_WORKERS)
         yield built
@@ -1087,6 +1092,14 @@ def test_a_drop_params_deployment_group_drops_malformed_tools(rig: _Rig, family:
     response: Final = _send(rig, family, marker, False, model=model, tools=5)
     _assert_answered(family, response, marker)
     assert _tool_values(_one_delivery(rig, marker, family.target(False))) == frozenset()
+
+
+def test_a_drop_params_deployment_keeps_its_own_tools_when_it_drops_malformed_request_tools(rig: _Rig) -> None:
+    marker: Final = _marker()
+    response: Final = _send(rig, CHAT, marker, False, model=rig.tools_drop_group, tools=5)
+    _assert_answered(CHAT, response, marker)
+    sent: Final = _one_delivery(rig, marker, "/v1/chat/completions")
+    assert _tool_names(CHAT, sent) == _tool_names(CHAT, {"tools": [CHAT.tool]}), sent
 
 
 @pytest.mark.parametrize("drop", [False, None], ids=["false", "null"])

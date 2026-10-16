@@ -122,6 +122,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     mask_sensitive_structure,
 )
 from litellm.litellm_core_utils.token_counter import offload_token_count
+from litellm.litellm_core_utils.tool_fields import drop_policy
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo, anthropic_error_frame_exception
 from litellm.llms.base_llm.passthrough.transformation import replace_path_segment
 from litellm.llms.base_llm.vector_store.transformation import (
@@ -514,6 +515,7 @@ def _stream_chunks_have_generated_content(chunks: Sequence[ModelResponseStream])
 
 
 _NO_SESSION_KWARGS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType({})
+_NO_DEFAULT_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 _SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
@@ -539,6 +541,22 @@ def _deployment_that_just_failed(request_metadata: object) -> str | None:
         return None
     model_id: Final = model_info.get("id")
     return model_id if isinstance(model_id, str) else None
+
+
+def _merged_tools(
+    deployment_tools: Sequence[object],
+    deployment_params: Mapping[str, object],
+    defaults: Mapping[str, object],
+    request: Mapping[str, object],
+) -> list[object] | None:
+    request_tools: Final = request.get("tools") or []
+    if isinstance(request_tools, (list, tuple)):
+        return [*deployment_tools, *request_tools] if deployment_tools or request_tools else None
+    if not deployment_tools:
+        return None
+    set_defaults: Final = {name: value for name, value in defaults.items() if value is not None}
+    drops_tools: Final = drop_policy({**deployment_params, **set_defaults, **request}).drops("tools")
+    return list(deployment_tools) if drops_tools else None
 
 
 def _deployment_pick_attributes(model: str, request_kwargs: Mapping[str, object] | None) -> Mapping[str, str | int]:
@@ -4250,7 +4268,9 @@ class Router:
         return deployment_pydantic_obj
 
     @staticmethod
-    def _merge_tools_from_deployment(deployment: dict, kwargs: dict) -> None:
+    def _merge_tools_from_deployment(
+        deployment: dict, kwargs: dict, defaults: Mapping[str, object] = _NO_DEFAULT_PARAMS
+    ) -> None:
         """
         Merge tools from deployment litellm_params with request kwargs.
         When both have tools, concatenate them (deployment tools first, then request tools).
@@ -4261,10 +4281,9 @@ class Router:
             dep_params = dep_params_raw
         else:
             dep_params = dep_params_raw.model_dump(exclude_none=True)
-        dep_tools: Final = dep_params.get("tools") or []
-        req_tools: Final = kwargs.get("tools") or []
-        if (dep_tools or req_tools) and isinstance(req_tools, (list, tuple)):
-            kwargs["tools"] = [*dep_tools, *req_tools]
+        merged_tools: Final = _merged_tools(dep_params.get("tools") or [], dep_params, defaults, kwargs)
+        if merged_tools is not None:
+            kwargs["tools"] = merged_tools
         if "tool_choice" not in kwargs and dep_params.get("tool_choice") is not None:
             kwargs["tool_choice"] = dep_params["tool_choice"]
 
@@ -4285,7 +4304,7 @@ class Router:
             deployment=deployment, forwarded_keys=kwargs.pop(_ALIAS_MARKER_FORWARDED_PARAMS_KWARG, ())
         ):
             kwargs.pop(key, None)
-        self._merge_tools_from_deployment(deployment=deployment, kwargs=kwargs)
+        self._merge_tools_from_deployment(deployment=deployment, kwargs=kwargs, defaults=self.default_litellm_params)
 
         model_info = deployment.get("model_info", {}).copy()
         deployment_litellm_model_name = deployment["litellm_params"]["model"]
