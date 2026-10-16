@@ -1,5 +1,6 @@
 import time
 from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
@@ -7,6 +8,7 @@ import httpx
 import pytest
 from pydantic import JsonValue, TypeAdapter
 
+import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
@@ -24,22 +26,109 @@ from litellm.llms.vertex_ai.common_utils import (
     vertex_request_labels_from_litellm_params,
 )
 from litellm.llms.vertex_ai.count_tokens import handler as vertex_count_tokens_handler
+from litellm.types.utils import TokenCountMessagesFormat
 
 
 @pytest.mark.asyncio
-async def test_vertex_gemini_rejects_non_text_system_blocks_before_request() -> None:
+@pytest.mark.parametrize("messages_format", ("openai", "anthropic"))
+async def test_vertex_gemini_rejects_non_text_system_blocks_before_request(
+    messages_format: TokenCountMessagesFormat,
+) -> None:
     result: Final = await VertexAITokenCounter().count_tokens(
         model_to_use="gemini-4-argon",
         messages=[{"role": "user", "content": "Count this"}],
         contents=None,
         request_model="vertex_ai/gemini-4-argon",
         system=[{"type": "image", "source": {"type": "base64", "data": "AAAA"}}],
+        messages_format=messages_format,
     )
 
     assert result is not None
     assert result.error is True
     assert result.status_code == 400
     assert "text blocks" in (result.error_message or "")
+
+
+class _VertexCountTokensPeer:
+    def __init__(self, status_code: int) -> None:
+        self.status_code: Final = status_code
+        self.requests: tuple[httpx.Request, ...] = ()
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests = (*self.requests, request)
+        if self.status_code == 200:
+            return httpx.Response(200, json={"totalTokens": 37}, request=request)
+        return httpx.Response(
+            self.status_code,
+            json={"error": {"code": self.status_code, "message": "Invalid function name", "status": "INVALID_ARGUMENT"}},
+            request=request,
+        )
+
+
+@contextmanager
+def _vertex_count_tokens_peer(status_code: int) -> Iterator[_VertexCountTokensPeer]:
+    peer: Final = _VertexCountTokensPeer(status_code)
+    with (
+        patch.object(
+            gemini_count_tokens_handler,
+            "get_async_httpx_client",
+            return_value=AsyncHTTPHandler(transport=httpx.MockTransport(peer)),
+        ),
+        patch.object(
+            vertex_count_tokens_handler.VertexAITokenCounter,
+            "_ensure_access_token_async",
+            new=AsyncMock(return_value=("fake-token", "test-project")),
+        ),
+    ):
+        yield peer
+
+
+_VERTEX_DEPLOYMENT: Final = {"litellm_params": {"vertex_project": "test-project", "vertex_location": "us-central1"}}
+
+
+@pytest.mark.asyncio
+async def test_vertex_gemini_count_answers_with_the_status_google_rejected_it_with() -> None:
+    with _vertex_count_tokens_peer(400) as peer:
+        result: Final = await VertexAITokenCounter().count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=[{"role": "user", "content": "Hello"}],
+            contents=None,
+            deployment=_VERTEX_DEPLOYMENT,
+            request_model="vertex_ai/gemini-2.5-flash",
+        )
+
+    assert result is not None
+    assert result.error is True
+    assert result.status_code == 400
+    assert "Invalid function name" in (result.error_message or "")
+    assert len(peer.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_vertex_gemini_count_rejects_an_image_url_it_refuses_to_fetch_without_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", True)
+    with _vertex_count_tokens_peer(200) as peer:
+        result: Final = await VertexAITokenCounter().count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [{"type": "image", "source": {"type": "url", "url": "http://127.0.0.1:9/image.png"}}],
+                }
+            ],
+            contents=None,
+            deployment=_VERTEX_DEPLOYMENT,
+            request_model="vertex_ai/gemini-2.5-flash",
+            messages_format="anthropic",
+        )
+
+    assert result is not None
+    assert result.error is True
+    assert result.status_code == 400
+    assert "http://127.0.0.1:9/image.png" in (result.error_message or "")
+    assert peer.requests == ()
 
 
 @pytest.mark.parametrize("location", ["us", "eu", "us-central1", "europe-west1", "global"])
