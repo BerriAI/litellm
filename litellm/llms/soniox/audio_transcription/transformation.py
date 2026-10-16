@@ -91,16 +91,10 @@ def raise_soniox_form_error(error: SonioxInvalidFormParam) -> NoReturn:
 
 
 def soniox_language_hints(language: object, hints: object) -> object:
-    """Soniox has no `language` field, so the OpenAI `language` leads its `language_hints`."""
-    if not isinstance(language, str) or not language:
+    """Soniox has no `language` field, so the OpenAI `language` becomes `language_hints` when none are set."""
+    if hints is not None or not isinstance(language, str) or not language:
         return hints
-    if hints is None:
-        return (language,)
-    try:
-        known: Final = _ITEMS.validate_python(hints)
-    except ValidationError:
-        return hints
-    return known if language in known else (language, *known)
+    return (language,)
 
 
 def _decode_bool(key: str, value: str) -> bool | SonioxInvalidFormParam:

@@ -780,9 +780,9 @@ class TestCleanupNormalization:
 
     @pytest.mark.parametrize(
         "language_hints, expected",
-        [("en,es", ["de", "en", "es"]), ("de,en", ["de", "en"]), (None, ["de"])],
+        [("en,es", ["en", "es"]), (["es"], ["es"]), (None, ["de"])],
     )
-    def test_should_keep_language_alongside_language_hints(self, language_hints, expected, monkeypatch):
+    def test_should_use_language_only_without_language_hints(self, language_hints, expected, monkeypatch):
         import litellm
 
         monkeypatch.setattr("time.sleep", lambda *_: None)
@@ -808,6 +808,68 @@ class TestCleanupNormalization:
         body = next(c for c in client.calls if c["method"] == "POST")["json"]
         assert list(body["language_hints"]) == expected
         assert "language" not in body
+
+
+class TestProxyFormFields:
+    def test_should_send_soniox_types_for_fields_the_proxy_parsed_from_an_sdk_form(self, monkeypatch):
+        import litellm
+        from starlette.requests import Request
+
+        from litellm.proxy.common_utils.http_parsing_utils import get_form_data
+
+        monkeypatch.setattr("time.sleep", lambda *_: None)
+        multipart = httpx.Request(
+            "POST",
+            "http://proxy/v1/audio/transcriptions",
+            data={
+                "model": "soniox/stt-async-v4",
+                "audio_url": "https://example.com/a.wav",
+                "context[terms][]": ["Celebrex"],
+                "context[general][][key]": "domain",
+                "context[general][][value]": "Healthcare",
+                "translation[type]": "one_way",
+                "translation[target_language]": "de",
+                "enable_speaker_diarization": "true",
+                "language_hints[]": ["en", "es"],
+            },
+            files={"file": ("a.wav", b"RIFF", "audio/wav")},
+        )
+        multipart_body = multipart.read()
+
+        async def receive():
+            return {"type": "http.request", "body": multipart_body, "more_body": False}
+
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/v1/audio/transcriptions",
+                "headers": [(b"content-type", multipart.headers["content-type"].encode())],
+            },
+            receive,
+        )
+        form = asyncio.run(get_form_data(request))
+        client = _MockSyncClient(
+            {
+                "POST https://api.soniox.com/v1/transcriptions": [_make_response({"id": "tx_1"})],
+                "GET https://api.soniox.com/v1/transcriptions/tx_1": [_make_response({"status": "completed"})],
+                "GET https://api.soniox.com/v1/transcriptions/tx_1/transcript": [
+                    _make_response({"text": "hello", "tokens": []})
+                ],
+                "DELETE https://api.soniox.com/v1/transcriptions/tx_1": [_make_response({})],
+            }
+        )
+        litellm.transcription(
+            file=("a.wav", b"RIFF", "audio/wav"),
+            api_key="sk-test",
+            client=client,
+            **{key: value for key, value in form.items() if key != "file"},
+        )
+        body = json.loads(json.dumps(next(c for c in client.calls if c["method"] == "POST")["json"]))
+        assert body["context"] == {"terms": ["Celebrex"], "general": [{"key": "domain", "value": "Healthcare"}]}
+        assert body["translation"] == {"type": "one_way", "target_language": "de"}
+        assert body["enable_speaker_diarization"] is True
+        assert body["language_hints"] == ["en", "es"]
 
 
 class TestErrorResponses:

@@ -50,7 +50,7 @@ class TestMapOpenAIParams:
         )
         assert list(result["language_hints"]) == ["en"]
 
-    def test_should_prepend_language_to_existing_hints(self):
+    def test_should_keep_explicit_hints_over_language(self):
         cfg = SonioxAudioTranscriptionConfig()
         result = cfg.map_openai_params(
             non_default_params={"language": "en"},
@@ -58,7 +58,7 @@ class TestMapOpenAIParams:
             model="stt-async-v4",
             drop_params=False,
         )
-        assert list(result["language_hints"]) == ["en", "fr"]
+        assert list(result["language_hints"]) == ["fr"]
 
     def test_should_not_duplicate_language_already_in_hints(self):
         cfg = SonioxAudioTranscriptionConfig()
