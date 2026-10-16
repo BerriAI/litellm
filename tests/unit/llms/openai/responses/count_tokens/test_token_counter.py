@@ -407,3 +407,25 @@ async def test_count_uses_the_global_openai_key_chat_would_use(monkeypatch: pyte
     assert result is not None
     assert result.total_tokens == 9
     assert route.calls.last.request.headers["authorization"] == "Bearer sk-from-litellm-settings"
+
+
+@pytest.mark.asyncio
+async def test_count_sends_the_global_key_only_to_the_global_api_base(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "openai_key", "sk-private-gateway")
+    monkeypatch.setattr(litellm, "api_base", "https://gateway.internal.example/v1")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    with respx.mock:
+        route: Final = respx.post("https://gateway.internal.example/v1/responses/input_tokens").mock(
+            return_value=httpx.Response(200, json={"input_tokens": 4})
+        )
+        result: Final = await OpenAITokenCounter().count_tokens(
+            model_to_use="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            deployment={"litellm_params": {}},
+            request_model="openai/gpt-4o",
+        )
+    assert result is not None
+    assert result.total_tokens == 4
+    assert route.calls.last.request.headers["authorization"] == "Bearer sk-private-gateway"

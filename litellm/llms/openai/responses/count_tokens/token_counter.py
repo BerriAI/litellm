@@ -106,7 +106,10 @@ class OpenAITokenCounter(BaseTokenCounter):
         deployment = deployment or {}
         litellm_params: Final = deployment.get("litellm_params", {})
 
-        api_key: Final = get_openai_credentials(api_key=litellm_params.get("api_key")).api_key
+        credentials: Final = get_openai_credentials(
+            api_base=litellm_params.get("api_base"), api_key=litellm_params.get("api_key")
+        )
+        api_key: Final = credentials.api_key
 
         if not api_key:
             return TokenCountResponse(
@@ -122,7 +125,7 @@ class OpenAITokenCounter(BaseTokenCounter):
                 status_code=401,
             )
 
-        api_base: Final = litellm_params.get("api_base")
+        api_base: Final = credentials.api_base
 
         input_items, instructions, counted_tools, text = self._responses_request_parts(
             model_to_use=model_to_use,
