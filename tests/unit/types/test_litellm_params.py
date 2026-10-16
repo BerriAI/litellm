@@ -65,6 +65,7 @@ CONNECTION_NAMES: Final = (
     "api_key",
     "api_base",
     "api_version",
+    "responses_api_version",
     "region_name",
     "headers",
     "provider_specific_header",

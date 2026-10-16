@@ -5357,6 +5357,7 @@ class TestRouterPreRoutingSharedAliasName:
                 "api_key": "sk-marker",
                 "api_base": "https://marker.example/v1",
                 "api_version": "2024-01-01",
+                "responses_api_version": "v1",
             },
         }
         router = Router(model_list=[marker_with_connection_params, self._tier_entry()])
@@ -5372,6 +5373,7 @@ class TestRouterPreRoutingSharedAliasName:
         assert "api_base" not in request_kwargs
         assert "api_key" not in request_kwargs
         assert "api_version" not in request_kwargs
+        assert "responses_api_version" not in request_kwargs
         assert request_kwargs["drop_params"] is True
 
     @pytest.mark.asyncio

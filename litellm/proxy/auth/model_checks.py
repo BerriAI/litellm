@@ -332,7 +332,7 @@ def get_known_models_from_wildcard(wildcard_model: str, litellm_params: LiteLLM_
             else:
                 model = f"{wildcard_provider_prefix}/{model}"
         suffix_appended_wildcard_models.append(model)
-    return suffix_appended_wildcard_models or []
+    return list(dict.fromkeys(suffix_appended_wildcard_models))
 
 
 def expand_wildcard_deployments_for_model_info(
