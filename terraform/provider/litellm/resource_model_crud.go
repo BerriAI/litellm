@@ -337,6 +337,9 @@ func resourceLiteLLMModelRead(d *schema.ResourceData, m interface{}) error {
 		}
 		return fmt.Errorf("failed to read model: %w", err)
 	}
+	if modelResp == nil {
+		return fmt.Errorf("failed to read model: empty response body")
+	}
 
 	// Update the state with values from the response or fall back to the data passed in during creation
 	d.Set("model_name", GetStringValue(modelResp.ModelName, d.Get("model_name").(string)))
