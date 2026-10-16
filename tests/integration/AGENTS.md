@@ -26,6 +26,7 @@ directory that a `GROUPS` entry in `run.py` selects. There is no manifest and no
 tests. A product bug the test exposes is `pytest.skip("BUG: <symptom>")` at the top of the body, not a
 fix in the test and not a deletion. Needs no network, proxy, DB or Redis: `tests/unit`
 
-CircleCI runs every file here. Never add one to a GitHub Actions workflow or to `GITHUB_FILES` in `run.py`,
-which only lists files a dedicated job runs on its own, like the image tests that need the images
-`image-scan.yml` builds (#46780)
+CircleCI runs every file here except the OCI and sandbox tests, which no CI runs, and the files in
+`GITHUB_FILES` in `run.py`. That list is only for a file a dedicated job must run on its own, like the
+image tests that need the images `image-scan.yml` builds. Add a file there, and to that job, only in that
+case. Never put one on a shared GitHub Actions shard like `test-unit.yml` (#46780)
