@@ -1181,15 +1181,19 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_count_tokens_drops_a_malformed_tool_result_text_when_the_body_sets_drop_params(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("request_drop_params", "user_agent"),
+    (({"drop_params": True}, "python-httpx/0.28.1"), ({}, "claude-cli/2.1.0 (external, cli)")),
+)
+async def test_anthropic_count_tokens_drops_a_malformed_tool_result_text_when_drop_params_applies(
+    monkeypatch: pytest.MonkeyPatch, request_drop_params: dict[str, bool], user_agent: str
 ) -> None:
     import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
     import litellm.proxy.proxy_server as proxy_server
 
     body: Final = {
         "model": "gpt-tool-result",
-        "drop_params": True,
+        **request_drop_params,
         "messages": [
             {"role": "user", "content": "run the build"},
             {
@@ -1214,9 +1218,10 @@ async def test_anthropic_count_tokens_drops_a_malformed_tool_result_text_when_th
         ]
     )
     request: Final = MagicMock(spec=Request)
-    request.headers = {}
+    request.headers = {"user-agent": user_agent}
     monkeypatch.setattr(anthropic_endpoints, "read_request_body", AsyncMock(return_value=body))
     monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "proxy_config", proxy_server.ProxyConfig())
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
     with respx.mock:

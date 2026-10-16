@@ -10,7 +10,7 @@ from pydantic import JsonValue
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
-from litellm.llms.anthropic.pass_through.convertible_blocks import unconvertible_blocks_error
+from litellm.llms.anthropic.pass_through.convertible_blocks import deployment_drops_params, unconvertible_blocks_error
 from litellm.llms.anthropic.pass_through.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
@@ -23,7 +23,6 @@ from litellm.llms.openai.responses.count_tokens.transformation import (
     OpenAICountTokensConfig,
     ResponsesCountRequestParts,
 )
-from litellm.responses.litellm_completion_transformation.transformation import drops_unsupported_params
 from litellm.types.utils import LlmProviders, TokenCountMessagesFormat, TokenCountResponse
 
 # Global handler instance - reuse across all token counting requests
@@ -70,14 +69,6 @@ class OpenAITokenCounter(BaseTokenCounter):
             case _:
                 assert_never(messages_format)
 
-    @staticmethod
-    def _deployment_drops_params(deployment: Mapping[str, object] | None) -> bool:
-        match deployment:
-            case {"litellm_params": {"drop_params": object() as drop_params}}:
-                return drops_unsupported_params(drop_params)
-            case _:
-                return drops_unsupported_params(None)
-
     async def count_tokens(
         self,
         model_to_use: str,
@@ -98,7 +89,7 @@ class OpenAITokenCounter(BaseTokenCounter):
 
         malformed_error: Final = (
             OpenAICountTokensConfig.malformed_anthropic_messages_error(
-                messages, drop_params=self._deployment_drops_params(deployment)
+                messages, drop_params=deployment_drops_params(deployment)
             )
             if messages_format == "anthropic"
             else None

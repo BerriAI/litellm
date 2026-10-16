@@ -31,6 +31,7 @@ from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.utils import ProviderConfigManager
 
 from ..adapters.handler import request_safeguards_evaluator
+from ..convertible_blocks import reject_malformed_tool_result_text
 from ..safeguards import with_safeguard_results
 from ..utils import litellm_logging_obj_from_kwargs, local_model_name
 from .streaming_iterator import AnthropicResponsesStreamWrapper
@@ -55,20 +56,6 @@ def _provider_returns_encrypted_reasoning(model: str, custom_llm_provider: objec
     provider_model: Final = local_model_name(model, provider)
     responses_config: Final = ProviderConfigManager.get_provider_responses_api_config(provider, provider_model)
     return responses_config is not None and "include" in responses_config.get_supported_openai_params(provider_model)
-
-
-def _reject_malformed_tool_result_text(
-    messages: AnthropicRequestMessages, model: str, forwarded_kwargs: Mapping[str, object]
-) -> None:
-    if drops_unsupported_params(forwarded_kwargs.get("drop_params")):
-        return
-    error: Final = _ADAPTER.malformed_tool_result_text_error(messages)
-    if error is None:
-        return
-    provider: Final = forwarded_kwargs.get("custom_llm_provider")
-    raise litellm.BadRequestError(
-        message=error, model=model, llm_provider=provider if isinstance(provider, str) else ""
-    )
 
 
 def _reads_prompt_cache_breakpoint(model: str, forwarded_kwargs: Mapping[str, object]) -> bool:
@@ -149,7 +136,7 @@ def _build_responses_kwargs(
     Build the kwargs dict to pass directly to litellm.responses() / litellm.aresponses().
     """
     forwarded_kwargs: Final = _forwarded_kwargs(extra_kwargs)
-    _reject_malformed_tool_result_text(messages, model, forwarded_kwargs)
+    reject_malformed_tool_result_text(messages, model, forwarded_kwargs)
     block_rewrite: Final = _prompt_cache_block_rewrite(model, forwarded_kwargs)
     request_messages: Final[AnthropicRequestMessages] = (
         [

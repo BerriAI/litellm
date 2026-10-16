@@ -6,11 +6,9 @@ path used for OpenAI and Azure models.
 """
 
 import json
-from collections.abc import Iterable, Iterator, Mapping, Sequence
-from itertools import chain, groupby
+from collections.abc import Iterable, Mapping, Sequence
+from itertools import groupby
 from typing import Any, Final, cast
-
-from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
@@ -22,6 +20,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking_budget,
 )
+from litellm.llms.anthropic.pass_through.convertible_blocks import tool_result_text_parts
 from litellm.llms.anthropic.pass_through.messages.utils import (
     refusal_stop_details,
     responses_output_refusal_text,
@@ -54,7 +53,6 @@ from litellm.types.llms.openai import (
 
 REASONING_SUMMARY_PART_SEPARATOR: Final = "\n\n"
 RESPONSES_INCLUDE_ENCRYPTED_REASONING: Final = "reasoning.encrypted_content"
-_OBJECTS: Final = TypeAdapter(tuple[object, ...])
 
 
 class LiteLLMAnthropicToResponsesAPIAdapter:
@@ -227,58 +225,6 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         return [*parts[:-1], with_prompt_cache_breakpoint(parts[-1], prompt_cache_breakpoint)]
 
     @staticmethod
-    def _list_items(value: object) -> tuple[object, ...]:
-        return _OBJECTS.validate_python(value) if isinstance(value, list) else ()
-
-    @staticmethod
-    def _has_non_string_text(block: object) -> bool:
-        match block:
-            case {"type": "text", "text": str()}:
-                return False
-            case {"type": "text", "text": object()}:
-                return True
-            case _:
-                return False
-
-    @staticmethod
-    def _tool_result_text_part(block: object) -> str | None:
-        match block:
-            case {"type": "text", "text": str(text)}:
-                return text
-            case {"type": "text", "text": object()}:
-                return None
-            case {"type": "text"}:
-                return ""
-            case _:
-                return None
-
-    @classmethod
-    def _tool_result_text_parts(cls, tool_result: Mapping[str, object]) -> tuple[str, ...]:
-        parts: Final = map(cls._tool_result_text_part, cls._list_items(tool_result.get("content")))
-        return tuple(part for part in parts if part is not None)
-
-    @classmethod
-    def _user_content_blocks(cls, message: Mapping[str, object]) -> tuple[object, ...]:
-        return cls._list_items(message.get("content")) if message.get("role") == "user" else ()
-
-    @classmethod
-    def _tool_result_text_errors(cls, block: object) -> Iterator[str]:
-        match block:
-            case {"type": "tool_result", "tool_use_id": object() as tool_use_id, "content": object() as content}:
-                return (
-                    f"tool_result {tool_use_id} content.{index}.text: Input should be a valid string"
-                    for index, text_block in enumerate(cls._list_items(content))
-                    if cls._has_non_string_text(text_block)
-                )
-            case _:
-                return iter(())
-
-    @classmethod
-    def malformed_tool_result_text_error(cls, messages: Iterable[Mapping[str, object]]) -> str | None:
-        blocks: Final = chain.from_iterable(map(cls._user_content_blocks, messages))
-        return next(chain.from_iterable(map(cls._tool_result_text_errors, blocks)), None)
-
-    @staticmethod
     def _translate_midturn_system_content_to_responses(
         content: str | Iterable[AnthropicSystemMessageContent],
     ) -> list[dict[str, object]]:  # mutable-ok: API message payload
@@ -445,7 +391,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                             elif isinstance(inner, str):
                                 output_text = inner
                             elif isinstance(inner, list):
-                                output_text = "\n".join(self._tool_result_text_parts(tool_result_block))
+                                output_text = "\n".join(tool_result_text_parts(tool_result_block))
                                 if covered_image_parts or later_image_parts:
                                     output_text = (
                                         f"{output_text}\n{TOOL_RESULT_IMAGE_PLACEHOLDER}"

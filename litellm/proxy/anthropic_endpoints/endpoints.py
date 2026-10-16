@@ -43,6 +43,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     openai_error_type,
     with_litellm_call_id,
 )
+from litellm.proxy.litellm_pre_call_utils import should_auto_drop_params_for_agentic_cli
 
 router: Final = APIRouter()
 
@@ -298,8 +299,8 @@ def _requested_output_format(data: Mapping[str, JsonValue]) -> JsonValue:
     return output_config.get("format")
 
 
-def _requested_count_options(data: Mapping[str, JsonValue]) -> tuple[JsonValue, JsonValue]:
-    return _requested_output_format(data), data.get("drop_params")
+def _requested_count_options(data: Mapping[str, JsonValue], auto_drop_params: bool) -> tuple[JsonValue, JsonValue]:
+    return _requested_output_format(data), True if auto_drop_params else data.get("drop_params")
 
 
 @router.post(
@@ -331,7 +332,7 @@ async def count_tokens(
     
     Returns: {"input_tokens": <number>}
     """
-    from litellm.proxy.proxy_server import count_request_tokens
+    from litellm.proxy.proxy_server import count_request_tokens, proxy_config
 
     litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
     try:
@@ -358,7 +359,9 @@ async def count_tokens(
             system=data.get("system"),
         )
 
-        output_format, drop_params = _requested_count_options(data)
+        output_format, drop_params = _requested_count_options(
+            data, should_auto_drop_params_for_agentic_cli(request.headers.get("user-agent", ""), data, proxy_config)
+        )
         token_response: Final = await count_request_tokens(
             request=token_request,
             call_endpoint=True,

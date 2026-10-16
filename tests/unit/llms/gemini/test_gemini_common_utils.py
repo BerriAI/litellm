@@ -153,6 +153,82 @@ async def test_google_ai_studio_count_tokens_answers_with_the_status_google_reje
     assert "Invalid function name" in (result.error_message or "")
 
 
+def _weather_tool_result_messages(text: JsonValue) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "What is the weather in Paris?"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "Paris"}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01",
+                    "content": [{"type": "text", "text": text}, {"type": "text", "text": "partly cloudy"}],
+                }
+            ],
+        },
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", (None, 5))
+async def test_google_ai_studio_count_tokens_rejects_a_non_string_tool_result_text_without_request(
+    text: JsonValue,
+) -> None:
+    peer: Final = _GeminiCountTokensPeer()
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(peer))
+
+    with patch.object(gemini_count_tokens_handler, "get_async_httpx_client", return_value=client):
+        result: Final = await GoogleAIStudioTokenCounter().count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=_weather_tool_result_messages(text),
+            contents=None,
+            deployment={"litellm_params": {"api_key": "test-key", "api_base": "https://count-tokens.test"}},
+            request_model="gemini/gemini-2.5-flash",
+            messages_format="anthropic",
+        )
+
+    assert result is not None
+    assert result.error is True
+    assert result.status_code == 400
+    assert result.error_message == "tool_result toolu_01 content.0.text: Input should be a valid string"
+    assert peer.request_body is None
+
+
+@pytest.mark.asyncio
+async def test_google_ai_studio_count_tokens_leaves_out_a_numeric_tool_result_text_under_drop_params() -> None:
+    peer: Final = _GeminiCountTokensPeer()
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(peer))
+
+    with patch.object(gemini_count_tokens_handler, "get_async_httpx_client", return_value=client):
+        result: Final = await GoogleAIStudioTokenCounter().count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=_weather_tool_result_messages(5),
+            contents=None,
+            deployment={
+                "litellm_params": {"api_key": "test-key", "api_base": "https://count-tokens.test", "drop_params": True}
+            },
+            request_model="gemini/gemini-2.5-flash",
+            messages_format="anthropic",
+        )
+
+    assert result is not None
+    assert result.error is False
+    assert result.total_tokens == 11
+    assert peer.request_body is not None
+    assert peer.request_body["contents"] == [
+        {"role": "user", "parts": [{"text": "What is the weather in Paris?"}]},
+        {"role": "model", "parts": [{"function_call": {"name": "get_weather", "args": {"city": "Paris"}}}]},
+        {
+            "role": "user",
+            "parts": [{"function_response": {"name": "get_weather", "response": {"content": "partly cloudy"}}}],
+        },
+    ]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("system_instruction", "tools", "expected_body"),
