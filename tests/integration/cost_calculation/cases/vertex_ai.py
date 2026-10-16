@@ -1667,9 +1667,9 @@ GEMINI_3_1_PRO_PASSTHROUGH_STREAM_GENERATE_CONTENT_PRICED_VIA_VERTEX_KEY: Final 
 
 # gemini-3.8-flash
 GEMINI_3_8_FLASH_INPUT_TEXT: Final = CostTrackingTestCase(
-    name="gemini-3.8-flash-input_text",
+    name="vertex_ai/gemini-3.8-flash-input_text",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
-    model="gemini-3.8-flash",
+    model="vertex_ai/gemini-3.8-flash",
     request={
         "model": "$MODEL",
         "messages": [
@@ -1720,9 +1720,9 @@ GEMINI_3_8_FLASH_INPUT_TEXT: Final = CostTrackingTestCase(
 )
 
 GEMINI_3_8_FLASH_CACHE_READ: Final = CostTrackingTestCase(
-    name="gemini-3.8-flash-cache_read",
+    name="vertex_ai/gemini-3.8-flash-cache_read",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
-    model="gemini-3.8-flash",
+    model="vertex_ai/gemini-3.8-flash",
     request={
         "model": "$MODEL",
         "messages": [
@@ -1777,9 +1777,9 @@ GEMINI_3_8_FLASH_CACHE_READ: Final = CostTrackingTestCase(
 
 
 GEMINI_3_8_FLASH_SERVICE_TIER_FLEX: Final = CostTrackingTestCase(
-    name="gemini-3.8-flash-service_tier_flex",
+    name="vertex_ai/gemini-3.8-flash-service_tier_flex",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
-    model="gemini-3.8-flash",
+    model="vertex_ai/gemini-3.8-flash",
     request={
         "model": "$MODEL",
         "messages": [
@@ -1831,9 +1831,9 @@ GEMINI_3_8_FLASH_SERVICE_TIER_FLEX: Final = CostTrackingTestCase(
 )
 
 GEMINI_3_8_FLASH_SERVICE_TIER_PRIORITY: Final = CostTrackingTestCase(
-    name="gemini-3.8-flash-service_tier_priority",
+    name="vertex_ai/gemini-3.8-flash-service_tier_priority",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
-    model="gemini-3.8-flash",
+    model="vertex_ai/gemini-3.8-flash",
     request={
         "model": "$MODEL",
         "messages": [
@@ -1885,9 +1885,9 @@ GEMINI_3_8_FLASH_SERVICE_TIER_PRIORITY: Final = CostTrackingTestCase(
 )
 
 GEMINI_3_8_FLASH_WEB_SEARCH_PER_PROMPT: Final = CostTrackingTestCase(
-    name="gemini-3.8-flash-web_search_per_prompt",
+    name="vertex_ai/gemini-3.8-flash-web_search_per_prompt",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
-    model="gemini-3.8-flash",
+    model="vertex_ai/gemini-3.8-flash",
     request={
         "model": "$MODEL",
         "messages": [
@@ -1935,14 +1935,14 @@ GEMINI_3_8_FLASH_WEB_SEARCH_PER_PROMPT: Final = CostTrackingTestCase(
         },
     ),
     expected=ExactExpected(
-        spend=0.03724224, input_cost=0.0009568, output_cost=0.00128544, prompt_tokens=1840, completion_tokens=412
+        spend=0.10724224, input_cost=0.0009568, output_cost=0.00128544, prompt_tokens=1840, completion_tokens=412
     ),
 )
 
 GEMINI_3_8_FLASH_GOOGLE_MAPS_GROUNDING: Final = CostTrackingTestCase(
-    name="gemini-3.8-flash-google_maps_grounding",
+    name="vertex_ai/gemini-3.8-flash-google_maps_grounding",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
-    model="gemini-3.8-flash",
+    model="vertex_ai/gemini-3.8-flash",
     request={
         "model": "$MODEL",
         "messages": [
@@ -1999,9 +1999,9 @@ GEMINI_3_8_FLASH_GOOGLE_MAPS_GROUNDING: Final = CostTrackingTestCase(
 )
 
 GEMINI_3_8_FLASH_FALLBACK_IMAGE_TOKENS_AT_INPUT_RATE: Final = CostTrackingTestCase(
-    name="gemini-3.8-flash-fallback_image_tokens_at_input_rate",
+    name="vertex_ai/gemini-3.8-flash-fallback_image_tokens_at_input_rate",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
-    model="gemini-3.8-flash",
+    model="vertex_ai/gemini-3.8-flash",
     request={
         "model": "$MODEL",
         "messages": [
@@ -2062,9 +2062,9 @@ GEMINI_3_8_FLASH_FALLBACK_IMAGE_TOKENS_AT_INPUT_RATE: Final = CostTrackingTestCa
 )
 
 GEMINI_3_8_FLASH_STREAM: Final = CostTrackingTestCase(
-    name="gemini-3.8-flash-stream",
+    name="vertex_ai/gemini-3.8-flash-stream",
     covers="quota_management.spend_tracking.scripted_wire.logs_cost",
-    model="gemini-3.8-flash",
+    model="vertex_ai/gemini-3.8-flash",
     request={
         "model": "$MODEL",
         "messages": [
@@ -2122,9 +2122,9 @@ GEMINI_3_8_FLASH_STREAM: Final = CostTrackingTestCase(
 )
 
 GEMINI_3_8_FLASH_STREAM_NO_USAGE: Final = CostTrackingTestCase(
-    name="gemini-3.8-flash-stream_no_usage",
+    name="vertex_ai/gemini-3.8-flash-stream_no_usage",
     covers="quota_management.spend_tracking.scripted_wire.logs_cost",
-    model="gemini-3.8-flash",
+    model="vertex_ai/gemini-3.8-flash",
     request={
         "model": "$MODEL",
         "messages": [
@@ -2174,9 +2174,9 @@ GEMINI_3_8_FLASH_STREAM_NO_USAGE: Final = CostTrackingTestCase(
 )
 
 GEMINI_3_8_FLASH_STREAM_NO_USAGE_TOOL_CALL: Final = CostTrackingTestCase(
-    name="gemini-3.8-flash-stream_no_usage_tool_call",
+    name="vertex_ai/gemini-3.8-flash-stream_no_usage_tool_call",
     covers="quota_management.spend_tracking.scripted_wire.logs_cost",
-    model="gemini-3.8-flash",
+    model="vertex_ai/gemini-3.8-flash",
     request={
         "model": "$MODEL",
         "messages": [
@@ -2258,9 +2258,9 @@ GEMINI_3_8_FLASH_STREAM_NO_USAGE_TOOL_CALL: Final = CostTrackingTestCase(
 )
 
 GEMINI_3_8_FLASH_STREAM_NO_USAGE_IMAGE_INPUT: Final = CostTrackingTestCase(
-    name="gemini-3.8-flash-stream_no_usage_image_input",
+    name="vertex_ai/gemini-3.8-flash-stream_no_usage_image_input",
     covers="quota_management.spend_tracking.scripted_wire.logs_cost",
-    model="gemini-3.8-flash",
+    model="vertex_ai/gemini-3.8-flash",
     request={
         "model": "$MODEL",
         "messages": [
@@ -2317,9 +2317,9 @@ GEMINI_3_8_FLASH_STREAM_NO_USAGE_IMAGE_INPUT: Final = CostTrackingTestCase(
 )
 
 GEMINI_3_8_FLASH_PROMPT_BLOCKED: Final = CostTrackingTestCase(
-    name="gemini-3.8-flash-prompt_blocked",
+    name="vertex_ai/gemini-3.8-flash-prompt_blocked",
     covers="quota_management.spend_tracking.scripted_wire.logs_cost",
-    model="gemini-3.8-flash",
+    model="vertex_ai/gemini-3.8-flash",
     request={
         "model": "$MODEL",
         "messages": [
@@ -2367,9 +2367,9 @@ GEMINI_3_8_FLASH_PROMPT_BLOCKED: Final = CostTrackingTestCase(
 )
 
 GEMINI_3_8_FLASH_STREAM_PROMPT_BLOCKED: Final = CostTrackingTestCase(
-    name="gemini-3.8-flash-stream_prompt_blocked",
+    name="vertex_ai/gemini-3.8-flash-stream_prompt_blocked",
     covers="quota_management.spend_tracking.scripted_wire.logs_cost",
-    model="gemini-3.8-flash",
+    model="vertex_ai/gemini-3.8-flash",
     request={
         "model": "$MODEL",
         "messages": [
@@ -2424,9 +2424,9 @@ GEMINI_3_8_FLASH_STREAM_PROMPT_BLOCKED: Final = CostTrackingTestCase(
 )
 
 GEMINI_3_8_FLASH_RESPONSE_MODEL_OVERRIDE: Final = CostTrackingTestCase(
-    name="gemini-3.8-flash-response_model_override",
+    name="vertex_ai/gemini-3.8-flash-response_model_override",
     covers="quota_management.spend_tracking.scripted_wire.logs_cost",
-    model="gemini-3.8-flash",
+    model="vertex_ai/gemini-3.8-flash",
     request={
         "model": "$MODEL",
         "messages": [
@@ -2477,9 +2477,9 @@ GEMINI_3_8_FLASH_RESPONSE_MODEL_OVERRIDE: Final = CostTrackingTestCase(
 )
 
 GEMINI_3_8_FLASH_STREAM_RESPONSE_MODEL_OVERRIDE: Final = CostTrackingTestCase(
-    name="gemini-3.8-flash-stream_response_model_override",
+    name="vertex_ai/gemini-3.8-flash-stream_response_model_override",
     covers="quota_management.spend_tracking.scripted_wire.logs_cost",
-    model="gemini-3.8-flash",
+    model="vertex_ai/gemini-3.8-flash",
     request={
         "model": "$MODEL",
         "messages": [
@@ -2537,9 +2537,9 @@ GEMINI_3_8_FLASH_STREAM_RESPONSE_MODEL_OVERRIDE: Final = CostTrackingTestCase(
 )
 
 GEMINI_3_8_FLASH_TOOL_CALL: Final = CostTrackingTestCase(
-    name="gemini-3.8-flash-tool_call",
+    name="vertex_ai/gemini-3.8-flash-tool_call",
     covers="quota_management.spend_tracking.scripted_wire.logs_cost",
-    model="gemini-3.8-flash",
+    model="vertex_ai/gemini-3.8-flash",
     request={
         "model": "$MODEL",
         "messages": [
@@ -2624,9 +2624,9 @@ GEMINI_3_8_FLASH_TOOL_CALL: Final = CostTrackingTestCase(
 )
 
 GEMINI_3_8_FLASH_STREAM_TOOL_CALL: Final = CostTrackingTestCase(
-    name="gemini-3.8-flash-stream_tool_call",
+    name="vertex_ai/gemini-3.8-flash-stream_tool_call",
     covers="quota_management.spend_tracking.scripted_wire.logs_cost",
-    model="gemini-3.8-flash",
+    model="vertex_ai/gemini-3.8-flash",
     request={
         "model": "$MODEL",
         "messages": [
@@ -2718,9 +2718,9 @@ GEMINI_3_8_FLASH_STREAM_TOOL_CALL: Final = CostTrackingTestCase(
 )
 
 GEMINI_3_8_FLASH_STREAM_FULL_USAGE: Final = CostTrackingTestCase(
-    name="gemini-3.8-flash-stream_full_usage",
+    name="vertex_ai/gemini-3.8-flash-stream_full_usage",
     covers="quota_management.spend_tracking.scripted_wire.logs_cost",
-    model="gemini-3.8-flash",
+    model="vertex_ai/gemini-3.8-flash",
     request={
         "model": "$MODEL",
         "messages": [
@@ -2782,7 +2782,7 @@ GEMINI_3_8_FLASH_STREAM_FULL_USAGE: Final = CostTrackingTestCase(
         ),
     ),
     expected=ExactExpected(
-        spend=0.006992128, input_cost=0.001619488, output_cost=0.00537264, prompt_tokens=8314, completion_tokens=1592
+        spend=0.005775328, input_cost=0.001276288, output_cost=0.00449904, prompt_tokens=8314, completion_tokens=1592
     ),
 )
 
@@ -3118,26 +3118,182 @@ VERTEX_AI_CLAUDE_FABLE_5_1_TOOL_CALL: Final = _vertex_claude_shape_case(
 
 
 GEMINI_3_1_PRO_PREVIEW_INPUT_TEXT: Final = _gemini_case(
-    GEMINI_3_8_FLASH_INPUT_TEXT, "gemini-3.1-pro-preview-input_text", "gemini-3.1-pro-preview",
+    GEMINI_3_8_FLASH_INPUT_TEXT, "vertex_ai/gemini-3.1-pro-preview-input_text", "vertex_ai/gemini-3.1-pro-preview",
     ExactExpected(spend=0.0094864, input_cost=0.004048, output_cost=0.0054384, prompt_tokens=1840, completion_tokens=412)
 )
 GEMINI_3_1_PRO_PREVIEW_STREAM: Final = _gemini_case(
-    GEMINI_3_8_FLASH_STREAM, "gemini-3.1-pro-preview-stream", "gemini-3.1-pro-preview",
+    GEMINI_3_8_FLASH_STREAM, "vertex_ai/gemini-3.1-pro-preview-stream", "vertex_ai/gemini-3.1-pro-preview",
     ExactExpected(spend=0.0094864, input_cost=0.004048, output_cost=0.0054384, prompt_tokens=1840, completion_tokens=412)
 )
 GEMINI_3_1_PRO_PREVIEW_CACHE_READ: Final = _gemini_case(
-    GEMINI_3_8_FLASH_CACHE_READ, "gemini-3.1-pro-preview-cache_read", "gemini-3.1-pro-preview",
+    GEMINI_3_8_FLASH_CACHE_READ, "vertex_ai/gemini-3.1-pro-preview-cache_read", "vertex_ai/gemini-3.1-pro-preview",
     ExactExpected(spend=0.00912736, input_cost=0.00411136, output_cost=0.005016, prompt_tokens=12928, completion_tokens=380)
 )
 GEMINI_3_1_PRO_PREVIEW_REASONING: Final = _gemini_case(
-    GEMINI_3_1_PRO_REASONING, "gemini-3.1-pro-preview-reasoning", "gemini-3.1-pro-preview",
+    GEMINI_3_1_PRO_REASONING, "vertex_ai/gemini-3.1-pro-preview-reasoning", "vertex_ai/gemini-3.1-pro-preview",
     ExactExpected(spend=0.056056, input_cost=0.002728, output_cost=0.053328, prompt_tokens=1240, completion_tokens=4040)
 )
 GEMINI_3_1_PRO_PREVIEW_TOOL_CALL: Final = _gemini_case(
-    GEMINI_3_8_FLASH_TOOL_CALL, "gemini-3.1-pro-preview-tool_call", "gemini-3.1-pro-preview",
+    GEMINI_3_8_FLASH_TOOL_CALL, "vertex_ai/gemini-3.1-pro-preview-tool_call", "vertex_ai/gemini-3.1-pro-preview",
     ExactExpected(spend=0.0094864, input_cost=0.004048, output_cost=0.0054384, prompt_tokens=1840, completion_tokens=412)
 )
 
+GEMINI_4_ARGON_INPUT_TEXT: Final = GEMINI_3_8_FLASH_INPUT_TEXT.model_copy(
+    update={
+        "name": "vertex_ai/gemini-4-argon-input_text",
+        "model": "vertex_ai/gemini-4-argon",
+        "response": JsonResponse(
+            content_type="application/json",
+            body={
+                "candidates": [
+                    {
+                        "content": {"parts": [{"text": "Hello."}], "role": "model"},
+                        "finishReason": "STOP",
+                        "index": 0,
+                    }
+                ],
+                "usageMetadata": {
+                    "promptTokenCount": 37,
+                    "candidatesTokenCount": 6,
+                    "totalTokenCount": 43,
+                    "trafficType": "ON_DEMAND",
+                    "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 37}],
+                    "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 6}],
+                },
+                "modelVersion": "gemini-4-argon",
+            },
+        ),
+        "expected": ExactExpected(
+            spend=0.0001608, input_cost=0.0000888, output_cost=0.000072, prompt_tokens=37, completion_tokens=6
+        ),
+    }
+)
+GEMINI_4_ARGON_STREAM: Final = GEMINI_3_8_FLASH_STREAM.model_copy(
+    update={
+        "name": "vertex_ai/gemini-4-argon-stream",
+        "model": "vertex_ai/gemini-4-argon",
+        "response": SseResponse(
+            content_type="text/event-stream",
+            frames=sse_frames(
+                {
+                    "candidates": [{"content": {"role": "model", "parts": [{"text": "Hello."}]}}],
+                    "usageMetadata": {"trafficType": "ON_DEMAND"},
+                    "modelVersion": "gemini-4-argon",
+                },
+                {
+                    "candidates": [{"content": {"role": "model", "parts": [{"text": ""}]}, "finishReason": "STOP"}],
+                    "usageMetadata": {
+                        "promptTokenCount": 37,
+                        "candidatesTokenCount": 6,
+                        "totalTokenCount": 43,
+                        "trafficType": "ON_DEMAND",
+                        "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 37}],
+                        "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 6}],
+                    },
+                    "modelVersion": "gemini-4-argon",
+                },
+            ),
+        ),
+        "expected": ExactExpected(
+            spend=0.0001608, input_cost=0.0000888, output_cost=0.000072, prompt_tokens=37, completion_tokens=6
+        ),
+    }
+)
+GEMINI_4_ARGON_CACHE_READ: Final = GEMINI_3_8_FLASH_CACHE_READ.model_copy(
+    update={
+        "name": "vertex_ai/gemini-4-argon-cache_read",
+        "model": "vertex_ai/gemini-4-argon",
+        "response": JsonResponse(
+            content_type="application/json",
+            body={
+                "candidates": [
+                    {"content": {"parts": [{"text": "Understood."}], "role": "model"}, "finishReason": "STOP"}
+                ],
+                "usageMetadata": {
+                    "promptTokenCount": 13532,
+                    "candidatesTokenCount": 21,
+                    "totalTokenCount": 13553,
+                    "cachedContentTokenCount": 11478,
+                    "trafficType": "ON_DEMAND",
+                    "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 13532}],
+                    "cacheTokensDetails": [{"modality": "TEXT", "tokenCount": 11478}],
+                    "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 21}],
+                },
+                "modelVersion": "gemini-4-argon",
+            },
+        ),
+        "expected": ExactExpected(
+            spend=0.00655896, input_cost=0.00630696, output_cost=0.000252, prompt_tokens=13532, completion_tokens=21
+        ),
+    }
+)
+GEMINI_4_ARGON_REASONING: Final = GEMINI_3_1_PRO_REASONING.model_copy(
+    update={
+        "name": "vertex_ai/gemini-4-argon-reasoning",
+        "model": "vertex_ai/gemini-4-argon",
+        "response": JsonResponse(
+            content_type="application/json",
+            body={
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [{"text": "Hello.", "thought": True}, {"text": "Hello."}],
+                            "role": "model",
+                        },
+                        "finishReason": "STOP",
+                        "index": 0,
+                    }
+                ],
+                "usageMetadata": {
+                    "promptTokenCount": 37,
+                    "candidatesTokenCount": 6,
+                    "totalTokenCount": 162,
+                    "trafficType": "ON_DEMAND",
+                    "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 37}],
+                    "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 6}],
+                    "thoughtsTokenCount": 119,
+                },
+                "modelVersion": "gemini-4-argon",
+            },
+        ),
+        "expected": ExactExpected(
+            spend=0.0015888, input_cost=0.0000888, output_cost=0.0015, prompt_tokens=37, completion_tokens=125
+        ),
+    }
+)
+GEMINI_4_ARGON_TOOL_CALL: Final = GEMINI_3_8_FLASH_TOOL_CALL.model_copy(
+    update={
+        "name": "vertex_ai/gemini-4-argon-tool_call",
+        "model": "vertex_ai/gemini-4-argon",
+        "response": JsonResponse(
+            content_type="application/json",
+            body={
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [{"functionCall": {"name": "report_weather", "args": {"city": "Paris"}}}],
+                            "role": "model",
+                        },
+                        "finishReason": "STOP",
+                        "index": 0,
+                    }
+                ],
+                "usageMetadata": {
+                    "promptTokenCount": 90,
+                    "candidatesTokenCount": 22,
+                    "totalTokenCount": 112,
+                    "trafficType": "ON_DEMAND",
+                    "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 90}],
+                    "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 22}],
+                },
+                "modelVersion": "gemini-4-argon",
+            },
+        ),
+        "expected": ExactExpected(
+            spend=0.00048, input_cost=0.000216, output_cost=0.000264, prompt_tokens=90, completion_tokens=22
+        ),
+    }
+)
 
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GEMINI_3_1_PRO_INPUT_TEXT,
@@ -3210,6 +3366,11 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GEMINI_3_1_PRO_PREVIEW_CACHE_READ,
     GEMINI_3_1_PRO_PREVIEW_REASONING,
     GEMINI_3_1_PRO_PREVIEW_TOOL_CALL,
+    GEMINI_4_ARGON_INPUT_TEXT,
+    GEMINI_4_ARGON_STREAM,
+    GEMINI_4_ARGON_CACHE_READ,
+    GEMINI_4_ARGON_REASONING,
+    GEMINI_4_ARGON_TOOL_CALL,
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
@@ -3231,6 +3392,7 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(plain=VERTEX_AI_CLAUDE_OPUS_5_5_INPUT_TEXT, streamed=VERTEX_AI_CLAUDE_OPUS_5_5_STREAM),
     StreamParityTestCase(plain=VERTEX_AI_CLAUDE_FABLE_5_1_INPUT_TEXT, streamed=VERTEX_AI_CLAUDE_FABLE_5_1_STREAM),
     StreamParityTestCase(plain=GEMINI_3_1_PRO_PREVIEW_INPUT_TEXT, streamed=GEMINI_3_1_PRO_PREVIEW_STREAM),
+    StreamParityTestCase(plain=GEMINI_4_ARGON_INPUT_TEXT, streamed=GEMINI_4_ARGON_STREAM),
 )
 
 BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
@@ -3239,4 +3401,5 @@ BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
         ("/v1/responses", "/v1/messages"),
     ),
     *bridge_pairs((GEMINI_3_1_PRO_PREVIEW_INPUT_TEXT,), ("/v1/responses",)),
+    *bridge_pairs((GEMINI_4_ARGON_INPUT_TEXT,), ("/v1/responses",)),
 )
