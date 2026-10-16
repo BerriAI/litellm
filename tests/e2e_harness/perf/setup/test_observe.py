@@ -70,6 +70,7 @@ def test_junit_properties_carry_each_observed_metric_and_each_limit_including_un
         "perf_postgres_calls_per_request": 10.0,
         "perf_postgres_background_calls_per_request": 0.0,
         "perf_postgres_max_statement_per_request": 10.0,
+        "perf_postgres_max_background_statement_per_request": 0.0,
         "perf_redis_calls_per_request_limit": 35.0,
     }
 
@@ -93,6 +94,13 @@ def _observation_with(statements: tuple[StatementCalls, ...]) -> Observation:
 
 
 MAX_STATEMENT_CASE: Final = replace(CASE, limits=(Limit("postgres_max_statement_per_request", max=0.5),))
+BACKGROUND_CAP_CASE: Final = replace(
+    CASE,
+    limits=(Limit("postgres_max_background_statement_per_request", max=0.9),),
+    background_cap_exempt_tables=frozenset({"LiteLLM_DailyGuardrailMetrics"}),
+)
+GUARDRAIL_UPSERT: Final = 'INSERT INTO "LiteLLM_DailyGuardrailMetrics" ("guardrail_id","date") VALUES ($1,$2)'
+MODEL_USAGE_UPSERT: Final = 'INSERT INTO "LiteLLM_DailyModelUsage" ("date","model") VALUES ($1,$2)'
 TEAM_REFRESH: Final = 'SELECT * FROM "LiteLLM_TeamMembership" WHERE user_id = $1'
 USER_LOOKUP: Final = 'SELECT * FROM "LiteLLM_UserTable" WHERE user_id = $1'
 
@@ -125,3 +133,37 @@ def test_per_statement_limit_without_db_counters_reports_nothing_observed() -> N
     _, exceeded = evaluate(MAX_STATEMENT_CASE, observation)
 
     assert exceeded == ["postgres_max_statement_per_request: limit set but nothing observed"]
+
+
+def test_per_flush_rollups_pass_the_background_cap_and_the_exempt_table_is_skipped() -> None:
+    statements: Final = (
+        _statement(1, GUARDRAIL_UPSERT, calls=1150),
+        _statement(2, MODEL_USAGE_UPSERT, calls=810),
+        _statement(3, USER_LOOKUP, calls=1000),
+    )
+
+    rows, exceeded = evaluate(BACKGROUND_CAP_CASE, _observation_with(statements))
+
+    assert exceeded == []
+    assert dict(junit_properties(rows))["perf_postgres_max_background_statement_per_request"] == 0.81
+
+
+def test_a_rollup_written_on_every_request_fails_the_background_cap_and_names_the_statement() -> None:
+    statements: Final = (_statement(1, GUARDRAIL_UPSERT, calls=1050), _statement(2, MODEL_USAGE_UPSERT, calls=1000))
+
+    _, exceeded = evaluate(BACKGROUND_CAP_CASE, _observation_with(statements))
+
+    assert exceeded == [
+        f"postgres_max_background_statement_per_request: observed 1.0000 > limit 0.9000 ({MODEL_USAGE_UPSERT})"
+    ], exceeded
+
+
+def test_background_cap_without_exemptions_counts_the_guardrail_upsert() -> None:
+    case: Final = replace(BACKGROUND_CAP_CASE, background_cap_exempt_tables=frozenset())
+    statements: Final = (_statement(1, GUARDRAIL_UPSERT, calls=1150), _statement(2, MODEL_USAGE_UPSERT, calls=810))
+
+    _, exceeded = evaluate(case, _observation_with(statements))
+
+    assert exceeded == [
+        f"postgres_max_background_statement_per_request: observed 1.1500 > limit 0.9000 ({GUARDRAIL_UPSERT})"
+    ], exceeded
