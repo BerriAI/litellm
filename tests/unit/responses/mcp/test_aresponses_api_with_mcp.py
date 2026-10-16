@@ -1745,35 +1745,34 @@ async def test_non_stream_auto_execute_bills_the_paid_first_round_when_the_follo
     assert tool_logging_obj.litellm_trace_id == recorder.failed[0]["trace_id"]
 
 
-@pytest.mark.asyncio
-async def test_non_stream_auto_execute_retried_after_a_failed_follow_up_bills_each_attempt_its_own_rounds(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
-):
-    retried_round_one: Final = MappingProxyType(
-        {
-            **_ROUND_ONE_BODY,
-            "id": "resp_retried_round_one",
-            "usage": {
-                "input_tokens": 500,
-                "input_tokens_details": {"cached_tokens": 0},
-                "output_tokens": 40,
-                "output_tokens_details": {"reasoning_tokens": 0},
-                "total_tokens": 540,
-            },
-        }
-    )
-    server_error: Final = {"error": {"message": "upstream overloaded", "type": "server_error", "code": "server_error"}}
-    _serve_responses(
-        respx_mock,
-        monkeypatch,
-        (
-            httpx.Response(200, content=json.dumps(_ROUND_ONE_BODY, default=dict)),
-            httpx.Response(500, json=server_error),
-            httpx.Response(200, content=json.dumps(retried_round_one, default=dict)),
-            httpx.Response(200, content=json.dumps(_ROUND_TWO_BODY, default=dict)),
-        ),
-    )
-    router: Final = litellm.Router(
+_RETRIED_ROUND_ONE: Final = MappingProxyType(
+    {
+        **_ROUND_ONE_BODY,
+        "id": "resp_retried_round_one",
+        "usage": {
+            "input_tokens": 500,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens": 40,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": 540,
+        },
+    }
+)
+_SERVER_ERROR: Final = MappingProxyType(
+    {"error": {"message": "upstream overloaded", "type": "server_error", "code": "server_error"}}
+)
+
+
+def _ok(body: Mapping[str, object]) -> httpx.Response:
+    return httpx.Response(200, content=json.dumps(body, default=dict))
+
+
+def _server_error() -> httpx.Response:
+    return httpx.Response(500, content=json.dumps(_SERVER_ERROR, default=dict))
+
+
+def _router_retrying_once() -> litellm.Router:
+    return litellm.Router(
         model_list=[
             {
                 "model_name": "gpt-5.6",
@@ -1787,10 +1786,21 @@ async def test_non_stream_auto_execute_retried_after_a_failed_follow_up_bills_ea
         num_retries=1,
         retry_after=0,
     )
+
+
+@pytest.mark.asyncio
+async def test_non_stream_auto_execute_retried_after_a_failed_follow_up_bills_each_attempt_its_own_rounds(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    _serve_responses(
+        respx_mock,
+        monkeypatch,
+        (_ok(_ROUND_ONE_BODY), _server_error(), _ok(_RETRIED_ROUND_ONE), _ok(_ROUND_TWO_BODY)),
+    )
     recorder: Final = _RoundRecorder()
 
     with _echo_tool_served("PING"):
-        response: Final = await router.aresponses(
+        response: Final = await _router_retrying_once().aresponses(
             model="gpt-5.6",
             input="Call echo with PING",
             tools=[dict(_ECHO_MCP_TOOL)],
@@ -1808,7 +1818,45 @@ async def test_non_stream_auto_execute_retried_after_a_failed_follow_up_bills_ea
     assert row["id"] == response.id
     assert (row["prompt_tokens"], row["completion_tokens"]) == (500 + 149, 40 + 5)
     assert (row["prompt_tokens"], row["completion_tokens"]) == (response.usage.input_tokens, response.usage.output_tokens)
-    assert row["response_cost"] == pytest.approx(_round_cost(retried_round_one) + _round_cost(_ROUND_TWO_BODY))
+    assert row["response_cost"] == pytest.approx(_round_cost(_RETRIED_ROUND_ONE) + _round_cost(_ROUND_TWO_BODY))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("retried_first_rounds", "billed_tokens"),
+    [
+        pytest.param((), (71, 19), id="the retry fails its first call"),
+        pytest.param((_RETRIED_ROUND_ONE,), (71 + 500, 19 + 40), id="the retry fails its follow-up"),
+    ],
+)
+async def test_non_stream_auto_execute_failing_every_retry_bills_each_paid_first_round_once_on_the_request_failure(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    retried_first_rounds: tuple[Mapping[str, object], ...],
+    billed_tokens: tuple[int, int],
+):
+    _serve_responses(
+        respx_mock,
+        monkeypatch,
+        (_ok(_ROUND_ONE_BODY), _server_error(), *(_ok(body) for body in retried_first_rounds), _server_error()),
+    )
+    logging_obj: Final = _rounds_logging_obj(_RoundRecorder(), "mcp-rounds-every-retry-fails")
+
+    with _echo_tool_served("PING"), pytest.raises(litellm.InternalServerError):
+        await _router_retrying_once().aresponses(
+            model="gpt-5.6",
+            input="Call echo with PING",
+            tools=[dict(_ECHO_MCP_TOOL)],
+            litellm_logging_obj=logging_obj,
+        )
+
+    failure_row_fields: Final = _failure_fields_to_lift(MappingProxyType({"litellm_logging_obj": logging_obj}))
+    billed_usage: Final = failure_row_fields["combined_usage_object"]
+    assert isinstance(billed_usage, Usage)
+    assert (billed_usage.prompt_tokens, billed_usage.completion_tokens) == billed_tokens
+    assert failure_row_fields["response_cost"] == pytest.approx(
+        _round_cost(_ROUND_ONE_BODY) + sum(_round_cost(body) for body in retried_first_rounds)
+    )
 
 
 @pytest.mark.asyncio

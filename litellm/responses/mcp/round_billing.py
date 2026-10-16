@@ -75,15 +75,14 @@ def summed_cost_breakdown(
     final: ResponsesAPIResponse,
     final_breakdown: CostBreakdown | None,
 ) -> CostBreakdown | None:
-    """The breakdown of the charged rounds, or None when one of them was priced without a breakdown or the final round
-    kept the first round's, since a partial one would disagree with the billed cost. The fixed margin is charged once
-    per request, not once per round."""
+    """The breakdown of the charged rounds, or None when a charged round was priced without its own breakdown, since a
+    partial one would disagree with the billed cost. The fixed margin is charged once per request, not once per round."""
+    if served_from_cache(final):
+        return None if served_from_cache(first) else first_breakdown
     if first_breakdown is final_breakdown:
         return None
     if served_from_cache(first):
-        return None if served_from_cache(final) else final_breakdown
-    if served_from_cache(final):
-        return first_breakdown
+        return final_breakdown
     if first_breakdown is None or final_breakdown is None:
         return None
     return _COST_BREAKDOWN.validate_python(

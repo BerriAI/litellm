@@ -361,7 +361,7 @@ async def aresponses_api_with_mcp(
     # Make initial response API call
     #########################################################
     if isinstance(logging_obj, LiteLLMLoggingObj):
-        logging_obj.discard_partial_usage_for_failure()
+        logging_obj.carry_failed_attempt_usage()
     with internal_sub_call():
         response: Final = await aresponses(
             input=input,

@@ -80,6 +80,20 @@ def test_summed_cost_breakdown_is_none_when_the_final_round_was_not_repriced():
     )
 
 
+def test_a_final_round_served_from_the_response_cache_keeps_the_paid_first_round_breakdown():
+    breakdown: Final[CostBreakdown] = {"input_cost": 0.001, "output_cost": 0.002, "total_cost": 0.003}
+
+    assert (
+        summed_cost_breakdown(
+            first=_round("resp_first", 0.003),
+            first_breakdown=breakdown,
+            final=_round("resp_final", 0.0, served_from_cache=True),
+            final_breakdown=breakdown,
+        )
+        == breakdown
+    )
+
+
 def test_merged_round_usage_sums_token_details_and_keeps_provider_flags():
     first: Final = ResponseAPIUsage.model_validate(
         MappingProxyType(
