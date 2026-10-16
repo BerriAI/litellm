@@ -48,7 +48,14 @@ from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.litellm_params import ControlOptions
 from litellm.types.llms.openai import AllMessageValues, HttpxBinaryResponseContent
 from litellm.types.prompts.init_prompts import PromptSpec
-from litellm.types.utils import Delta, ModelResponseStream, StandardCallbackDynamicParams, StreamingChoices, Usage
+from litellm.types.utils import (
+    CallTypes,
+    Delta,
+    ModelResponseStream,
+    StandardCallbackDynamicParams,
+    StreamingChoices,
+    Usage,
+)
 from tests.unit.llms.bedrock.slow_upstream import (
     STREAM_TIMEOUT_SECONDS,
     UPSTREAM_FIRST_BYTE_SECONDS,
@@ -445,6 +452,42 @@ def _settled_success_calls(counter: _SyncSuccessCounter, expected: int) -> int:
     return len(counter.calls)
 
 
+class _DeploymentHookCounter(CustomLogger):
+    call_types: tuple[str, ...] = ()
+
+    async def async_pre_call_deployment_hook(self, kwargs: dict[str, object], call_type: CallTypes | None) -> None:
+        self.call_types = (*self.call_types, str(call_type))
+
+
+@pytest.mark.asyncio
+async def test_responses_mode_model_without_a_responses_api_stays_on_chat(
+    respx_mock: respx.MockRouter, openai_api_response: dict[str, object], monkeypatch: pytest.MonkeyPatch
+):
+    counter: Final = _DeploymentHookCounter()
+    monkeypatch.setattr(litellm, "callbacks", [counter])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    litellm.register_model(
+        {"groq/responses-only-model": {"litellm_provider": "groq", "mode": "responses", "max_tokens": 100}}
+    )
+    api_base: Final = "https://example.invalid/openai/v1"
+    chat_route: Final = respx_mock.post(f"{api_base}/chat/completions").mock(
+        return_value=httpx.Response(status_code=200, json=openai_api_response)
+    )
+
+    response: Final = await litellm.acompletion(
+        model="groq/responses-only-model",
+        api_base=api_base,
+        api_key="sk-x",
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.id == openai_api_response["id"]
+    assert chat_route.call_count == 1
+    assert counter.call_types == ("CallTypes.acompletion",)
+
+
 def test_execute_chat_calls_the_provider_without_logging(
     respx_mock: respx.MockRouter, openai_api_response, monkeypatch: pytest.MonkeyPatch
 ):
@@ -471,7 +514,6 @@ def test_execute_chat_calls_the_provider_without_logging(
         kwargs={"api_base": api_base, "api_key": "sk-x", "litellm_logging_obj": logging_obj},
         non_default_params={},
         control_options=ControlOptions(),
-        skip_responses_api_bridge=False,
         prompt_id=None,
         prompt_variables=None,
     )

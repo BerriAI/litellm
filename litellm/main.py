@@ -5428,12 +5428,6 @@ def completion(
     ######### unpacking kwargs #####################
     args: Final = _locals_snapshot(locals())
 
-    # Set by the responses->completion fallback so completion() does not bridge
-    # back to the Responses API: that round-trip mutually recurses forever for a
-    # model whose model_cost mode is "responses" but whose provider has no
-    # Responses API config (get_provider_responses_api_config -> None).
-    skip_responses_api_bridge: Final = kwargs.pop("_skip_responses_api_bridge", False)
-
     control_options: Final = _resolve_control_options(kwargs, model)
     skip_mcp_handler: Final = kwargs.pop("_skip_mcp_handler", False)
     if not skip_mcp_handler and tools:
@@ -5614,7 +5608,6 @@ def completion(
             kwargs=kwargs,
             non_default_params=non_default_params,
             control_options=control_options,
-            skip_responses_api_bridge=skip_responses_api_bridge,
             prompt_id=prompt_id,
             prompt_variables=prompt_variables,
         )
@@ -5629,6 +5622,23 @@ def completion(
         )
 
 
+def _bridges_to_responses_api(
+    responses_api_model_info: Mapping[str, object],
+    model: str,
+    custom_llm_provider: str,
+    model_info: object,
+    api_base: str | None,
+) -> bool:
+    if responses_api_model_info.get("mode") != "responses":
+        return False
+    from litellm.responses.main import resolve_responses_api_provider_config
+
+    return isinstance(
+        plan_chat_route(resolve_responses_api_provider_config(model, custom_llm_provider, model_info, api_base)),
+        NativeResponses,
+    )
+
+
 def execute_chat(
     *,
     model: str,
@@ -5636,7 +5646,6 @@ def execute_chat(
     kwargs: dict,  # mutable-ok: provider steps pop request-scoped keys, as in completion()
     non_default_params: dict[str, object],  # mutable-ok: seeded in place before the provider call
     control_options: ControlOptions,
-    skip_responses_api_bridge: bool,
     prompt_id: str | None,
     prompt_variables: dict | None,  # mutable-ok: forwarded to get_litellm_params as is
     timeout: float | str | httpx.Timeout | openai.Timeout | None = None,
@@ -5875,8 +5884,9 @@ def execute_chat(
         if dynamic_api_key is not None:
             api_key = dynamic_api_key
         # check if user passed in any of the OpenAI optional params
-        bridges_to_responses_api: Final = (
-            responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge
+        deployment_model_info: Final = cast(object, kwargs.get("model_info"))  # cast-ok: untyped request kwargs
+        bridges_to_responses_api: Final = _bridges_to_responses_api(
+            responses_api_model_info, model, custom_llm_provider, deployment_model_info, api_base
         )
         allowed_openai_params: Final[list[str] | None] = (
             [*(kwargs.get("allowed_openai_params") or []), "reasoning_effort"]
@@ -6142,9 +6152,8 @@ def execute_chat(
         # detection when the deployment name differs from the model name.
         _azure_detection_model: Final = base_model or model
 
-        if isinstance(
-            plan_chat_route(responses_api_model_info.get("mode") == "responses", skip_responses_api_bridge is True),
-            NativeResponses,
+        if _bridges_to_responses_api(
+            responses_api_model_info, model, custom_llm_provider, deployment_model_info, api_base
         ):
             from litellm.completion_extras import responses_api_bridge
 
@@ -6454,7 +6463,7 @@ def execute_chat(
 
 
 _PLANNED_CHAT_ARGS: Final = frozenset(
-    ("kwargs", "non_default_params", "control_options", "skip_responses_api_bridge", "prompt_id", "prompt_variables")
+    ("kwargs", "non_default_params", "control_options", "prompt_id", "prompt_variables")
 )
 _EXECUTE_CHAT_CODE: Final = execute_chat.__code__
 _EXECUTE_CHAT_PARAMS: Final = (
@@ -6471,7 +6480,6 @@ _CHAT_SURFACE_KWARGS: Final = (
     "mock_delay",
     "mock_timeout",
 )
-_SKIP_RESPONSES_API_BRIDGE: Final = "_skip_responses_api_bridge"
 _TEXT_COMPLETION_PROVIDERS: Final = frozenset(
     ("text-completion-openai", "text-completion-codestral", "text-completion-inception")
 )
@@ -6485,7 +6493,6 @@ class PlannedChat:
     kwargs: Mapping[str, object]
     non_default_params: Mapping[str, object]
     control_options: ControlOptions
-    skip_responses_api_bridge: bool
 
 
 def _optional_str(value: object) -> str | None:
@@ -6555,11 +6562,7 @@ def plan_chat(request: Mapping[str, object], logging_obj: LiteLLMLoggingObj) -> 
     )
     if resolved_provider in _TEXT_COMPLETION_PROVIDERS:
         return None
-    kwargs: Final = {
-        key: value
-        for key, value in request.items()
-        if key not in _EXECUTE_CHAT_PARAMS and key != _SKIP_RESPONSES_API_BRIDGE
-    }
+    kwargs: Final = {key: value for key, value in request.items() if key not in _EXECUTE_CHAT_PARAMS}
     tools: Final = validate_and_fix_openai_tools(tools=_object_list(request.get("tools")))
     messages: Final = get_completion_messages(
         messages=validate_and_fix_openai_messages(messages=_object_list(request.get("messages")) or []),
@@ -6599,7 +6602,6 @@ def plan_chat(request: Mapping[str, object], logging_obj: LiteLLMLoggingObj) -> 
         kwargs=MappingProxyType(kwargs),
         non_default_params=MappingProxyType(non_default_params),
         control_options=_resolve_control_options(kwargs, model),
-        skip_responses_api_bridge=request.get(_SKIP_RESPONSES_API_BRIDGE) is True,
     )
 
 
@@ -6609,7 +6611,6 @@ def _run_planned_chat(plan: PlannedChat, is_async: bool) -> ModelResponse | Cust
         kwargs={**plan.kwargs, "acompletion": is_async},
         non_default_params=dict(plan.non_default_params),
         control_options=plan.control_options,
-        skip_responses_api_bridge=plan.skip_responses_api_bridge,
         prompt_id=None,
         prompt_variables=None,
     )
