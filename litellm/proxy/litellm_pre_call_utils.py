@@ -189,10 +189,20 @@ def _caller_trace_field(data: Mapping[str, object], metadata_variable_name: str,
     return requester_value if isinstance(requester_value, str) and requester_value else None
 
 
-def _request_carries_trace_field(data: Mapping[str, object], metadata_variable_name: str, field: str) -> bool:
-    """True once any earlier source (a header, Anthropic metadata, W3C context or the
-    caller's own body) has set ``litellm_<field>`` or the caller's metadata ``field``."""
-    return f"litellm_{field}" in data or _caller_trace_field(data, metadata_variable_name, field) is not None
+def _trace_field_open_for(data: Mapping[str, object], metadata_variable_name: str, field: str, value: str) -> bool:
+    """A trace-control field is still open for ``value`` when no earlier source set it, or
+    when what set it (MCP stamps the chain id before request setup) was this same id."""
+    root: Final = data.get(f"litellm_{field}")
+    caller: Final = _caller_trace_field(data, metadata_variable_name, field)
+    return root in (None, value) and caller in (None, value)
+
+
+def _has_w3c_trace_context(normalized: Mapping[str, str]) -> bool:
+    traceparent: Final = normalized.get("traceparent")
+    baggage: Final = normalized.get("baggage")
+    return (isinstance(traceparent, str) and _trace_id_from_traceparent(traceparent) is not None) or (
+        isinstance(baggage, str) and _session_id_from_baggage(baggage) is not None
+    )
 
 
 def _stampable_key_hash(user_api_key_dict: UserAPIKeyAuth) -> str | None:
@@ -843,7 +853,9 @@ def get_chain_id_from_headers(headers: dict[str, str] | None) -> str | None:
        (alphanumeric / UUID, at least 8 chars).  E.g. ``x-claude-code-session-id``.
     4. Codex's unprefixed ``session-id`` / ``thread-id``, for Codex callers only.
     5. A vendor-less ``x-session-id`` header (e.g. opencode), same value rules.
-    6. ``x-session-affinity`` (pi-ai, opencode), which also allows ``:`` and ``.``.
+    6. ``x-session-affinity`` (pi-ai, opencode), which also allows ``:`` and ``.``,
+       unless a W3C ``traceparent`` / ``baggage`` session is present: request setup
+       applies those later and they must keep winning over this header.
 
     Header keys are matched case-insensitively so this works with raw header
     dicts from any transport.
@@ -854,7 +866,10 @@ def get_chain_id_from_headers(headers: dict[str, str] | None) -> str | None:
     if not headers:
         return None
     normalized: Final = _normalize_header_keys(headers)
-    return _extract_session_header_chain_id(normalized) or _extract_session_affinity_from_headers(normalized)
+    chain_id: Final = _extract_session_header_chain_id(normalized)
+    if chain_id or _has_w3c_trace_context(normalized):
+        return chain_id
+    return _extract_session_affinity_from_headers(normalized)
 
 
 def _get_anthropic_session_id_from_metadata(metadata: object) -> str | None:
@@ -1733,19 +1748,36 @@ class LiteLLMProxyRequestSetup:
                     metadata_from_headers["session_id"] = session_id_from_baggage
                     data["litellm_session_id"] = session_id_from_baggage  # rebind-ok: data is an out-param
                     verbose_proxy_logger.debug("Extracted session_id from W3C baggage header")
-        session_affinity: Final = _extract_session_affinity_from_headers(normalized_headers)
-        body: Final = cast(Mapping[str, object], data)  # cast-ok: request body is a str-keyed JSON object
-        if session_affinity and not _request_carries_trace_field(body, _metadata_variable_name, "session_id"):
-            metadata_from_headers["session_id"] = session_affinity
-            data["litellm_session_id"] = session_affinity  # rebind-ok: data is an out-param
-            verbose_proxy_logger.debug("Extracted session_id from x-session-affinity header")
-            if not _request_carries_trace_field(body, _metadata_variable_name, "trace_id"):
-                metadata_from_headers["trace_id"] = session_affinity
-                data["litellm_trace_id"] = session_affinity  # rebind-ok: data is an out-param
 
         if isinstance(data[_metadata_variable_name], dict):
             data[_metadata_variable_name].update(metadata_from_headers)
         return data
+
+    @staticmethod
+    def add_session_affinity_from_request_headers(
+        headers: Mapping[str, str],
+        data: dict[str, object],  # mutable-ok: the request body is written in place, like every step around it
+        _metadata_variable_name: str,
+    ) -> None:
+        """
+        The last session source. ``x-session-affinity`` fills ``litellm_session_id``, and
+        ``litellm_trace_id`` when it owns the session, only where every earlier source
+        (session headers, Anthropic metadata, W3C context, the caller's body and the
+        parent OTel span) left the field empty.
+        """
+        session_affinity: Final = _extract_session_affinity_from_headers(_normalize_header_keys(headers))
+        metadata: Final = data.get(_metadata_variable_name)
+        if session_affinity is None or not isinstance(metadata, dict):
+            return
+        if not _trace_field_open_for(data, _metadata_variable_name, "session_id", session_affinity):
+            return
+        metadata_map: Final = cast(dict[str, object], metadata)  # cast-ok: isinstance above, free-form JSON values
+        metadata_map["session_id"] = session_affinity
+        data["litellm_session_id"] = session_affinity  # rebind-ok: data is an out-param
+        verbose_proxy_logger.debug("Extracted session_id from x-session-affinity header")
+        if _trace_field_open_for(data, _metadata_variable_name, "trace_id", session_affinity):
+            metadata_map["trace_id"] = session_affinity
+            data["litellm_trace_id"] = session_affinity  # rebind-ok: data is an out-param
 
     @staticmethod
     def get_logged_api_key(user_api_key_dict: UserAPIKeyAuth) -> str | None:
@@ -2327,6 +2359,11 @@ async def add_litellm_data_to_request(
         parent_otel_span=user_api_key_dict.parent_otel_span
         if user_api_key_dict.parent_otel_span is not None
         else getattr(request.state, "parent_otel_span", None),
+    )
+    LiteLLMProxyRequestSetup.add_session_affinity_from_request_headers(
+        headers=_headers,
+        data=data,
+        _metadata_variable_name=_metadata_variable_name,
     )
     apply_missing_session_id_policy(
         data=data,

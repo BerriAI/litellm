@@ -86,7 +86,7 @@ def _is_session_header_trace(trace_id: object, session_id: object, proxy_server_
         return False
     if trace_id != session_id and headers.get("langfuse_session_id") != session_id:
         return False
-    if headers.get("x-litellm-session-id") == trace_id:
+    if headers.get("x-litellm-session-id") == trace_id or headers.get("x-session-affinity") == trace_id:
         return True
     if re.fullmatch(r"[a-zA-Z0-9_\-]{8,}", trace_id) is None:
         return False

@@ -1893,11 +1893,17 @@ def test_every_proxy_session_header_shape_is_classified_as_a_session_alias():
         {"x-litellm-session-id": session},
         {"X-Claude-Code-Session-Id": session},
         {"x-session-id": session},
+        {"x-session-affinity": session},
         *({header: session, "user-agent": "codex_cli_rs/1.0"} for header in _CODEX_SESSION_ID_HEADERS),
     )
     for headers in session_shapes:
         assert get_chain_id_from_headers(dict(headers)) == session, headers
         assert _is_session_header_trace(session, session, {"headers": headers}) is True, headers
+
+    affinity: Final = "web:alice.smith:7f3e9c2a-5b1d-4e8f-9a6c-0d2b4f6e8a1c"
+    assert get_chain_id_from_headers({"x-session-affinity": affinity}) == affinity
+    assert _is_session_header_trace(affinity, affinity, {"headers": {"x-session-affinity": affinity}}) is True
+    assert _is_session_header_trace(affinity, affinity, {"headers": {"x-session-affinity": "other:id:1234"}}) is False
 
     explicit_trace: Final = {"x-litellm-trace-id": session, "x-litellm-session-id": session}
     assert get_chain_id_from_headers(dict(explicit_trace)) == session

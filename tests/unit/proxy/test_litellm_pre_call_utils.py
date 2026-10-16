@@ -3634,13 +3634,27 @@ def test_add_litellm_metadata_groups_opencode_turns_into_one_session():
 PI_AI_SESSION_ID = "web:alice.smith:7f3e9c2a-5b1d-4e8f-9a6c-0d2b4f6e8a1c"
 
 
+def _apply_session_sources(
+    headers: dict[str, str], data: dict[str, object], parent_otel_span: object = None
+) -> dict[str, object]:
+    """The session/trace steps of add_litellm_data_to_request, in the order the proxy runs them."""
+    from litellm.proxy.litellm_pre_call_utils import add_otel_trace_id_to_request
+
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    add_otel_trace_id_to_request(data=data, _metadata_variable_name="metadata", parent_otel_span=parent_otel_span)
+    LiteLLMProxyRequestSetup.add_session_affinity_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    return data
+
+
 def _session_from_affinity_only(data: dict[str, object] | None = None) -> object:
     """Control for the precedence tests: with the competing source removed, x-session-affinity
     must win, so a test that passes while the header is ignored entirely is caught."""
     payload = data if data is not None else {"metadata": {}}
-    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
-        headers={"x-session-affinity": PI_AI_SESSION_ID}, data=payload, _metadata_variable_name="metadata"
-    )
+    _apply_session_sources({"x-session-affinity": PI_AI_SESSION_ID}, payload)
     return payload.get("litellm_session_id")
 
 
@@ -3656,10 +3670,7 @@ def _session_from_affinity_only(data: dict[str, object] | None = None) -> object
 def test_add_litellm_metadata_session_affinity_alone_sets_session_and_trace(session_affinity: str):
     """pi-ai and opencode send the session only in x-session-affinity, with ids that carry colons
     and dots, so that header alone must group the turns instead of a fresh per-call id."""
-    data = {"metadata": {}}
-    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
-        headers={"X-Session-Affinity": session_affinity}, data=data, _metadata_variable_name="metadata"
-    )
+    data = _apply_session_sources({"X-Session-Affinity": session_affinity}, {"metadata": {}})
 
     assert data["litellm_session_id"] == session_affinity
     assert data["litellm_trace_id"] == session_affinity
@@ -3674,10 +3685,7 @@ def test_add_litellm_metadata_session_affinity_alone_sets_session_and_trace(sess
 def test_session_affinity_rejects_junk_values(value: str):
     from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
 
-    data = {"metadata": {}}
-    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
-        headers={"x-session-affinity": value}, data=data, _metadata_variable_name="metadata"
-    )
+    data = _apply_session_sources({"x-session-affinity": value}, {"metadata": {}})
 
     assert get_chain_id_from_headers({"x-session-affinity": value}) is None
     assert "litellm_session_id" not in data
@@ -3709,10 +3717,7 @@ def test_every_session_header_beats_session_affinity_everywhere(winning_headers:
     from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
 
     headers = {**winning_headers, "x-session-affinity": PI_AI_SESSION_ID}
-    data = {"metadata": {}}
-    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
-        headers=headers, data=data, _metadata_variable_name="metadata"
-    )
+    data = _apply_session_sources(headers, {"metadata": {}})
 
     assert get_chain_id_from_headers(headers) == "other-session-1234"
     assert data["litellm_session_id"] == "other-session-1234"
@@ -3723,9 +3728,9 @@ def test_every_session_header_beats_session_affinity_everywhere(winning_headers:
 
 
 def test_anthropic_metadata_session_beats_session_affinity():
-    data = {"metadata": {"user_id": "user_abc123_account__session_e96634a3-fa28-4083-b354-55542e2dca01"}}
-    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
-        headers={"x-session-affinity": PI_AI_SESSION_ID}, data=data, _metadata_variable_name="metadata"
+    data = _apply_session_sources(
+        {"x-session-affinity": PI_AI_SESSION_ID},
+        {"metadata": {"user_id": "user_abc123_account__session_e96634a3-fa28-4083-b354-55542e2dca01"}},
     )
 
     assert data["litellm_session_id"] == "e96634a3-fa28-4083-b354-55542e2dca01"
@@ -3735,34 +3740,58 @@ def test_anthropic_metadata_session_beats_session_affinity():
 
 
 def test_baggage_session_beats_session_affinity():
-    data = {"metadata": {}}
-    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
-        headers={"baggage": "session.id=baggage-session-42", "x-session-affinity": PI_AI_SESSION_ID},
-        data=data,
-        _metadata_variable_name="metadata",
-    )
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    headers = {"baggage": "session.id=baggage-session-42", "x-session-affinity": PI_AI_SESSION_ID}
+    data = _apply_session_sources(headers, {"metadata": {}})
 
     assert data["litellm_session_id"] == "baggage-session-42"
     assert data["metadata"]["session_id"] == "baggage-session-42"
     assert "litellm_trace_id" not in data
+    assert get_chain_id_from_headers(headers) is None
+    assert get_chain_id_from_headers({**headers, "baggage": "user.id=42"}) == PI_AI_SESSION_ID
     assert _session_from_affinity_only() == PI_AI_SESSION_ID
 
 
 def test_traceparent_keeps_trace_id_while_session_affinity_fills_session_id():
-    data = {"metadata": {}}
-    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
-        headers={
-            "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
-            "x-session-affinity": PI_AI_SESSION_ID,
-        },
-        data=data,
-        _metadata_variable_name="metadata",
-    )
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    headers = {
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        "x-session-affinity": PI_AI_SESSION_ID,
+    }
+    data = _apply_session_sources(headers, {"metadata": {}})
 
     assert data["litellm_trace_id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
     assert data["metadata"]["trace_id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
     assert data["litellm_session_id"] == PI_AI_SESSION_ID
     assert data["metadata"]["session_id"] == PI_AI_SESSION_ID
+    assert get_chain_id_from_headers(headers) is None
+
+
+def test_parent_otel_span_trace_beats_session_affinity():
+    """With OTel on, the request's own span already owns litellm_trace_id, so x-session-affinity
+    may only fill the session, exactly as it does next to a traceparent header."""
+    span = NonRecordingSpan(SpanContext(trace_id=0xABCDEF0123456789ABCDEF0123456789, span_id=0x1, is_remote=True))
+    data = _apply_session_sources({"x-session-affinity": PI_AI_SESSION_ID}, {"metadata": {}}, parent_otel_span=span)
+
+    assert data["litellm_trace_id"] == "abcdef0123456789abcdef0123456789"
+    assert data["metadata"]["trace_id"] == "abcdef0123456789abcdef0123456789"
+    assert data["litellm_session_id"] == PI_AI_SESSION_ID
+    assert data["metadata"]["session_id"] == PI_AI_SESSION_ID
+    assert _session_from_affinity_only() == PI_AI_SESSION_ID
+
+
+def test_mcp_prestamped_session_affinity_still_fills_metadata():
+    """MCP stamps get_chain_id_from_headers into the root fields before request setup; that stamp
+    must not count as a competing source, or metadata.session_id (what spend logs read) stays empty."""
+    data = _apply_session_sources(
+        {"x-session-affinity": PI_AI_SESSION_ID},
+        {"metadata": {}, "litellm_trace_id": PI_AI_SESSION_ID, "litellm_session_id": PI_AI_SESSION_ID},
+    )
+
+    assert data["metadata"]["session_id"] == PI_AI_SESSION_ID
+    assert data["metadata"]["trace_id"] == PI_AI_SESSION_ID
 
 
 @pytest.mark.parametrize(
@@ -3773,10 +3802,7 @@ def test_traceparent_keeps_trace_id_while_session_affinity_fills_session_id():
     ],
 )
 def test_caller_body_session_beats_session_affinity(body: dict[str, object]):
-    data = copy.deepcopy(body)
-    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
-        headers={"x-session-affinity": PI_AI_SESSION_ID}, data=data, _metadata_variable_name="metadata"
-    )
+    data = _apply_session_sources({"x-session-affinity": PI_AI_SESSION_ID}, copy.deepcopy(body))
 
     assert data == body
     assert _session_from_affinity_only() == PI_AI_SESSION_ID
