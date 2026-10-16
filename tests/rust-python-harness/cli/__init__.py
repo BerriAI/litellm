@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Final, cast
 
 import click
+from pydantic import TypeAdapter
 
 from ..shared.reporting.models import SDK_FUNCTIONS, SdkFunction, Strategy, Surface
-from .catalog import load_catalog
-from .commands import run_command, select_cases
+from ..shared.reporting.strategy import RepositoryStrategyDefinition
+from .catalog import CatalogStrategy, load_catalog
+from .commands import REPO_ROOT, run_command, select_cases
 
-__all__ = ["load_catalog", "main"]
+__all__ = ["build_cli", "load_catalog", "main"]
 
 _INTERRUPTED_EXIT_CODE: Final = 130
 
@@ -34,7 +37,7 @@ def _run_all_command(strategies: Sequence[Strategy]) -> click.Command:
         "all",
         params=[_function_option()],
         callback=run_all,
-        help="run every strategy",
+        help="run every SDK test strategy",
     )
 
 
@@ -77,14 +80,18 @@ def _strategy_command(strategy: Strategy) -> click.Command:
     )
 
 
-def _build_cli(strategies: Sequence[Strategy]) -> click.Group:
+def build_cli(strategies: Sequence[CatalogStrategy], repo_root: Path = REPO_ROOT) -> click.Group:
     root: Final = click.Group(
         "rust-python-harness",
         help="Run Rust/Python parity tests with raw progress and strategy reports.",
     )
-    run: Final = click.Group("run", help="run one strategy or the complete harness")
-    run.add_command(_run_all_command(strategies))
+    run: Final = click.Group("run", help="run one strategy or every SDK test strategy")
+    test_strategies: Final = tuple(strategy for strategy in strategies if isinstance(strategy, Strategy))
+    run.add_command(_run_all_command(test_strategies))
     for strategy in strategies:
+        if isinstance(strategy, RepositoryStrategyDefinition):
+            run.add_command(strategy.command(repo_root))
+            continue
         run.add_command(_strategy_command(strategy))
     root.add_command(run)
     return root
@@ -93,12 +100,15 @@ def _build_cli(strategies: Sequence[Strategy]) -> click.Group:
 def main(argv: Sequence[str] | None = None) -> int:
     try:
         strategies: Final = load_catalog()
-        result: Final = _build_cli(strategies).main(
-            args=None if argv is None else list(argv),
-            prog_name="rust-python-harness",
-            standalone_mode=False,
+        result: Final = TypeAdapter[int | None](int | None).validate_python(
+            build_cli(strategies).main(
+                args=None if argv is None else list(argv),
+                prog_name="rust-python-harness",
+                standalone_mode=False,
+            ),
+            strict=True,
         )
-        exit_code: Final = result if isinstance(result, int) else 0
+        exit_code: Final = result if result is not None else 0
     except click.ClickException as error:
         error.show()
         return error.exit_code
