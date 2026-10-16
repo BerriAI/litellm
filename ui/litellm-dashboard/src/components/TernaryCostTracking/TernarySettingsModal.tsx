@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 
 import {
   useTernaryCreate,
@@ -8,7 +8,14 @@ import {
 import { FormField } from "@/components/shared/form/FormField";
 import { PasswordInput } from "@/components/shared/PasswordInput";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { FieldGroup } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -22,7 +29,7 @@ import {
   EMPTY_TERNARY_FORM_VALUES,
   formValuesFromSettings,
   FREQUENCY_ITEMS,
-  updateSchema,
+  updateSchemaFor,
   type TernaryFormValues,
 } from "./ternaryPayload";
 
@@ -35,7 +42,9 @@ interface TernarySettingsModalProps {
 
 export default function TernarySettingsModal({ open, settings, onSaved, onCancel }: TernarySettingsModalProps) {
   const isEdit = settings !== null;
-  const form = useZodForm(isEdit ? updateSchema : createSchema, { defaultValues: EMPTY_TERNARY_FORM_VALUES });
+  const currentBaseUrl = settings?.ternary_base_url ?? "";
+  const schema = useMemo(() => (isEdit ? updateSchemaFor(currentBaseUrl) : createSchema), [isEdit, currentBaseUrl]);
+  const form = useZodForm(schema, { defaultValues: EMPTY_TERNARY_FORM_VALUES });
   const createMutation = useTernaryCreate();
   const updateMutation = useTernaryUpdate();
   const isPending = createMutation.isPending || updateMutation.isPending;
@@ -67,8 +76,8 @@ export default function TernarySettingsModal({ open, settings, onSaved, onCancel
         <DialogHeader>
           <DialogTitle>{isEdit ? "Edit Ternary Integration" : "Add Ternary Integration"}</DialogTitle>
           <DialogDescription>
-            Create an AI Gateway integration in Ternary (Admin, Integrations, New Integration) to get a connection
-            ID and API key.
+            Create an AI Gateway integration in Ternary (Admin, Integrations, New Integration) to get a connection ID
+            and API key.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={(event) => event.preventDefault()} noValidate>

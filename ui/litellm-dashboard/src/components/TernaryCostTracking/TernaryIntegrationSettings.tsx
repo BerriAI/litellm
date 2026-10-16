@@ -24,7 +24,7 @@ import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/componen
 import { Separator } from "@/components/ui/separator";
 import { toast } from "@/lib/toast";
 
-import { describeFrequency, formatEstimatedSpend } from "./ternaryDisplay";
+import { describeExport, describeFrequency, formatEstimatedSpend } from "./ternaryDisplay";
 
 const DRY_RUN_LIMIT = 500;
 
@@ -73,6 +73,7 @@ export function TernaryIntegrationSettings({ settings, onEdit, onDeleted }: Tern
     });
 
   const summary = dryRun.data?.summary;
+  const managedByConfigFile = settings.status === "config_file";
 
   return (
     <>
@@ -81,39 +82,48 @@ export function TernaryIntegrationSettings({ settings, onEdit, onDeleted }: Tern
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-lg">
               Ternary Configuration
-              <Badge variant="secondary" className="capitalize">
-                {settings.status}
-              </Badge>
+              <Badge variant="secondary">{managedByConfigFile ? "Config file" : "Configured"}</Badge>
             </CardTitle>
-            <CardAction className="flex gap-2">
-              <Button variant="outline" onClick={onEdit}>
-                <Pencil />
-                Edit
-              </Button>
-              <Button variant="destructive" onClick={() => setIsDeleteOpen(true)}>
-                <Trash2 />
-                Delete
-              </Button>
-            </CardAction>
+            {!managedByConfigFile && (
+              <CardAction className="flex gap-2">
+                <Button variant="outline" onClick={onEdit}>
+                  <Pencil />
+                  Edit
+                </Button>
+                <Button variant="destructive" onClick={() => setIsDeleteOpen(true)}>
+                  <Trash2 />
+                  Delete
+                </Button>
+              </CardAction>
+            )}
           </CardHeader>
 
           <CardContent>
-            <dl className="rounded-md border border-border">
-              <DetailRow label="API Key (Redacted)">
-                <span className="font-mono">{settings.api_key_masked}</span>
-              </DetailRow>
-              <DetailRow label="Connection ID">
-                <span className="font-mono">{settings.connection_id}</span>
-              </DetailRow>
-              <DetailRow label="Base URL">
-                <span className="font-mono">{settings.ternary_base_url}</span>
-              </DetailRow>
-              <DetailRow label="Export Frequency">{describeFrequency(settings)}</DetailRow>
-            </dl>
-            <p className="mt-3 text-xs text-muted-foreground">
-              Settings saved here take effect for scheduled exports after the proxy restarts. A callbacks entry for
-              ternary in the config file takes precedence over them.
-            </p>
+            {managedByConfigFile ? (
+              <p className="text-sm text-muted-foreground">
+                This proxy sets up Ternary in its config file, with callbacks: [&quot;ternary&quot;] and the TERNARY_*
+                environment variables. Change or remove it there.
+              </p>
+            ) : (
+              <>
+                <dl className="rounded-md border border-border">
+                  <DetailRow label="API Key (Redacted)">
+                    <span className="font-mono">{settings.api_key_masked}</span>
+                  </DetailRow>
+                  <DetailRow label="Connection ID">
+                    <span className="font-mono">{settings.connection_id}</span>
+                  </DetailRow>
+                  <DetailRow label="Base URL">
+                    <span className="font-mono">{settings.ternary_base_url}</span>
+                  </DetailRow>
+                  <DetailRow label="Export Frequency">{describeFrequency(settings)}</DetailRow>
+                </dl>
+                <p className="mt-3 text-xs text-muted-foreground">
+                  Scheduled exports pick up changes saved here after the proxy restarts. Export Now always uses the
+                  settings shown.
+                </p>
+              </>
+            )}
 
             <div className="mt-6 flex items-center gap-3">
               <span className="text-sm text-muted-foreground">Actions</span>
@@ -152,11 +162,8 @@ export function TernaryIntegrationSettings({ settings, onEdit, onDeleted }: Tern
 
             {exportNow.data && (
               <Alert>
-                <AlertTitle>Export complete</AlertTitle>
-                <AlertDescription>
-                  Uploaded usage from {exportNow.data.start_time_utc} to {exportNow.data.end_time_utc} (UTC), one
-                  file per day.
-                </AlertDescription>
+                <AlertTitle>{exportNow.data.days_uploaded.length ? "Export complete" : "Nothing to export"}</AlertTitle>
+                <AlertDescription>{describeExport(exportNow.data)}</AlertDescription>
               </Alert>
             )}
           </CardContent>

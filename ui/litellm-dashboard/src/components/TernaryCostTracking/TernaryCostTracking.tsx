@@ -51,7 +51,11 @@ export default function TernaryCostTracking() {
       )}
 
       {current ? (
-        <TernaryIntegrationSettings settings={current} onEdit={() => setIsModalOpen(true)} onDeleted={setRestartNotice} />
+        <TernaryIntegrationSettings
+          settings={current}
+          onEdit={() => setIsModalOpen(true)}
+          onDeleted={setRestartNotice}
+        />
       ) : (
         <div className="mx-auto mt-8 max-w-2xl rounded-lg border border-dashed border-border bg-card p-12 text-center">
           <div className="flex flex-col items-center gap-2">

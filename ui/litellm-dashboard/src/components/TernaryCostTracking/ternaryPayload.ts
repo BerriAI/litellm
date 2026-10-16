@@ -37,7 +37,17 @@ export const createSchema = baseSchema
   .extend({ api_key: z.string().trim().min(1, "Enter the API key from Ternary") })
   .superRefine(requireIntervalSeconds);
 
-export const updateSchema = baseSchema.superRefine(requireIntervalSeconds);
+export const updateSchemaFor = (currentBaseUrl: string) =>
+  baseSchema.superRefine((values, ctx) => {
+    requireIntervalSeconds(values, ctx);
+    if (values.ternary_base_url.trim() !== currentBaseUrl && values.api_key.trim() === "") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["api_key"],
+        message: "Enter the API key again when changing the base URL",
+      });
+    }
+  });
 
 export type TernaryFormValues = z.input<typeof baseSchema>;
 
