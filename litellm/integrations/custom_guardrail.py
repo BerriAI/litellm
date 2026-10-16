@@ -256,6 +256,8 @@ class CustomGuardrail(CustomLogger):
         scan_raw_request: bool = False,
         only_scan_new_messages: bool = False,
         timeout: float | None = None,
+        turn_off_message_logging: bool = False,
+        message_logging: bool = True,
         **kwargs: object,
     ) -> None:
         """
@@ -323,7 +325,11 @@ class CustomGuardrail(CustomLogger):
                     "(default) to enforce validation and fail at startup.",
                     validation_error,
                 )
-        super().__init__(**kwargs)
+        super().__init__(
+            turn_off_message_logging=turn_off_message_logging,
+            message_logging=message_logging,
+            **kwargs,
+        )
 
     def render_violation_message(self, default: str, context: Mapping[str, object] | None = None) -> str:
         """Return a custom violation message if template is configured."""
