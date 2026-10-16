@@ -2,13 +2,13 @@
 Test for issue #17209: Clearer error when LLM endpoint returns empty response
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
+from openai._legacy_response import LegacyAPIResponse
 
-
-from litellm.llms.openai.openai import OpenAIChatCompletion
 from litellm.llms.openai.common_utils import OpenAIError
+from litellm.llms.openai.openai import OpenAIChatCompletion
 
 
 class TestEmptyResponseHandling:
@@ -22,7 +22,7 @@ class TestEmptyResponseHandling:
         openai_chat = OpenAIChatCompletion()
 
         # Mock the raw response to return an empty string from parse()
-        mock_raw_response = MagicMock()
+        mock_raw_response = MagicMock(spec=LegacyAPIResponse)
         mock_raw_response.headers = {}
         mock_raw_response.parse.return_value = ""  # Empty string response
 
@@ -48,7 +48,7 @@ class TestEmptyResponseHandling:
         """Test that None response also produces a clear error"""
         openai_chat = OpenAIChatCompletion()
 
-        mock_raw_response = MagicMock()
+        mock_raw_response = MagicMock(spec=LegacyAPIResponse)
         mock_raw_response.headers = {}
         mock_raw_response.parse.return_value = None
 
@@ -75,7 +75,7 @@ class TestEmptyResponseHandling:
         mock_response = MagicMock()
         mock_response.model_dump.return_value = {"choices": []}
 
-        mock_raw_response = MagicMock()
+        mock_raw_response = MagicMock(spec=LegacyAPIResponse)
         mock_raw_response.headers = {"x-request-id": "123"}
         mock_raw_response.parse.return_value = mock_response
 
@@ -104,7 +104,7 @@ class TestEmptyResponseHandling:
         # Create a mock response WITHOUT model_dump (like an AsyncStream/Iterator)
         mock_stream = MagicMock(spec=[])  # spec=[] means no attributes
 
-        mock_raw_response = MagicMock()
+        mock_raw_response = MagicMock(spec=LegacyAPIResponse)
         mock_raw_response.headers = {"x-request-id": "123"}
         mock_raw_response.parse.return_value = mock_stream
 
