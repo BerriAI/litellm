@@ -67,8 +67,18 @@ class AnthropicTokenCounter(BaseTokenCounter):
                 allow_workload_identity=True,
             )
             if auth_header is None:
-                verbose_logger.warning("No Anthropic credential found for token counting")
-                return None
+                return TokenCountResponse(
+                    total_tokens=0,
+                    request_model=request_model,
+                    model_used=model_to_use,
+                    tokenizer_type="anthropic_api",
+                    error=True,
+                    error_message=(
+                        f"No Anthropic API key is set for model {request_model or model_to_use}, so tokens can't be "
+                        "counted. Set api_key on the deployment or ANTHROPIC_API_KEY in the proxy environment."
+                    ),
+                    status_code=401,
+                )
 
             result: Final = await anthropic_count_tokens_handler.handle_count_tokens_request(
                 model=model_to_use,

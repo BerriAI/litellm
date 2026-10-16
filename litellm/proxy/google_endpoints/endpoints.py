@@ -1,14 +1,15 @@
 from collections.abc import Mapping
 from itertools import chain
+from types import MappingProxyType
 from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from fastapi.responses import ORJSONResponse
+from fastapi.responses import JSONResponse, ORJSONResponse
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.json_validation_rule import normalize_json_schema_types
 from litellm.proxy._types import *
-from litellm.proxy._types import TokenCountRequest
+from litellm.proxy._types import ProxyException, TokenCountRequest
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
@@ -61,6 +62,30 @@ def _input_schema(declaration: _GoogleCountTokensFunctionDeclaration) -> object:
     if declaration.parameters is not None:
         return normalize_json_schema_types(declaration.parameters)
     return {"type": "object", "properties": {}}
+
+
+_GOOGLE_RPC_STATUS: Final = MappingProxyType(
+    {
+        400: "INVALID_ARGUMENT",
+        401: "UNAUTHENTICATED",
+        403: "PERMISSION_DENIED",
+        404: "NOT_FOUND",
+        409: "ABORTED",
+        429: "RESOURCE_EXHAUSTED",
+        499: "CANCELLED",
+        501: "UNIMPLEMENTED",
+        503: "UNAVAILABLE",
+        504: "DEADLINE_EXCEEDED",
+    }
+)
+
+
+def _google_error_response(status_code: int, message: str) -> JSONResponse:
+    status: Final = _GOOGLE_RPC_STATUS.get(status_code, "INTERNAL" if status_code >= 500 else "FAILED_PRECONDITION")
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": {"code": status_code, "message": message, "status": status}},
+    )
 
 
 def _google_count_tokens_request(model_name: str, data: object) -> TokenCountRequest:
@@ -251,16 +276,14 @@ async def google_count_tokens(request: Request, model_name: str):
     data: Final = await read_request_body(request=request)
     try:
         token_request: Final = _google_count_tokens_request(model_name, data)
-    except ValidationError as error:
-        raise HTTPException(status_code=400, detail="Invalid Google countTokens request body") from error
+    except ValidationError:
+        return _google_error_response(400, "Invalid Google countTokens request body")
 
-    # Call the internal token counter function with direct request flag set to False
-    token_response: Final = await internal_token_counter(
-        request=token_request,
-        call_endpoint=True,
-    )
-    if token_response is None:
-        return TokenCountDetailsResponse(totalTokens=0, promptTokensDetails=[])
+    try:
+        token_response: Final = await internal_token_counter(request=token_request, call_endpoint=True)
+    except ProxyException as error:
+        status_code: Final = int(error.code) if error.code is not None and error.code.isdigit() else 500
+        return _google_error_response(status_code, error.message)
     original_response: Final[dict] = token_response.original_response or {}
     return TokenCountDetailsResponse(
         totalTokens=original_response.get("totalTokens") or token_response.total_tokens or 0,

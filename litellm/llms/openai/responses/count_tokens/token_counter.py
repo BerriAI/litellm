@@ -113,8 +113,18 @@ class OpenAITokenCounter(BaseTokenCounter):
             api_key = os.getenv("OPENAI_API_KEY")
 
         if not api_key:
-            verbose_logger.warning("No OpenAI API key found for token counting")
-            return None
+            return TokenCountResponse(
+                total_tokens=0,
+                request_model=request_model,
+                model_used=model_to_use,
+                tokenizer_type="openai_api",
+                error=True,
+                error_message=(
+                    f"No OpenAI API key is set for model {request_model or model_to_use}, so tokens can't be "
+                    "counted. Set api_key on the deployment or OPENAI_API_KEY in the proxy environment."
+                ),
+                status_code=401,
+            )
 
         api_base: Final = litellm_params.get("api_base")
 

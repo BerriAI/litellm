@@ -18,6 +18,23 @@ from litellm.types.utils import LlmProviders, TokenCountMessagesFormat, TokenCou
 azure_ai_anthropic_count_tokens_handler: Final = AzureAIAnthropicCountTokensHandler()
 
 
+def _missing_setting_response(
+    request_model: str, model_to_use: str, setting: str, env_var: str, status_code: int
+) -> TokenCountResponse:
+    return TokenCountResponse(
+        total_tokens=0,
+        request_model=request_model,
+        model_used=model_to_use,
+        tokenizer_type="azure_ai_anthropic_api",
+        error=True,
+        error_message=(
+            f"No Azure AI {setting} is set for model {request_model or model_to_use}, so tokens can't be counted. "
+            f"Set it on the deployment or {env_var} in the proxy environment."
+        ),
+        status_code=status_code,
+    )
+
+
 class AzureAIAnthropicTokenCounter(BaseTokenCounter):
     """Token counter implementation for Azure AI Anthropic provider using the CountTokens API."""
 
@@ -71,12 +88,10 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
             api_base = os.getenv("AZURE_AI_API_BASE")
 
         if not api_key:
-            verbose_logger.warning("No Azure AI API key found for token counting")
-            return None
+            return _missing_setting_response(request_model, model_to_use, "API key", "AZURE_AI_API_KEY", 401)
 
         if not api_base:
-            verbose_logger.warning("No Azure AI API base found for token counting")
-            return None
+            return _missing_setting_response(request_model, model_to_use, "API base", "AZURE_AI_API_BASE", 500)
 
         try:
             result: Final = await azure_ai_anthropic_count_tokens_handler.handle_count_tokens_request(
