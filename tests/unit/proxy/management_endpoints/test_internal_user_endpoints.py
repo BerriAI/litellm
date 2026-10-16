@@ -13,6 +13,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from prisma.models import LiteLLM_ObjectPermissionTable as PrismaLiteLLM_ObjectPermissionTable
 from pytest_mock import MockerFixture
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -5211,3 +5212,426 @@ async def test_user_update_without_password_revokes_nothing(_admin_prisma, mocke
     await _update_single_user_helper(user_request=user_request, user_api_key_dict=admin_caller)
 
     revoke_mock.assert_not_awaited()
+
+
+def _user_mcp_grant_prisma_mocks(mocker: MockerFixture, teams: Sequence[str] = ()) -> MagicMock:
+    mock_prisma_client: Final = mocker.MagicMock()
+    existing_user: Final = mocker.MagicMock()
+    existing_user.model_dump.return_value = {
+        "user_id": "target-user",
+        "object_permission_id": None,
+        "teams": list(teams),
+    }
+    existing_user.user_id = "target-user"
+    existing_user.object_permission_id = None
+    mock_prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=existing_user)
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = mocker.AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert = mocker.AsyncMock(
+        return_value=SimpleNamespace(object_permission_id="perm-new")
+    )
+    mock_prisma_client.db.litellm_mcpservertable.find_many = mocker.AsyncMock(return_value=[])
+    mock_prisma_client.update_data = mocker.AsyncMock(return_value={"user_id": "target-user"})
+    mock_prisma_client.jsonify_object = mocker.MagicMock(side_effect=lambda value: value)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+    mocker.patch(
+        "litellm.proxy.proxy_server.invalidate_spend_counter",
+        new=mocker.AsyncMock(),
+    )
+    return mock_prisma_client
+
+
+def _patch_user_mcp_grant_env(
+    mocker: MockerFixture,
+    server_ids: Sequence[str],
+    allow_all_server_ids: Sequence[str] = (),
+) -> None:
+    server_objects: Final = {
+        server_id: SimpleNamespace(server_id=server_id, alias=None, server_name=None, name=server_id)
+        for server_id in server_ids
+    }
+    manager: Final = mocker.MagicMock()
+    manager.get_registry.return_value = server_objects
+    manager.get_mcp_server_by_id.side_effect = lambda server_id: server_objects.get(server_id)
+    manager.get_allow_all_keys_server_ids.return_value = list(allow_all_server_ids)
+    mocker.patch(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        manager,
+    )
+    mocker.patch(
+        "litellm.proxy.auth.auth_checks.get_mcp_server_ids_from_access_groups",
+        new=mocker.AsyncMock(return_value=[]),
+    )
+
+
+def _user_mcp_team(team_id: str, access_group_ids: Sequence[str] = ()) -> SimpleNamespace:
+    return SimpleNamespace(
+        team_id=team_id,
+        access_group_ids=list(access_group_ids),
+        object_permission=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_user_update_rejects_server_outside_every_team_before_upserting(mocker: MockerFixture):
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _update_single_user_helper
+
+    mock_prisma_client: Final = _user_mcp_grant_prisma_mocks(mocker, teams=("team-a",))
+    _patch_user_mcp_grant_env(mocker, ("server-in-team", "server-outside"))
+    cache: Final = mocker.MagicMock()
+    cache.async_delete_cache = mocker.AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_team_object",
+        new=mocker.AsyncMock(return_value=_user_mcp_team("team-a", ("group-a",))),
+    )
+    mocker.patch(
+        "litellm.proxy.auth.auth_checks.get_mcp_server_ids_from_access_groups",
+        new=mocker.AsyncMock(return_value=["server-in-team"]),
+    )
+    handle_update: Final = mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.handle_update_object_permission_common",
+        new=mocker.AsyncMock(),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _update_single_user_helper(
+            user_request=UpdateUserRequest(
+                user_id="target-user",
+                object_permission={"mcp_servers": ["server-outside"]},
+            ),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert exc_info.value.status_code == 403
+    handle_update.assert_not_called()
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert.assert_not_called()
+    mock_prisma_client.update_data.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_user_update_persists_server_allowed_by_a_team(mocker: MockerFixture):
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _update_single_user_helper
+
+    mock_prisma_client: Final = _user_mcp_grant_prisma_mocks(mocker, teams=("team-a",))
+    _patch_user_mcp_grant_env(mocker, ("server-in-team",))
+    cache: Final = mocker.MagicMock()
+    cache.async_delete_cache = mocker.AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_team_object",
+        new=mocker.AsyncMock(return_value=_user_mcp_team("team-a", ("group-a",))),
+    )
+    mocker.patch(
+        "litellm.proxy.auth.auth_checks.get_mcp_server_ids_from_access_groups",
+        new=mocker.AsyncMock(return_value=["server-in-team"]),
+    )
+
+    await _update_single_user_helper(
+        user_request=UpdateUserRequest(
+            user_id="target-user",
+            object_permission={"mcp_servers": ["server-in-team"]},
+        ),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    upsert_kwargs: Final = mock_prisma_client.db.litellm_objectpermissiontable.upsert.call_args.kwargs
+    assert upsert_kwargs["data"]["create"]["mcp_servers"] == ["server-in-team"]
+    assert mock_prisma_client.update_data.call_args.kwargs["data"]["object_permission_id"] == "perm-new"
+
+
+@pytest.mark.asyncio
+async def test_user_update_rejects_server_when_all_teams_are_missing(mocker: MockerFixture):
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _update_single_user_helper
+
+    mock_prisma_client: Final = _user_mcp_grant_prisma_mocks(
+        mocker,
+        teams=("missing-team-a", "missing-team-b"),
+    )
+    _patch_user_mcp_grant_env(mocker, ("server-in-team", "server-outside"))
+    cache: Final = mocker.MagicMock()
+    cache.async_delete_cache = mocker.AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)
+
+    async def get_team(team_id: str, **kwargs: object) -> SimpleNamespace:
+        raise auth_checks.TeamNotFoundError(team_id)
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_team_object",
+        side_effect=get_team,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _update_single_user_helper(
+            user_request=UpdateUserRequest(
+                user_id="target-user",
+                object_permission={"mcp_servers": ["server-outside"]},
+            ),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert exc_info.value.status_code == 403
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_user_update_allows_global_server_when_all_teams_are_missing(mocker: MockerFixture):
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _update_single_user_helper
+
+    mock_prisma_client: Final = _user_mcp_grant_prisma_mocks(mocker, teams=("missing-team",))
+    _patch_user_mcp_grant_env(
+        mocker,
+        ("global-server",),
+        allow_all_server_ids=("global-server",),
+    )
+    cache: Final = mocker.MagicMock()
+    cache.async_delete_cache = mocker.AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_team_object",
+        new=mocker.AsyncMock(side_effect=auth_checks.TeamNotFoundError("missing-team")),
+    )
+
+    await _update_single_user_helper(
+        user_request=UpdateUserRequest(
+            user_id="target-user",
+            object_permission={"mcp_servers": ["global-server"]},
+        ),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    upsert_data: Final = mock_prisma_client.db.litellm_objectpermissiontable.upsert.call_args.kwargs["data"]
+    assert upsert_data["create"]["mcp_servers"] == ["global-server"]
+
+
+@pytest.mark.asyncio
+async def test_user_update_propagates_non_missing_team_lookup_errors(mocker: MockerFixture):
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _update_single_user_helper
+
+    mock_prisma_client: Final = _user_mcp_grant_prisma_mocks(mocker, teams=("team-a",))
+    _patch_user_mcp_grant_env(mocker, ("server-a",))
+    cache: Final = mocker.MagicMock()
+    cache.async_delete_cache = mocker.AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_team_object",
+        new=mocker.AsyncMock(side_effect=RuntimeError("team lookup failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="team lookup failed"):
+        await _update_single_user_helper(
+            user_request=UpdateUserRequest(
+                user_id="target-user",
+                object_permission={"mcp_servers": ["server-a"]},
+            ),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert.assert_not_called()
+    mock_prisma_client.update_data.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_user_mcp_grant_validation_skips_lookups_without_permission_or_teams(mocker: MockerFixture):
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _validate_user_mcp_grants
+
+    prisma_client: Final = mocker.MagicMock()
+    get_team: Final = mocker.AsyncMock(side_effect=RuntimeError("team lookup should not run"))
+    find_permission: Final = mocker.AsyncMock(side_effect=RuntimeError("permission lookup should not run"))
+    prisma_client.db.litellm_objectpermissiontable.find_unique = find_permission
+    cache: Final = mocker.MagicMock()
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_team_object",
+        new=get_team,
+    )
+
+    no_permission_result: Final = await _validate_user_mcp_grants(
+        object_permission=None,
+        team_ids=("team-a",),
+        existing_object_permission_id="permission-id",
+        prisma_client=prisma_client,
+        user_api_key_cache=cache,
+    )
+    no_teams_result: Final = await _validate_user_mcp_grants(
+        object_permission={"mcp_servers": ["server-a"]},
+        team_ids=(),
+        existing_object_permission_id="permission-id",
+        prisma_client=prisma_client,
+        user_api_key_cache=cache,
+    )
+
+    assert no_permission_result is None
+    assert no_teams_result is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "team_args",
+    ({"teams": ["team-a"]}, {"team_id": "team-a"}),
+)
+async def test_new_user_rejects_server_outside_requested_teams_before_persisting(
+    mocker: MockerFixture,
+    team_args: dict[str, object],
+):
+    mock_prisma_client: Final = mocker.MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.create = mocker.AsyncMock()
+    mock_prisma_client.db.litellm_mcpservertable.find_many = mocker.AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(
+        return_value=SimpleNamespace(teams=["team-a"])
+    )
+    mock_prisma_client.db.litellm_usertable.count = mocker.AsyncMock(return_value=0)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", mocker.MagicMock())
+    _patch_user_mcp_grant_env(mocker, ("server-in-team", "server-outside"))
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_team_object",
+        new=mocker.AsyncMock(return_value=_user_mcp_team("team-a", ("group-a",))),
+    )
+    mocker.patch(
+        "litellm.proxy.auth.auth_checks.get_mcp_server_ids_from_access_groups",
+        new=mocker.AsyncMock(return_value=["server-in-team"]),
+    )
+    mocker.patch(
+        "litellm.proxy.hooks.user_management_event_hooks.UserManagementEventHooks.async_user_created_hook",
+        new=mocker.AsyncMock(),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.team_endpoints.team_member_add",
+        new=mocker.AsyncMock(),
+    )
+    generate_key: Final = mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.generate_key_helper_fn",
+        new=mocker.AsyncMock(return_value={"user_id": "new-human", "token": "sk-x", "expires": None}),
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await new_user(
+            data=NewUserRequest(
+                user_id="new-human",
+                object_permission={"mcp_servers": ["server-outside"]},
+                **team_args,
+            ),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert exc_info.value.code == "403"
+    assert "server-outside" in exc_info.value.message
+    mock_prisma_client.db.litellm_objectpermissiontable.create.assert_not_called()
+    generate_key.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_new_user_uses_team_id_instead_of_teams_for_mcp_grants(mocker: MockerFixture):
+    mock_prisma_client: Final = mocker.MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.create = mocker.AsyncMock(
+        return_value=SimpleNamespace(object_permission_id="perm-created")
+    )
+    mock_prisma_client.db.litellm_mcpservertable.find_many = mocker.AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(
+        return_value=SimpleNamespace(teams=["team-b"])
+    )
+    mock_prisma_client.db.litellm_usertable.count = mocker.AsyncMock(return_value=0)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", mocker.MagicMock())
+    _patch_user_mcp_grant_env(mocker, ("server-in-team-a",))
+
+    teams: Final = {
+        "team-a": _user_mcp_team("team-a", ("group-a",)),
+        "team-b": _user_mcp_team("team-b"),
+    }
+
+    async def get_team(team_id: str, **kwargs: object) -> SimpleNamespace:
+        return teams[team_id]
+
+    async def get_access_group_servers(access_group_ids: Sequence[str], **kwargs: object) -> list[str]:
+        return ["server-in-team-a"] if "group-a" in access_group_ids else []
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_team_object",
+        new=mocker.AsyncMock(side_effect=get_team),
+    )
+    mocker.patch(
+        "litellm.proxy.auth.auth_checks.get_mcp_server_ids_from_access_groups",
+        new=mocker.AsyncMock(side_effect=get_access_group_servers),
+    )
+    mocker.patch(
+        "litellm.proxy.hooks.user_management_event_hooks.UserManagementEventHooks.async_user_created_hook",
+        new=mocker.AsyncMock(),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.team_endpoints.team_member_add",
+        new=mocker.AsyncMock(),
+    )
+    generate_key: Final = mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.generate_key_helper_fn",
+        new=mocker.AsyncMock(return_value={"user_id": "new-human", "token": "sk-x", "expires": None}),
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await new_user(
+            data=NewUserRequest(
+                user_id="new-human",
+                team_id="team-b",
+                teams=["team-a"],
+                object_permission={"mcp_servers": ["server-in-team-a"]},
+            ),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert exc_info.value.code == "403"
+    assert "server-in-team-a" in exc_info.value.message
+    mock_prisma_client.db.litellm_objectpermissiontable.create.assert_not_called()
+    generate_key.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_user_update_grandfathers_prisma_object_permission_model(mocker: MockerFixture) -> None:
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _update_single_user_helper
+
+    mock_prisma_client: Final = _user_mcp_grant_prisma_mocks(mocker, teams=("team-a",))
+    mock_prisma_client.db.litellm_usertable.find_first.return_value.object_permission_id = "perm-existing"
+    mock_prisma_client.db.litellm_usertable.find_first.return_value.model_dump.return_value = {
+        "user_id": "target-user",
+        "object_permission_id": "perm-existing",
+        "teams": ["team-a"],
+    }
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = mocker.AsyncMock(
+        return_value=PrismaLiteLLM_ObjectPermissionTable(
+            object_permission_id="perm-existing",
+            mcp_servers=["srv_b"],
+            mcp_access_groups=[],
+            vector_stores=[],
+            agents=[],
+            agent_access_groups=[],
+            models=[],
+            blocked_tools=[],
+            mcp_toolsets=[],
+            search_tools=[],
+            skills=[],
+        )
+    )
+    _patch_user_mcp_grant_env(mocker, ("srv_a", "srv_b"))
+    cache: Final = mocker.MagicMock()
+    cache.async_delete_cache = mocker.AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_team_object",
+        new=mocker.AsyncMock(return_value=_user_mcp_team("team-a", ("group-a",))),
+    )
+    mocker.patch(
+        "litellm.proxy.auth.auth_checks.get_mcp_server_ids_from_access_groups",
+        new=mocker.AsyncMock(return_value=["srv_a"]),
+    )
+
+    await _update_single_user_helper(
+        user_request=UpdateUserRequest(
+            user_id="target-user",
+            object_permission={"mcp_servers": ["srv_b"]},
+        ),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    upsert_data: Final = mock_prisma_client.db.litellm_objectpermissiontable.upsert.call_args.kwargs["data"]
+    assert upsert_data["update"]["mcp_servers"] == ["srv_b"]
