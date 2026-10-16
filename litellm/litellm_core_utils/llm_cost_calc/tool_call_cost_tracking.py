@@ -260,9 +260,6 @@ class StandardBuiltInToolCostTracking:
             default_image_cost_calculator,  # pyright: ignore[reportUnknownVariableType]  # optional_params param is untyped
         )
 
-        status: Final = _output_item_field(output_item, "status")
-        if status != "completed":
-            return 0.0
         quality: Final = _output_item_field(output_item, "quality")
         size: Final = _output_item_field(output_item, "size")
         try:
@@ -568,7 +565,7 @@ class StandardBuiltInToolCostTracking:
             ):
                 return True
             reported: Final = _reported_web_search_requests(response_object)
-            return isinstance(reported, int) and reported > 0
+            return reported is not None and reported > 0
         elif usage is not None:
             if get_web_search_requests_from_usage(usage) is not None or (
                 hasattr(usage, "prompt_tokens_details")
@@ -626,7 +623,7 @@ class StandardBuiltInToolCostTracking:
     @staticmethod
     def response_includes_output_type(
         response_object: ResponsesAPIResponse,
-        output_type: Literal["web_search_call", "file_search_call", "image_generation_call"],
+        output_type: Literal["web_search_call", "file_search_call"],
     ) -> bool:
         """
         Check if the ResponsesAPIResponse includes one of the specified output types.

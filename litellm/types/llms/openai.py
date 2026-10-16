@@ -1431,8 +1431,6 @@ class ImageGenTokenDetails(LiteLLMBaseModel):
 class ImageGenToolUsage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
-    input_tokens: NonNegativeInt = 0
-    output_tokens: NonNegativeInt = 0
     total_tokens: NonNegativeInt = 0
     input_tokens_details: ImageGenTokenDetails | None = None
     output_tokens_details: ImageGenTokenDetails | None = None
