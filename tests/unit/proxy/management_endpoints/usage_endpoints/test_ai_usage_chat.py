@@ -3,6 +3,7 @@ Tests for AI Usage Chat module.
 """
 
 import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -510,7 +511,7 @@ class TestUsageAiChatCompletionRouting:
     @pytest.mark.asyncio
     async def test_stream_usage_ai_chat_uses_router_for_configured_model(self):
         mock_router = MagicMock()
-        mock_router.get_model_names.return_value = ["my-alias"]
+        mock_router.is_recognized_model.return_value = True
         mock_router.acompletion = AsyncMock(return_value=self._plain_content_response())
         mock_acompletion = AsyncMock(return_value=self._plain_content_response())
 
@@ -543,9 +544,10 @@ class TestUsageAiChatCompletionRouting:
     @pytest.mark.asyncio
     async def test_stream_usage_ai_chat_falls_back_to_litellm_for_unknown_model(self):
         mock_router = MagicMock()
-        mock_router.get_model_names.return_value = ["other"]
+        mock_router.is_recognized_model.return_value = False
+        mock_router.router_general_settings.pass_through_all_models = False
         mock_router.default_deployment = None
-        mock_router.pattern_router.patterns = {}
+        mock_router.pattern_router.route.return_value = None
         mock_router.acompletion = AsyncMock(return_value=self._plain_content_response())
         mock_acompletion = AsyncMock(return_value=self._plain_content_response())
 
@@ -576,16 +578,22 @@ class TestUsageAiChatCompletionRouting:
 
     @pytest.mark.asyncio
     async def test_stream_usage_ai_chat_uses_router_when_wildcard_pattern_exists(self):
-        mock_router = MagicMock()
-        mock_router.get_model_names.return_value = []
-        mock_router.default_deployment = None
-        mock_router.pattern_router.patterns = {"openai/.*": [{"model_name": "openai/*"}]}
-        mock_router.acompletion = AsyncMock(return_value=self._plain_content_response())
+        from litellm.router import Router
+
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "openai/*",
+                    "litellm_params": {"model": "openai/*", "api_key": "sk-dummy"},
+                }
+            ]
+        )
+        router.acompletion = AsyncMock(return_value=self._plain_content_response())
         mock_acompletion = AsyncMock(return_value=self._plain_content_response())
 
         with (
             patch(  # test-quality-ok: ai_usage_chat reads the proxy_server.llm_router module global; no injection seam
-                "litellm.proxy.proxy_server.llm_router", mock_router
+                "litellm.proxy.proxy_server.llm_router", router
             ),
             patch(  # test-quality-ok: the stream calls the module-level litellm.acompletion directly; no injection seam
                 "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm.acompletion",
@@ -595,15 +603,100 @@ class TestUsageAiChatCompletionRouting:
             events = []
             async for event in stream_usage_ai_chat(
                 messages=[{"role": "user", "content": "hi"}],
-                model="gpt-5.6-terra",
+                model="openai/gpt-4o-mini",
                 is_admin=True,
             ):
                 events.append(json.loads(event.replace("data: ", "").strip()))
 
-            mock_router.acompletion.assert_awaited_once()
-            assert mock_router.acompletion.await_args.kwargs["model"] == "gpt-5.6-terra"
-            assert mock_router.acompletion.await_args.kwargs["drop_params"] is True
+            router.acompletion.assert_awaited_once()
+            assert router.acompletion.await_args.kwargs["model"] == "openai/gpt-4o-mini"
+            assert router.acompletion.await_args.kwargs["drop_params"] is True
             mock_acompletion.assert_not_called()
+
+            event_types = [e["type"] for e in events]
+            assert "chunk" in event_types
+            assert "error" not in event_types
+
+    @pytest.mark.asyncio
+    async def test_stream_usage_ai_chat_falls_back_when_wildcard_does_not_match(self):
+        from litellm.router import Router
+
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "anthropic/*",
+                    "litellm_params": {
+                        "model": "anthropic/claude-3-haiku-20240307",
+                        "api_key": "sk-dummy",
+                    },
+                }
+            ]
+        )
+        router.acompletion = AsyncMock(return_value=self._plain_content_response())
+        mock_acompletion = AsyncMock(return_value=self._plain_content_response())
+
+        with (
+            patch(  # test-quality-ok: ai_usage_chat reads the proxy_server.llm_router module global; no injection seam
+                "litellm.proxy.proxy_server.llm_router", router
+            ),
+            patch(  # test-quality-ok: the stream calls the module-level litellm.acompletion directly; no injection seam
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm.acompletion",
+                new=mock_acompletion,
+            ),
+        ):
+            events = []
+            async for event in stream_usage_ai_chat(
+                messages=[{"role": "user", "content": "hi"}],
+                model="gpt-4o-mini",
+                is_admin=True,
+            ):
+                events.append(json.loads(event.replace("data: ", "").strip()))
+
+            mock_acompletion.assert_awaited_once()
+            assert mock_acompletion.await_args.kwargs["model"] == "gpt-4o-mini"
+            router.acompletion.assert_not_called()
+
+            event_types = [e["type"] for e in events]
+            assert "chunk" in event_types
+            assert "error" not in event_types
+
+    @pytest.mark.asyncio
+    async def test_stream_usage_ai_chat_falls_back_when_pass_through_all_models(self):
+        from litellm.router import Router
+        from litellm.types.router import RouterGeneralSettings
+
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "openai/*",
+                    "litellm_params": {"model": "openai/*", "api_key": "sk-dummy"},
+                }
+            ],
+            router_general_settings=RouterGeneralSettings(pass_through_all_models=True),
+        )
+        router.acompletion = AsyncMock(return_value=self._plain_content_response())
+        mock_acompletion = AsyncMock(return_value=self._plain_content_response())
+
+        with (
+            patch(  # test-quality-ok: ai_usage_chat reads the proxy_server.llm_router module global; no injection seam
+                "litellm.proxy.proxy_server.llm_router", router
+            ),
+            patch(  # test-quality-ok: the stream calls the module-level litellm.acompletion directly; no injection seam
+                "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm.acompletion",
+                new=mock_acompletion,
+            ),
+        ):
+            events = []
+            async for event in stream_usage_ai_chat(
+                messages=[{"role": "user", "content": "hi"}],
+                model="gpt-4o-mini",
+                is_admin=True,
+            ):
+                events.append(json.loads(event.replace("data: ", "").strip()))
+
+            mock_acompletion.assert_awaited_once()
+            assert mock_acompletion.await_args.kwargs["model"] == "gpt-4o-mini"
+            router.acompletion.assert_not_called()
 
             event_types = [e["type"] for e in events]
             assert "chunk" in event_types
@@ -612,9 +705,9 @@ class TestUsageAiChatCompletionRouting:
     @pytest.mark.asyncio
     async def test_stream_usage_ai_chat_uses_router_when_default_deployment_exists(self):
         mock_router = MagicMock()
-        mock_router.get_model_names.return_value = []
+        mock_router.is_recognized_model.return_value = False
+        mock_router.router_general_settings.pass_through_all_models = False
         mock_router.default_deployment = {"model_name": "default", "litellm_params": {}}
-        mock_router.pattern_router.patterns = {}
         mock_router.acompletion = AsyncMock(return_value=self._plain_content_response())
         mock_acompletion = AsyncMock(return_value=self._plain_content_response())
 
@@ -681,7 +774,7 @@ class TestUsageAiChatCompletionRouting:
             yield chunk
 
         mock_router = MagicMock()
-        mock_router.get_model_names.return_value = ["my-alias"]
+        mock_router.is_recognized_model.return_value = True
         mock_router.acompletion = AsyncMock(side_effect=[mock_first_response, mock_stream()])
 
         with (
