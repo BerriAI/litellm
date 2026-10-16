@@ -54,9 +54,9 @@ class ProviderCountFailure:
         )
 
 
-def cost_map_entry(model: str) -> Mapping[str, object]:
+def cost_map_entry(model: str, custom_llm_provider: str | None = None) -> Mapping[str, object]:
     try:
-        return litellm.get_model_info(model=model)
+        return litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:  # noqa: BLE001  # get_model_info raises bare Exception for unmapped models
         return MappingProxyType({})
 

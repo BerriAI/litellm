@@ -14559,11 +14559,20 @@ def _model_group_deployment(router: Router | None, model_group: str) -> Mapping[
     return group[0] if group else None
 
 
-def _token_count_settings_model(deployment: _TokenCountDeployment, request_model: str) -> str:
+def _non_empty_str(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _token_count_settings_model(deployment: _TokenCountDeployment, request_model: str) -> tuple[str, str | None]:
     model_info: Final = deployment.get("model_info", {})
     params: Final = deployment.get("litellm_params", {})
-    candidates: Final = (model_info.get("base_model"), params.get("base_model"), params.get("model"))
-    return next((c for c in candidates if isinstance(c, str) and c), request_model)
+    base_model: Final = _non_empty_str(model_info.get("base_model")) or _non_empty_str(params.get("base_model"))
+    if base_model is not None:
+        return base_model, None
+    model: Final = _non_empty_str(params.get("model"))
+    if model is None:
+        return request_model, None
+    return model, _non_empty_str(params.get("custom_llm_provider"))
 
 
 def _system_message(system: object) -> ChatCompletionSystemMessage | None:
@@ -14639,7 +14648,7 @@ async def count_request_tokens(
     )
     settings: Final = resolve_token_count_settings(
         configured=deployment_view.get("model_info", {}),
-        default=await asyncify(cost_map_entry)(_token_count_settings_model(deployment_view, request.model)),
+        default=await asyncify(cost_map_entry)(*_token_count_settings_model(deployment_view, request.model)),
     )
 
     # Try provider-specific token counting first - only for non-direct requests (from provider endpoints)

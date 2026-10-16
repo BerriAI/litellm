@@ -39,6 +39,7 @@ from litellm.proxy.common_utils.token_count_settings import (
     UNAVAILABLE_FALLBACK_TTL_SECONDS,
     ProviderCountFailure,
     TokenCountSettings,
+    cost_map_entry,
 )
 from litellm.proxy.proxy_server import (
     _estimate_or_provider_error,
@@ -1602,6 +1603,39 @@ async def test_local_estimate_adds_the_configured_framing_once_per_request(monke
     assert framed.total_tokens == plain.total_tokens + 100
     assert (plain.count_source, framed.count_source) == ("local_estimate", "local_estimate")
     assert framed_prompt.total_tokens == litellm.token_counter(model="gpt-5.4-mini", text="hello there")
+
+
+@pytest.mark.asyncio
+async def test_framing_comes_from_the_row_the_deployment_provider_or_base_model_names(monkeypatch: pytest.MonkeyPatch):
+    def deployment(name: str, litellm_params: dict[str, object], model_info: dict[str, object]) -> dict[str, object]:
+        return {
+            "model_name": name,
+            "litellm_params": {**litellm_params, "api_key": "unused", "api_base": "https://unused.invalid"},
+            "model_info": model_info,
+        }
+
+    kimi: Final = "databricks/system.ai.kimi-k3"
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                deployment("prefixed", {"model": kimi}, {}),
+                deployment("split", {"model": "system.ai.kimi-k3", "custom_llm_provider": "databricks"}, {}),
+                deployment("aliased", {"model": "gpt-5.4-mini", "custom_llm_provider": "openai"}, {"base_model": kimi}),
+            ]
+        ),
+    )
+    messages: Final = [{"role": "user", "content": "hello there"}]
+    framing: Final = cost_map_entry(kimi)["token_count_framing"]
+
+    prefixed: Final = await token_counter(request=TokenCountRequest(model="prefixed", messages=messages))
+    split: Final = await token_counter(request=TokenCountRequest(model="split", messages=messages))
+    aliased: Final = await token_counter(request=TokenCountRequest(model="aliased", messages=messages))
+
+    assert prefixed.total_tokens == litellm.token_counter(model="system.ai.kimi-k3", messages=messages) + framing
+    assert split.total_tokens == prefixed.total_tokens
+    assert aliased.total_tokens == litellm.token_counter(model="gpt-5.4-mini", messages=messages) + framing
 
 
 @pytest.mark.asyncio
