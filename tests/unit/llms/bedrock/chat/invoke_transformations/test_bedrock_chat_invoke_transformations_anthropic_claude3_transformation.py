@@ -1087,7 +1087,6 @@ def test_bedrock_chat_invoke_eager_input_streaming_beta_not_duplicated_with_clie
     assert result["anthropic_beta"] == [FINE_GRAINED_TOOL_STREAMING_BETA]
 
 
-
 DANGEROUS_TOOL_USE_BETA: Final = "dangerous-tool-use-2026-09-03"
 
 
@@ -1106,11 +1105,11 @@ def _chat_invoke_betas(extra_optional_params: dict[str, object]) -> object:
     ).get("anthropic_beta")
 
 
-def test_bedrock_chat_invoke_drops_client_dangerous_tool_use_beta_without_safeguards():
+def test_bedrock_chat_invoke_drops_client_dangerous_tool_use_beta_without_safeguards() -> None:
     assert _chat_invoke_betas({}) == ["claude-code-20250219"]
 
 
-def test_bedrock_chat_invoke_keeps_client_dangerous_tool_use_beta_with_safeguards():
+def test_bedrock_chat_invoke_keeps_client_dangerous_tool_use_beta_with_safeguards() -> None:
     assert _chat_invoke_betas({"safeguards": [{"type": "dangerous_tool_use"}]}) == [
         "claude-code-20250219",
         DANGEROUS_TOOL_USE_BETA,

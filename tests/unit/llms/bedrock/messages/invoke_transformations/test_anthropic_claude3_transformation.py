@@ -1690,13 +1690,11 @@ _NAME_SCHEMA: Final = {"type": "object", "properties": {"name": {"type": "string
     ids=["plain", "output_config_format", "strict_tool"],
 )
 def test_bedrock_messages_drops_client_dangerous_tool_use_beta_without_safeguards(
-    local_model_cost_map, local_beta_headers_config, request_params
-):
+    local_model_cost_map: None, local_beta_headers_config: None, request_params: dict[str, object]
+) -> None:
     from litellm.types.router import GenericLiteLLMParams
 
-    cfg = AmazonAnthropicClaudeMessagesConfig()
-
-    result = cfg.transform_anthropic_messages_request(
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
         model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=[{"role": "user", "content": [{"type": "text", "text": "Name a color."}]}],
         anthropic_messages_optional_request_params={"max_tokens": 64, **request_params},
@@ -1709,15 +1707,14 @@ def test_bedrock_messages_drops_client_dangerous_tool_use_beta_without_safeguard
 
 
 def test_bedrock_messages_keeps_client_dangerous_tool_use_beta_with_safeguards_and_structured_outputs(
-    local_model_cost_map, local_beta_headers_config
-):
+    local_model_cost_map: None, local_beta_headers_config: None
+) -> None:
     from litellm.types.router import GenericLiteLLMParams
 
-    cfg = AmazonAnthropicClaudeMessagesConfig()
-    safeguards = [{"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}]
-    strict_tool = {"name": "get_name", "strict": True, "input_schema": _NAME_SCHEMA}
+    safeguards: Final = [{"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}]
+    strict_tool: Final = {"name": "get_name", "strict": True, "input_schema": _NAME_SCHEMA}
 
-    result = cfg.transform_anthropic_messages_request(
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
         model="us.anthropic.claude-sonnet-5",
         messages=[{"role": "user", "content": [{"type": "text", "text": "Name a color."}]}],
         anthropic_messages_optional_request_params={
