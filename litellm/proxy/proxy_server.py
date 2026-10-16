@@ -277,7 +277,12 @@ import litellm
 import litellm._redis
 from litellm import Router
 from litellm._internal_context import service_target, with_service_target
-from litellm._logging import redact_string, verbose_proxy_logger, verbose_router_logger
+from litellm._logging import (
+    redact_internal_details_from_client_message,
+    redact_string,
+    verbose_proxy_logger,
+    verbose_router_logger,
+)
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.dual_cache import DeclaredBatchRead
 from litellm.caching.redis_batch import (
@@ -14397,7 +14402,12 @@ def _with_resolved_api_key(litellm_params: object) -> Mapping[str, object]:
     try:
         load_credentials_from_list(call_params)
     except litellm.AuthenticationError as e:
-        raise ProxyException(message=e.message, type="auth_error", param="model", code=401) from e
+        raise ProxyException(
+            message=redact_internal_details_from_client_message(e.message),
+            type="auth_error",
+            param="model",
+            code=401,
+        ) from e
     return call_params
 
 

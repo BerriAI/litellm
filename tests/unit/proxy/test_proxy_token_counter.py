@@ -206,6 +206,8 @@ async def test_token_counter_reads_an_oidc_api_key_only_when_it_calls_the_provid
     with pytest.raises(ProxyException) as excinfo:
         await token_counter(request=request, call_endpoint=call_endpoint)
     assert excinfo.value.code == "401"
+    assert str(tmp_path) not in excinfo.value.message
+
 
 @pytest.mark.asyncio
 async def test_anthropic_messages_count_tokens_endpoint():
