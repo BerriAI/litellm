@@ -34,8 +34,9 @@ _SUCCEEDS: Final = "succeeds"
 
 
 class _CallbackProbe(CustomLogger):
-    def __init__(self) -> None:
+    def __init__(self, call_id: str) -> None:
         super().__init__()
+        self._call_id: Final = call_id
         self._lock: Final = threading.Lock()
         self._failures: Final[list[object]] = []
         self._successes: Final[list[object]] = []
@@ -43,12 +44,16 @@ class _CallbackProbe(CustomLogger):
     async def async_log_failure_event(
         self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
+        if kwargs.get("litellm_call_id") != self._call_id:
+            return
         with self._lock:
             self._failures.append(kwargs.get("exception"))
 
     async def async_log_success_event(
         self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
+        if kwargs.get("litellm_call_id") != self._call_id:
+            return
         with self._lock:
             self._successes.append((kwargs.get("litellm_call_id"), kwargs.get("standard_logging_object")))
 
@@ -98,30 +103,34 @@ async def _settled(read: Callable[[], tuple[object, ...]]) -> tuple[object, ...]
 
 
 async def test_sdk_bridged_stream_failing_after_content_reports_the_provider_error_once() -> None:
-    probe: Final = _CallbackProbe()
-    litellm.callbacks.append(probe)
     marker: Final = uuid.uuid4().hex
+    failing_prompt: Final = f"{_DROPS_AFTER_CONTENT}:{marker}"
+    succeeding_prompt: Final = f"{_SUCCEEDS}:{marker}"
+    failing_probe: Final = _CallbackProbe(failing_prompt)
+    succeeding_probe: Final = _CallbackProbe(succeeding_prompt)
+    litellm.callbacks.append(failing_probe)
+    litellm.callbacks.append(succeeding_probe)
     with wire_server(_upstream(marker)) as wire:
-        failing: Final = await _stream(wire, f"{_DROPS_AFTER_CONTENT}:{marker}")
+        failing: Final = await _stream(wire, failing_prompt)
         assert delta_text(failing) == _TEXT, failing
         assert event_types(failing)[-1] == "error" and "message_stop" not in event_types(failing), failing
-        await _settled(probe.failures)
-        succeeding: Final = await _stream(wire, f"{_SUCCEEDS}:{marker}")
+        await _settled(failing_probe.failures)
+        succeeding: Final = await _stream(wire, succeeding_prompt)
         assert event_types(succeeding)[-1] == "message_stop", succeeding
         assert delta_text(succeeding) == _TEXT, succeeding
-        await _settled(probe.successes)
+        await _settled(succeeding_probe.successes)
         assert posted_targets(wire) == (_UPSTREAM_TARGET,) * 2
-    failures: Final = probe.failures()
+    failures: Final = failing_probe.failures()
     assert len(failures) == 1, failures
     assert isinstance(failures[0], Exception), failures
     assert not isinstance(failures[0], MidStreamFallbackError), failures
-    assert len(probe.successes()) == 1, probe.successes()
+    assert len(succeeding_probe.successes()) == 1, succeeding_probe.successes()
 
 
 async def test_sdk_native_messages_stream_delivers_one_success_callback_with_usage() -> None:
-    probe: Final = _CallbackProbe()
-    litellm.callbacks.append(probe)
     prompt: Final = uuid.uuid4().hex
+    probe: Final = _CallbackProbe(prompt)
+    litellm.callbacks.append(probe)
     model: Final = "claude-sonnet-5-5"
 
     def respond(request: Request) -> Reply:

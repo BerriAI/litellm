@@ -15,7 +15,7 @@ import pytest
 import yaml
 from integration._support.client import Gateway, eventually, held, object_value
 from integration._support.database import read_rows
-from integration._support.process import graceful_stop_seconds, owned_proxy_process
+from integration._support.process import WorkerHealthcheck, graceful_stop_seconds, owned_proxy_process
 from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
@@ -296,7 +296,16 @@ def test_worker_killed_mid_stream_leaves_the_sibling_billing_each_stream_once(ga
         wire: Final = stack.enter_context(wire_server(_peer(gate)))
         stack.callback(gate.set)
         config: Final = _owned_config(tmp_path / "worker-kill.yaml", gateway, wire, {})
-        owned: Final = stack.enter_context(owned_proxy_process(gateway, tmp_path, {}, config=config, workers=2))
+        owned: Final = stack.enter_context(
+            owned_proxy_process(
+                gateway,
+                tmp_path,
+                {},
+                config=config,
+                workers=2,
+                healthcheck=WorkerHealthcheck.LENIENT,
+            )
+        )
         workers: Final = eventually(
             lambda: tuple(int(pid) for pid in _STARTED_WORKER.findall(owned.log.read_text())),
             lambda pids: len(pids) == 2,
@@ -308,7 +317,11 @@ def test_worker_killed_mid_stream_leaves_the_sibling_billing_each_stream_once(ga
             stack.enter_context(httpx.Client(base_url=str(proxy_url), timeout=60, trust_env=False)) for _ in range(12)
         )
         keys: Final = tuple(scenario.key(models=[_ADAPTER_MODEL]) for _ in clients)
-        ports: Final = tuple(_local_port(client) for client in clients)
+        with owned.suspended(workers[1]):
+            first_worker_ports: Final = tuple(_local_port(client) for client in clients[:6])
+        with owned.suspended(workers[0]):
+            second_worker_ports: Final = tuple(_local_port(client) for client in clients[6:])
+        ports: Final = first_worker_ports + second_worker_ports
         pool: Final = stack.enter_context(ThreadPoolExecutor(max_workers=len(clients)))
         futures: Final = tuple(
             pool.submit(_stream_or_dropped, client, key) for client, key in zip(clients, keys, strict=True)
@@ -316,6 +329,8 @@ def test_worker_killed_mid_stream_leaves_the_sibling_billing_each_stream_once(ga
         eventually(wire.received.qsize, lambda size: size >= len(clients), seconds=60)
         shares: Final = {pid: _accepted_client_ports(pid, proxy_url.port or 0) & frozenset(ports) for pid in workers}
         assert sum(map(len, shares.values())) == len(clients), shares
+        assert shares[workers[0]] == frozenset(first_worker_ports), shares
+        assert shares[workers[1]] == frozenset(second_worker_ports), shares
         victim: Final = min((pid for pid in workers if shares[pid]), key=lambda pid: len(shares[pid]))
         with owned.replacing_worker(victim) as kill:
             kill()
