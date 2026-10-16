@@ -56,8 +56,8 @@ UNREACHABLE_HTTP_STATUSES: Final = frozenset({502, 504})
 TRANSFORM_MISSING: Final = "TrustGuard transform missing payload"
 
 
-_Parameters = ParamSpec("_Parameters")
-_Result = TypeVar("_Result")
+_Parameters: Final = ParamSpec("_Parameters")
+_Result: Final = TypeVar("_Result")
 
 
 @runtime_checkable

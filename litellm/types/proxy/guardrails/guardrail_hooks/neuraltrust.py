@@ -8,7 +8,7 @@ DEFAULT_API_BASE: Final = "https://trustguard.neuraltrust.ai"
 DEFAULT_TIMEOUT: Final = 5.0
 
 
-_Config = TypeVar("_Config", bound=BaseModel)
+_Config: Final = TypeVar("_Config", bound=BaseModel)
 
 
 class NeuralTrustGuardrailConfigModel(GuardrailConfigModel[_Config]):
