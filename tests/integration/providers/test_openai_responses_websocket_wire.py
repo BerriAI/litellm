@@ -284,12 +284,14 @@ def _one_turn(candidate: Gateway, key: str, model: str) -> tuple[dict[str, JsonV
     return events
 
 
-def test_a_deployment_key_reaches_the_provider_socket_instead_of_the_proxy_openai_key(
+def test_a_bare_model_declared_as_openai_sends_its_deployment_key_to_the_provider_socket(
     candidate: Gateway, cert: tuple[Path, Path]
 ) -> None:
     deployment_key: Final = f"sk-deployment-{uuid.uuid4().hex}"
     with responses_peer(cert) as peer, candidate.scenario() as scenario:
-        model: Final = scenario.model(model=f"openai/{PROVIDER_MODEL}", api_base=peer.url, api_key=deployment_key)
+        model: Final = scenario.model(
+            model=PROVIDER_MODEL, custom_llm_provider="openai", api_base=peer.url, api_key=deployment_key
+        )
         events: Final = _one_turn(candidate, scenario.key(models=[model]), model)
         assert _completed(events)["status"] == "completed"
         assert peer.credentials.get_nowait().authorization == f"Bearer {deployment_key}"
