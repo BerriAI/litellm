@@ -2,6 +2,7 @@
 
 import asyncio
 import contextvars
+import threading
 import time
 from base64 import b64encode
 from collections.abc import Mapping
@@ -3496,9 +3497,11 @@ class TestEvictionSafety:
         def __init__(self):
             super().__init__(InMemorySpanExporter())
             self.shutdown_calls = 0
+            self.closed = threading.Event()
 
         def shutdown(self):
             self.shutdown_calls += 1
+            self.closed.set()
 
     def _fan_out(self):
         built = []
@@ -3540,7 +3543,7 @@ class TestEvictionSafety:
         assert id(held) in fan_out._retired
 
         fan_out._release(held)
-        self._settle(fan_out, held)
+        assert held.closed.wait(timeout=5)
 
         assert held.shutdown_calls == 1
 
@@ -3554,7 +3557,7 @@ class TestEvictionSafety:
             fan_out._release(fan_out._acquire(self._dest(index)))
         fan_out._release(fan_out._acquire(self._dest(0)))
         fan_out._release(fan_out._acquire(self._dest(_MAX_CACHED_DESTINATION_PROCESSORS)))
-        self._settle(fan_out, built[1])
+        assert built[1].closed.wait(timeout=5)
 
         assert built[1].shutdown_calls == 1
         assert built[0].shutdown_calls == 0, "the destination used most recently was the one shed"
@@ -3566,7 +3569,7 @@ class TestEvictionSafety:
         for index in range(_MAX_CACHED_DESTINATION_PROCESSORS + 1):
             fan_out._acquire(self._dest(index))
             fan_out._release(built[-1])
-        self._settle(fan_out, built[0])
+        assert built[0].closed.wait(timeout=5)
 
         assert built[0].shutdown_calls == 1
         assert len(fan_out._processors) == _MAX_CACHED_DESTINATION_PROCESSORS
@@ -3577,9 +3580,11 @@ class TestEvictionSafety:
         every other tenant's spans."""
         from litellm.integrations.otel.plumbing.providers import _MAX_CACHED_DESTINATION_PROCESSORS
 
+        release = threading.Event()
+
         class Slow(self.Recording):
             def shutdown(self):
-                time.sleep(3)
+                release.wait(timeout=10)
                 super().shutdown()
 
         built = []
@@ -3589,12 +3594,14 @@ class TestEvictionSafety:
             return built[-1]
 
         fan_out = TenantFanOutSpanProcessor(processor_factory=factory)
-        started = time.monotonic()
-        for index in range(_MAX_CACHED_DESTINATION_PROCESSORS + 1):
-            fan_out._acquire(self._dest(index))
-            fan_out._release(built[-1])
+        try:
+            for index in range(_MAX_CACHED_DESTINATION_PROCESSORS + 1):
+                fan_out._acquire(self._dest(index))
+                fan_out._release(built[-1])
 
-        assert time.monotonic() - started < 2
+            assert not built[0].closed.is_set(), "the shed processor was closed inline on the export path"
+        finally:
+            release.set()
 
     def test_shedding_many_processors_does_not_spawn_a_thread_each(self):
         """A tenant that cycles its destination config sheds a processor per request,
@@ -3970,11 +3977,7 @@ class TestEvictionSafety:
         fan_out.shutdown()
         fan_out._drain.submit(stray)
 
-        for _ in range(500):
-            if stray.shutdown_calls:
-                break
-            time.sleep(0.02)
-
+        assert stray.closed.wait(timeout=5)
         assert stray.shutdown_calls == 1
 
     def test_releasing_a_straggler_after_shutdown_does_not_block_the_span_thread(self):
@@ -4036,7 +4039,7 @@ class TestEvictionSafety:
         assert held.shutdown_calls == 0
 
         fan_out._release(held)
-        self._settle(fan_out, held)
+        assert held.closed.wait(timeout=5)
 
         assert held.shutdown_calls == 1
 
@@ -4153,10 +4156,7 @@ class TestEvictionSafety:
         close_returned.set()
         submitter.join(timeout=5)
         closer.join(timeout=5)
-        for _ in range(250):
-            if submitted.shutdown_calls:
-                break
-            time.sleep(0.02)
+        assert submitted.closed.wait(timeout=5), "a processor was queued behind the sentinels and never closed"
 
         assert submitted.shutdown_calls == 1, "a processor was queued behind the sentinels and never closed"
 
@@ -4175,7 +4175,7 @@ class TestEvictionSafety:
         assert held.shutdown_calls == 0
 
         fan_out._release(held)
-        self._settle(fan_out, held)
+        assert held.closed.wait(timeout=5)
 
         assert held.shutdown_calls == 1
 

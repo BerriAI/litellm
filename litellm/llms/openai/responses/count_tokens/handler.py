@@ -6,7 +6,7 @@ Uses httpx for HTTP requests to OpenAI's /v1/responses/input_tokens endpoint.
 
 import json
 from collections.abc import Sequence
-from typing import Any, Final
+from typing import Final
 
 import httpx
 
@@ -33,7 +33,7 @@ class OpenAICountTokensHandler(OpenAICountTokensConfig):
         timeout: float | httpx.Timeout | None = None,
         tools: list[dict[str, object]] | None = None,
         instructions: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Handle a token counting request to OpenAI's Responses API.
 

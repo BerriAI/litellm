@@ -37,7 +37,16 @@ from litellm.llms.anthropic.pass_through.context_management.editors.compact impo
 from litellm.llms.anthropic.pass_through.context_management.result import (
     PolyfillResult,
 )
+from litellm.proxy._types import (
+    LiteLLM_BudgetTable,
+    LiteLLM_ProjectTableCachedObj,
+    LiteLLM_TeamMembership,
+    LiteLLM_TeamTableCachedObj,
+    LiteLLM_UserTable,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitUnverifiableError
+from tests.unit.llms.anthropic.pass_through.conftest import ProxyAuthState
 
 MODEL = "openai/gpt-4o"
 
@@ -1201,29 +1210,22 @@ def _fake_user_api_key_auth(
     team_member_model_max_budget=None,
     user_id=None,
     token=None,
+    project_id=None,
 ):
-    """Build a minimal stand-in for ``UserAPIKeyAuth`` with just the fields
-    consulted by ``_check_summary_model_access`` and
-    ``_check_summary_model_budget``. Avoids pulling the proxy deps into this
-    unit test."""
-
-    class _Auth:
-        pass
-
-    auth = _Auth()
-    auth.models = list(key_models) if key_models is not None else []
-    auth.team_models = list(team_models) if team_models is not None else []
-    auth.team_id = team_id
-    auth.team_model_aliases = None
-    auth.model_max_budget = model_max_budget
-    auth.team_model_max_budget = team_model_max_budget
-    auth.end_user_model_max_budget = end_user_model_max_budget
-    auth.end_user_id = end_user_id
-    auth.user_model_max_budget = user_model_max_budget
-    auth.team_member_model_max_budget = team_member_model_max_budget
-    auth.user_id = user_id
-    auth.token = token
-    return auth
+    return UserAPIKeyAuth(
+        models=list(key_models) if key_models is not None else [],
+        team_models=list(team_models) if team_models is not None else [],
+        team_id=team_id,
+        model_max_budget=model_max_budget or {},
+        team_model_max_budget=team_model_max_budget,
+        end_user_model_max_budget=end_user_model_max_budget,
+        end_user_id=end_user_id,
+        user_model_max_budget=user_model_max_budget,
+        team_member_model_max_budget=team_member_model_max_budget,
+        user_id=user_id,
+        token=token,
+        project_id=project_id,
+    )
 
 
 async def test_summary_model_denied_when_key_not_in_allowlist():
@@ -1255,35 +1257,6 @@ async def test_summary_model_denied_when_key_not_in_allowlist():
     assert result.compaction_block is None
     assert result.iterations_usage is None
     assert result.applied_edits[0]["type"] == "compact_20260112"
-    assert result.applied_edits[0].get("error") == "summary_model_access_denied"
-
-
-async def test_summary_model_denied_when_team_not_in_allowlist():
-    """Team-level model allowlist is enforced even if the key allows all models."""
-    messages = _simple_messages()
-    mock_call = AsyncMock(return_value=_make_mock_response("<summary>x</summary>"))
-
-    with (
-        patch(
-            "litellm.llms.anthropic.pass_through.context_management.editors.compact._read_summary_model_setting",
-            return_value="claude-haiku-4-5",
-        ),
-        patch("litellm.token_counter", return_value=200_000),
-        patch(
-            "litellm.llms.anthropic.pass_through.context_management.editors.compact._call_summary_model",
-            mock_call,
-        ),
-    ):
-        result = await apply_compact_20260112(
-            model=MODEL,
-            messages=messages,
-            tools=None,
-            system=None,
-            edit_spec=_EDIT_SPEC_DEFAULT,
-            user_api_key_auth=_fake_user_api_key_auth(key_models=["all-proxy-models"], team_models=["gpt-4o"]),
-        )
-
-    mock_call.assert_not_awaited()
     assert result.applied_edits[0].get("error") == "summary_model_access_denied"
 
 
@@ -1346,20 +1319,7 @@ async def test_summary_model_allowed_when_no_user_api_key_auth():
     assert result.compaction_block is not None
 
 
-async def test_summary_model_denied_when_user_scope_excludes_it():
-    """Personal user allowed-models scope denies the summary model even when
-    key/team allowlists permit it."""
-    messages = _simple_messages()
-    mock_call = AsyncMock(return_value=_make_mock_response("<summary>x</summary>"))
-
-    auth = _fake_user_api_key_auth(key_models=["all-proxy-models"])
-    auth.user_id = "user-123"
-
-    class _User:
-        user_id = "user-123"
-        models = ["gpt-3.5-turbo"]
-        organization_memberships = []
-
+async def _compact_as(auth: UserAPIKeyAuth, summary_call: AsyncMock) -> PolyfillResult:
     with (
         patch(
             "litellm.llms.anthropic.pass_through.context_management.editors.compact._read_summary_model_setting",
@@ -1368,145 +1328,79 @@ async def test_summary_model_denied_when_user_scope_excludes_it():
         patch("litellm.token_counter", return_value=200_000),
         patch(
             "litellm.llms.anthropic.pass_through.context_management.editors.compact._call_summary_model",
-            mock_call,
+            summary_call,
         ),
-        patch(
-            "litellm.proxy.auth.auth_checks.get_user_object",
-            AsyncMock(return_value=_User()),
-        ),
-        patch(
-            "litellm.proxy.auth.auth_checks.get_team_membership",
-            AsyncMock(return_value=None),
-        ),
-        patch(
-            "litellm.proxy.auth.auth_checks.get_project_object",
-            AsyncMock(return_value=None),
-        ),
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
     ):
-        result = await apply_compact_20260112(
+        return await apply_compact_20260112(
             model=MODEL,
-            messages=messages,
+            messages=_simple_messages(),
             tools=None,
             system=None,
             edit_spec=_EDIT_SPEC_DEFAULT,
             user_api_key_auth=auth,
         )
 
-    mock_call.assert_not_awaited()
-    assert result.applied_edits[0].get("error") == "summary_model_access_denied"
 
-
-async def test_summary_model_denied_when_project_scope_excludes_it():
-    """Project allowed-models scope denies the summary model even when
-    key/team allowlists permit it."""
-    messages = _simple_messages()
-    mock_call = AsyncMock(return_value=_make_mock_response("<summary>x</summary>"))
-
-    auth = _fake_user_api_key_auth(key_models=["all-proxy-models"])
-    auth.project_id = "project-1"
-
-    class _Project:
-        project_id = "project-1"
-        models = ["gpt-3.5-turbo"]
-
-    with (
-        patch(
-            "litellm.llms.anthropic.pass_through.context_management.editors.compact._read_summary_model_setting",
-            return_value="claude-haiku-4-5",
+@pytest.mark.parametrize(
+    "auth, rows, summarized",
+    [
+        (
+            _fake_user_api_key_auth(key_models=["all-proxy-models"], team_id="team-1"),
+            (LiteLLM_TeamTableCachedObj(team_id="team-1", models=["claude-haiku-4-5"]),),
+            True,
         ),
-        patch("litellm.token_counter", return_value=200_000),
-        patch(
-            "litellm.llms.anthropic.pass_through.context_management.editors.compact._call_summary_model",
-            mock_call,
+        (
+            _fake_user_api_key_auth(key_models=["all-proxy-models"], team_id="team-1"),
+            (LiteLLM_TeamTableCachedObj(team_id="team-1", models=["gpt-4o"]),),
+            False,
         ),
-        patch(
-            "litellm.proxy.auth.auth_checks.get_user_object",
-            AsyncMock(return_value=None),
+        (
+            _fake_user_api_key_auth(key_models=["all-proxy-models"], user_id="user-123"),
+            (LiteLLM_UserTable(user_id="user-123", models=["gpt-3.5-turbo"]),),
+            False,
         ),
-        patch(
-            "litellm.proxy.auth.auth_checks.get_team_membership",
-            AsyncMock(return_value=None),
+        (
+            _fake_user_api_key_auth(key_models=["all-proxy-models"], project_id="project-1"),
+            (LiteLLM_ProjectTableCachedObj(project_id="project-1", models=["gpt-3.5-turbo"]),),
+            False,
         ),
-        patch(
-            "litellm.proxy.auth.auth_checks.get_project_object",
-            AsyncMock(return_value=_Project()),
+        (
+            _fake_user_api_key_auth(key_models=["all-proxy-models"], team_id="team-1", user_id="user-123"),
+            (
+                LiteLLM_TeamTableCachedObj(team_id="team-1", models=["claude-haiku-4-5"]),
+                LiteLLM_TeamMembership(
+                    user_id="user-123",
+                    team_id="team-1",
+                    litellm_budget_table=LiteLLM_BudgetTable(allowed_models=["gpt-3.5-turbo"]),
+                ),
+            ),
+            False,
         ),
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-    ):
-        result = await apply_compact_20260112(
-            model=MODEL,
-            messages=messages,
-            tools=None,
-            system=None,
-            edit_spec=_EDIT_SPEC_DEFAULT,
-            user_api_key_auth=auth,
-        )
+    ],
+    ids=["team-grants", "team-excludes", "user-excludes", "project-excludes", "team-member-excludes"],
+)
+async def test_summary_model_runs_only_when_every_scope_of_the_caller_grants_it(
+    proxy_auth_state: ProxyAuthState,
+    auth: UserAPIKeyAuth,
+    rows: tuple[
+        LiteLLM_TeamTableCachedObj | LiteLLM_UserTable | LiteLLM_ProjectTableCachedObj | LiteLLM_TeamMembership, ...
+    ],
+    summarized: bool,
+) -> None:
+    proxy_auth_state.seed(*rows)
+    summary_call: Final = AsyncMock(return_value=_make_mock_response("<summary>x</summary>"))
 
-    mock_call.assert_not_awaited()
-    assert result.applied_edits[0].get("error") == "summary_model_access_denied"
+    result: Final = await _compact_as(auth, summary_call)
 
-
-async def test_summary_model_denied_when_team_member_scope_excludes_it():
-    """Per-team-member allowed-models scope denies the summary model even
-    when key/team allowlists permit it."""
-    messages = _simple_messages()
-    mock_call = AsyncMock(return_value=_make_mock_response("<summary>x</summary>"))
-
-    auth = _fake_user_api_key_auth(key_models=["all-proxy-models"], team_id="team-1")
-    auth.user_id = "user-123"
-
-    class _Budget:
-        allowed_models = ["gpt-3.5-turbo"]
-
-    class _Membership:
-        litellm_budget_table = _Budget()
-
-    with (
-        patch(
-            "litellm.llms.anthropic.pass_through.context_management.editors.compact._read_summary_model_setting",
-            return_value="claude-haiku-4-5",
-        ),
-        patch("litellm.token_counter", return_value=200_000),
-        patch(
-            "litellm.llms.anthropic.pass_through.context_management.editors.compact._call_summary_model",
-            mock_call,
-        ),
-        patch(
-            "litellm.proxy.auth.auth_checks.get_user_object",
-            AsyncMock(return_value=None),
-        ),
-        patch(
-            "litellm.proxy.auth.auth_checks.get_team_membership",
-            AsyncMock(return_value=_Membership()),
-        ),
-        patch(
-            "litellm.proxy.auth.auth_checks.get_project_object",
-            AsyncMock(return_value=None),
-        ),
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-    ):
-        result = await apply_compact_20260112(
-            model=MODEL,
-            messages=messages,
-            tools=None,
-            system=None,
-            edit_spec=_EDIT_SPEC_DEFAULT,
-            user_api_key_auth=auth,
-        )
-
-    mock_call.assert_not_awaited()
-    assert result.applied_edits[0].get("error") == "summary_model_access_denied"
+    assert summary_call.await_count == (1 if summarized else 0)
+    assert result.applied_edits[0].get("error") == (None if summarized else "summary_model_access_denied")
 
 
-async def test_summary_model_denied_when_team_membership_read_hits_a_db_outage():
+async def test_summary_model_denied_when_team_membership_read_hits_a_db_outage(
+    proxy_auth_state: ProxyAuthState,
+) -> None:
     """A member-level scope that cannot be read fails closed: the summary
     model is not invoked while the membership row is unreachable."""
-    messages = _simple_messages()
-    mock_call = AsyncMock(return_value=_make_mock_response("<summary>x</summary>"))
-
-    auth = _fake_user_api_key_auth(key_models=["all-proxy-models"], team_id="team-outage")
-    auth.user_id = "user-outage"
 
     class _UnreachableMembershipPrisma:
         class db:
@@ -1515,36 +1409,16 @@ async def test_summary_model_denied_when_team_membership_read_hits_a_db_outage()
                 async def find_unique(where: dict[str, dict[str, str]], include: dict[str, bool]) -> None:
                     raise httpx.ConnectError("All connection attempts failed")
 
-    with (
-        patch(
-            "litellm.llms.anthropic.pass_through.context_management.editors.compact._read_summary_model_setting",
-            return_value="claude-haiku-4-5",
-        ),
-        patch("litellm.token_counter", return_value=200_000),
-        patch(
-            "litellm.llms.anthropic.pass_through.context_management.editors.compact._call_summary_model",
-            mock_call,
-        ),
-        patch(
-            "litellm.proxy.auth.auth_checks.get_user_object",
-            AsyncMock(return_value=None),
-        ),
-        patch(
-            "litellm.proxy.auth.auth_checks.get_project_object",
-            AsyncMock(return_value=None),
-        ),
-        patch("litellm.proxy.proxy_server.prisma_client", _UnreachableMembershipPrisma()),
-    ):
-        result = await apply_compact_20260112(
-            model=MODEL,
-            messages=messages,
-            tools=None,
-            system=None,
-            edit_spec=_EDIT_SPEC_DEFAULT,
-            user_api_key_auth=auth,
+    proxy_auth_state.seed(LiteLLM_TeamTableCachedObj(team_id="team-outage", models=["claude-haiku-4-5"]))
+    summary_call: Final = AsyncMock(return_value=_make_mock_response("<summary>x</summary>"))
+
+    with patch("litellm.proxy.proxy_server.prisma_client", _UnreachableMembershipPrisma()):
+        result: Final = await _compact_as(
+            _fake_user_api_key_auth(key_models=["all-proxy-models"], team_id="team-outage", user_id="user-outage"),
+            summary_call,
         )
 
-    mock_call.assert_not_awaited()
+    summary_call.assert_not_awaited()
     assert result.applied_edits[0].get("error") == "summary_model_access_denied"
 
 

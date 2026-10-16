@@ -110,7 +110,9 @@ The following arguments are supported:
 
 * `custom_llm_provider` - (Required) string. The LLM provider for this model (e.g., "openai", "anthropic", "azure", "bedrock").
 
-* `model_api_key` - (Optional) string (Sensitive). The API key for the underlying model provider. Sensitive attributes are hidden from Terraform output but still stored in plaintext in the state file; prefer storing provider secrets in a `litellm_credential` and referencing it via `litellm_credential_name`, and secure your state backend.
+* `model_api_key` - (Optional) string (Sensitive). The API key for the underlying model provider. Sensitive attributes are hidden from Terraform output but still stored in plaintext in the state file; use `model_api_key_wo` or a `litellm_credential` referenced via `litellm_credential_name` to keep it out of state. Conflicts with `model_api_key_wo`.
+* `model_api_key_wo` - (Optional, Write-only) string (Sensitive). Same as `model_api_key`, but sent to the proxy on every apply and never written to plan or state. Requires Terraform 1.11 or later and `model_api_key_wo_version`.
+* `model_api_key_wo_version` - (Optional) integer. Bump it whenever `model_api_key_wo` changes to trigger an update, since write-only values produce no diff on their own.
 
 * `model_api_base` - (Optional) string. The base URL for the model provider's API.
 
@@ -169,7 +171,9 @@ The following arguments are supported:
 
 * `vertex_location` - (Optional) string. Vertex AI location (e.g., `us-central1`).
 
-* `vertex_credentials` - (Optional) string. Vertex credentials (JSON string or path depending on your setup).
+* `vertex_credentials` - (Optional) string (Sensitive). Vertex credentials (JSON string or path depending on your setup). Stored in plaintext in the state file. Conflicts with `vertex_credentials_wo`.
+* `vertex_credentials_wo` - (Optional, Write-only) string (Sensitive). Same as `vertex_credentials`, but never written to plan or state. Requires Terraform 1.11 or later and `vertex_credentials_wo_version`.
+* `vertex_credentials_wo_version` - (Optional) integer. Bump it whenever `vertex_credentials_wo` changes to trigger an update.
 
 * `additional_litellm_params` - (Optional) map(string). A map of arbitrary additional parameters that will be merged into the `litellm_params` object sent to the LiteLLM API. This is intended for provider-specific or experimental options not exposed as dedicated arguments.
 
@@ -213,7 +217,9 @@ The following arguments are supported:
 
 * `aws_access_key_id` - (Optional) string (Sensitive). AWS access key ID for AWS-based models.
 
-* `aws_secret_access_key` - (Optional) string (Sensitive). AWS secret access key for AWS-based models. As with `model_api_key`, the value is stored in plaintext in the state file; prefer a `litellm_credential` referenced via `litellm_credential_name` and secure your state backend.
+* `aws_secret_access_key` - (Optional) string (Sensitive). AWS secret access key for AWS-based models. As with `model_api_key`, the value is stored in plaintext in the state file; use `aws_secret_access_key_wo` or a `litellm_credential` referenced via `litellm_credential_name` to keep it out of state. Conflicts with `aws_secret_access_key_wo`.
+* `aws_secret_access_key_wo` - (Optional, Write-only) string (Sensitive). Same as `aws_secret_access_key`, but never written to plan or state. Requires Terraform 1.11 or later and `aws_secret_access_key_wo_version`.
+* `aws_secret_access_key_wo_version` - (Optional) integer. Bump it whenever `aws_secret_access_key_wo` changes to trigger an update.
 
 * `aws_region_name` - (Optional) string. AWS region name for AWS-based models.
 

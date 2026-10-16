@@ -587,3 +587,24 @@ def test_maybe_raise_for_error_event_maps_vector_store_timeout_to_retriable_504(
     with pytest.raises(MidStreamFallbackError) as exc_info:
         iterator._maybe_raise_for_error_event(chunk)
     assert exc_info.value.status_code == 504
+
+
+@pytest.mark.parametrize(
+    ("code", "status_code", "exception_type"),
+    [
+        ("rate_limit_exceeded", 429, litellm.RateLimitError),
+        ("server_error", 500, litellm.InternalServerError),
+        (429, 429, litellm.RateLimitError),
+    ],
+)
+def test_openai_top_level_error_event_keeps_the_provider_code_and_message(
+    code: str | int, status_code: int, exception_type: type[Exception]
+):
+    chunk = ErrorEvent(
+        type=ResponsesAPIStreamEvents.ERROR, sequence_number=3, code=code, message=f"upstream said {code}"
+    )
+    with pytest.raises(MidStreamFallbackError) as exc_info:
+        _make_iterator()._maybe_raise_for_error_event(chunk)
+    assert exc_info.value.status_code == status_code
+    assert type(exc_info.value.original_exception) is exception_type
+    assert f"upstream said {code}" in str(exc_info.value.original_exception)
