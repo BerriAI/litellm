@@ -67,6 +67,7 @@ from litellm.constants import (
     AIOHTTP_NEEDS_CLEANUP_CLOSED,
     AIOHTTP_TTL_DNS_CACHE,
     AUDIO_SPEECH_CHUNK_SIZE,
+    AWS_ERROR_TYPE_HEADER,
     BACKGROUND_HEALTH_CHECK_DB_SAVE_JOB_NAME,
     BASE_MCP_ROUTE,
     DAILY_TAG_SPEND_BATCH_MULTIPLIER,
@@ -97,6 +98,7 @@ from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.token_counter import offload_token_count
 from litellm.proxy._types import (
     UI_TEAM_ID,
+    AwsErrorTypeProxyException,
     CallbackDelete,
     CallInfo,
     CommonProxyErrors,
@@ -2062,6 +2064,17 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
         status_code=status_code,
         content={"error": error_dict},
         headers=headers,
+    )
+
+
+@app.exception_handler(AwsErrorTypeProxyException)
+async def aws_error_type_exception_handler(request: Request, exc: AwsErrorTypeProxyException) -> Response:
+    """The ProxyException response plus the ``x-amzn-errortype`` header and top-level ``message`` an AWS SDK reads."""
+    response: Final = await openai_exception_handler(request, exc.error)
+    return JSONResponse(
+        status_code=response.status_code,
+        content={"message": exc.error.message, **JSON_OBJECT.validate_json(bytes(response.body))},
+        headers={**exc.error.headers, AWS_ERROR_TYPE_HEADER: exc.aws_error_type},
     )
 
 
