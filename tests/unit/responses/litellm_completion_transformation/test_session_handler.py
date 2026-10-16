@@ -17,7 +17,9 @@ from litellm.responses.litellm_completion_transformation.session_handler import 
     ResponsesSessionHandler,
     _normalize_redacted_tool_call_arguments,
 )
+from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import Message
 
 
@@ -674,8 +676,11 @@ async def test_message_history_replays_a_bridged_mcp_turn_stored_under_the_clien
                             "status": "completed",
                             "content": [{"type": "output_text", "text": "PING", "annotations": []}],
                         },
-                        {"type": "mcp_tools_fetched", "tools": [{"name": "demo-echo"}]},
-                        {"type": "tool_execution_results", "results": [{"tool_name": "demo-echo", "result": "PING"}]},
+                        *LiteLLM_Proxy_MCP_Handler.add_mcp_output_elements_to_response(
+                            ResponsesAPIResponse(id=client_response_id, created_at=0, output=[]),
+                            mcp_tools_fetched=[{"name": "demo-echo"}],
+                            tool_results=[{"tool_name": "demo-echo", "result": "PING"}],
+                        ).output,
                     ],
                 },
             },

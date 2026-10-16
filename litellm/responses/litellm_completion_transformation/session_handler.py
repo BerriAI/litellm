@@ -49,10 +49,17 @@ def _is_a_conversation_turn(spend_log: "SpendLogsPayload") -> bool:
     return spend_log.get("call_type") not in _MCP_TOOL_CALL_TYPES
 
 
+_MCP_AUTO_EXECUTE_OUTPUT_TYPES: Final = frozenset(("mcp_tools_fetched", "tool_execution_results"))
+
+
+def _is_model_output(item: object) -> bool:
+    return not (isinstance(item, Mapping) and item.get("type") in _MCP_AUTO_EXECUTE_OUTPUT_TYPES)
+
+
 def _stored_responses_api_output(stored_response: object) -> ResponseInputParam | None:
     match stored_response:
         case {"object": "response", "output": list() as output}:
-            return output
+            return [item for item in output if _is_model_output(item)]
         case {"object": "response"}:
             return []
         case _:
