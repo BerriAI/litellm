@@ -458,6 +458,29 @@ describe("PlaygroundChat", () => {
     expect(screen.getByText("No guardrails or policies ran on this request")).toBeInTheDocument();
   });
 
+  it("does not claim policies were skipped when the gateway's own headers are hidden", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: true,
+      media: query,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }));
+    chatRequest.mockImplementationOnce(async (...args: ChatArgs) => {
+      args[27]?.(new Headers({ "content-type": "application/json" }));
+      args[1]("cross-origin reply", args[2]);
+    });
+    preload({ selectedModel: "gpt-fast" });
+    renderChat();
+
+    await send(user, "hello");
+    expect(await screen.findByText("cross-origin reply")).toBeInTheDocument();
+    expect(
+      screen.getByText("Policies are only reported when the dashboard is opened from the proxy"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/policies ran on this request/)).not.toBeInTheDocument();
+  });
+
   it("keeps a stopped request's gateway details off the newer reply", async () => {
     const user = userEvent.setup();
     vi.stubGlobal("matchMedia", (query: string) => ({

@@ -147,9 +147,14 @@ function Routing({ message }: { message: MessageType }) {
   );
 }
 
+const noneRan = (policies: readonly string[] | undefined): string | null => {
+  if (policies === undefined) return "No guardrails ran on this request";
+  return policies.length === 0 ? "No guardrails or policies ran on this request" : null;
+};
+
 function Guardrails({ message }: { message: MessageType }) {
   const guardrails = message.trace?.appliedGuardrails;
-  const policies = message.trace?.appliedPolicies ?? [];
+  const policies = message.trace?.appliedPolicies;
   if (guardrails === undefined) {
     return (
       <TraceSection value="guardrails" title="Guardrails and policies">
@@ -157,6 +162,7 @@ function Guardrails({ message }: { message: MessageType }) {
       </TraceSection>
     );
   }
+  const emptyNote = guardrails.length === 0 ? noneRan(policies) : null;
   return (
     <TraceSection value="guardrails" title="Guardrails and policies">
       {guardrails.map((name) => (
@@ -164,12 +170,13 @@ function Guardrails({ message }: { message: MessageType }) {
           <Badge variant="secondary">Ran</Badge>
         </TraceRow>
       ))}
-      {policies.map((name) => (
+      {policies?.map((name) => (
         <TraceRow key={`p-${name}`} title={name} description="Policy">
           <Badge variant="secondary">Ran</Badge>
         </TraceRow>
       ))}
-      {guardrails.length === 0 && policies.length === 0 && <Muted>No guardrails or policies ran on this request</Muted>}
+      {emptyNote && <Muted>{emptyNote}</Muted>}
+      {policies === undefined && <Muted>Policies are only reported when the dashboard is opened from the proxy</Muted>}
     </TraceSection>
   );
 }

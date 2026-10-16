@@ -10,7 +10,7 @@ export type GatewayTrace = Readonly<{
   responseMs?: number;
   cost?: number;
   appliedGuardrails: readonly string[];
-  appliedPolicies: readonly string[];
+  appliedPolicies?: readonly string[];
   cacheHit: boolean;
 }>;
 
@@ -44,6 +44,6 @@ export const gatewayTraceFromHeaders = (headers: Headers): GatewayTrace => ({
   responseMs: number(headers, "x-litellm-response-duration-ms"),
   cost: number(headers, "x-litellm-response-cost"),
   appliedGuardrails: list(headers, "x-litellm-applied-guardrails"),
-  appliedPolicies: list(headers, "x-litellm-applied-policies"),
+  appliedPolicies: headers.has("x-litellm-call-id") ? list(headers, "x-litellm-applied-policies") : undefined,
   cacheHit: text(headers, "x-litellm-cache-key") !== undefined,
 });

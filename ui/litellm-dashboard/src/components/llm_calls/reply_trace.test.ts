@@ -52,4 +52,13 @@ describe("gatewayTraceFromHeaders", () => {
     expect(trace.appliedGuardrails).toEqual([]);
     expect(trace.cacheHit).toBe(false);
   });
+
+  it("leaves policies unknown when the gateway's own headers are hidden from the page", () => {
+    const hidden = gatewayTraceFromHeaders(new Headers({ "x-litellm-applied-guardrails": "pii-mask" }));
+    const visible = gatewayTraceFromHeaders(new Headers({ "x-litellm-call-id": "call-1" }));
+
+    expect(hidden.appliedGuardrails).toEqual(["pii-mask"]);
+    expect(hidden.appliedPolicies).toBeUndefined();
+    expect(visible.appliedPolicies).toEqual([]);
+  });
 });
