@@ -355,15 +355,16 @@ describe("customer payload", () => {
       ...toCustomerFormValues(stored),
       mcp_servers_and_groups: { servers: [keptServer.server_id], accessGroups: [], toolsets: [] },
     };
-
-    expect(
-      buildCustomerPayload(values, stored, [sharedServer, anotherSharedServer, keptServer], []).object_permission,
-    ).toEqual({
+    const grant = {
       mcp_servers: [keptServer.server_id],
       mcp_access_groups: [],
       mcp_toolsets: [],
       mcp_tool_permissions: {},
-    });
+    };
+
+    expect(
+      buildCustomerPayload(values, stored, [sharedServer, anotherSharedServer, keptServer], []).object_permission,
+    ).toEqual(grant);
   });
 
   it("keeps the stored ID of an existing customer exactly as stored", () => {
