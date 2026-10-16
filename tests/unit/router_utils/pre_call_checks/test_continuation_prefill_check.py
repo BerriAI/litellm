@@ -196,14 +196,14 @@ async def test_continuation_output_drops_only_a_full_echo_of_the_prefill(
 
 
 @pytest.mark.parametrize(
-    "emitted_text,prefill_content,fallback_texts,expected_texts",
+    "prefill,fallback_texts,expected_texts",
     [
-        ("Transformers use ", "Transformers use", ("self-attention",), ("self-attention",)),
-        ("Hello ", "Hello", ("Hello", " world"), ("", "world")),
-        ("Hello \n", "Hello", ("\nworld",), ("\nworld",)),
-        ("A.\n\n", "A.", ("\n Hi", "\nthere"), (" Hi", "\nthere")),
-        ("\n\n", "\n\n", ("\nHi",), ("\nHi",)),
-        ("\nHello\n", "\nHello", ("\n",), ("",)),
+        ("Transformers use ", ("self-attention",), ("self-attention",)),
+        ("Hello ", ("Hello ", " world"), ("", "world")),
+        ("Hello \n", ("\nworld",), ("\nworld",)),
+        ("A.\n\n", ("\n Hi", "\nthere"), (" Hi", "\nthere")),
+        ("\n\n", ("\nHi",), ("\nHi",)),
+        ("\nHello\n", ("\n",), ("",)),
     ],
     ids=[
         "continuation_without_whitespace_passes_through",
@@ -216,11 +216,9 @@ async def test_continuation_output_drops_only_a_full_echo_of_the_prefill(
 )
 @pytest.mark.asyncio
 async def test_continuation_output_drops_only_whitespace_the_client_already_has(
-    emitted_text, prefill_content, fallback_texts, expected_texts
+    prefill, fallback_texts, expected_texts
 ):
-    output = ContinuationOutput(
-        emitted_text, {"role": "assistant", "content": prefill_content, "prefix": True}, "group", ()
-    )
+    output = ContinuationOutput(prefill, {"role": "assistant", "content": prefill, "prefix": True}, "group", ())
 
     async def fallback_stream():
         for text in fallback_texts:

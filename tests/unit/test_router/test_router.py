@@ -3255,16 +3255,16 @@ async def test_acompletion_streaming_iterator_plain_fallback_keeps_the_fallback_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "partial,fallback_texts,expected_prefill,expected_answer",
+    "partial,fallback_texts,expected_answer",
     [
-        ("Transformers use ", (" self", "-attention"), "Transformers use", "Transformers use self-attention"),
-        ("def f():\n  ", ("\n", "    return 1"), "def f():", "def f():\n    return 1"),
-        ("First.\n", ("\n\nSecond",), "First.", "First.\n\nSecond"),
+        ("Transformers use ", (" self", "-attention"), "Transformers use self-attention"),
+        ("def f():\n  ", ("\n", "    return 1"), "def f():\n    return 1"),
+        ("First.\n", ("\n\nSecond",), "First.\n\nSecond"),
     ],
     ids=["space", "indentation", "paragraph_break"],
 )
 async def test_acompletion_streaming_iterator_continuation_does_not_double_trailing_whitespace(
-    partial, fallback_texts, expected_prefill, expected_answer
+    partial, fallback_texts, expected_answer
 ):
     from litellm.exceptions import MidStreamFallbackError
 
@@ -3280,7 +3280,7 @@ async def test_acompletion_streaming_iterator_continuation_does_not_double_trail
         _continuation_router(), error, [], [{"role": "user", "content": "Hi"}], fallback_items
     )
 
-    assert passed_kwargs["messages"][-1]["content"] == expected_prefill
+    assert passed_kwargs["messages"][-1]["content"] == partial
     assert partial + "".join(chunk.choices[0].delta.content for chunk in streamed) == expected_answer
 
 
@@ -3452,14 +3452,24 @@ def test_build_completion_continuation_input_appends_assistant_prefill():
     assert built[-1] == {"role": "assistant", "content": "partial answer", "prefix": True}
 
 
-def test_build_completion_continuation_input_folds_into_existing_prefill():
-    """A nested break must not leave two trailing assistant turns: the new partial
-    folds into the prior prefill so a non-merging provider still gets one."""
-    once = litellm.Router._build_completion_continuation_input([{"role": "user", "content": "hi"}], "part one ")
-    twice = litellm.Router._build_completion_continuation_input(list(once), " part two ")
-    assert once[-1]["content"] == "part one"
-    assert [m["role"] for m in twice] == ["user", "assistant"]
-    assert twice[-1] == {"role": "assistant", "content": "part one part two", "prefix": True}
+@pytest.mark.parametrize(
+    "prefill_content,second_partial,expected_content",
+    [
+        ("part one ", " part two ", "part one part two "),
+        ("part one ", "part two ", "part one part two "),
+        ("First.\n\n", "Second", "First.\n\nSecond"),
+        ([{"type": "text", "text": "part one "}], " part two ", [{"type": "text", "text": "part one part two "}]),
+    ],
+    ids=["separator_sent_again", "separator_not_sent_again", "paragraph_break_not_sent_again", "content_blocks"],
+)
+def test_build_completion_continuation_input_folds_into_existing_prefill(
+    prefill_content, second_partial, expected_content
+):
+    """A nested break must not leave two trailing assistant turns: the new partial folds into the prior prefill,
+    which keeps reading as the text the caller already received."""
+    messages = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": prefill_content, "prefix": True}]
+    built = litellm.Router._build_completion_continuation_input(messages, second_partial)
+    assert built == [messages[0], {"role": "assistant", "content": expected_content, "prefix": True}]
 
 
 @pytest.mark.parametrize(

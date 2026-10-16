@@ -528,16 +528,12 @@ _UNCONSTRAINED_RESPONSE_FORMAT: Final[Mapping[str, str]] = MappingProxyType({"ty
 _CONTENT_BLOCKS_ADAPTER: Final = TypeAdapter(list[dict[str, object]])
 
 
-def _prefill_stem(text: str) -> str:
-    return text.rstrip() or text
-
-
 def _extend_trailing_text_block(blocks: Sequence[Mapping[str, object]], text: str) -> Sequence[Mapping[str, object]]:
     """Continue the last text block in place so the prefill reads as the text the caller already received."""
     last: Final = blocks[-1] if blocks else None
     if last is not None and last.get("type") == "text" and isinstance(last_text := last.get("text"), str):
-        return [*blocks[:-1], {**last, "text": _prefill_stem(f"{last_text}{text}")}]
-    return [*blocks, {"type": "text", "text": _prefill_stem(text)}]
+        return [*blocks[:-1], {**last, "text": f"{last_text}{text}"}]
+    return [*blocks, {"type": "text", "text": text}]
 
 
 def _is_fallback_hop(request_kwargs: Mapping[str, object]) -> bool:
@@ -3555,15 +3551,15 @@ class Router:
         turn, or in a prefill turn whose content has a shape this cannot extend."""
         last: Final = messages[-1] if messages else None
         if last is None or last.get("role") != "assistant":
-            return [*messages, {"role": "assistant", "content": _prefill_stem(generated_content), "prefix": True}]
+            return [*messages, {"role": "assistant", "content": generated_content, "prefix": True}]
         if last.get("prefix") is not True:
             return None
-        from litellm.router_utils.pre_call_checks.continuation_prefill_check import without_prefill_echo
+        from litellm.router_utils.pre_call_checks.continuation_prefill_check import continued_text
 
-        new_text: Final = without_prefill_echo(last, generated_content)
+        new_text: Final = continued_text(last, generated_content)
         content: Final = last.get("content")
         if content is None or isinstance(content, str):
-            return [*messages[:-1], {**last, "content": _prefill_stem(f"{content or ''}{new_text}"), "prefix": True}]
+            return [*messages[:-1], {**last, "content": f"{content or ''}{new_text}", "prefix": True}]
         try:
             blocks: Final = _CONTENT_BLOCKS_ADAPTER.validate_python(content)
         except ValidationError:

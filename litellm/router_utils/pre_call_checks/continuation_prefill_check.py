@@ -85,13 +85,15 @@ def _prefill_text(prefill_message: Mapping[str, object]) -> str:
     )
 
 
-def without_prefill_echo(prefill_message: Mapping[str, object], generated_content: str) -> str:
+def _resendable_whitespace(prefill: str) -> str:
+    return prefill[len(prefill.rstrip()) :] if prefill.strip() else ""
+
+
+def continued_text(prefill_message: Mapping[str, object], generated_content: str) -> str:
     prefill: Final = _prefill_text(prefill_message)
-    return generated_content[len(prefill) :] if prefill and generated_content.startswith(prefill) else generated_content
-
-
-def _trailing_whitespace(text: str) -> str:
-    return text[len(text.rstrip()) :]
+    echo: Final = len(prefill) if prefill and generated_content.startswith(prefill) else 0
+    after_echo: Final = generated_content[echo:]
+    return after_echo[len(commonprefix((after_echo, _resendable_whitespace(prefill)))) :]
 
 
 def _with_first_delta(chunk: ModelResponseStream, update: Mapping[str, object]) -> ModelResponseStream:
@@ -129,8 +131,8 @@ def _drop_leading_text(chunks: tuple[ModelResponseStream, ...], count: int) -> t
 
 class ContinuationOutput:
     """Splices a fallback's continuation onto the stream the client already received. Drops a leading echo of the
-    prefill, since some providers (Mistral) return the prefix inside the completion, and the re-emitted part of the
-    trailing whitespace the prefill left out, keeps the primary's chunk id, created time and single role delta, and
+    prefill, since some providers (Mistral) return the prefix inside the completion, and the prefill's trailing
+    whitespace sent again by a provider that strips it (Anthropic), keeps the primary's chunk id, created time and single role delta, and
     runs litellm.post_call_rules over the joined text, since each stream wrapper only sees its own fragment."""
 
     def __init__(
@@ -147,9 +149,7 @@ class ContinuationOutput:
         self._rules: Final = Rules()
         self._held: tuple[ModelResponseStream, ...] = ()
         self._echo_settled = not self._prefill_text
-        self._seam = (
-            _trailing_whitespace(emitted_text) if self._prefill_text and not self._prefill_text[-1].isspace() else ""
-        )
+        self._seam = _resendable_whitespace(self._prefill_text)
 
     async def splice(self, stream: AsyncIterable[object]) -> AsyncIterator[object]:
         async for item in stream:

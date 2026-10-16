@@ -118,7 +118,6 @@ ignored_function_names = [
     "_set_mid_stream_fallback_continuation",  # Tested through the update_settings continuation test in test_router.py
     "_is_flag_enabled",  # Tested through the string-flag continuation tests in test_router.py
     "_set_retry_policy",  # Tested through update_settings in test_router_retry_policy_update.py
-    "_prefill_stem",  # Tested through the trailing-whitespace continuation tests in test_router.py
 ]
 
 
