@@ -3,9 +3,9 @@
 Every pull request whose diff against its merge base touches one of the three cost map files gets the file
 checks: the files parse, the backup copy matches the root file, and the JSON schema is in sync and validates the
 map. A pull request that leaves all three untouched skips them, since merging it keeps the base branch's copies
-and its head tree only carries whatever state the branch was cut from. Pull requests from the cost map sync bot
-(branches named litellm_cost_map_sync_*) always get the file checks and additionally may only touch those three
-files and may only add or update models.
+and its head tree only carries whatever state the branch was cut from. Pull requests from the cost map sync bots
+(branches named litellm-providers/price-sync* or litellm_cost_map_sync_*) always get the file checks and additionally
+may only touch those three files and may only add or update models.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ COST_MAP_PATH: Final = "model_prices_and_context_window.json"
 BACKUP_PATH: Final = "litellm/model_prices_and_context_window_backup.json"
 SCHEMA_PATH: Final = "model_prices_and_context_window.schema.json"
 GUARDED_PATHS: Final = (COST_MAP_PATH, BACKUP_PATH, SCHEMA_PATH)
-BOT_BRANCH_PREFIX: Final = "litellm_cost_map_sync_"
+BOT_BRANCH_PREFIXES: Final = ("litellm-providers/price-sync", "litellm_cost_map_sync_")
 EVALUATION_OUTPUT_PRICE_SOURCES: Final[Mapping[str, str]] = MappingProxyType({})
 
 CostMap = dict[str, object]
@@ -198,7 +198,7 @@ def main(argv: Sequence[str]) -> int:
     parser.add_argument("--head", required=True, help="head commit of the pull request")
     parser.add_argument("--head-ref", required=True, help="head branch name of the pull request")
     args: Final = parser.parse_args(argv)
-    bot: Final = args.head_ref.startswith(BOT_BRANCH_PREFIX)
+    bot: Final = args.head_ref.startswith(BOT_BRANCH_PREFIXES)
     changed: Final = changed_files(args.base, args.head)
     if changed is None:
         print(f"cost map guard failed: git diff {args.base} {args.head} failed, so the changed files are unknown")
