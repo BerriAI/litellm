@@ -226,6 +226,29 @@ def test_completion_cost_returns_zero_for_capability_only_generalization(
     assert cost == 0.0
 
 
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "hosted_vllm"])
+def test_completion_cost_prices_base_model_under_its_own_provider(
+    custom_llm_provider: str, _local_model_cost_map: None
+) -> None:
+    response: Final = ModelResponse(
+        model="my-deploy",
+        choices=[],
+        usage=Usage(prompt_tokens=1000, completion_tokens=1000, total_tokens=2000),
+    )
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model=f"{custom_llm_provider}/my-deploy",
+        custom_llm_provider=custom_llm_provider,
+        base_model="claude-sonnet-4-5",
+    )
+
+    info: Final = litellm.get_model_info("claude-sonnet-4-5", custom_llm_provider="anthropic")
+    assert cost == pytest.approx(
+        1000 * info["input_cost_per_token"] + 1000 * info["output_cost_per_token"]
+    )
+
+
 def test_completion_cost_strips_dated_azure_snapshot_model(_local_model_cost_map: None) -> None:
     dated_response = ModelResponse(
         model="gpt-5.6-luna-2099-01-01",
