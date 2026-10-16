@@ -438,3 +438,75 @@ async def test_async_fake_streamed_json_mode_answer_keeps_the_reasoning_of_the_n
     assert _streamed_thinking_blocks(chunks) == [
         {**block, "index": index} for index, block in enumerate(answer.choices[0].message.thinking_blocks)
     ]
+
+
+LLAMA_TEXT_TOOL_CALL_CONVERSE_RESPONSE: Final = {
+    "output": {
+        "message": {
+            "role": "assistant",
+            "content": [{"text": '{"type": "function", "name": "get_weather", "parameters": {"city": "Paris"}}'}],
+        }
+    },
+    "stopReason": "end_turn",
+    "usage": {"inputTokens": 175, "outputTokens": 23, "totalTokens": 198},
+}
+
+
+def _answer_with_llama_text_tool_call(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(200, json=LLAMA_TEXT_TOOL_CALL_CONVERSE_RESPONSE, request=request)
+
+
+def _llama_tool_kwargs() -> dict[str, object]:
+    return {
+        "model": "bedrock/us.meta.llama3-3-70b-instruct-v1:0",
+        "messages": [{"role": "user", "content": "What is the weather in Paris right now?"}],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}},
+                        "required": ["city"],
+                    },
+                },
+            }
+        ],
+        "aws_access_key_id": "fake",
+        "aws_secret_access_key": "fake",
+        "aws_region_name": "us-east-1",
+    }
+
+
+def _tool_answer(response: ModelResponse) -> tuple[object, ...]:
+    choice: Final = response.choices[0]
+    return (
+        choice.finish_reason,
+        choice.message.content,
+        [(call.function.name, call.function.arguments) for call in choice.message.tool_calls or []],
+    )
+
+
+def test_fake_streamed_text_tool_call_arrives_as_the_tool_call_of_the_non_streamed_answer() -> None:
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_answer_with_llama_text_tool_call)))
+    kwargs: Final = _llama_tool_kwargs()
+
+    answer: Final = litellm.completion(client=client, **kwargs)
+    chunks: Final = list(litellm.completion(client=client, stream=True, **kwargs))
+
+    assert _tool_answer(answer) == ("tool_calls", None, [("get_weather", '{"city": "Paris"}')])
+    assert _tool_answer(litellm.stream_chunk_builder(chunks, messages=kwargs["messages"])) == _tool_answer(answer)
+
+
+@pytest.mark.asyncio
+async def test_async_fake_streamed_text_tool_call_arrives_as_the_tool_call_of_the_non_streamed_answer() -> None:
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_answer_with_llama_text_tool_call))
+    kwargs: Final = _llama_tool_kwargs()
+
+    answer: Final = await litellm.acompletion(client=client, **kwargs)
+    stream: Final = await litellm.acompletion(client=client, stream=True, **kwargs)
+    chunks: Final = [chunk async for chunk in stream]
+
+    assert _tool_answer(answer) == ("tool_calls", None, [("get_weather", '{"city": "Paris"}')])
+    assert _tool_answer(litellm.stream_chunk_builder(chunks, messages=kwargs["messages"])) == _tool_answer(answer)

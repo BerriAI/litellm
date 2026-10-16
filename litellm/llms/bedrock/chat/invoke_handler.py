@@ -228,6 +228,7 @@ async def make_call(
     bedrock_invoke_provider: litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL | None = None,
     stream_chunk_size: int | None = None,
     timeout: float | httpx.Timeout | None = None,
+    optional_params: Mapping[str, object] | None = None,
 ) -> tuple[
     base_model_iterator.MockResponseIterator | AsyncIterator[GChunk | ModelResponseStream | dict], httpx.Headers
 ]:
@@ -266,7 +267,7 @@ async def make_call(
                 model_response=litellm.ModelResponse(),
                 stream=True,
                 logging_obj=logging_obj,
-                optional_params={},
+                optional_params=dict(optional_params or {}),
                 api_key="",
                 data=data,
                 messages=messages,
