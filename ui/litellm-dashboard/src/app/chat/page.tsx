@@ -14,7 +14,7 @@ import { getChatRoutes } from "@/components/chat/ChatShell";
 import ChatMessages from "@/components/chat/ChatMessages";
 import MCPConnectPicker from "@/components/chat/MCPConnectPicker";
 import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
-import { makeOpenAIResponsesRequest } from "@/components/llm_calls/responses_api";
+import { makeOpenAIResponsesRequest, type ResponsesMessage } from "@/components/llm_calls/responses_api";
 import type { TokenUsage } from "@/components/chat_ui/ResponseMetrics";
 import type { MCPEvent } from "@/components/chat/types";
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
@@ -150,7 +150,7 @@ export default function ChatConversationPage() {
   }, []);
 
   const handleSend = useCallback(
-    async (text: string, historyOverride?: Array<{ role: "user" | "assistant"; content: string }>) => {
+    async (text: string, historyOverride?: ResponsesMessage[]) => {
       const trimmed = text.trim();
       if (!trimmed || !selectedModel || isStreaming) return;
       const model = selectedModel;
@@ -181,7 +181,7 @@ export default function ChatConversationPage() {
 
       const previousResponseId = historyOverride || statelessModelGroups.has(model) ? null : responsesSessionId;
 
-      const history: Array<{ role: "user" | "assistant"; content: string }> = historyOverride
+      const history: ResponsesMessage[] = historyOverride
         ? [...historyOverride, { role: "user" as const, content: trimmed }]
         : previousResponseId
           ? [{ role: "user" as const, content: trimmed }]
@@ -192,7 +192,7 @@ export default function ChatConversationPage() {
                 .filter(
                   (m): m is typeof m & { role: "user" | "assistant" } => m.role === "user" || m.role === "assistant",
                 )
-                .map((m) => ({ role: m.role, content: m.content })),
+                .map((m) => ({ role: m.role, content: m.content, mcpEvents: m.mcpEvents })),
               { role: "user" as const, content: trimmed },
             ];
 
@@ -296,7 +296,7 @@ export default function ChatConversationPage() {
       const idx = msgs.findIndex((m) => m.id === messageId);
       const priorMessages = (idx === -1 ? msgs : msgs.slice(0, idx))
         .filter((m) => m.role === "user" || m.role === "assistant")
-        .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
+        .map((m) => ({ role: m.role, content: m.content, mcpEvents: m.mcpEvents }));
       truncateFromMessage(activeConversationId, messageId);
       handleSend(newContent, priorMessages);
     },

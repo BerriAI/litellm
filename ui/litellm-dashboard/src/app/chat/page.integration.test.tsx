@@ -5,6 +5,8 @@ import ChatConversationPage from "./page";
 import { renderWithProviders } from "@/../tests/test-utils";
 import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
+import type { makeOpenAIResponsesRequest } from "@/components/llm_calls/responses_api";
+import type { MCPEvent } from "@/components/chat/types";
 
 const { mockMakeOpenAIResponsesRequest, shellState } = vi.hoisted(() => ({
   mockMakeOpenAIResponsesRequest: vi.fn(),
@@ -137,6 +139,68 @@ describe("/ui/chat request metrics", () => {
           ]
         : [{ role: "user", content: "Follow up" }],
     );
+  });
+
+  it.each([
+    { providers: ["openrouter"], stateless: true },
+    { providers: ["openai", "openrouter"], stateless: true },
+    { providers: ["openai"], stateless: false },
+  ])("preserves MCP context with providers=$providers", async ({ providers, stateless }) => {
+    const event: MCPEvent = {
+      type: "response.output_item.done",
+      item: {
+        type: "mcp_call",
+        id: "mcp-inventory",
+        name: "lookup_inventory",
+        arguments: "{}",
+        output: '{"quantity":17}',
+      },
+    };
+    vi.mocked(fetchAvailableModels).mockResolvedValue([{ model_group: "gpt-5.4-mini", providers }]);
+    mockMakeOpenAIResponsesRequest.mockImplementationOnce(
+      async (...args: Parameters<typeof makeOpenAIResponsesRequest>) => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        args[1]("assistant", "Lookup completed");
+        args[15]?.("response-first");
+        args[16]?.(event);
+      },
+    );
+    mockMakeOpenAIResponsesRequest.mockResolvedValue(undefined);
+
+    await sendOneMessage();
+    expect(await screen.findByText("Lookup completed")).toBeVisible();
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "What was the quantity?" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(mockMakeOpenAIResponsesRequest).toHaveBeenCalledTimes(2));
+
+    const second = mockMakeOpenAIResponsesRequest.mock.calls[1];
+    expect(second[14]).toBe(stateless ? null : "response-first");
+    expect(second[0]).toEqual(
+      stateless
+        ? [
+            { role: "user", content: "How much did this cost?" },
+            { role: "assistant", content: "Lookup completed", mcpEvents: [event] },
+            { role: "user", content: "What was the quantity?" },
+          ]
+        : [{ role: "user", content: "What was the quantity?" }],
+    );
+
+    fireEvent.mouseOver(screen.getByText("What was the quantity?"));
+    fireEvent.click(await screen.findByRole("button", { name: "Edit message" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Edit message" }), {
+      target: { value: "Repeat the inventory quantity" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save & Send" }));
+    await waitFor(() => expect(mockMakeOpenAIResponsesRequest).toHaveBeenCalledTimes(3));
+
+    const edited = mockMakeOpenAIResponsesRequest.mock.calls[2];
+    expect(edited[14]).toBeNull();
+    expect(edited[0]).toEqual([
+      { role: "user", content: "How much did this cost?" },
+      { role: "assistant", content: "Lookup completed", mcpEvents: [event] },
+      { role: "user", content: "Repeat the inventory quantity" },
+    ]);
   });
 
   it("resends history instead of reusing another model's response ID after changing models", async () => {
