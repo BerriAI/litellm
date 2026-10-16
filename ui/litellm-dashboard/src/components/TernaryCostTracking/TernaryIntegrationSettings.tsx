@@ -175,8 +175,8 @@ export function TernaryIntegrationSettings({ settings, onEdit, onDeleted }: Tern
           <AlertDialogHeader>
             <AlertDialogTitle>Export to Ternary now?</AlertDialogTitle>
             <AlertDialogDescription>
-              This sends the same days the next scheduled export would, replacing what Ternary already has for those
-              days.
+              This uploads LiteLLM usage for today and the two days before (UTC), the same days a scheduled export
+              sends. Each day with usage replaces what Ternary has for that day.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
