@@ -17,6 +17,7 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_json_strings
 from litellm.proxy.management_helpers.auto_router_permissions import (
     MemberAutoRouterDependencyObjects,
     authorize_member_auto_router_dependencies,
@@ -316,7 +317,7 @@ async def test_member_authorization_and_persistence_resolve_the_same_classifier(
     grant: Final = await operation
     persisted: Final = update_db_model(existing, patch)
     saved: Final = RequestComplexityRouterConfig.model_validate(
-        json.loads(persisted["litellm_params"])["complexity_router_config"]
+        decrypt_json_strings(json.loads(persisted["litellm_params"])["complexity_router_config"])
     )
     assert grant.config == saved
     assert saved.jev_classifier_config is not None

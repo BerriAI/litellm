@@ -749,7 +749,6 @@ class InMemoryGuardrailHandler:
             return self.IN_MEMORY_GUARDRAILS[guardrail_id]
 
         litellm_params_data: Final = guardrail["litellm_params"]
-        verbose_proxy_logger.debug("litellm_params= %s", litellm_params_data)
 
         if isinstance(litellm_params_data, dict):
             if reject_invalid_logging_only_scope:
@@ -1094,7 +1093,7 @@ class InMemoryGuardrailHandler:
 
         # Log differences if any found
         if changed_fields:
-            verbose_proxy_logger.debug("Guardrail params changed. Differences: %s", changed_fields)
+            verbose_proxy_logger.debug("Guardrail params changed: %s", sorted(changed_fields))
 
         # Return True if any fields changed
         return len(changed_fields) > 0

@@ -20,6 +20,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.model_checks import get_all_fallbacks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_config_section
 from litellm.proxy.utils import PrismaClient, evict_config_param, invalidate_config_param
 
 if TYPE_CHECKING:
@@ -67,7 +68,7 @@ def _reject_config_owned_rules(proxy_config: "ProxyConfig", fallback_key: str, r
 
 
 async def _persist_router_settings(prisma_client: PrismaClient, router_settings: Mapping[str, object]) -> None:
-    router_settings_json: Final = json.dumps(router_settings)
+    router_settings_json: Final = json.dumps(encrypt_config_section(ROUTER_SETTINGS_PARAM, router_settings))
     await ConfigRepository(prisma_client).table.upsert(
         where={"param_name": ROUTER_SETTINGS_PARAM},
         data={

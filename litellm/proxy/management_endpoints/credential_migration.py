@@ -55,6 +55,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (  # noqa: F401  # 
     decrypt_value_helper,
     encrypt_value_helper,
     get_salt_key,
+    parse_stored_json_object,
 )
 
 ValueClass = Literal["migrated", "legacy", "plaintext", "undecryptable", "not-a-string"]
@@ -469,6 +470,7 @@ def _classify_callback_value(value: object) -> ValueClass:
 _COVERED_TABLE_SPECS: Final = [
     ("model_table", "litellm_proxymodeltable", ("litellm_params",), ()),
     ("credentials", "litellm_credentialstable", ("credential_values",), ()),
+    ("guardrails", "litellm_guardrailstable", ("litellm_params",), ()),
     ("mcp_server", "litellm_mcpservertable", ("credentials", "env_vars", "static_headers", "env"), ()),
     ("mcp_user_credentials", "litellm_mcpusercredentials", (), ("credential_b64",)),
     ("mcp_user_env_vars", "litellm_mcpuserenvvars", (), ("values_b64",)),
@@ -501,7 +503,9 @@ def _classify_into_report(report: LocationReport, value: str) -> None:
     names, base URLs, …) do not decrypt and fall through to ``plaintext``, so
     over-scanning a column is harmless to the residual count.
     """
-    report.count(classify_value(value, key="scan"))
+    from litellm.proxy.common_utils.callback_utils import CALLBACK_VAR_ENCRYPTED_PREFIX
+
+    report.count(classify_value(value.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX), key="scan"))
 
 
 def _classify_secret_map(value: object, key: str) -> ValueClass | None:
@@ -553,23 +557,23 @@ async def _scan_one_table(
     return report
 
 
-async def _scan_config_env_vars(prisma_client: object) -> LocationReport:
-    """Scan the ``environment_variables`` config row (``param_value`` dict)."""
-    report: Final = LocationReport(location="config_environment_variables")
+_CONFIG_SECTION_LOCATIONS: Final = (
+    ("environment_variables", "config_environment_variables"),
+    ("router_settings", "config_router_settings"),
+)
+
+
+async def _scan_config_section(prisma_client: object, param_name: str, location: str) -> LocationReport:
+    """Scan one encrypted ``LiteLLM_Config`` row (``param_value`` JSON object)."""
+    report: Final = LocationReport(location=location)
     try:
-        record: Final = await prisma_client.db.litellm_config.find_unique(where={"param_name": "environment_variables"})
+        record: Final = await prisma_client.db.litellm_config.find_unique(where={"param_name": param_name})
     except Exception as e:  # pragma: no cover - defensive
-        verbose_proxy_logger.debug("scan: config env vars unavailable: %s", str(e))
+        verbose_proxy_logger.debug("scan: config %s unavailable: %s", param_name, str(e))
         return report
     if record is None or record.param_value is None:
         return report
-    value = record.param_value
-    if isinstance(value, str):
-        try:
-            value = _DECODED_JSON.validate_python(json.loads(value))
-        except (ValueError, TypeError):
-            value = {}
-    for s in _iter_encrypted_strings(value):
+    for s in _iter_encrypted_strings(parse_stored_json_object(record.param_value) or {}):
         _classify_into_report(report, s)
     return report
 
@@ -579,7 +583,8 @@ async def _scan_covered_tables(prisma_client: object) -> list[LocationReport]:
     reports: Final[list[LocationReport]] = []
     for location, db_attr, json_cols, scalar_cols in _COVERED_TABLE_SPECS:
         reports.append(await _scan_one_table(prisma_client, location, db_attr, json_cols, scalar_cols))
-    reports.append(await _scan_config_env_vars(prisma_client))
+    for param_name, location in _CONFIG_SECTION_LOCATIONS:
+        reports.append(await _scan_config_section(prisma_client, param_name, location))
     return reports
 
 
@@ -594,7 +599,8 @@ _CLOUDZERO_SENSITIVE: Final = ["api_key"]
 
 async def _migrate_covered_tables(prisma_client: object, user_api_key_dict: object) -> list[LocationReport]:
     """Re-encrypt the tables already covered by ``_rotate_master_key`` (model
-    table, credentials, MCP credential/env tables, config environment_variables)
+    table, credentials, guardrails, MCP credential/env tables, config
+    environment_variables and router_settings)
     by running that orchestrator in *same-key* mode. With the AES gate on, the
     re-encrypt writes land in ``v2:`` format.
 

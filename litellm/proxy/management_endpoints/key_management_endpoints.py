@@ -83,6 +83,11 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
     coordination_redis_cache,
     publish_config_change,
 )
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    ENCRYPTED_CONFIG_SECTIONS,
+    encrypt_config_section,
+    parse_stored_json_object,
+)
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
@@ -5507,6 +5512,27 @@ async def delete_key_aliases(
     )
 
 
+async def _rekey_config_section(
+    prisma_client: PrismaClient, param_name: str, param_value: object, new_master_key: str
+) -> None:
+    import prisma
+
+    section: Final = parse_stored_json_object(param_value)
+    if section is None:
+        verbose_proxy_logger.error(
+            "Master key rotation skipped config %s: stored value is not a JSON object", param_name
+        )
+        return
+    try:
+        rekeyed: Final = encrypt_config_section(param_name, section, new_encryption_key=new_master_key)
+    except ValueError as too_deep:
+        verbose_proxy_logger.error("Master key rotation skipped config %s: %s", param_name, too_deep)
+        return
+    await _config_table(prisma_client).update(
+        where={"param_name": param_name}, data={"param_value": prisma.Json(rekeyed)}
+    )
+
+
 async def rotate_master_key(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
@@ -5591,6 +5617,10 @@ async def rotate_master_key(
                     where={"param_name": "environment_variables"},
                     data={"param_value": prisma.Json(encrypted_env_vars)},
                 )
+
+        for c in config:
+            if c.param_name in ENCRYPTED_CONFIG_SECTIONS and c.param_value is not None:
+                await _rekey_config_section(prisma_client, c.param_name, c.param_value, new_master_key)
 
     try:
         from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
