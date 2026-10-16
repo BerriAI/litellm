@@ -260,6 +260,7 @@ jobs:
               tests/unit/llms/e2b
               tests/unit/llms/edenai
               tests/unit/llms/elevenlabs
+              tests/unit/llms/empiriolabs
               tests/unit/llms/exa_ai
               tests/unit/llms/fal_ai
               tests/unit/llms/fastcrw
