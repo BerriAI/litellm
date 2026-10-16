@@ -245,9 +245,7 @@ class ModelRateLimitingCheck(CustomLogger):
                 _increment_rate_limiter_failure_counter,
             )
 
-            _increment_rate_limiter_failure_counter(
-                limiter_type="model_rate_limit_check", error_type=type(e).__name__
-            )
+            _increment_rate_limiter_failure_counter(limiter_type="model_rate_limit_check", error_type=type(e).__name__)
             if _fail_closed_rate_limit_enforcement_from_general_settings():
                 verbose_router_logger.warning(
                     "ModelRateLimitingCheck.pre_call_check: Redis failure, fail-closed enabled — rejecting. err=%s",
@@ -351,9 +349,7 @@ class ModelRateLimitingCheck(CustomLogger):
                 _increment_rate_limiter_failure_counter,
             )
 
-            _increment_rate_limiter_failure_counter(
-                limiter_type="model_rate_limit_check", error_type=type(e).__name__
-            )
+            _increment_rate_limiter_failure_counter(limiter_type="model_rate_limit_check", error_type=type(e).__name__)
             if _fail_closed_rate_limit_enforcement_from_general_settings():
                 verbose_router_logger.warning(
                     "ModelRateLimitingCheck.async_pre_call_check: Redis failure, fail-closed enabled — rejecting. err=%s",
