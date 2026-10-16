@@ -3508,15 +3508,17 @@ class ProxyBaseLLMRequestProcessing:
         endpoints may have their stream buffered for post-call guardrails; every
         other endpoint must keep streaming so the response is not silently turned
         into a non-streaming body when no content modification would occur (e.g.
-        Bedrock invoke-with-response-stream, which is only ever relayed).
+        Bedrock invoke-with-response-stream of a model other than Claude).
         """
         from litellm.llms.pass_through.guardrail_translation.handler import (
             LlmPassthroughRouteHandler,
         )
 
         return LlmPassthroughRouteHandler.supports_event_stream_de_anonymization(
-            self.data.get("custom_llm_provider"),
-            self.data.get("endpoint"),
+            self.data.get("custom_llm_provider"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # self.data is the untyped request dict
+            self.data.get("endpoint"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # self.data is the untyped request dict
+            getattr(self.data.get("litellm_logging_obj"), "model", None),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # self.data is the untyped request dict
+            self.data.get("data"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # self.data is the untyped request dict
         )
 
     def _passthrough_stream_is_relayable(self) -> bool:

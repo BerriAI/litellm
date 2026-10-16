@@ -858,7 +858,10 @@ class _CardMaskingGuardrail(CustomGuardrail):
 
 
 async def _run_post_call_guardrail_on_stream(
-    stream_bytes: bytes, guardrail: CustomGuardrail, monkeypatch: pytest.MonkeyPatch
+    stream_bytes: bytes,
+    guardrail: CustomGuardrail,
+    monkeypatch: pytest.MonkeyPatch,
+    endpoint: str = "model/claude/converse-stream",
 ) -> bytes:
     monkeypatch.setattr(litellm, "callbacks", [guardrail])
     logging_obj = LiteLLMLoggingObj(
@@ -877,7 +880,7 @@ async def _run_post_call_guardrail_on_stream(
         data={
             "model": "claude",
             "custom_llm_provider": "bedrock",
-            "endpoint": "model/claude/converse-stream",
+            "endpoint": endpoint,
             "litellm_logging_obj": logging_obj,
         },
     )
@@ -2074,6 +2077,147 @@ def _streamed_text(raw: bytes) -> str:
     )
 
 
+class _RequestDataRecordingGuardrail(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="request-recorder", event_hook=GuardrailEventHooks.post_call, default_on=True)
+        self.scans: list[tuple[object, int, object]] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        response = request_data.get("response")
+        self.scans.append(
+            (
+                request_data.get("stream"),
+                len(request_data.get("responses") or ()),
+                response.choices[0].finish_reason if response is not None else None,
+            )
+        )
+        return inputs
+
+
+def _invoke_delta_frame(index: int, delta: dict) -> bytes:
+    return _invoke_chunk_frame({"type": "content_block_delta", "index": index, "delta": delta})
+
+
+class TestBufferedInvokeStream:
+    @pytest.mark.asyncio
+    async def test_masks_are_written_back_into_the_chunk_frames_that_carried_the_text(self, monkeypatch):
+        guardrail = _CardMaskingGuardrail()
+        stream = b"".join(_invoke_card_stream())
+
+        result = await _run_post_call_guardrail_on_stream(stream, guardrail, monkeypatch, endpoint=_INVOKE_STREAM)
+
+        assert guardrail.received_texts == [["Card: 4111 1111 1111 1111. Thanks!"]]
+        assert _streamed_text(result) == "Card: ****. Thanks!"
+        assert [event for _, event in _decoded_invoke_frames(result) if event["type"] != "content_block_delta"] == [
+            event for _, event in _decoded_invoke_frames(stream) if event["type"] != "content_block_delta"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_each_content_block_is_scanned_and_masked_on_its_own(self, monkeypatch):
+        guardrail = _CardMaskingGuardrail()
+        stream = b"".join(
+            (
+                _invoke_delta_frame(0, {"type": "thinking_delta", "thinking": "The card is 4111 1111 1111 1111"}),
+                _invoke_delta_frame(0, {"type": "signature_delta", "signature": "sig-4111 1111 1111 1111"}),
+                _invoke_delta_frame(1, {"type": "text_delta", "text": "Paying with 4111 1111 "}),
+                _invoke_delta_frame(1, {"type": "text_delta", "text": "1111 1111 now"}),
+                _invoke_delta_frame(2, {"type": "input_json_delta", "partial_json": '{"card": "4111 1111 1111 1111"}'}),
+                _invoke_chunk_frame({"type": "message_stop"}),
+            )
+        )
+
+        result = await _run_post_call_guardrail_on_stream(stream, guardrail, monkeypatch, endpoint=_INVOKE_STREAM)
+
+        deltas = [
+            event["delta"] for _, event in _decoded_invoke_frames(result) if event["type"] == "content_block_delta"
+        ]
+        assert deltas[0] == {"type": "thinking_delta", "thinking": "The card is ****"}
+        assert deltas[1] == {"type": "signature_delta", "signature": "sig-4111 1111 1111 1111"}
+        assert deltas[2]["text"] + deltas[3]["text"] == "Paying with **** now"
+        assert deltas[4] == {"type": "input_json_delta", "partial_json": '{"card": "****"}'}
+
+    @pytest.mark.asyncio
+    async def test_two_text_blocks_reach_the_guardrail_as_two_texts(self, monkeypatch):
+        guardrail = _CardMaskingGuardrail()
+        stream = b"".join(
+            (
+                _invoke_delta_frame(0, {"type": "text_delta", "text": "First 4111 1111 1111 1111"}),
+                _invoke_delta_frame(1, {"type": "text_delta", "text": "Second 4111 1111 1111 1111"}),
+                _invoke_chunk_frame({"type": "message_stop"}),
+            )
+        )
+
+        result = await _run_post_call_guardrail_on_stream(stream, guardrail, monkeypatch, endpoint=_INVOKE_STREAM)
+
+        assert guardrail.received_texts == [["First 4111 1111 1111 1111", "Second 4111 1111 1111 1111"]]
+        events = [event for _, event in _decoded_invoke_frames(result)]
+        assert [event["delta"]["text"] for event in events[:2]] == ["First ****", "Second ****"]
+
+    @pytest.mark.asyncio
+    async def test_a_delta_whose_text_is_not_a_string_is_left_as_received(self, monkeypatch):
+        guardrail = _CardMaskingGuardrail()
+        odd = _invoke_delta_frame(0, {"type": "text_delta", "text": 4111})
+        stream = b"".join(
+            (
+                _invoke_delta_frame(0, {"type": "text_delta", "text": "Card 4111 1111 1111 1111"}),
+                odd,
+                _invoke_chunk_frame({"type": "message_stop"}),
+            )
+        )
+
+        result = await _run_post_call_guardrail_on_stream(stream, guardrail, monkeypatch, endpoint=_INVOKE_STREAM)
+
+        assert guardrail.received_texts == [["Card 4111 1111 1111 1111"]]
+        frames = _decoded_invoke_frames(result)
+        assert frames[0][1]["delta"]["text"] == "Card ****"
+        assert odd in result
+
+    @pytest.mark.asyncio
+    async def test_a_stream_without_text_skips_the_post_call_hooks(self):
+        hook = AsyncMock()
+        stream = b"".join(
+            (
+                _invoke_chunk_frame({"type": "message_start", "message": {"id": "msg_1", "content": []}}),
+                _invoke_chunk_frame({"type": "message_stop"}),
+            )
+        )
+
+        result = await BedrockPassthroughGuardrailHandler.de_anonymize_event_stream(
+            body_bytes=stream,
+            proxy_logging_obj=MagicMock(post_call_success_hook=hook),
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            data={"custom_llm_provider": "bedrock", "endpoint": _INVOKE_STREAM},
+        )
+
+        hook.assert_not_awaited()
+        assert result == stream
+
+    @pytest.mark.asyncio
+    async def test_a_stream_the_guardrail_leaves_alone_is_returned_byte_for_byte(self, monkeypatch):
+        guardrail = _RecordingGuardrail()
+        stream = b"".join(_invoke_stream("Hello ", "there")) + b"trailing"
+
+        result = await _run_post_call_guardrail_on_stream(stream, guardrail, monkeypatch, endpoint=_INVOKE_STREAM)
+
+        assert guardrail.received_texts == [["Hello there"]]
+        assert result == stream
+
+    @pytest.mark.asyncio
+    async def test_a_block_raises_before_any_frame_is_returned(self, monkeypatch):
+        guardrail = _RaisingGuardrail(GuardrailBlocked("Blocked"), "Card")
+
+        with pytest.raises(GuardrailBlocked):
+            await _run_post_call_guardrail_on_stream(
+                b"".join(_invoke_card_stream()), guardrail, monkeypatch, endpoint=_INVOKE_STREAM
+            )
+
+
 class TestInvokeStreamGuardrailRelay:
     @pytest.mark.asyncio
     async def test_frames_are_cut_at_their_boundaries_whatever_the_transport_chunks(self):
@@ -2290,10 +2434,55 @@ class TestInvokeStreamGuardrailRelay:
             ("model/x/invoke", _APPLICATION_PROFILE, {"anthropic_version": "bedrock-2023-05-31"}, False),
         ],
     )
-    def test_relayable_streams_are_converse_and_claude_invoke_streams(
+    def test_relayed_and_buffered_streams_are_converse_and_claude_invoke_streams(
         self, endpoint: str, model: str, body: object, relayable: bool
     ):
         assert BedrockPassthroughGuardrailHandler.event_stream_endpoint_is_relayable(endpoint, model, body) is relayable
+        assert (
+            BedrockPassthroughGuardrailHandler.event_stream_endpoint_is_de_anonymizable(endpoint, model, body)
+            is relayable
+        )
+
+    @pytest.mark.asyncio
+    async def test_each_sampled_scan_sees_a_streaming_request_and_every_event_relayed_so_far(self, monkeypatch):
+        guardrail = _RequestDataRecordingGuardrail()
+        guardrail.streaming_sampling_rate = 2
+
+        await _relay_through_post_call_guardrail(
+            _invoke_stream("Card: ", "4111 1111 ", "1111 1111", "."), guardrail, monkeypatch, endpoint=_INVOKE_STREAM
+        )
+
+        assert len(guardrail.scans) > 1
+        assert all(stream is True for stream, _, _ in guardrail.scans)
+        responses_seen = [responses for _, responses, _ in guardrail.scans]
+        assert responses_seen == sorted(set(responses_seen)), responses_seen
+
+    @pytest.mark.asyncio
+    async def test_the_held_scan_sees_the_whole_stream_and_its_finish_reason(self, monkeypatch):
+        guardrail = _RequestDataRecordingGuardrail()
+        stream = (
+            _invoke_chunk_frame(
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_1",
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [],
+                        "model": "claude",
+                        "stop_reason": None,
+                        "usage": {"input_tokens": 5, "output_tokens": 0},
+                    },
+                }
+            ),
+            *_invoke_card_stream()[1:],
+        )
+
+        await _relay_through_post_call_guardrail(
+            stream, guardrail, monkeypatch, holds_until_moderated=True, endpoint=_INVOKE_STREAM
+        )
+
+        assert guardrail.scans == [(True, len(stream) + 1, "stop")]
 
     @pytest.mark.asyncio
     async def test_sampled_scan_key_reads_the_received_text_once_a_guardrail_rewrote_it(self):

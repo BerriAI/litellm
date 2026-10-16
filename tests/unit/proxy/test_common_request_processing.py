@@ -6329,8 +6329,25 @@ class TestAllmPassthroughStreamingProviderGate:
             "_parallel_guardrail",
         ],
     )
-    async def test_bedrock_converse_stream_is_buffered_for_a_guardrail_that_needs_the_whole_response(
-        self, monkeypatch, guardrail_factory
+    @pytest.mark.parametrize(
+        ("endpoint", "model", "request_body"),
+        [
+            ("model/us.amazon.nova-lite-v1:0/converse-stream", "us.amazon.nova-lite-v1:0", None),
+            (
+                "model/us.anthropic.claude-sonnet-5-v1:0/invoke-with-response-stream",
+                "us.anthropic.claude-sonnet-5-v1:0",
+                None,
+            ),
+            (
+                "model/abc/invoke-with-response-stream",
+                "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc",
+                {"anthropic_version": "bedrock-2023-05-31", "max_tokens": 8, "messages": []},
+            ),
+        ],
+        ids=["converse-stream", "claude-invoke-stream", "claude-invoke-stream-behind-an-application-inference-profile"],
+    )
+    async def test_bedrock_stream_is_buffered_for_a_guardrail_that_needs_the_whole_response(
+        self, monkeypatch, guardrail_factory, endpoint, model, request_body
     ):
         guardrail = (
             self._apply_guardrail(mask_response_content=True)
@@ -6339,7 +6356,12 @@ class TestAllmPassthroughStreamingProviderGate:
         )
 
         result, body, mock_handler, recorded = await self._run_converse_stream(
-            monkeypatch, guardrail, [b"raw-1", b"raw-2"]
+            monkeypatch,
+            guardrail,
+            [b"raw-1", b"raw-2"],
+            endpoint=endpoint,
+            model=model,
+            request_body=request_body,
         )
 
         assert isinstance(result, Response)
@@ -6719,11 +6741,11 @@ class TestAllmPassthroughStreamingProviderGate:
         ("model", "guardrail_factory"),
         [
             ("meta.llama4-maverick-17b-instruct-v1:0", "_apply_guardrail"),
-            ("us.anthropic.claude-sonnet-5-v1:0", "_success_hook_guardrail"),
+            ("meta.llama4-maverick-17b-instruct-v1:0", "_success_hook_guardrail"),
         ],
-        ids=["model-without-a-stream-translation", "guardrail-that-needs-the-whole-response"],
+        ids=["guardrail-the-relay-scans", "guardrail-that-needs-the-whole-response"],
     )
-    async def test_bedrock_invoke_stream_the_relay_cannot_scan_streams_as_received(
+    async def test_bedrock_invoke_stream_of_a_model_without_a_stream_translation_streams_as_received(
         self, monkeypatch, model, guardrail_factory
     ):
         result, body, mock_handler, recorded = await self._run_converse_stream(

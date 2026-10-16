@@ -5,6 +5,7 @@ import struct
 from binascii import crc32
 from collections.abc import AsyncGenerator, AsyncIterable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Optional, Protocol, TypeAlias, TypeVar
 
 from pydantic import TypeAdapter, ValidationError
@@ -665,10 +666,14 @@ async def _scan_invoke_stream(
     user_api_key_dict: Optional["UserAPIKeyAuth"],
     request_data: dict[str, object] | None,  # mutable-ok: the request dict guardrails receive
 ) -> None:
-    """Scan the Anthropic events relayed so far as ``/v1/messages`` scans its stream. Once the stream has ended, the
-    rewrites are written back into the frames, which reach the caller only when the stream is held until moderated."""
+    """Scan the Anthropic events relayed so far as ``/v1/messages`` scans its stream, with the request marked as
+    streaming and those events as its ``responses``. Once the stream has ended, the rewrites are written back into the
+    frames, which reach the caller only when the stream is held until moderated."""
     received: Final = tuple(frame.sse() for frame in frames)
     scanned: Final[list[object]] = list(received)  # mutable-ok: the /v1/messages translation rewrites it in place
+    if request_data is not None:
+        request_data["stream"] = True  # rebind-ok: marks the request guardrails receive as a stream
+        request_data["responses"] = scanned  # rebind-ok: each scan sees every event relayed so far
     await AnthropicMessagesHandler().process_output_streaming_response(  # pyright: ignore[reportUnknownMemberType]  # takes the untyped request dict
         responses_so_far=scanned,
         guardrail_to_apply=guardrail_to_apply,
@@ -711,6 +716,109 @@ def _write_back_stream_texts(
             frame.guardrailed_payload = rewritten
 
 
+_INVOKE_DELTA_TEXT_FIELDS: Final = MappingProxyType(
+    {
+        "text_delta": ("text", "text"),
+        "input_json_delta": ("tool", "partial_json"),
+        "thinking_delta": ("reasoning", "thinking"),
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _InvokeDeltaText:
+    """The guardrailable text one Anthropic event's delta carries, keyed by its content block and kind like the
+    Converse holders: text, tool input and thinking. Signatures and citations are never rewritten."""
+
+    group: _StreamGroupKey
+    delta: Mapping[str, object]
+    field: str
+    text: str
+
+
+def _invoke_delta_text(event: Mapping[str, object] | None) -> _InvokeDeltaText | None:
+    if event is None:
+        return None
+    try:
+        delta: Final = _JSON_OBJECT.validate_python(event.get("delta"))
+    except ValidationError:
+        return None
+    kind: Final = delta.get("type")
+    field: Final = _INVOKE_DELTA_TEXT_FIELDS.get(kind) if isinstance(kind, str) else None
+    text: Final = delta.get(field[1]) if field is not None else None
+    if field is None or not isinstance(text, str):
+        return None
+    index: Final = event.get("index")
+    return _InvokeDeltaText((index if isinstance(index, int) else None, field[0]), delta, field[1], text)
+
+
+async def _post_call_rewritten_texts(
+    groups: _StreamTextGroups,
+    proxy_logging_obj: "ProxyLogging",
+    user_api_key_dict: "UserAPIKeyAuth",
+    data: dict[str, object],
+) -> list[str] | None:
+    """Run the post_call guardrails on a buffered stream's texts as one Converse response with a content block per
+    group, and return each group's text as the guardrails left it, or None when the response came back in another
+    shape."""
+    synthetic_response: Final[dict] = {
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [{"text": text} for text in groups.texts()],
+            }
+        },
+        "stopReason": "end_turn",
+    }
+
+    processed: Final = await proxy_logging_obj.post_call_success_hook(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+        response=synthetic_response,
+    )
+
+    if not isinstance(processed, dict):
+        verbose_proxy_logger.debug(
+            "BedrockPassthroughGuardrailHandler: post_call_success_hook returned %s, leaving event stream unmodified",
+            type(processed).__name__,
+        )
+        return None
+
+    try:
+        processed_blocks: Final = processed["output"]["message"]["content"]
+        return [processed_blocks[i]["text"] for i in range(len(groups.groups))]
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
+async def _guardrail_buffered_invoke_stream(
+    body_bytes: bytes,
+    proxy_logging_obj: "ProxyLogging",
+    user_api_key_dict: "UserAPIKeyAuth",
+    data: dict[str, object],
+) -> bytes:
+    """Scan a whole Claude invoke stream the way the buffered Converse path scans its stream, and write the guardrail
+    rewrites back into the ``chunk`` frames that carried each text."""
+
+    async def received() -> AsyncGenerator[bytes, None]:
+        yield body_bytes
+
+    frames: Final = [frame async for frame in _event_stream_frames(received(), InvokeStreamFrame, _decode_invoke_frame)]
+    texts: Final = [_invoke_delta_text(frame.event) for frame in frames]
+    groups: Final = _group_stream_texts([[] if text is None else [(text.group, text.text)] for text in texts])
+    if not groups.groups:
+        return body_bytes
+    rewritten_texts: Final = await _post_call_rewritten_texts(groups, proxy_logging_obj, user_api_key_dict, data)
+    if rewritten_texts is None:
+        return body_bytes
+    split: Final = _split_group_texts(groups, rewritten_texts)
+    for frame_idx, (frame, text) in enumerate(zip(frames, texts)):
+        new_text = split.get((frame_idx, 0))
+        if text is not None and frame.event is not None and new_text is not None and new_text != text.text:
+            frame.guardrailed_event = {**frame.event, "delta": {**text.delta, text.field: new_text}}
+    return b"".join(frame.encode() for frame in frames)
+
+
 class BedrockPassthroughGuardrailHandler(BaseTranslation):
     @staticmethod
     def is_event_stream_content_type(content_type: str) -> bool:
@@ -721,8 +829,9 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         return _EVENT_STREAM_MEDIA_TYPE
 
     @staticmethod
-    def event_stream_endpoint_is_de_anonymizable(endpoint: str) -> bool:
-        return _is_converse_endpoint(endpoint)
+    def event_stream_endpoint_is_de_anonymizable(endpoint: str, model: str, body: object) -> bool:
+        """The streams the buffered path can scan whole and rewrite, the same ones the relay scans."""
+        return BedrockPassthroughGuardrailHandler.event_stream_endpoint_is_relayable(endpoint, model, body)
 
     @staticmethod
     def event_stream_endpoint_is_relayable(endpoint: str, model: str, body: object) -> bool:
@@ -742,8 +851,11 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         body_bytes: bytes,
         proxy_logging_obj: "ProxyLogging",
         user_api_key_dict: "UserAPIKeyAuth",
-        data: dict,
+        data: dict[str, object],
     ) -> bytes:
+        if _is_invoke_stream_endpoint(str(data.get("endpoint") or "")):
+            return await _guardrail_buffered_invoke_stream(body_bytes, proxy_logging_obj, user_api_key_dict, data)
+
         from botocore.eventstream import EventStreamBuffer
 
         frames: Final[list[_StreamFrame]] = []
@@ -791,37 +903,13 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         if not groups.groups:
             return body_bytes
 
-        synthetic_response: Final[dict] = {
-            "output": {
-                "message": {
-                    "role": "assistant",
-                    "content": [{"text": text} for text in groups.texts()],
-                }
-            },
-            "stopReason": "end_turn",
-        }
-
-        processed: Final = await proxy_logging_obj.post_call_success_hook(
-            data=data,
-            user_api_key_dict=user_api_key_dict,
-            response=synthetic_response,
+        de_anonymized_texts: Final = await _post_call_rewritten_texts(
+            groups, proxy_logging_obj, user_api_key_dict, data
         )
-
-        if not isinstance(processed, dict):
-            verbose_proxy_logger.debug(
-                "BedrockPassthroughGuardrailHandler: post_call_success_hook returned %s, "
-                "leaving event stream unmodified",
-                type(processed).__name__,
-            )
+        if de_anonymized_texts is None:
             return body_bytes
 
-        try:
-            processed_blocks: Final = processed["output"]["message"]["content"]
-            de_anonymized_texts: Final = [processed_blocks[i]["text"] for i in range(len(groups.groups))]
-        except (KeyError, IndexError, TypeError):
-            return body_bytes
-
-        new_text_map: Final = _split_group_texts(groups, de_anonymized_texts)  # pyright: ignore[reportUnknownArgumentType]  # the hook returns an untyped response
+        new_text_map: Final = _split_group_texts(groups, de_anonymized_texts)
 
         result_parts: Final[list[bytes]] = []
 
@@ -906,8 +994,13 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
         request_data: dict | None = None,
     ) -> object:
-        endpoint: Final = (request_data or {}).get("endpoint", "")
-        if endpoint and not _is_converse_endpoint(endpoint):
+        endpoint: Final[object] = (request_data or {}).get("endpoint", "")
+        if (
+            isinstance(endpoint, str)
+            and endpoint
+            and not _is_converse_endpoint(endpoint)
+            and not _is_invoke_stream_endpoint(endpoint)
+        ):
             return await _generic_passthrough_handler().process_output_response(
                 response=response,
                 guardrail_to_apply=guardrail_to_apply,

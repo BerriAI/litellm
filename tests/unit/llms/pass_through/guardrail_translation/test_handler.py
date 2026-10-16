@@ -139,12 +139,15 @@ def _invoke_frame(event: dict) -> bytes:
         ("vertex_ai", "model/x/converse-stream", "anthropic.claude-sonnet-5-v1:0", None, False),
     ],
 )
-def test_passthrough_route_relays_the_streams_its_provider_translation_scans(
+def test_passthrough_route_relays_and_buffers_the_streams_its_provider_translation_scans(
     provider: str, endpoint: str | None, model: str | None, body: object, relayable: bool
 ):
     from litellm.llms.pass_through.guardrail_translation.handler import LlmPassthroughRouteHandler
 
     assert LlmPassthroughRouteHandler.supports_event_stream_relay(provider, endpoint, model, body) is relayable
+    assert (
+        LlmPassthroughRouteHandler.supports_event_stream_de_anonymization(provider, endpoint, model, body) is relayable
+    )
 
 
 @pytest.mark.asyncio

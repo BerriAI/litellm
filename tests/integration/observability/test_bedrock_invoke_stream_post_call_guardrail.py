@@ -5,8 +5,9 @@ The caller is boto3 ``InvokeModelWithResponseStream`` (or raw HTTP) against
 stream event, and a guardrail that scans responses through ``apply_guardrail`` runs on those events the way it runs
 on ``/bedrock/model/<model>/converse-stream`` and ``/v1/messages``: frames reach the caller as the upstream sends
 them, every fifth frame and the end of the stream are scanned, a block ends the stream with an AWS exception frame,
-and a held stream gets its masks written back into re-encoded ``chunk`` frames. Streams of other model families keep
-going out as received"""
+and a held stream gets its masks written back into re-encoded ``chunk`` frames. A guardrail the relay cannot run on
+frames, one released on scan or run in parallel, gets the whole stream held and scanned once as converse-stream does.
+Streams of other model families keep going out as received"""
 
 from __future__ import annotations
 
@@ -53,6 +54,9 @@ BEDROCK_MESSAGE: Final = "invoke-bedrock-message"
 UNGUARDED: Final = "invoke-unguarded"
 OUTAGE: Final = "invoke-outage"
 RELEASE_ON_SCAN: Final = "invoke-release-on-scan"
+PARALLEL: Final = "invoke-parallel"
+NOMA: Final = "invoke-noma"
+NOMA_HELD: Final = "invoke-noma-held"
 CODE_BLOCK_REASON: Final = "code says no"
 BLOCK_REASON: Final = "Violated guardrail policy"
 BEDROCK_BLOCK_MESSAGE: Final = "Sorry, the model cannot answer this question."
@@ -225,6 +229,14 @@ class Rig:
             if request.target.startswith(f"/{guardrail}/") and marker.encode() in request.body
         )
 
+    def guardrail_request_data(self, guardrail: str, marker: str) -> tuple[Mapping[str, JsonValue], ...]:
+        """The request data each Noma scan of the marker's stream carried, in the order the scans ran."""
+        return tuple(
+            json.loads(request.body)["request_data"]
+            for request in self.sink.drain()
+            if request.target.startswith(f"/{guardrail}/") and marker.encode() in request.body
+        )
+
     def invoke_stream(self, guardrail: str, marker: str, model: str = CLAUDE) -> StreamOutcome:
         client: Final = boto3.client(
             "bedrock-runtime",
@@ -295,6 +307,20 @@ def _bedrock_guardrail(name: str, sink: Wire, **settings: JsonValue) -> dict[str
     }
 
 
+def _noma_guardrail(name: str, sink: Wire, **settings: JsonValue) -> dict[str, JsonValue]:
+    return {
+        "guardrail_name": name,
+        "litellm_params": {
+            "guardrail": "noma_v2",
+            "mode": "post_call",
+            "default_on": False,
+            "api_base": f"{sink.url}/{name}",
+            "api_key": "synthetic-guardrail-key",
+            **settings,
+        },
+    }
+
+
 def _deployment(name: str, model_id: str, upstream: Wire) -> dict[str, JsonValue]:
     return {
         "model_name": name,
@@ -342,6 +368,8 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
             return Reply(status=503, body=b'{"error":"guardrail vendor unavailable"}')
         if request.target.startswith((f"/{BEDROCK}/", f"/{BEDROCK_MESSAGE}/", f"/{RELEASE_ON_SCAN}/")):
             return bedrock_verdict(request)
+        if request.target.startswith((f"/{NOMA}/", f"/{NOMA_HELD}/")):
+            return Reply(body=json.dumps({"action": "NONE"}).encode())
         return verdict(request)
 
     with httpx.Client(base_url=os.environ["INTEGRATION_PROXY_URL"], timeout=30, trust_env=False) as root_client:
@@ -358,6 +386,9 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
                 _guardrail(HELD, sink, streaming_buffer_until_moderated=True),
                 _guardrail(END_ONLY, sink, streaming_end_of_stream_only=True),
                 _guardrail(OUTAGE, sink),
+                _guardrail(PARALLEL, sink, run_in_parallel=True),
+                _noma_guardrail(NOMA, sink, streaming_buffer_until_moderated=False),
+                _noma_guardrail(NOMA_HELD, sink, streaming_buffer_until_moderated=True),
                 _bedrock_guardrail(BEDROCK, sink),
                 _bedrock_guardrail(BEDROCK_MESSAGE, sink, disable_exception_on_block=True),
                 _bedrock_guardrail(RELEASE_ON_SCAN, sink, streaming_buffer_release_on_scan=True),
@@ -386,7 +417,19 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
             config_path.write_text(yaml.safe_dump(config))
             with owned_proxy_process(root, directory, {}, config=config_path, workers=2) as owned:
                 with owned.gateway.scenario() as scenario:
-                    guarded: Final = (SAMPLED, HELD, END_ONLY, CODE, BEDROCK, BEDROCK_MESSAGE, OUTAGE, RELEASE_ON_SCAN)
+                    guarded: Final = (
+                        SAMPLED,
+                        HELD,
+                        END_ONLY,
+                        CODE,
+                        BEDROCK,
+                        BEDROCK_MESSAGE,
+                        OUTAGE,
+                        RELEASE_ON_SCAN,
+                        PARALLEL,
+                        NOMA,
+                        NOMA_HELD,
+                    )
                     yield Rig(
                         owned.gateway,
                         scenario,
@@ -626,14 +669,69 @@ def test_invoke_stream_without_a_guardrail_is_relayed_as_received(rig: Rig) -> N
     assert body == b"".join(frames), decode(body)
 
 
-def test_guardrail_that_releases_a_held_stream_on_scan_leaves_the_invoke_stream_unscanned(rig: Rig) -> None:
+def test_held_stream_released_on_scan_stays_buffered_and_applies_masks(rig: Rig) -> None:
     marker: Final = f"invoke-{uuid.uuid4().hex}"
-    frames: Final = claude_frames(f"Release {marker} ", BLOCKED_WORD, " end")
+    rig.scripts[marker] = Reply(
+        content_type=EVENT_STREAM, chunks=claude_frames(f"{marker} ", MASKED_WORD, " is", " the", " capital")
+    )
+    outcome: Final = rig.invoke_stream(RELEASE_ON_SCAN, marker)
+    assert (outcome.error_code, outcome.rejected_before_stream) == (None, None), outcome
+    assert outcome.events[0] == "message_start" and outcome.events[-1] == "message_stop", outcome
+    assert outcome.text == f"{marker} {MASK} is the capital", outcome
+    assert rig.bedrock_scans(RELEASE_ON_SCAN, marker) == ((f"{marker} {MASKED_WORD} is the capital",),)
+
+
+def test_held_stream_released_on_scan_with_a_block_returns_an_error_before_any_event(rig: Rig) -> None:
+    marker: Final = f"invoke-{uuid.uuid4().hex}"
+    rig.scripts[marker] = Reply(
+        content_type=EVENT_STREAM, chunks=claude_frames(f"Release {marker} ", BLOCKED_WORD, " end")
+    )
+    outcome: Final = rig.invoke_stream(RELEASE_ON_SCAN, marker)
+    assert outcome.events == () and outcome.rejected_before_stream is not None, outcome
+    assert "(400)" in outcome.rejected_before_stream, outcome
+    assert rig.bedrock_scans(RELEASE_ON_SCAN, marker) == ((f"Release {marker} {BLOCKED_WORD} end",),)
+
+
+def test_parallel_guardrail_scans_the_whole_invoke_stream_before_any_event(rig: Rig) -> None:
+    marker: Final = f"invoke-{uuid.uuid4().hex}"
+    rig.scripts[marker] = Reply(
+        content_type=EVENT_STREAM, chunks=claude_frames(f"Parallel {marker} ", BLOCKED_WORD, " end")
+    )
+    outcome: Final = rig.invoke_stream(PARALLEL, marker)
+    assert outcome.events == () and outcome.rejected_before_stream is not None, outcome
+    assert "(400)" in outcome.rejected_before_stream, outcome
+    assert rig.scans(PARALLEL, marker) == ((f"Parallel {marker} {BLOCKED_WORD} end",),)
+
+
+def test_each_sampled_scan_sends_a_streaming_request_with_every_event_relayed_so_far(rig: Rig) -> None:
+    marker: Final = f"invoke-{uuid.uuid4().hex}"
+    frames: Final = claude_frames(f"Noma {marker} ", *(f" word{index}" for index in range(9)))
     rig.scripts[marker] = Reply(content_type=EVENT_STREAM, chunks=frames)
-    status, content_type, body = _stream(rig, RELEASE_ON_SCAN, marker)
+    status, content_type, body = _stream(rig, NOMA, marker)
     assert (status, content_type) == (200, EVENT_STREAM), body
     assert body == b"".join(frames), decode(body)
-    assert rig.bedrock_scans(RELEASE_ON_SCAN, marker) == ()
+    scans: Final = rig.guardrail_request_data(NOMA, marker)
+    assert len(scans) > 1, scans
+    assert [scan.get("stream") for scan in scans] == [True] * len(scans), scans
+    relayed: Final = [len(scan["responses"]) for scan in scans if isinstance(scan.get("responses"), list)]
+    assert len(relayed) == len(scans) and relayed == sorted(set(relayed)), relayed
+
+
+def test_the_end_of_stream_scan_sends_the_whole_stream_and_its_finish_reason(rig: Rig) -> None:
+    marker: Final = f"invoke-{uuid.uuid4().hex}"
+    frames: Final = claude_frames(f"Noma {marker} ", "held", " reply", " here")
+    rig.scripts[marker] = Reply(content_type=EVENT_STREAM, chunks=frames)
+    outcome: Final = rig.invoke_stream(NOMA_HELD, marker)
+    assert (outcome.error_code, outcome.rejected_before_stream) == (None, None), outcome
+    assert outcome.text == f"Noma {marker} held reply here", outcome
+    scans: Final = rig.guardrail_request_data(NOMA_HELD, marker)
+    assert [scan.get("stream") for scan in scans] == [True] * len(scans) and scans, scans
+    scan: Final = scans[-1]
+    responses: Final = scan.get("responses")
+    assert isinstance(responses, list) and len(responses) >= len(frames), responses
+    response: Final = scan.get("response")
+    assert isinstance(response, dict) and isinstance(choices := response.get("choices"), list), response
+    assert [choice.get("finish_reason") for choice in choices if isinstance(choice, dict)] == ["stop"], response
 
 
 def test_upstream_exception_mid_stream_reaches_the_caller_after_the_scanned_frames(rig: Rig) -> None:
