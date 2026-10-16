@@ -37,6 +37,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.request_metadata import bedrock_request_metadata_is_owned
 from litellm.secret_managers.main import get_secret, get_secret_str
 from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams
+from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 
 if TYPE_CHECKING:
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -1064,10 +1065,44 @@ def _function_tools_only(tools: object) -> bool:
 
 
 _EXTRA_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
+_EXTRA_BODY_KEYS_THE_RESPONSES_BRIDGE_CARRIES: Final = frozenset(
+    {*ResponsesAPIOptionalRequestParams.__annotations__, "reasoning_effort", "reasoningSummary", "reasoning_summary"}
+    - {"tools"}
+)
+_CHAT_PARAMS_THE_RESPONSES_BRIDGE_DROPS: Final = MappingProxyType(
+    {
+        "n": 1,
+        "presence_penalty": 0,
+        "frequency_penalty": 0,
+        "logprobs": False,
+        "top_logprobs": None,
+        "logit_bias": None,
+        "seed": None,
+        "modalities": None,
+        "audio": None,
+        "prediction": None,
+        "web_search_options": None,
+        "function_call": None,
+        "include_server_side_tool_invocations": None,
+    }
+)
+_ENCRYPTED_REASONING: Final = "reasoning.encrypted_content"
+_INCLUDE_ADAPTER: Final = TypeAdapter(tuple[object, ...])
 
 
-def _extra_body_has_tools(extra_body: object) -> bool:
-    return isinstance(extra_body, dict) and bool(_EXTRA_BODY_ADAPTER.validate_python(extra_body).get("tools"))
+def _extra_body_bridgeable(extra_body: object) -> bool:
+    if extra_body is None:
+        return True
+    return isinstance(extra_body, dict) and (
+        _EXTRA_BODY_ADAPTER.validate_python(extra_body).keys() <= _EXTRA_BODY_KEYS_THE_RESPONSES_BRIDGE_CARRIES
+    )
+
+
+def _sets_a_chat_param_the_responses_bridge_drops(request_params: Mapping[str, object]) -> bool:
+    return any(
+        request_params.get(param) not in (None, no_op_value)
+        for param, no_op_value in _CHAT_PARAMS_THE_RESPONSES_BRIDGE_DROPS.items()
+    )
 
 
 def _bridgeable_to_responses(model: str, request_params: Mapping[str, object]) -> bool:
@@ -1075,7 +1110,8 @@ def _bridgeable_to_responses(model: str, request_params: Mapping[str, object]) -
         not request_params.get("functions")
         and request_params.get("aws_bedrock_client") is None
         and _function_tools_only(request_params.get("tools"))
-        and not _extra_body_has_tools(request_params.get("extra_body"))
+        and _extra_body_bridgeable(request_params.get("extra_body"))
+        and not _sets_a_chat_param_the_responses_bridge_drops(request_params)
         and _bedrock_serves_responses(model)
     )
 
@@ -1085,6 +1121,26 @@ def _bedrock_serves_responses(model: str) -> bool:
     return region is None and any(
         _price_map_entry_lists_endpoint(_model_cost_entry(key), "/v1/responses")
         for key in (model_id, f"bedrock/{model_id}")
+    )
+
+
+def bedrock_responses_bridge_optional_params(optional_params: Mapping[str, object]) -> Mapping[str, object]:
+    if optional_params.get("store") is not None:
+        return optional_params
+    include: Final = optional_params.get("include")
+    requested: Final = _INCLUDE_ADAPTER.validate_python(include) if isinstance(include, (list, tuple)) else ()
+    return {
+        **optional_params,
+        "store": False,
+        "include": [*requested, *(() if _ENCRYPTED_REASONING in requested else (_ENCRYPTED_REASONING,))],
+    }
+
+
+def bedrock_responses_bridge_api_base(api_base: str | None, aws_bedrock_runtime_endpoint: object) -> str | None:
+    return (
+        (aws_bedrock_runtime_endpoint if isinstance(aws_bedrock_runtime_endpoint, str) else None)
+        or get_secret_str("AWS_BEDROCK_RUNTIME_ENDPOINT")
+        or api_base
     )
 
 

@@ -586,6 +586,18 @@ def _weather_tool_named(name):
             "converse",
         ),
         ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "extra_body": {"store": False}}, "responses"),
+        ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "extra_body": {"top_k": 5}}, "converse"),
+        ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "extra_body": "store=false"}, "converse"),
+        ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "seed": 7}, "converse"),
+        ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "logit_bias": {"50256": -100}}, "converse"),
+        ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "web_search_options": {}}, "converse"),
+        ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "n": 2}, "converse"),
+        ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "n": 1}, "responses"),
+        ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "presence_penalty": 0.5}, "converse"),
+        ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "presence_penalty": 0}, "responses"),
+        ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "logprobs": True}, "converse"),
+        ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "logprobs": False}, "responses"),
+        ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "prompt_cache_key": "k"}, "responses"),
         ({"reasoning_effort": "low"}, "chat_completions"),
         ({"tools": None, "reasoning_effort": "low"}, "chat_completions"),
         ({"tools": [], "reasoning_effort": "low"}, "chat_completions"),
@@ -1140,10 +1152,77 @@ def test_gpt56_and_newer_tools_with_reasoning_effort_bridge_to_runtime_responses
     assert body["reasoning"] == {"effort": "low"}
     assert [tool["name"] for tool in body["tools"]] == ["get_weather"]
     assert "temperature" not in body
+    assert body["store"] is False
+    assert body["include"] == ["reasoning.encrypted_content"]
     assert response.object == "chat.completion"
     assert response.choices[0].finish_reason == "tool_calls"
     assert response.choices[0].message.tool_calls[0].function.name == "get_weather"
     assert response._hidden_params["response_cost"] > 0
+
+
+def test_tools_with_reasoning_bridge_stores_only_when_the_caller_asks(local_cost_map, fake_aws_env):
+    requests, client = _recording_client(json={**RESPONSES_TOOL_CALL_JSON, "model": "global.openai.gpt-6-sol"})
+    litellm.completion(
+        model="bedrock/global.openai.gpt-6-sol",
+        messages=[{"role": "user", "content": "weather in Paris"}],
+        tools=[GET_WEATHER_TOOL],
+        reasoning_effort="low",
+        store=True,
+        client=client,
+    )
+
+    body = json.loads(requests[0].content)
+    assert body["store"] is True
+    assert "include" not in body
+
+
+def test_tools_with_reasoning_and_a_param_the_bridge_drops_fail_like_converse_without_drop_params(
+    local_cost_map, fake_aws_env
+):
+    requests, client = _recording_client(json={**RESPONSES_TOOL_CALL_JSON, "model": "global.openai.gpt-6-sol"})
+    with pytest.raises(litellm.UnsupportedParamsError, match="seed"):
+        litellm.completion(
+            model="bedrock/global.openai.gpt-6-sol",
+            messages=[{"role": "user", "content": "weather in Paris"}],
+            tools=[GET_WEATHER_TOOL],
+            reasoning_effort="low",
+            seed=7,
+            client=client,
+        )
+
+    assert requests == []
+
+
+@pytest.mark.parametrize(
+    "runtime_endpoint_param, runtime_endpoint_env, expected_host",
+    [
+        ("https://vpce-param.example.com", None, "vpce-param.example.com"),
+        (None, "https://vpce-env.example.com", "vpce-env.example.com"),
+        (None, None, "proxy.example.com"),
+    ],
+)
+def test_tools_with_reasoning_bridge_goes_to_the_host_converse_would(
+    local_cost_map, fake_aws_env, monkeypatch, runtime_endpoint_param, runtime_endpoint_env, expected_host
+):
+    if runtime_endpoint_env:
+        monkeypatch.setenv("AWS_BEDROCK_RUNTIME_ENDPOINT", runtime_endpoint_env)
+    params = {
+        "model": "bedrock/global.openai.gpt-6-sol",
+        "messages": [{"role": "user", "content": "weather in Paris"}],
+        "reasoning_effort": "low",
+        "api_base": "https://proxy.example.com",
+        "aws_bedrock_runtime_endpoint": runtime_endpoint_param,
+    }
+    converse_requests, converse_client = _recording_client(json=CONVERSE_JSON)
+    litellm.completion(**params, tools=[_weather_tool_named("get weather!")], client=converse_client)
+    bridge_requests, bridge_client = _recording_client(
+        json={**RESPONSES_TOOL_CALL_JSON, "model": "global.openai.gpt-6-sol"}
+    )
+    litellm.completion(**params, tools=[GET_WEATHER_TOOL], client=bridge_client)
+
+    assert converse_requests[0].url.raw_path.endswith(b"/converse")
+    assert bridge_requests[0].url.path == "/openai/v1/responses"
+    assert bridge_requests[0].url.host == converse_requests[0].url.host == expected_host
 
 
 def test_tools_with_reasoning_and_a_name_openai_rejects_keep_converse_and_its_name_mapping(local_cost_map, fake_aws_env):
