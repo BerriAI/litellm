@@ -232,7 +232,7 @@ def get_secret(
 
     # Example: oidc/google/https://bedrock-runtime.us-east-1.amazonaws.com/model/stability.stable-diffusion-xl-v1/invoke
     if secret_name.startswith("oidc/"):
-        secret_name_split: Final = secret_name.replace("oidc/", "")
+        secret_name_split: Final = secret_name.removeprefix("oidc/")
         oidc_provider, oidc_aud = secret_name_split.split("/", 1)
         oidc_aud = "/".join(secret_name_split.split("/")[1:])
         # TODO: Add caching for HTTP requests
