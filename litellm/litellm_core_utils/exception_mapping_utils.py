@@ -38,6 +38,100 @@ from ..exceptions import (
     UnprocessableEntityError,
 )
 
+_VALIDATION_STRUCTURED_MARKERS: Final = frozenset(
+    {
+        "bad_request",
+        "invalid_argument",
+        "invalid_request",
+        "invalid_request_error",
+        "validation",
+        "validation_error",
+        "validation_exception",
+    }
+)
+_STRUCTURED_ERROR_SIGNAL_KEYS: Final = (
+    "code",
+    "error_code",
+    "status",
+    "status_code",
+    "type",
+    "error_type",
+    "__type",
+)
+_ERROR_PAYLOAD_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+def _normalise_structured_marker(value: object) -> str:
+    """Normalize provider code/type values for marker comparison."""
+    if not isinstance(value, (int, str)):
+        return ""
+    value_string: Final = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(value))
+    return re.sub(r"[^a-z0-9]+", "_", value_string.lower()).strip("_")
+
+
+def _parse_structured_error_payload(error_text: str) -> Mapping[str, object] | None:
+    """Parse a JSON error body, including SDK prefixes around the JSON."""
+    start: Final = error_text.find("{")
+    end: Final = error_text.rfind("}")
+    candidates: Final = (error_text.strip(),) + ((error_text[start : end + 1],) if start >= 0 and end > start else ())
+
+    for candidate in candidates:
+        try:
+            return _ERROR_PAYLOAD_ADAPTER.validate_json(candidate)
+        except ValidationError:
+            continue
+    return None
+
+
+def _response_json_payload(response: httpx.Response | None) -> Mapping[str, object] | None:
+    if response is None:
+        return None
+    try:
+        return _ERROR_PAYLOAD_ADAPTER.validate_json(response.content)
+    except (ValidationError, httpx.ResponseNotRead):
+        return None
+
+
+def _error_payload_mapping(payload: object) -> Mapping[str, object] | None:
+    try:
+        return _ERROR_PAYLOAD_ADAPTER.validate_python(payload)
+    except ValidationError:
+        return None
+
+
+def _error_object_has_validation_marker(error_object: Mapping[str, object]) -> bool:
+    return any(
+        _normalise_structured_marker(error_object.get(key)) in _VALIDATION_STRUCTURED_MARKERS
+        for key in _STRUCTURED_ERROR_SIGNAL_KEYS
+    )
+
+
+def _payload_has_validation_marker(payload: Mapping[str, object]) -> bool:
+    nested_error: Final = _error_payload_mapping(payload.get("error"))
+    return _error_object_has_validation_marker(payload) or (
+        nested_error is not None and _error_object_has_validation_marker(nested_error)
+    )
+
+
+def _structured_validation_signal(
+    *,
+    error_str: str,
+    response: httpx.Response | None = None,
+    error_body: object | None = None,
+) -> bool:
+    """Return whether the provider supplies an explicit validation signal."""
+    payloads: Final = tuple(
+        payload
+        for payload in (
+            _error_payload_mapping(error_body),
+            _response_json_payload(response),
+            _parse_structured_error_payload(error_str),
+        )
+        if payload is not None
+    )
+
+    return any(_payload_has_validation_marker(payload) for payload in payloads)
+
 
 class ExceptionCheckers:
     """
@@ -45,7 +139,13 @@ class ExceptionCheckers:
     """
 
     @staticmethod
-    def is_error_str_rate_limit(error_str: str, status_code: int | None = None) -> bool:
+    def is_error_str_rate_limit(
+        error_str: str,
+        status_code: int | None = None,
+        *,
+        response: httpx.Response | None = None,
+        error_body: object | None = None,
+    ) -> bool:
         """
         Check if an error string indicates a rate limit error.
 
@@ -54,7 +154,10 @@ class ExceptionCheckers:
             status_code: The HTTP status the provider returned, when known. Gates only the
                 bare-number branch: providers echo the request back in validation errors and
                 429 is an ordinary token id, so an echoed prompt can put a standalone 429 in
-                the body of a 400. The phrase branches stay ungated (#11455).
+                the body of a 400. The legacy rate-limit phrase stays ungated (#11455).
+                New quota phrases require no structured validation signal.
+            response: The provider response, when available, for structured error fields.
+            error_body: The parsed provider error body, when available.
 
         Returns:
             True if the error indicates a rate limit, False otherwise
@@ -73,13 +176,34 @@ class ExceptionCheckers:
         if re.search(r"rate[\s_\-]*limit", _error_str_lower):
             return True
 
-        #######################################
-        # Mistral API returns this error string
-        #########################################
-        if "service tier capacity exceeded" in _error_str_lower:
-            return True
+        if _structured_validation_signal(
+            error_str=error_str,
+            response=response,
+            error_body=error_body,
+        ):
+            return False
 
-        return False
+        # Common provider rate-limit and quota exhaustion phrases across Gemini, Bedrock, Mistral, Azure, and Anthropic
+        rate_limit_patterns: Final = (
+            "service tier capacity exceeded",
+            "too many requests",
+            "quota exceeded",
+            "quota_exceeded",
+            "insufficient_quota",
+            "exceeded your current quota",
+            "resource_exhausted",
+            "resource has been exhausted",
+            "request_rate_too_large",
+            "provisioned throughput exceeded",
+            "capacity temporarily exceeded",
+            "concurrency limit reached",
+            "concurrent requests limit exceeded",
+            "requests per minute exceeded",
+            "tokens per minute exceeded",
+            "requests per day exceeded",
+            "tokens per day exceeded",
+        )
+        return any(pattern in _error_str_lower for pattern in rate_limit_patterns)
 
     @staticmethod
     def is_error_str_context_window_exceeded(error_str: str) -> bool:
@@ -345,7 +469,10 @@ def _map_openai_exception(
         exception_provider = custom_llm_provider[0].upper() + custom_llm_provider[1:] + "Exception"
 
     if ExceptionCheckers.is_error_str_rate_limit(
-        error_str, status_code=getattr(original_exception, "status_code", None)
+        error_str,
+        status_code=getattr(original_exception, "status_code", None),
+        response=getattr(original_exception, "response", None),
+        error_body=getattr(original_exception, "body", None),
     ):
         raise RateLimitError(
             message=f"RateLimitError: {exception_provider} - {message}",
@@ -574,6 +701,9 @@ def _map_anthropic_exception(
     exception_provider: str,
     extra_information: str,
 ) -> None:
+    error_payload: Final = _parse_structured_error_payload(error_str)
+    structured_error: Final = _error_payload_mapping(error_payload.get("error")) if error_payload is not None else None
+    structured_message: Final = structured_error.get("message") if structured_error is not None else None
     if (
         "prompt is too long" in error_str
         or "prompt: length" in error_str
@@ -589,6 +719,25 @@ def _map_anthropic_exception(
             message=f"AnthropicError - {error_str}",
             model=model,
             llm_provider="anthropic",
+        )
+    elif getattr(original_exception, "status_code", None) != 429 and (
+        (
+            isinstance(structured_message, str)
+            and structured_message.startswith("You have reached your specified API usage limits.")
+        )
+        or ExceptionCheckers.is_error_str_rate_limit(
+            error_str,
+            status_code=getattr(original_exception, "status_code", None),
+            response=getattr(original_exception, "response", None),
+            error_body=getattr(original_exception, "body", None),
+        )
+    ):
+        raise RateLimitError(
+            message=f"AnthropicException - {error_str}",
+            model=model,
+            llm_provider="anthropic",
+            response=getattr(original_exception, "response", None),
+            litellm_debug_info=extra_information,
         )
     if "Invalid API Key" in error_str:
         raise AuthenticationError(
@@ -958,6 +1107,19 @@ def _map_bedrock_exception(
             llm_provider="bedrock",
             response=getattr(original_exception, "response", None),
         )
+    elif getattr(original_exception, "status_code", None) != 429 and ExceptionCheckers.is_error_str_rate_limit(
+        error_str,
+        status_code=getattr(original_exception, "status_code", None),
+        response=getattr(original_exception, "response", None),
+        error_body=getattr(original_exception, "body", None),
+    ):
+        raise RateLimitError(
+            message=f"BedrockException - {error_str}",
+            model=model,
+            llm_provider="bedrock",
+            response=getattr(original_exception, "response", None),
+            litellm_debug_info=extra_information,
+        )
     elif "Conversation blocks and tool result blocks cannot be provided in the same turn." in error_str:
         raise BadRequestError(
             message=f"BedrockException - {error_str}\n. Enable 'litellm.modify_params=True' (for PROXY do: `litellm_settings::modify_params: True`) to insert a dummy assistant message and fix this error.",
@@ -1284,11 +1446,25 @@ def _map_vertex_exception(
             ),
         )
     elif (
-        "429 Quota exceeded" in error_str
-        or "Quota exceeded for" in error_str
-        or "Resource exhausted" in error_str
-        or "IndexError: list index out of range" in error_str
-        or "429 Unable to submit request because the service is temporarily out of capacity." in error_str
+        getattr(original_exception, "status_code", None) != 429
+        and not _structured_validation_signal(
+            error_str=error_str,
+            response=getattr(original_exception, "response", None),
+            error_body=getattr(original_exception, "body", None),
+        )
+        and (
+            "429 Quota exceeded" in error_str
+            or "Quota exceeded for" in error_str
+            or "Resource exhausted" in error_str
+            or "IndexError: list index out of range" in error_str
+            or "429 Unable to submit request because the service is temporarily out of capacity." in error_str
+            or ExceptionCheckers.is_error_str_rate_limit(
+                error_str,
+                status_code=getattr(original_exception, "status_code", None),
+                response=getattr(original_exception, "response", None),
+                error_body=getattr(original_exception, "body", None),
+            )
+        )
     ):
         raise RateLimitError(
             message=f"litellm.RateLimitError: {custom_llm_provider}Exception - {error_str}",
@@ -1810,6 +1986,19 @@ def _map_together_ai_exception(
             model=model,
             llm_provider="together_ai",
         )
+    elif getattr(original_exception, "status_code", None) != 429 and ExceptionCheckers.is_error_str_rate_limit(
+        error_str,
+        status_code=getattr(original_exception, "status_code", None),
+        response=getattr(original_exception, "response", None),
+        error_body=getattr(original_exception, "body", None),
+    ):
+        raise RateLimitError(
+            message=f"TogetherAIException - {error_str}",
+            model=model,
+            llm_provider="together_ai",
+            response=getattr(original_exception, "response", None),
+            litellm_debug_info=extra_information,
+        )
     elif (
         "error" in error_response
         and "API key doesn't match expected format." in error_response["error"]
@@ -2074,6 +2263,19 @@ def _map_azure_exception(
             litellm_debug_info=extra_information,
             response=getattr(original_exception, "response", None),
             body=getattr(original_exception, "body", None),
+        )
+    elif getattr(original_exception, "status_code", None) != 429 and ExceptionCheckers.is_error_str_rate_limit(
+        error_str,
+        status_code=getattr(original_exception, "status_code", None),
+        response=getattr(original_exception, "response", None),
+        error_body=getattr(original_exception, "body", None),
+    ):
+        raise RateLimitError(
+            message=f"AzureException RateLimitError - {message}",
+            llm_provider="azure",
+            model=model,
+            litellm_debug_info=extra_information,
+            response=getattr(original_exception, "response", None),
         )
     elif "invalid_request_error" in error_str and getattr(original_exception, "status_code", None) in (None, 400):
         raise BadRequestError(
