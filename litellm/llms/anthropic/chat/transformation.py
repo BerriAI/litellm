@@ -3002,7 +3002,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         _hidden_params["provider_specific_fields"] = provider_specific_fields
         # Merge so earlier values (e.g. Bedrock Invoke region_name / custom_llm_provider
         # set in main.py for region-based pricing) are not wiped. See #44002.
-        model_response.hidden_params = {  # mutable-ok: merge preexisting Bedrock region pricing keys into hidden_params
+        model_response.hidden_params = {  # rebind-ok: merge preexisting Bedrock region pricing keys into hidden_params without wiping region_name
             **model_response.hidden_params,
             **_hidden_params,
         }

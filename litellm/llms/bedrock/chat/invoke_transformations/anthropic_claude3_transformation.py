@@ -378,7 +378,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
-        model_response = AnthropicConfig.transform_response(
+        model_response = AnthropicConfig.transform_response(  # rebind-ok: Anthropic transform returns the filled ModelResponse
             self,
             model=model,
             raw_response=raw_response,
@@ -396,5 +396,5 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         # which breaks Bedrock region pricing keys like
         # bedrock/us-gov-west-1/anthropic.claude-opus-5. Match Converse/base_invoke
         # and keep the Bedrock model id. See #44002.
-        model_response.model = BedrockModelInfo.get_base_model(model)
+        model_response.model = BedrockModelInfo.get_base_model(model)  # rebind-ok: restore Bedrock model id for region pricing keys
         return model_response
