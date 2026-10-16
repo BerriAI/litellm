@@ -1924,7 +1924,12 @@ async def _common_key_generation_helper(
 
     try:
         response = await generate_key_helper_fn(
-            request_type="key", **data_json, table_name="key", llm_router=llm_router, actor=user_api_key_dict
+            request_type="key",
+            expires=data.expires,
+            **{key: value for key, value in data_json.items() if key != "expires"},
+            table_name="key",
+            llm_router=llm_router,
+            actor=user_api_key_dict,
         )
     except KeyProjectBindingError:
         if prisma_client is not None:

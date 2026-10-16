@@ -639,6 +639,7 @@ async def new_user(
 
         response: Final = await generate_key_helper_fn(
             request_type="user",
+            expires=None,
             **data_json,
             llm_router=None,
             actor=actor,
