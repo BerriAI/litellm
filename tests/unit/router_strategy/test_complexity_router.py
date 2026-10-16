@@ -93,7 +93,7 @@ from litellm.types.router import (
     TaggedPreRoutingStrategy,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.management_endpoints.auto_router_endpoints import RequestComplexityRouterConfig
+from litellm.router_strategy.complexity_router.request_models import RequestComplexityRouterConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 

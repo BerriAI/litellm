@@ -118,6 +118,40 @@ describe("loginCall - storeLoginToken integration", () => {
   });
 });
 
+describe("exchangeLoginCode - storeLoginToken integration", () => {
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("calls storeLoginToken when exchange response includes token", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ token: "sso-jwt" }),
+    }) as unknown as typeof global.fetch;
+    const { storeLoginToken } = await import("@/utils/cookieUtils");
+    const token = await Networking.exchangeLoginCode("some-login-code");
+    expect(token).toBe("sso-jwt");
+    expect(storeLoginToken).toHaveBeenCalledWith("sso-jwt");
+  });
+
+  it("does not call storeLoginToken when exchange response has no token", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({}),
+    }) as unknown as typeof global.fetch;
+    const { storeLoginToken } = await import("@/utils/cookieUtils");
+    const token = await Networking.exchangeLoginCode("some-login-code");
+    expect(token).toBeUndefined();
+    expect(storeLoginToken).not.toHaveBeenCalled();
+  });
+});
+
 describe("modelInfoCall", () => {
   let currentFetch: typeof global.fetch;
 
@@ -167,11 +201,13 @@ describe("UI config and public endpoints", () => {
         return Promise.resolve({
           ok: true,
           json: vi.fn().mockResolvedValue(response.data),
+          text: vi.fn().mockResolvedValue(JSON.stringify(response.data)),
         } as any);
       }
       return Promise.resolve({
         ok: true,
         json: vi.fn().mockResolvedValue({}),
+        text: vi.fn().mockResolvedValue("{}"),
       } as any);
     });
     global.fetch = mockFetch as any;
@@ -203,7 +239,7 @@ describe("UI config and public endpoints", () => {
     // Then call the public endpoint
     await Networking.getProviderCreateMetadata();
 
-    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
     const publicEndpointCall = mockFetch.mock.calls.find((call) =>
       (call[0] as string).includes("/public/providers/fields"),
     );
@@ -226,7 +262,7 @@ describe("UI config and public endpoints", () => {
     await Networking.getUiConfig();
     await Networking.getPublicModelHubInfo();
 
-    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
     const publicEndpointCall = mockFetch.mock.calls.find((call) =>
       (call[0] as string).includes("/public/model_hub/info"),
     );
@@ -249,7 +285,7 @@ describe("UI config and public endpoints", () => {
     await Networking.getUiConfig();
     await Networking.modelHubPublicModelsCall();
 
-    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
     const publicEndpointCall = mockFetch.mock.calls.find(
       (call) => (call[0] as string).includes("/public/model_hub") && !(call[0] as string).includes("/info"),
     );
@@ -272,7 +308,7 @@ describe("UI config and public endpoints", () => {
     await Networking.getUiConfig();
     await Networking.agentHubPublicModelsCall();
 
-    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
     const publicEndpointCall = mockFetch.mock.calls.find((call) => (call[0] as string).includes("/public/agent_hub"));
     expect(publicEndpointCall).toBeDefined();
     const calledUrl = publicEndpointCall![0] as string;
@@ -293,7 +329,7 @@ describe("UI config and public endpoints", () => {
     await Networking.getUiConfig();
     await Networking.mcpHubPublicServersCall();
 
-    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
     const publicEndpointCall = mockFetch.mock.calls.find((call) => (call[0] as string).includes("/public/mcp_hub"));
     expect(publicEndpointCall).toBeDefined();
     const calledUrl = publicEndpointCall![0] as string;
@@ -314,7 +350,7 @@ describe("UI config and public endpoints", () => {
     await Networking.getUiConfig();
     await Networking.getProviderCreateMetadata();
 
-    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
     const publicEndpointCall = mockFetch.mock.calls.find((call) =>
       (call[0] as string).includes("/public/providers/fields"),
     );
@@ -333,7 +369,7 @@ describe("UI config and public endpoints", () => {
 
     const result = await Networking.getUiConfig();
 
-    expect(mockFetch).toHaveBeenCalledOnce();
+    expect(mockFetch).toHaveBeenCalledTimes(2);
     expect(result).toEqual(uiConfig);
     const configCall = mockFetch.mock.calls.find((call) =>
       (call[0] as string).includes("/litellm/.well-known/litellm-ui-config"),
@@ -353,6 +389,41 @@ describe("UI config and public endpoints", () => {
 
     expect(Networking.serverRootPath).toBe("/litellm");
     expect(uiHref("api-reference")).toBe("/litellm/ui/api-reference");
+  });
+
+  it("sends model group connection probes to the configured gateway", async () => {
+    const uiConfig = {
+      server_root_path: "",
+      proxy_base_url: "https://backend.example.com",
+      gateway_base_url: "https://gateway.example.com",
+    };
+    const mockFetch = setupMockFetch([{ url: "/litellm/.well-known/litellm-ui-config", data: uiConfig }]);
+
+    await Networking.getUiConfig();
+    expect(await Networking.testModelGroupConnection("token", "chat-model", "chat")).toEqual({ status: "success" });
+    expect(await Networking.testModelGroupConnection("token", "embedding-model", "embedding")).toEqual({
+      status: "success",
+    });
+
+    const requestedUrls = mockFetch.mock.calls.map(([url]) => String(url));
+    expect(requestedUrls).toContain("https://gateway.example.com/v1/chat/completions");
+    expect(requestedUrls).toContain("https://gateway.example.com/v1/embeddings");
+  });
+
+  it("falls back to the proxy URL for model group probes when the gateway is unset", async () => {
+    const uiConfig = {
+      server_root_path: "",
+      proxy_base_url: "https://backend.example.com",
+    };
+    const mockFetch = setupMockFetch([{ url: "/litellm/.well-known/litellm-ui-config", data: uiConfig }]);
+
+    await Networking.getUiConfig();
+    expect(await Networking.testModelGroupConnection("token", "embedding-model", "embedding")).toEqual({
+      status: "success",
+    });
+
+    const requestedUrls = mockFetch.mock.calls.map(([url]) => String(url));
+    expect(requestedUrls).toContain("https://backend.example.com/v1/embeddings");
   });
 });
 
@@ -442,6 +513,20 @@ describe("teamInfoCall", () => {
     expect(parsed.searchParams.get("team_id")).toBe(teamID);
   });
 
+  it("passes key_limit when requested", async () => {
+    const mockFetch = vi.spyOn(global, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
+
+    try {
+      await Networking.teamInfoCall("token", "team-1", { keyLimit: 1 });
+
+      const [url] = mockFetch.mock.calls[0];
+      const parsed = url instanceof Request ? new URL(url.url) : new URL(url.toString(), "http://example.com");
+      expect(parsed.searchParams.get("key_limit")).toBe("1");
+    } finally {
+      mockFetch.mockRestore();
+    }
+  });
+
   it("should not append team_id when teamID is null", async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
@@ -455,6 +540,7 @@ describe("teamInfoCall", () => {
     const [url] = mockFetch.mock.calls[0];
     const parsed = typeof url === "string" ? new URL(url, "http://example.com") : new URL((url as Request).url);
     expect(parsed.searchParams.has("team_id")).toBe(false);
+    expect(parsed.searchParams.has("key_limit")).toBe(false);
   });
 });
 
@@ -886,5 +972,185 @@ describe("modelCostMap", () => {
 
     expect(mockFetch.mock.calls[0][0]).toMatch(/\/public\/litellm_model_cost_map\?catalog_only=true$/);
     expect(mockFetch.mock.calls[1][0]).toMatch(/\/public\/litellm_model_cost_map$/);
+  });
+});
+
+describe("getUiConfig runtime backend discovery", () => {
+  const discoveryConfig = () => ({
+    server_root_path: "/",
+    proxy_base_url: null,
+    gateway_base_url: null,
+    auto_redirect_to_sso: false,
+    admin_ui_disabled: false,
+    sso_configured: false,
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  const loadFreshNetworking = async () => {
+    const storage = new Map<string, string>();
+    vi.stubGlobal("window", {
+      location: { origin: "https://ui.example.com" },
+      localStorage: {
+        getItem: (key: string) => storage.get(key) ?? null,
+        setItem: (key: string, value: string) => storage.set(key, value),
+        removeItem: (key: string) => storage.delete(key),
+        clear: () => storage.clear(),
+      },
+    });
+    vi.stubEnv("NEXT_PUBLIC_BASE_URL", "");
+    vi.stubEnv("NEXT_PUBLIC_USE_REWRITES", "true");
+    vi.resetModules();
+    return import("./networking");
+  };
+
+  const loadNetworkingWithGateway = async (gatewayBaseUrl: string | null) => {
+    const backendBaseUrl = "https://backend.example.com";
+    const mockFetch = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url === "/ui/litellm-runtime-config.json") {
+        return new Response(JSON.stringify({ backend_url: backendBaseUrl }));
+      }
+      if (url === `${backendBaseUrl}/litellm/.well-known/litellm-ui-config`) {
+        return new Response(
+          JSON.stringify({
+            ...discoveryConfig(),
+            proxy_base_url: backendBaseUrl,
+            gateway_base_url: gatewayBaseUrl,
+          }),
+        );
+      }
+      if (url.endsWith("/v1/indexes")) {
+        return new Response(JSON.stringify({ object: "list", data: [] }));
+      }
+      if (url.endsWith("/v1/a2a/discover")) {
+        return new Response(JSON.stringify({ agent_card: {}, url: "https://agent.example.com" }));
+      }
+      return new Response("{}");
+    });
+    vi.stubGlobal("fetch", mockFetch);
+    const networking = await loadFreshNetworking();
+    await networking.getUiConfig();
+    return { networking, mockFetch };
+  };
+
+  it("uses a normalized runtime backend URL for discovery and the management fallback", async () => {
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ backend_url: "  https://backend.example.com///  " }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ...discoveryConfig(),
+          gateway_base_url: "  https://gateway.example.com/// ",
+        }),
+      } as Response);
+    vi.stubGlobal("fetch", mockFetch);
+    const networking = await loadFreshNetworking();
+
+    await networking.getUiConfig();
+
+    expect(mockFetch).toHaveBeenNthCalledWith(1, "/ui/litellm-runtime-config.json", { cache: "no-store" });
+    expect(mockFetch.mock.calls[1][0]).toBe("https://backend.example.com/litellm/.well-known/litellm-ui-config");
+    expect(networking.getProxyBaseUrl().replace(/\/+$/, "")).toBe("https://backend.example.com");
+    expect(networking.getGatewayBaseUrl()).toBe("https://gateway.example.com");
+
+    networking.switchToWorkerUrl("https://worker.example.com");
+    expect(networking.getGatewayBaseUrl()).toBe("https://worker.example.com");
+    networking.switchToWorkerUrl(null);
+    expect(networking.getGatewayBaseUrl()).toBe("https://gateway.example.com");
+  });
+
+  it.each([
+    ["404", { ok: false }],
+    [
+      "HTML 200",
+      {
+        ok: true,
+        json: async () => {
+          throw new SyntaxError("Unexpected token '<'");
+        },
+      },
+    ],
+  ])("keeps discovery behavior when runtime config returns %s", async (_label, runtimeResponse) => {
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce(runtimeResponse as Response)
+      .mockResolvedValueOnce({ ok: true, json: async () => discoveryConfig() } as Response);
+    vi.stubGlobal("fetch", mockFetch);
+    const networking = await loadFreshNetworking();
+
+    await networking.getUiConfig();
+
+    expect(mockFetch).toHaveBeenNthCalledWith(1, "/ui/litellm-runtime-config.json", { cache: "no-store" });
+    expect(mockFetch.mock.calls[1][0]).toBe("/litellm/.well-known/litellm-ui-config");
+    expect(networking.getGatewayBaseUrl()).toBe(networking.getProxyBaseUrl());
+  });
+
+  it("fetches model availability from the gateway and falls back to the backend when unset", async () => {
+    const { networking, mockFetch } = await loadNetworkingWithGateway("https://gateway.example.com");
+    await networking.modelAvailableCall("token", "user-1", "Admin");
+
+    const gatewayRequestUrl = new URL(String(mockFetch.mock.calls.at(-1)?.[0]));
+    expect(gatewayRequestUrl.origin).toBe("https://gateway.example.com");
+    expect(gatewayRequestUrl.pathname).toBe("/models");
+
+    const fallback = await loadNetworkingWithGateway(null);
+    await fallback.networking.modelAvailableCall("token", "user-1", "Admin");
+
+    const fallbackRequestUrl = new URL(String(fallback.mockFetch.mock.calls.at(-1)?.[0]));
+    expect(fallbackRequestUrl.origin).toBe("https://backend.example.com");
+    expect(fallbackRequestUrl.pathname).toBe("/models");
+  });
+
+  it("posts decision tests to the gateway", async () => {
+    const { networking, mockFetch } = await loadNetworkingWithGateway("https://gateway.example.com");
+    await networking.decisionsTestCall("token", {
+      model: "test-model",
+      input: "test input",
+      questions: [{ type: "predicate", name: "valid", instructions: "The input is valid" }],
+    });
+
+    const requestUrl = new URL(String(mockFetch.mock.calls.at(-1)?.[0]));
+    expect(requestUrl.origin).toBe("https://gateway.example.com");
+    expect(requestUrl.pathname).toBe("/v1/decisions");
+  });
+
+  it("ingests RAG documents through the gateway", async () => {
+    const { networking, mockFetch } = await loadNetworkingWithGateway("https://gateway.example.com");
+    await networking.ragIngestCall("token", new File(["document"], "document.txt"), "openai");
+
+    const requestUrl = new URL(String(mockFetch.mock.calls.at(-1)?.[0]));
+    expect(requestUrl.origin).toBe("https://gateway.example.com");
+    expect(requestUrl.pathname).toBe("/rag/ingest");
+  });
+
+  it("lists indexes from the gateway", async () => {
+    const { networking, mockFetch } = await loadNetworkingWithGateway("https://gateway.example.com");
+    await networking.indexesListCall("token");
+
+    expect(String(mockFetch.mock.calls.at(-1)?.[0])).toBe("https://gateway.example.com/v1/indexes");
+  });
+
+  it("discovers agent cards through the gateway with the default discovery mode", async () => {
+    const { networking, mockFetch } = await loadNetworkingWithGateway("https://gateway.example.com");
+    await networking.discoverAgentCardCall("token", "https://agent.example.com");
+
+    const [requestUrl, requestInit] = mockFetch.mock.calls.at(-1) ?? [];
+    expect(requestUrl instanceof Request ? requestUrl.url : String(requestUrl)).toBe(
+      "https://gateway.example.com/v1/a2a/discover",
+    );
+    expect(new Headers(requestInit?.headers).get(networking.getGlobalLitellmHeaderName())).toBe("Bearer token");
+    expect(JSON.parse(String(requestInit?.body))).toEqual({
+      url: "https://agent.example.com",
+      discovery_mode: "well_known_fallback",
+    });
   });
 });

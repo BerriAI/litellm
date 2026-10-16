@@ -17,6 +17,7 @@ from integration._support.bedrock_runtime_peer import answer, forwarded_effort, 
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
+from integration._support.timing import assert_within_factor_of_control, timed
 from integration._support.wire import Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
@@ -255,16 +256,21 @@ def test_model_group_info_lists_the_native_supported_params(gateway: Gateway) ->
 
 def test_thirty_thousand_digit_version_is_classified_quickly_and_served_by_converse(gateway: Gateway) -> None:
     marker: Final = uuid.uuid4().hex
+    control_marker: Final = uuid.uuid4().hex
     with wire_server(respond) as wire, gateway.scenario() as scenario, ThreadPoolExecutor(max_workers=1) as pool:
+        control_model: Final = _deployment(scenario, wire)
         model: Final = _deployment(scenario, wire, model=f"bedrock/{LONG_VERSION_GPT}")
+        control: Final = timed(lambda: _chat(gateway, control_model, control_marker))
+        assert _content(control.value) == answer(control_marker), control.value.text
+        _only_request(wire, control_marker)
         liveliness: Final = pool.submit(_timed_liveliness, gateway)
-        started: Final = time.monotonic()
-        response: Final = _chat(gateway, model, marker)
-        elapsed: Final = time.monotonic() - started
+        served: Final = timed(lambda: _chat(gateway, model, marker))
+        response: Final = served.value
         health_status, health_elapsed = liveliness.result()
         assert _content(response) == answer(marker), response.text
-        assert elapsed < 10, elapsed
-        assert (health_status, health_elapsed < 2) == (200, True), (health_status, health_elapsed)
+        assert_within_factor_of_control(served.seconds, control=control.seconds, factor=20)
+        assert health_status == 200, (health_status, health_elapsed)
+        assert_within_factor_of_control(health_elapsed, control=control.seconds, factor=20)
         request: Final = _only_request(wire, marker)
         assert (request.method, target_of(request)) == ("POST", f"/model/{LONG_VERSION_GPT}/converse"), request.target
         _assert_row(string_value(_payload(response)["id"]), model, "success")
@@ -274,12 +280,14 @@ def test_bad_key_on_the_long_version_model_is_refused_before_any_route(gateway: 
     marker: Final = uuid.uuid4().hex
     control_marker: Final = uuid.uuid4().hex
     with wire_server(respond) as wire, gateway.scenario() as scenario:
+        short_model: Final = _deployment(scenario, wire)
         model: Final = _deployment(scenario, wire, model=f"bedrock/{LONG_VERSION_GPT}")
-        started: Final = time.monotonic()
-        refused: Final = _chat(gateway, model, marker, key=BAD_KEY)
-        elapsed: Final = time.monotonic() - started
+        short_refusal: Final = timed(lambda: _chat(gateway, short_model, uuid.uuid4().hex, key=BAD_KEY))
+        assert short_refusal.value.status_code == 401, short_refusal.value.text
+        long_refusal: Final = timed(lambda: _chat(gateway, model, marker, key=BAD_KEY))
+        refused: Final = long_refusal.value
         assert refused.status_code == 401, refused.text
-        assert elapsed < 2, elapsed
+        assert_within_factor_of_control(long_refusal.seconds, control=short_refusal.seconds, factor=10)
         assert "Authentication Error" in _error_message(refused), refused.text
         refused_rows: Final = eventually(
             lambda: read_rows(

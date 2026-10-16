@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import uuid
 from itertools import chain
 from pathlib import Path
@@ -898,10 +899,7 @@ def test_arize_otel_v2_a_cache(surface: str, gateway: Gateway, tmp_path: Path) -
             request for request in rig.provider.drain() if request.method == "POST" and marker.encode() in request.body
         )
         assert len(forwarded) == 1, forwarded
-        if surface == "messages":
-            assert not second[2].get("x-litellm-cache-key"), second[2]
-        else:
-            assert second[2].get("x-litellm-cache-key"), second[2]
+        assert re.fullmatch(r"[0-9a-f]{64}", second[2].get("x-litellm-cache-key", "")), second[2]
         forwarded_body: Final = _json_object(forwarded[0].body)
         if surface in ("chat", "chat-stream"):
             assert "metadata" not in forwarded_body, forwarded[0]

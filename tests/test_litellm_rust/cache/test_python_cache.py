@@ -21,14 +21,14 @@ from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_di
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule
 from litellm.rust_bridge.configuration import Rollout
-from litellm.rust_bridge.dispatch import call_hook
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.caching import CachingSupportedCallTypes
-from tests.test_litellm_rust.support.cache import cache_key, collect, invoke, payload
-from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
+from tests.test_litellm_rust.cache.support import cache_key, collect, invoke, payload
+from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_EVENTS, MESSAGES_MODEL, MESSAGES_RESPONSE
+from tests.test_litellm_rust.responses.data import RESPONSES_RESPONSE
+from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging, request_body
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
-from tests.test_litellm_rust.support.requests import MESSAGES, MESSAGES_EVENTS, MESSAGES_MODEL, MESSAGES_RESPONSE
-from tests.test_litellm_rust.test_inference import RESPONSES_RESPONSE
+from tests.test_litellm_rust.support.routing import native_route
 
 pytestmark = pytest.mark.requires_rust_extension
 
@@ -228,22 +228,23 @@ async def test_v2_messages_replays_a_completed_stream(recording_server: Recordin
         "stream": True,
         "callbacks": [recorder],
     }
-    first_stream: Final = await litellm.anthropic_messages(**parameters)
-    assert cache_key(first_stream) is None
-    first: Final = await collect(first_stream)
-    await recorder.wait_for_async("async_log_success_event")
-    second_stream: Final = await litellm.anthropic_messages(**parameters)
-    assert isinstance(cache_key(second_stream), str)
-    assert cache_key(second_stream) == get_hidden_params_dict(second_stream)["cache_key"]
-    second: Final = await collect(second_stream)
-    assert payload(first) == payload(second)
-    assert first == b"".join(recording_server.default_response.payloads())
-    assert len(recording_server.requests) == 1
-    await drain_logging()
-    successes: Final = await recorder.wait_for_async("async_log_success_event", count=2)
-    cached_log: Final = TypeAdapter(dict[str, object]).validate_python(successes[-1].kwargs)
-    assert cached_log["cache_hit"] is True
-    assert cached_log["response_cost"] == 0
+    with native_route(Route.MESSAGES):
+        first_stream: Final = await litellm.anthropic_messages(**parameters)
+        assert cache_key(first_stream) is None
+        first: Final = await collect(first_stream)
+        await recorder.wait_for_async("async_log_success_event")
+        second_stream: Final = await litellm.anthropic_messages(**parameters)
+        assert isinstance(cache_key(second_stream), str)
+        assert cache_key(second_stream) == get_hidden_params_dict(second_stream)["cache_key"]
+        second: Final = await collect(second_stream)
+        assert payload(first) == payload(second)
+        assert first == b"".join(recording_server.default_response.payloads())
+        assert len(recording_server.requests) == 1
+        await drain_logging()
+        successes: Final = await recorder.wait_for_async("async_log_success_event", count=2)
+        cached_log: Final = TypeAdapter(dict[str, object]).validate_python(successes[-1].kwargs)
+        assert cached_log["cache_hit"] is True
+        assert cached_log["response_cost"] == 0
 
 
 @pytest.mark.asyncio
@@ -350,8 +351,6 @@ async def test_cache_lookup_uses_backend_request_callback_semantics(
     route: Literal["chat", "messages", "responses"],
     legacy: bool,
 ) -> None:
-    from tests.test_litellm_rust.support.requests import request_body
-
     class Rewrite(RecordingLogger):
         temperature = 0.1
 

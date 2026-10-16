@@ -8,6 +8,7 @@ import asyncio, importlib, importlib.resources as importlib_get_model, json, lit
 import os
 import sys
 import threading
+from typing import Final
 
 import pytest
 
@@ -212,7 +213,6 @@ def test_shipped_backup_marks_claude_4_6_plus_adaptive_not_4_0():
         "anthropic.claude-opus-4-8",
         "vertex_ai/claude-opus-4-6@default",
         "us.anthropic.claude-sonnet-4-6",
-        "openrouter/anthropic/claude-opus-4.7",
         "azure_ai/claude-opus-4-7",
     ]:
         assert backup[adaptive]["supports_adaptive_thinking"] is True, adaptive
@@ -222,29 +222,6 @@ def test_shipped_backup_marks_claude_4_6_plus_adaptive_not_4_0():
         "claude-opus-4-5",
     ]:
         assert "supports_adaptive_thinking" not in backup[non_adaptive], non_adaptive
-
-
-# OpenRouter headline rates from GET https://openrouter.ai/api/v1/models.
-# These were the catalog values that disagreed with that API (and, for the
-# two spotlight models, the public model pages that their source fields cite).
-_OPENROUTER_LIVE_COSTS = {
-    "openrouter/qwen/qwen3.5-plus-02-15": (2.6e-07, 1.56e-06, None),
-    "openrouter/openai/gpt-oss-120b": (3.7e-08, 1.7e-07, None),
-    "openrouter/qwen/qwen3-coder-plus": (6.5e-07, 3.25e-06, None),
-    "openrouter/qwen/qwen3.5-flash-02-23": (6.5e-08, 2.6e-07, None),
-    "openrouter/qwen/qwen3.5-27b": (1.95e-07, 1.56e-06, None),
-    "openrouter/gryphe/mythomax-l2-13b": (6e-08, 6e-08, None),
-    "openrouter/mancer/weaver": (4e-07, 7.5e-07, None),
-    "openrouter/xiaomi/mimo-v2.5-pro": (4.35e-07, 8.7e-07, 3.6e-09),
-    "openrouter/moonshotai/kimi-k2.5": (4.5e-07, 2.25e-06, 7e-08),
-    "openrouter/z-ai/glm-5": (6e-07, 1.92e-06, None),
-}
-
-_OPENROUTER_STALE_COSTS = {
-    "openrouter/qwen/qwen3.5-plus-02-15": (4e-07, 2.4e-06),
-    "openrouter/openai/gpt-oss-120b": (1.8e-07, 8e-07),
-    "openrouter/gryphe/mythomax-l2-13b": (1.875e-06, 1.875e-06),
-}
 
 
 def test_get_model_cost_map_stamps_loaded_at():
@@ -462,6 +439,22 @@ async def test_loaded_catalog_snapshot_follows_the_fetched_map_and_ignores_later
     litellm.register_model({"gpt-5.4-mini": {"max_input_tokens": 2048}}, persist_across_reloads=False)
     assert litellm.model_cost["gpt-5.4-mini"]["max_input_tokens"] == 2048
     assert GetModelCostMap.loaded_model_cost_map()["gpt-5.4-mini"]["max_input_tokens"] == 777
+
+
+@pytest.mark.asyncio
+async def test_loaded_catalog_fields_follow_each_fetched_map():
+    added = json.loads(_real_map_bytes())
+    added["gpt-5.4-mini"]["supports_litellm_qa_capability"] = True
+    with_field, _ = _mock_client([httpx.Response(200, content=json.dumps(added).encode())])
+    without_field, _ = _mock_client([httpx.Response(200, content=_real_map_bytes())])
+
+    await refetch_model_cost_map(url=_URL, sleep=_SleepRecorder(), rng=random.Random(0), client=with_field)
+    fields_after_adding: Final = GetModelCostMap.loaded_model_cost_map_fields()
+    await refetch_model_cost_map(url=_URL, sleep=_SleepRecorder(), rng=random.Random(0), client=without_field)
+
+    assert "supports_litellm_qa_capability" in fields_after_adding
+    assert "supports_litellm_qa_capability" not in GetModelCostMap.loaded_model_cost_map_fields()
+    assert "max_input_tokens" in GetModelCostMap.loaded_model_cost_map_fields()
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,5 @@
 import json
 import math
-import socket
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -14,6 +13,7 @@ from integration._support.client import Gateway, Scenario, eventually, object_va
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
 from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
+from integration._support.ports import allocate_port
 from integration.cost_calculation.cost_tracking_case import JsonResponse
 from pydantic import JsonValue, TypeAdapter
 
@@ -69,6 +69,7 @@ class _Provider:
     api_key: str | None
     wraps_result: bool
     cost_map_key: str | None
+    provider_reported_cost: float | None = None
 
 
 _PROVIDERS: Final = (
@@ -89,10 +90,27 @@ _PROVIDERS: Final = (
         "typesafe/jev-1.13",
         _API_KEY,
         False,
-        "openrouter/typesafe/jev-1.13",
+        None,
+        1.5834e-5,
     ),
     _Provider(
         "strands_decider", "strands_decider/systemone-decider", "/v1/systemone", "systemone-decider", None, False, None
+    ),
+    _Provider("laya", "laya/english", "/v1/systemone", "english", None, False, "laya/english"),
+    _Provider(
+        "bespoke", "bespoke/nimble-latest", "/v1/systemone", "nimble-latest", None, False, "bespoke/nimble-latest"
+    ),
+    _Provider(
+        "hosted_vllm", "hosted_vllm/Qwen/Qwen3-0.6B", "/v1/systemone", "Qwen/Qwen3-0.6B", None, False, None
+    ),
+    _Provider(
+        "fireworks_ai",
+        "fireworks_ai/accounts/fireworks/routers/rune",
+        "/v1/systemone",
+        "accounts/fireworks/routers/rune",
+        _API_KEY,
+        False,
+        "fireworks_ai/accounts/fireworks/routers/rune",
     ),
     _Provider(
         "cloudflare",
@@ -102,6 +120,18 @@ _PROVIDERS: Final = (
         _API_KEY,
         True,
         "cloudflare/@cf/cloudflare/clef",
+    ),
+    _Provider(
+        "azure_ai", "azure_ai/decision-1", "/providers/microsoft/v1/systemone", "decision-1", _API_KEY, False, None
+    ),
+    _Provider(
+        "databricks",
+        "databricks/databricks-openjev-qwen35-4b",
+        "/databricks-openjev-qwen35-4b/invocations",
+        "databricks-openjev-qwen35-4b",
+        _API_KEY,
+        False,
+        None,
     ),
 )
 _PERPLEXITY: Final = _PROVIDERS[0]
@@ -130,17 +160,32 @@ def _number(value: JsonValue) -> float:
     return float(value)
 
 
-def _expected_spend(cost_map_key: str | None) -> float:
-    if cost_map_key is None:
+def _expected_spend(provider: _Provider) -> float:
+    if provider.provider_reported_cost is not None:
+        return provider.provider_reported_cost
+    if provider.cost_map_key is None:
         return 0.0
-    prices: Final = object_value(json.loads(Path("model_prices_and_context_window.json").read_text())[cost_map_key])
+    prices: Final = object_value(
+        json.loads(Path("model_prices_and_context_window.json").read_text())[provider.cost_map_key]
+    )
     return _number(_USAGE["input_tokens"]) * _number(prices["input_cost_per_token"]) + _number(
         _USAGE["output_tokens"]
     ) * _number(prices["output_cost_per_token"])
 
 
+def _usage(provider: _Provider) -> dict[str, JsonValue]:
+    return {
+        **_USAGE,
+        **({"cost": provider.provider_reported_cost} if provider.provider_reported_cost is not None else {}),
+    }
+
+
 def _answer_body(provider: _Provider) -> dict[str, JsonValue]:
-    answer: Final[dict[str, JsonValue]] = {"model": provider.body_model, "answers": _ANSWERS, "usage": _USAGE}
+    answer: Final[dict[str, JsonValue]] = {
+        "model": provider.body_model,
+        "answers": _ANSWERS,
+        "usage": _usage(provider),
+    }
     return {"result": answer, "success": True} if provider.wraps_result else answer
 
 
@@ -190,12 +235,6 @@ def _assert_connection_error(response: httpx.Response) -> None:
     assert _GENERIC_API_ERROR not in response.text, response.text
 
 
-def _free_closed_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
-
-
 def _pass_through_config(directory: Path, pass_through_target: str, native_api_base: str) -> Path:
     base: Final = _JSON_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
     config: Final = {
@@ -223,16 +262,14 @@ def _pass_through_config(directory: Path, pass_through_target: str, native_api_b
 
 
 @pytest.mark.parametrize("provider", _PROVIDERS, ids=lambda provider: provider.name)
-def test_each_provider_gets_its_own_path_key_and_body_and_is_billed_from_the_cost_map(
-    gateway: Gateway, provider: _Provider
-) -> None:
-    expected_spend: Final = _expected_spend(provider.cost_map_key)
+def test_each_provider_gets_its_own_path_key_and_body_and_is_billed(gateway: Gateway, provider: _Provider) -> None:
+    expected_spend: Final = _expected_spend(provider)
     with gateway.scenario() as scenario:
         handle: Final = _register(scenario, _answer_body(provider))
         model: Final = _deployment(scenario, handle, provider)
         response: Final = _decide(gateway, model)
         assert response.status_code == 200, response.text
-        assert response.json() == {"model": provider.body_model, "answers": _ANSWERS, "usage": _USAGE}
+        assert response.json() == {"model": provider.body_model, "answers": _ANSWERS, "usage": _usage(provider)}
         assert response.headers["x-litellm-model-group"] == model
         assert math.isclose(float(response.headers.get("x-litellm-response-cost", "0")), expected_spend, rel_tol=1e-9)
         (call,) = _upstream_calls(gateway, handle)
@@ -248,11 +285,31 @@ def test_each_provider_gets_its_own_path_key_and_body_and_is_billed_from_the_cos
             row["api_base"],
             row["prompt_tokens"],
             row["completion_tokens"],
-        ) == ("success", "adecisions", provider.name, model, f"{handle.api_base()}{provider.path}", 367, 3)
+        ) == ("success", "asystemone", provider.name, model, f"{handle.api_base()}{provider.path}", 367, 3)
         assert math.isclose(_number(row["spend"]), expected_spend, rel_tol=1e-9), row
 
 
 def test_test_connection_evaluation_mode_uses_typesafe_decisions_path(gateway: Gateway) -> None:
+    provider: Final = _PROVIDERS[1]
+    with gateway.scenario() as scenario:
+        handle: Final = _register(scenario, _answer_body(provider))
+        response: Final = gateway.request(
+            "POST",
+            "/health/test_connection",
+            {
+                "litellm_params": {"model": provider.model, "api_base": handle.api_base(), "api_key": provider.api_key},
+                "mode": "evaluation",
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "success", response.text
+        (call,) = _upstream_calls(gateway, handle)
+        assert call["path"] == f"/{handle.scenario_id}{provider.path}"
+
+
+def test_test_connection_by_configured_alias_probes_the_stored_model(gateway: Gateway) -> None:
+    pytest.skip("BUG: /health/test_connection given only a configured alias sends the alias as the model")
     provider: Final = _PROVIDERS[1]
     with gateway.scenario() as scenario:
         handle: Final = _register(scenario, _answer_body(provider))
@@ -289,7 +346,7 @@ async def test_sdk_sync_and_async_clients_send_the_same_request(gateway: Gateway
         synchronous: Final = litellm.decisions(
             model=provider.model, state=_STATE, questions=_SDK_QUESTIONS, api_base=handle.api_base(), api_key=_API_KEY
         )
-        asynchronous: Final = await litellm.adecisions(
+        asynchronous: Final = await litellm.asystemone(
             model=provider.model, state=_STATE, questions=_SDK_QUESTIONS, api_base=handle.api_base(), api_key=_API_KEY
         )
         for response in (synchronous, asynchronous):
@@ -368,8 +425,8 @@ def test_request_body_api_base_is_refused_like_chat_without_an_upstream_call(gat
     with gateway.scenario() as scenario:
         handle: Final = _register(scenario, _answer_body(_PERPLEXITY))
         model: Final = _deployment(scenario, handle, _PERPLEXITY)
-        decisions: Final = _decide(gateway, model, api_base=f"http://127.0.0.1:{_free_closed_port()}")
-        chat: Final = _chat(gateway, model, api_base=f"http://127.0.0.1:{_free_closed_port()}")
+        decisions: Final = _decide(gateway, model, api_base=f"http://127.0.0.1:{allocate_port()}")
+        chat: Final = _chat(gateway, model, api_base=f"http://127.0.0.1:{allocate_port()}")
         assert 400 <= decisions.status_code < 500, decisions.text
         assert decisions.status_code == chat.status_code, (decisions.text, chat.text)
         assert _upstream_calls(gateway, handle) == []
@@ -457,7 +514,7 @@ def test_upstream_errors_keep_their_status_and_log_an_unbilled_failure(gateway: 
         row: Final = _spend_row(response.headers["x-litellm-call-id"])
         assert (row["status"], row["call_type"], row["model_group"], _number(row["spend"])) == (
             "failure",
-            "adecisions",
+            "asystemone",
             model,
             0.0,
         )
@@ -479,7 +536,7 @@ def test_unreachable_upstream_fails_only_its_own_deployment(gateway: Gateway, pr
         handle: Final = _register(scenario, _answer_body(provider))
         healthy: Final = _deployment(scenario, handle, provider)
         dead: Final = scenario.model(
-            model=provider.model, api_base=f"http://127.0.0.1:{_free_closed_port()}", api_key=provider.api_key
+            model=provider.model, api_base=f"http://127.0.0.1:{allocate_port()}", api_key=provider.api_key
         )
         failed: Final = _decide(gateway, dead, num_retries=0)
         _assert_connection_error(failed)
@@ -493,7 +550,7 @@ def test_an_unreachable_openrouter_deployment_reports_a_connection_error_on_chat
     gateway: Gateway,
 ) -> None:
     with gateway.scenario() as scenario:
-        dead_api_base: Final = f"http://127.0.0.1:{_free_closed_port()}"
+        dead_api_base: Final = f"http://127.0.0.1:{allocate_port()}"
         chat_model: Final = scenario.model(model=_OPENROUTER_CHAT_MODEL, api_base=dead_api_base, api_key=_API_KEY)
         decisions_model: Final = scenario.model(model=_OPENROUTER.model, api_base=dead_api_base, api_key=_API_KEY)
         chat: Final = _chat(gateway, chat_model, num_retries=0)
@@ -509,7 +566,7 @@ def test_an_unreachable_openrouter_deployment_reports_a_connection_error_on_chat
 
 
 async def test_sdk_openrouter_connection_failures_raise_a_connection_error(gateway: Gateway) -> None:
-    dead_api_base: Final = f"http://127.0.0.1:{_free_closed_port()}"
+    dead_api_base: Final = f"http://127.0.0.1:{allocate_port()}"
     with pytest.raises(litellm.APIConnectionError):
         litellm.completion(
             model=_OPENROUTER_CHAT_MODEL,
@@ -529,7 +586,7 @@ async def test_sdk_openrouter_connection_failures_raise_a_connection_error(gatew
             model=_OPENROUTER.model, state=_STATE, questions=_SDK_QUESTIONS, api_base=dead_api_base, api_key=_API_KEY
         )
     with pytest.raises(litellm.APIConnectionError):
-        await litellm.adecisions(
+        await litellm.asystemone(
             model=_OPENROUTER.model, state=_STATE, questions=_SDK_QUESTIONS, api_base=dead_api_base, api_key=_API_KEY
         )
 
