@@ -1,10 +1,13 @@
-from collections.abc import Mapping
+from collections.abc import Generator, Mapping
+from contextlib import contextmanager
 from types import MappingProxyType
 from typing import Final
 
 from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.hidden_params import served_from_cache
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.utils import CostBreakdown
 
@@ -82,3 +85,17 @@ def billed_for_every_round(first: ResponsesAPIResponse, final: ResponsesAPIRespo
         "response_cost": total_cost,
     }
     return billed
+
+
+@contextmanager
+def first_round_billed_on_failure(logging_obj: object, first: ResponsesAPIResponse) -> Generator[None]:
+    try:
+        yield
+    except Exception:
+        first_cost: Final = first.hidden_params.get("response_cost")
+        if isinstance(logging_obj, LiteLLMLoggingObj) and first.usage is not None and not served_from_cache(first):
+            logging_obj.record_partial_usage_for_failure(
+                ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(first.usage),
+                float(first_cost) if isinstance(first_cost, (int, float)) else 0.0,
+            )
+        raise

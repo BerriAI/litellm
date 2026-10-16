@@ -3098,8 +3098,8 @@ async def test_a_cache_hit_inside_an_internal_sub_call_is_free_and_fires_no_call
 
     assert async_hit is not None and async_hit.cached_result is not None
     assert sync_hit.cached_result is not None
-    assert (async_hit.cached_result._hidden_params.get("response_cost") == 0.0) is internal
-    assert (sync_hit.cached_result._hidden_params.get("response_cost") == 0.0) is internal
+    assert async_hit.cached_result._hidden_params.get("response_cost") == 0.0
+    assert sync_hit.cached_result._hidden_params.get("response_cost") == 0.0
     assert async_logging.async_success_handler.called is not internal
     assert async_logging.handle_sync_success_callbacks_for_async_calls.called is not internal
     assert sync_logging.handle_sync_success_callbacks_for_async_calls.called is not internal

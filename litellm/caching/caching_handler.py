@@ -511,16 +511,15 @@ class LLMCachingHandler:
                         custom_llm_provider=custom_llm_provider,
                     )
 
-                    if not _should_defer_streaming_cache_hit_callbacks(cached_result=cached_result):
-                        if is_internal_call.get():
-                            _set_cached_hidden_param(cached_result, "response_cost", 0.0)
-                        else:
-                            logging_obj.handle_sync_success_callbacks_for_async_calls(
-                                result=cached_result,
-                                start_time=start_time,
-                                end_time=end_time,
-                                cache_hit=cache_hit,
-                            )
+                    if not is_internal_call.get() and not _should_defer_streaming_cache_hit_callbacks(
+                        cached_result=cached_result
+                    ):
+                        logging_obj.handle_sync_success_callbacks_for_async_calls(
+                            result=cached_result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            cache_hit=cache_hit,
+                        )
                     cache_key: Final = (
                         self.preset_cache_key
                         or self.request_kwargs.get("cache_key")
@@ -824,10 +823,9 @@ class LLMCachingHandler:
             end_time (datetime): The end time of the operation.
             cache_hit (bool): Whether it was a cache hit.
 
-        An internal sub-call's hit fires nothing and costs nothing, since the parent call that folds it in logs it.
+        An internal sub-call's hit fires nothing, since the parent call that folds it in logs it.
         """
         if is_internal_call.get():
-            _set_cached_hidden_param(cached_result, "response_cost", 0.0)
             return
 
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER

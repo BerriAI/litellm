@@ -1477,12 +1477,18 @@ class _RoundRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.logged: tuple[StandardLoggingPayload, ...] = ()
+        self.failed: tuple[StandardLoggingPayload, ...] = ()
         self.hooked: tuple[object, ...] = ()
 
     async def async_log_success_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
         self.logged = (*self.logged, cast(StandardLoggingPayload, kwargs["standard_logging_object"]))
+
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.failed = (*self.failed, cast(StandardLoggingPayload, kwargs["standard_logging_object"]))
 
     def logging_hook(self, kwargs: dict, result: Any, call_type: str) -> tuple[dict, Any]:
         self.hooked = (*self.hooked, result)
@@ -1508,14 +1514,20 @@ _ECHO_MCP_TOOL: Final = MappingProxyType(
 )
 
 
-def _serve_rounds(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, bodies: Sequence[Mapping[str, object]]
+def _serve_responses(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, responses: Sequence[httpx.Response]
 ) -> respx.Route:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     litellm.in_memory_llm_clients_cache.flush_cache()
-    return respx_mock.post(url__regex=r"https://mcp-rounds\.example\.com/.*responses").mock(
-        side_effect=[httpx.Response(200, content=json.dumps(body, default=dict)) for body in bodies]
+    return respx_mock.post(url__regex=r"https://mcp-rounds\.example\.com/.*responses").mock(side_effect=list(responses))
+
+
+def _serve_rounds(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, bodies: Sequence[Mapping[str, object]]
+) -> respx.Route:
+    return _serve_responses(
+        respx_mock, monkeypatch, tuple(httpx.Response(200, content=json.dumps(body, default=dict)) for body in bodies)
     )
 
 
@@ -1568,6 +1580,7 @@ def _rounds_logging_obj(recorder: _RoundRecorder, call_id: str) -> Logging:
         function_id=call_id,
         dynamic_async_success_callbacks=[recorder],
         dynamic_success_callbacks=[recorder, _no_op_sync_callback],
+        dynamic_async_failure_callbacks=[recorder],
     )
 
 
@@ -1642,6 +1655,39 @@ async def test_non_stream_auto_execute_hands_sync_callbacks_the_client_response(
         71 + 149,
         19 + 5,
     )
+
+
+@pytest.mark.asyncio
+async def test_non_stream_auto_execute_bills_the_paid_first_round_when_the_follow_up_fails(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    context_window_error: Final = {
+        "error": {
+            "message": "Your input exceeds the context window of this model.",
+            "type": "invalid_request_error",
+            "param": "input",
+            "code": "context_length_exceeded",
+        }
+    }
+    _serve_responses(
+        respx_mock,
+        monkeypatch,
+        (
+            httpx.Response(200, content=json.dumps(_ROUND_ONE_BODY, default=dict)),
+            httpx.Response(400, json=context_window_error),
+        ),
+    )
+    recorder: Final = _RoundRecorder()
+
+    with pytest.raises(litellm.BadRequestError):
+        await _auto_execute(_rounds_logging_obj(recorder, "mcp-rounds-follow-up-fails"), _ECHO_MCP_TOOL, "PING")
+    await _settle(lambda: len(recorder.failed) > 0)
+
+    assert recorder.logged == ()
+    assert len(recorder.failed) == 1
+    assert (recorder.failed[0]["prompt_tokens"], recorder.failed[0]["completion_tokens"]) == (71, 19)
+    assert recorder.failed[0]["response_cost"] == pytest.approx(_round_cost(_ROUND_ONE_BODY))
+    assert recorder.failed[0]["response_cost"] > 0
 
 
 @pytest.mark.asyncio
