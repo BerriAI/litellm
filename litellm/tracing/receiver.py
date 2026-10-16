@@ -15,9 +15,7 @@ class TraceReceiver:
     async def list_traces(
         self, scope: TraceScope, start_ms: int, end_ms: int, cursor: str | None = None, agent: str | None = None
     ) -> TracePage:
-        return await self.storage.list_traces(
-            scope, start_ms, end_ms, cursor, AGENT_TRACING_LIST_PAGE_SIZE, agent
-        )
+        return await self.storage.list_traces(scope, start_ms, end_ms, cursor, AGENT_TRACING_LIST_PAGE_SIZE, agent)
 
     async def list_agents(self, scope: TraceScope, start_ms: int, end_ms: int) -> TraceAgentList:
         rows: Final = await self.storage.trace_agents(
