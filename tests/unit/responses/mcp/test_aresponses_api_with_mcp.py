@@ -1739,6 +1739,22 @@ async def test_non_stream_auto_execute_bills_the_paid_first_round_when_the_follo
 
 
 @pytest.mark.asyncio
+async def test_non_stream_auto_execute_tool_log_continues_the_request_trace_without_renaming_it(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    _serve_rounds(respx_mock, monkeypatch, (_ROUND_ONE_BODY, _ROUND_TWO_BODY))
+    call_tool: Final = AsyncMock(return_value=CallToolResult(content=[TextContent(type="text", text="PING")]))
+    recorder: Final = _RoundRecorder()
+
+    await _auto_execute_through_mcp_server(monkeypatch, call_tool, _rounds_logging_obj(recorder, "mcp-rounds-trace"))
+    await _settle(lambda: len(recorder.logged) > 0)
+
+    assert call_tool.await_args is not None
+    tool_metadata: Final = call_tool.await_args.kwargs["litellm_logging_obj"].litellm_params["metadata"]
+    assert tool_metadata["existing_trace_id"] == recorder.logged[0]["trace_id"]
+
+
+@pytest.mark.asyncio
 async def test_non_stream_auto_execute_bills_the_paid_first_round_when_the_client_disconnects_during_a_tool_call(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):
@@ -1799,6 +1815,108 @@ async def test_non_stream_auto_execute_bills_nothing_for_rounds_served_from_the_
     assert first_cached.logged[0]["cache_hit"] is None
     assert all_cached.logged[0]["id"].startswith(f"{all_cached_response.id}_cache_hit")
     assert all_cached.logged[0]["cache_hit"] is True
+
+
+_PRIOR_TURN: Final = MappingProxyType(
+    {
+        "request_id": "chatcmpl-prior-turn",
+        "session_id": "prior-session",
+        "proxy_server_request": {"input": "My favorite color is teal."},
+        "response": {
+            "id": "chatcmpl-prior-turn",
+            "object": "chat.completion",
+            "created": 1767225600,
+            "model": "claude-haiku-4-5",
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "Noted."}}],
+        },
+    }
+)
+
+
+def _anthropic_message(message_id: str, content: Sequence[Mapping[str, object]], stop: str) -> dict[str, object]:
+    return {
+        "id": message_id,
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-haiku-4-5",
+        "content": [dict(block) for block in content],
+        "stop_reason": stop,
+        "usage": {"input_tokens": 50, "output_tokens": 10},
+    }
+
+
+class _SpendLogs:
+    def __init__(self, rows: Sequence[Mapping[str, object]]) -> None:
+        self.rows: Final = tuple(rows)
+        self.asked: tuple[frozenset[str], ...] = ()
+
+    async def query_raw(self, query: str, *request_ids: str) -> list[dict[str, object]]:
+        self.asked = (*self.asked, frozenset(request_ids))
+        return [dict(row) for row in self.rows if row["request_id"] in request_ids]
+
+
+@pytest.mark.asyncio
+async def test_bridged_auto_execute_follow_up_continues_the_client_conversation_in_its_session(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    spend_logs: Final = _SpendLogs((_PRIOR_TURN,))
+    monkeypatch.setitem(
+        sys.modules,
+        "litellm.proxy.proxy_server",
+        SimpleNamespace(proxy_logging_obj=None, prisma_client=SimpleNamespace(db=spend_logs), disable_spend_logs=False),
+    )
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    thinking: Final = {"type": "thinking", "thinking": "Echo PING back.", "signature": "sig-round-one"}
+    provider: Final = respx_mock.post("https://mcp-rounds.example.com/v1/messages").mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                json=_anthropic_message(
+                    "msg_tool_round",
+                    (thinking, {"type": "tool_use", "id": "toolu_echo", "name": "echo", "input": {"value": "PING"}}),
+                    "tool_use",
+                ),
+            ),
+            httpx.Response(200, json=_anthropic_message("msg_answer", ({"type": "text", "text": "PING"},), "end_turn")),
+        ]
+    )
+    echo_tool: Final = MCPTool.model_validate(
+        {"name": "echo", "inputSchema": {"type": "object", "properties": {"value": {"type": "string"}}}},
+        by_name=False,
+    )
+    execute: Final = AsyncMock(return_value=[{"tool_call_id": "toolu_echo", "result": "PING", "name": "echo"}])
+    recorder: Final = _RoundRecorder()
+
+    with (
+        patch.object(
+            LiteLLM_Proxy_MCP_Handler,
+            "process_mcp_tools_without_openai_transform",
+            AsyncMock(return_value=([echo_tool], {"echo": "demo"})),
+        ),
+        patch.object(LiteLLM_Proxy_MCP_Handler, "execute_tool_calls", execute),
+    ):
+        await litellm.aresponses(
+            model="anthropic/claude-haiku-4-5",
+            input="Call echo with PING",
+            previous_response_id="chatcmpl-prior-turn",
+            tools=[dict(_ECHO_MCP_TOOL)],
+            api_key="sk-mcp-rounds",
+            api_base="https://mcp-rounds.example.com",
+            litellm_logging_obj=_rounds_logging_obj(recorder, "mcp-rounds-bridged"),
+        )
+    await _settle(lambda: len(recorder.logged) > 0)
+
+    follow_up: Final = json.loads(provider.calls[1].request.content)["messages"]
+    assert spend_logs.asked == (frozenset({"chatcmpl-prior-turn"}),) * 2
+    assert [message["role"] for message in follow_up] == ["user", "assistant", "user", "assistant", "user"]
+    assert json.dumps(follow_up).count("My favorite color is teal.") == 1
+    assert [block["type"] for block in follow_up[3]["content"]] == ["thinking", "tool_use"]
+    assert follow_up[3]["content"][0]["signature"] == "sig-round-one"
+    assert execute.await_args is not None
+    assert execute.await_args.kwargs["litellm_trace_id"] == "prior-session"
+    assert recorder.logged[0]["trace_id"] == "prior-session"
 
 
 def _event_type(event: object) -> str:

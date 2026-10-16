@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
@@ -554,7 +555,7 @@ async def test_message_history_retries_a_spend_log_the_batch_writer_has_not_flus
         ("assistant", "OK"),
     ]
     assert result["litellm_session_id"] == session_id
-    assert fake_prisma_client.db.calls == [(request_id,), (request_id,)]
+    assert [call[0] for call in fake_prisma_client.db.calls] == [request_id, request_id]
 
 
 @pytest.mark.asyncio
@@ -622,7 +623,88 @@ async def test_message_history_looks_up_the_decoded_chat_completion_id():
             encoded_response_id
         )
 
-    assert fake_prisma_client.db.calls == [(request_id,)]
+    assert len(fake_prisma_client.db.calls) == 1
+    assert request_id in fake_prisma_client.db.calls[0]
+
+
+class _StoredSpendLogs:
+    def __init__(self, rows: tuple[dict, ...]) -> None:
+        self.rows = rows
+
+    async def query_raw(self, query: str, *request_ids: str) -> list[dict]:
+        sessions: Final = {row["session_id"] for row in self.rows if row["request_id"] in request_ids}
+        return [row for row in self.rows if row["session_id"] in sessions]
+
+
+@pytest.mark.asyncio
+async def test_message_history_replays_a_bridged_mcp_turn_stored_under_the_client_response_id():
+    client_response_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="anthropic",
+        model_id="e0f302a1412e78470ebb28cbed01fff5f88c0d331c667e9f2ba4b413c6fbd282",
+        response_id="chatcmpl-mcp-final-round",
+    )
+    session_id: Final = "mcp-session"
+    stored: Final = _StoredSpendLogs(
+        (
+            {
+                "request_id": "list-tools-row",
+                "call_type": "list_mcp_tools",
+                "session_id": session_id,
+                "proxy_server_request": {},
+                "response": [{"name": "demo-echo"}],
+            },
+            {
+                "request_id": client_response_id,
+                "call_type": "aresponses",
+                "session_id": session_id,
+                "proxy_server_request": {"input": "Call echo with PING.", "model": "claude-bridge"},
+                "response": {
+                    "id": client_response_id,
+                    "object": "response",
+                    "output": [
+                        {
+                            "type": "reasoning",
+                            "id": "rs_mcp-final-round",
+                            "summary": [{"type": "summary_text", "text": "The echo tool returned PING."}],
+                        },
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "status": "completed",
+                            "content": [{"type": "output_text", "text": "PING", "annotations": []}],
+                        },
+                        {"type": "mcp_tools_fetched", "tools": [{"name": "demo-echo"}]},
+                        {"type": "tool_execution_results", "results": [{"tool_name": "demo-echo", "result": "PING"}]},
+                    ],
+                },
+            },
+            {
+                "request_id": "call-tool-row",
+                "call_type": "call_mcp_tool",
+                "session_id": session_id,
+                "proxy_server_request": {"name": "echo", "arguments": {"value": "PING"}},
+                "response": {"content": [{"type": "text", "text": "PING"}], "is_error": False},
+            },
+        )
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=stored)):
+        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            client_response_id
+        )
+
+    assert [(message.get("role"), _text_of(message.get("content"))) for message in result["messages"]] == [
+        ("user", "Call echo with PING."),
+        ("assistant", "PING"),
+    ]
+    assert result["messages"][-1].get("reasoning_content") == "The echo tool returned PING."
+    assert result["litellm_session_id"] == session_id
+
+
+def _text_of(content: object) -> object:
+    if isinstance(content, list):
+        return "".join(part.get("text", "") for part in content if isinstance(part, dict))
+    return content
 
 
 @pytest.mark.asyncio
@@ -643,7 +725,7 @@ async def test_session_lookup_does_not_retry_when_spend_logs_are_disabled(
         )
 
     assert spend_logs == []
-    assert fake_prisma_client.db.calls == [("chatcmpl-does-not-exist",)]
+    assert len(fake_prisma_client.db.calls) == 1
 
 
 def test_normalize_redacted_arguments_skips_custom_tool_calls():

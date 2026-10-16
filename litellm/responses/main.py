@@ -377,16 +377,19 @@ async def aresponses_api_with_mcp(
                     guardrail_context=MCPRequestContext.resolve_guardrail_context(
                         MappingProxyType({**kwargs, "metadata": metadata, "model": model})
                     ),
+                    joins_request_trace=isinstance(logging_obj, LiteLLMLoggingObj),
                 )
 
                 if tool_results:
-                    persistence_disabled: Final = LiteLLM_Proxy_MCP_Handler.is_persistence_disabled(call_params)
+                    chains_on_first_round: Final = not LiteLLM_Proxy_MCP_Handler.is_persistence_disabled(
+                        call_params
+                    ) and _provider_stores_the_first_round(model, custom_llm_provider, kwargs)
 
                     follow_up_input: Final = LiteLLM_Proxy_MCP_Handler.create_follow_up_input(
                         response=response,
                         tool_results=tool_results,
                         original_input=input,
-                        preserve_reasoning=persistence_disabled,
+                        preserve_reasoning=not chains_on_first_round,
                     )
 
                     # Prepare parameters for follow-up call (restores original stream setting)
@@ -406,7 +409,7 @@ async def aresponses_api_with_mcp(
                             follow_up_input=follow_up_input,
                             model=model,
                             all_tools=all_tools,
-                            response_id=previous_response_id if persistence_disabled else response.id,
+                            response_id=response.id if chains_on_first_round else previous_response_id,
                             **follow_up_call_params,
                         )
 
@@ -430,18 +433,6 @@ async def aresponses_api_with_mcp(
 
                     # Add custom output elements to the final response (for non-streaming)
                     elif isinstance(final_response, ResponsesAPIResponse):
-                        # Fetch MCP tools again for output elements (without OpenAI transformation)
-                        (
-                            mcp_tools_for_output,
-                            _,
-                        ) = await LiteLLM_Proxy_MCP_Handler.process_mcp_tools_without_openai_transform(
-                            user_api_key_auth=user_api_key_auth,
-                            mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
-                            mcp_auth_header=mcp_auth_header,
-                            mcp_server_auth_headers=mcp_server_auth_headers,
-                            request_tags=LiteLLM_Proxy_MCP_Handler.get_parent_request_tags(kwargs),
-                            raw_headers=discovery_raw_headers,
-                        )
                         final_round_breakdown: Final = (
                             logging_obj.cost_breakdown if isinstance(logging_obj, LiteLLMLoggingObj) else None
                         )
@@ -457,7 +448,7 @@ async def aresponses_api_with_mcp(
                             first_breakdown=first_round_breakdown,
                             final=LiteLLM_Proxy_MCP_Handler.add_mcp_output_elements_to_response(
                                 response=final_response,
-                                mcp_tools_fetched=mcp_tools_for_output,
+                                mcp_tools_fetched=original_mcp_tools,
                                 tool_results=tool_results,
                             ),
                             final_breakdown=final_round_breakdown,
@@ -601,6 +592,18 @@ def _will_bridge_to_chat_completions(
             api_base,
         ),
         use_chat_completions_api or normalized_model[1],
+    )
+
+
+def _provider_stores_the_first_round(model: str, custom_llm_provider: str | None, kwargs: Mapping[str, object]) -> bool:
+    """A bridged first MCP round runs as an internal call, so no spend log holds it for the follow-up to replay."""
+    api_base: Final = _api_base_kwarg(kwargs)
+    return not _will_bridge_to_chat_completions(
+        model,
+        custom_llm_provider or litellm.get_llm_provider(model=model, api_base=api_base)[1],
+        bool(kwargs.get("use_chat_completions_api")),
+        kwargs.get("model_info"),
+        api_base,
     )
 
 

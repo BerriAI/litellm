@@ -729,6 +729,7 @@ class LiteLLM_Proxy_MCP_Handler:
         request_tags: list[str] | None = None,
         guardrail_context: Mapping[str, object] | None = None,
         served_tools: Sequence[MCPTool] | None = None,
+        joins_request_trace: bool = False,
     ) -> list[MCPToolResult]:
         """Execute tool calls and return results."""
         from fastapi import HTTPException
@@ -813,6 +814,8 @@ class LiteLLM_Proxy_MCP_Handler:
                 }
                 if litellm_trace_id:
                     logging_request_data["litellm_trace_id"] = litellm_trace_id
+                if litellm_trace_id and joins_request_trace:
+                    logging_metadata["existing_trace_id"] = litellm_trace_id
                 if request_tags:
                     logging_metadata["tags"] = request_tags
                 if typed_user_api_key_auth is not None:

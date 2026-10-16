@@ -14,7 +14,7 @@ from litellm.types.llms.openai import (
     GenericChatCompletionMessage,
     ResponseInputParam,
 )
-from litellm.types.utils import ChatCompletionMessageToolCall, Message, ModelResponse
+from litellm.types.utils import CallTypes, ChatCompletionMessageToolCall, Message, ModelResponse
 
 if TYPE_CHECKING:
     from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
@@ -42,6 +42,23 @@ def _normalize_redacted_tool_call_arguments(message: Message) -> None:
         function_call.arguments = REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 
 
+_MCP_TOOL_CALL_TYPES: Final = frozenset((CallTypes.list_mcp_tools.value, CallTypes.call_mcp_tool.value))
+
+
+def _is_a_conversation_turn(spend_log: "SpendLogsPayload") -> bool:
+    return spend_log.get("call_type") not in _MCP_TOOL_CALL_TYPES
+
+
+def _stored_responses_api_output(stored_response: object) -> ResponseInputParam | None:
+    match stored_response:
+        case {"object": "response", "output": list() as output}:
+            return output
+        case {"object": "response"}:
+            return []
+        case _:
+            return None
+
+
 def _stored_instructions(proxy_server_request: Mapping[str, object] | None) -> str | None:
     instructions: Final = None if proxy_server_request is None else proxy_server_request.get("instructions")
     return instructions if isinstance(instructions, str) and instructions else None
@@ -61,9 +78,13 @@ class ResponsesSessionHandler:
         )
 
         verbose_proxy_logger.debug("inside get_chat_completion_message_history_for_previous_response_id")
-        all_spend_logs: list[
-            SpendLogsPayload
-        ] = await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(previous_response_id)
+        all_spend_logs: Final = [
+            spend_log
+            for spend_log in await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
+                previous_response_id
+            )
+            if _is_a_conversation_turn(spend_log)
+        ]
         verbose_proxy_logger.debug("found %s spend logs for this response id", len(all_spend_logs))
 
         litellm_session_id: str | None = None
@@ -158,8 +179,17 @@ class ResponsesSessionHandler:
         ############################################################
         # Add Output messages for this Spend Log
         ############################################################
-        _response_output: Final = spend_log.get("response", "{}")
-        if isinstance(_response_output, dict) and _response_output and _response_output != {}:
+        _response_output: Final[object] = spend_log.get("response", "{}")
+        if (responses_api_output := _stored_responses_api_output(_response_output)) is not None:
+            chat_completion_message_history.extend(
+                LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                    input=responses_api_output,
+                    responses_api_request={},
+                    replay_reasoning=True,
+                    item_cache_control=item_cache_control,
+                )
+            )
+        elif isinstance(_response_output, dict) and _response_output and _response_output != {}:
             # transform `ChatCompletion Response` to `ResponsesAPIResponse`
             model_response: Final = ModelResponse(**_response_output)
             for choice in model_response.choices:
@@ -176,7 +206,7 @@ class ResponsesSessionHandler:
         Get the parsed proxy server request from the spend log
         """
         proxy_server_request: Final[str | dict] = spend_log.get("proxy_server_request") or "{}"
-        proxy_server_request_dict: dict | None = None
+        proxy_server_request_dict: dict[str, object] | None = None
         if isinstance(proxy_server_request, dict):
             proxy_server_request_dict = proxy_server_request
         else:
@@ -229,7 +259,7 @@ class ResponsesSessionHandler:
     @staticmethod
     async def get_proxy_server_request_from_cold_storage_with_object_key(
         object_key: str,
-    ) -> dict | None:
+    ) -> dict[str, object] | None:
         """
         Get the proxy server request from cold storage using the object key directly.
 
@@ -251,7 +281,7 @@ class ResponsesSessionHandler:
 
     @staticmethod
     def _should_check_cold_storage_for_full_payload(
-        proxy_server_request_dict: dict | None,
+        proxy_server_request_dict: Mapping[str, object] | None,
     ) -> bool:
         """
         Only check cold storage when both are true
@@ -305,7 +335,7 @@ class ResponsesSessionHandler:
             WITH matching_session AS (
                 SELECT session_id
                 FROM "LiteLLM_SpendLogs"
-                WHERE request_id = $1
+                WHERE request_id IN ($1, $2)
             )
             SELECT *
             FROM "LiteLLM_SpendLogs"
@@ -317,7 +347,7 @@ class ResponsesSessionHandler:
         for attempt in range(max_attempts):
             if attempt:
                 await asyncio.sleep(RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL)
-            if spend_logs := await prisma_client.db.query_raw(query, response_id):
+            if spend_logs := await prisma_client.db.query_raw(query, response_id, previous_response_id):
                 verbose_proxy_logger.debug(
                     "Found the following spend logs for previous response id %s: %s",
                     response_id,
