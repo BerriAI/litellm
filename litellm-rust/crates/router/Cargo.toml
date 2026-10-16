@@ -10,6 +10,7 @@ litellm-config.workspace = true
 litellm-inference-messages.workspace = true
 litellm-router-types.workspace = true
 rand.workspace = true
+sha2.workspace = true
 strum.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

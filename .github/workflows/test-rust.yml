@@ -104,9 +104,21 @@ jobs:
   rust-test:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # The gateway's shared-state tests run against this Redis.
+    services:
+      redis:
+        image: redis@sha256:e2debfb7956fa12c7ddc79d7e645c8cf26b30c99a6e9161ea9bf4171e1668a5f
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     # Trim debuginfo to keep the job's target dir within the runner's disk
     env:
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      LITELLM_TEST_REDIS_URL: redis://127.0.0.1:6379
     defaults:
       run:
         working-directory: litellm-rust

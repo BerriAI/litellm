@@ -1,4 +1,5 @@
 mod auth;
+pub mod coordination;
 pub mod drain;
 mod error;
 pub mod health;
@@ -153,11 +154,46 @@ pub fn router_with_keys(
     mcp: Option<Router>,
     keys: Option<Arc<dyn KeyLookup>>,
 ) -> Router {
+    let keys = keys.map(|keys| key_cache(keys, config));
+    router_with_key_cache(inference, config, ui, mcp, keys)
+}
+
+/// The cache virtual keys are read through: `general_settings.user_api_key_cache_ttl` seconds
+/// for a found key, as the proxy's in-memory key cache, 60 by default.
+pub fn key_cache(keys: Arc<dyn KeyLookup>, config: &Config) -> Arc<CachedKeyLookup> {
+    let defaults = KeyCacheSettings::default();
+    let positive_ttl = match config
+        .general_settings
+        .additional_fields
+        .get("user_api_key_cache_ttl")
+    {
+        Some(litellm_config::Value::Number(seconds)) => seconds.as_f64(),
+        Some(litellm_config::Value::String(seconds)) => seconds.trim().parse().ok(),
+        _ => None,
+    }
+    .and_then(|seconds| std::time::Duration::try_from_secs_f64(seconds).ok())
+    .unwrap_or(defaults.positive_ttl);
+    Arc::new(CachedKeyLookup::new(
+        keys,
+        KeyCacheSettings {
+            positive_ttl,
+            ..defaults
+        },
+    ))
+}
+
+/// [`router_with_keys`] over an already built key cache, which the caller can keep to
+/// invalidate.
+pub fn router_with_key_cache(
+    inference: Arc<Gateway>,
+    config: &Config,
+    ui: Option<Router>,
+    mcp: Option<Router>,
+    keys: Option<Arc<CachedKeyLookup>>,
+) -> Router {
     let auth = Auth::from_config(config, inference.secrets.clone());
     let auth = match keys {
-        Some(keys) => {
-            auth.with_virtual_keys(CachedKeyLookup::new(keys, KeyCacheSettings::default()))
-        }
+        Some(keys) => auth.with_virtual_keys(keys),
         None => auth,
     };
     let inference = litellm_gateway_inference::router(inference)

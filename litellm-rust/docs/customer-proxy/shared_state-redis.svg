@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 660" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="13">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker>
+  </defs>
+  <rect width="1100" height="660" fill="#ffffff"/>
+  <text x="24" y="34" font-size="18" font-weight="600" fill="#0f172a">Shared state across gateway replicas through the coordination Redis</text>
+  <text x="24" y="56" fill="#475569">Nothing here runs on a request that succeeds: the hot path reads only in-process atomics and the in-process key cache.</text>
+
+  <!-- replica A -->
+  <rect x="24" y="80" width="330" height="330" rx="8" fill="#f8fafc" stroke="#334155"/>
+  <text x="40" y="104" font-size="15" font-weight="600" fill="#0f172a">Rust gateway replica A</text>
+  <rect x="40" y="118" width="298" height="66" rx="6" fill="#eef4fb" stroke="#1f4e79"/>
+  <text x="52" y="139" fill="#111">Router health (atomics per deployment)</text>
+  <text x="52" y="158" fill="#475569" font-size="12">in flight, window counts, cooldown_until;</text>
+  <text x="52" y="174" fill="#475569" font-size="12">read on every routing choice, never Redis</text>
+  <rect x="40" y="198" width="298" height="66" rx="6" fill="#eef4fb" stroke="#1f4e79"/>
+  <text x="52" y="219" fill="#111">Virtual key cache (moka, 60 s TTL)</text>
+  <text x="52" y="238" fill="#475569" font-size="12">answers tagged with key hash, team and user;</text>
+  <text x="52" y="254" fill="#475569" font-size="12">read on every request, never Redis</text>
+  <rect x="40" y="278" width="298" height="116" rx="6" fill="#fff4e5" stroke="#b35c00"/>
+  <text x="52" y="299" fill="#111" font-weight="600">Background tasks (coordination.rs)</text>
+  <text x="52" y="319" fill="#333" font-size="12">cooldown poll: one MGET per second</text>
+  <text x="52" y="337" fill="#333" font-size="12">invalidation subscriber: one SUBSCRIBE</text>
+  <text x="52" y="355" fill="#333" font-size="12">only after a failed attempt: SET cooldown,</text>
+  <text x="52" y="373" fill="#333" font-size="12">INCR allowed_fails (waits at most 250 ms)</text>
+
+  <!-- redis -->
+  <rect x="400" y="118" width="310" height="320" rx="8" fill="#fef2f2" stroke="#b91c1c"/>
+  <text x="416" y="142" font-size="15" font-weight="600" fill="#7f1d1d">Coordination Redis</text>
+  <text x="416" y="161" fill="#475569" font-size="12">coordination_redis, cache_params or REDIS_*</text>
+  <text x="416" y="188" fill="#111" font-family="monospace" font-size="12">[ns:]deployment:&lt;id&gt;:cooldown</text>
+  <text x="416" y="205" fill="#475569" font-size="12">{timestamp, cooldown_time, ...} PX cooldown,</text>
+  <text x="416" y="221" fill="#475569" font-size="12">Python CooldownCache's key and fields</text>
+  <text x="416" y="250" fill="#111" font-family="monospace" font-size="12">[ns:]deployment:&lt;id&gt;:allowed_fails</text>
+  <text x="416" y="267" fill="#475569" font-size="12">fleet count for router_settings.allowed_fails</text>
+  <text x="416" y="296" fill="#111" font-family="monospace" font-size="12">[ns:]litellm_proxy.auth_cache_invalidation</text>
+  <text x="416" y="313" fill="#475569" font-size="12">{"cache_key": "&lt;hash&gt;" | "team_id:&lt;id&gt;" |</text>
+  <text x="416" y="329" fill="#475569" font-size="12"> "team_membership:&lt;user&gt;:&lt;team&gt;" | "&lt;user_id&gt;"}</text>
+  <text x="416" y="395" fill="#7f1d1d" font-size="12">If Redis is down, each replica keeps its own</text>
+  <text x="416" y="411" fill="#7f1d1d" font-size="12">state, as before; requests never wait on it.</text>
+
+  <!-- other replicas -->
+  <rect x="756" y="80" width="320" height="200" rx="8" fill="#f8fafc" stroke="#334155"/>
+  <text x="772" y="104" font-size="15" font-weight="600" fill="#0f172a">Rust gateway replicas B..N</text>
+  <text x="772" y="128" fill="#333">Same as A. A cooldown read from Redis is</text>
+  <text x="772" y="146" fill="#333">applied with fetch_max, so a longer local</text>
+  <text x="772" y="164" fill="#333">cooldown is never shortened.</text>
+  <text x="772" y="196" fill="#475569" font-size="12">Deployments are named by model_info.id, else</text>
+  <text x="772" y="212" fill="#475569" font-size="12">gateway-&lt;sha256 of group, position, model,</text>
+  <text x="772" y="228" fill="#475569" font-size="12">api_base&gt;, the same on every replica that</text>
+  <text x="772" y="244" fill="#475569" font-size="12">loads the same config.</text>
+
+  <rect x="756" y="310" width="320" height="128" rx="8" fill="#f1f5f9" stroke="#334155"/>
+  <text x="772" y="334" font-size="15" font-weight="600" fill="#0f172a">Python proxy (admin API, unchanged)</text>
+  <text x="772" y="356" fill="#333">/key/update, /key/block, /key/delete,</text>
+  <text x="772" y="374" fill="#333">/team/update, member changes: commit to</text>
+  <text x="772" y="392" fill="#333">Postgres, then publish_auth_cache_invalidation</text>
+  <text x="772" y="418" fill="#475569" font-size="12">Its routers share the cooldown keys too</text>
+
+  <!-- arrows: A background -> redis -->
+  <path d="M338 330 L400 230" stroke="#b35c00" stroke-width="1.8" fill="none" marker-end="url(#a)"/>
+  <!-- redis -> A health (poll) -->
+  <path d="M400 200 L338 152" stroke="#1f4e79" stroke-width="1.8" fill="none" marker-end="url(#a)"/>
+  <!-- redis -> A key cache (subscriber) -->
+  <path d="M400 312 L338 236" stroke="#1f4e79" stroke-width="1.8" fill="none" marker-end="url(#a)"/>
+  <!-- redis <-> B..N -->
+  <path d="M710 200 L756 180" stroke="#475569" stroke-width="1.8" fill="none" marker-start="url(#a)" marker-end="url(#a)"/>
+  <!-- python -> redis -->
+  <path d="M756 374 L710 320" stroke="#475569" stroke-width="1.8" fill="none" marker-end="url(#a)"/>
+  <text x="716" y="368" fill="#334155" font-size="12">PUBLISH</text>
+
+  <!-- arrow legend -->
+  <text x="24" y="436" fill="#b35c00" font-size="12">orange: written by a failed attempt</text>
+  <text x="24" y="454" fill="#1f4e79" font-size="12">blue: read in the background and applied in process</text>
+
+  <!-- effects -->
+  <rect x="24" y="480" width="1052" height="160" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="40" y="504" font-size="14" font-weight="600" fill="#0f172a">What each replica does with it</text>
+  <text x="40" y="528" fill="#333">Cooldown: the replica that cools a deployment writes the key; every other replica's poll applies the remaining time within a second.</text>
+  <text x="40" y="550" fill="#333">allowed_fails: a failed attempt adds to the fleet count and cools once the fleet passes the limit (Python's v1 rule).</text>
+  <text x="40" y="568" fill="#333">The v2 failure-rate rule (no allowed_fails) stays per replica, as it is in Python.</text>
+  <text x="40" y="590" fill="#333">Keys: an invalidation drops the named key, or the team's or user's keys, from the cache and the outage fallback on every replica at once.</text>
+  <text x="40" y="612" fill="#333">A store read that overlapped an invalidation is not cached, and every (re)subscribe drops all fresh answers,</text>
+  <text x="40" y="630" fill="#333">since messages published while unsubscribed were missed.</text>
+</svg>
