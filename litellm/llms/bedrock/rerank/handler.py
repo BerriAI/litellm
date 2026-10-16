@@ -16,7 +16,7 @@ from litellm.types.llms.bedrock import BedrockPreparedRequest
 from litellm.types.rerank import RerankRequest
 from litellm.types.utils import RerankResponse
 
-from ..base_aws_llm import BaseAWSLLM
+from ..base_aws_llm import BaseAWSLLM, bedrock_bearer_token
 from ..common_utils import BedrockError
 from .transformation import BedrockRerankConfig
 
@@ -76,6 +76,7 @@ class BedrockRerankHandler(BaseAWSLLM):
         api_base: str | None = None,
         extra_headers: dict | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
+        api_key: str | None = None,
     ) -> RerankResponse:
         request_data: Final = RerankRequest(
             model=model,
@@ -93,6 +94,7 @@ class BedrockRerankHandler(BaseAWSLLM):
             api_base=api_base,
             extra_headers=extra_headers,
             data=cast(dict, data),
+            api_key=api_key,
         )
 
         logging_obj.pre_call(
@@ -150,8 +152,11 @@ class BedrockRerankHandler(BaseAWSLLM):
         extra_headers: dict | None,
         data: dict,
         optional_params: dict,
+        api_key: str | None = None,
     ) -> BedrockPreparedRequest:
-        boto3_credentials_info: Final = self._get_boto_credentials_from_optional_params(optional_params, model)
+        boto3_credentials_info: Final = self._get_boto_credentials_from_optional_params(
+            optional_params, model, bearer_token=bedrock_bearer_token(api_key)
+        )
 
         ### SET RUNTIME ENDPOINT ###
         _, proxy_endpoint_url = self.get_runtime_endpoint(
@@ -174,7 +179,7 @@ class BedrockRerankHandler(BaseAWSLLM):
             endpoint_url=proxy_endpoint_url,
             data=body,
             headers=headers,
-            supports_bearer_token=False,
+            api_key=api_key,
         )
 
         return BedrockPreparedRequest(
