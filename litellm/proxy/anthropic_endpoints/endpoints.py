@@ -46,6 +46,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     openai_error_type,
     with_litellm_call_id,
 )
+from litellm.proxy.litellm_pre_call_utils import should_auto_drop_params_for_agentic_cli
 
 router: Final = APIRouter()
 
@@ -310,11 +311,14 @@ class _CountTokensBodyOptions(TypedDict):
     request_litellm_params: ReadOnly[Mapping[str, JsonValue]]
 
 
-def _count_tokens_body_options(data: Mapping[str, JsonValue]) -> _CountTokensBodyOptions:
+def _count_tokens_body_options(data: Mapping[str, JsonValue], auto_drop_params: bool) -> _CountTokensBodyOptions:
+    sent_params: Final[Mapping[str, JsonValue]] = {key: data[key] for key in _COUNTED_LITELLM_PARAMS if key in data}
     return {
         "output_format": _requested_output_format(data),
         "context_management": data.get("context_management"),
-        "request_litellm_params": MappingProxyType({key: data[key] for key in _COUNTED_LITELLM_PARAMS if key in data}),
+        "request_litellm_params": MappingProxyType(
+            {"drop_params": True, **sent_params} if auto_drop_params else sent_params
+        ),
     }
 
 
@@ -347,7 +351,7 @@ async def count_tokens(
     
     Returns: {"input_tokens": <number>}
     """
-    from litellm.proxy.proxy_server import count_request_tokens
+    from litellm.proxy.proxy_server import count_request_tokens, proxy_config
 
     litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
     try:
@@ -378,7 +382,12 @@ async def count_tokens(
             request=token_request,
             call_endpoint=True,
             messages_format="anthropic",
-            **_count_tokens_body_options(data),
+            **_count_tokens_body_options(
+                data,
+                should_auto_drop_params_for_agentic_cli(
+                    request.headers.get("user-agent", ""), "drop_params" in data, proxy_config
+                ),
+            ),
         )
     except HTTPException as e:
         return _anthropic_error_json_response(proxy_exception_from_http_exception(e, {}), request)

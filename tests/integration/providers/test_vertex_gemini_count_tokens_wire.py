@@ -4,10 +4,11 @@ import threading
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
+from dataclasses import dataclass
 from itertools import chain
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal, TypeAlias, get_args
 from uuid import uuid4
 
 import anthropic
@@ -18,6 +19,7 @@ from integration._support.process import graceful_stop_seconds, owned_proxy_proc
 from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
+from typing_extensions import assert_never
 
 pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 
@@ -364,12 +366,12 @@ def _files_kept(contents: JsonValue, marker: str) -> tuple[bool, ...]:
 
 
 def _contents_sent_upstream(
-    gateway: Gateway, peer: _GeminiPeer, body: Mapping[str, JsonValue]
+    gateway: Gateway, peer: _GeminiPeer, body: Mapping[str, JsonValue], headers: Mapping[str, str] | None = None
 ) -> tuple[JsonValue, JsonValue]:
-    generated: Final = gateway.request("POST", "/v1/messages", {**body, "max_tokens": 16})
+    generated: Final = gateway.request("POST", "/v1/messages", {**body, "max_tokens": 16}, headers=headers)
     assert generated.status_code == 200, generated.text
     generate_requests: Final = tuple(request for request in peer.drain() if request.target.endswith(":generateContent"))
-    counted: Final = gateway.request("POST", "/v1/messages/count_tokens", body)
+    counted: Final = gateway.request("POST", "/v1/messages/count_tokens", body, headers=headers)
     assert counted.status_code == 200, counted.text
     assert _JSON_OBJECT.validate_json(counted.content)["input_tokens"] == _COUNT, counted.text
     count_requests: Final = peer.drain()
@@ -413,32 +415,110 @@ def test_count_tokens_follows_the_context_management_opt_out_messages_follows(
         assert counted == generated
 
 
-def test_count_tokens_follows_a_router_default_context_management_opt_out(gateway: Gateway, tmp_path: Path) -> None:
-    peer: Final = _GeminiPeer()
-    with wire_server(peer) as wire:
-        model: Final = f"router-default-{uuid4().hex}"
-        config: Final = tmp_path / "router-default.yaml"
-        config.write_text(
-            json.dumps(
+_RoutedCase: TypeAlias = Literal[
+    "router-default-drops",
+    "fallback-deployment-drops",
+    "fallback-router-default-drops",
+    "fallback-request-drops",
+    "alias-to-a-litellm-model-drops",
+    "completion-model-drops",
+]
+_DROPS_CONTEXT_MANAGEMENT: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"additional_drop_params": ["context_management"]}
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _RoutedProxy:
+    settings: Mapping[str, JsonValue]
+    requested: str
+    request_options: Mapping[str, JsonValue]
+
+
+def _scripted_gemini(model_name: str, model: str, api_base: str, options: Mapping[str, JsonValue]) -> JsonValue:
+    return {
+        "model_name": model_name,
+        "litellm_params": {"model": model, "api_base": api_base, "api_key": "scripted-gemini-key", **options},
+    }
+
+
+def _default_fallback_settings(
+    prefix: str, api_base: str, deployment_options: Mapping[str, JsonValue], router_defaults: Mapping[str, JsonValue]
+) -> Mapping[str, JsonValue]:
+    return {
+        "model_list": [
+            _scripted_gemini(f"{prefix}-fallback", f"gemini/{_MODEL}", api_base, deployment_options),
+            _scripted_gemini(f"{prefix}-wild/*", "gemini/*", api_base, {}),
+        ],
+        "router_settings": {
+            "default_fallbacks": [f"{prefix}-fallback"],
+            **({"default_litellm_params": dict(router_defaults)} if router_defaults else {}),
+        },
+    }
+
+
+def _routed_proxy(case: _RoutedCase, prefix: str, api_base: str) -> _RoutedProxy:
+    match case:
+        case "router-default-drops":
+            return _RoutedProxy(
+                {
+                    "model_list": [_scripted_gemini(prefix, f"gemini/{_MODEL}", api_base, {})],
+                    "router_settings": {"default_litellm_params": dict(_DROPS_CONTEXT_MANAGEMENT)},
+                },
+                prefix,
+                {},
+            )
+        case "fallback-deployment-drops":
+            return _RoutedProxy(
+                _default_fallback_settings(prefix, api_base, _DROPS_CONTEXT_MANAGEMENT, {}), f"{prefix}-unrouted", {}
+            )
+        case "fallback-router-default-drops":
+            return _RoutedProxy(
+                _default_fallback_settings(prefix, api_base, {}, _DROPS_CONTEXT_MANAGEMENT), f"{prefix}-unrouted", {}
+            )
+        case "fallback-request-drops":
+            return _RoutedProxy(
+                _default_fallback_settings(prefix, api_base, {}, {}), f"{prefix}-unrouted", _DROPS_CONTEXT_MANAGEMENT
+            )
+        case "alias-to-a-litellm-model-drops":
+            return _RoutedProxy(
+                {
+                    "model_list": [_scripted_gemini(prefix, f"gemini/{_MODEL}", api_base, _DROPS_CONTEXT_MANAGEMENT)],
+                    "router_settings": {"model_group_alias": {f"{prefix}-alias": f"gemini/{_MODEL}"}},
+                },
+                f"{prefix}-alias",
+                {},
+            )
+        case "completion-model-drops":
+            return _RoutedProxy(
                 {
                     "model_list": [
-                        {
-                            "model_name": model,
-                            "litellm_params": {
-                                "model": f"gemini/{_MODEL}",
-                                "api_base": wire.url,
-                                "api_key": "scripted-gemini-key",
-                            },
-                        }
+                        _scripted_gemini(f"{prefix}-keeps", f"gemini/{_MODEL}", api_base, {}),
+                        _scripted_gemini(f"{prefix}-drops", f"gemini/{_MODEL}", api_base, _DROPS_CONTEXT_MANAGEMENT),
                     ],
-                    "router_settings": {"default_litellm_params": {"additional_drop_params": ["context_management"]}},
-                }
-            ),
-            encoding="utf-8",
-        )
+                    "general_settings": {"completion_model": f"{prefix}-drops"},
+                },
+                f"{prefix}-keeps",
+                {},
+            )
+        case _:
+            assert_never(case)
+
+
+@pytest.mark.parametrize("case", get_args(_RoutedCase))
+def test_count_tokens_follows_the_opt_out_of_the_deployment_proxy_settings_send_to(
+    gateway: Gateway, tmp_path: Path, case: _RoutedCase
+) -> None:
+    peer: Final = _GeminiPeer()
+    with wire_server(peer) as wire:
+        routed: Final = _routed_proxy(case, f"routed-{uuid4().hex}", wire.url)
+        config: Final = tmp_path / "routed.yaml"
+        config.write_text(json.dumps(routed.settings), encoding="utf-8")
         with owned_proxy_process(gateway, tmp_path, {}, config=config) as owned:
             marker: Final = uuid4().hex
-            generated, counted = _contents_sent_upstream(owned.gateway, peer, _agent_body(model, marker, {}))
+            generated, counted = _contents_sent_upstream(
+                owned.gateway, peer, _agent_body(routed.requested, marker, routed.request_options)
+            )
             assert _files_kept(generated, marker) == (True, True, True)
             assert counted == generated
 
@@ -543,6 +623,36 @@ def test_count_tokens_rejects_a_context_edit_messages_rejects_without_an_upstrea
         assert counted.status_code == 400, counted.text
         assert _error_type(counted) == _error_type(generated)
         assert peer.drain() == ()
+
+
+@pytest.mark.parametrize(
+    ("deployment_options", "request_options", "user_agent"),
+    (
+        ({"drop_params": True}, {}, "python-httpx"),
+        ({}, {"drop_params": True}, "python-httpx"),
+        ({}, {}, "claude-cli/2.1.0 (external, cli)"),
+        ({}, {}, "codex_cli_rs/0.50.0"),
+    ),
+    ids=("deployment-drop-params", "request-drop-params", "claude-code-client", "codex-client"),
+)
+def test_count_tokens_counts_the_unedited_body_messages_sends_when_drop_params_drops_an_invalid_edit(
+    gateway: Gateway,
+    deployment_options: Mapping[str, JsonValue],
+    request_options: Mapping[str, JsonValue],
+    user_agent: str,
+) -> None:
+    peer: Final = _GeminiPeer()
+    with wire_server(peer) as wire, gateway.scenario() as scenario:
+        model: Final = _ai_studio_deployment(scenario, wire.url, **deployment_options)
+        marker: Final = uuid4().hex
+        generated, counted = _contents_sent_upstream(
+            gateway,
+            peer,
+            _agent_body(model, marker, {"context_management": _COMPACT_UNDER_THE_MINIMUM_TRIGGER, **request_options}),
+            {"User-Agent": user_agent},
+        )
+        assert _files_kept(generated, marker) == (True, True, True)
+        assert counted == generated
 
 
 def test_count_tokens_answers_for_the_unedited_body_when_a_context_edit_fails_inside_the_proxy(
