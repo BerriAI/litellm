@@ -23,6 +23,7 @@ Metric = Literal[
     "memory_growth_megabytes",
     "postgres_calls_per_request",
     "postgres_background_calls_per_request",
+    "postgres_max_statement_per_request",
     "cpu_seconds_per_request",
     "redis_calls_per_request",
     "redis_background_calls_per_request",
