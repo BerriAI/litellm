@@ -54,6 +54,10 @@ OPENCODE_PROVIDER_NPM: Final = "@ai-sdk/openai-compatible"
 
 _SKIP_VERIFY_FLAG: Final = "--skip-verify"
 
+# Set by the shims `lite alias <agent>` installs (see commands/alias.py): it names the
+# directory the shim lives in so an agent launch can resolve the *real* binary past it.
+ALIAS_SHIM_DIR_ENV: Final = "LITELLM_ALIAS_SHIM_DIR"
+
 PROFILE_ANTHROPIC: Final = "anthropic"
 PROFILE_OPENAI: Final = "openai"
 PROFILE_LITELLM: Final = "litellm"
@@ -680,6 +684,26 @@ def _restore_controlling_terminal() -> None:
         os.close(fd)
 
 
+def which_ignoring_alias_dir(command: str) -> str | None:
+    """shutil.which for an agent launch, resolving past `lite alias` shims.
+
+    `lite alias <agent>` installs a shim named after the agent ahead of the real
+    binary on PATH; the shim hands control to `lite <agent>`, whose launch must
+    then find the *real* binary or it would loop. The shim marks the directory
+    it lives in via ALIAS_SHIM_DIR_ENV, so whenever that is set, every PATH
+    entry pointing there is skipped and the rest is searched in order.
+    """
+    shim_dir: Final = os.environ.get(ALIAS_SHIM_DIR_ENV)
+    if not shim_dir:
+        return shutil.which(command)
+    keep: Final = os.pathsep.join(
+        entry
+        for entry in os.environ.get("PATH", os.defpath).split(os.pathsep)
+        if os.path.normcase(os.path.normpath(entry)) != os.path.normcase(os.path.normpath(shim_dir))
+    )
+    return shutil.which(command, path=keep)
+
+
 def run_agent(
     base_url: str,
     api_key: str,
@@ -687,7 +711,7 @@ def run_agent(
     *,
     skip_verify: bool = False,
     base_env: Mapping[str, str] | None = None,
-    which: Callable[[str], str | None] = shutil.which,
+    which: Callable[[str], str | None] = which_ignoring_alias_dir,
     verify: Callable[[str, str], None] = verify_proxy_key,
     sync_models: Callable[[str, Mapping[str, str], str, str, bool], ModelSyncResult] = agent_model_sync_env,
     warn: Callable[[str], None] = _warn,
@@ -700,7 +724,8 @@ def run_agent(
     On success this replaces the current process and never returns. Raises
     AgentRunError for missing binaries, an unreachable proxy, a rejected key, or
     a failed pre-launch config sync (pi). reattach_terminal, when given, runs
-    just before handoff to restore stdin.
+    just before handoff to restore stdin. The binary is resolved past any
+    `lite alias` shim so a shim-forwarded launch finds the real agent.
     """
     if not command:
         raise AgentRunError("Nothing to run.")
@@ -827,4 +852,5 @@ __all__ = [
     "resolve_api_key",
     "run_agent",
     "verify_proxy_key",
+    "which_ignoring_alias_dir",
 ]
