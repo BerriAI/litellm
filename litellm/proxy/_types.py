@@ -666,6 +666,7 @@ class LiteLLMRoutes(enum.Enum):
             "/model/update",
             "/model/delete",
             "/model/info",
+            "/model/{model_id}/kubernetes_pods",
             "/jwt/key/mapping/new",
             "/jwt/key/mapping/update",
             "/jwt/key/mapping/delete",
