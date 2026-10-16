@@ -346,7 +346,7 @@ async def test_anthropic_endpoint_error_handling():
     """
     from unittest.mock import MagicMock
 
-    from fastapi import HTTPException, Request
+    from fastapi import Request
 
     from litellm.proxy.anthropic_endpoints.endpoints import count_tokens
 
