@@ -72,9 +72,7 @@ async def get_team_admin_emails(team: LiteLLM_TeamTable, prisma_client: object) 
     """Emails of the members holding the admin role: the user record's email, else the inline one, deduped"""
     admins: Final = tuple(member for member in team.members_with_roles if member.role == "admin")
     admin_ids: Final = frozenset(member.user_id for member in admins if member.user_id)
-    rows: Final = (
-        await UserRepository(prisma_client).find_many(where={"user_id": {"in": sorted(admin_ids)}}) if admin_ids else ()
-    )
+    rows: Final = await UserRepository(prisma_client).find_many_in("user_id", sorted(admin_ids))
     record_emails: Final = MappingProxyType({row.user_id: row.user_email for row in rows if row.user_email})
     inline_emails: Final = tuple(
         member.user_email for member in admins if member.user_email and member.user_id not in record_emails
