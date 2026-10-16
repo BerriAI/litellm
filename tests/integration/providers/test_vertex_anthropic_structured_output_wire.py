@@ -37,6 +37,7 @@ _STRUCTURED_OUTPUTS_BETA: Final = "structured-outputs-2025-11-13"
 _TOOL_MODEL: Final = "claude-sonnet-5"
 _EFFORT_GATED_MODEL: Final = "claude-haiku-4-5"
 _NATIVE_MODEL: Final = "claude-opus-5-5"
+_FORCED_TOOL_NATIVE_MODEL: Final = "claude-haiku-5-5"
 _UNMAPPED_MODEL: Final = "claude-scripted-9"
 _BEDROCK_INVOKE_MODEL: Final = "anthropic.claude-sonnet-5"
 _PROJECT: Final = "scripted-project"
@@ -1432,11 +1433,13 @@ def test_vertex_responses_native_folds_output_format(gateway: Gateway) -> None:
 def _native_deployment(gateway: Gateway, scenario: Scenario, api_base: str, provider: str) -> str:
     match provider:
         case "vertex_ai":
-            return _vertex_deployment(gateway, scenario, api_base, _NATIVE_MODEL)
+            return _vertex_deployment(gateway, scenario, api_base, _FORCED_TOOL_NATIVE_MODEL)
         case "anthropic":
-            return scenario.model(model=f"anthropic/{_NATIVE_MODEL}", api_base=api_base, api_key=_ANTHROPIC_KEY)
+            return scenario.model(
+                model=f"anthropic/{_FORCED_TOOL_NATIVE_MODEL}", api_base=api_base, api_key=_ANTHROPIC_KEY
+            )
         case "azure_ai":
-            return scenario.model(model=f"azure_ai/{_NATIVE_MODEL}", api_base=api_base, api_key=_AZURE_KEY)
+            return scenario.model(model=f"azure_ai/{_FORCED_TOOL_NATIVE_MODEL}", api_base=api_base, api_key=_AZURE_KEY)
         case _:
             raise AssertionError(provider)
 

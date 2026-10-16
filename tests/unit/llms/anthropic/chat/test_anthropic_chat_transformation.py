@@ -1375,6 +1375,40 @@ def test_dict_fields_take_the_json_tool_on_a_native_structured_output_model(fiel
     assert ([tool["name"] for tool in optional_params.get("tools", [])] == ["json_tool_call"]) is not native
 
 
+
+@pytest.mark.parametrize(
+    ("model", "thinking_params"),
+    [
+        ("claude-opus-4-8", {"thinking": {"type": "adaptive"}}),
+        ("claude-opus-4-8", {"reasoning_effort": "low"}),
+        ("claude-sonnet-5-5", {}),
+    ],
+    ids=["adaptive-thinking", "reasoning-effort", "model-without-forced-tools"],
+)
+def test_dict_fields_keep_native_output_when_the_json_tool_would_not_be_forced(model, thinking_params):
+    optional_params: Final = AnthropicConfig().map_openai_params(
+        non_default_params={
+            **thinking_params,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "out",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"field": {"type": "object", "additionalProperties": {"type": "integer"}}},
+                        "required": ["field"],
+                    },
+                },
+            },
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert "output_format" in optional_params
+    assert "json_tool_call" not in [tool["name"] for tool in optional_params.get("tools", [])]
+
 def test_native_structured_output_uses_bundled_capability_when_remote_map_lags(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
