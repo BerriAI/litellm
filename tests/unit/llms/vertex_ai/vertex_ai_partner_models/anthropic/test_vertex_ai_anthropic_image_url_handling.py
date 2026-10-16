@@ -15,6 +15,7 @@ import pytest
 
 import litellm
 from litellm._uuid import uuid
+from litellm.native.chat_providers.handlers import vertex_partner_models_chat_completion
 from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_messages_pt,
     convert_to_anthropic_tool_result,
@@ -406,7 +407,7 @@ async def test_vertex_ai_anthropic_async_completion_inlines_https_images_off_the
     with (
         patch.dict(sys.modules, {"vertexai": vertexai}),
         patch.object(  # test-quality-ok: litellm.acompletion has no seam for Vertex token minting
-            litellm.main.vertex_partner_models_chat_completion,
+            vertex_partner_models_chat_completion,
             "_ensure_access_token",
             return_value=("token", "test-project"),
         ),

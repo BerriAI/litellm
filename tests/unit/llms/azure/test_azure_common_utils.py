@@ -728,7 +728,7 @@ async def test_ensure_initialize_azure_sdk_client_always_used_azure_text(call_ty
     # Get appropriate input for this call type
     input_kwarg = test_inputs.get(call_type.value, {})
 
-    patch_target = "litellm.main.azure_text_completions.initialize_azure_sdk_client"
+    patch_target = "litellm.native.chat_providers.handlers.azure_text_completions.initialize_azure_sdk_client"
 
     # Mock the initialize_azure_sdk_client function
     with patch(patch_target) as mock_init_azure:
