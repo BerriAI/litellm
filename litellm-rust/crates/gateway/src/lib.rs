@@ -69,7 +69,7 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
         resources,
         http,
         secrets,
-        ModelRouter::from_model_list(&config.model_list),
+        ModelRouter::from_config(config)?,
     )?))
 }
 

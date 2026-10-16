@@ -4285,10 +4285,14 @@ name = "litellm-router"
 version = "0.1.0"
 dependencies = [
  "litellm-config",
- "litellm-inference",
  "litellm-inference-messages",
  "litellm-router-types",
+ "rand 0.8.7",
  "rstest",
+ "strum",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

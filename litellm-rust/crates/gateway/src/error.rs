@@ -7,6 +7,8 @@ pub enum Error {
     #[error("MCP host does not yet support configured setting {0}")]
     McpSetting(String),
     #[error(transparent)]
+    Routing(#[from] litellm_gateway_inference::RoutingError),
+    #[error(transparent)]
     Mcp(#[from] litellm_gateway_mcp::ConnectError),
     #[error("MCP requires a configured master key")]
     Auth(#[from] litellm_gateway_auth::Error),

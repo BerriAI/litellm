@@ -7,9 +7,13 @@ repository.workspace = true
 
 [dependencies]
 litellm-config.workspace = true
-litellm-inference.workspace = true
 litellm-inference-messages.workspace = true
 litellm-router-types.workspace = true
+rand.workspace = true
+strum.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 rstest.workspace = true
+tokio.workspace = true
