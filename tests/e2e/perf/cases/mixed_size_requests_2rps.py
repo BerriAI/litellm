@@ -69,6 +69,7 @@ CASE: Final = PerformanceTestCase(
         Limit("memory_growth_megabytes", max=600),
         Limit("cpu_seconds_per_request", max=1.26),
         Limit("postgres_calls_per_request", max=3.5),
+        Limit("postgres_max_statement_per_request", max=0.5),
         Limit("redis_calls_per_request", max=21.0),
     ),
 )
