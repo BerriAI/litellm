@@ -1,8 +1,9 @@
 """OpenAI's ``prompt_cache_breakpoint`` on a chat request bound for Claude, rewritten as Claude's ``cache_control``."""
 
+from bisect import bisect_left
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
-from itertools import chain
+from itertools import accumulate, chain
 from types import MappingProxyType
 from typing import Final, Literal, NoReturn, TypeAlias, cast  # noqa: TID251  # isinstance-checked hot-path JSON
 
@@ -55,7 +56,7 @@ class _Placed:
 
 @dataclass(frozen=True, slots=True)
 class _Hoisted:
-    message: object
+    value: object
     replaced: tuple[object, ...]
 
 
@@ -160,7 +161,7 @@ def _without_breakpoint(block: object) -> object:
     )
 
 
-def _without_message_breakpoint(message: _Fields) -> _Fields:
+def _without_own_breakpoint(message: _Fields) -> _Fields:
     return {key: value for key, value in message.items() if key != "prompt_cache_breakpoint"}
 
 
@@ -196,19 +197,22 @@ def _first_usable(markers: Sequence[object]) -> tuple[object, tuple[object, ...]
 def _tool_result_hoisted(message: _Fields) -> _Hoisted:
     """Claude rejects a tool result marked both on the result and inside its content, or marked twice inside it, so
     a ``cache_control`` the client wrote at either level wins over every breakpoint, and the result's breakpoints
-    become one on the message."""
+    become one on the message. Every breakpoint that loses is still checked."""
     parts: Final = _blocks(message.get("content"))
     if parts is None:
         return _Hoisted(message, ())
     own: Final = message.get("prompt_cache_breakpoint")
     unmarked_parts: Final = [_without_breakpoint(part) for part in parts]
-    if message.get("cache_control") is not None:
-        return _Hoisted({**message, "content": unmarked_parts}, ())
     part_breakpoints: Final = tuple(
         marker for marker in (_block_mark(part, "prompt_cache_breakpoint") for part in parts) if marker is not None
     )
+    if message.get("cache_control") is not None:
+        return _Hoisted({**message, "content": unmarked_parts}, part_breakpoints)
     if any(_block_mark(part, "cache_control") is not None for part in parts):
-        return _Hoisted({**_without_message_breakpoint(message), "content": unmarked_parts}, part_breakpoints)
+        return _Hoisted(
+            {**_without_own_breakpoint(message), "content": unmarked_parts},
+            part_breakpoints if own is None else (own, *part_breakpoints),
+        )
     if own is None and not part_breakpoints:
         return _Hoisted(message, ())
     kept, replaced = _first_usable(part_breakpoints if own is None else (own, *part_breakpoints))
@@ -240,7 +244,7 @@ def _message_breakpoint_hoisted(message: _Fields) -> _Hoisted:
         return (
             _Hoisted(
                 {
-                    **_without_message_breakpoint(message),
+                    **_without_own_breakpoint(message),
                     "content": [{"type": "text", "text": content, "prompt_cache_breakpoint": own}],
                 },
                 (),
@@ -250,15 +254,15 @@ def _message_breakpoint_hoisted(message: _Fields) -> _Hoisted:
         )
     last: Final = _last_block(message)
     if last is None:
-        return _Hoisted(_without_message_breakpoint(message), (own,))
+        return _Hoisted(_without_own_breakpoint(message), (own,))
     key, blocks, block = last
     if block.get("cache_control") is not None:
-        return _Hoisted(_without_message_breakpoint(message), ())
+        return _Hoisted(_without_own_breakpoint(message), (own,))
     existing: Final = block.get("prompt_cache_breakpoint")
     kept, replaced = (own, ()) if existing is None else _first_usable((existing, own))
     return _Hoisted(
         {
-            **_without_message_breakpoint(message),
+            **_without_own_breakpoint(message),
             key: [*blocks[:-1], {**block, "prompt_cache_breakpoint": _joined_breakpoint(kept, replaced)}],
         },
         replaced,
@@ -288,33 +292,34 @@ def _marked_message(index: int, message: object, mark: _Mark) -> object:
     }
 
 
-def _with_one_tool_breakpoint(tool: _Fields) -> _Fields:
+def _hoisted_tool(tool: object) -> _Hoisted:
     """Claude sends one mark per tool and Converse reads only the top-level one, so a breakpoint written under
-    ``function`` moves up, and a ``cache_control`` the client wrote at either level wins over every breakpoint."""
-    function: Final = _fields(tool.get("function"))
-    if function is None:
-        return tool
+    ``function`` moves up and joins the tool's own, a ``cache_control`` the client wrote at either level wins over
+    every breakpoint, and every breakpoint that loses is still checked."""
+    fields: Final = _fields(tool)
+    function: Final = None if fields is None else _fields(fields.get("function"))
+    if fields is None or function is None:
+        return _Hoisted(tool, ())
     function_marker: Final = function.get("prompt_cache_breakpoint")
-    tool_marker: Final = tool.get("prompt_cache_breakpoint")
+    tool_marker: Final = fields.get("prompt_cache_breakpoint")
     if function_marker is None and (tool_marker is None or function.get("cache_control") is None):
-        return tool
-    client_marked: Final = function.get("cache_control") is not None or tool.get("cache_control") is not None
-    return {
-        **{key: value for key, value in tool.items() if key != "prompt_cache_breakpoint"},
-        "function": {key: value for key, value in function.items() if key != "prompt_cache_breakpoint"},
-        **(
-            {}
-            if client_marked
-            else {"prompt_cache_breakpoint": function_marker if tool_marker is None else tool_marker}
-        ),
+        return _Hoisted(tool, ())
+    markers: Final = tuple(marker for marker in (tool_marker, function_marker) if marker is not None)
+    unmarked: Final = {
+        **_without_own_breakpoint(fields),
+        "function": _without_own_breakpoint(function),
     }
+    if function.get("cache_control") is not None or fields.get("cache_control") is not None:
+        return _Hoisted(unmarked, markers)
+    kept, replaced = _first_usable(markers)
+    return _Hoisted({**unmarked, "prompt_cache_breakpoint": _joined_breakpoint(kept, replaced)}, replaced)
 
 
 def _marked_tool(index: int, tool: object, mark: _Mark) -> object:
     fields: Final = _fields(tool)
     if fields is None:
         return tool
-    marked: Final = mark(("tools", index), _with_one_tool_breakpoint(fields))
+    marked: Final = mark(("tools", index), fields)
     function: Final = _fields(marked.get("function"))
     return marked if function is None else {**marked, "function": mark(("tools", index, "function"), function)}
 
@@ -326,9 +331,7 @@ def _marker_problem(marker: object) -> UnsupportedPromptCacheParam | None:
 
 def _breakpoint_problem(block: _Fields) -> UnsupportedPromptCacheParam | None:
     marker: Final = block.get("prompt_cache_breakpoint")
-    if marker is None or block.get("cache_control") is not None:
-        return None
-    return _marker_problem(marker)
+    return None if marker is None else _marker_problem(marker)
 
 
 def _renamed(_path: _Path, block: _Fields) -> _Fields:
@@ -401,7 +404,24 @@ def _wire_position(path: _Path, leading_system_count: int) -> tuple[int, ...]:
     return (group, index, *block)
 
 
-def _last_read(path: _Path, messages: Sequence[object], leading_system_count: int) -> tuple[int, ...]:
+def _run_ends(messages: Sequence[object]) -> tuple[int, ...]:
+    """For each index, the first message at or after it that a moving system message never passes."""
+    return tuple(
+        reversed(
+            tuple(
+                accumulate(
+                    reversed(range(len(messages))),
+                    lambda end, index: end if _role(messages[index]) in _SYSTEM_MOVES_WITHIN_ROLES else index,
+                    initial=len(messages),
+                )
+            )
+        )
+    )
+
+
+def _last_read(
+    path: _Path, messages: Sequence[object], leading_system_count: int, run_ends: Sequence[int]
+) -> tuple[int, ...]:
     """The transforms may move a system message after the conversation start behind the user, tool and function
     turns that follow it, never past the next assistant turn, so Claude may read its marks as late as the end of
     those turns."""
@@ -409,15 +429,7 @@ def _last_read(path: _Path, messages: Sequence[object], leading_system_count: in
     index: Final = int(path[1]) if path[0] == "messages" else -1
     if index < leading_system_count or _role(messages[index]) not in _SYSTEM_ROLES:
         return position
-    turns_end: Final = next(
-        (
-            later
-            for later in range(index + 1, len(messages))
-            if _role(messages[later]) not in _SYSTEM_MOVES_WITHIN_ROLES
-        ),
-        len(messages),
-    )
-    return (3, turns_end - 1, 3)
+    return (3, run_ends[index + 1] - 1, 3)
 
 
 def _tool_call_id(message: _Fields, index: int) -> object:
@@ -469,15 +481,20 @@ def _first_five(marks: Sequence[_Placed]) -> tuple[int, ...]:
     return min((mark.first_read for mark in marks if _chosen(mark, "5m")), default=(5,))
 
 
-def _hour_reach(hour: _Placed, marks: Sequence[_Placed]) -> tuple[int, ...]:
+def _hour_reach(
+    hour: _Placed, free_starts: Sequence[tuple[int, ...]], free_latest: Sequence[tuple[int, ...]]
+) -> tuple[int, ...]:
+    read_before: Final = bisect_left(free_starts, hour.last_read)
+    return hour.last_read if read_before == 0 else max(hour.last_read, free_latest[read_before - 1])
+
+
+def _hour_reaches(marks: Sequence[_Placed]) -> Mapping[_Path, tuple[int, ...]]:
     """A 1h mark makes every breakpoint without a ttl that Claude may read before it take 1h too, so its order with a
     5m mark holds as late as the last of them may be read."""
-    return max(
-        (
-            hour.last_read,
-            *(mark.last_read for mark in marks if mark.kind == "free" and mark.first_read < hour.last_read),
-        )
-    )
+    free: Final = sorted((mark for mark in marks if mark.kind == "free"), key=lambda mark: mark.first_read)
+    starts: Final = tuple(mark.first_read for mark in free)
+    latest: Final = tuple(accumulate((mark.last_read for mark in free), max))
+    return MappingProxyType({hour.path: _hour_reach(hour, starts, latest) for hour in marks if _chosen(hour, "1h")})
 
 
 def _loosened(marks: Sequence[_Placed], drop_params: bool) -> tuple[_Placed, ...]:
@@ -485,7 +502,7 @@ def _loosened(marks: Sequence[_Placed], drop_params: bool) -> tuple[_Placed, ...
     if not drop_params:
         return tuple(marks)
     first_five: Final = _first_five(marks)
-    reaches: Final = MappingProxyType({mark.path: _hour_reach(mark, marks) for mark in marks if _chosen(mark, "1h")})
+    reaches: Final = _hour_reaches(marks)
     last_hour: Final = max(reaches.values(), default=(-1,))
     return tuple(
         replace(mark, ttl="5m", kind="free")
@@ -547,9 +564,12 @@ def claude_prompt_cache(
     listed_tools: Final = tools or ()
     if not any(map(_message_carries_breakpoint, messages)) and not any(map(_tool_carries_breakpoint, listed_tools)):
         return ClaudePromptCache(tuple(messages), None if tools is None else tuple(tools))
-    hoists: Final = tuple(map(_hoisted_message, messages))
-    hoisted_messages: Final = tuple(hoist.message for hoist in hoists)
-    blocks: Final = tuple(block for _, block in _markable(*_marked_request(hoisted_messages, listed_tools, _unchanged)))
+    hoists: Final = (*map(_hoisted_message, messages), *map(_hoisted_tool, listed_tools))
+    hoisted_messages: Final = tuple(hoist.value for hoist in hoists[: len(messages)])
+    hoisted_tools: Final = tuple(hoist.value for hoist in hoists[len(messages) :])
+    blocks: Final = tuple(
+        block for _, block in _markable(*_marked_request(hoisted_messages, hoisted_tools, _unchanged))
+    )
     problem: Final = next(
         filter(
             None,
@@ -564,9 +584,10 @@ def claude_prompt_cache(
         return problem
     if problem is not None:
         verbose_logger.debug("Claude: adjusting %s=%r because %s", problem.param, problem.value, problem.reason)
-    renamed_messages, renamed_tools = _marked_request(hoisted_messages, listed_tools, _renamed)
-    translated: Final = _translated(hoisted_messages, listed_tools)
+    renamed_messages, renamed_tools = _marked_request(hoisted_messages, hoisted_tools, _renamed)
+    translated: Final = _translated(hoisted_messages, hoisted_tools)
     leading_system_count: Final = _leading_system_count(messages)
+    run_ends: Final = _run_ends(messages)
     unsent_call_ids: Final = unanswered_tool_search_call_ids(messages)
     request_mark: Final = params.get("cache_control")
     placements: Final[tuple[tuple[_Path, object, _Kind], ...]] = (
@@ -585,7 +606,7 @@ def claude_prompt_cache(
                 _ttl(cache_control),
                 kind,
                 _wire_position(path, leading_system_count),
-                _last_read(path, messages, leading_system_count),
+                _last_read(path, messages, leading_system_count, run_ends),
             )
             for path, cache_control, kind in placements
         ),

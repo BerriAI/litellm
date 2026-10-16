@@ -1,3 +1,4 @@
+import time
 from typing import Final
 
 import pytest
@@ -94,26 +95,100 @@ def test_a_request_without_breakpoints_is_returned_as_written():
 
 
 def test_a_client_cache_control_on_the_same_block_wins():
-    hour: Final = {"type": "ephemeral", "ttl": "1h"}
     messages: Final = [
-        {"role": "user", "content": [_part("hi", cache_control=hour, prompt_cache_breakpoint={"ttl": "9d"})]}
-    ]
-
-    assert list(_resolved(messages).messages) == [{"role": "user", "content": [_part("hi", cache_control=hour)]}]
-
-
-def test_a_breakpoint_under_a_function_the_tool_cache_control_overrides_is_never_reported():
-    tools: Final = [
         {
-            "type": "function",
-            "cache_control": _EPHEMERAL,
-            "function": {"name": "t", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "30m"}},
+            "role": "user",
+            "content": [
+                _part("hi", cache_control=_ONE_HOUR, prompt_cache_breakpoint={"mode": "explicit", "ttl": "5m"})
+            ],
         }
     ]
 
-    result: Final = _resolved([{"role": "user", "content": "hi"}], tools)
+    assert list(_resolved(messages).messages) == [{"role": "user", "content": [_part("hi", cache_control=_ONE_HOUR)]}]
 
-    assert list(result.tools or ()) == [{"type": "function", "cache_control": _EPHEMERAL, "function": {"name": "t"}}]
+
+_THIRTY_MINUTES: Final = {"mode": "explicit", "ttl": "30m"}
+
+
+@pytest.mark.parametrize(
+    ("messages", "tools"),
+    [
+        pytest.param(
+            [
+                {
+                    "role": "user",
+                    "content": [_part("hi", cache_control=_EPHEMERAL, prompt_cache_breakpoint=_THIRTY_MINUTES)],
+                }
+            ],
+            None,
+            id="same-block",
+        ),
+        pytest.param(
+            [{"role": "user", "content": "hi"}],
+            [
+                {
+                    "type": "function",
+                    "cache_control": _EPHEMERAL,
+                    "function": {"name": "t", "prompt_cache_breakpoint": _THIRTY_MINUTES},
+                }
+            ],
+            id="function-under-a-marked-tool",
+        ),
+        pytest.param(
+            [{"role": "user", "content": "hi"}],
+            [
+                {
+                    "type": "function",
+                    "prompt_cache_breakpoint": _THIRTY_MINUTES,
+                    "function": {"name": "t", "cache_control": _EPHEMERAL},
+                }
+            ],
+            id="tool-over-a-marked-function",
+        ),
+        pytest.param(
+            [
+                {
+                    "role": "tool",
+                    "tool_call_id": "c1",
+                    "cache_control": _EPHEMERAL,
+                    "content": [_part("r0", prompt_cache_breakpoint=_THIRTY_MINUTES)],
+                }
+            ],
+            None,
+            id="part-of-a-marked-tool-result",
+        ),
+        pytest.param(
+            [
+                {
+                    "role": "tool",
+                    "tool_call_id": "c1",
+                    "prompt_cache_breakpoint": _THIRTY_MINUTES,
+                    "content": [_part("r0", cache_control=_EPHEMERAL)],
+                }
+            ],
+            None,
+            id="tool-result-with-a-marked-part",
+        ),
+        pytest.param(
+            [
+                {
+                    "role": "user",
+                    "prompt_cache_breakpoint": _THIRTY_MINUTES,
+                    "content": [_part("u0", cache_control=_EPHEMERAL)],
+                }
+            ],
+            None,
+            id="message-whose-last-part-is-marked",
+        ),
+    ],
+)
+def test_a_breakpoint_a_client_cache_control_wins_over_is_still_reported(
+    messages: list[object], tools: list[object] | None
+):
+    outcome: Final = _cache(messages, tools)
+
+    assert isinstance(outcome, UnsupportedPromptCacheParam)
+    assert outcome.value == _THIRTY_MINUTES
 
 
 def test_a_breakpoint_on_a_tool_search_call_nobody_answered_takes_no_slot_from_the_system_mark_under_drop_params():
@@ -798,6 +873,70 @@ def test_breakpoints_joined_into_one_mark_keep_the_longest_ttl_the_caller_chose(
     result: Final = _resolved([message])
 
     assert list(result.messages) == [sent]
+
+
+def test_a_tools_breakpoint_joined_with_its_functions_keeps_the_hour_the_function_asked_for():
+    tools: Final = [
+        {
+            "type": "function",
+            "prompt_cache_breakpoint": _EXPLICIT,
+            "function": {"name": "t", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}},
+        }
+    ]
+
+    result: Final = _resolved([{"role": "user", "content": "hi"}], tools)
+
+    assert list(result.tools or ()) == [{"type": "function", "function": {"name": "t"}, "cache_control": _ONE_HOUR}]
+
+
+def test_a_function_breakpoint_the_tools_own_breakpoint_replaces_is_still_reported():
+    tools: Final = [
+        {
+            "type": "function",
+            "prompt_cache_breakpoint": _EXPLICIT,
+            "function": {"name": "t", "prompt_cache_breakpoint": _THIRTY_MINUTES},
+        }
+    ]
+
+    outcome: Final = _cache([{"role": "user", "content": "hi"}], tools)
+
+    assert isinstance(outcome, UnsupportedPromptCacheParam)
+    assert outcome.value == _THIRTY_MINUTES
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        pytest.param(
+            [
+                {"role": "user", "content": "hi"},
+                *(
+                    {"role": "system", "content": f"s{index}", "prompt_cache_breakpoint": _EXPLICIT}
+                    for index in range(8000)
+                ),
+            ],
+            id="system-turns-with-breakpoints",
+        ),
+        pytest.param(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        *(_part(f"p{index}", cache_control=_ONE_HOUR) for index in range(20000)),
+                        _part("end", prompt_cache_breakpoint=_EXPLICIT),
+                    ],
+                }
+            ],
+            id="one-hour-parts-beside-a-breakpoint",
+        ),
+    ],
+)
+def test_settling_thousands_of_marks_under_drop_params_takes_well_under_a_second_per_thousand(messages: list[object]):
+    started: Final = time.perf_counter()
+
+    _resolved(messages, drop_params=True)
+
+    assert time.perf_counter() - started < 5
 
 
 def test_a_tool_config_cache_point_takes_one_of_claudes_four_and_is_never_dropped_under_drop_params():

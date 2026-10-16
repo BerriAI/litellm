@@ -394,7 +394,7 @@ def test_a_tool_breakpoint_beside_a_function_cache_control_keeps_the_latest_brea
 
 
 @pytest.mark.parametrize("provider", PROVIDERS)
-def test_a_function_breakpoint_the_tool_cache_control_overrides_is_never_reported(
+def test_a_function_breakpoint_the_tool_cache_control_overrides_is_still_a_400(
     gateway: Gateway, provider: Provider
 ) -> None:
     marker: Final = new_marker()
@@ -405,8 +405,8 @@ def test_a_function_breakpoint_the_tool_cache_control_overrides_is_never_reporte
         "cache_control": EPHEMERAL,
         "function": {**function, "prompt_cache_breakpoint": _THIRTY_MINUTES},
     }
-    marks: Final = _marks_sent(gateway, provider, lambda model: {**chat_body(model, [_final(marker)]), "tools": [tool]})
-    assert marks == (Mark("tool:lookup_weather", None),)
+    text: Final = _rejected(gateway, provider, lambda model: {**chat_body(model, [_final(marker)]), "tools": [tool]})
+    assert "30m" in text, text
 
 
 @pytest.mark.parametrize("provider", PROVIDERS)
