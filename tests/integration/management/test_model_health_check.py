@@ -1352,3 +1352,40 @@ def test_evaluation_mode_health_check_of_databricks_ai_decide_resolves_the_mode_
                 },
             )
         ]
+
+
+def _openai_gpt_transcribe_health_reply(request: Request) -> Reply:
+    if _multipart_text_fields(_multipart_parts(request)).get("response_format") == "verbose_json":
+        return Reply(
+            status=400,
+            body=json.dumps(
+                {
+                    "error": {
+                        "message": "response_format 'verbose_json' is not compatible with model 'gpt-transcribe'",
+                        "type": "invalid_request_error",
+                        "param": "response_format",
+                        "code": "unsupported_value",
+                    }
+                }
+            ).encode(),
+        )
+    return Reply(body=json.dumps({"text": "healthy", "usage": {"type": "duration", "seconds": 1}}).encode())
+
+
+def test_health_check_of_gpt_transcribe_probes_without_verbose_json_and_reports_it_healthy(gateway: Gateway) -> None:
+    with wire_server(_openai_gpt_transcribe_health_reply) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="openai/gpt-transcribe",
+            api_base=f"{wire.url}/v1",
+            api_key="synthetic-openai-key",
+            model_info={"mode": "audio_transcription"},
+        )
+        report: Final = _health_report(gateway, model)
+        requests: Final = wire.drain()
+
+    assert (report["healthy_count"], report["unhealthy_count"]) == (1, 0), report
+    assert requests, report
+    assert {
+        (request.method, request.target, tuple(sorted(_multipart_text_fields(_multipart_parts(request)).items())))
+        for request in requests
+    } == {("POST", "/v1/audio/transcriptions", (("model", "gpt-transcribe"),))}
