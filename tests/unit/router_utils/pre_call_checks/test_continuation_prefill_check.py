@@ -155,6 +155,29 @@ async def test_filter_empties_group_when_no_prefill_capable_deployment():
     assert result == []
 
 
+@pytest.mark.asyncio
+async def test_filter_drops_deployments_whose_own_params_constrain_the_continuation():
+    check = ContinuationPrefillDeploymentCheck()
+    plain = _deployment(PREFILL_MODEL, "plain")
+    constrained = [
+        {"litellm_params": {"model": PREFILL_MODEL, **params}, "model_info": {"id": dep_id}}
+        for dep_id, params in (
+            ("json", {"response_format": {"type": "json_object"}}),
+            ("two_choices", {"extra_body": {"n": 2}}),
+            ("forced_tool", {"tool_choice": {"type": "function", "function": {"name": "f"}}}),
+            ("merged_reasoning", {"merge_reasoning_content_in_choices": True}),
+        )
+    ]
+
+    result = await check.async_filter_deployments(
+        model="group",
+        healthy_deployments=[plain, *constrained],
+        messages=None,
+        request_kwargs={MID_STREAM_CONTINUATION_KWARG: MID_STREAM_CONTINUATION_MARKER},
+    )
+    assert [d["model_info"]["id"] for d in result] == ["plain"]
+
+
 def _text_chunk(text: str) -> litellm.ModelResponseStream:
     return litellm.ModelResponseStream(choices=[{"index": 0, "delta": {"content": text}}])
 

@@ -3662,6 +3662,7 @@ async def _continues_after_content(
     initial_kwargs: dict[str, object],
     primary_params: Mapping[str, object] = MappingProxyType({}),
     default_litellm_params: dict[str, object] | None = None,
+    cut_model_id: str = "primary-deployment",
 ) -> bool:
     from unittest.mock import AsyncMock, patch
 
@@ -3685,6 +3686,15 @@ async def _continues_after_content(
                 "litellm_params": {"model": "anthropic/claude-3-opus-20240229", "api_key": "k4"},
                 "model_info": {"id": "prefill-deployment", "supports_assistant_prefill": True},
             },
+            {
+                "model_name": "json-claude-backup",
+                "litellm_params": {
+                    "model": "anthropic/claude-3-opus-20240229",
+                    "api_key": "k5",
+                    "response_format": {"type": "json_object"},
+                },
+                "model_info": {"id": "json-prefill-deployment", "supports_assistant_prefill": True},
+            },
         ],
         fallbacks=[{"gpt-4": ["backup"]}],
         default_litellm_params=default_litellm_params,
@@ -3696,7 +3706,7 @@ async def _continues_after_content(
     )
     fallback_chunk: Final = litellm.ModelResponseStream(choices=[{"index": 0, "delta": {"content": " world"}}])
     cut_stream: Final = _make_midstream_source(error)
-    cut_stream._hidden_params = {"model_id": "primary-deployment"}
+    cut_stream._hidden_params = {"model_id": cut_model_id}
     with patch.object(
         router,
         "async_function_with_fallbacks_common_utils",
@@ -3774,6 +3784,7 @@ async def test_mid_stream_continuation_declines_a_request_fallback_that_override
         ([{"model": "no-prefill-deployment"}], False),
         ([{"gpt-4": ["prefill-deployment"]}], True),
         ([{"gpt-4": ["openai-backup"]}], True),
+        ([{"gpt-4": ["json-prefill-deployment"]}], False),
     ],
     ids=[
         "deployment_id_without_prefill",
@@ -3781,9 +3792,10 @@ async def test_mid_stream_continuation_declines_a_request_fallback_that_override
         "flat_entry_naming_a_deployment_id_without_prefill",
         "deployment_id_with_prefill",
         "group_without_prefill_left_to_the_deployment_filter",
+        "deployment_id_with_its_own_response_format",
     ],
 )
-async def test_mid_stream_continuation_declines_a_fallback_naming_a_deployment_without_prefill(
+async def test_mid_stream_continuation_declines_a_fallback_naming_a_deployment_that_cannot_continue(
     fallbacks: list[object], continues: bool
 ) -> None:
     assert await _continues_after_content({"fallbacks": fallbacks}) is continues
@@ -3802,6 +3814,7 @@ async def test_mid_stream_continuation_declines_a_fallback_naming_a_deployment_w
         ({"temperature": 0.2}, None, True),
         ({"tool_choice": "required"}, {"tool_choice": "auto"}, False),
         ({"response_format": {"type": "json_object"}}, {"response_format": {"type": "text"}}, True),
+        ({"extra_body": {"n": 2}}, None, False),
     ],
     ids=[
         "deployment_response_format",
@@ -3813,12 +3826,75 @@ async def test_mid_stream_continuation_declines_a_fallback_naming_a_deployment_w
         "deployment_unrelated_param",
         "deployment_tool_choice_over_router_default",
         "router_default_format_over_deployment",
+        "deployment_extra_body_n",
     ],
 )
 async def test_mid_stream_continuation_reads_constraints_configured_on_the_cut_deployment(
     primary_params: Mapping[str, object], default_litellm_params: dict[str, object] | None, continues: bool
 ) -> None:
     assert await _continues_after_content({}, primary_params, default_litellm_params) is continues
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "extra_body,continues",
+    [({"response_format": {"type": "json_object"}}, False), ({"n": 2}, False), ({"top_k": 5}, True)],
+    ids=["json_format_in_extra_body", "n_in_extra_body", "unrelated_extra_body_key"],
+)
+async def test_mid_stream_continuation_reads_constraints_the_request_sends_in_extra_body(
+    extra_body: dict[str, object], continues: bool
+) -> None:
+    assert await _continues_after_content({"extra_body": extra_body}) is continues
+
+
+@pytest.mark.asyncio
+async def test_mid_stream_continuation_declines_when_the_cut_deployment_is_not_in_the_router() -> None:
+    assert await _continues_after_content({}, cut_model_id="per-request-credential-deployment") is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "routing_strategy",
+    [
+        "simple-shuffle",
+        "usage-based-routing",
+        "usage-based-routing-v2",
+        "least-busy",
+        "latency-based-routing",
+        "cost-based-routing",
+    ],
+)
+async def test_continuation_routes_only_to_deployments_that_can_continue_under_every_routing_strategy(
+    routing_strategy: str,
+) -> None:
+    from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
+        MID_STREAM_CONTINUATION_KWARG,
+        MID_STREAM_CONTINUATION_MARKER,
+    )
+    from litellm.types.router import RouterRateLimitError
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "backup",
+                "litellm_params": {"model": "gpt-4o", "api_key": "k1"},
+                "model_info": {"id": "no-prefill-deployment", "supports_assistant_prefill": False},
+            },
+        ],
+        routing_strategy=routing_strategy,
+        enable_mid_stream_fallback_continuation=True,
+    )
+    messages: Final = [{"role": "user", "content": "Hi"}]
+    plain_pick: Final = await router.async_get_available_deployment(
+        model="backup", messages=messages, request_kwargs={}
+    )
+    assert plain_pick["model_info"]["id"] == "no-prefill-deployment"
+    with pytest.raises(RouterRateLimitError):
+        await router.async_get_available_deployment(
+            model="backup",
+            messages=messages,
+            request_kwargs={MID_STREAM_CONTINUATION_KWARG: MID_STREAM_CONTINUATION_MARKER},
+        )
 
 
 @pytest.mark.asyncio

@@ -1,4 +1,5 @@
-"""Keeps a mid-stream continuation on deployments whose model supports assistant prefill."""
+"""Keeps a mid-stream continuation on deployments whose model supports assistant prefill and whose own params leave
+the output unconstrained."""
 
 from collections.abc import AsyncIterable, AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -26,6 +27,7 @@ MID_STREAM_CONTINUATION_MARKER: Final = _ContinuationMarker()
 
 _STR_KEYED_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _NO_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
+_UNCONSTRAINED_RESPONSE_FORMAT: Final[Mapping[str, str]] = MappingProxyType({"type": "text"})
 
 
 def _str_keyed(value: object) -> Mapping[str, object]:
@@ -47,6 +49,35 @@ def deployment_supports_prefill(deployment: object) -> bool:
     return model is not None and supports_assistant_prefill(model=model)
 
 
+def constrains_continuation(params: Mapping[str, object]) -> bool:
+    sent: Final = {**params, **_str_keyed(params.get("extra_body"))}
+    choice_count: Final = sent.get("n")
+    response_format: Final = sent.get("response_format")
+    tool_choice: Final = sent.get("tool_choice")
+    return (
+        (isinstance(choice_count, int) and choice_count > 1)
+        or (response_format is not None and response_format != _UNCONSTRAINED_RESPONSE_FORMAT)
+        or tool_choice == "required"
+        or isinstance(tool_choice, Mapping)
+        or sent.get("merge_reasoning_content_in_choices") is True
+    )
+
+
+def deployment_can_continue(deployment: object) -> bool:
+    litellm_params: Final = _str_keyed(_str_keyed(deployment).get("litellm_params"))
+    return deployment_supports_prefill(deployment) and not constrains_continuation(litellm_params)
+
+
+def continuation_deployments(
+    healthy_deployments: list[dict[str, object]],  # mutable-ok: router deployment-list contract
+    request_kwargs: Mapping[str, object] | None,
+) -> list[dict[str, object]]:  # mutable-ok: returns a mutable deployment list
+    marker: Final = (request_kwargs or {}).get(MID_STREAM_CONTINUATION_KWARG)
+    if not isinstance(marker, _ContinuationMarker):
+        return healthy_deployments
+    return [deployment for deployment in healthy_deployments if deployment_can_continue(deployment)]
+
+
 class ContinuationPrefillDeploymentCheck(CustomLogger):
     async def async_filter_deployments(
         self,
@@ -56,11 +87,7 @@ class ContinuationPrefillDeploymentCheck(CustomLogger):
         request_kwargs: Mapping[str, object] | None = None,
         parent_otel_span: Span | None = None,
     ) -> list[dict[str, object]]:  # mutable-ok: returns a mutable deployment list
-        marker: Final = (request_kwargs or {}).get(MID_STREAM_CONTINUATION_KWARG)
-        if not isinstance(marker, _ContinuationMarker):
-            return healthy_deployments
-        eligible: Final = (deployment for deployment in healthy_deployments if deployment_supports_prefill(deployment))
-        return list(eligible)
+        return continuation_deployments(healthy_deployments, request_kwargs)
 
 
 def _delta_text(chunk: ModelResponseStream) -> str:

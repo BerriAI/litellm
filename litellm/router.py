@@ -263,6 +263,16 @@ from litellm.router_utils.handle_error import (
     send_llm_exception_alert,
 )
 from litellm.router_utils.health_state_cache import DeploymentHealthCache
+from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
+    MID_STREAM_CONTINUATION_MARKER,
+    ContinuationOutput,
+    ContinuationPrefillDeploymentCheck,
+    ContinuedPartial,
+    constrains_continuation,
+    continuation_deployments,
+    continued_text,
+    deployment_can_continue,
+)
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
     warn_on_unknown_model_group_affinity_flags,
@@ -412,7 +422,6 @@ if TYPE_CHECKING:
     from litellm.router_strategy.quality_router.quality_router import (
         QualityRouter,
     )
-    from litellm.router_utils.pre_call_checks.continuation_prefill_check import ContinuedPartial
     from litellm.types.llms.anthropic_messages.anthropic_response import (
         AnthropicMessagesResponse,
     )
@@ -536,7 +545,6 @@ _ROUTING_KWARGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeA
 _FALLBACK_HOP_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _OPAQUE_VALUE_ADAPTER: Final = TypeAdapter(object)
 _DEPLOYMENT_SELECTED_EVENT: Final = "litellm.request.deployment_selected"
-_UNCONSTRAINED_RESPONSE_FORMAT: Final[Mapping[str, str]] = MappingProxyType({"type": "text"})
 _CONTENT_BLOCKS_ADAPTER: Final = TypeAdapter(list[dict[str, object]])
 
 
@@ -1576,10 +1584,6 @@ class Router:
 
     @staticmethod
     def _register_continuation_prefill_check() -> None:
-        from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
-            ContinuationPrefillDeploymentCheck,
-        )
-
         # Process-global on purpose: Router.discard() must not drop a filter another router still needs.
         litellm.logging_callback_manager.add_litellm_callback(ContinuationPrefillDeploymentCheck())
 
@@ -3189,7 +3193,6 @@ class Router:
     ) -> "ContinuedPartial | None":
         """Price the cut stream's partial, plus any partial it inherited, before a fallback can reuse its logging."""
         from litellm.cost_calculator import BaseTokenUsageProcessor
-        from litellm.router_utils.pre_call_checks.continuation_prefill_check import ContinuedPartial
 
         cut_logging: Final = cut_stream.logging_obj
         partial_usage: Final = getattr(partial_response, "usage", None)
@@ -3368,11 +3371,6 @@ class Router:
                         "content_policy_fallbacks", self.content_policy_fallbacks
                     )
                     initial_kwargs["original_function"] = self._acompletion
-                    from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
-                        MID_STREAM_CONTINUATION_MARKER,
-                        ContinuationOutput,
-                    )
-
                     continuation_messages: Final = (
                         self._build_completion_continuation_input(messages, e.generated_content)
                         if continue_after_content
@@ -3609,10 +3607,9 @@ class Router:
         raise e
 
     def _params_sent_to_deployment(
-        self, request_kwargs: Mapping[str, object], deployment_id: object
+        self, request_kwargs: Mapping[str, object], deployment: Deployment | None
     ) -> Mapping[str, object]:
         """The request as the deployment received it, merged in the order _update_kwargs_with_deployment applies."""
-        deployment: Final = self.get_deployment(model_id=deployment_id) if isinstance(deployment_id, str) else None
         deployment_params: Final = deployment.litellm_params.model_dump(exclude_none=True) if deployment else {}
         defaults: Final = {key: value for key, value in self.default_litellm_params.items() if value is not None}
         deployment_tool_choice: Final = (
@@ -3622,14 +3619,12 @@ class Router:
         )
         return MappingProxyType({**deployment_params, **defaults, **deployment_tool_choice, **request_kwargs})
 
-    def _names_deployment_without_prefill(self, target: object) -> bool:
+    def _names_deployment_that_cannot_continue(self, target: object) -> bool:
         name: Final = fallback_target_name(target)
         if name is None or name in self.model_names or not self.has_model_id(name):
             return False
-        from litellm.router_utils.pre_call_checks.continuation_prefill_check import deployment_supports_prefill
-
         deployment: Final = self.get_deployment(model_id=name)
-        return deployment is not None and not deployment_supports_prefill(deployment.model_dump(exclude_none=True))
+        return deployment is not None and not deployment_can_continue(deployment.model_dump(exclude_none=True))
 
     def _mid_stream_continuation_eligible(
         self,
@@ -3644,17 +3639,12 @@ class Router:
             return False
         if isinstance(e.original_exception, litellm.ContentPolicyViolationError):
             return False
-        sent_params: Final = self._params_sent_to_deployment(request_kwargs, cut_deployment_id)
-        choice_count: Final = sent_params.get("n")
-        if isinstance(choice_count, int) and choice_count > 1:
+        cut_deployment: Final = (
+            self.get_deployment(model_id=cut_deployment_id) if isinstance(cut_deployment_id, str) else None
+        )
+        if isinstance(cut_deployment_id, str) and cut_deployment is None:
             return False
-        response_format: Final = sent_params.get("response_format")
-        if response_format is not None and response_format != _UNCONSTRAINED_RESPONSE_FORMAT:
-            return False
-        tool_choice: Final = sent_params.get("tool_choice")
-        if tool_choice == "required" or isinstance(tool_choice, Mapping):
-            return False
-        if sent_params.get("merge_reasoning_content_in_choices") is True:
+        if constrains_continuation(self._params_sent_to_deployment(request_kwargs, cut_deployment)):
             return False
         requested_group: Final = request_kwargs.get("model")
         lookup_groups: Final = fallback_lookup_groups(
@@ -3663,7 +3653,7 @@ class Router:
         targets: Final = continuation_fallback_targets(request_kwargs.get("fallbacks", self.fallbacks), lookup_groups)
         if any(fallback_target_overrides_request_params(target) for target in targets):
             return False
-        if any(self._names_deployment_without_prefill(target) for target in targets):
+        if any(self._names_deployment_that_cannot_continue(target) for target in targets):
             return False
         return not any(
             isinstance(callback, CustomGuardrail)
@@ -3703,8 +3693,6 @@ class Router:
             return [*messages, {"role": "assistant", "content": generated_content, "prefix": True}]
         if last.get("prefix") is not True:
             return None
-        from litellm.router_utils.pre_call_checks.continuation_prefill_check import continued_text
-
         new_text: Final = continued_text(last, generated_content)
         content: Final = last.get("content")
         if content is None or isinstance(content, str):
@@ -15362,9 +15350,8 @@ class Router:
             request_kwargs=request_kwargs,
         )
         strategy, strategy_selector = self._get_routing_context(model, request_kwargs)
-        pick_attributes: Final = _deployment_pick_attributes(
-            model, _ROUTING_KWARGS_ADAPTER.validate_python(request_kwargs)
-        )
+        routing_kwargs: Final = _ROUTING_KWARGS_ADAPTER.validate_python(request_kwargs)
+        pick_attributes: Final = _deployment_pick_attributes(model, routing_kwargs)
 
         if isinstance(healthy_deployments, dict):
             if (healthy_deployments.get("model_info") or {}).get("blocked") is True:
@@ -15402,7 +15389,9 @@ class Router:
             )
             healthy_deployments = _pre_cooldown_deployments
 
-        healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
+        healthy_deployments = continuation_deployments(
+            self._filter_blocked_deployments(healthy_deployments), routing_kwargs
+        )
 
         # filter pre-call checks
         if self.enable_pre_call_checks and (messages is not None or input is not None):

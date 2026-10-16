@@ -118,7 +118,7 @@ ignored_function_names = [
     "_set_mid_stream_fallback_continuation",  # Tested through the update_settings continuation test in test_router.py
     "_is_flag_enabled",  # Tested through the string-flag continuation tests in test_router.py
     "_params_sent_to_deployment",  # Tested through the configured-constraint continuation tests in test_router.py
-    "_names_deployment_without_prefill",  # Tested through the deployment-id continuation tests in test_router.py
+    "_names_deployment_that_cannot_continue",  # Tested through the deployment-id continuation tests in test_router.py
     "_set_retry_policy",  # Tested through update_settings in test_router_retry_policy_update.py
     "_resolve_pre_call_check_input_tokens",  # Tested through the token-count failure pre-call check tests in test_router.py
     "_params_neither_dropped_nor_allowed",  # Tested through the allowed-or-dropped param pre-call check tests in test_router.py
