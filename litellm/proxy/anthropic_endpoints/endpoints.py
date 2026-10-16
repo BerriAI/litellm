@@ -30,6 +30,7 @@ from litellm.proxy.common_request_processing import (
     create_response,
     log_llm_api_exception,
     proxy_exception_from_http_exception,
+    proxy_exception_from_route_error,
     resolve_counted_tool_fields,
     resolve_litellm_call_id,
 )
@@ -371,10 +372,10 @@ async def count_tokens(
         messages: Final = data.get("messages", [])
 
         if not model_name:
-            raise HTTPException(status_code=400, detail={"error": "model parameter is required"})
+            raise HTTPException(status_code=400, detail="model parameter is required")
 
         if not messages:
-            raise HTTPException(status_code=400, detail={"error": "messages parameter is required"})
+            raise HTTPException(status_code=400, detail="messages parameter is required")
 
         token_fields: Final = _token_count_fields(
             data, request.headers.get("user-agent", ""), llm_router, user_api_key_dict.team_id
@@ -391,13 +392,13 @@ async def count_tokens(
             messages_format="anthropic",
             output_format=_requested_output_format(data),
         )
-    except HTTPException:
-        raise
+    except HTTPException as e:
+        return _anthropic_error_json_response(proxy_exception_from_http_exception(e, {}), request)
     except ProxyException as e:
         return _anthropic_error_json_response(e, request)
     except Exception as e:
         log_llm_api_exception(e, litellm_call_id)
-        raise HTTPException(status_code=500, detail={"error": f"Internal server error: {e}"})
+        return _anthropic_error_json_response(proxy_exception_from_route_error(e), request)
     else:
         return {"input_tokens": token_response.total_tokens}
 

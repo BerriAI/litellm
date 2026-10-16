@@ -219,7 +219,7 @@ class GitLabTemplateManager:
                 elif value.replace(".", "").isdigit():
                     try:
                         result[key] = float(value)
-                    except Exception:
+                    except ValueError:
                         result[key] = value
                 else:
                     result[key] = value.strip("\"'")
