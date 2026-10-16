@@ -1,18 +1,13 @@
 from __future__ import annotations
 
 import importlib
-import json
-import os
-import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Final
 
 import pytest
-from click.testing import CliRunner
 
-from ..shared.drift import DriftReport
 from ..shared.reporting.models import (
     SDK_FUNCTIONS,
     SURFACES,
@@ -27,9 +22,12 @@ from ..shared.reporting.ui import PlainDashboard, final_report, make_dashboard
 from ..strategies.unit_tests_parity import UNIT_PARITY_SUITES
 from ..strategies.unit_tests_rust import RUST_SUITES
 from . import main
-from .catalog import STRATEGIES_ROOT, load_catalog
+from .catalog import STRATEGIES_ROOT, CatalogStrategy, load_catalog
 from .commands import REPO_ROOT, select_cases
-from .drift import drift_command
+
+
+def _sdk_strategies(strategies: Sequence[CatalogStrategy]) -> tuple[Strategy, ...]:
+    return tuple(strategy for strategy in strategies if isinstance(strategy, Strategy))
 
 
 def _strategy_source(
@@ -90,16 +88,17 @@ def _write_strategy_folder(
     return folder
 
 
-def test_should_load_surface_aware_and_function_only_strategies() -> None:
+def test_should_load_test_and_repository_strategies() -> None:
     strategies: Final = load_catalog()
 
     assert [strategy.id for strategy in strategies] == [
+        "drift",
         "e2e_parity",
         "trace_parity",
         "unit_tests_parity",
         "unit_tests_rust",
     ]
-    for strategy in strategies:
+    for strategy in _sdk_strategies(strategies):
         expected: Final = tuple(
             (surface, function) for surface in (strategy.definition.surfaces or (None,)) for function in SDK_FUNCTIONS
         )
@@ -108,7 +107,9 @@ def test_should_load_surface_aware_and_function_only_strategies() -> None:
 
 def test_unit_strategies_use_function_only_cases() -> None:
     strategies: Final = {
-        strategy.id: strategy for strategy in load_catalog() if strategy.id in {"unit_tests_parity", "unit_tests_rust"}
+        strategy.id: strategy
+        for strategy in _sdk_strategies(load_catalog())
+        if strategy.id in {"unit_tests_parity", "unit_tests_rust"}
     }
 
     for sdk_function in SDK_FUNCTIONS:
@@ -128,7 +129,7 @@ def test_unit_strategies_use_function_only_cases() -> None:
 
 
 def test_raw_dashboard_is_always_the_default() -> None:
-    assert isinstance(make_dashboard(load_catalog()), PlainDashboard)
+    assert isinstance(make_dashboard(_sdk_strategies(load_catalog())), PlainDashboard)
 
 
 def test_every_strategy_folder_complies() -> None:
@@ -138,7 +139,7 @@ def test_every_strategy_folder_complies() -> None:
     }
 
     assert folders == {strategy.id for strategy in strategies}
-    for strategy in strategies:
+    for strategy in _sdk_strategies(strategies):
         definition: Final = strategy.definition
         assert isinstance(definition, StrategyDefinition)
         assert definition.directory == strategy.directory
@@ -207,7 +208,7 @@ def test_should_reject_an_unavailable_case_with_a_blank_reason(
 
 
 def test_should_select_functions_and_surfaces() -> None:
-    strategy: Final = next(strategy for strategy in load_catalog() if strategy.id == "e2e_parity")
+    strategy: Final = next(strategy for strategy in _sdk_strategies(load_catalog()) if strategy.id == "e2e_parity")
 
     assert tuple(case.key for case in select_cases((strategy,), {"messages"})) == (
         "e2e_parity:messages",
@@ -246,7 +247,7 @@ def test_every_unavailable_case_finishes_and_explains_itself() -> None:
     }
     unavailable: Final = tuple(
         (strategy, case)
-        for strategy in load_catalog()
+        for strategy in _sdk_strategies(load_catalog())
         for case in strategy.cases
         if case.spec.disposition is not CaseDisposition.RUNNABLE
     )
@@ -289,6 +290,7 @@ def test_run_help_lists_all_and_every_strategy(capsys: pytest.CaptureFixture[str
         "trace_parity",
         "unit_tests_parity",
         "unit_tests_rust",
+        "drift",
     ):
         assert command in captured.out
 
@@ -298,6 +300,8 @@ def test_run_help_lists_all_and_every_strategy(capsys: pytest.CaptureFixture[str
     (
         ("list",),
         ("check",),
+        ("drift",),
+        ("run", "drift", "--function", "messages"),
         ("run", "--strategy", "unit_tests_parity"),
         ("run", "unit_tests_parity", "--surface", "sdk"),
         ("run", "unit_tests_parity", "--plain"),
@@ -481,155 +485,9 @@ def test_strategy_subcommand_accepts_function_filter(capsys: pytest.CaptureFixtu
     assert "unit_tests_rust:messages: not_implemented" not in captured.out
 
 
-def _drift_git(repo_root: Path, *args: str) -> str:
-    result: Final = subprocess.run(("git", "-C", str(repo_root), *args), check=True, capture_output=True, text=True)
-    return result.stdout.strip()
-
-
-def _drift_manifest(checkpoint_sha: str | None = None) -> str:
-    return json.dumps(
-        {
-            "schema_version": 1,
-            "checkpoint_sha": checkpoint_sha,
-            "candidate_paths": ["litellm/", "litellm-rust/"],
-            "mappings": [
-                {
-                    "id": "messages",
-                    "python_paths": ["litellm/messages/"],
-                    "rust_paths": ["litellm-rust/crates/inference-messages/"],
-                }
-            ],
-        }
-    )
-
-
-def _drift_repo(tmp_path: Path) -> tuple[Path, str]:
-    repo_root: Final = tmp_path / "repo"
-    repo_root.mkdir()
-    _drift_git(repo_root, "init", "--quiet", "--initial-branch=main")
-    _drift_git(repo_root, "config", "user.name", "Harness Test")
-    _drift_git(repo_root, "config", "user.email", "harness@example.invalid")
-    source: Final = repo_root / "litellm/messages/dispatch.py"
-    source.parent.mkdir(parents=True)
-    source.write_text("VALUE = 'initial'\n", encoding="utf-8")
-    manifest: Final = repo_root / "tests/rust-python-harness/drift.json"
-    manifest.parent.mkdir(parents=True)
-    manifest.write_text(_drift_manifest(), encoding="utf-8")
-    _drift_git(repo_root, "add", ".")
-    _drift_git(repo_root, "commit", "--quiet", "-m", "initial")
-    return repo_root, _drift_git(repo_root, "rev-parse", "HEAD")
-
-
-def test_drift_command_reports_unreviewed_checkpoint_from_default_manifest(tmp_path: Path) -> None:
-    repo_root, initial_sha = _drift_repo(tmp_path)
-    result: Final = CliRunner().invoke(drift_command(repo_root))
-
-    assert result.exit_code == 0, result.output
-    report: Final = DriftReport.model_validate_json(result.output)
-    assert report.status == "unreviewed"
-    assert report.target_sha == initial_sha
-    assert report.checkpoint_sha is None
-
-
-@pytest.mark.parametrize("absolute_path", (False, True))
-def test_drift_command_resolves_custom_manifest_paths(tmp_path: Path, absolute_path: bool) -> None:
-    repo_root, initial_sha = _drift_repo(tmp_path)
-    manifest: Final = repo_root / "custom.json"
-    manifest.write_text(_drift_manifest(initial_sha), encoding="utf-8")
-    manifest_arg: Final = str(manifest if absolute_path else manifest.relative_to(repo_root))
-    result: Final = CliRunner().invoke(drift_command(repo_root), ("--manifest", manifest_arg))
-
-    assert result.exit_code == 0, result.output
-    report: Final = DriftReport.model_validate_json(result.output)
-    assert report.status == "no_changes"
-    assert report.checkpoint_sha == initial_sha
-
-
-def test_drift_command_compares_requested_revisions_without_claiming_parity(tmp_path: Path) -> None:
-    repo_root, initial_sha = _drift_repo(tmp_path)
-    source: Final = repo_root / "litellm/messages/dispatch.py"
-    source.write_text("VALUE = 'second'\n", encoding="utf-8")
-    _drift_git(repo_root, "add", ".")
-    _drift_git(repo_root, "commit", "--quiet", "-m", "second")
-    second_sha: Final = _drift_git(repo_root, "rev-parse", "HEAD")
-    source.write_text("VALUE = 'third'\n", encoding="utf-8")
-    _drift_git(repo_root, "add", ".")
-    _drift_git(repo_root, "commit", "--quiet", "-m", "third")
-    result: Final = CliRunner().invoke(drift_command(repo_root), ("--since", initial_sha, "--target", second_sha))
-
-    assert result.exit_code == 0, result.output
-    report: Final = DriftReport.model_validate_json(result.output)
-    assert report.status == "unreviewed"
-    assert report.checkpoint_sha is None
-    assert report.comparison_sha == initial_sha
-    assert report.target_sha == second_sha
-    assert tuple(change.path for change in report.changes) == ("litellm/messages/dispatch.py",)
-    assert "+VALUE = 'second'" in report.changes[0].patch
-    assert "third" not in report.changes[0].patch
-
-
-def test_drift_command_writes_report_to_file(tmp_path: Path) -> None:
-    repo_root, initial_sha = _drift_repo(tmp_path)
-    output: Final = tmp_path / "report.json"
-    result: Final = CliRunner().invoke(drift_command(repo_root), ("--output", str(output)))
-
-    assert result.exit_code == 0, result.output
-    assert result.output == ""
-    report: Final = DriftReport.model_validate_json(output.read_text(encoding="utf-8"))
-    assert report.status == "unreviewed"
-    assert report.target_sha == initial_sha
-
-
-def test_drift_command_surfaces_inventory_errors(tmp_path: Path) -> None:
-    repo_root, _ = _drift_repo(tmp_path)
-    result: Final = CliRunner().invoke(drift_command(repo_root), ("--manifest", "missing.json"))
-
-    assert result.exit_code != 0
-    assert "Error" in result.output
-    assert "missing.json" in result.output
-
-
-def test_drift_command_reports_output_write_errors(tmp_path: Path) -> None:
-    repo_root, _ = _drift_repo(tmp_path)
-    output: Final = tmp_path / "missing/report.json"
-    result: Final = CliRunner().invoke(drift_command(repo_root), ("--output", str(output)))
-
-    assert result.exit_code != 0
-    assert "Cannot write drift report" in result.output
-    assert str(output) in result.output
-
-
-def test_top_level_help_lists_drift_and_run(capsys: pytest.CaptureFixture[str]) -> None:
-    exit_code: Final = main(("--help",))
-    captured: Final = capsys.readouterr()
-
-    assert exit_code == 0
-    assert "drift" in captured.out
-    assert "run" in captured.out
-
-
 def test_drift_help_exposes_inventory_options(capsys: pytest.CaptureFixture[str]) -> None:
-    exit_code: Final = main(("drift", "--help"))
+    exit_code: Final = main(("run", "drift", "--help"))
     captured: Final = capsys.readouterr()
 
     assert exit_code == 0
     assert all(option in captured.out for option in ("--target", "--manifest", "--since", "--output"))
-
-
-@pytest.mark.parametrize("output_kind", ("absolute", "relative", "symlink", "hardlink"))
-def test_drift_command_preserves_manifest_when_output_aliases_it(tmp_path: Path, output_kind: str) -> None:
-    repo_root, _ = _drift_repo(tmp_path)
-    manifest: Final = repo_root / "tests/rust-python-harness/drift.json"
-    original: Final = manifest.read_bytes()
-    alias: Final = repo_root / "report.json"
-    if output_kind == "symlink":
-        alias.symlink_to(manifest)
-    if output_kind == "hardlink":
-        alias.hardlink_to(manifest)
-    destination: Final = alias if output_kind in {"symlink", "hardlink"} else manifest
-    output: Final = os.path.relpath(destination) if output_kind == "relative" else str(destination)
-    result: Final = CliRunner().invoke(drift_command(repo_root), ("--output", output))
-
-    assert result.exit_code != 0
-    assert "Output path must differ from the drift manifest" in result.output
-    assert manifest.read_bytes() == original

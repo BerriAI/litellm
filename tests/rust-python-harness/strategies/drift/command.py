@@ -5,7 +5,7 @@ from typing import Final
 
 import click
 
-from ..shared.drift import DriftError, inspect_drift
+from .runner import DriftError, inspect_drift
 
 
 def drift_command(repo_root: Path) -> click.Command:
@@ -39,7 +39,7 @@ def drift_command(repo_root: Path) -> click.Command:
             click.Option(("--target",), default="HEAD", show_default=True, help="Git revision to inspect"),
             click.Option(
                 ("--manifest",),
-                default="tests/rust-python-harness/drift.json",
+                default="tests/rust-python-harness/strategies/drift/drift.json",
                 type=click.Path(path_type=Path, dir_okay=False),
                 show_default=True,
                 help="Manifest path, relative to the repository root",

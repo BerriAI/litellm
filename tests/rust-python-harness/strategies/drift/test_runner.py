@@ -9,7 +9,7 @@ from typing import Final
 
 import pytest
 
-from .drift import DriftError, DriftReport, inspect_drift
+from .runner import DriftError, DriftReport, inspect_drift
 
 
 @dataclass(frozen=True, slots=True)
