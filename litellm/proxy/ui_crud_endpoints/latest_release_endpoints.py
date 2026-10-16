@@ -119,7 +119,9 @@ def earlier_releases_in_line(
 
 def summarize_release_line(latest: _GitHubRelease, earlier: tuple[_GitHubRelease, ...]) -> LatestReleaseInfo:
     """A patch release's notes only list its backports, so count the whole minor line it belongs to."""
-    counts: Final = sum((Counter(count_release_bullets(release.body)) for release in (latest, *earlier)), Counter())
+    counts: Final = sum(
+        (Counter[_Bucket](count_release_bullets(release.body)) for release in (latest, *earlier)), Counter[_Bucket]()
+    )
     return LatestReleaseInfo(
         version=latest.tag_name.removeprefix("v"),
         new_features=counts.get("new_features", 0),
