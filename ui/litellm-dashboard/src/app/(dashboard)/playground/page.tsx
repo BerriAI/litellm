@@ -11,6 +11,21 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { fetchProxySettings } from "@/utils/proxyUtils";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useUrlTab } from "@/hooks/useUrlTab";
+import { parseAsString, useQueryState } from "nuqs";
+import { Code2, Eraser, PlayCircle } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
+import { Page } from "@/components/shared/Page";
+import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
+import {
+  PrototypeOptionA,
+  PrototypeOptionB,
+} from "@/app/(dashboard)/playground/components/chat_prototype/PrototypeOptions";
+import {
+  PrototypeCleanSlate,
+  parseOpenControl,
+} from "@/app/(dashboard)/playground/components/chat_prototype/PrototypeCleanSlate";
+import { PrototypeHeaderOption } from "@/app/(dashboard)/playground/components/chat_prototype/PrototypeHeaderOptions";
 
 const PLAYGROUND_TABS = ["chat", "compare", "compliance", "system-one", "agent-builder"] as const;
 
@@ -23,6 +38,13 @@ export default function PlaygroundPage() {
   const { accessToken, userRole, userId, disabledPersonalKeyCreation, token, isViewOnly } = useAuthorized();
   const [proxySettings, setProxySettings] = useState<ProxySettings | undefined>(undefined);
   const [activeTab, setActiveTab] = useUrlTab(PLAYGROUND_TABS, "chat");
+  const [proto] = useQueryState("proto", parseAsString);
+  const [sheet] = useQueryState("sheet", parseAsString);
+  const [thread] = useQueryState("thread", parseAsString);
+  const [hdr] = useQueryState("hdr", parseAsString);
+  const [open] = useQueryState("open", parseAsString);
+  const [names] = useQueryState("names", parseAsString);
+  const threadState = thread === "empty" || thread === "streaming" ? thread : "filled";
 
   useEffect(() => {
     const initializeProxySettings = async () => {
@@ -48,6 +70,73 @@ export default function PlaygroundPage() {
           Your role does not have access to the Playground. Ask your proxy admin for access to test models.
         </p>
       </div>
+    );
+  }
+
+  if (proto === "clean") {
+    return (
+      <Page className="h-full overflow-hidden pb-0 sm:pb-0">
+        <PrototypeCleanSlate state={threadState} openControl={parseOpenControl(open)} longNames={names === "long"} />
+      </Page>
+    );
+  }
+
+  if (proto === "a" && (hdr === "1" || hdr === "2" || hdr === "3")) {
+    return (
+      <Page className="h-full overflow-hidden pb-0 sm:pb-0">
+        <PrototypeHeaderOption variant={hdr} threadState={threadState} />
+      </Page>
+    );
+  }
+
+  if (proto === "a" || proto === "b") {
+    return (
+      <Page className="h-full gap-0 overflow-hidden pb-0 sm:pb-0">
+        <PageHeader>
+          <PageHeaderTitle>
+            <PlayCircle />
+            Playground
+          </PageHeaderTitle>
+          <PageHeaderDescription>
+            Send test requests through the gateway with any model, key, guardrail or tool
+          </PageHeaderDescription>
+          <PageHeaderControls className="border-b border-border">
+            <Button variant="outline" size="sm">
+              <Code2 />
+              Get code
+            </Button>
+            <Button variant="outline" size="sm">
+              <Eraser />
+              Clear chat
+            </Button>
+            <Separator orientation="vertical" className="mx-2 h-5" />
+            <Tabs value="chat">
+              <TabsList variant="line" className="h-9 gap-4 p-0">
+                <TabsTrigger value="chat" className="flex-none px-0">
+                  Chat
+                </TabsTrigger>
+                <TabsTrigger value="compare" className="flex-none px-0">
+                  Compare
+                </TabsTrigger>
+                <TabsTrigger value="compliance" className="flex-none px-0">
+                  Compliance
+                </TabsTrigger>
+                <TabsTrigger value="system-one" className="flex-none px-0">
+                  <BetaBadge>Decisions</BetaBadge>
+                </TabsTrigger>
+                <TabsTrigger value="agent-builder" className="flex-none px-0">
+                  Agent builder
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
+          </PageHeaderControls>
+        </PageHeader>
+        {proto === "a" ? (
+          <PrototypeOptionA threadState={threadState} />
+        ) : (
+          <PrototypeOptionB sheetOpen={sheet === "1"} threadState={threadState} />
+        )}
+      </Page>
     );
   }
 

@@ -29,7 +29,7 @@ export function PageTabsList({ className, ...props }: ComponentProps<typeof Tabs
 export function PageTabsTrigger({ className, ...props }: ComponentProps<typeof TabsTrigger>) {
   return (
     <TabsTrigger
-      className={cn("flex-none px-0 font-normal group-data-horizontal/tabs:after:bottom-0", className)}
+      className={cn("h-full flex-none px-0 font-normal group-data-horizontal/tabs:after:-bottom-0.5", className)}
       {...props}
     />
   );
