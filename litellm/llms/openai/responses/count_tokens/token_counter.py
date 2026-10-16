@@ -17,8 +17,8 @@ from litellm.llms.openai.responses.count_tokens.transformation import (
 )
 from litellm.llms.openai.workload_identity import (
     openai_static_api_key,
+    openai_workload_identity_requested,
     resolve_openai_bearer_token_async,
-    resolve_openai_workload_identity_config,
 )
 from litellm.types.utils import LlmProviders, TokenCountResponse
 
@@ -33,7 +33,7 @@ async def _token_counting_api_key(litellm_params: Mapping[str, object], api_base
     )
     if static_api_key:
         return static_api_key
-    if resolve_openai_workload_identity_config(api_key=None, api_base=api_base, litellm_params=litellm_params) is None:
+    if not openai_workload_identity_requested(api_base=api_base, litellm_params=litellm_params):
         return None
     return await resolve_openai_bearer_token_async(
         static_api_key=openai_static_api_key(None), api_base=api_base, litellm_params=litellm_params

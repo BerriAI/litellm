@@ -68,10 +68,24 @@ def resolve_openai_workload_identity_config(
     )
     if static_api_key is not None:
         return None
-    effective_api_base: Final = (
-        api_base or litellm.api_base or get_secret_str("OPENAI_BASE_URL") or get_secret_str("OPENAI_API_BASE")
-    )
-    if not _targets_openai_api(effective_api_base):
+    return _configured_openai_workload_identity(api_base=api_base, litellm_params=litellm_params)
+
+
+def openai_workload_identity_requested(api_base: str | None, litellm_params: Mapping[str, object] | None) -> bool:
+    if _carries_deployment_identity(litellm_params):
+        return _targets_openai_api(_effective_openai_api_base(api_base))
+    return _configured_openai_workload_identity(api_base=api_base, litellm_params=litellm_params) is not None
+
+
+def _effective_openai_api_base(api_base: str | None) -> str | None:
+    return api_base or litellm.api_base or get_secret_str("OPENAI_BASE_URL") or get_secret_str("OPENAI_API_BASE")
+
+
+def _configured_openai_workload_identity(
+    api_base: str | None,
+    litellm_params: Mapping[str, object] | None,
+) -> OpenAIWorkloadIdentityConfig | None:
+    if not _targets_openai_api(_effective_openai_api_base(api_base)):
         return None
     identity_provider_id, service_account_id, token_file = (
         _config_value(litellm_params, param_key, env_name) for param_key, env_name in _IDENTITY_PARAM_ENV_NAMES

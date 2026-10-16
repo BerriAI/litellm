@@ -19,7 +19,9 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.llms.openai.common_utils import OpenAIError
 from litellm.llms.openai.workload_identity import (
+    OpenAIWorkloadIdentityConfig,
     resolve_openai_bearer_token_async,
     resolve_openai_workload_identity_config,
 )
@@ -41,6 +43,17 @@ if TYPE_CHECKING:
 
 def _config_secret(value: object) -> object:
     return get_secret_str(value) if isinstance(value, str) and value.startswith("os.environ/") else value
+
+
+def _guardrail_workload_identity(
+    api_base: str, workload_identity_params: Mapping[str, object]
+) -> OpenAIWorkloadIdentityConfig | None:
+    try:
+        return resolve_openai_workload_identity_config(
+            api_key=None, api_base=api_base, litellm_params=workload_identity_params
+        )
+    except OpenAIError as incomplete_identity:
+        raise ValueError(f"OpenAI Moderation: {incomplete_identity.message}") from incomplete_identity
 
 
 class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
@@ -94,13 +107,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
             {key: _config_secret(value) for key, value in (workload_identity_params or {}).items()}
         )
 
-        if (
-            not self.api_key
-            and resolve_openai_workload_identity_config(
-                api_key=None, api_base=self.api_base, litellm_params=self.workload_identity_params
-            )
-            is None
-        ):
+        if not self.api_key and _guardrail_workload_identity(self.api_base, self.workload_identity_params) is None:
             raise ValueError(
                 "OpenAI Moderation: api_key is required. Set OPENAI_API_KEY environment variable or pass it in configuration."
             )

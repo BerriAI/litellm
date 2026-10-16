@@ -26,6 +26,8 @@ from litellm.proxy.guardrails.guardrail_hooks.openai import (
 from litellm.proxy.guardrails.guardrail_hooks.openai.moderations import (
     OpenAIModerationGuardrail,
 )
+from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER, InMemoryGuardrailHandler
+from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 from litellm.types.guardrails import Guardrail, LitellmParams, SupportedGuardrailIntegrations
 from litellm.types.llms.openai import OpenAIModerationResponse, OpenAIModerationResult
 
@@ -1192,3 +1194,58 @@ async def test_openai_moderation_federates_with_the_identity_in_its_own_guardrai
     assert exchange_body["identity_provider_id"] == "idp_guardrail_config"
     assert exchange_body["service_account_id"] == "user-guardrail-config"
     assert endpoint.authorization == "Bearer guardrail-config-bearer"
+
+
+@pytest.fixture
+def no_ambient_openai_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in (
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_API_BASE",
+        "OPENAI_IDENTITY_PROVIDER_ID",
+        "OPENAI_SERVICE_ACCOUNT_ID",
+        "OPENAI_IDENTITY_TOKEN_FILE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    for attribute in ("api_key", "openai_key", "api_base"):
+        monkeypatch.setattr(litellm, attribute, None)
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+
+PARTIAL_IDENTITY_MODERATION: Final = {
+    "guardrail": SupportedGuardrailIntegrations.OPENAI_MODERATION.value,
+    "mode": "pre_call",
+    "openai_identity_provider_id": "idp_without_the_rest",
+}
+
+
+@pytest.mark.usefixtures("no_ambient_openai_credentials")
+def test_openai_moderation_with_a_partial_identity_is_a_configuration_error_naming_the_gap() -> None:
+    with pytest.raises(ValueError, match="openai_service_account_id, openai_identity_token_file"):
+        InMemoryGuardrailHandler().initialize_guardrail(
+            guardrail={"guardrail_name": "partial-identity-mod", "litellm_params": PARTIAL_IDENTITY_MODERATION},
+            source="db",
+        )
+
+
+@pytest.mark.usefixtures("no_ambient_openai_credentials")
+def test_proxy_boot_skips_an_openai_moderation_with_a_partial_identity() -> None:
+    IN_MEMORY_GUARDRAIL_HANDLER.IN_MEMORY_GUARDRAILS.clear()
+    IN_MEMORY_GUARDRAIL_HANDLER.guardrail_id_to_custom_guardrail.clear()
+
+    init_guardrails_v2(
+        all_guardrails=[
+            {"guardrail_name": "partial-identity-mod", "litellm_params": PARTIAL_IDENTITY_MODERATION},
+            {
+                "guardrail_name": "keyed-mod",
+                "litellm_params": {
+                    "guardrail": SupportedGuardrailIntegrations.OPENAI_MODERATION.value,
+                    "mode": "pre_call",
+                    "api_key": "sk-moderation",
+                },
+            },
+        ]
+    )
+
+    booted: Final = IN_MEMORY_GUARDRAIL_HANDLER.IN_MEMORY_GUARDRAILS.values()
+    assert {guardrail["guardrail_name"] for guardrail in booted} == {"keyed-mod"}

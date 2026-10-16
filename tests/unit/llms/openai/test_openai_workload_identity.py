@@ -17,6 +17,7 @@ from openai import APIStatusError, AsyncOpenAI, OpenAI
 
 import litellm
 from litellm.containers import alist_container_files, aretrieve_container, list_container_files
+from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.llms.litellm_proxy.responses.transformation import LiteLLMProxyResponsesAPIConfig
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.openai.common_utils import BaseOpenAILLM, OpenAIError
@@ -39,6 +40,7 @@ from litellm.llms.openai.workload_identity import (
     resolve_openai_workload_identity_config,
 )
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 from litellm.types.workload_identity import OPENAI_WIF_KWARGS_KEYS
 
 TOKEN_EXCHANGE_URL: Final = "https://auth.openai.com/oauth/token"
@@ -1704,6 +1706,27 @@ class TestDeploymentKeyBesideIdentity:
         assert exchange.call_count == 0
 
 
+class _VaultHoldingOpenAIKey(CustomSecretManager):
+    def __init__(self) -> None:
+        super().__init__(secret_manager_name="openai_key_vault")
+
+    async def async_read_secret(
+        self,
+        secret_name: str,
+        optional_params: dict[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> str | None:
+        return self.sync_read_secret(secret_name, optional_params, timeout)
+
+    def sync_read_secret(
+        self,
+        secret_name: str,
+        optional_params: dict[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> str | None:
+        return "sk-from-vault" if secret_name == "OPENAI_API_KEY" else None
+
+
 class TestCountTokensFromDeployment:
     @staticmethod
     async def count(litellm_params: dict[str, str]) -> int | None:
@@ -1762,6 +1785,26 @@ class TestCountTokensFromDeployment:
         await self.count({"api_key": "sk-count", **deployment_wif})
 
         assert bearer_of(route) == "Bearer sk-count"
+        assert exchange.call_count == 0
+
+    @respx.mock
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "identity_keys",
+        [tuple(OPENAI_WIF_KWARGS_KEYS), ("openai_identity_provider_id",)],
+        ids=["complete_trio", "partial_trio"],
+    )
+    async def test_secret_manager_key_beats_deployment_identity_without_an_exchange(
+        self, deployment_wif: dict[str, str], monkeypatch: pytest.MonkeyPatch, identity_keys: tuple[str, ...]
+    ) -> None:
+        monkeypatch.setattr(litellm, "secret_manager_client", _VaultHoldingOpenAIKey())
+        monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.CUSTOM)
+        monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode="read_only"))
+        exchange: Final = mock_token_exchange()
+        route: Final = respx.post(INPUT_TOKENS_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 7}))
+
+        assert await self.count({key: deployment_wif[key] for key in identity_keys}) == 7
+        assert bearer_of(route) == "Bearer sk-from-vault"
         assert exchange.call_count == 0
 
     @pytest.mark.asyncio
