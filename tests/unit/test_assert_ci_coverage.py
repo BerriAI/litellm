@@ -73,9 +73,10 @@ def test_integration_groups_require_exclusive_scheduled_circleci_owner(tmp_path:
     workflow.write_text(yaml.safe_dump({"jobs": {"tests": {"steps": [{"run": "pytest tests/integration"}]}}}))
     _, findings = coverage._integration_ownership(tmp_path)
     assert [(finding.subject, finding.detail) for finding in findings] == [
-        (test_path, "integration contract is also selected by GitHub Actions")
+        (test_path, "integration file outside GITHUB_FILES is selected by GitHub Actions")
     ]
-    github_path: Final = "tests/integration/management/test_github_contract.py"
+    github_path: Final = "tests/integration/database/image/test_github_contract.py"
+    (tmp_path / github_path).parent.mkdir(parents=True)
     (tmp_path / github_path).write_text("def test_contract(): pass\n")
     runner: Final = tmp_path / "tests/integration/run.py"
     runner.write_text(runner.read_text() + f"GITHUB_FILES: Final = frozenset({{{github_path!r}}})\n")
@@ -105,25 +106,19 @@ def test_integration_groups_require_exclusive_scheduled_circleci_owner(tmp_path:
     assert circle_invocation == ()
 
 
-@pytest.mark.parametrize(("workflow_name", "exit_code"), [("image-scan.yml", 0), ("test-unit.yml", 1)])
-def test_census_fails_when_a_github_owned_contract_runs_from_a_shared_workflow(
-    tmp_path: Path, workflow_name: str, exit_code: int
-) -> None:
-    script: Final = tmp_path / ".github/scripts/assert_ci_coverage.py"
-    script.parent.mkdir(parents=True)
-    shutil.copy(_MODULE_PATH, script)
-    github_path: Final = "tests/integration/management/test_github_contract.py"
-    contracts: Final = tmp_path / "tests/integration/management"
+def _write_integration_tree(root: Path, github_path: str) -> None:
+    contracts: Final = root / "tests/integration/management"
     contracts.mkdir(parents=True)
     (contracts / "test_contract.py").write_text("def test_contract(): pass\n")
-    (tmp_path / github_path).write_text("def test_contract(): pass\n")
-    (tmp_path / "tests/integration/run.py").write_text(
+    (root / github_path).parent.mkdir(parents=True, exist_ok=True)
+    (root / github_path).write_text("def test_contract(): pass\n")
+    (root / "tests/integration/run.py").write_text(
         "from types import MappingProxyType\nfrom typing import Final\n"
         'GROUPS: Final = MappingProxyType({"management": ("management",)})\n'
         f"GITHUB_FILES: Final = frozenset({{{github_path!r}}})\n"
     )
-    (tmp_path / ".circleci").mkdir()
-    (tmp_path / ".circleci/config.yml").write_text(
+    (root / ".circleci").mkdir()
+    (root / ".circleci/config.yml").write_text(
         yaml.safe_dump(
             {
                 "jobs": {
@@ -135,12 +130,46 @@ def test_census_fails_when_a_github_owned_contract_runs_from_a_shared_workflow(
             }
         )
     )
-    (tmp_path / ".github/workflows").mkdir()
+    (root / ".github/workflows").mkdir(parents=True)
+
+
+@pytest.mark.parametrize(
+    ("github_path", "workflow_name", "exit_code"),
+    [
+        ("tests/integration/database/image/test_github_contract.py", "image-scan.yml", 0),
+        ("tests/integration/database/image/test_github_contract.py", "test-unit.yml", 1),
+        ("tests/integration/management/test_github_contract.py", "image-scan.yml", 1),
+    ],
+)
+def test_census_fails_when_a_github_owned_contract_runs_outside_its_dedicated_workflow(
+    tmp_path: Path, github_path: str, workflow_name: str, exit_code: int
+) -> None:
+    script: Final = tmp_path / ".github/scripts/assert_ci_coverage.py"
+    script.parent.mkdir(parents=True)
+    shutil.copy(_MODULE_PATH, script)
+    _write_integration_tree(tmp_path, github_path)
     (tmp_path / ".github/workflows" / workflow_name).write_text(
         yaml.safe_dump({"jobs": {"tests": {"steps": [{"run": f"pytest {github_path}"}]}}})
     )
     result: Final = subprocess.run([sys.executable, "-I", str(script)], capture_output=True, text=True, check=False)
     assert result.returncode == exit_code, result.stdout
+    assert "Playwright" not in result.stdout
+
+
+def test_an_integration_file_outside_every_group_cannot_run_on_a_github_shard(tmp_path: Path) -> None:
+    _write_integration_tree(tmp_path, "tests/integration/database/image/test_github_contract.py")
+    ungrouped: Final = "tests/integration/ci_probe/test_ci_probe.py"
+    (tmp_path / ungrouped).parent.mkdir(parents=True)
+    (tmp_path / ungrouped).write_text("def test_probe(): pass\n")
+    _, before = coverage._integration_ownership(tmp_path)
+    (tmp_path / ".github/workflows/test-unit.yml").write_text(
+        yaml.safe_dump({"jobs": {"mcp": {"steps": [{"run": f"pytest {ungrouped}"}]}}})
+    )
+    _, after = coverage._integration_ownership(tmp_path)
+    assert [(finding.subject, finding.detail) for finding in after if finding.subject == ungrouped] == [
+        (ungrouped, "integration file outside GITHUB_FILES is selected by GitHub Actions")
+    ]
+    assert not [finding for finding in before if finding.subject == ungrouped]
 
 
 def test_circleci_postgres_suites_count_their_test_path_as_invoked() -> None:

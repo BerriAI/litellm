@@ -32,7 +32,7 @@ IGNORE_ARG_RE: Final = re.compile(r"--ignore(?:-glob)?[= ](\S+)")
 DOCKERFILE_TOKEN_RE = re.compile(r"[A-Za-z0-9_./-]*Dockerfile[A-Za-z0-9_.-]*")
 COMMENT_RE = re.compile(r"^\s*#.*$", re.MULTILINE)
 GLOB_CHARS = frozenset("*?")
-DEDICATED_INTEGRATION_WORKFLOWS: Final = frozenset({"image-scan.yml"})
+DEDICATED_INTEGRATION_WORKFLOWS: Final = MappingProxyType({"image-scan.yml": "tests/integration/database/image/"})
 
 # Trees whose jobs are sharded with no catch-all bucket, so every child that holds
 # tests has to be named by some shard or it runs nowhere. A child listed here is
@@ -561,6 +561,17 @@ def _integration_github_files(runner: pathlib.Path) -> frozenset[str]:
     return frozenset(ast.literal_eval(values))
 
 
+def _owns(workflow: str, relative_path: str) -> bool:
+    owned_root: Final = DEDICATED_INTEGRATION_WORKFLOWS.get(workflow)
+    return owned_root is not None and relative_path.startswith(owned_root)
+
+
+def _tokens_outside_owner(relative_path: str, workflow_tokens: Mapping[str, frozenset[str]]) -> frozenset[str]:
+    return frozenset[str]().union(
+        *(tokens for workflow, tokens in workflow_tokens.items() if not _owns(workflow, relative_path))
+    )
+
+
 def _integration_ownership(repo_root: pathlib.Path = REPO_ROOT) -> tuple[frozenset[str], tuple[Finding, ...]]:
     runner: Final = repo_root / "tests/integration/run.py"
     if not runner.exists():
@@ -612,21 +623,20 @@ def _integration_ownership(repo_root: pathlib.Path = REPO_ROOT) -> tuple[frozens
         )
         != 1
     )
-    gha_tokens: Final = _invoked_test_tokens(
-        scalar
-        for path in (repo_root / ".github/workflows").glob("*.y*ml")
-        for scalar in _scalars(yaml.safe_load(path.read_text()), path.name)
+    workflow_tokens: Final = MappingProxyType(
+        {
+            path.name: _invoked_test_tokens(_scalars(yaml.safe_load(path.read_text()), path.name))
+            for path in (repo_root / ".github/workflows").glob("*.y*ml")
+        }
     )
-    shared_workflow_tokens: Final = _invoked_test_tokens(
-        scalar
-        for path in (repo_root / ".github/workflows").glob("*.y*ml")
-        if path.name not in DEDICATED_INTEGRATION_WORKFLOWS
-        for scalar in _scalars(yaml.safe_load(path.read_text()), path.name)
+    gha_tokens: Final = frozenset[str]().union(*workflow_tokens.values())
+    circle_owned: Final = (
+        frozenset(str(path.relative_to(repo_root)) for path in integration_root.rglob("test_*.py")) - github_files
     )
     findings: Final = (
         tuple(
-            Finding(path, "integration contract is also selected by GitHub Actions")
-            for path in paths
+            Finding(path, "integration file outside GITHUB_FILES is selected by GitHub Actions")
+            for path in sorted(circle_owned)
             if any(_token_covers(token, path) for token in gha_tokens)
         )
         + tuple(
@@ -642,7 +652,7 @@ def _integration_ownership(repo_root: pathlib.Path = REPO_ROOT) -> tuple[frozens
         + tuple(
             Finding(path, "GitHub-owned integration contract runs outside a dedicated integration workflow")
             for path in sorted(github_files)
-            if any(_token_covers(token, path) for token in shared_workflow_tokens)
+            if any(_token_covers(token, path) for token in _tokens_outside_owner(path, workflow_tokens))
         )
     )
     browser_commands: Final = tuple(
@@ -720,12 +730,16 @@ def main() -> int:
             "Add each to a job's test path, or list it in .github/ci-coverage-allowlist.yml with a reason.",
         )
     if ownership_findings:
+        browser_remedy = (
+            " CircleCI's browser group owns the integrationCritical Playwright contracts, so no GitHub workflow may "
+            "select them and the default Playwright config must exclude them."
+            if any("browser" in finding.detail or "Playwright" in finding.detail for finding in ownership_findings)
+            else ""
+        )
         _report(
             "integration contracts with the wrong CI owner",
             ownership_findings,
-            "Follow tests/integration/AGENTS.md, which says which CI job owns each integration file. CircleCI's "
-            "browser group owns the integrationCritical Playwright contracts, so no GitHub workflow may select them "
-            "and the default Playwright config must exclude them.",
+            "Follow tests/integration/AGENTS.md, which says which CI job owns each integration file." + browser_remedy,
         )
     if dockerfile_findings:
         _report(
