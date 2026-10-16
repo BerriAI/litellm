@@ -25,13 +25,13 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (  # noqa: F401  # l
     RateLimitDescriptor,
     RateLimitDescriptorRateLimitObject,
     RateLimitResponse,
-    _fail_closed_rate_limit_enforcement_from_general_settings,
+    fail_closed_rate_limit_enforcement_from_general_settings,
     _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     claim_request_stash_for_data,
     get_or_create_request_stash,
 )
 from litellm.proxy.hooks.rate_limit_failure_metrics import (
-    _increment_rate_limiter_failure_counter,
+    increment_rate_limiter_failure_counter,
 )
 from litellm.proxy.hooks.rate_limiter_utils import (
     convert_priority_to_percent,
@@ -297,10 +297,10 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
         except Exception as e:
             verbose_proxy_logger.error("Error checking saturation for %s: %s", model, e)
-            if _fail_closed_rate_limit_enforcement_from_general_settings():
-                _increment_rate_limiter_failure_counter(limiter_type="v3_dynamic", error_type=type(e).__name__)
+            if fail_closed_rate_limit_enforcement_from_general_settings():
+                increment_rate_limiter_failure_counter(limiter_type="v3_dynamic", error_type=type(e).__name__)
                 raise
-            _increment_rate_limiter_failure_counter(limiter_type="v3_dynamic", error_type=type(e).__name__)
+            increment_rate_limiter_failure_counter(limiter_type="v3_dynamic", error_type=type(e).__name__)
             return 0.0
 
     def _create_priority_based_descriptors(
@@ -660,8 +660,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         except HTTPException:
             raise
         except Exception as e:
-            _increment_rate_limiter_failure_counter(limiter_type="v3_dynamic", error_type=type(e).__name__)
-            if _fail_closed_rate_limit_enforcement_from_general_settings():
+            increment_rate_limiter_failure_counter(limiter_type="v3_dynamic", error_type=type(e).__name__)
+            if fail_closed_rate_limit_enforcement_from_general_settings():
                 verbose_proxy_logger.error(
                     "Error in dynamic rate limiter v3, fail-closed enabled — rejecting request. err=%s", e
                 )

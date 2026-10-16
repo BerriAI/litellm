@@ -239,14 +239,14 @@ class ModelRateLimitingCheck(CustomLogger):
         except Exception as e:
             from litellm.proxy.hooks.parallel_request_limiter_v3 import (
                 RateLimitUnverifiableError,
-                _fail_closed_rate_limit_enforcement_from_general_settings,
+                fail_closed_rate_limit_enforcement_from_general_settings,
             )
             from litellm.proxy.hooks.rate_limit_failure_metrics import (
-                _increment_rate_limiter_failure_counter,
+                increment_rate_limiter_failure_counter,
             )
 
-            _increment_rate_limiter_failure_counter(limiter_type="model_rate_limit_check", error_type=type(e).__name__)
-            if _fail_closed_rate_limit_enforcement_from_general_settings():
+            increment_rate_limiter_failure_counter(limiter_type="model_rate_limit_check", error_type=type(e).__name__)
+            if fail_closed_rate_limit_enforcement_from_general_settings():
                 verbose_router_logger.warning(
                     "ModelRateLimitingCheck.pre_call_check: Redis failure, fail-closed enabled — rejecting. err=%s",
                     e,
@@ -343,14 +343,14 @@ class ModelRateLimitingCheck(CustomLogger):
         except Exception as e:
             from litellm.proxy.hooks.parallel_request_limiter_v3 import (
                 RateLimitUnverifiableError,
-                _fail_closed_rate_limit_enforcement_from_general_settings,
+                fail_closed_rate_limit_enforcement_from_general_settings,
             )
             from litellm.proxy.hooks.rate_limit_failure_metrics import (
-                _increment_rate_limiter_failure_counter,
+                increment_rate_limiter_failure_counter,
             )
 
-            _increment_rate_limiter_failure_counter(limiter_type="model_rate_limit_check", error_type=type(e).__name__)
-            if _fail_closed_rate_limit_enforcement_from_general_settings():
+            increment_rate_limiter_failure_counter(limiter_type="model_rate_limit_check", error_type=type(e).__name__)
+            if fail_closed_rate_limit_enforcement_from_general_settings():
                 verbose_router_logger.warning(
                     "ModelRateLimitingCheck.async_pre_call_check: Redis failure, fail-closed enabled — rejecting. err=%s",
                     e,

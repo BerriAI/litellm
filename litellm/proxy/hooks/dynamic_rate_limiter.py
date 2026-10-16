@@ -19,10 +19,10 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     RateLimitUnverifiableError,
-    _fail_closed_rate_limit_enforcement_from_general_settings,
+    fail_closed_rate_limit_enforcement_from_general_settings,
 )
 from litellm.proxy.hooks.rate_limit_failure_metrics import (
-    _increment_rate_limiter_failure_counter,
+    increment_rate_limiter_failure_counter,
 )
 from litellm.proxy.hooks.rate_limiter_utils import (
     convert_priority_to_percent,
@@ -217,18 +217,18 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                 v is None for v in (available_tpm, available_rpm, model_tpm, model_rpm, active_projects)
             )
             if all_none:
-                if _fail_closed_rate_limit_enforcement_from_general_settings():
+                if fail_closed_rate_limit_enforcement_from_general_settings():
                     verbose_proxy_logger.warning(
                         "dynamic_rate_limiter v1: check_available_usage returned all None "
                         "(Redis unreachable?), fail-closed enabled — rejecting request."
                     )
-                    _increment_rate_limiter_failure_counter(limiter_type="v1_dynamic", error_type="connection")
+                    increment_rate_limiter_failure_counter(limiter_type="v1_dynamic", error_type="connection")
                     raise RateLimitUnverifiableError()
                 verbose_proxy_logger.warning(
                     "dynamic_rate_limiter v1: check_available_usage returned all None "
                     "(Redis unreachable?), fail-open — allowing request."
                 )
-                _increment_rate_limiter_failure_counter(limiter_type="v1_dynamic", error_type="connection")
+                increment_rate_limiter_failure_counter(limiter_type="v1_dynamic", error_type="connection")
                 return None
 
             ### CHECK TPM ###

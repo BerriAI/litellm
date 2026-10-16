@@ -456,10 +456,10 @@ def io_token_pre_call_check(
     except Exception as e:
         from litellm.proxy.hooks.parallel_request_limiter_v3 import (
             RateLimitUnverifiableError,
-            _fail_closed_rate_limit_enforcement_from_general_settings,
+            fail_closed_rate_limit_enforcement_from_general_settings,
         )
 
-        if _fail_closed_rate_limit_enforcement_from_general_settings():
+        if fail_closed_rate_limit_enforcement_from_general_settings():
             verbose_router_logger.warning(
                 "io_token_pre_call_check: Redis failure, fail-closed enabled — rejecting. err=%s", e
             )
@@ -539,10 +539,10 @@ async def async_io_token_pre_call_check(
     except Exception as e:
         from litellm.proxy.hooks.parallel_request_limiter_v3 import (
             RateLimitUnverifiableError,
-            _fail_closed_rate_limit_enforcement_from_general_settings,
+            fail_closed_rate_limit_enforcement_from_general_settings,
         )
 
-        if _fail_closed_rate_limit_enforcement_from_general_settings():
+        if fail_closed_rate_limit_enforcement_from_general_settings():
             verbose_router_logger.warning(
                 "async_io_token_pre_call_check: Redis failure, fail-closed enabled — rejecting. err=%s", e
             )
