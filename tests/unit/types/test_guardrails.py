@@ -202,3 +202,20 @@ def test_litellm_params_rejects_invalid_max_input_chars(value: object) -> None:
 def test_litellm_params_accepts_max_input_chars() -> None:
     params = LitellmParams(guardrail="llm_as_a_judge", mode="pre_call", max_input_chars=500)
     assert params.max_input_chars == 500
+
+
+@pytest.mark.parametrize("value", [True, 5])
+def test_non_judge_max_input_chars_keeps_base_coercion(value: object) -> None:
+    params = LitellmParams(guardrail="decision_model", mode="pre_call", max_input_chars=value)
+    assert params.max_input_chars == int(value)
+
+
+def test_non_judge_max_input_chars_zero_still_rejected() -> None:
+    with pytest.raises(ValidationError):
+        LitellmParams(guardrail="decision_model", mode="pre_call", max_input_chars=0)
+
+
+@pytest.mark.parametrize("value", [1.5, "0.5", True, -2])
+def test_non_judge_sample_rate_passes_through_unvalidated(value: object) -> None:
+    params = LitellmParams(guardrail="decision_model", mode="pre_call", sample_rate=value)
+    assert params.sample_rate == value

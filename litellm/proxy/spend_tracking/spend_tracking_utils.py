@@ -284,6 +284,7 @@ def _get_spend_logs_metadata(
         vector_store_request_metadata
     )
     clean_metadata["guardrail_information"] = _sanitize_guardrail_information_for_spend_logs(guardrail_information)
+    clean_metadata["eval_information"] = _sanitize_eval_information_for_spend_logs(clean_metadata["eval_information"])
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
     clean_metadata["cold_storage_object_key"] = cold_storage_object_key
@@ -1450,6 +1451,48 @@ def _redact_prompt_fields_in_guardrail_entry(
     if preserved_stats is None:
         return redacted
     return {**redacted, "guardrail_response": preserved_stats}
+
+
+_EVAL_VERDICT_KEEP_FIELDS: Final = frozenset(("criterion_name", "score", "passed", "weight"))
+
+
+def _redact_eval_verdict(verdict: object) -> object:
+    if not isinstance(verdict, dict):
+        return verdict
+    fields: Final = cast(dict[str, object], verdict)  # cast-ok: verdict entries are heterogeneous dicts
+    return {
+        key: (value if key in _EVAL_VERDICT_KEEP_FIELDS or not isinstance(value, str) else REDACTED_BY_LITELM_STRING)
+        for key, value in fields.items()
+    }
+
+
+def _redact_eval_entry(entry: object) -> object:
+    if not isinstance(entry, dict):
+        return entry
+    entry_fields: Final = cast(dict[str, object], entry)  # cast-ok: eval entries are heterogeneous dicts
+    verdicts: Final = entry_fields.get("verdicts")
+    if not isinstance(verdicts, list):
+        return entry_fields
+    verdict_list: Final = cast(list[object], verdicts)  # cast-ok: narrowed to list by isinstance
+    return {**entry_fields, "verdicts": [_redact_eval_verdict(verdict) for verdict in verdict_list]}
+
+
+def _sanitize_eval_information_for_spend_logs(eval_information: object) -> object:
+    """
+    When ``store_prompts_in_spend_logs`` is False, redact free text inside
+    ``eval_information`` before it lands in ``LiteLLM_SpendLogs.metadata``.
+
+    Verdict ``reasoning`` (and any other non-scalar verdict field a judge hook
+    adds later) can quote the request it judged, so only the score-carrying
+    fields survive; eval-level fields like ``eval_name``, ``passed``,
+    ``overall_score`` and ``threshold`` are config or numbers, not user text.
+    """
+    if eval_information is None or should_store_prompts_and_responses_in_spend_logs():
+        return eval_information
+    if isinstance(eval_information, list):
+        info_list: Final = cast(list[object], eval_information)  # cast-ok: narrowed to list by isinstance
+        return [_redact_eval_entry(entry) for entry in info_list]
+    return _redact_eval_entry(eval_information)
 
 
 def sanitize_error_information_for_spend_logs(

@@ -27038,7 +27038,7 @@ export interface components {
             max_concurrent_decision_calls?: number | null;
             /**
              * Max Input Chars
-             * @description Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model'.
+             * @description Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model' and 'llm_as_a_judge'.
              */
             max_input_chars?: number | null;
             /**
@@ -36588,7 +36588,7 @@ export interface components {
             max_concurrent_decision_calls?: number | null;
             /**
              * Max Input Chars
-             * @description Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model'.
+             * @description Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model' and 'llm_as_a_judge'.
              */
             max_input_chars?: number | null;
             /**

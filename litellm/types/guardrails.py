@@ -1189,17 +1189,6 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         description="Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model' and 'llm_as_a_judge'.",
     )
 
-    sample_rate: float | None = Field(
-        default=None,
-        ge=0,
-        le=1,
-        description=(
-            "Fraction of requests the guardrail judges, decided deterministically per litellm_call_id "
-            "so pre_call and post_call agree. Default 1 judges every request. "
-            "Implemented by guardrail='llm_as_a_judge'."
-        ),
-    )
-
     max_concurrent_decision_calls: int | None = Field(
         default=None,
         gt=0,
@@ -1400,21 +1389,27 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
         description="When to apply the guardrail (pre_call, post_call, during_call, logging_only)"
     )
 
-    @field_validator("sample_rate", mode="before", check_fields=False)
+    @model_validator(mode="before")  # pyright: ignore[reportUntypedFunctionDecorator]  # pydantic decorators are untyped
     @classmethod
-    def reject_non_numeric_sample_rate(cls, v: object) -> object:
-        if v is None or v == "":
-            return None
-        if isinstance(v, bool) or not isinstance(v, (int, float)):
-            raise ValueError(f"sample_rate must be a number between 0 and 1, got {v!r}")  # noqa: TRY004  # pydantic surfaces ValueError as 422, TypeError escapes as 500
-        return float(v)
-
-    @field_validator("max_input_chars", mode="before", check_fields=False)
-    @classmethod
-    def reject_bool_max_input_chars(cls, v: object) -> object:
-        if isinstance(v, bool):
-            raise ValueError(f"max_input_chars must be a positive integer, got {v!r}")  # noqa: TRY004  # pydantic surfaces ValueError as 422, TypeError escapes as 500
-        return v
+    def reject_invalid_llm_judge_sampling_params(cls, data: object) -> object:
+        if not isinstance(data, Mapping):
+            return data
+        fields: Final = cast(Mapping[str, object], data)  # cast-ok: pydantic hands a before-validator the raw mapping
+        if fields.get("guardrail") != SupportedGuardrailIntegrations.LLM_AS_A_JUDGE.value:
+            return fields
+        sample_rate: Final = fields.get("sample_rate")
+        if (
+            sample_rate is not None
+            and sample_rate != ""
+            and (
+                isinstance(sample_rate, bool) or not isinstance(sample_rate, (int, float)) or not 0 <= sample_rate <= 1
+            )
+        ):
+            raise ValueError(f"sample_rate must be a number between 0 and 1, got {sample_rate!r}")
+        max_input_chars: Final = fields.get("max_input_chars")
+        if isinstance(max_input_chars, bool):
+            raise ValueError(f"max_input_chars must be a positive integer, got {max_input_chars!r}")  # noqa: TRY004  # pydantic surfaces ValueError as 422, TypeError escapes as 500
+        return fields
 
     @field_validator("timeout", mode="before", check_fields=False)
     @classmethod

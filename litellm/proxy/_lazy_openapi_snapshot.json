@@ -14384,7 +14384,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model'.",
+              "description": "Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model' and 'llm_as_a_judge'.",
               "title": "Max Input Chars"
             },
             "model": {
@@ -16904,7 +16904,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model'.",
+              "description": "Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model' and 'llm_as_a_judge'.",
               "title": "Max Input Chars"
             },
             "metadata": {

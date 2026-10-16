@@ -629,3 +629,48 @@ def test_not_run_requests_excluded_from_guardrail_usage(gateway: Gateway, tmp_pa
                 seconds=120,
             )
             assert int(row["requestsEvaluated"]) == len(judged_rows) < total, row
+
+
+def test_logging_only_judge_records_eval_information(gateway: Gateway, tmp_path: Path) -> None:
+    with wire_server(_judge_scoring(95)) as judge, wire_server(_work_handler) as work:
+        config, gname = _write_config(
+            tmp_path, work.url, judge.url, {**BASE_JUDGE_PARAMS, "mode": "logging_only", "on_failure": "log"}
+        )
+        with owned_proxy(gateway, tmp_path, {}, config=config) as candidate:
+            call_id: Final = "lit8332-logscan-" + RUN_TOKEN
+            _send(candidate, call_id)
+            rows: Final = eventually(
+                lambda: _spend_rows((call_id,)), lambda values: len(values) == 1, seconds=120
+            )
+            meta: Final = _meta(rows[0])
+            entries: Final = _eval_entries(meta)
+            assert entries, f"logging_only judge left no eval_information in spend row: {meta}"
+            assert all(entry.get("overall_score") == 95 for entry in entries), entries
+            assert all(entry.get("eval_name") == gname for entry in entries), entries
+
+
+def test_eval_information_reasoning_redacted_when_store_prompts_disabled(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with wire_server(_judge_scoring(95)) as judge, wire_server(_work_handler) as work:
+        config, gname = _write_config(
+            tmp_path, work.url, judge.url, {**BASE_JUDGE_PARAMS, "mode": "pre_call", "on_failure": "log"}
+        )
+        loaded: Final = yaml.safe_load(config.read_text())
+        loaded["general_settings"]["store_prompts_in_spend_logs"] = False
+        config.write_text(yaml.safe_dump(loaded))
+        with owned_proxy(gateway, tmp_path, {}, config=config) as candidate:
+            call_id: Final = "lit8332-redact-" + RUN_TOKEN
+            _send(candidate, call_id)
+            rows: Final = eventually(
+                lambda: _spend_rows((call_id,)), lambda values: len(values) == 1, seconds=120
+            )
+            meta: Final = _meta(rows[0])
+            entries: Final = _eval_entries(meta)
+            assert entries, f"judged spend row has no eval_information: {meta}"
+            for entry in entries:
+                assert entry.get("passed") is True
+                assert entry.get("overall_score") == 95
+                for verdict in list_value(entry.get("verdicts")):
+                    assert object_value(verdict)["reasoning"] == "REDACTED_BY_LITELM"
+                    assert object_value(verdict)["score"] == 95

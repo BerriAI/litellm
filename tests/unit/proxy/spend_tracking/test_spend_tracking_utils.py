@@ -6946,3 +6946,78 @@ def test_get_spend_logs_metadata_carries_eval_information_from_metadata():
 def test_get_spend_logs_metadata_eval_information_none_when_absent():
     result = _get_spend_logs_metadata(metadata={"user_api_key": "test-key"})
     assert result["eval_information"] is None
+
+
+def test_eval_information_free_text_redacted_when_prompt_storage_off():
+    from litellm.constants import REDACTED_BY_LITELM_STRING
+    from litellm.proxy.spend_tracking.spend_tracking_utils import (
+        _sanitize_eval_information_for_spend_logs,
+    )
+
+    eval_info = {
+        "eval_name": "usage-classifier",
+        "judge_model": "judge-1",
+        "passed": False,
+        "overall_score": 20.0,
+        "threshold": 80.0,
+        "verdicts": [
+            {
+                "criterion_name": "work_related",
+                "score": 20,
+                "passed": False,
+                "weight": 100,
+                "reasoning": "the user asked about their weekend in Lisbon",
+            }
+        ],
+    }
+    with patch(
+        "litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs",
+        return_value=False,
+    ):
+        result = _sanitize_eval_information_for_spend_logs(eval_info)
+
+    assert result["passed"] is False
+    assert result["overall_score"] == 20.0
+    assert result["threshold"] == 80.0
+    verdict = result["verdicts"][0]
+    assert verdict["criterion_name"] == "work_related"
+    assert verdict["score"] == 20
+    assert verdict["passed"] is False
+    assert verdict["weight"] == 100
+    assert verdict["reasoning"] == REDACTED_BY_LITELM_STRING
+
+
+def test_eval_information_unchanged_when_prompt_storage_on():
+    from litellm.proxy.spend_tracking.spend_tracking_utils import (
+        _sanitize_eval_information_for_spend_logs,
+    )
+
+    eval_info = {
+        "eval_name": "usage-classifier",
+        "verdicts": [{"criterion_name": "w", "score": 90, "passed": True, "weight": 100, "reasoning": "work"}],
+    }
+    with patch(
+        "litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs",
+        return_value=True,
+    ):
+        assert _sanitize_eval_information_for_spend_logs(eval_info) is eval_info
+
+
+def test_eval_information_redaction_covers_each_entry_in_list():
+    from litellm.constants import REDACTED_BY_LITELM_STRING
+    from litellm.proxy.spend_tracking.spend_tracking_utils import (
+        _sanitize_eval_information_for_spend_logs,
+    )
+
+    eval_info = [
+        {"verdicts": [{"criterion_name": "w", "score": 1, "passed": False, "weight": 50, "reasoning": "a"}]},
+        {"verdicts": [{"criterion_name": "w", "score": 2, "passed": False, "weight": 50, "reasoning": "b"}]},
+    ]
+    with patch(
+        "litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs",
+        return_value=False,
+    ):
+        result = _sanitize_eval_information_for_spend_logs(eval_info)
+
+    assert len(result) == 2
+    assert all(entry["verdicts"][0]["reasoning"] == REDACTED_BY_LITELM_STRING for entry in result)

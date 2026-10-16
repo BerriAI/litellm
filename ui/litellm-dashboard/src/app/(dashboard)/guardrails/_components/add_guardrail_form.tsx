@@ -675,11 +675,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
         if (values.sample_rate !== null && values.sample_rate !== undefined && values.sample_rate !== "") {
           guardrailData.litellm_params.sample_rate = Number(values.sample_rate);
         }
-        if (
-          values.max_input_chars !== null &&
-          values.max_input_chars !== undefined &&
-          values.max_input_chars !== ""
-        ) {
+        if (values.max_input_chars !== null && values.max_input_chars !== undefined && values.max_input_chars !== "") {
           guardrailData.litellm_params.max_input_chars = Number(values.max_input_chars);
         }
       }

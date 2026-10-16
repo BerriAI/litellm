@@ -1051,8 +1051,34 @@ class CustomGuardrail(CustomLogger):
             await self._scan_logged_call(kwargs, response, translation, output_translation, scratch_metadata)
         except Exception as e:
             verbose_logger.warning("Guardrail %s: logging_only scan raised: %s", self.guardrail_name, e)
-        recorded: Final = scratch_metadata.get("standard_logging_guardrail_information")
+        eval_information: Final = scratch_metadata.get("eval_information")
         standard_logging_object: Final = kwargs.get("standard_logging_object")
+        if eval_information is not None:
+            # scratch_metadata started from litellm_params["metadata"], so its
+            # eval_information already carries verdicts recorded by earlier judges
+            _setdefault_eval_information(
+                cast(dict[str, object], litellm_params),  # cast-ok: kwargs litellm_params is a heterogeneous dict
+                eval_information,
+            )
+            kwargs_view: Final = cast(  # cast-ok: the CustomLogger kwargs dict is heterogeneous
+                Mapping[str, object], kwargs
+            )
+            mcd: Final = cast(  # cast-ok: kwargs carries model_call_details as a heterogeneous dict
+                dict[str, object] | None, kwargs_view.get("model_call_details")
+            )
+            if isinstance(mcd, dict):
+                mcd_litellm_params: Final = mcd.get("litellm_params")
+                if isinstance(mcd_litellm_params, dict):
+                    _setdefault_eval_information(
+                        cast(dict[str, object], mcd_litellm_params),  # cast-ok: narrowed to dict by isinstance
+                        eval_information,
+                    )
+            if isinstance(standard_logging_object, dict):
+                _setdefault_eval_information(
+                    cast(dict[str, object], standard_logging_object),  # cast-ok: narrowed to dict by isinstance
+                    eval_information,
+                )
+        recorded: Final = scratch_metadata.get("standard_logging_guardrail_information")
         if not recorded or not isinstance(standard_logging_object, dict):
             return kwargs, result
         entries: Final = recorded if isinstance(recorded, list) else [recorded]

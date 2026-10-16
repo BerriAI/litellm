@@ -3786,3 +3786,35 @@ def test_default_on_guardrail() -> None:
         )
         is True
     )
+
+
+class _EvalInfoObserver(_ApplyOnlyObserver):
+    """Writes eval_information into the request metadata like llm_as_a_judge's apply path."""
+
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
+
+        bucket = get_or_create_metadata_bucket(request_data)[1]
+        verdict = {"eval_name": "eval-observer", "passed": True, "overall_score": 90.0}
+        existing = bucket.get("eval_information")
+        bucket["eval_information"] = (
+            [*existing, verdict] if isinstance(existing, list) else [existing, verdict] if existing is not None else verdict
+        )
+        return await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
+
+
+@pytest.mark.asyncio
+async def test_logging_only_eval_information_reaches_logging_metadata():
+    guardrail = _EvalInfoObserver()
+    kwargs, response = _logged_call([{"role": "user", "content": "hello there"}])
+    kwargs["litellm_params"]["metadata"]["eval_information"] = {"eval_name": "earlier", "passed": False}
+
+    out_kwargs, _ = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
+
+    slo_eval = out_kwargs["standard_logging_object"]["metadata"]["eval_information"]
+    assert slo_eval[0] == {"eval_name": "earlier", "passed": False}
+    assert any(
+        entry == {"eval_name": "eval-observer", "passed": True, "overall_score": 90.0}
+        for entry in slo_eval
+    )
+    assert out_kwargs["litellm_params"]["metadata"]["eval_information"] == slo_eval
