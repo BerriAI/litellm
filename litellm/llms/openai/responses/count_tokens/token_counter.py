@@ -24,6 +24,7 @@ from litellm.llms.openai.responses.count_tokens.transformation import (
     ResponsesCountRequestParts,
 )
 from litellm.llms.openai.workload_identity import (
+    OpenAIWorkloadIdentityConfig,
     get_workload_identity_bearer_token,
     resolve_openai_workload_identity_config,
 )
@@ -33,16 +34,13 @@ from litellm.types.utils import LlmProviders, TokenCountMessagesFormat, TokenCou
 openai_count_tokens_handler: Final = OpenAICountTokensHandler()
 
 
-async def _workload_identity_bearer_token(litellm_params: Mapping[str, object]) -> str | None:
+def _workload_identity_config(litellm_params: Mapping[str, object]) -> OpenAIWorkloadIdentityConfig | None:
     api_base: Final = litellm_params.get("api_base")
-    config: Final = resolve_openai_workload_identity_config(
+    return resolve_openai_workload_identity_config(
         api_key=None,
         api_base=api_base if isinstance(api_base, str) else None,
         litellm_params=litellm_params,
     )
-    if config is None:
-        return None
-    return await asyncify(get_workload_identity_bearer_token)(config)
 
 
 class OpenAITokenCounter(BaseTokenCounter):
@@ -126,9 +124,9 @@ class OpenAITokenCounter(BaseTokenCounter):
         credentials: Final = get_openai_credentials(
             api_base=litellm_params.get("api_base"), api_key=litellm_params.get("api_key")
         )
-        api_key: Final = credentials.api_key or await _workload_identity_bearer_token(litellm_params)
+        credential: Final = credentials.api_key or _workload_identity_config(litellm_params)
 
-        if not api_key:
+        if credential is None:
             return TokenCountResponse(
                 total_tokens=0,
                 request_model=request_model,
@@ -159,6 +157,11 @@ class OpenAITokenCounter(BaseTokenCounter):
             return None
 
         try:
+            api_key: Final = (
+                credential
+                if isinstance(credential, str)
+                else await asyncify(get_workload_identity_bearer_token)(credential)
+            )
             result: Final = await openai_count_tokens_handler.handle_count_tokens_request(
                 model=model_to_use,
                 input=input_items,
