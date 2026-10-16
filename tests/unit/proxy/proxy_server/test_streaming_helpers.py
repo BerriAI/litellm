@@ -2095,13 +2095,17 @@ def test_fast_serialize_simple_model_response_stream_keeps_served_service_tier()
 @pytest.mark.asyncio
 async def test_async_data_generator_lets_other_tasks_run_during_a_stream_that_never_waits(monkeypatch):
     """A stream whose chunks are already buffered never suspends on its own, so
-    the generator has to hand the loop back itself: another task must get to
-    run before the stream is over."""
+    the generator has to hand the loop back itself once it has held the loop
+    long enough: another task must get to run before the stream is over, and
+    not before the hold budget is used up."""
     _patch_logging_flags(monkeypatch)
     order: list[str] = []  # mutable-ok: records the interleaving of the two tasks
+    clock: list[float] = [0.0]  # mutable-ok: fake monotonic clock, advanced 20 ms per chunk
+    monkeypatch.setattr(ps.time, "monotonic", lambda: clock[0])
 
     async def chunks():
         for index in range(6):
+            clock[0] += 0.02
             order.append(f"chunk{index}")
             yield _simple_chunk(content=str(index))
 
@@ -2118,3 +2122,4 @@ async def test_async_data_generator_lets_other_tasks_run_during_a_stream_that_ne
     await other
 
     assert "other" in order[:-1], order
+    assert order.index("other") >= 3, order
