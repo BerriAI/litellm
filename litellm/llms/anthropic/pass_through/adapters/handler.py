@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Final,
@@ -61,6 +62,12 @@ _ContextManagementSpec: TypeAlias = "dict[str, object] | list[dict[str, object]]
 class _CompletionKwargs(TypedDict, total=False, extra_items=object):
     model: str
     custom_llm_provider: str
+
+
+@dataclass(frozen=True, slots=True)
+class _ChatTargetReasoning:
+    effort: str
+    summary: str | None = None
 
 
 def _messages_have_compaction_block(messages: _AnthropicMessages) -> bool:
@@ -442,15 +449,33 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                     completion_kwargs["reasoning_effort"] = updated_reasoning_effort
 
     @staticmethod
-    def _plain_effort_for_chat_target(
+    def _requested_reasoning_summary(thinking: Mapping[str, object]) -> str | None:
+        if thinking.get("type") == "disabled":
+            return None
+        summary: Final = thinking.get("summary")
+        if isinstance(summary, str):
+            return summary
+        display: Final = thinking.get("display")
+        return "auto" if display is not None and display != "omitted" else None
+
+    @staticmethod
+    def _chat_target_reasoning(
         completion_kwargs: _CompletionKwargs,
         *,
         thinking: Mapping[str, object] | None,
-    ) -> str | None:
-        reasoning_effort: Final = completion_kwargs.get("reasoning_effort")
-        if not thinking or not isinstance(reasoning_effort, dict) or "summary" not in reasoning_effort:
+    ) -> _ChatTargetReasoning | None:
+        if not thinking:
             return None
-        effort: Final = reasoning_effort.get("effort")
+        reasoning_effort: Final = completion_kwargs.get("reasoning_effort")
+        wraps_summary: Final = isinstance(reasoning_effort, dict) and "summary" in reasoning_effort
+        requested_summary: Final = LiteLLMMessagesToCompletionTransformationHandler._requested_reasoning_summary(
+            thinking
+        )
+        if not wraps_summary and requested_summary is None:
+            return None
+        effort: Final[object] = (
+            reasoning_effort.get("effort") if isinstance(reasoning_effort, dict) else reasoning_effort
+        )
         model: Final = completion_kwargs.get("model")
         if not isinstance(effort, str) or not isinstance(model, str) or not model:
             return None
@@ -468,7 +493,12 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             return None
         if resolved_provider == "litellm_proxy":
             return None
-        from litellm.responses.bridge_check import responses_api_bridge_check
+        from litellm.responses.bridge_check import chat_target_accepts_reasoning_summary, responses_api_bridge_check
+
+        if requested_summary is not None and chat_target_accepts_reasoning_summary(local_model, resolved_provider):
+            return _ChatTargetReasoning(effort=effort, summary=requested_summary)
+        if not wraps_summary or not isinstance(reasoning_effort, dict):
+            return None
 
         web_search_options: Final = completion_kwargs.get("web_search_options")
         tools: Final = completion_kwargs.get("tools")
@@ -482,7 +512,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             reasoning_effort=reasoning_effort,
             api_base=resolved_api_base,
         )
-        return None if model_info.get("mode") == "responses" else effort
+        return None if model_info.get("mode") == "responses" else _ChatTargetReasoning(effort=effort)
 
     @staticmethod
     def _normalize_reasoning_effort(
@@ -648,12 +678,14 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             thinking=thinking,
         )
 
-        plain_effort: Final = LiteLLMMessagesToCompletionTransformationHandler._plain_effort_for_chat_target(
+        chat_reasoning: Final = LiteLLMMessagesToCompletionTransformationHandler._chat_target_reasoning(
             completion_kwargs,
             thinking=thinking,
         )
-        if plain_effort is not None:
-            completion_kwargs["reasoning_effort"] = plain_effort
+        if chat_reasoning is not None:
+            completion_kwargs["reasoning_effort"] = chat_reasoning.effort
+        if chat_reasoning is not None and chat_reasoning.summary is not None:
+            completion_kwargs["reasoning_summary"] = chat_reasoning.summary
 
         return completion_kwargs, tool_name_mapping
 

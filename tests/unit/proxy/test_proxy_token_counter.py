@@ -10,7 +10,7 @@ import httpx
 import pytest
 import respx
 from dotenv import load_dotenv
-from pydantic import JsonValue
+from pydantic import BaseModel, ConfigDict, JsonValue
 
 load_dotenv()
 
@@ -22,10 +22,13 @@ from fastapi.responses import JSONResponse
 
 import litellm
 from litellm import Router
+from litellm.llms.anthropic.count_tokens import handler as anthropic_count_tokens_handler
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
+from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import VertexAIPartnerModelsTokenCounter
 from litellm.proxy._types import ProxyException, TokenCountRequest
 from litellm.proxy.anthropic_endpoints.endpoints import (
     count_tokens as anthropic_count_tokens,
@@ -1303,3 +1306,277 @@ async def test_count_tokens_without_a_count_api_counts_a_non_string_tool_result_
 
     assert isinstance(response, dict)
     assert isinstance(response["input_tokens"], int) and response["input_tokens"] > 0
+
+
+class _GeminiPart(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    text: str = ""
+
+
+class _GeminiContent(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    parts: tuple[_GeminiPart, ...] = ()
+
+
+class _GeminiCountTokensBody(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    contents: tuple[_GeminiContent, ...] = ()
+
+
+def _word_count(content: _GeminiContent) -> int:
+    return sum(len(part.text.split()) for part in content.parts)
+
+
+def _gemini_word_counting_peer(request: httpx.Request) -> httpx.Response:
+    body: Final = _GeminiCountTokensBody.model_validate_json(request.content)
+    total: Final = sum(_word_count(content) for content in body.contents)
+    return httpx.Response(200, json={"totalTokens": total}, request=request)
+
+
+def _unavailable_peer(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(503, json={"error": {"message": "unavailable"}}, request=request)
+
+
+def _gemini_router(drop_params: bool = False) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "gemini-counted",
+                "litellm_params": {
+                    "model": "gemini/gemini-3.8-flash",
+                    "api_key": "test-key",
+                    "api_base": "https://count-tokens.test",
+                    "drop_params": drop_params,
+                },
+            }
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "text", ["hello there", "The quick brown fox jumps over the lazy dog. " * 50], ids=["short", "long"]
+)
+async def test_call_endpoint_counts_a_prompt_like_the_same_text_sent_as_a_user_message(
+    text: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _gemini_router())
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_gemini_word_counting_peer))
+
+    with patch.object(gemini_count_tokens_handler, "get_async_httpx_client", return_value=client):
+        from_prompt: Final = await token_counter(
+            request=TokenCountRequest(model="gemini-counted", prompt=text), call_endpoint=True
+        )
+        from_message: Final = await token_counter(
+            request=TokenCountRequest(model="gemini-counted", messages=[{"role": "user", "content": text}]),
+            call_endpoint=True,
+        )
+
+    assert from_prompt.error is False
+    assert from_prompt.total_tokens == from_message.total_tokens == len(text.split())
+
+
+class _PartnerMessage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    content: str = ""
+
+
+class _PartnerCountRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    messages: tuple[_PartnerMessage, ...] = ()
+
+
+async def _vertex_partner_word_count(
+    model: str, request_data: JsonValue, litellm_params: JsonValue
+) -> dict[str, JsonValue]:
+    body: Final = _PartnerCountRequest.model_validate(request_data)
+    return {"input_tokens": sum(len(message.content.split()) for message in body.messages)}
+
+
+@pytest.mark.asyncio
+async def test_call_endpoint_counts_a_prompt_on_a_vertex_ai_deployment(monkeypatch: pytest.MonkeyPatch) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "vertex-counted",
+                "litellm_params": {
+                    "model": "vertex_ai/claude-sonnet-5-5",
+                    "vertex_project": "test-project",
+                    "vertex_location": "us-east5",
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    text: Final = "The quick brown fox jumps over the lazy dog."
+
+    with patch.object(
+        VertexAIPartnerModelsTokenCounter, "handle_count_tokens_request", side_effect=_vertex_partner_word_count
+    ):
+        from_prompt: Final = await token_counter(
+            request=TokenCountRequest(model="vertex-counted", prompt=text), call_endpoint=True
+        )
+
+    assert (from_prompt.error, from_prompt.total_tokens) == (False, 9)
+
+
+_FOX: Final = "The quick brown fox jumps over the lazy dog."
+
+
+_CONVERSATIONS: Final = (
+    {"messages": [{"role": "user", "content": _FOX}]},
+    {"contents": [{"role": "user", "parts": [{"text": _FOX}]}]},
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("conversation", _CONVERSATIONS, ids=["messages", "contents"])
+@pytest.mark.parametrize("call_endpoint", [True, False], ids=["provider", "local"])
+async def test_prompt_next_to_a_conversation_answers_400_without_drop_params(
+    conversation: dict[str, JsonValue], call_endpoint: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _gemini_router())
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_gemini_word_counting_peer))
+
+    with (
+        patch.object(gemini_count_tokens_handler, "get_async_httpx_client", return_value=client),
+        pytest.raises(ProxyException) as rejected,
+    ):
+        await token_counter(
+            request=TokenCountRequest(model="gemini-counted", prompt="hi", **conversation), call_endpoint=call_endpoint
+        )
+
+    assert (rejected.value.code, rejected.value.param) == ("400", "prompt")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("conversation", "call_endpoint", "global_drop_params", "deployment_drop_params"),
+    [
+        (_CONVERSATIONS[0], True, False, True),
+        (_CONVERSATIONS[1], True, False, True),
+        (_CONVERSATIONS[0], False, False, True),
+        (_CONVERSATIONS[0], False, True, False),
+    ],
+    ids=[
+        "provider_messages",
+        "provider_contents",
+        "local_messages",
+        "local_messages_global_setting",
+    ],
+)
+async def test_drop_params_counts_a_conversation_without_the_prompt(
+    conversation: dict[str, JsonValue],
+    call_endpoint: bool,
+    global_drop_params: bool,
+    deployment_drop_params: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _gemini_router(drop_params=deployment_drop_params))
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_gemini_word_counting_peer))
+
+    with patch.object(gemini_count_tokens_handler, "get_async_httpx_client", return_value=client):
+        with_prompt: Final = await token_counter(
+            request=TokenCountRequest(model="gemini-counted", prompt="hi", **conversation), call_endpoint=call_endpoint
+        )
+        conversation_only: Final = await token_counter(
+            request=TokenCountRequest(model="gemini-counted", **conversation), call_endpoint=call_endpoint
+        )
+
+    assert with_prompt.error is False
+    assert with_prompt.total_tokens == conversation_only.total_tokens > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("empty_conversation", [{"messages": []}, {"contents": []}], ids=["messages", "contents"])
+async def test_call_endpoint_prompt_next_to_an_empty_conversation_counts_the_prompt(
+    empty_conversation: dict[str, JsonValue], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _gemini_router())
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_gemini_word_counting_peer))
+
+    with patch.object(gemini_count_tokens_handler, "get_async_httpx_client", return_value=client):
+        counted: Final = await token_counter(
+            request=TokenCountRequest(model="gemini-counted", prompt=_FOX, **empty_conversation), call_endpoint=True
+        )
+
+    assert (counted.error, counted.total_tokens) == (False, 9)
+
+
+@pytest.mark.asyncio
+async def test_local_count_of_a_prompt_next_to_empty_messages_counts_the_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _gemini_router())
+
+    with_empty: Final = await token_counter(request=TokenCountRequest(model="gemini-counted", prompt=_FOX, messages=[]))
+    alone: Final = await token_counter(request=TokenCountRequest(model="gemini-counted", prompt=_FOX))
+
+    assert with_empty.error is False
+    assert with_empty.total_tokens == alone.total_tokens > 0
+
+
+_WEATHER_TOOL: Final = {
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "Get the current weather for a city",
+        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+    },
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "chat_fields",
+    [{"system": "You answer in one short sentence. " * 20}, {"tools": [_WEATHER_TOOL]}],
+    ids=["system", "tools"],
+)
+@pytest.mark.parametrize("empty_conversation", [{}, {"messages": []}], ids=["no_messages", "empty_messages"])
+async def test_local_count_of_a_prompt_with_system_or_tools_counts_them_like_the_message_form(
+    chat_fields: dict[str, JsonValue], empty_conversation: dict[str, JsonValue], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _gemini_router())
+
+    from_prompt: Final = await token_counter(
+        request=TokenCountRequest(model="gemini-counted", prompt=_FOX, **empty_conversation, **chat_fields)
+    )
+    from_message: Final = await token_counter(
+        request=TokenCountRequest(model="gemini-counted", messages=[{"role": "user", "content": _FOX}], **chat_fields)
+    )
+    prompt_alone: Final = await token_counter(request=TokenCountRequest(model="gemini-counted", prompt=_FOX))
+
+    assert from_prompt.error is False
+    assert from_prompt.total_tokens == from_message.total_tokens > prompt_alone.total_tokens
+
+
+@pytest.mark.asyncio
+async def test_call_endpoint_prompt_keeps_the_local_count_on_a_counter_that_needs_messages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "anthropic-counted",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-5-5",
+                    "api_key": "test-key",
+                    "api_base": "https://count-tokens.test",
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_unavailable_peer))
+    request: Final = TokenCountRequest(model="anthropic-counted", prompt="The quick brown fox jumps over the lazy dog.")
+
+    with patch.object(anthropic_count_tokens_handler, "get_async_httpx_client", return_value=client):
+        with_endpoint: Final = await token_counter(request=request, call_endpoint=True)
+    local: Final = await token_counter(request=request, call_endpoint=False)
+
+    assert (with_endpoint.error, with_endpoint.total_tokens, with_endpoint.tokenizer_type) == (
+        False,
+        local.total_tokens,
+        local.tokenizer_type,
+    )
