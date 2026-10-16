@@ -6842,8 +6842,7 @@ class BaseLLMHTTPHandler:
                 turn_admission=turn_admission,
                 **kwargs,
             )
-            await handler.run()
-            return None
+            return await handler.run()
 
         import websockets
         from websockets.asyncio.client import ClientConnection

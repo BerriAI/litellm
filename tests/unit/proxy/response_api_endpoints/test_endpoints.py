@@ -14,12 +14,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from httpx import Response
 
 import litellm
+from litellm.proxy._types import ProxyException
 from litellm.proxy.proxy_server import app
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+from litellm.types.router import RouterErrors
 from tests._master_key import MASTER_KEY
 
 
@@ -1647,18 +1650,23 @@ class TestResponsesWSStreamingFirstMessage:
         (ValueError("No deployments available - crossed budget: Exceeded budget for deployment"), 429, "rate_limit_exceeded"),
         (litellm.BadRequestError(message="bad input", model="m", llm_provider="openai"), 400, "invalid_request_error"),
         (RuntimeError("boom"), 500, "server_error"),
+        (ValueError(f"{RouterErrors.no_deployments_with_tag_routing.value}=['free']"), 401, "invalid_request_error"),
+        (ProxyException(message="Authentication Error", type="auth_error", param=None, code=401), 401, "invalid_request_error"),
+        (HTTPException(status_code=403, detail="key not allowed"), 403, "invalid_request_error"),
     ],
-    ids=["crossed-budget", "bad-request", "unexpected"],
+    ids=["crossed-budget", "bad-request", "unexpected", "tag-routing", "proxy-auth", "http-exception"],
 )
 def test_responses_ws_failure_frame_uses_the_http_status_for_the_same_failure(
     failure: Exception, expected_status: int, expected_type: str
 ):
     from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_failure_frame
+    from litellm.proxy.utils import handle_exception_on_proxy
 
     frame: Final = json.loads(_responses_ws_failure_frame(failure))
 
     assert frame["status"] == expected_status
     assert frame["error"]["type"] == expected_type
+    assert frame["error"]["message"] == handle_exception_on_proxy(failure).message
 
 
 class TestWSSessionCostTracking:

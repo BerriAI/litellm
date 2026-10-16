@@ -1393,10 +1393,38 @@ class TestWebSocketTurnAdmission:
         assert "crossed budget" in refusal["error"]["message"]
 
     @pytest.mark.asyncio
+    async def test_native_relay_reports_a_refused_turn_as_the_socket_failure(self):
+        from unittest.mock import AsyncMock
+
+        from litellm.exceptions import RateLimitError
+
+        first, second, _ = _turn_frames()
+        backend_ws: Final = MagicMock()
+        backend_ws.send = AsyncMock()
+        backend_ws.close = AsyncMock()
+        backend_ws.recv = AsyncMock(side_effect=Exception("stop"))
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock()
+        websocket.receive_text = AsyncMock(side_effect=[second, Exception("client gone")])
+        handler: Final = _make_streaming(
+            websocket=websocket,
+            backend_ws=backend_ws,
+            request_data={},
+            first_message=first,
+            turn_admission=_admission_refusing_the_next_turn(),
+        )
+
+        failure: Final = await handler.bidirectional_forward()
+
+        assert isinstance(failure, RateLimitError)
+        assert "crossed budget" in str(failure)
+
+    @pytest.mark.asyncio
     async def test_managed_relay_skips_a_later_turn_the_deployment_refuses(self, monkeypatch):
         from unittest.mock import AsyncMock
 
         import litellm
+        from litellm.exceptions import RateLimitError
         from litellm.litellm_core_utils.litellm_logging import Logging
         from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
 
@@ -1433,11 +1461,13 @@ class TestWebSocketTurnAdmission:
             turn_admission=turn_admission,
         )
 
-        await handler.run()
+        failure: Final = await handler.run()
 
         assert len(answered) == 2
         assert "two" not in json.dumps(answered)
         assert turn_admission.await_count == 2
+        assert isinstance(failure, RateLimitError)
+        assert "crossed budget" in str(failure)
         refusals: Final = [
             json.loads(call.args[0])
             for call in websocket.send_text.await_args_list

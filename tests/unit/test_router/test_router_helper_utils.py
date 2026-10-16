@@ -584,6 +584,25 @@ async def test_responses_websocket_turn_after_the_first_counts_toward_deployment
 
 
 @pytest.mark.asyncio
+async def test_responses_websocket_turns_do_not_reserve_deployment_otpm():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "ws-otpm",
+                "litellm_params": {"model": "openai/ws-otpm-unpriced", "api_key": "sk-fake", "otpm": 5000},
+                "model_info": {"id": "ws-otpm-dep"},
+            }
+        ],
+        optional_pre_call_checks=["enforce_model_rate_limits"],
+    )
+    admit_turn: Final = (await _kwargs_routed_to(router, "ws-otpm", "_aresponses_websocket"))["turn_admission"]
+    assert callable(admit_turn)
+
+    for _ in range(3):
+        await admit_turn()
+
+
+@pytest.mark.asyncio
 async def test_deployment_callback_on_success_tracks_tpm_for_io_deployment():
     """
     An IO-limited deployment (itpm/otpm, no tpm/rpm) must still record TPM usage

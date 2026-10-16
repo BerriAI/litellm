@@ -270,6 +270,7 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     deployment_has_io_token_limits,
     refund_stale_reservation_before_retry,
     set_io_token_rate_limit_request_kwargs,
+    without_io_token_limits,
 )
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
     ModelRateLimitingCheck,
@@ -9318,7 +9319,7 @@ class Router:
                     category=litellm.RateLimitErrorCategory.LITELLM_RATE_LIMIT,
                 ) from e
         await self.async_routing_strategy_pre_call_checks(  # pyright: ignore[reportUnknownMemberType]  # legacy signature takes an untyped deployment dict
-            deployment=dict(deployment), parent_otel_span=None
+            deployment=dict(without_io_token_limits(deployment)), parent_otel_span=None
         )
 
     @contextlib.asynccontextmanager
