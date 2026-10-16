@@ -25,6 +25,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     validate_key_mcp_servers_against_team,
     validate_key_search_tools_against_team,
     validate_key_vector_stores_against_team,
+    validate_user_mcp_grants_against_teams,
 )
 
 
@@ -1636,3 +1637,432 @@ def test_object_permission_dict_mirrors_pydantic_model():
         f"Only in Pydantic model: {sorted(pydantic_fields - typeddict_fields)}\n"
         f"Only in TypedDict:      {sorted(typeddict_fields - pydantic_fields)}"
     )
+
+
+def _make_user_mcp_team(
+    team_id: str,
+    mcp_servers: list[str] | None = None,
+    mcp_access_groups: list[str] | None = None,
+    access_group_ids: list[str] | None = None,
+    mcp_toolsets: list[str] | None = None,
+) -> MagicMock:
+    team: Final = MagicMock()
+    team.team_id = team_id
+    team.access_group_ids = access_group_ids or []
+    if any(
+        value is not None
+        for value in (mcp_servers, mcp_access_groups, mcp_toolsets)
+    ):
+        team.object_permission = MagicMock(spec=LiteLLM_ObjectPermissionTable)
+        team.object_permission.mcp_servers = mcp_servers or []
+        team.object_permission.mcp_access_groups = mcp_access_groups or []
+        team.object_permission.mcp_tool_permissions = {}
+        team.object_permission.mcp_toolsets = mcp_toolsets
+    else:
+        team.object_permission = None
+    return team
+
+
+def _patch_user_mcp_grant_env(
+    monkeypatch: pytest.MonkeyPatch,
+    *server_ids: str,
+    allow_all_server_ids: tuple[str, ...] = (),
+    access_group_server_ids: tuple[str, ...] = (),
+) -> MagicMock:
+    manager: Final = _make_mock_mcp_manager(*server_ids)
+    manager.resolve_toolset_tool_permissions = AsyncMock(return_value={})
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        manager,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_helpers.object_permission_utils.get_allow_all_keys_server_ids",
+        lambda: set(allow_all_server_ids),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.auth.auth_checks.get_mcp_server_ids_from_access_groups",
+        AsyncMock(return_value=list(access_group_server_ids)),
+    )
+    return mock_prisma
+
+
+def _patch_user_mcp_toolset_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+    server_tool_permissions: dict[str, list[str]],
+) -> AsyncMock:
+    resolver: Final = AsyncMock(return_value=server_tool_permissions)
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager.resolve_toolset_tool_permissions",
+        resolver,
+    )
+    return resolver
+
+
+@pytest.mark.asyncio
+async def test_validate_user_mcp_grants_rejects_servers_outside_every_team(monkeypatch: pytest.MonkeyPatch):
+    mock_prisma: Final = _patch_user_mcp_grant_env(monkeypatch, "server-a", "server-b")
+    team: Final = _make_user_mcp_team(team_id="team-a", mcp_servers=["server-a"])
+
+    with pytest.raises(HTTPException) as exc_info:
+        await validate_user_mcp_grants_against_teams(
+            object_permission={"mcp_servers": ["server-b"]},
+            team_objs=[team],
+            prisma_client=mock_prisma,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == {
+        "error": (
+            "User requests MCP servers not allowed by any of the user's teams: ['server-b']."
+        )
+    }
+
+
+@pytest.mark.asyncio
+async def test_validate_user_mcp_grants_allows_the_union_of_teams_and_global_servers(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    mock_prisma: Final = _patch_user_mcp_grant_env(
+        monkeypatch,
+        "server-a",
+        "server-b",
+        "global-server",
+        allow_all_server_ids=("global-server",),
+    )
+    teams: Final = (
+        _make_user_mcp_team(team_id="team-a", mcp_servers=["server-a"]),
+        _make_user_mcp_team(team_id="team-b", mcp_servers=["server-b"]),
+    )
+
+    result: Final = await validate_user_mcp_grants_against_teams(
+        object_permission={"mcp_servers": ["server-a", "server-b", "global-server"]},
+        team_objs=teams,
+        prisma_client=mock_prisma,
+    )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_validate_user_mcp_grants_allows_servers_from_team_unified_access_groups(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    mock_prisma: Final = _patch_user_mcp_grant_env(
+        monkeypatch,
+        "group-server",
+        access_group_server_ids=("group-server",),
+    )
+    team: Final = _make_user_mcp_team(team_id="team-a", access_group_ids=["group-a"])
+
+    result: Final = await validate_user_mcp_grants_against_teams(
+        object_permission={"mcp_servers": ["group-server"]},
+        team_objs=[team],
+        prisma_client=mock_prisma,
+    )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "object_permission",
+    (
+        {"mcp_servers": ["server-a"]},
+        {"mcp_access_groups": ["group-a"]},
+        {"mcp_toolsets": ["toolset-a"]},
+    ),
+    ids=("server", "access-group", "toolset"),
+)
+async def test_validate_user_mcp_grants_without_teams_rejects_non_global_grants(
+    monkeypatch: pytest.MonkeyPatch,
+    object_permission: ObjectPermissionDict,
+) -> None:
+    mock_prisma: Final = _patch_user_mcp_grant_env(monkeypatch, "server-a")
+    if object_permission.get("mcp_toolsets"):
+        _patch_user_mcp_toolset_resolution(monkeypatch, {"server-a": ["tool-a"]})
+
+    with pytest.raises(HTTPException) as exc_info:
+        await validate_user_mcp_grants_against_teams(
+            object_permission=object_permission,
+            team_objs=[],
+            prisma_client=mock_prisma,
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_validate_user_mcp_grants_without_teams_allows_global_servers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_prisma: Final = _patch_user_mcp_grant_env(
+        monkeypatch,
+        "global-server",
+        allow_all_server_ids=("global-server",),
+    )
+    result: Final = await validate_user_mcp_grants_against_teams(
+        object_permission={"mcp_servers": ["global-server"]},
+        team_objs=[],
+        prisma_client=mock_prisma,
+    )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_validate_user_mcp_grants_without_requested_grants_returns_without_error():
+    team: Final = _make_user_mcp_team(team_id="team-a", mcp_servers=["server-a"])
+
+    result: Final = await validate_user_mcp_grants_against_teams(
+        object_permission={"mcp_servers": []},
+        team_objs=[team],
+    )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_validate_user_mcp_grants_grandfathers_existing_server(monkeypatch: pytest.MonkeyPatch):
+    mock_prisma: Final = _patch_user_mcp_grant_env(monkeypatch, "legacy-server")
+    existing_permission: Final = MagicMock()
+    existing_permission.mcp_servers = ["legacy-server"]
+    existing_permission.mcp_tool_permissions = {}
+    team: Final = _make_user_mcp_team(team_id="team-a", mcp_servers=[])
+
+    result: Final = await validate_user_mcp_grants_against_teams(
+        object_permission={"mcp_servers": ["legacy-server"]},
+        team_objs=[team],
+        prisma_client=mock_prisma,
+        existing_user_object_permission=existing_permission,
+    )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_validate_user_mcp_grants_rejects_disallowed_access_group(monkeypatch: pytest.MonkeyPatch):
+    mock_prisma: Final = _patch_user_mcp_grant_env(monkeypatch)
+    team: Final = _make_user_mcp_team(team_id="team-a", mcp_access_groups=["group-a"])
+
+    with pytest.raises(HTTPException) as exc_info:
+        await validate_user_mcp_grants_against_teams(
+            object_permission={"mcp_access_groups": ["group-b"]},
+            team_objs=[team],
+            prisma_client=mock_prisma,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == {
+        "error": (
+            "User requests MCP access groups not allowed by any of the user's teams: ['group-b']."
+        )
+    }
+
+
+@pytest.mark.asyncio
+async def test_user_grant_errors_do_not_disclose_team_allowlists(monkeypatch: pytest.MonkeyPatch) -> None:
+    mock_prisma: Final = _patch_user_mcp_grant_env(
+        monkeypatch,
+        "srv_a",
+        "srv_b",
+        "srv_g",
+        allow_all_server_ids=("srv_g",),
+    )
+    team: Final = _make_user_mcp_team(
+        team_id="team-a",
+        mcp_servers=["srv_a"],
+        mcp_access_groups=["grp_a"],
+    )
+
+    with pytest.raises(HTTPException) as server_exc_info:
+        await validate_user_mcp_grants_against_teams(
+            object_permission={"mcp_servers": ["srv_b"]},
+            team_objs=[team],
+            prisma_client=mock_prisma,
+        )
+
+    assert server_exc_info.value.status_code == 403
+    assert server_exc_info.value.detail == {
+        "error": "User requests MCP servers not allowed by any of the user's teams: ['srv_b']."
+    }
+
+    with pytest.raises(HTTPException) as access_group_exc_info:
+        await validate_user_mcp_grants_against_teams(
+            object_permission={"mcp_access_groups": ["grp_b"]},
+            team_objs=[team],
+            prisma_client=mock_prisma,
+        )
+
+    assert access_group_exc_info.value.status_code == 403
+    assert access_group_exc_info.value.detail == {
+        "error": "User requests MCP access groups not allowed by any of the user's teams: ['grp_b']."
+    }
+
+
+@pytest.mark.asyncio
+async def test_validate_user_mcp_grants_grandfathers_existing_access_groups(monkeypatch: pytest.MonkeyPatch):
+    mock_prisma: Final = _patch_user_mcp_grant_env(monkeypatch)
+    existing_permission: Final = MagicMock()
+    existing_permission.mcp_access_groups = ["existing-group"]
+    team: Final = _make_user_mcp_team(team_id="team-a", mcp_access_groups=["team-group"])
+
+    result: Final = await validate_user_mcp_grants_against_teams(
+        object_permission={"mcp_access_groups": ["team-group", "existing-group"]},
+        team_objs=[team],
+        prisma_client=mock_prisma,
+        existing_user_object_permission=existing_permission,
+    )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_validate_user_mcp_grants_unions_toolsets_and_grandfathers_existing_toolsets(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    mock_prisma: Final = _patch_user_mcp_grant_env(monkeypatch)
+    team_a: Final = _make_user_mcp_team(team_id="team-a", mcp_toolsets=["toolset-a"])
+    team_b: Final = _make_user_mcp_team(team_id="team-b", mcp_toolsets=["toolset-b"])
+    existing_permission: Final = MagicMock()
+    existing_permission.mcp_access_groups = []
+    existing_permission.mcp_toolsets = ["toolset-existing"]
+    existing_permission.mcp_servers = []
+    existing_permission.mcp_tool_permissions = {}
+
+    result: Final = await validate_user_mcp_grants_against_teams(
+        object_permission={"mcp_toolsets": ["toolset-a", "toolset-b", "toolset-existing"]},
+        team_objs=(team_a, team_b),
+        prisma_client=mock_prisma,
+        existing_user_object_permission=existing_permission,
+    )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_validate_user_mcp_grants_rejects_toolsets_resolving_outside_team_servers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_prisma: Final = _patch_user_mcp_grant_env(monkeypatch, "srv_a", "srv_b")
+    resolver: Final = _patch_user_mcp_toolset_resolution(monkeypatch, {"srv_b": ["tool_b"]})
+    team: Final = _make_user_mcp_team(team_id="team-a", mcp_servers=["srv_a"])
+
+    with pytest.raises(HTTPException) as exc_info:
+        await validate_user_mcp_grants_against_teams(
+            object_permission={"mcp_toolsets": ["ts_b"]},
+            team_objs=[team],
+            prisma_client=mock_prisma,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == {
+        "error": "User requests MCP toolsets not allowed by any of the user's teams: ['ts_b']."
+    }
+    resolver.assert_awaited_once_with(toolset_ids=["ts_b"], requires_fresh_policy=True)
+
+
+@pytest.mark.asyncio
+async def test_validate_user_mcp_grants_allows_toolsets_resolving_to_team_servers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_prisma: Final = _patch_user_mcp_grant_env(monkeypatch, "srv_a")
+    resolver: Final = _patch_user_mcp_toolset_resolution(monkeypatch, {"srv_a": ["tool_a"]})
+    team: Final = _make_user_mcp_team(team_id="team-a", mcp_servers=["srv_a"])
+
+    result: Final = await validate_user_mcp_grants_against_teams(
+        object_permission={"mcp_toolsets": ["ts_a"]},
+        team_objs=[team],
+        prisma_client=mock_prisma,
+    )
+
+    assert result is None
+    resolver.assert_awaited_once_with(toolset_ids=["ts_a"], requires_fresh_policy=True)
+
+
+@pytest.mark.asyncio
+async def test_validate_user_mcp_grants_allows_toolsets_resolving_to_allow_all_servers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_prisma: Final = _patch_user_mcp_grant_env(
+        monkeypatch,
+        "srv_a",
+        "srv_g",
+        allow_all_server_ids=("srv_g",),
+    )
+    resolver: Final = _patch_user_mcp_toolset_resolution(monkeypatch, {"srv_g": ["tool_g"]})
+    team: Final = _make_user_mcp_team(team_id="team-a", mcp_servers=["srv_a"])
+
+    result: Final = await validate_user_mcp_grants_against_teams(
+        object_permission={"mcp_toolsets": ["ts_g"]},
+        team_objs=[team],
+        prisma_client=mock_prisma,
+    )
+
+    assert result is None
+    resolver.assert_awaited_once_with(toolset_ids=["ts_g"], requires_fresh_policy=True)
+
+
+@pytest.mark.asyncio
+async def test_validate_user_mcp_grants_allows_team_toolset_resolving_outside_team_servers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_prisma: Final = _patch_user_mcp_grant_env(monkeypatch, "srv_a", "srv_b")
+    resolver: Final = _patch_user_mcp_toolset_resolution(monkeypatch, {"srv_b": ["tool_b"]})
+    team: Final = _make_user_mcp_team(
+        team_id="team-a",
+        mcp_servers=["srv_a"],
+        mcp_toolsets=["ts_team"],
+    )
+
+    result: Final = await validate_user_mcp_grants_against_teams(
+        object_permission={"mcp_toolsets": ["ts_team"]},
+        team_objs=[team],
+        prisma_client=mock_prisma,
+    )
+
+    assert result is None
+    resolver.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_validate_user_mcp_grants_allows_existing_user_toolset_resolving_outside_team_servers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_prisma: Final = _patch_user_mcp_grant_env(monkeypatch, "srv_b")
+    resolver: Final = _patch_user_mcp_toolset_resolution(monkeypatch, {"srv_b": ["tool_b"]})
+    existing_permission: Final = MagicMock()
+    existing_permission.mcp_servers = []
+    existing_permission.mcp_access_groups = []
+    existing_permission.mcp_tool_permissions = {}
+    existing_permission.mcp_toolsets = ["ts_existing"]
+    team: Final = _make_user_mcp_team(team_id="team-a", mcp_servers=[])
+
+    result: Final = await validate_user_mcp_grants_against_teams(
+        object_permission={"mcp_toolsets": ["ts_existing"]},
+        team_objs=[team],
+        prisma_client=mock_prisma,
+        existing_user_object_permission=existing_permission,
+    )
+
+    assert result is None
+    resolver.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_validate_user_mcp_grants_ignores_stale_server_identifiers_without_mutating_input(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    mock_prisma: Final = _patch_user_mcp_grant_env(monkeypatch, "server-a")
+    requested: Final[ObjectPermissionDict] = {"mcp_servers": ["stale-server"]}
+    team: Final = _make_user_mcp_team(team_id="team-a", mcp_servers=["server-a"])
+
+    result: Final = await validate_user_mcp_grants_against_teams(
+        object_permission=requested,
+        team_objs=[team],
+        prisma_client=mock_prisma,
+    )
+
+    assert result is None
+    assert requested == {"mcp_servers": ["stale-server"]}

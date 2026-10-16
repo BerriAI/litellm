@@ -3,6 +3,7 @@ Common utility functions for handling object permission updates across
 organizations, teams, and keys.
 """
 
+import asyncio
 import json
 from collections.abc import Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
@@ -853,6 +854,128 @@ def _validate_requested_toolsets(
             )
         },
     )
+
+
+async def validate_user_mcp_grants_against_teams(
+    object_permission: ObjectPermissionDict | None,
+    team_objs: Sequence["LiteLLM_TeamTableCachedObj"],
+    prisma_client: PrismaClient | None = None,
+    existing_user_object_permission: "LiteLLM_ObjectPermissionTable | None" = None,
+) -> None:
+    """Validate user MCP grants against the combined grants of the user's teams."""
+    requested_servers: Final = _extract_requested_mcp_server_ids(object_permission)
+    requested_access_groups: Final = _extract_requested_mcp_access_groups(object_permission)
+    requested_toolsets: Final = _extract_requested_mcp_toolsets(object_permission)
+    if not requested_servers and not requested_access_groups and not requested_toolsets:
+        return
+
+    allow_all_keys_servers: Final = get_allow_all_keys_server_ids()
+    team_server_results: Final = await asyncio.gather(
+        *(get_team_allowed_mcp_servers(team_obj=team_obj, prisma_client=prisma_client) for team_obj in team_objs)
+    )
+    team_allowed_servers: Final = frozenset[str]().union(*team_server_results)
+    all_allowed_servers: Final = team_allowed_servers | allow_all_keys_servers
+    grandfathered_servers: Final = (
+        await _get_grandfathered_key_mcp_server_ids(
+            existing_object_permission=existing_user_object_permission,
+            prisma_client=prisma_client,
+        )
+        if requested_servers or requested_toolsets
+        else frozenset[str]()
+    )
+    allowed_mcp_servers: Final = all_allowed_servers | grandfathered_servers
+
+    if requested_servers:
+        identifier_to_server_ids: Final = await _resolve_mcp_server_identifiers_to_ids(
+            identifiers=requested_servers,
+            prisma_client=prisma_client,
+        )
+        active_requested_servers: Final = _flatten_resolved_mcp_server_ids(identifier_to_server_ids)
+        disallowed_servers: Final = active_requested_servers - allowed_mcp_servers
+        if disallowed_servers:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": (
+                        "User requests MCP servers not allowed by any of the user's teams: "
+                        f"{sorted(disallowed_servers)}."
+                    )
+                },
+            )
+
+    if requested_access_groups:
+        team_access_groups: Final = frozenset[str]().union(
+            *(
+                team_obj.object_permission.mcp_access_groups or []
+                for team_obj in team_objs
+                if team_obj.object_permission is not None
+            )
+        )
+        existing_access_groups: Final = (
+            frozenset(existing_user_object_permission.mcp_access_groups or [])
+            if existing_user_object_permission is not None
+            else frozenset[str]()
+        )
+        allowed_access_groups: Final = team_access_groups | existing_access_groups
+        disallowed_groups: Final = requested_access_groups - allowed_access_groups
+        if disallowed_groups:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": (
+                        "User requests MCP access groups not allowed by any of the user's teams: "
+                        f"{sorted(disallowed_groups)}."
+                    )
+                },
+            )
+
+    if requested_toolsets:
+        team_toolsets: Final = frozenset[str]().union(
+            *(
+                team_obj.object_permission.mcp_toolsets or []
+                for team_obj in team_objs
+                if team_obj.object_permission is not None
+            )
+        )
+        existing_toolsets: Final = (
+            frozenset(existing_user_object_permission.mcp_toolsets or [])
+            if existing_user_object_permission is not None
+            else frozenset[str]()
+        )
+        remaining_toolsets: Final = tuple(sorted(requested_toolsets - team_toolsets - existing_toolsets))
+        if remaining_toolsets:
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                global_mcp_server_manager,
+            )
+
+            resolved_toolset_permissions: Final = await asyncio.gather(
+                *(
+                    global_mcp_server_manager.resolve_toolset_tool_permissions(
+                        toolset_ids=[toolset_id],
+                        requires_fresh_policy=True,
+                    )
+                    for toolset_id in remaining_toolsets
+                )
+            )
+            disallowed_toolsets: Final = frozenset(
+                toolset_id
+                for toolset_id, tool_permissions in zip(
+                    remaining_toolsets,
+                    resolved_toolset_permissions,
+                    strict=True,
+                )
+                if not set(tool_permissions).issubset(allowed_mcp_servers)
+            )
+            if disallowed_toolsets:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "error": (
+                            "User requests MCP toolsets not allowed by any of the user's teams: "
+                            f"{sorted(disallowed_toolsets)}."
+                        )
+                    },
+                )
 
 
 def _extract_requested_vector_stores(

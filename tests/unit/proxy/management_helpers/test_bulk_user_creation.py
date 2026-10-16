@@ -1,13 +1,18 @@
 import json
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Final
 
 import httpx
 import pytest
+from pytest_mock import MockerFixture
 from prisma.errors import UniqueViolationError
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from litellm.caching.caching import DualCache
+from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
+from litellm.models.team import LiteLLM_TeamTableCachedObj
 from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles, Member, UserAPIKeyAuth
 from litellm.proxy.list_api.common import ManagementProblem
 from litellm.proxy.management_helpers.bulk_user_creation import bulk_create_users
@@ -28,6 +33,7 @@ class _UserRow(BaseModel):
     user_role: str | None = None
     teams: list[str] = []
     max_budget: float | None = None
+    object_permission_id: str | None = None
 
 
 class _UserTable:
@@ -109,6 +115,26 @@ class _MembershipTable:
         return len(data)
 
 
+@dataclass(frozen=True, slots=True)
+class _CreatedPermission:
+    object_permission_id: str
+
+
+class _ObjectPermissionTable:
+    def __init__(self) -> None:
+        self.rows: dict[str, dict[str, object]] = {}
+
+    async def create(self, data: dict[str, object]) -> _CreatedPermission:
+        object_permission_id: Final = f"permission-{len(self.rows) + 1}"
+        self.rows[object_permission_id] = data
+        return _CreatedPermission(object_permission_id=object_permission_id)
+
+
+class _MCPServerTable:
+    async def find_many(self, where: dict[str, object]) -> list[object]:
+        return []
+
+
 class _Tx:
     def __init__(self, db: "_Db") -> None:
         self.litellm_teamtable = db.litellm_teamtable
@@ -136,6 +162,8 @@ class _Db:
         self.litellm_usertable = _UserTable(fail_ids, commit_then_drop, raced_ids)
         self.litellm_teamtable = _TeamTable(teams)
         self.litellm_teammembership = _MembershipTable()
+        self.litellm_objectpermissiontable = _ObjectPermissionTable()
+        self.litellm_mcpservertable = _MCPServerTable()
 
 
 class _FakePrisma:
@@ -279,6 +307,101 @@ async def test_bad_rows_fail_alone_and_good_rows_still_land():
 
     assert set(prisma.db.litellm_usertable.rows) == {"taken", "u1", "u7"}
     assert [m.user_id for m in prisma.db.litellm_teamtable.rows["t1"].members_with_roles] == ["u1", "u7"]
+
+
+@pytest.mark.asyncio
+async def test_bulk_user_mcp_grants_are_checked_before_permission_rows_are_created(
+    mocker: MockerFixture,
+) -> None:
+    prisma: Final = _FakePrisma(teams=[_team("team_9193")])
+    team_obj: Final = LiteLLM_TeamTableCachedObj(
+        team_id="team_9193",
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="team-permission",
+            mcp_servers=["srv_a"],
+        ),
+    )
+    server_objects: Final = {
+        server_id: SimpleNamespace(server_id=server_id, alias=None, server_name=None, name=server_id)
+        for server_id in ("srv_a", "srv_b")
+    }
+    manager: Final = mocker.MagicMock()
+    manager.get_registry.return_value = server_objects
+    manager.get_allow_all_keys_server_ids.return_value = []
+    mocker.patch(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        manager,
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_team_object",
+        new=mocker.AsyncMock(return_value=team_obj),
+    )
+    mocker.patch(
+        "litellm.proxy.auth.auth_checks.get_mcp_server_ids_from_access_groups",
+        new=mocker.AsyncMock(return_value=[]),
+    )
+
+    response = await _run(
+        prisma,
+        [
+            {
+                "user_id": "u1",
+                "teams": ["team_9193"],
+                "object_permission": {"mcp_servers": ["srv_b"]},
+            },
+            {
+                "user_id": "u2",
+                "teams": ["team_9193"],
+                "object_permission": {"mcp_servers": ["srv_a"]},
+            },
+        ],
+    )
+
+    rejected: Final = response.data[0]
+    accepted: Final = response.data[1]
+    assert (rejected.user_id, rejected.success) == ("u1", False)
+    assert rejected.error is not None and "srv_b" in rejected.error
+    assert (accepted.user_id, accepted.success, accepted.error) == ("u2", True, None)
+    assert set(prisma.db.litellm_usertable.rows) == {"u2"}
+    permission_rows: Final = prisma.db.litellm_objectpermissiontable.rows
+    assert len(permission_rows) == 1
+    accepted_permission_id: Final = prisma.db.litellm_usertable.rows["u2"].object_permission_id
+    assert accepted_permission_id is not None
+    assert set(permission_rows) == {accepted_permission_id}
+    assert permission_rows[accepted_permission_id]["mcp_servers"] == ["srv_a"]
+
+
+@pytest.mark.asyncio
+async def test_bulk_user_mcp_grants_reject_outside_server_for_teamless_non_admin(
+    mocker: MockerFixture,
+) -> None:
+    prisma: Final = _FakePrisma()
+    server_objects: Final = {
+        "srv_outside": SimpleNamespace(server_id="srv_outside", alias=None, server_name=None, name="srv_outside")
+    }
+    manager: Final = mocker.MagicMock()
+    manager.get_registry.return_value = server_objects
+    manager.get_allow_all_keys_server_ids.return_value = []
+    mocker.patch(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        manager,
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_team_object",
+        new=mocker.AsyncMock(side_effect=RuntimeError("team lookup should not run")),
+    )
+
+    response: Final = await _run(
+        prisma,
+        [{"user_id": "u1", "object_permission": {"mcp_servers": ["srv_outside"]}}],
+        caller=INTERNAL,
+    )
+
+    rejected: Final = response.data[0]
+    assert (rejected.user_id, rejected.success) == ("u1", False)
+    assert rejected.error is not None and "srv_outside" in rejected.error
+    assert prisma.db.litellm_usertable.rows == {}
+    assert prisma.db.litellm_objectpermissiontable.rows == {}
 
 
 @pytest.mark.asyncio
