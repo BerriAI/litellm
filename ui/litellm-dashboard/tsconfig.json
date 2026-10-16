@@ -18,8 +18,7 @@
       }
     ],
     "paths": {
-      "@/*": ["./src/*"],
-      "cn": ["./src/lib/cva.config.ts"]
+      "@/*": ["./src/*"]
     },
     "target": "ES2017"
   },

@@ -1,50 +1,27 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { PlayCircle } from "lucide-react";
 import AgentBuilderView from "@/app/(dashboard)/playground/components/chat_ui/AgentBuilderView";
-import ChatUI from "@/app/(dashboard)/playground/components/chat_ui/ChatUI";
+import { PlaygroundChat, type ProxySettings } from "@/app/(dashboard)/playground/components/chat/PlaygroundChat";
 import CompareUI from "@/app/(dashboard)/playground/components/compareUI/CompareUI";
 import ComplianceUI from "@/app/(dashboard)/playground/components/complianceUI/ComplianceUI";
 import SystemOneUI from "@/app/(dashboard)/playground/components/systemOneUI/SystemOneUI";
 import BetaBadge from "@/components/BetaBadge";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { fetchProxySettings } from "@/utils/proxyUtils";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useUrlTab } from "@/hooks/useUrlTab";
-import { parseAsString, useQueryState } from "nuqs";
-import { Code2, Eraser, PlayCircle } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
-import { Page } from "@/components/shared/Page";
-import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
-import {
-  PrototypeOptionA,
-  PrototypeOptionB,
-} from "@/app/(dashboard)/playground/components/chat_prototype/PrototypeOptions";
-import {
-  PrototypeCleanSlate,
-  parseOpenControl,
-} from "@/app/(dashboard)/playground/components/chat_prototype/PrototypeCleanSlate";
-import { PrototypeHeaderOption } from "@/app/(dashboard)/playground/components/chat_prototype/PrototypeHeaderOptions";
+import { Page, PageTabs, PageTabsContent, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
+import { PageHeader, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
 
 const PLAYGROUND_TABS = ["chat", "compare", "compliance", "system-one", "agent-builder"] as const;
 
-interface ProxySettings {
-  PROXY_BASE_URL?: string;
-  LITELLM_UI_API_DOC_BASE_URL?: string | null;
-}
+const TAB_TRIGGER = "h-full group-data-horizontal/tabs:after:-bottom-0.5";
 
 export default function PlaygroundPage() {
   const { accessToken, userRole, userId, disabledPersonalKeyCreation, token, isViewOnly } = useAuthorized();
   const [proxySettings, setProxySettings] = useState<ProxySettings | undefined>(undefined);
   const [activeTab, setActiveTab] = useUrlTab(PLAYGROUND_TABS, "chat");
-  const [proto] = useQueryState("proto", parseAsString);
-  const [sheet] = useQueryState("sheet", parseAsString);
-  const [thread] = useQueryState("thread", parseAsString);
-  const [hdr] = useQueryState("hdr", parseAsString);
-  const [open] = useQueryState("open", parseAsString);
-  const [names] = useQueryState("names", parseAsString);
-  const threadState = thread === "empty" || thread === "streaming" ? thread : "filled";
 
   useEffect(() => {
     const initializeProxySettings = async () => {
@@ -73,121 +50,52 @@ export default function PlaygroundPage() {
     );
   }
 
-  if (proto === "clean") {
-    return (
-      <Page className="h-full overflow-hidden pb-0 sm:pb-0">
-        <PrototypeCleanSlate state={threadState} openControl={parseOpenControl(open)} longNames={names === "long"} />
-      </Page>
-    );
-  }
-
-  if (proto === "a" && (hdr === "1" || hdr === "2" || hdr === "3")) {
-    return (
-      <Page className="h-full overflow-hidden pb-0 sm:pb-0">
-        <PrototypeHeaderOption variant={hdr} threadState={threadState} />
-      </Page>
-    );
-  }
-
-  if (proto === "a" || proto === "b") {
-    return (
-      <Page className="h-full gap-0 overflow-hidden pb-0 sm:pb-0">
-        <PageHeader>
-          <PageHeaderTitle>
-            <PlayCircle />
-            Playground
-          </PageHeaderTitle>
-          <PageHeaderDescription>
-            Send test requests through the gateway with any model, key, guardrail or tool
-          </PageHeaderDescription>
-          <PageHeaderControls className="border-b border-border">
-            <Button variant="outline" size="sm">
-              <Code2 />
-              Get code
-            </Button>
-            <Button variant="outline" size="sm">
-              <Eraser />
-              Clear chat
-            </Button>
-            <Separator orientation="vertical" className="mx-2 h-5" />
-            <Tabs value="chat">
-              <TabsList variant="line" className="h-9 gap-4 p-0">
-                <TabsTrigger value="chat" className="flex-none px-0">
-                  Chat
-                </TabsTrigger>
-                <TabsTrigger value="compare" className="flex-none px-0">
-                  Compare
-                </TabsTrigger>
-                <TabsTrigger value="compliance" className="flex-none px-0">
-                  Compliance
-                </TabsTrigger>
-                <TabsTrigger value="system-one" className="flex-none px-0">
-                  <BetaBadge>Decisions</BetaBadge>
-                </TabsTrigger>
-                <TabsTrigger value="agent-builder" className="flex-none px-0">
-                  Agent builder
-                </TabsTrigger>
-              </TabsList>
-            </Tabs>
-          </PageHeaderControls>
-        </PageHeader>
-        {proto === "a" ? (
-          <PrototypeOptionA threadState={threadState} />
-        ) : (
-          <PrototypeOptionB sheetOpen={sheet === "1"} threadState={threadState} />
-        )}
-      </Page>
-    );
-  }
-
   return (
-    <div className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden">
-      <Tabs
-        value={activeTab}
-        onValueChange={setActiveTab}
-        className="flex min-h-0 min-w-0 flex-1 flex-col gap-0 overflow-hidden"
-      >
-        <TabsList variant="line" className="w-full shrink-0 justify-start overflow-x-auto pb-1">
-          <TabsTrigger value="chat" className="flex-none">
+    <Page className="h-full overflow-hidden pb-0 sm:pb-0">
+      <PageHeader>
+        <PageHeaderTitle>
+          <PlayCircle />
+          Playground
+        </PageHeaderTitle>
+        <PageHeaderDescription>
+          Send test requests through the gateway with any model, key, guardrail or tool
+        </PageHeaderDescription>
+      </PageHeader>
+      <PageTabs value={activeTab} onValueChange={setActiveTab} className="gap-0">
+        <PageTabsList>
+          <PageTabsTrigger value="chat" className={TAB_TRIGGER}>
             Chat
-          </TabsTrigger>
-          <TabsTrigger value="compare" className="flex-none">
+          </PageTabsTrigger>
+          <PageTabsTrigger value="compare" className={TAB_TRIGGER}>
             Compare
-          </TabsTrigger>
-          <TabsTrigger value="compliance" className="flex-none">
+          </PageTabsTrigger>
+          <PageTabsTrigger value="compliance" className={TAB_TRIGGER}>
             Compliance
-          </TabsTrigger>
-          <TabsTrigger value="system-one" className="flex-none">
+          </PageTabsTrigger>
+          <PageTabsTrigger value="system-one" className={TAB_TRIGGER}>
             <BetaBadge>Decisions</BetaBadge>
-          </TabsTrigger>
-          <TabsTrigger value="agent-builder" className="flex-none">
-            Agent Builder (Experimental)
-          </TabsTrigger>
-        </TabsList>
-        <TabsContent
-          value="chat"
-          className="mt-0 h-full min-h-0 min-w-0 overflow-hidden data-hidden:hidden"
-          keepMounted
-        >
-          <ChatUI
+          </PageTabsTrigger>
+          <PageTabsTrigger value="agent-builder" className={TAB_TRIGGER}>
+            Agent builder
+          </PageTabsTrigger>
+        </PageTabsList>
+        <PageTabsContent value="chat" className="overflow-hidden data-hidden:hidden" keepMounted>
+          <PlaygroundChat
             accessToken={accessToken}
-            token={token}
-            userRole={userRole}
-            userID={userId}
             disabledPersonalKeyCreation={disabledPersonalKeyCreation}
             proxySettings={proxySettings}
           />
-        </TabsContent>
-        <TabsContent value="compare" className="mt-0 h-full data-hidden:hidden" keepMounted>
+        </PageTabsContent>
+        <PageTabsContent value="compare" className="overflow-y-auto pt-4 data-hidden:hidden" keepMounted>
           <CompareUI accessToken={accessToken} disabledPersonalKeyCreation={disabledPersonalKeyCreation} />
-        </TabsContent>
-        <TabsContent value="compliance" className="mt-0 h-full data-hidden:hidden" keepMounted>
+        </PageTabsContent>
+        <PageTabsContent value="compliance" className="overflow-y-auto pt-4 data-hidden:hidden" keepMounted>
           <ComplianceUI accessToken={accessToken} disabledPersonalKeyCreation={disabledPersonalKeyCreation} />
-        </TabsContent>
-        <TabsContent value="system-one" className="mt-0 min-h-0 data-hidden:hidden" keepMounted>
+        </PageTabsContent>
+        <PageTabsContent value="system-one" className="overflow-y-auto pt-4 data-hidden:hidden" keepMounted>
           <SystemOneUI accessToken={accessToken} disabledPersonalKeyCreation={disabledPersonalKeyCreation} />
-        </TabsContent>
-        <TabsContent value="agent-builder" className="mt-0 h-full data-hidden:hidden" keepMounted>
+        </PageTabsContent>
+        <PageTabsContent value="agent-builder" className="overflow-y-auto pt-4 data-hidden:hidden" keepMounted>
           <AgentBuilderView
             accessToken={accessToken}
             token={token}
@@ -197,8 +105,8 @@ export default function PlaygroundPage() {
             proxySettings={proxySettings}
             customProxyBaseUrl={proxySettings?.LITELLM_UI_API_DOC_BASE_URL ?? proxySettings?.PROXY_BASE_URL}
           />
-        </TabsContent>
-      </Tabs>
-    </div>
+        </PageTabsContent>
+      </PageTabs>
+    </Page>
   );
 }

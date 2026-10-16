@@ -494,7 +494,6 @@
   }
 }
 
-
 @property --scroll-fade-b {
   syntax: "<length-percentage>";
   inherits: false;
@@ -513,16 +512,8 @@
 }
 
 @utility scroll-fade-b {
-  --_scroll-fade-size-b: var(
-    --scroll-fade-b-size,
-    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
-  );
-  --scroll-fade-mask: linear-gradient(
-    to bottom,
-    #000 0,
-    #000 calc(100% - var(--scroll-fade-b, 0px)),
-    transparent 100%
-  );
+  --_scroll-fade-size-b: var(--scroll-fade-b-size, var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10))));
+  --scroll-fade-mask: linear-gradient(to bottom, #000 0, #000 calc(100% - var(--scroll-fade-b, 0px)), transparent 100%);
   -webkit-mask-image: var(--scroll-fade-mask);
   mask-image: var(--scroll-fade-mask);
   -webkit-mask-composite: source-in;
@@ -533,10 +524,7 @@
   @supports (animation-timeline: scroll()) {
     animation: scroll-fade-reveal-b 1ms ease-in-out;
     animation-timeline: scroll(self y);
-    animation-range: calc(
-        100% - var(--scroll-fade-reveal, calc(var(--spacing) * 24))
-      )
-      100%;
+    animation-range: calc(100% - var(--scroll-fade-reveal, calc(var(--spacing) * 24))) 100%;
     animation-fill-mode: both;
   }
 
@@ -574,21 +562,16 @@
 @utility shimmer {
   --_spread: var(--shimmer-spread, calc(3ch + 40px));
   --_base: currentColor;
-  --_highlight: var(
-    --shimmer-color,
-    oklch(from currentColor l c h / calc(alpha* 0.2))
-  );
+  --_highlight: var(--shimmer-color, oklch(from currentColor l c h / calc(alpha * 0.2)));
 
   background-image: var(
     --shimmer-image,
     linear-gradient(
       calc(90deg + var(--shimmer-angle)),
       var(--_base) calc(50% - var(--_spread)),
-      color-mix(in oklch, var(--_highlight), var(--_base) 50%)
-        calc(50% - var(--_spread) * 0.5),
+      color-mix(in oklch, var(--_highlight), var(--_base) 50%) calc(50% - var(--_spread) * 0.5),
       var(--_highlight) 50%,
-      color-mix(in oklch, var(--_highlight), var(--_base) 50%)
-        calc(50% + var(--_spread) * 0.5),
+      color-mix(in oklch, var(--_highlight), var(--_base) 50%) calc(50% + var(--_spread) * 0.5),
       var(--_base) calc(50% + var(--_spread))
     )
   );
@@ -601,10 +584,7 @@
   animation: tw-shimmer var(--shimmer-duration, 2s) linear infinite;
 
   @variant dark {
-    --_highlight: var(
-      --shimmer-color,
-      oklch(from currentColor max(0.8, calc(l + 0.4)) c h / calc(alpha + 0.4))
-    );
+    --_highlight: var(--shimmer-color, oklch(from currentColor max(0.8, calc(l + 0.4)) c h / calc(alpha + 0.4)));
   }
 
   &:where([dir="rtl"], [dir="rtl"] *) {
@@ -627,11 +607,7 @@
 
 @utility shimmer-color-* {
   --shimmer-color: --value(--color, [color]);
-  --shimmer-color: color-mix(
-    in oklch,
-    --value(--color, [color]) calc(--modifier(integer) * 1%),
-    transparent
-  );
+  --shimmer-color: color-mix(in oklch, --value(--color, [color]) calc(--modifier(integer) * 1%), transparent);
 }
 
 @utility shimmer-duration-* {
