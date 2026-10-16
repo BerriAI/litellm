@@ -499,8 +499,16 @@ def test_cancel_then_delete_on_another_replica_releases_without_a_spend_row(rig:
         key: Final = scenario.key()
         created: Final = _create(rig.creator, model, key)
         _state(rig, created, InteractionState(status="in_progress"))
+        _drain(rig)
         cancelled: Final = rig.settler.request("POST", f"/v1beta/interactions/{created}/cancel", {}, key=key)
         assert cancelled.status_code == 200, cancelled.text
+        assert JSON_OBJECT.validate_json(cancelled.content)["status"] == "cancelled", cancelled.text
+        posted: Final = tuple(
+            string_value(object_value(entry)["path"])
+            for entry in _drain(rig)
+            if string_value(object_value(entry)["method"]) == "POST"
+        )
+        assert len(posted) == 1 and posted[0].endswith(f"/v1beta/interactions/{created}/cancel"), posted
         before_delete: Final = _settlement(created)
         assert before_delete is not None and before_delete["claimed"] is False, before_delete
         deleted: Final = _delete(rig.settler, created, key)

@@ -3237,6 +3237,7 @@ class TestJWTOAuth2Coexistence:
         jwt_handler.auth_jwt = AsyncMock(return_value={"sub": "mapped-user"})
         jwt_handler.get_user_email = MagicMock(return_value="mapped@example.com")
         jwt_handler.get_user_id = MagicMock(return_value="mapped-user")
+        jwt_handler.get_end_user_id = MagicMock(return_value=None)
         jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
             virtual_key_claim_field="sub",
             user_email_jwt_field="sub",
@@ -3312,6 +3313,7 @@ class TestJWTOAuth2Coexistence:
         jwt_handler.auth_jwt = AsyncMock(return_value={"sub": "jwt-principal"})
         jwt_handler.get_user_email = MagicMock(return_value="principal@example.com")
         jwt_handler.get_user_id = MagicMock(return_value="jwt-principal")
+        jwt_handler.get_end_user_id = MagicMock(return_value=None)
         jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
             virtual_key_claim_field="sub",
             user_email_jwt_field="sub",
@@ -3388,6 +3390,7 @@ class TestJWTOAuth2Coexistence:
         jwt_handler.auth_jwt = AsyncMock(return_value={"sub": "mapped-user"})
         jwt_handler.get_user_email = MagicMock(return_value="mapped@example.com")
         jwt_handler.get_user_id = MagicMock(return_value="mapped-user")
+        jwt_handler.get_end_user_id = MagicMock(return_value=None)
         jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
             virtual_key_claim_field="sub",
             user_email_jwt_field="sub",
@@ -11288,6 +11291,7 @@ def _per_issuer_virtual_key_jwt_handler(
 ) -> MagicMock:
     jwt_handler = MagicMock()
     jwt_handler.is_jwt.return_value = True
+    jwt_handler.get_end_user_id.return_value = None
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
         virtual_key_claim_field=global_claim_field,
         unregistered_jwt_client_behavior=global_behavior,

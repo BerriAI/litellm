@@ -13,7 +13,9 @@ import urllib
 import urllib.parse
 from collections.abc import Awaitable, Callable, Coroutine
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar
+from typing import TYPE_CHECKING, Final, Protocol, TypeVar
+
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.db.db_span import db_span
@@ -33,6 +35,7 @@ from litellm.secret_managers.main import str_to_bool
 
 if TYPE_CHECKING:
     from prisma import Prisma
+    from prisma.types import HttpConfig
 
 __all__ = (
     "IAMEndpoint",
@@ -40,6 +43,9 @@ __all__ = (
     "PrismaWrapper",
     "parse_iam_endpoint_from_url",
 )
+
+
+_ENGINE_ATTRIBUTE: Final = TypeAdapter(object)
 
 
 class _PrismaProcess(Protocol):
@@ -116,7 +122,7 @@ class _TrackedPrismaEngine:
         return self._engine.process
 
     def __getattr__(self, name: str) -> object:
-        return getattr(self._engine, name)
+        return _ENGINE_ATTRIBUTE.validate_python(getattr(self._engine, name))
 
     async def query(self, content: str, *, tx_id: str | None) -> object:
         return await self._finish_even_if_cancelled(self._tracked_query(content, tx_id))
@@ -240,7 +246,7 @@ class PrismaWrapper:
 
     def __init__(
         self,
-        original_prisma: Any,
+        original_prisma: "Prisma",
         iam_token_db_auth: bool = False,
         *,
         token_auth: DatabaseTokenAuth | None = None,
@@ -590,7 +596,7 @@ class PrismaWrapper:
     async def recreate_prisma_client(
         self,
         new_db_url: str,
-        http_client: object | None = None,
+        http_client: "HttpConfig | None" = None,
         *,
         expected_generation: int | None = None,
     ) -> bool:
@@ -628,7 +634,7 @@ class PrismaWrapper:
     async def _recreate_prisma_client_locked(
         self,
         new_db_url: str,
-        http_client: object | None = None,
+        http_client: "HttpConfig | None" = None,
         *,
         expected_generation: int | None = None,
     ) -> bool:
@@ -639,6 +645,7 @@ class PrismaWrapper:
         lock) don't re-acquire it — `asyncio.Lock` is not reentrant.
         """
         from prisma import Prisma
+        from prisma.types import DatasourceOverride
 
         if expected_generation is not None and expected_generation != self._engine_generation:
             verbose_proxy_logger.info(
@@ -665,12 +672,15 @@ class PrismaWrapper:
             self._expected_engine_deaths.add(old_engine_pid)
             await self._kill_engine_process(old_engine_pid)
 
-        kwargs: Final[dict[str, Any]] = {}
-        if http_client is not None:
-            kwargs["http"] = http_client
-        if self._recreate_uses_datasource:
-            kwargs["datasource"] = {"url": new_db_url}
-        self._original_prisma = Prisma(**kwargs)
+        datasource: Final = DatasourceOverride(url=new_db_url) if self._recreate_uses_datasource else None
+        if http_client is not None and datasource is not None:
+            self._original_prisma = Prisma(http=http_client, datasource=datasource)
+        elif http_client is not None:
+            self._original_prisma = Prisma(http=http_client)
+        elif datasource is not None:
+            self._original_prisma = Prisma(datasource=datasource)
+        else:
+            self._original_prisma = Prisma()
 
         await self._original_prisma.connect()
         self._active_drain_tracker = self._instrument_prisma_client(self._original_prisma)
@@ -884,6 +894,12 @@ class PrismaWrapper:
             return False
         seconds_left: Final = (expiration_time - datetime.utcnow()).total_seconds()
         return seconds_left > self.TOKEN_REFRESH_BUFFER_SECONDS
+
+    if TYPE_CHECKING:
+
+        def is_connected(self) -> bool: ...
+
+        async def disconnect(self, timeout: float | timedelta | None = None) -> None: ...
 
     def __getattr__(self, name: str):
         """
