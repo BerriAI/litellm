@@ -1,6 +1,5 @@
 import asyncio
 import re
-import socket
 import threading
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
@@ -27,27 +26,48 @@ from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from integration._support.responses_stream import (
     AZURE_TARGET,
+    RATE_LIMIT_MESSAGE,
     chat_content,
     function_tools,
     healthy_stream,
+    openai_error_stream,
     rate_limited_stream,
 )
 from integration._support.wire import Reply, Request, wire_server
+from integration._support.ports import allocate_port
 from pydantic import JsonValue
 
 pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 
 _MODEL: Final = "bridged-stream-chaos"
 _MARKER: Final = re.compile(r"marker-([0-9a-f]{32})")
-_STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
 _SENTINEL_PREFIX: Final = "litellm.MidStreamFallbackError: "
 _RATE_LIMIT_PREFIX: Final = "litellm.RateLimitError: "
 _HEADERS: Final[Mapping[str, str]] = MappingProxyType({"anthropic-version": "2023-06-01"})
 
-Kind: TypeAlias = Literal["chat_limited", "chat_healthy", "messages_limited", "responses_limited"]
+Kind: TypeAlias = Literal[
+    "chat_limited",
+    "chat_healthy",
+    "messages_limited",
+    "responses_limited",
+    "chat_top_level",
+    "messages_top_level",
+    "responses_top_level",
+    "chat_dropped",
+]
 _KINDS: Final[tuple[Kind, ...]] = ("chat_limited", "chat_healthy", "messages_limited", "responses_limited")
+_TOP_LEVEL_KINDS: Final[tuple[Kind, ...]] = (
+    "chat_top_level",
+    "chat_healthy",
+    "messages_top_level",
+    "responses_top_level",
+    "chat_dropped",
+)
 _CHAT_KINDS: Final[tuple[Kind, ...]] = ("chat_limited", "chat_healthy")
-_LOGGED_KINDS: Final[frozenset[Kind]] = frozenset({"chat_limited", "chat_healthy", "responses_limited"})
+_TOP_LEVEL_CHAT_KINDS: Final[tuple[Kind, ...]] = ("chat_top_level", "chat_healthy")
+_LOGGED_KINDS: Final[frozenset[Kind]] = frozenset(
+    {"chat_limited", "chat_healthy", "responses_limited", "chat_top_level", "responses_top_level", "chat_dropped"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,12 +92,6 @@ class _Rig:
     @property
     def gateway(self) -> Gateway:
         return self.proxy.gateway
-
-
-def _free_port() -> int:
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        return reserve.getsockname()[1]
 
 
 def _config(port: int, directory: Path) -> Path:
@@ -108,7 +122,7 @@ def _config(port: int, directory: Path) -> Path:
 @pytest.fixture(scope="module")
 def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
     directory: Final = tmp_path_factory.mktemp("bridged-stream-chaos")
-    port: Final = _free_port()
+    port: Final = allocate_port()
     with (
         gateway_from_environment() as shared,
         owned_proxy_process(shared, directory, {}, config=_config(port, directory), workers=2) as owned,
@@ -128,16 +142,25 @@ def _respond(request: Request) -> Reply:
     identity: Final = f"resp_{uuid.uuid4().hex}"
     if b"chat_healthy" in request.body:
         return Reply(content_type="text/event-stream", chunks=healthy_stream(identity, f"answer marker-{marker}"))
+    if b"chat_dropped" in request.body:
+        return Reply(
+            content_type="text/event-stream", chunks=healthy_stream(identity, f"answer marker-{marker}"), abort_after=1
+        )
+    if b"_top_level" in request.body:
+        return Reply(
+            content_type="text/event-stream",
+            chunks=openai_error_stream(identity, "rate_limit_exceeded", RATE_LIMIT_MESSAGE),
+        )
     return Reply(content_type="text/event-stream", chunks=rate_limited_stream(identity))
 
 
 def _path(kind: Kind) -> str:
     match kind:
-        case "chat_limited" | "chat_healthy":
+        case "chat_limited" | "chat_healthy" | "chat_top_level" | "chat_dropped":
             return "/v1/chat/completions"
-        case "messages_limited":
+        case "messages_limited" | "messages_top_level":
             return "/v1/messages"
-        case "responses_limited":
+        case "responses_limited" | "responses_top_level":
             return "/v1/responses"
 
 
@@ -150,9 +173,9 @@ def _body(call: _Call) -> Mapping[str, JsonValue]:
         "cache": {"no-cache": True},
     }
     match call.kind:
-        case "chat_limited" | "chat_healthy":
+        case "chat_limited" | "chat_healthy" | "chat_top_level" | "chat_dropped":
             return {**common, "messages": [{"role": "user", "content": prompt}], "tools": function_tools()}
-        case "messages_limited":
+        case "messages_limited" | "messages_top_level":
             return {
                 **common,
                 "max_tokens": 64,
@@ -165,7 +188,7 @@ def _body(call: _Call) -> Mapping[str, JsonValue]:
                     }
                 ],
             }
-        case "responses_limited":
+        case "responses_limited" | "responses_top_level":
             return {**common, "input": prompt}
 
 
@@ -216,13 +239,14 @@ def _assert_answered_in_its_own_shape(served: _Served) -> None:
         case "chat_healthy":
             assert served.status == 200, served.text
             assert chat_content(_data_frames(served.text)) == f"answer marker-{served.call.marker}", served.text
-        case "chat_limited":
+        case "chat_limited" | "chat_top_level":
             assert served.status == 429, served.text
             error: Final = object_value(JSON_OBJECT.validate_json(served.text)["error"])
             assert error["type"] == "throttling_error" and str(error["code"]) == "429", error
             message: Final = string_value(error["message"])
             assert message.startswith(_RATE_LIMIT_PREFIX) and _SENTINEL_PREFIX not in message, message
-        case "messages_limited":
+            assert RATE_LIMIT_MESSAGE in message, message
+        case "messages_limited" | "messages_top_level":
             assert served.status == 200, served.text
             events: Final = _sse_events(served.text)
             assert events[0][0] == "message_start" and events[-1][0] == "error", events
@@ -230,10 +254,21 @@ def _assert_answered_in_its_own_shape(served: _Served) -> None:
             assert frame_error["type"] == "rate_limit_error", frame_error
             frame_message: Final = string_value(frame_error["message"])
             assert frame_message.startswith(_RATE_LIMIT_PREFIX) and _SENTINEL_PREFIX not in frame_message, frame_message
+            assert RATE_LIMIT_MESSAGE in frame_message, frame_message
         case "responses_limited":
             assert served.status == 200, served.text
             kinds: Final = [frame["type"] for frame in _data_frames(served.text)]
             assert kinds == ["response.created", "response.failed"], served.text
+        case "responses_top_level":
+            assert served.status == 200, served.text
+            frames: Final = _data_frames(served.text)
+            assert [frame["type"] for frame in frames] == ["response.created", "response.failed"], served.text
+            failure: Final = object_value(object_value(frames[-1]["response"])["error"])
+            assert failure["code"] == "rate_limit_exceeded", failure
+            assert RATE_LIMIT_MESSAGE in string_value(failure["message"]), failure
+        case "chat_dropped":
+            assert served.status == 500, served.text
+            assert "error" in JSON_OBJECT.validate_json(served.text), served.text
 
 
 def _assert_forwarded(received: tuple[Request, ...], calls: tuple[_Call, ...]) -> None:
@@ -263,12 +298,8 @@ def _assert_each_lands_once(served: tuple[_Served, ...]) -> None:
         assert by_call[item.call_id]["status"] == expected, (item.call_id, rows)
 
 
-def _worker_pids(log: Path, count: int) -> tuple[int, ...]:
-    return eventually(
-        lambda: tuple(int(found.group(1)) for found in _STARTED_WORKER.finditer(log.read_text())),
-        lambda pids: len(pids) == count,
-        seconds=30,
-    )
+def _worker_pids(proxy: OwnedProxy, count: int) -> frozenset[int]:
+    return eventually(proxy.worker_pids, lambda pids: len(pids) == count, seconds=30)
 
 
 def _open_upstream_connections(pid: int, upstream: str) -> int:
@@ -299,24 +330,28 @@ async def _held_burst(gateway: Gateway, calls: tuple[_Call, ...], held: _Held) -
     return burst
 
 
+@pytest.mark.parametrize("kinds", [_KINDS, _TOP_LEVEL_KINDS], ids=["nested", "top_level"])
 async def test_mixed_burst_of_bridged_streams_answers_each_call_in_its_own_shape_and_logs_each_once(
-    rig: _Rig,
+    rig: _Rig, kinds: tuple[Kind, ...]
 ) -> None:
-    calls: Final = _calls(24, _KINDS)
+    calls: Final = _calls(6 * len(kinds), kinds)
     with wire_server(_respond, port=rig.port) as wire:
         served: Final = await _burst(rig.gateway, calls)
-        assert len(served) == 24
+        assert len(served) == len(calls)
         for item in served:
             _assert_answered_in_its_own_shape(item)
         _assert_forwarded(wire.drain(), calls)
     _assert_each_lands_once(served)
 
 
-async def test_worker_sigkill_mid_burst_leaves_the_sibling_answering_the_bridged_streams(rig: _Rig) -> None:
-    calls: Final = _calls(20, _CHAT_KINDS)
+@pytest.mark.parametrize("kinds", [_CHAT_KINDS, _TOP_LEVEL_CHAT_KINDS], ids=["nested", "top_level"])
+async def test_worker_sigkill_mid_burst_leaves_the_sibling_answering_the_bridged_streams(
+    rig: _Rig, kinds: tuple[Kind, ...]
+) -> None:
+    calls: Final = _calls(20, kinds)
     held: Final = _Held(threading.Event(), SimpleQueue())
     with wire_server(held.respond, port=rig.port) as wire:
-        workers: Final = _worker_pids(rig.proxy.log, 2)
+        workers: Final = _worker_pids(rig.proxy, 2)
         burst: Final = await _held_burst(rig.gateway, calls, held)
         held_by: Final = MappingProxyType({pid: _open_upstream_connections(pid, wire.url) for pid in workers})
         assert sum(held_by.values()) == 20, held_by
@@ -341,7 +376,7 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_answering_the_bridged
 async def test_proxy_sigterm_mid_burst_drains_the_spend_log_queue_and_the_restarted_proxy_serves(
     gateway: Gateway, tmp_path: Path
 ) -> None:
-    port: Final = _free_port()
+    port: Final = allocate_port()
     config: Final = _config(port, tmp_path)
     calls: Final = _calls(20, _CHAT_KINDS)
     held: Final = _Held(threading.Event(), SimpleQueue())

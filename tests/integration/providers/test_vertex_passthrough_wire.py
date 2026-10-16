@@ -5,6 +5,7 @@ import socket
 import socketserver
 import ssl
 import threading
+import uuid
 from collections.abc import Generator, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -24,13 +25,23 @@ from cryptography.x509.oid import NameOID
 from google import genai
 from google.genai import types
 from google.oauth2.credentials import Credentials
-from integration._support.client import Gateway, gateway_from_environment
-from integration._support.process import owned_proxy
+from integration._support.anthropic_thinking import sse_chunks
+from integration._support.client import Gateway, eventually, gateway_from_environment
+from integration._support.database import read_rows
+from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration.providers._tool_search_support import (
+    SEARCH_TOOL,
+    SEARCH_TURN,
+    marker_of,
+    message_events,
+    question,
+    turn_reply,
+)
 from pydantic import JsonValue, TypeAdapter
 
-pytestmark = pytest.mark.timeout(240)
+pytestmark = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 
 _PROJECT: Final = "scripted-project"
 _TOKEN: Final = "scripted-vertex-token"
@@ -167,6 +178,8 @@ def _vertex_tunnel(destination: Wire) -> Generator[_Tunnel, None, None]:
 
 
 def _vertex_peer(request: Request) -> Reply:
+    if SEARCH_TOOL.encode() in request.body:
+        return turn_reply(request, _search_identity(marker_of(request)), SEARCH_TURN, "tool_use")
     if "enerateContent" in request.target:
         if ":streamGenerateContent" in request.target:
             return Reply(chunks=_GEMINI_SSE, content_type="text/event-stream")
@@ -174,6 +187,10 @@ def _vertex_peer(request: Request) -> Reply:
     if ":streamRawPredict" in request.target or request.target.endswith(":rawPredict?alt=sse"):
         return Reply(chunks=_CLAUDE_SSE, content_type="text/event-stream", gate_after_first=_VERTEX_STREAM_GATE)
     return Reply(body=json.dumps(_CLAUDE_REPLY).encode())
+
+
+def _search_identity(marker: str) -> str:
+    return f"msg_{marker}_search"
 
 
 def _token_peer(request: Request) -> Reply:
@@ -514,3 +531,36 @@ def test_credential_less_vertex_project_forwards_the_caller_bearer_token_when_th
         assert upstream.headers["x-caller-trace"] == "trace-1", upstream.headers
         assert key not in upstream.target, upstream.target
         assert _JSON_OBJECT.validate_json(upstream.body) == body, upstream.body
+
+
+@pytest.mark.parametrize("action", ["rawPredict", "streamRawPredict"])
+def test_vertex_partner_stream_relays_a_tool_search_turn_verbatim_and_logs_it_once(rig: _Rig, action: str) -> None:
+    marker: Final = uuid.uuid4().hex
+    model_path: Final = f"/v1/projects/{_PROJECT}/locations/global/publishers/anthropic/models/claude-sonnet-4-5"
+    body: Final[dict[str, JsonValue]] = {
+        "anthropic_version": "vertex-2023-10-16",
+        "max_tokens": 64,
+        "stream": True,
+        "tools": [{"type": "tool_search_tool_bm25_20251119", "name": SEARCH_TOOL}],
+        "messages": [{"role": "user", "content": question(marker)}],
+    }
+    with rig.proxy.scenario() as scenario:
+        key: Final = scenario.key()
+        response: Final = rig.proxy.client.post(
+            f"/vertex_ai{model_path}:{action}", json=body, headers={"Authorization": f"Bearer {key}"}
+        )
+        assert response.status_code == 200, response.text
+        expected: Final = b"".join(sse_chunks(message_events(_search_identity(marker), SEARCH_TURN, "tool_use")))
+        assert response.content == expected, response.text
+        received: Final = rig.vertex.drain()
+        assert [(request.method, request.target) for request in received] == [
+            ("POST", f"{model_path}:{action}?alt=sse")
+        ], received
+        rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT status FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (response.headers["x-litellm-call-id"],)
+            ),
+            lambda found: len(found) == 1,
+            seconds=70,
+        )
+        assert rows[0]["status"] == "success", rows

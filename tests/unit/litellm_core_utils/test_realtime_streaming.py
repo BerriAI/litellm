@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 from collections.abc import Coroutine, Mapping, Sequence
 from dataclasses import dataclass
@@ -11,7 +12,11 @@ from websockets.exceptions import ConnectionClosed
 from websockets.frames import Close
 
 import litellm
-from litellm.constants import REALTIME_SESSION_FAILURE_LOGGED_KEY, REALTIME_SESSION_SUCCESS_LOGGED_KEY
+from litellm.constants import (
+    REALTIME_METERED_USAGE_KEY,
+    REALTIME_SESSION_FAILURE_LOGGED_KEY,
+    REALTIME_SESSION_SUCCESS_LOGGED_KEY,
+)
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.realtime_streaming import (
     RealTimeStreaming,
@@ -20,7 +25,9 @@ from litellm.litellm_core_utils.realtime_streaming import (
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.xai.realtime.transformation import XAIRealtimeNormalizer
+from litellm.llms.xai.realtime.usage_meter import XAIRealtimeUsageMeter
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.llms.xai import RealtimeMeteredUsage
 from litellm.types.realtime import RealtimeResponseTransformInput, RealtimeResponseTypedDict
 from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -782,6 +789,60 @@ def test_collect_user_input_empty_transcript_not_collected():
     }
     streaming._collect_user_input_from_backend_event(event_obj)
     assert len(streaming.input_messages) == 0
+
+
+@pytest.mark.asyncio
+async def test_usage_meter_snapshot_stored_in_model_call_details():
+    """xAI metered usage from raw client/backend frames reaches the spend log."""
+    client_ws = MagicMock()
+    client_ws.send_text = AsyncMock()
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[
+            json.dumps(
+                {"type": "session.created", "session": {"turn_detection": {"type": None}}}
+            ).encode(),
+            json.dumps(
+                {"type": "response.output_audio.delta", "delta": base64.b64encode(b"x" * 24000).decode()}
+            ).encode(),
+            ConnectionClosed(None, None),
+        ]
+    )
+    logging_obj: Final = _mock_logging()
+    logging_obj.model_call_details = {}
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    logging_obj.dispatch_success_handlers = AsyncMock()
+    streaming = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        logging_obj,
+        event_normalizer=XAIRealtimeNormalizer(),
+        usage_meter=XAIRealtimeUsageMeter(),
+    )
+
+    await streaming._send_to_backend(json.dumps({"type": "session.update", "session": {"turn_detection": None}}))
+    await streaming._send_to_backend(
+        json.dumps({"type": "input_audio_buffer.append", "audio": base64.b64encode(b"y" * 48000).decode()})
+    )
+    await streaming._send_to_backend(
+        json.dumps(
+            {
+                "type": "conversation.item.create",
+                "item": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+            }
+        )
+    )
+    await streaming.backend_to_client_send_messages()
+    await streaming.log_messages()
+
+    metered = logging_obj.model_call_details[REALTIME_METERED_USAGE_KEY]
+    assert isinstance(metered, RealtimeMeteredUsage)
+    assert metered.push_to_talk is True
+    assert metered.audio_seconds_sent == 1.0
+    assert metered.audio_seconds_received == 0.5
+    assert metered.text_messages == 1
 
 
 @pytest.mark.asyncio

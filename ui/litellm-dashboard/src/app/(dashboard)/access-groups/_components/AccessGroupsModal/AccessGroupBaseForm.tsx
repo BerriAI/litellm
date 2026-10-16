@@ -1,6 +1,6 @@
 "use client";
 
-import { BotIcon, InfoIcon, LayersIcon, ServerIcon } from "lucide-react";
+import { BotIcon, InfoIcon, LayersIcon, ServerIcon, SparklesIcon } from "lucide-react";
 import type { UseFormReturn } from "react-hook-form";
 import { z } from "zod";
 
@@ -12,6 +12,7 @@ import { ModelSelect } from "@/components/ModelSelect/ModelSelect";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { MultiSelect } from "@/components/shared/MultiSelect";
+import SkillSelector from "@/components/skills/SkillSelector";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
@@ -23,6 +24,7 @@ export const accessGroupFormSchema = z.object({
   mcpServerIds: z.array(z.string()),
   mcpToolPermissions: z.record(z.string(), z.array(z.string())),
   agentIds: z.array(z.string()),
+  skillNames: z.array(z.string()),
 });
 
 export type AccessGroupFormValues = z.output<typeof accessGroupFormSchema>;
@@ -31,6 +33,7 @@ export const GENERAL_TAB = "general";
 export const MODELS_TAB = "models";
 export const MCP_SERVERS_TAB = "mcp-servers";
 export const AGENTS_TAB = "agents";
+export const SKILLS_TAB = "skills";
 
 interface AccessGroupBaseFormProps {
   form: UseFormReturn<AccessGroupFormValues>;
@@ -77,6 +80,7 @@ export function AccessGroupBaseForm({
   onTabChange,
   initialServerIds,
 }: AccessGroupBaseFormProps) {
+  const { accessToken } = useAuthorized();
   const { data: agentsData } = useAgents();
   const { data: mcpServersData } = useMCPServers();
 
@@ -107,6 +111,10 @@ export function AccessGroupBaseForm({
         <TabsTrigger value={AGENTS_TAB}>
           <BotIcon size={16} />
           Agents
+        </TabsTrigger>
+        <TabsTrigger value={SKILLS_TAB}>
+          <SparklesIcon size={16} />
+          Skills
         </TabsTrigger>
       </TabsList>
 
@@ -160,6 +168,24 @@ export function AccessGroupBaseForm({
               onValueChange={onChange}
               options={agentOptions}
               placeholder="Select agents"
+            />
+          )}
+        </FormField>
+      </TabsContent>
+
+      <TabsContent value={SKILLS_TAB} className="pt-4">
+        <FormField
+          control={form.control}
+          name="skillNames"
+          label="Allowed Skills"
+          description="Enabled skills are visible to everyone. Grant disabled (private) Claude Code plugins to the teams and keys in this group here."
+        >
+          {({ value, onChange }) => (
+            <SkillSelector
+              onChange={onChange}
+              value={value}
+              accessToken={accessToken || ""}
+              placeholder="Select skills (optional)"
             />
           )}
         </FormField>

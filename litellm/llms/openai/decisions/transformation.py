@@ -10,6 +10,8 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.decisions import (
     DecisionsImage,
     DecisionsIRAnswer,
+    DecisionsIRBoxAnswer,
+    DecisionsIRBoxQuestion,
     DecisionsIRChoiceAnswer,
     DecisionsIRChoiceOption,
     DecisionsIRChoiceProbability,
@@ -28,6 +30,8 @@ from litellm.types.decisions import (
     DecisionsIRState,
     DecisionsIRUsage,
     DecisionsJSON,
+    OpenAIBoxAnswer,
+    OpenAIBoxQuestion,
     OpenAIChoiceAnswer,
     OpenAIChoiceProbability,
     OpenAIChoiceQuestion,
@@ -85,6 +89,8 @@ def _ir_question(question: OpenAIDecisionQuestion) -> DecisionsIRQuestion:
                     DecisionsIRScoreLevel(label=level.label, description=level.description) for level in question.levels
                 ),
             )
+        case OpenAIBoxQuestion():
+            return DecisionsIRBoxQuestion(name=question.name, instructions=question.instructions)
         case _:
             assert_never(question)
 
@@ -144,6 +150,12 @@ def _openai_question(question: DecisionsIRQuestion) -> Mapping[str, object]:
                     {"label": decisions_text(level.label), **_text_field("description", level.description)}
                     for level in question.levels
                 ],
+            }
+        case DecisionsIRBoxQuestion():
+            return {
+                "type": "box",
+                **_text_field("name", question.name),
+                "instructions": decisions_text(question.instructions),
             }
         case _:
             assert_never(question)
@@ -227,6 +239,8 @@ def _ir_answer(question: DecisionsIRQuestion, answer: OpenAIDecisionAnswer | Non
                     for item in answer.probabilities
                 ),
             )
+        case DecisionsIRBoxQuestion(), OpenAIBoxAnswer():
+            return DecisionsIRBoxAnswer(box=answer.box, confidence=answer.confidence)
         case _:
             return DecisionsIRRefusal()
 
@@ -287,6 +301,8 @@ def _openai_answer(question: DecisionsIRQuestion, answer: DecisionsIRAnswer) -> 
             return _openai_choice_answer(question, answer)
         case DecisionsIRScoreQuestion(), DecisionsIRScoreAnswer():
             return _openai_score_answer(question, answer)
+        case DecisionsIRBoxQuestion(), DecisionsIRBoxAnswer():
+            return OpenAIBoxAnswer(name=question.name, box=answer.box, confidence=answer.confidence)
         case _:
             return OpenAIRefusalAnswer(name=question.name)
 

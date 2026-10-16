@@ -1,10 +1,13 @@
 # What is this?
 ## Translates OpenAI call to Anthropic `/v1/messages` format
 import copy
+import itertools
 import json
 import traceback
 from collections import deque
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from dataclasses import dataclass, replace
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -36,7 +39,7 @@ from litellm.types.llms.anthropic import (
     UsageDelta,
     UsageIteration,
 )
-from litellm.types.utils import AdapterCompletionStreamWrapper, Delta
+from litellm.types.utils import AdapterCompletionStreamWrapper, ChatCompletionDeltaToolCall, Delta, Function
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
@@ -103,11 +106,55 @@ def _delta_payload_field(delta_type: StreamingContentBlockDeltaType) -> str:
             assert_never(delta_type)
 
 
+def _optional_str_attr(obj: object, name: str) -> str | None:
+    value: Final = _optional_attr(obj, name)
+    return value if isinstance(value, str) else None
+
+
+def _optional_int_attr(obj: object, name: str, *, default: int) -> int:
+    value: Final = _optional_attr(obj, name)
+    return value if isinstance(value, int) else default
+
+
+@dataclass(frozen=True, slots=True)
+class _ToolCallPart:
+    index: int
+    call_id: str | None
+    call_type: str | None
+    name: str | None
+    arguments: str
+
+    @staticmethod
+    def from_entries(index: int, entries: Sequence[object]) -> "_ToolCallPart":
+        functions: Final = tuple(_optional_attr(entry, "function") for entry in entries)
+        return _ToolCallPart(
+            index=index,
+            call_id=next(filter(None, (_optional_str_attr(entry, "id") for entry in entries)), None),
+            call_type=next(filter(None, (_optional_str_attr(entry, "type") for entry in entries)), None),
+            name=next(filter(None, (_optional_str_attr(function, "name") for function in functions)), None),
+            arguments="".join(_optional_str_attr(function, "arguments") or "" for function in functions),
+        )
+
+    def extended(self, parts: "Sequence[_ToolCallPart]") -> "_ToolCallPart":
+        return replace(
+            self, arguments=self.arguments + "".join(part.arguments for part in parts if part.index == self.index)
+        )
+
+    def to_tool_call(self) -> ChatCompletionDeltaToolCall:
+        return ChatCompletionDeltaToolCall(
+            id=self.call_id,
+            type=self.call_type,
+            function=Function(name=self.name, arguments=self.arguments),
+            index=self.index,
+        )
+
+
 class _CombinedChunkSplitter:
     """
     Splits a streaming chunk that carries BOTH response content and a
     ``finish_reason`` into two chunks: a content-only chunk followed by a
-    finish-only chunk.
+    finish-only chunk, and a chunk that carries several tool calls into one chunk
+    per call (see ``_route_tool_calls``).
 
     ``AnthropicStreamWrapper`` (via ``translate_streaming_openai_response_to_anthropic``)
     assumes content and ``finish_reason`` never arrive in the same chunk — true for
@@ -128,6 +175,8 @@ class _CombinedChunkSplitter:
         self._sync_iter: Iterator[ModelResponseStream] | None = None
         self._async_iter: AsyncIterator[ModelResponseStream] | None = None
         self._buffer: deque[ModelResponseStream] = deque()
+        self._held_calls: Mapping[int, tuple[ModelResponseStream, _ToolCallPart]] = MappingProxyType({})
+        self._live_call_index: int | None = None
 
     @property
     def chunks(self) -> "list[ModelResponseStream] | None":
@@ -238,6 +287,70 @@ class _CombinedChunkSplitter:
         return pieces
 
     @staticmethod
+    def _tool_call_parts(tool_calls: Sequence[object]) -> "tuple[_ToolCallPart, ...]":
+        indexed: Final = tuple(
+            (_optional_int_attr(tool_call, "index", default=position), tool_call)
+            for position, tool_call in enumerate(tool_calls)
+        )
+        return tuple(
+            _ToolCallPart.from_entries(index, tuple(entry for entry_index, entry in indexed if entry_index == index))
+            for index in dict.fromkeys(index for index, _ in indexed)
+        )
+
+    @staticmethod
+    def _with_tool_call(
+        chunk: "ModelResponseStream", part: "_ToolCallPart", *, keep_role: bool
+    ) -> "ModelResponseStream":
+        piece: Final = copy.deepcopy(chunk)
+        role: Final = getattr(piece.choices[0].delta, "role", None) if keep_role else None
+        piece.choices[0].delta = Delta(role=role, tool_calls=[part.to_tool_call()])
+        return piece
+
+    def _release_held_calls(self) -> "tuple[ModelResponseStream, ...]":
+        released: Final = tuple(
+            self._with_tool_call(template, part, keep_role=False)
+            for _, (template, part) in sorted(self._held_calls.items())
+        )
+        self._held_calls = MappingProxyType({})
+        self._live_call_index = None
+        return released
+
+    def _route_tool_calls(self, chunk: "ModelResponseStream") -> "tuple[ModelResponseStream, ...]":
+        """Anthropic ``tool_use`` blocks are sequential, so only the first call a chunk opens streams live.
+
+        Later calls are held, gather their fragments by ``index``, and are written whole on the next
+        non-tool chunk or at stream end.
+        """
+        choices: Final = _optional_attr_sequence(chunk, "choices")
+        tool_calls: Final = (
+            _optional_attr_sequence(_optional_attr(choices[0], "delta"), "tool_calls") if len(choices) == 1 else ()
+        )
+        if not tool_calls:
+            return (*self._release_held_calls(), chunk) if choices else (chunk,)
+        parts: Final = self._tool_call_parts(tool_calls)
+        held: Final = self._held_calls
+        if not held and len(parts) == 1:
+            if parts[0].name:
+                self._live_call_index = parts[0].index
+            return (chunk,)
+
+        new_parts: Final = tuple(part for part in parts if part.index not in held)
+        live_index: Final = (
+            self._live_call_index
+            if self._live_call_index is not None
+            else next((part.index for part in new_parts if part.name), None)
+        )
+        self._live_call_index = live_index
+        live: Final = tuple(part for part in new_parts if not part.name or part.index == live_index)
+        self._held_calls = MappingProxyType(
+            {
+                **{index: (template, held_part.extended(parts)) for index, (template, held_part) in held.items()},
+                **{part.index: (chunk, part) for part in new_parts if part.name and part.index != live_index},
+            }
+        )
+        return tuple(self._with_tool_call(chunk, part, keep_role=position == 0) for position, part in enumerate(live))
+
+    @staticmethod
     def _split(chunk: "ModelResponseStream") -> "list[ModelResponseStream]":
         """Return ``[chunk]``, or ``[content_chunk, finish_chunk]`` if combined."""
         if not _CombinedChunkSplitter._is_combined(chunk):
@@ -259,6 +372,14 @@ class _CombinedChunkSplitter:
         if hasattr(finish_delta, "thinking_blocks"):
             finish_delta.thinking_blocks = None
         return [content_chunk, finish_chunk]
+
+    def _expand(self, chunk: "ModelResponseStream") -> "tuple[ModelResponseStream, ...]":
+        split_chunks: Final = tuple(
+            split_chunk
+            for combined_chunk in self._split(chunk)
+            for split_chunk in self._split_by_payload_kind(combined_chunk)  # comprehension-ok: flattens nested splits
+        )
+        return tuple(itertools.chain.from_iterable(self._route_tool_calls(split_chunk) for split_chunk in split_chunks))
 
     def __iter__(self) -> "Iterator[ModelResponseStream]":
         return self
@@ -289,12 +410,15 @@ class _CombinedChunkSplitter:
             return self._buffer.popleft()
         if self._sync_iter is None:
             self._sync_iter = iter(self._stream)
-        chunk: Final = next(self._sync_iter)  # propagates StopIteration when exhausted
-        self._buffer.extend(
-            split_chunk
-            for combined_chunk in self._split(chunk)
-            for split_chunk in self._split_by_payload_kind(combined_chunk)
-        )
+        while not self._buffer:
+            try:
+                chunk = next(self._sync_iter)
+            except StopIteration:
+                self._buffer.extend(self._release_held_calls())
+                if not self._buffer:
+                    raise
+                break
+            self._buffer.extend(self._expand(chunk))
         return self._buffer.popleft()
 
     def __aiter__(self) -> "AsyncIterator[ModelResponseStream]":
@@ -305,12 +429,15 @@ class _CombinedChunkSplitter:
             return self._buffer.popleft()
         if self._async_iter is None:
             self._async_iter = self._stream.__aiter__()
-        chunk: Final = await self._async_iter.__anext__()  # propagates StopAsyncIteration
-        self._buffer.extend(
-            split_chunk
-            for combined_chunk in self._split(chunk)
-            for split_chunk in self._split_by_payload_kind(combined_chunk)
-        )
+        while not self._buffer:
+            try:
+                chunk = await self._async_iter.__anext__()
+            except StopAsyncIteration:
+                self._buffer.extend(self._release_held_calls())
+                if not self._buffer:
+                    raise
+                break
+            self._buffer.extend(self._expand(chunk))
         return self._buffer.popleft()
 
 

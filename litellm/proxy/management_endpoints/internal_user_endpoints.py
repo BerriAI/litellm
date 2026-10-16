@@ -75,6 +75,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (  # noq
     generate_key_helper_fn,
     prepare_metadata_fields,
 )
+from litellm.proxy.management_helpers.bulk_user_deletion import delete_users_from_current_teams
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
     _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     handle_update_object_permission_common,
@@ -85,9 +86,7 @@ from litellm.proxy.utils import handle_exception_on_proxy, hash_password
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
-    InvitationLinkRepository,
     OrganizationMembershipRepository,
-    TeamMembershipRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
@@ -160,15 +159,6 @@ def _organization_membership_table(
     return membership_table
 
 
-def _invitation_link_table(
-    prisma_client: "PrismaClient | None",
-) -> "TableActions[prisma_models.LiteLLM_InvitationLink]":
-    invitation_table: Final[TableActions[prisma_models.LiteLLM_InvitationLink]] = InvitationLinkRepository(
-        prisma_client
-    ).table
-    return invitation_table
-
-
 def _organization_table(
     prisma_client: "PrismaClient | None",
 ) -> "TableActions[prisma_models.LiteLLM_OrganizationTable]":
@@ -176,15 +166,6 @@ def _organization_table(
         prisma_client
     ).table
     return organization_table
-
-
-def _team_membership_table(
-    prisma_client: "PrismaClient | None",
-) -> "TableActions[prisma_models.LiteLLM_TeamMembership]":
-    team_membership_table: Final[TableActions[prisma_models.LiteLLM_TeamMembership]] = TeamMembershipRepository(
-        prisma_client
-    ).table
-    return team_membership_table
 
 
 async def _hash_password_in_dict(
@@ -2431,9 +2412,6 @@ async def delete_user(
     Parameters:
     - user_ids: List[str] - The list of user id's to be deleted.
     """
-    from litellm.proxy.management_endpoints.team_endpoints import (
-        cleanup_members_with_roles,
-    )
     from litellm.proxy.management_helpers.audit_logs import (
         get_audit_log_changed_by,
         is_audit_logging_enabled,
@@ -2542,31 +2520,6 @@ async def delete_user(
                 )
             )
 
-        ## CLEANUP MEMBERS_WITH_ROLES
-        fetch_all_teams: Sequence[prisma_models.LiteLLM_TeamTable] = await TeamRepository(
-            prisma_client
-        ).table.find_many(where={"team_id": {"in": user_row.teams}})
-        teams_to_update: list[tuple[str, str]] = []
-        for team in fetch_all_teams:
-            removed_team_members, new_team_members = cleanup_members_with_roles(
-                existing_team_row=LiteLLM_TeamTable.model_validate(team.model_dump()),
-                data=TeamMemberDeleteRequest(
-                    team_id=team.team_id,
-                    user_id=user_row.user_id,
-                    user_email=user_row.user_email,
-                ),
-            )
-            if removed_team_members:
-                _db_new_team_members: list[dict] = [m.model_dump() for m in new_team_members]
-                teams_to_update.append((team.team_id, json.dumps(_db_new_team_members)))
-
-        ## update teams
-
-        for team_id, members_with_roles in teams_to_update:
-            await TeamRepository(prisma_client).table.update(
-                where={"team_id": team_id},
-                data={"members_with_roles": members_with_roles},
-            )
     # End of Audit logging
 
     ## DELETE ASSOCIATED KEYS
@@ -2591,27 +2544,16 @@ async def delete_user(
     )
     await evict_and_broadcast(cache_keys=jwt_mapping_cache_keys, user_api_key_cache=user_api_key_cache)
 
-    ## DELETE ASSOCIATED INVITATION LINKS
-    await _invitation_link_table(prisma_client).delete_many(
-        where={
-            "OR": [
-                {"user_id": {"in": data.user_ids}},
-                {"created_by": {"in": data.user_ids}},
-                {"updated_by": {"in": data.user_ids}},
-            ]
-        }
+    deleted_users: Final = await delete_users_from_current_teams(
+        prisma_client=prisma_client,
+        user_ids=data.user_ids,
+        user_api_key_dict=user_api_key_dict,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+        litellm_changed_by=litellm_changed_by,
     )
-
-    ## DELETE ASSOCIATED ORGANIZATION MEMBERSHIPS
-    await _organization_membership_table(prisma_client).delete_many(where={"user_id": {"in": data.user_ids}})
-
-    ## DELETE ASSOCIATED TEAM MEMBERSHIPS
-    await _team_membership_table(prisma_client).delete_many(where={"user_id": {"in": data.user_ids}})
-
-    ## DELETE USERS
-    deleted_users: Final = await _user_table(prisma_client).delete_many(where={"user_id": {"in": data.user_ids}})
-    await evict_and_broadcast(cache_keys=tuple(data.user_ids), user_api_key_cache=user_api_key_cache)
-
+    if isinstance(deleted_users, str):
+        raise HTTPException(status_code=500, detail={"error": deleted_users})
     return deleted_users
 
 

@@ -1,6 +1,8 @@
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -11,7 +13,11 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     convert_url_to_base64,
 )
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+from litellm.llms.anthropic.common_utils import (
+    OBJECT_MAPPING_ADAPTER,
+    AnthropicModelInfo,
+    carried_thinking_keys,
+)
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
@@ -40,6 +46,8 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_NON_DEFAULT_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
 class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
@@ -98,14 +106,19 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
         mapped_params: Final = AnthropicConfig.map_openai_params(
             self,
-            non_default_params,
+            {
+                **non_default_params,
+                **self._tools_param_with_openai_tool_search_mapped(
+                    _NON_DEFAULT_PARAMS.validate_python(non_default_params), model, drop_params
+                ),
+            },
             optional_params,
             model,
             drop_params,
         )
 
         AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
-            model=model, optional_params=mapped_params, custom_llm_provider="bedrock"
+            model=model, optional_params=mapped_params, custom_llm_provider="bedrock", drop_params=drop_params
         )
         translated_thinking: Final = mapped_params.get("thinking")
         if (
@@ -113,8 +126,14 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             and isinstance(translated_thinking, dict)
             and translated_thinking.get("type") == "adaptive"
         ):
-            thinking_with_display: Final[AnthropicThinkingParam] = {"type": "adaptive", "display": "updates"}
-            mapped_params["thinking"] = thinking_with_display
+            mapped_params["thinking"] = {
+                **carried_thinking_keys(
+                    OBJECT_MAPPING_ADAPTER.validate_python(translated_thinking),
+                    rebuilt_keys=frozenset(("display",)),
+                    drop_params=drop_params,
+                ),
+                "display": "updates",
+            }
 
         return mapped_params
 
