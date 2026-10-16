@@ -47,7 +47,6 @@ from litellm.types.utils import ModelResponse
 from litellm.utils import get_model_info
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
     from litellm.router import Router
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
@@ -83,9 +82,7 @@ def _messages_have_compaction_block(messages: _AnthropicMessages) -> bool:
     return False
 
 
-def _record_bridged_response_cost(
-    completion_response: ModelResponse, logging_obj: "LiteLLMLoggingObject | None"
-) -> None:
+def _record_bridged_response_cost(completion_response: ModelResponse, logging_obj: LiteLLMLoggingObject | None) -> None:
     """
     The Anthropic-shaped response can no longer be priced correctly (its usage drops the image token breakdown),
     and the success handlers that store this cost run on another thread, so the proxy's x-litellm-response-cost
