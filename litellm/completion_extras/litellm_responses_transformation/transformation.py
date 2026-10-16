@@ -307,7 +307,6 @@ def _reasoning_items_from_output_items(output_items: Sequence[object]) -> tuple[
 
 
 _REASONING_ORIGIN_PREFIX: Final = "litellm_reasoning_origin:"
-_PROVIDERS_TAGGING_REASONING_ORIGIN: Final = frozenset({"bedrock"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -316,7 +315,11 @@ class ReasoningReplayTarget:
 
 
 def reasoning_origin_for(provider: str | None, model: str) -> str | None:
-    return f"{_REASONING_ORIGIN_PREFIX}{provider}/{model}:" if provider in _PROVIDERS_TAGGING_REASONING_ORIGIN else None
+    if provider != "bedrock":
+        return None
+    from litellm.llms.bedrock.common_utils import get_bedrock_base_model
+
+    return f"{_REASONING_ORIGIN_PREFIX}bedrock/{get_bedrock_base_model(model)}:"
 
 
 def _with_reasoning_origin(output_items: Sequence[object], origin: str | None) -> Sequence[object]:

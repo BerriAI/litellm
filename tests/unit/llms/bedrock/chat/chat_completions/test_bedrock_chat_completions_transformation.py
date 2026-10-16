@@ -1450,9 +1450,13 @@ async def test_reasoning_one_bedrock_model_minted_never_replays_to_another(local
     history: Final = _history_after(first.choices[0].message.reasoning_items)
 
     to_same_model, _ = await _bedrock_turn(history, json=RESPONSES_TOOL_CALL_JSON)
+    to_same_model_us_profile, _ = await _bedrock_turn(
+        history, model="us.openai.gpt-6-sol", json=RESPONSES_TOOL_CALL_JSON
+    )
     to_other_model, _ = await _bedrock_turn(history, model="us.openai.gpt-5.6-sol", json=RESPONSES_TOOL_CALL_JSON)
 
     assert _replayed_reasoning(to_same_model[0]) == ["gpt-6-minted"]
+    assert _replayed_reasoning(to_same_model_us_profile[0]) == ["gpt-6-minted"]
     assert _replayed_reasoning(to_other_model[0]) == []
 
 
