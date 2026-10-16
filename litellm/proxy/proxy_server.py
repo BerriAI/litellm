@@ -712,6 +712,7 @@ from litellm.proxy.management_endpoints.router_settings_endpoints import (
 from litellm.proxy.management_endpoints.session_endpoints import (
     router as session_management_router,
 )
+from litellm.proxy.management_endpoints.sso.saml_sso import SAML_AUTHN_REQUEST_TTL_SECONDS
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
     router as tag_management_router,
 )
@@ -2828,6 +2829,7 @@ user_api_key_cache: UserApiKeyCache = UserApiKeyCache(
 )
 spend_counter_cache: Final = DualCache(default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value)
 cli_sso_session_cache: Final = DualCache(default_in_memory_ttl=CLI_SSO_SESSION_TTL_SECONDS)
+saml_sso_cache: Final = DualCache(default_in_memory_ttl=SAML_AUTHN_REQUEST_TTL_SECONDS)
 model_max_budget_limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=spend_counter_cache)
 litellm.logging_callback_manager.add_litellm_callback(model_max_budget_limiter)
 redis_usage_cache: RedisCache | None = None  # redis cache used for tracking spend, tpm/rpm limits
@@ -5179,12 +5181,13 @@ def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: 
     """
     Wires an established coordination Redis into the proxy-level caches that
     consume it directly: the spend counter cache, the CLI SSO login-session
-    cache, the cluster-wide config cache, and (only when opted in) the
-    virtual-key auth cache.
+    cache, the SAML SSO sign-in cache, the cluster-wide config cache, and (only
+    when opted in) the virtual-key auth cache.
 
-    The CLI SSO login-session cache is always backed by Redis when available so
-    that the browser SSO flow behind `lite login` survives landing on different
-    workers; it must not be gated behind enable_redis_auth_cache.
+    The CLI SSO login-session cache and the SAML SSO sign-in cache are always
+    backed by Redis when available so that the browser SSO flows behind
+    `lite login` and SAML sign-in survive landing on different workers; they
+    must not be gated behind enable_redis_auth_cache.
     """
     spend_counter_cache.attach_redis_cache(
         redis_cache,
@@ -5193,6 +5196,10 @@ def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: 
     cli_sso_session_cache.attach_redis_cache(
         redis_cache,
         default_redis_ttl=CLI_SSO_SESSION_TTL_SECONDS,
+    )
+    saml_sso_cache.attach_redis_cache(
+        redis_cache,
+        default_redis_ttl=SAML_AUTHN_REQUEST_TTL_SECONDS,
     )
     if enable_redis_auth_cache is True:
         user_api_key_cache.attach_redis_cache(

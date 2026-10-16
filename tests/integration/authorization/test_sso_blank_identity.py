@@ -169,8 +169,9 @@ class SamlIdp:
             "</IDPSSODescriptor></EntityDescriptor>"
         )
 
-    def response(self, acs: str, request_id: str, name_id: str, email: str | None) -> str:
+    def response(self, acs: str, request_id: str | None, name_id: str, email: str | None) -> str:
         now: Final = datetime.now(timezone.utc)
+        in_response_to: Final = "" if request_id is None else f' InResponseTo="{request_id}"'
         issued: Final = (now - timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
         not_before: Final = (now - timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
         expires: Final = (now + timedelta(seconds=300)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -186,7 +187,7 @@ class SamlIdp:
             '<saml:Subject><saml:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified">'
             f"{name_id}</saml:NameID>"
             '<saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer">'
-            f'<saml:SubjectConfirmationData InResponseTo="{request_id}" NotOnOrAfter="{expires}" Recipient="{acs}"/>'
+            f'<saml:SubjectConfirmationData{in_response_to} NotOnOrAfter="{expires}" Recipient="{acs}"/>'
             "</saml:SubjectConfirmation></saml:Subject>"
             f'<saml:Conditions NotBefore="{not_before}" NotOnOrAfter="{expires}">'
             f"<saml:AudienceRestriction><saml:Audience>{SAML_SP_ENTITY}</saml:Audience>"
@@ -206,7 +207,7 @@ class SamlIdp:
             '<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" '
             'xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" '
             f'ID="_response_{uuid.uuid4().hex}" Version="2.0" IssueInstant="{issued}" '
-            f'Destination="{acs}" InResponseTo="{request_id}">'
+            f'Destination="{acs}"{in_response_to}>'
             f"<saml:Issuer>{SAML_IDP_ENTITY}</saml:Issuer>"
             '<samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status>'
             f"{signed_text}</samlp:Response>"
@@ -256,6 +257,55 @@ def _saml_sign_in(proxy: Gateway, idp: SamlIdp, name_id: str, email: str | None)
         assert login.is_redirect, f"{login.status_code} {login.text}"
         request_id: Final = login.cookies[SAML_STATE_COOKIE]
         return browser.post(acs, data={"SAMLResponse": idp.response(acs, request_id, name_id, email)})
+
+
+SAML_PAIR_BASE: Final = "http://saml-pair.integration.invalid"
+SAML_PAIR_ACS: Final = f"{SAML_PAIR_BASE}/sso/saml/callback"
+
+
+@dataclass(frozen=True, slots=True)
+class SamlPair:
+    first: Gateway
+    second: Gateway
+
+
+@pytest.fixture(scope="module")
+def saml_pair(
+    saml_idp: SamlIdp, gateway_module: Gateway, tmp_path_factory: pytest.TempPathFactory
+) -> Iterator[SamlPair]:
+    """Two proxies sharing one database and one coordination Redis, with enable_redis_auth_cache left unset"""
+    environment: Final = {
+        "SAML_IDP_METADATA_XML": saml_idp.metadata(),
+        "SAML_SP_ENTITY_ID": SAML_SP_ENTITY,
+        "SAML_ALLOW_UNSOLICITED": "true",
+        "PROXY_BASE_URL": SAML_PAIR_BASE,
+    }
+    config: Final = Path("tests/integration/coordination_redis_proxy_config.yaml")
+    with (
+        owned_proxy_process(
+            gateway_module, tmp_path_factory.mktemp("saml-pair-first"), environment, config=config
+        ) as first,
+        owned_proxy_process(
+            gateway_module, tmp_path_factory.mktemp("saml-pair-second"), environment, config=config
+        ) as second,
+    ):
+        yield SamlPair(first.gateway, second.gateway)
+
+
+def _saml_login_ticket(proxy: Gateway) -> str:
+    with _browser() as browser:
+        login: Final = browser.get(f"{_proxy_url(proxy)}/sso/key/generate", params={"return_to": "/ui/"})
+    assert login.status_code == 303, f"{login.status_code} {login.text}"
+    return login.cookies[SAML_STATE_COOKIE]
+
+
+def _post_saml_response(proxy: Gateway, saml_response: str, ticket: str | None) -> httpx.Response:
+    with _browser() as browser:
+        return browser.post(
+            f"{_proxy_url(proxy)}/sso/saml/callback",
+            data={"SAMLResponse": saml_response},
+            headers={} if ticket is None else {"cookie": f"{SAML_STATE_COOKIE}={ticket}"},
+        )
 
 
 @pytest.fixture(scope="module")
@@ -811,3 +861,44 @@ def test_saml_sign_in_with_an_email_signs_in_as_a_real_account(
         assert callback.status_code == 303 and session is not None, f"{callback.status_code} {callback.text}"
         assert session["user_id"] == expected, f"session issued for user_id={session['user_id']!r}"
     assert _blank_accounts() == (), _blank_accounts()
+
+
+def test_saml_sign_in_started_on_one_proxy_completes_on_another(
+    saml_pair: SamlPair, saml_idp: SamlIdp, gateway_module: Gateway
+) -> None:
+    email: Final = f"saml-pair-{uuid.uuid4().hex[:12]}@example.com"
+    with gateway_module.scenario() as scenario:
+        _forget_sign_in(scenario, email)
+        ticket: Final = _saml_login_ticket(saml_pair.first)
+        callback: Final = _post_saml_response(
+            saml_pair.second, saml_idp.response(SAML_PAIR_ACS, ticket, email, email), ticket
+        )
+        assert callback.status_code == 303 and _session(callback) is not None, f"{callback.status_code} {callback.text}"
+        assert callback.headers["location"].startswith(f"{SAML_PAIR_BASE}/ui/"), callback.headers["location"]
+
+
+def test_saml_response_replayed_on_another_proxy_is_refused(
+    saml_pair: SamlPair, saml_idp: SamlIdp, gateway_module: Gateway
+) -> None:
+    email: Final = f"saml-pair-{uuid.uuid4().hex[:12]}@example.com"
+    with gateway_module.scenario() as scenario:
+        _forget_sign_in(scenario, email)
+        ticket: Final = _saml_login_ticket(saml_pair.first)
+        saml_response: Final = saml_idp.response(SAML_PAIR_ACS, ticket, email, email)
+        accepted: Final = _post_saml_response(saml_pair.second, saml_response, ticket)
+        assert accepted.status_code == 303, f"{accepted.status_code} {accepted.text}"
+        replayed: Final = _post_saml_response(saml_pair.first, saml_response, ticket)
+    assert replayed.status_code == 401 and _session(replayed) is None, f"{replayed.status_code} {replayed.text}"
+    assert "already been used" in string_value(JSON_OBJECT.validate_json(replayed.content)["detail"]), replayed.text
+
+
+def test_idp_initiated_saml_sign_in_completes_on_any_proxy(
+    saml_pair: SamlPair, saml_idp: SamlIdp, gateway_module: Gateway
+) -> None:
+    email: Final = f"saml-pair-{uuid.uuid4().hex[:12]}@example.com"
+    with gateway_module.scenario() as scenario:
+        _forget_sign_in(scenario, email)
+        callback: Final = _post_saml_response(
+            saml_pair.second, saml_idp.response(SAML_PAIR_ACS, None, email, email), None
+        )
+        assert callback.status_code == 303 and _session(callback) is not None, f"{callback.status_code} {callback.text}"
