@@ -183,7 +183,7 @@ def test_litellm_params_treats_blank_values_as_unset(blank: str) -> None:
 
 @pytest.mark.parametrize("value", [0, 1, 0.5])
 def test_litellm_params_accepts_valid_sample_rate(value: float) -> None:
-    params = LitellmParams(guardrail="llm_as_a_judge", mode="pre_call", sample_rate=value)
+    params = LitellmParams(guardrail="llm_as_a_judge", mode="pre_call", sample_rate=value, on_failure="log")
     assert params.sample_rate == float(value)
 
 
@@ -200,8 +200,37 @@ def test_litellm_params_rejects_invalid_max_input_chars(value: object) -> None:
 
 
 def test_litellm_params_accepts_max_input_chars() -> None:
-    params = LitellmParams(guardrail="llm_as_a_judge", mode="pre_call", max_input_chars=500)
+    params = LitellmParams(guardrail="llm_as_a_judge", mode="pre_call", max_input_chars=500, on_failure="log")
     assert params.max_input_chars == 500
+
+
+@pytest.mark.parametrize(
+    "litellm_params",
+    [
+        {"sample_rate": 0.5, "on_failure": "block", "mode": "pre_call"},
+        {"sample_rate": 0.5, "mode": "pre_call"},
+        {"max_input_chars": 5000, "on_failure": "block", "mode": "pre_call"},
+        {"max_input_chars": 5000, "on_failure": "block", "mode": "during_call"},
+    ],
+)
+def test_llm_judge_sampling_and_cap_rejected_when_judge_can_block(litellm_params: dict) -> None:
+    with pytest.raises(ValidationError, match="on_failure: log"):
+        LitellmParams(guardrail="llm_as_a_judge", **litellm_params)
+
+
+@pytest.mark.parametrize(
+    "litellm_params",
+    [
+        {"sample_rate": 1, "on_failure": "block", "mode": "pre_call"},
+        {"sample_rate": 1, "mode": "post_call"},
+        {"sample_rate": 0.05, "max_input_chars": 5000, "on_failure": "log", "mode": "pre_call"},
+        {"sample_rate": 0.5, "on_failure": "block", "mode": "logging_only"},
+        {"sample_rate": 0.5, "max_input_chars": 500, "mode": ["logging_only"]},
+    ],
+)
+def test_llm_judge_sampling_and_cap_allowed_when_judge_cannot_block(litellm_params: dict) -> None:
+    params = LitellmParams(guardrail="llm_as_a_judge", **litellm_params)
+    assert params.guardrail == "llm_as_a_judge"
 
 
 @pytest.mark.parametrize("value", [True, 5])
@@ -219,3 +248,11 @@ def test_non_judge_max_input_chars_zero_still_rejected() -> None:
 def test_non_judge_sample_rate_passes_through_unvalidated(value: object) -> None:
     params = LitellmParams(guardrail="decision_model", mode="pre_call", sample_rate=value)
     assert params.sample_rate == value
+
+
+def test_non_judge_sampling_and_cap_with_block_unaffected() -> None:
+    params = LitellmParams(
+        guardrail="decision_model", mode="pre_call", sample_rate=0.5, max_input_chars=500, on_failure="block"
+    )
+    assert params.sample_rate == 0.5
+    assert params.max_input_chars == 500

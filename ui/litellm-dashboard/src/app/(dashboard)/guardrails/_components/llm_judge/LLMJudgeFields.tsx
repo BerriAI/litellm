@@ -169,20 +169,23 @@ const LLMJudgeFields: React.FC<LLMJudgeFieldsProps> = ({ availableModels, contro
         )}
       >
         {({ id, name, value, onChange, onBlur, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
-          <Input
-            id={id}
-            name={name}
-            type="number"
-            min={0}
-            max={1}
-            step={0.01}
-            placeholder="1"
-            aria-invalid={ariaInvalid}
-            aria-describedby={ariaDescribedBy}
-            value={asText(value)}
-            onChange={(event) => onChange(event.target.value === "" ? null : event.target.value)}
-            onBlur={onBlur}
-          />
+          <>
+            <Input
+              id={id}
+              name={name}
+              type="number"
+              min={0}
+              max={1}
+              step={0.01}
+              placeholder="1"
+              aria-invalid={ariaInvalid}
+              aria-describedby={ariaDescribedBy}
+              value={asText(value)}
+              onChange={(event) => onChange(event.target.value === "" ? null : event.target.value)}
+              onBlur={onBlur}
+            />
+            <p className="text-xs text-muted-foreground">Only allowed when On failure is log</p>
+          </>
         )}
       </GuardrailField>
 
@@ -195,18 +198,21 @@ const LLMJudgeFields: React.FC<LLMJudgeFieldsProps> = ({ availableModels, contro
         )}
       >
         {({ id, name, value, onChange, onBlur, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
-          <Input
-            id={id}
-            name={name}
-            type="number"
-            min={1}
-            step={1}
-            aria-invalid={ariaInvalid}
-            aria-describedby={ariaDescribedBy}
-            value={asText(value)}
-            onChange={(event) => onChange(event.target.value === "" ? null : event.target.value)}
-            onBlur={onBlur}
-          />
+          <>
+            <Input
+              id={id}
+              name={name}
+              type="number"
+              min={1}
+              step={1}
+              aria-invalid={ariaInvalid}
+              aria-describedby={ariaDescribedBy}
+              value={asText(value)}
+              onChange={(event) => onChange(event.target.value === "" ? null : event.target.value)}
+              onBlur={onBlur}
+            />
+            <p className="text-xs text-muted-foreground">Only allowed when On failure is log</p>
+          </>
         )}
       </GuardrailField>
 

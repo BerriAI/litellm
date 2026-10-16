@@ -22,9 +22,7 @@ WORK_MODEL: Final = "lit8332-work-model"
 JUDGE_MODEL: Final = "lit8332-judge-model"
 CALL_ID_HEADER: Final = "x-litellm-call-id"
 RUN_TOKEN: Final = uuid.uuid4().hex[:8]
-CRITERIA: Final = [
-    {"name": "work", "description": "Is this request work related?", "weight": 100}
-]
+CRITERIA: Final = [{"name": "work", "description": "Is this request work related?", "weight": 100}]
 BASE_JUDGE_PARAMS: Final = {
     "guardrail": "llm_as_a_judge",
     "judge_model": JUDGE_MODEL,
@@ -85,7 +83,9 @@ def _work_handler(request: Request) -> Reply:
     return _chat_completion("synthetic work answer", model=WORK_MODEL)
 
 
-def _write_config(tmp_path: Path, work_url: str, judge_url: str, guardrail_params: Mapping[str, JsonValue]) -> tuple[Path, str]:
+def _write_config(
+    tmp_path: Path, work_url: str, judge_url: str, guardrail_params: Mapping[str, JsonValue]
+) -> tuple[Path, str]:
     config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     config["model_list"] = [
         {
@@ -109,9 +109,7 @@ def _write_config(tmp_path: Path, work_url: str, judge_url: str, guardrail_param
     config["litellm_settings"]["cache"] = False
     config["litellm_settings"].pop("cache_params", None)
     guardrail_name: Final = f"lit8332-{uuid.uuid4().hex}"
-    config["guardrails"] = [
-        {"guardrail_name": guardrail_name, "litellm_params": dict(guardrail_params)}
-    ]
+    config["guardrails"] = [{"guardrail_name": guardrail_name, "litellm_params": dict(guardrail_params)}]
     path: Final = tmp_path / "judge.yaml"
     path.write_text(yaml.safe_dump(config))
     return path, guardrail_name
@@ -152,11 +150,7 @@ def _guardrail_entries(meta: Mapping[str, JsonValue], name: str) -> list[dict[st
     if raw is None:
         return []
     items: Final = raw if isinstance(raw, list) else [raw]
-    return [
-        object_value(item)
-        for item in items
-        if object_value(item).get("guardrail_name") in (None, name)
-    ]
+    return [object_value(item) for item in items if object_value(item).get("guardrail_name") in (None, name)]
 
 
 def _statuses(row: Mapping[str, JsonValue], name: str) -> list[JsonValue]:
@@ -187,9 +181,7 @@ def test_sample_rate_bounds_judge_calls_and_marks_not_run(gateway: Gateway, tmp_
             call_ids: Final = tuple(f"lit8332-sample-{RUN_TOKEN}-{i}" for i in range(total))
             for call_id in call_ids:
                 _send(candidate, call_id)
-            rows: Final = eventually(
-                lambda: _spend_rows(call_ids), lambda values: len(values) == total, seconds=180
-            )
+            rows: Final = eventually(lambda: _spend_rows(call_ids), lambda values: len(values) == total, seconds=180)
             judged_rows: Final = [row for row in rows if _eval_entries(_meta(row))]
             skipped_rows: Final = [row for row in rows if not _eval_entries(_meta(row))]
             judged_calls: Final = len(judge.drain())
@@ -224,9 +216,7 @@ def test_sample_decision_depends_only_on_call_id(gateway: Gateway, tmp_path: Pat
             probe_rows: Final = eventually(
                 lambda: _spend_rows(probe_ids), lambda values: len(values) == len(probe_ids), seconds=180
             )
-            by_id: Final = {
-                str(row["litellm_call_id"]): bool(_eval_entries(_meta(row))) for row in probe_rows
-            }
+            by_id: Final = {str(row["litellm_call_id"]): bool(_eval_entries(_meta(row))) for row in probe_rows}
             sampled: Final = [call_id for call_id, judged in by_id.items() if judged]
             unsampled: Final = [call_id for call_id, judged in by_id.items() if not judged]
             assert sampled and unsampled, f"probe produced only sampled={len(sampled)} unsampled={len(unsampled)}"
@@ -249,8 +239,7 @@ def test_sample_decision_depends_only_on_call_id(gateway: Gateway, tmp_path: Pat
                 )
                 outcomes: Final = frozenset(bool(_eval_entries(_meta(row))) for row in rows)
                 assert outcomes == frozenset({by_id[call_id]}), (
-                    f"call id {call_id} decided {outcomes} across two keys and repeats, "
-                    f"probe said {by_id[call_id]}"
+                    f"call id {call_id} decided {outcomes} across two keys and repeats, probe said {by_id[call_id]}"
                 )
                 judge_calls: Final = len(judge.drain())
                 expected_calls: Final = 4 if by_id[call_id] else 0
@@ -261,9 +250,7 @@ def test_sample_decision_depends_only_on_call_id(gateway: Gateway, tmp_path: Pat
 
 def test_default_sample_rate_judges_every_request(gateway: Gateway, tmp_path: Path) -> None:
     with wire_server(_judge_scoring(95)) as judge, wire_server(_work_handler) as work:
-        config, gname = _write_config(
-            tmp_path, work.url, judge.url, {**BASE_JUDGE_PARAMS, "mode": "pre_call"}
-        )
+        config, gname = _write_config(tmp_path, work.url, judge.url, {**BASE_JUDGE_PARAMS, "mode": "pre_call"})
         with owned_proxy(gateway, tmp_path, {}, config=config) as candidate:
             call_ids: Final = tuple(f"lit8332-default-{RUN_TOKEN}-{i}" for i in range(10))
             for call_id in call_ids:
@@ -381,9 +368,7 @@ def test_max_input_chars_caps_judged_response_context(gateway: Gateway, tmp_path
             assert counts["e"] > 0, "response text missing from judge prompt"
 
 
-def test_two_judges_on_one_request_both_record_eval_information(
-    gateway: Gateway, tmp_path: Path
-) -> None:
+def test_two_judges_on_one_request_both_record_eval_information(gateway: Gateway, tmp_path: Path) -> None:
     with wire_server(_judge_scoring(95)) as judge, wire_server(_work_handler) as work:
         config, gname = _write_config(
             tmp_path,
@@ -435,9 +420,7 @@ def test_log_only_judge_failure_never_blocks(gateway: Gateway, tmp_path: Path) -
             rows: Final = eventually(
                 lambda: _spend_rows(("lit8332-logonly-" + RUN_TOKEN,)), lambda values: len(values) == 1, seconds=120
             )
-            assert _statuses(rows[0], gname) == ["guardrail_intervened"], _guardrail_entries(
-                _meta(rows[0]), gname
-            )
+            assert _statuses(rows[0], gname) == ["guardrail_intervened"], _guardrail_entries(_meta(rows[0]), gname)
 
 
 def test_judge_upstream_error_fails_open(gateway: Gateway, tmp_path: Path) -> None:
@@ -489,9 +472,7 @@ def test_judge_non_json_verdict_fails_open(gateway: Gateway, tmp_path: Path) -> 
 
 
 def _guardrail_table_rows(name: str) -> list[dict[str, JsonValue]]:
-    return read_rows(
-        'SELECT guardrail_name FROM "LiteLLM_GuardrailsTable" WHERE guardrail_name = %s', (name,)
-    )
+    return read_rows('SELECT guardrail_name FROM "LiteLLM_GuardrailsTable" WHERE guardrail_name = %s', (name,))
 
 
 def _drop_guardrail_row(name: str) -> None:
@@ -524,14 +505,20 @@ def test_invalid_sampling_params_rejected_on_create(
     gateway: Gateway, tmp_path: Path, field: str, value: JsonValue
 ) -> None:
     with wire_server(_judge_scoring(95)) as judge, wire_server(_work_handler) as work:
-        config, gname = _write_config(
-            tmp_path, work.url, judge.url, {**BASE_JUDGE_PARAMS, "mode": "pre_call"}
-        )
+        config, gname = _write_config(tmp_path, work.url, judge.url, {**BASE_JUDGE_PARAMS, "mode": "pre_call"})
         with owned_proxy(gateway, tmp_path, {}, config=config) as candidate:
             name: Final = f"lit8332-invalid-{field}-{uuid.uuid4().hex[:12]}"
             try:
                 response: Final = _create_guardrail(
-                    candidate, name, {**BASE_JUDGE_PARAMS, "default_on": False, "mode": "pre_call", "judge_model": "lit8332-zombie-judge", field: value}
+                    candidate,
+                    name,
+                    {
+                        **BASE_JUDGE_PARAMS,
+                        "default_on": False,
+                        "mode": "pre_call",
+                        "judge_model": "lit8332-zombie-judge",
+                        field: value,
+                    },
                 )
                 assert 400 <= response.status_code < 500, (
                     f"POST /guardrails {field}={value!r} returned {response.status_code}: {response.text}"
@@ -543,9 +530,7 @@ def test_invalid_sampling_params_rejected_on_create(
 
 def test_valid_sampling_params_accepted_on_create(gateway: Gateway, tmp_path: Path) -> None:
     with wire_server(_judge_scoring(95)) as judge, wire_server(_work_handler) as work:
-        config, gname = _write_config(
-            tmp_path, work.url, judge.url, {**BASE_JUDGE_PARAMS, "mode": "pre_call"}
-        )
+        config, gname = _write_config(tmp_path, work.url, judge.url, {**BASE_JUDGE_PARAMS, "mode": "pre_call"})
         with owned_proxy(gateway, tmp_path, {}, config=config) as candidate:
             name: Final = f"lit8332-valid-{uuid.uuid4().hex[:12]}"
             try:
@@ -607,9 +592,7 @@ def test_not_run_requests_excluded_from_guardrail_usage(gateway: Gateway, tmp_pa
             call_ids: Final = tuple(f"lit8332-usage-{RUN_TOKEN}-{i}" for i in range(total))
             for call_id in call_ids:
                 _send(candidate, call_id)
-            rows: Final = eventually(
-                lambda: _spend_rows(call_ids), lambda values: len(values) == total, seconds=180
-            )
+            rows: Final = eventually(lambda: _spend_rows(call_ids), lambda values: len(values) == total, seconds=180)
             not_run: Final = [row for row in rows if _statuses(row, guardrail_name) == ["not_run"]]
             assert not_run, f"no not_run guardrail rows among {total} requests at sample_rate 0.5"
             judged_rows: Final = [row for row in rows if _eval_entries(_meta(row))]
@@ -639,9 +622,7 @@ def test_logging_only_judge_records_eval_information(gateway: Gateway, tmp_path:
         with owned_proxy(gateway, tmp_path, {}, config=config) as candidate:
             call_id: Final = "lit8332-logscan-" + RUN_TOKEN
             _send(candidate, call_id)
-            rows: Final = eventually(
-                lambda: _spend_rows((call_id,)), lambda values: len(values) == 1, seconds=120
-            )
+            rows: Final = eventually(lambda: _spend_rows((call_id,)), lambda values: len(values) == 1, seconds=120)
             meta: Final = _meta(rows[0])
             entries: Final = _eval_entries(meta)
             assert entries, f"logging_only judge left no eval_information in spend row: {meta}"
@@ -649,9 +630,7 @@ def test_logging_only_judge_records_eval_information(gateway: Gateway, tmp_path:
             assert all(entry.get("eval_name") == gname for entry in entries), entries
 
 
-def test_eval_information_reasoning_redacted_when_store_prompts_disabled(
-    gateway: Gateway, tmp_path: Path
-) -> None:
+def test_eval_information_reasoning_redacted_when_store_prompts_disabled(gateway: Gateway, tmp_path: Path) -> None:
     with wire_server(_judge_scoring(95)) as judge, wire_server(_work_handler) as work:
         config, gname = _write_config(
             tmp_path, work.url, judge.url, {**BASE_JUDGE_PARAMS, "mode": "pre_call", "on_failure": "log"}
@@ -662,9 +641,7 @@ def test_eval_information_reasoning_redacted_when_store_prompts_disabled(
         with owned_proxy(gateway, tmp_path, {}, config=config) as candidate:
             call_id: Final = "lit8332-redact-" + RUN_TOKEN
             _send(candidate, call_id)
-            rows: Final = eventually(
-                lambda: _spend_rows((call_id,)), lambda values: len(values) == 1, seconds=120
-            )
+            rows: Final = eventually(lambda: _spend_rows((call_id,)), lambda values: len(values) == 1, seconds=120)
             meta: Final = _meta(rows[0])
             entries: Final = _eval_entries(meta)
             assert entries, f"judged spend row has no eval_information: {meta}"
@@ -674,3 +651,191 @@ def test_eval_information_reasoning_redacted_when_store_prompts_disabled(
                 for verdict in list_value(entry.get("verdicts")):
                     assert object_value(verdict)["reasoning"] == "REDACTED_BY_LITELM"
                     assert object_value(verdict)["score"] == 95
+
+
+_BLOCKING_JUDGE_PARAMS: Final = [
+    ({"mode": "pre_call", "on_failure": "block", "sample_rate": 0.5}, "sample_rate"),
+    ({"mode": "pre_call", "sample_rate": 0.5}, "sample_rate"),
+    ({"mode": "pre_call", "on_failure": "block", "max_input_chars": 5000}, "max_input_chars"),
+    ({"mode": "during_call", "on_failure": "block", "max_input_chars": 5000}, "max_input_chars"),
+]
+
+
+@pytest.mark.parametrize("blocking_params,field", _BLOCKING_JUDGE_PARAMS)
+def test_sampling_params_rejected_on_blocking_judge(
+    gateway: Gateway, tmp_path: Path, blocking_params: Mapping[str, JsonValue], field: str
+) -> None:
+    with wire_server(_judge_scoring(95)) as judge, wire_server(_work_handler) as work:
+        config, gname = _write_config(tmp_path, work.url, judge.url, {**BASE_JUDGE_PARAMS, "mode": "pre_call"})
+        with owned_proxy(gateway, tmp_path, {}, config=config) as candidate:
+            name: Final = f"lit8332-blocking-{field}-{uuid.uuid4().hex[:12]}"
+            try:
+                litellm_params: Final = {
+                    **BASE_JUDGE_PARAMS,
+                    "default_on": False,
+                    "judge_model": "lit8332-zombie-judge",
+                    **blocking_params,
+                }
+                if "on_failure" not in blocking_params:
+                    litellm_params.pop("on_failure", None)
+                response: Final = _create_guardrail(candidate, name, litellm_params)
+                assert 400 <= response.status_code < 500, (
+                    f"POST /guardrails {blocking_params} returned {response.status_code}: {response.text}"
+                )
+                assert field in response.text, f"rejection did not name {field}: {response.text}"
+                assert _guardrail_table_rows(name) == []
+            finally:
+                _drop_guardrail_row(name)
+
+
+@pytest.mark.parametrize(
+    "accepted_params",
+    [
+        {"mode": "pre_call", "on_failure": "block", "sample_rate": 1},
+        {"mode": "logging_only", "on_failure": "block", "sample_rate": 0.5},
+    ],
+)
+def test_sampling_params_accepted_when_judge_cannot_block(
+    gateway: Gateway, tmp_path: Path, accepted_params: Mapping[str, JsonValue]
+) -> None:
+    with wire_server(_judge_scoring(95)) as judge, wire_server(_work_handler) as work:
+        config, gname = _write_config(tmp_path, work.url, judge.url, {**BASE_JUDGE_PARAMS, "mode": "pre_call"})
+        with owned_proxy(gateway, tmp_path, {}, config=config) as candidate:
+            name: Final = f"lit8332-nonblocking-{uuid.uuid4().hex[:12]}"
+            try:
+                response: Final = _create_guardrail(
+                    candidate,
+                    name,
+                    {
+                        **BASE_JUDGE_PARAMS,
+                        "default_on": False,
+                        "judge_model": "lit8332-zombie-judge",
+                        **accepted_params,
+                    },
+                )
+                assert response.status_code == 200, (
+                    f"POST /guardrails {accepted_params} returned {response.status_code}: {response.text}"
+                )
+                assert _guardrail_table_rows(name) != []
+            finally:
+                _drop_guardrail_row(name)
+
+
+def test_blocking_update_to_sampled_judge_rejected(gateway: Gateway, tmp_path: Path) -> None:
+    with wire_server(_judge_scoring(95)) as judge, wire_server(_work_handler) as work:
+        config, gname = _write_config(tmp_path, work.url, judge.url, {**BASE_JUDGE_PARAMS, "mode": "pre_call"})
+        with owned_proxy(gateway, tmp_path, {}, config=config) as candidate:
+            name: Final = f"lit8332-update-{uuid.uuid4().hex[:12]}"
+            try:
+                create: Final = _create_guardrail(
+                    candidate,
+                    name,
+                    {
+                        **BASE_JUDGE_PARAMS,
+                        "default_on": False,
+                        "mode": "pre_call",
+                        "on_failure": "log",
+                        "sample_rate": 0.5,
+                        "judge_model": "lit8332-zombie-judge",
+                    },
+                )
+                assert create.status_code == 200, create.text
+                guardrail_id: Final = str(object_value(create.json())["guardrail_id"])
+
+                put_response: Final = candidate.request(
+                    "PUT",
+                    f"/guardrails/{guardrail_id}",
+                    {
+                        "guardrail": {
+                            "guardrail_name": name,
+                            "litellm_params": {
+                                **BASE_JUDGE_PARAMS,
+                                "default_on": False,
+                                "mode": "pre_call",
+                                "on_failure": "block",
+                                "sample_rate": 0.5,
+                                "judge_model": "lit8332-zombie-judge",
+                            },
+                        }
+                    },
+                )
+                assert 400 <= put_response.status_code < 500, (
+                    f"PUT on_failure=block onto sampled judge returned {put_response.status_code}: {put_response.text}"
+                )
+
+                patch_response: Final = candidate.request(
+                    "PATCH",
+                    f"/guardrails/{guardrail_id}",
+                    {"litellm_params": {"on_failure": "block"}},
+                )
+                assert 400 <= patch_response.status_code < 500, (
+                    f"PATCH on_failure=block onto sampled judge returned {patch_response.status_code}: {patch_response.text}"
+                )
+
+                stored: Final = read_rows(
+                    'SELECT litellm_params FROM "LiteLLM_GuardrailsTable" WHERE guardrail_name = %s', (name,)
+                )
+                assert stored, f"guardrail row for {name} missing after rejected update"
+                assert object_value(stored[0]["litellm_params"]).get("on_failure") == "log", (
+                    f"rejected update still changed the stored row: {stored[0]}"
+                )
+            finally:
+                _drop_guardrail_row(name)
+
+
+def test_config_does_not_load_sampled_blocking_judge(gateway: Gateway, tmp_path: Path) -> None:
+    with wire_server(_judge_scoring(95)) as judge, wire_server(_work_handler) as work:
+        config, gname = _write_config(
+            tmp_path,
+            work.url,
+            judge.url,
+            {**BASE_JUDGE_PARAMS, "mode": "pre_call", "on_failure": "block", "sample_rate": 0.5},
+        )
+        with owned_proxy(gateway, tmp_path, {}, config=config) as candidate:
+            call_ids: Final = tuple(f"lit8332-cfgblock-{RUN_TOKEN}-{i}" for i in range(5))
+            for call_id in call_ids:
+                _send(candidate, call_id)
+            rows: Final = eventually(
+                lambda: _spend_rows(call_ids), lambda values: len(values) == len(call_ids), seconds=120
+            )
+            assert len(judge.drain()) == 0, "a blocking judge was sampled despite on_failure=block + sample_rate"
+            for row in rows:
+                assert _statuses(row, gname) == [], (
+                    f"sampled blocking judge left guardrail_information: {_guardrail_entries(_meta(row), gname)}"
+                )
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"max_input_chars": True},
+        {"max_input_chars": 5},
+        {"sample_rate": 1.5},
+        {"sample_rate": "0.5"},
+    ],
+)
+def test_non_judge_guardrail_validation_unchanged(
+    gateway: Gateway, tmp_path: Path, extra: Mapping[str, JsonValue]
+) -> None:
+    with wire_server(_judge_scoring(95)) as judge, wire_server(_work_handler) as work:
+        config, gname = _write_config(tmp_path, work.url, judge.url, {**BASE_JUDGE_PARAMS, "mode": "pre_call"})
+        with owned_proxy(gateway, tmp_path, {}, config=config) as candidate:
+            name: Final = f"lit8332-decision-{uuid.uuid4().hex[:12]}"
+            try:
+                response: Final = _create_guardrail(
+                    candidate,
+                    name,
+                    {
+                        "guardrail": "decision_model",
+                        "mode": "pre_call",
+                        "decision_model": "lit8332-live",
+                        "checks": [{"name": "c", "instructions": "work?"}],
+                        "default_on": False,
+                        **extra,
+                    },
+                )
+                assert response.status_code == 200, (
+                    f"POST /guardrails decision_model {extra} returned {response.status_code}: {response.text}"
+                )
+            finally:
+                _drop_guardrail_row(name)
