@@ -6,7 +6,7 @@ from typing import Final
 
 import anthropic
 import pytest
-from integration._support.client import Gateway, Scenario
+from integration._support.client import Gateway, Scenario, string_value
 from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
@@ -23,6 +23,8 @@ _ANTHROPIC_COUNT: Final = 58
 _BEDROCK_COUNT: Final = 1345
 _GEMINI: Final = "gemini-4-argon"
 _VERTEX_PROJECT: Final = "scripted-project"
+_CITY: Final = "Paris"
+_REDACTED_CITY: Final = "[CITY]"
 _TOOLS: Final[list[JsonValue]] = [
     {
         "name": "get_weather",
@@ -146,6 +148,12 @@ def _openai_model(scenario: Scenario, wire: Wire, **parameters: JsonValue) -> st
 def _mistral_model(scenario: Scenario, wire: Wire, **parameters: JsonValue) -> str:
     return scenario.model(
         model="mistral/mistral-small-latest", api_base=wire.url, api_key="synthetic-mistral-key", **parameters
+    )
+
+
+def _anthropic_model(scenario: Scenario, wire: Wire, **parameters: JsonValue) -> str:
+    return scenario.model(
+        model="anthropic/claude-sonnet-4-6", api_base=wire.url, api_key="synthetic-anthropic-key", **parameters
     )
 
 
@@ -335,9 +343,7 @@ def _forwarded_tool_result(body: Mapping[str, JsonValue]) -> JsonValue:
 
 def test_native_anthropic_forwards_a_null_tool_result_text_unchanged(gateway: Gateway) -> None:
     with wire_server(_anthropic_peer) as wire, gateway.scenario() as scenario:
-        model: Final = scenario.model(
-            model="anthropic/claude-sonnet-4-6", api_base=wire.url, api_key="synthetic-anthropic-key"
-        )
+        model: Final = _anthropic_model(scenario, wire)
         body: Final = _body(model, _NULL_TEXT)
         created: Final = gateway.request("POST", "/v1/messages", {**body, "max_tokens": 64}, headers=_CLAUDE_CODE)
         counted: Final = gateway.request("POST", "/v1/messages/count_tokens", body, headers=_CLAUDE_CODE)
@@ -383,3 +389,147 @@ def test_valid_tool_result_text_reaches_the_upstream(gateway: Gateway, provider:
             assert _function_call_output(_only(requests, "/responses/input_tokens")) == f"{_WEATHER}\n"
         else:
             assert _tool_message_text(_only(requests, "/chat/completions")) == _WEATHER
+
+
+def _redacted(content: JsonValue) -> JsonValue:
+    if isinstance(content, str):
+        return content.replace(_CITY, _REDACTED_CITY)
+    if isinstance(content, list):
+        return [_redacted(part) for part in content]
+    if isinstance(content, dict) and isinstance(content.get("text"), str):
+        return {**content, "text": _redacted(content["text"])}
+    return content
+
+
+def _redacted_row(row: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    return {**row, "content": _redacted(row["content"])} if "content" in row else dict(row)
+
+
+def _guardrail_peer(request: Request) -> Reply:
+    if request.target.startswith("/none/"):
+        return Reply(body=json.dumps({"action": "NONE"}).encode())
+    rows: Final = _JSON_OBJECTS.validate_python(_json(request)["structured_messages"])
+    verdict: Final = {"action": "GUARDRAIL_INTERVENED", "structured_messages": [_redacted_row(row) for row in rows]}
+    return Reply(body=json.dumps(verdict).encode())
+
+
+def _delete_guardrail(gateway: Gateway, identity: str) -> None:
+    deleted: Final = gateway.request("DELETE", f"/guardrails/{identity}")
+    assert deleted.status_code == 200, deleted.text
+
+
+def _guardrail(gateway: Gateway, scenario: Scenario, wire: Wire, mode: str) -> str:
+    name: Final = f"tool-result-{mode}-{uuid.uuid4().hex}"
+    params: Final[dict[str, JsonValue]] = {
+        "guardrail": "generic_guardrail_api",
+        "mode": "pre_call",
+        "default_on": False,
+        "api_base": f"{wire.url}/{mode}",
+        "api_key": "synthetic-guardrail-key",
+    }
+    created: Final = gateway.post("/guardrails", {"guardrail": {"guardrail_name": name, "litellm_params": params}})
+    scenario.cleanups.callback(_delete_guardrail, gateway, string_value(created["guardrail_id"]))
+    return name
+
+
+def _forwarded_tool_result_texts(body: Mapping[str, JsonValue]) -> tuple[JsonValue, ...]:
+    content: Final = _forwarded_tool_result(body)
+    if isinstance(content, str):
+        return (content,)
+    return tuple(block.get("text") for block in _JSON_OBJECTS.validate_python(content) if block.get("type") == "text")
+
+
+def test_rewriting_guardrail_rejects_a_non_string_tool_result_text(gateway: Gateway) -> None:
+    with (
+        wire_server(_anthropic_peer) as provider,
+        wire_server(_guardrail_peer) as guard,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _anthropic_model(scenario, provider)
+        body: Final = _body(model, _NULL_TEXT, max_tokens=64, guardrails=[_guardrail(gateway, scenario, guard, "rows")])
+        _assert_field_rejection(gateway, "/v1/messages", body)
+        _assert_field_rejection(gateway, "/v1/messages", {**body, "stream": True})
+        assert provider.drain() == ()
+
+
+@pytest.mark.parametrize("source", ("body", "claude_code"))
+def test_rewriting_guardrail_drops_the_malformed_text_under_drop_params(gateway: Gateway, source: str) -> None:
+    deployment, extra, headers = _DROP_SOURCES[source]
+    with (
+        wire_server(_anthropic_peer) as provider,
+        wire_server(_guardrail_peer) as guard,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _anthropic_model(scenario, provider, **deployment)
+        guardrail: Final = _guardrail(gateway, scenario, guard, "rows")
+        body: Final = _body(model, _NUMBER_THEN_WEATHER, max_tokens=64, guardrails=[guardrail], **extra)
+        created: Final = gateway.request("POST", "/v1/messages", body, headers=headers)
+        assert created.status_code == 200, created.text
+        forwarded: Final = _only(provider.drain(), "/v1/messages")
+        first_turn: Final = json.dumps(_JSON_OBJECTS.validate_python(forwarded["messages"])[0])
+        assert _REDACTED_CITY in first_turn and _CITY not in first_turn, first_turn
+        assert _forwarded_tool_result_texts(forwarded) == (_WEATHER,), forwarded
+
+
+def test_guardrail_that_rewrites_nothing_forwards_a_null_tool_result_text_unchanged(gateway: Gateway) -> None:
+    with (
+        wire_server(_anthropic_peer) as provider,
+        wire_server(_guardrail_peer) as guard,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _anthropic_model(scenario, provider)
+        guardrail: Final = _guardrail(gateway, scenario, guard, "none")
+        created: Final = gateway.request(
+            "POST", "/v1/messages", _body(model, _NULL_TEXT, max_tokens=64, guardrails=[guardrail])
+        )
+        assert created.status_code == 200, created.text
+        assert len(guard.drain()) == 1
+        assert _forwarded_tool_result(_only(provider.drain(), "/v1/messages")) == [{"type": "text", "text": None}]
+
+
+def _forwarded_chat_turns(wire: Wire) -> tuple[dict[str, JsonValue], ...]:
+    return _JSON_OBJECTS.validate_python(_only(wire.drain(), "/chat/completions")["messages"])
+
+
+def test_mistral_receives_the_tool_reply_whose_only_text_drop_params_dropped(gateway: Gateway) -> None:
+    with wire_server(_chat_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _mistral_model(scenario, wire)
+        created: Final = gateway.request(
+            "POST", "/v1/messages", _body(model, _NULL_TEXT, max_tokens=64, drop_params=True)
+        )
+        assert created.status_code == 200, created.text
+        turns: Final = _forwarded_chat_turns(wire)
+        assert [turn["role"] for turn in turns] == ["user", "assistant", "tool"], turns
+        calls: Final = _JSON_OBJECTS.validate_python(turns[1]["tool_calls"])
+        assert [call["id"] for call in calls] == [turns[2]["tool_call_id"]], turns
+        assert _tool_message_text({"messages": list(turns)}) == "", turns
+
+
+def test_mistral_chat_completions_drops_only_empty_assistant_messages(gateway: Gateway) -> None:
+    ask: Final = f"What is the weather in {_CITY}? {uuid.uuid4().hex}"
+    call: Final[dict[str, JsonValue]] = {
+        "id": "call_weather",
+        "type": "function",
+        "function": {"name": "get_weather", "arguments": json.dumps({"city": _CITY})},
+    }
+    messages: Final[list[JsonValue]] = [
+        {"role": "system", "content": ""},
+        {"role": "user", "content": ask},
+        {"role": "assistant", "content": ""},
+        {"role": "assistant", "content": None, "tool_calls": [call]},
+        {"role": "tool", "tool_call_id": "call_weather", "content": ""},
+        {"role": "user", "content": ""},
+    ]
+    with wire_server(_chat_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _mistral_model(scenario, wire)
+        response: Final = gateway.request("POST", "/v1/chat/completions", {"model": model, "messages": messages})
+        assert response.status_code == 200, response.text
+        turns: Final = _forwarded_chat_turns(wire)
+        assert [(turn["role"], turn.get("content")) for turn in turns] == [
+            ("system", ""),
+            ("user", ask),
+            ("assistant", None),
+            ("tool", ""),
+            ("user", ""),
+        ], turns
+        assert turns[3]["tool_call_id"] == "call_weather", turns
