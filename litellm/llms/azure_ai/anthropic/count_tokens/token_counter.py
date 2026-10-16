@@ -5,12 +5,14 @@ Azure AI Anthropic Token Counter implementation using the CountTokens API.
 import os
 from typing import Any, Final
 
+from pydantic import JsonValue
+
 from litellm._logging import verbose_logger
 from litellm.llms.azure_ai.anthropic.count_tokens.handler import (
     AzureAIAnthropicCountTokensHandler,
 )
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
-from litellm.types.utils import LlmProviders, TokenCountResponse
+from litellm.types.utils import LlmProviders, TokenCountMessagesFormat, TokenCountResponse
 
 # Global handler instance - reuse across all token counting requests
 azure_ai_anthropic_count_tokens_handler: Final = AzureAIAnthropicCountTokensHandler()
@@ -28,12 +30,14 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
     async def count_tokens(
         self,
         model_to_use: str,
-        messages: list[dict[str, object]] | None,
+        messages: list[dict[str, JsonValue]] | None,
         contents: list[dict[str, object]] | None,
         deployment: dict[str, Any] | None = None,
         request_model: str = "",
-        tools: list[dict[str, object]] | None = None,
+        tools: list[dict[str, JsonValue]] | None = None,
         system: object | None = None,
+        messages_format: TokenCountMessagesFormat = "anthropic",
+        output_format: JsonValue = None,
     ) -> TokenCountResponse | None:
         """
         Count tokens using Azure AI Anthropic's CountTokens API.
@@ -86,12 +90,14 @@ class AzureAIAnthropicTokenCounter(BaseTokenCounter):
             )
 
             if result is not None:
-                return TokenCountResponse(
-                    total_tokens=result.get("input_tokens", 0),
-                    request_model=request_model,
-                    model_used=model_to_use,
-                    tokenizer_type="azure_ai_anthropic_api",
-                    original_response=result,
+                return TokenCountResponse.model_validate(
+                    {
+                        "total_tokens": result.get("input_tokens", 0),
+                        "request_model": request_model,
+                        "model_used": model_to_use,
+                        "tokenizer_type": "azure_ai_anthropic_api",
+                        "original_response": result,
+                    }
                 )
         except AnthropicError as e:
             verbose_logger.warning(

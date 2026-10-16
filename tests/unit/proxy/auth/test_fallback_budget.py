@@ -429,7 +429,11 @@ async def test_check_fails_closed_when_the_spend_lookup_breaks(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_router_skips_the_paid_fallback_target_when_over_budget():
-    from litellm.router_utils.fallback_event_handlers import _is_fallback_target_within_budget
+    from litellm.router_utils.fallback_event_handlers import (
+        AttemptedFallbackTargets,
+        _is_fallback_target_within_budget,
+    )
+    from litellm.types.router import FallbackSkipReason, SkippedFallbackTarget
 
     router = Router(
         model_list=[FREE_MODEL, PAID_MODEL],
@@ -438,19 +442,34 @@ async def test_router_skips_the_paid_fallback_target_when_over_budget():
     )
     over = {"metadata": {"user_api_key_auth": _token(user_spend=1900.0, user_max_budget=50.0)}}
     under = {"metadata": {"user_api_key_auth": _token(user_spend=1.0, user_max_budget=50.0)}}
+    over_attempted: Final = AttemptedFallbackTargets()
+    under_attempted: Final = AttemptedFallbackTargets()
 
-    assert await _is_fallback_target_within_budget(router, "paid-model", "free-model", over) is False
-    assert await _is_fallback_target_within_budget(router, "paid-model", "free-model", under) is True
+    assert (
+        await _is_fallback_target_within_budget(router, "paid-model", "free-model", over, attempted=over_attempted)
+        is False
+    )
+    assert (
+        await _is_fallback_target_within_budget(
+            router, "paid-model", "free-model", under, attempted=under_attempted
+        )
+        is True
+    )
+    assert over_attempted.skipped == (SkippedFallbackTarget("paid-model", FallbackSkipReason.OVER_BUDGET),)
 
 
 @pytest.mark.asyncio
 async def test_router_without_a_budget_check_attempts_every_fallback():
-    from litellm.router_utils.fallback_event_handlers import _is_fallback_target_within_budget
+    from litellm.router_utils.fallback_event_handlers import AttemptedFallbackTargets, _is_fallback_target_within_budget
 
     router = _router()  # fallback_budget_check defaults to None
     over = {"metadata": {"user_api_key_auth": _token(user_spend=1900.0, user_max_budget=50.0)}}
+    attempted: Final = AttemptedFallbackTargets()
 
-    assert await _is_fallback_target_within_budget(router, "paid-model", "free-model", over) is True
+    assert (
+        await _is_fallback_target_within_budget(router, "paid-model", "free-model", over, attempted=attempted)
+        is True
+    )
 
 
 @pytest.mark.asyncio

@@ -197,6 +197,7 @@ describe("provider_info_helpers", () => {
     it("should map every provider to a bundled logo except the known logoless set, never a raw /ui/assets path", () => {
       const knownLogolessProviders = [
         Providers.AUTO_ROUTER,
+        Providers.Bespoke,
         Providers.BYTEZ,
         Providers.CLARIFAI,
         Providers.Cognition,
@@ -209,6 +210,7 @@ describe("provider_info_helpers", () => {
         Providers.GALADRIEL,
         Providers.GradientAI,
         Providers.HEROKU,
+        Providers.Laya,
         Providers.LEMONADE,
         Providers.LLAMAFILE,
         Providers.MARITALK,
@@ -369,6 +371,13 @@ describe("provider_info_helpers", () => {
     it("should return decision model placeholders for the TypeSafe and StrandsDecider dropdown keys", () => {
       expect(getPlaceholder("TypeSafe")).toBe("typesafe/jev-latest");
       expect(getPlaceholder("StrandsDecider")).toBe("strands_decider/strands-decider-2B-hobson-v19");
+    });
+
+    it.each([
+      [Providers.Laya, "laya/english"],
+      [Providers.Bespoke, "bespoke/nimble"],
+    ])("should return the %s decisions model placeholder", (provider, placeholder) => {
+      expect(getPlaceholder(provider)).toBe(placeholder);
     });
 
     it("should return default gpt-3.5-turbo placeholder for unknown provider", () => {

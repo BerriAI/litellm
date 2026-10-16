@@ -16,8 +16,8 @@ from litellm.rust_bridge.host import settings
 from litellm.rust_bridge.ocr.entrypoints import NATIVE_AOCR, NATIVE_OCR
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
+from tests.test_litellm_rust.ocr.data import OCR_DOCUMENT, OCR_MODEL, OCR_RESPONSE
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec, recording_service
-from tests.test_litellm_rust.support.requests import OCR_DOCUMENT, OCR_MODEL, OCR_RESPONSE
 
 native: Final = pytest.importorskip("litellm.rust_bridge._native")
 

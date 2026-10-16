@@ -1,5 +1,7 @@
 import base64
+import functools
 import json
+from types import MappingProxyType
 from typing import Any, Final, cast
 
 import pytest
@@ -43,6 +45,7 @@ from litellm.types.utils import (
     StreamingChoices,
     Usage,
 )
+from litellm.utils import remove_additional_properties, remove_strict_from_schema
 
 
 def test_translate_openai_response_to_anthropic_empty_choices() -> None:
@@ -4424,6 +4427,95 @@ def test_tool_result_plain_text_unchanged_by_openai_transform():
     assert len(tool_messages) == 1
     assert tool_messages[0]["content"] == "42 files found"
     assert _image_urls_in_user_messages(result) == []
+
+
+def _caller_tools_with_strict_schemas() -> list[dict[str, object]]:
+    return [
+        {
+            "type": "custom",
+            "name": "lint",
+            "strict": True,
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "additionalProperties": False,
+                    },
+                    "strict": {"type": "boolean"},
+                },
+                "additionalProperties": False,
+            },
+            "input_examples": [{"target": {"path": "a.py"}, "strict": True}],
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "strict": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "additionalProperties": False,
+                },
+            },
+        },
+    ]
+
+
+def test_translate_anthropic_tools_to_openai_leaves_caller_tools_untouched_by_schema_cleanup():
+    adapter: Final = LiteLLMAnthropicMessagesAdapter()
+    tools: Final = _caller_tools_with_strict_schemas()
+
+    translated_tools, _ = adapter.translate_anthropic_tools_to_openai(tools=tools)
+    remove_strict_from_schema(remove_additional_properties(translated_tools))
+
+    assert tools == _caller_tools_with_strict_schemas()
+
+
+def _schema_nested_past_the_recursion_limit() -> dict[str, object]:
+    return functools.reduce(
+        lambda inner, level: {"type": "object", "properties": {f"p{level}": inner}},
+        range(600),
+        cast(dict[str, object], {"type": "string"}),
+    )
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [
+        MappingProxyType(
+            {
+                "name": "lint",
+                "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}},
+                "input_examples": [{"path": "a.py"}],
+            }
+        ),
+        {"name": "lint", "input_schema": _schema_nested_past_the_recursion_limit(), "input_examples": [{}]},
+    ],
+    ids=["frozen_mapping", "schema_nested_past_the_recursion_limit"],
+)
+def test_translate_anthropic_tools_to_openai_leaves_tools_deepcopy_cannot_copy_untouched(tool):
+    adapter: Final = LiteLLMAnthropicMessagesAdapter()
+
+    translated_tools, _ = adapter.translate_anthropic_tools_to_openai(tools=[tool])
+
+    assert [translated["function"]["name"] for translated in translated_tools] == ["lint"]
+    assert translated_tools[0]["function"]["parameters"]["input_examples"] == tool["input_examples"]
+    assert set(tool["input_schema"]) == {"type", "properties"}
+
+
+def test_translate_anthropic_tools_to_openai_translates_a_tool_json_cannot_copy():
+    adapter: Final = LiteLLMAnthropicMessagesAdapter()
+    properties: Final = {"level": {"enum": {1, 2}}}
+
+    translated_tools, _ = adapter.translate_anthropic_tools_to_openai(
+        tools=[{"name": "lint", "input_schema": {"type": "object", "properties": properties}}]
+    )
+
+    assert [translated["function"]["name"] for translated in translated_tools] == ["lint"]
+    assert translated_tools[0]["function"]["parameters"]["properties"] == properties
 
 
 TOOL_RESULT_PDF_B64 = base64.b64encode(b"%PDF-1.4 minimal regression fixture").decode()

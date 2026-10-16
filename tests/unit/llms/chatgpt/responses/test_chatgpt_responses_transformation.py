@@ -371,6 +371,7 @@ class TestChatGPTResponsesAPITransformation:
                 "type": "error",
                 "error": {"message": "ChatGPT upstream failed"},
             },
+            {"type": "error", "code": "server_error", "message": "ChatGPT upstream failed"},
         ],
     )
     def test_chatgpt_non_stream_sse_response_raises_openai_error(self, error_chunk):
@@ -392,5 +393,5 @@ class TestChatGPTResponsesAPITransformation:
                 logging_obj=logging_obj,
             )
 
-        assert "ChatGPT upstream failed" in str(exc_info.value)
+        assert exc_info.value.message == "ChatGPT upstream failed"
         assert exc_info.value.status_code == 502
