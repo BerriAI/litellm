@@ -25,9 +25,9 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (  # noqa: F401  # l
     RateLimitDescriptor,
     RateLimitDescriptorRateLimitObject,
     RateLimitResponse,
-    fail_closed_rate_limit_enforcement_from_general_settings,
     _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     claim_request_stash_for_data,
+    fail_closed_rate_limit_enforcement_from_general_settings,
     get_or_create_request_stash,
 )
 from litellm.proxy.hooks.rate_limit_failure_metrics import (
