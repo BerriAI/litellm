@@ -19698,6 +19698,26 @@ async def delete_config_general_settings(
     return response
 
 
+def _configured_callback_names(value: object) -> tuple[JsonValue, ...]:
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, list):
+        return tuple(cast(Iterable[JsonValue], value))  # cast-ok: config.yaml values are untyped
+    return ()
+
+
+def _is_callback_name(entry: object, callback_name: str) -> bool:
+    return isinstance(entry, str) and entry.lower() == callback_name
+
+
+def _callback_lists_to_rewrite(
+    matching_keys: tuple[str, ...], owned_by_config: Callable[[str], bool]
+) -> tuple[str, ...]:
+    """The matching lists the database owns, or all of them when the config file owns every one."""
+    database_owned: Final = tuple(key for key in matching_keys if not owned_by_config(key))
+    return database_owned or matching_keys
+
+
 @router.post(
     "/config/callback/delete",
     tags=["config.yaml"],
@@ -19733,24 +19753,42 @@ async def delete_callback(
 
     try:
         # Get current configuration
-        config: Final = await proxy_config.get_config()
+        config: Final = cast(  # cast-ok: get_config returns an untyped config dict
+            dict[str, object],
+            await proxy_config.get_config(),
+        )
         callback_name: Final = data.callback_name.lower()
 
         # Check if callback exists in current configuration
-        litellm_settings: Final = config.get("litellm_settings", {})
-        success_callbacks: Final = litellm_settings.get("success_callback", [])
+        litellm_settings: Final[Mapping[str, object]] = cast(  # cast-ok: the config dict's values are untyped
+            Mapping[str, object],
+            config.get("litellm_settings", {}),
+        )
+        configured_lists: Final = {
+            key: _configured_callback_names(litellm_settings.get(key)) for key in _DB_CONFIG_CALLBACK_EVENT_TYPES
+        }
+        matching_keys: Final = tuple(
+            key
+            for key, names in configured_lists.items()
+            if any(_is_callback_name(entry, callback_name) for entry in names)
+        )
 
-        if callback_name not in success_callbacks:
+        if not matching_keys:
             raise HTTPException(
                 status_code=404,
                 detail={"error": f"Callback '{callback_name}' not found in active configuration"},
             )
 
-        before_success_callbacks: Final = list(success_callbacks)
-
-        # Remove callback from success_callback list
-        success_callbacks.remove(callback_name)
-        config.setdefault("litellm_settings", {})["success_callback"] = success_callbacks
+        rewritten_keys: Final = _callback_lists_to_rewrite(matching_keys, proxy_config.litellm_settings.owned_by_config)
+        remaining_lists: Final = MappingProxyType(
+            {
+                key: tuple(entry for entry in configured_lists[key] if not _is_callback_name(entry, callback_name))
+                for key in rewritten_keys
+            }
+        )
+        before_callbacks: Final[JsonValue] = {key: list(configured_lists[key]) for key in rewritten_keys}
+        after_callbacks: Final[JsonValue] = {key: list(names) for key, names in remaining_lists.items()}
+        config["litellm_settings"] = {**litellm_settings, **after_callbacks}
 
         # Save the updated configuration
         await proxy_config.save_config(new_config=config)
@@ -19759,8 +19797,8 @@ async def delete_callback(
             create_config_audit_log(
                 "litellm_settings",
                 "deleted",
-                {"success_callback": before_success_callbacks},
-                {"success_callback": success_callbacks},
+                before_callbacks,
+                after_callbacks,
                 user_api_key_dict,
             )
         )
@@ -19771,7 +19809,7 @@ async def delete_callback(
         return {
             "message": f"Successfully deleted callback: {callback_name}",
             "removed_callback": callback_name,
-            "remaining_callbacks": success_callbacks,
+            "remaining_callbacks": tuple(chain.from_iterable(remaining_lists.values())),
             "deleted_at": datetime.now().isoformat(),
         }
 
