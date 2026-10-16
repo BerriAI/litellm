@@ -7,7 +7,7 @@
 
 import fnmatch
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal, Optional
 
 import httpx
@@ -20,6 +20,7 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
@@ -56,6 +57,21 @@ _HEADER_VALUE_ALLOWLIST: Final = frozenset(
 
 # Placeholder for headers that exist but are not on the allowlist (we don't expose their value).
 _HEADER_PRESENT_PLACEHOLDER: Final = "[present]"
+
+_AFTER_CONNECT_FAILURES: Final = (
+    httpx.ReadTimeout,
+    httpx.WriteTimeout,
+    httpx.ReadError,
+    httpx.WriteError,
+    httpx.RemoteProtocolError,
+)
+
+
+def _after_connect_failure(error: Timeout | httpx.TransportError) -> httpx.TransportError | None:
+    """AsyncHTTPHandler re-raises connect and read timeouts as the same litellm Timeout, so the phase comes from
+    the httpx error it was raised while handling."""
+    origin: Final = error if isinstance(error, httpx.TransportError) else error.__cause__ or error.__context__
+    return origin if isinstance(origin, _AFTER_CONNECT_FAILURES) else None
 
 
 def _header_value_allowed(
@@ -205,9 +221,18 @@ class GenericGuardrailAPI(CustomGuardrail):
         streaming_sampling_rate: int | None = None,
         streaming_transform_mode: Literal["block_only", "incremental_diff"] | None = None,
         streaming_buffer_until_moderated: bool | None = None,
+        num_retries: int | None = None,
+        async_handler: AsyncHTTPHandler | None = None,
+        fresh_handler_factory: Callable[[], AsyncHTTPHandler] | None = None,
         **kwargs,
     ):
-        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+        self.async_handler = async_handler or get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.GuardrailCallback
+        )
+        self.fresh_handler_factory: Callable[[], AsyncHTTPHandler] = fresh_handler_factory or (
+            lambda: AsyncHTTPHandler(timeout=self.async_handler.timeout)
+        )
+        self.num_retries: int = num_retries or 0
         self.headers = headers or {}
         self.extra_headers = extra_headers or []
 
@@ -332,17 +357,14 @@ class GenericGuardrailAPI(CustomGuardrail):
         return_inputs.update(inputs)
         return return_inputs
 
-    def _build_request_headers(self) -> dict:
+    def _build_request_headers(self) -> Mapping[str, str]:
         """Build HTTP headers for the guardrail API request."""
-        headers: Final = {"Content-Type": "application/json"}
-        if self.headers:
-            headers.update(self.headers)
-        return headers
+        return {"Content-Type": "application/json", **self.headers}
 
     def _build_guardrail_return_inputs(
         self,
         *,
-        texts: list,
+        texts: list[str],
         images: list[str] | None,
         tools: list[ChatCompletionToolParam] | None,
         structured_messages: Sequence[AllMessageValues] | None,
@@ -393,6 +415,35 @@ class GenericGuardrailAPI(CustomGuardrail):
         verbose_proxy_logger.error("Generic Guardrail API: failed to make request: %s", str(error))
         raise Exception(f"Generic Guardrail API failed: {error}")
 
+    async def _post_check(
+        self,
+        handler: AsyncHTTPHandler,
+        payload: Mapping[str, object],
+        headers: Mapping[str, str],
+        retries_left: int,
+    ) -> httpx.Response:
+        try:
+            return await handler.post(
+                url=self.api_base, json=dict(payload), headers=dict(headers), timeout=self.timeout
+            )
+        except (Timeout, httpx.TransportError) as error:
+            failure: Final = _after_connect_failure(error)
+            if retries_left < 1 or failure is None:
+                raise
+            verbose_proxy_logger.warning(
+                "Generic Guardrail API check timed out or lost its connection, retrying on a fresh connection. "
+                "guardrail_name=%s api_base=%s error_type=%s retries_left=%d",
+                getattr(self, "guardrail_name", None),
+                self.api_base,
+                type(failure).__name__,
+                retries_left - 1,
+            )
+        fresh: Final = self.fresh_handler_factory()
+        try:
+            return await self._post_check(fresh, payload, headers, retries_left - 1)
+        finally:
+            await fresh.close()
+
     @log_guardrail_information
     async def apply_guardrail(
         self,
@@ -438,12 +489,8 @@ class GenericGuardrailAPI(CustomGuardrail):
         request_body: Final = request_data.get("body") or {}
 
         # Merge additional provider specific params from config and dynamic params
-        additional_params: Final = {**self.additional_provider_specific_params}
-
-        # Get dynamic params from request if available
-        dynamic_params: Final = self.get_guardrail_dynamic_request_body_params(request_body)
-        if dynamic_params:
-            additional_params.update(dynamic_params)
+        dynamic_params: Final[Mapping[str, object]] = self.get_guardrail_dynamic_request_body_params(request_body) or {}
+        additional_params: Final = {**self.additional_provider_specific_params, **dynamic_params}
 
         # Extract user API key metadata
         user_metadata: Final = self._extract_user_api_key_metadata(request_data)
@@ -476,11 +523,11 @@ class GenericGuardrailAPI(CustomGuardrail):
 
             # Make the API request
             # Use mode="json" to ensure all iterables are converted to lists
-            response: Final = await self.async_handler.post(
-                url=self.api_base,
-                json=guardrail_request.model_dump(mode="json"),
-                headers=headers,
-                timeout=self.timeout,
+            response: Final = await self._post_check(
+                self.async_handler,
+                guardrail_request.model_dump(mode="json"),
+                headers,
+                self.num_retries,
             )
 
             response.raise_for_status()

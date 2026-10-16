@@ -4,6 +4,7 @@ from typing import Any, Final, Literal, cast  # noqa: TID251  # JSON chat rows h
 from pydantic import ConfigDict, Field
 from typing_extensions import TypedDict
 
+from litellm.types.guardrails import GuardrailNumRetries
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -61,6 +62,8 @@ class GenericGuardrailAPIOptionalParams(LiteLLMBaseModel):
             "guardrail response can block or modify it; broader than unreachable_fallback."
         ),
     )
+
+    num_retries: GuardrailNumRetries = None
 
     streaming_end_of_stream_only: bool | None = Field(
         default=None,

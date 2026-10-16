@@ -6,6 +6,9 @@ specifically focusing on metadata extraction and passing.
 """
 
 import os
+from collections.abc import Callable
+from functools import partial
+from queue import SimpleQueue
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -16,6 +19,7 @@ import litellm
 from litellm import ModelResponse
 from litellm._version import version as litellm_version
 from litellm.exceptions import GuardrailRaisedException, Timeout
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     GenericGuardrailAPI,
@@ -23,7 +27,7 @@ from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guardrail_api import (
     _HEADER_PRESENT_PLACEHOLDER,
 )
-from litellm.types.utils import Choices, Message
+from litellm.types.utils import Choices, GenericGuardrailAPIInputs, Message
 
 
 @pytest.fixture
@@ -2049,3 +2053,112 @@ class TestFailOnError:
                     request_data={},
                     input_type="response",
                 )
+
+
+Outcome = Exception | Callable[[], httpx.Response]
+
+REWRITTEN: Final = partial(httpx.Response, 200, json={"action": "GUARDRAIL_INTERVENED", "texts": ["redacted"]})
+
+
+def _scripted(*outcomes: Outcome) -> tuple[httpx.MockTransport, SimpleQueue[bytes]]:
+    """Each check gets the next outcome; the last one repeats once the script runs out."""
+    sent: Final[SimpleQueue[bytes]] = SimpleQueue()
+    script: Final = iter(outcomes)
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        sent.put(request.read())
+        outcome: Final = next(script, outcomes[-1])
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome()
+
+    return httpx.MockTransport(answer), sent
+
+
+def _guardrail_on(
+    transport: httpx.MockTransport, num_retries: int | None, fail_on_error: bool = True
+) -> GenericGuardrailAPI:
+    return GenericGuardrailAPI(
+        api_base="https://api.test.guardrail.com",
+        guardrail_name="retrying-guardrail",
+        fail_on_error=fail_on_error,
+        num_retries=num_retries,
+        timeout=5,
+        async_handler=AsyncHTTPHandler(transport=transport),
+        fresh_handler_factory=lambda: AsyncHTTPHandler(transport=transport),
+    )
+
+
+async def _check(guardrail: GenericGuardrailAPI) -> GenericGuardrailAPIInputs:
+    return await guardrail.apply_guardrail(inputs={"texts": ["hi"]}, request_data={}, input_type="request")
+
+
+async def _attempts_until_it_raises(outcome: Outcome, num_retries: int | None) -> int:
+    transport, sent = _scripted(outcome)
+    with pytest.raises(Exception, match=r"Generic Guardrail API failed|policy violation"):
+        await _check(_guardrail_on(transport, num_retries))
+    return sent.qsize()
+
+
+class TestNumRetries:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            httpx.ReadTimeout("no answer before the read timeout"),
+            httpx.WriteTimeout("request body stalled"),
+            httpx.ReadError("connection reset by peer"),
+            httpx.WriteError("broken pipe"),
+            httpx.RemoteProtocolError("Server disconnected without sending a response."),
+        ],
+        ids=["read_timeout", "write_timeout", "read_error", "write_error", "remote_protocol_error"],
+    )
+    async def test_check_lost_after_connect_is_resent_and_the_retry_verdict_applies(self, failure: Exception) -> None:
+        transport, sent = _scripted(failure, REWRITTEN)
+
+        result: Final = await _check(_guardrail_on(transport, num_retries=1))
+
+        bodies: Final = [sent.get_nowait() for _ in range(sent.qsize())]
+        assert len(bodies) == 2
+        assert bodies[0] == bodies[1]
+        assert result == {"texts": ["redacted"]}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "outcome",
+        [
+            httpx.ConnectTimeout("no TCP handshake before the timeout"),
+            httpx.ConnectError("connection refused"),
+            httpx.PoolTimeout("no free pooled connection"),
+            partial(httpx.Response, 503, json={"error": "unavailable"}),
+            partial(httpx.Response, 500, json={"error": "boom"}),
+            partial(httpx.Response, 200, json={"action": "BLOCKED", "blocked_reason": "policy violation"}),
+        ],
+        ids=["connect_timeout", "connect_error", "pool_timeout", "http_503", "http_500", "blocked"],
+    )
+    async def test_num_retries_does_not_resend_connect_failures_error_statuses_or_blocks(
+        self, outcome: Outcome
+    ) -> None:
+        assert await _attempts_until_it_raises(outcome, num_retries=3) == await _attempts_until_it_raises(
+            outcome, num_retries=None
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("num_retries", [None, 0])
+    async def test_unset_num_retries_sends_a_timed_out_check_once(self, num_retries: int | None) -> None:
+        transport, sent = _scripted(httpx.ReadTimeout("no answer before the read timeout"), REWRITTEN)
+
+        with pytest.raises(Exception, match="Generic Guardrail API failed"):
+            await _check(_guardrail_on(transport, num_retries))
+
+        assert sent.qsize() == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("num_retries", [1, 3])
+    async def test_num_retries_bounds_the_attempts_before_fail_on_error_applies(self, num_retries: int) -> None:
+        transport, sent = _scripted(httpx.ReadTimeout("no answer before the read timeout"))
+
+        result: Final = await _check(_guardrail_on(transport, num_retries, fail_on_error=False))
+
+        assert sent.qsize() == num_retries + 1
+        assert result == {"texts": ["hi"]}
