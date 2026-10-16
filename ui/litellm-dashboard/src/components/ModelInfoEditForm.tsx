@@ -72,15 +72,12 @@ const PRICING_FIELDS = [
 ] as const;
 export type TouchedPricingField = (typeof PRICING_FIELDS)[number];
 
-const COST_SOURCES: Record<TouchedPricingField, { param: string; info: string }> = {
-  input_cost: { param: "input_cost_per_token", info: "input_cost_per_token" },
-  output_cost: { param: "output_cost_per_token", info: "output_cost_per_token" },
-  cache_read_cost: { param: "cache_read_input_token_cost", info: "cache_read_input_token_cost" },
-  cache_write_cost: { param: "cache_creation_input_token_cost", info: "cache_creation_input_token_cost" },
-  cache_write_cost_1h: {
-    param: "cache_creation_input_token_cost_above_1hr",
-    info: "cache_creation_input_token_cost_above_1hr",
-  },
+const COST_SOURCES: Record<TouchedPricingField, string> = {
+  input_cost: "input_cost_per_token",
+  output_cost: "output_cost_per_token",
+  cache_read_cost: "cache_read_input_token_cost",
+  cache_write_cost: "cache_creation_input_token_cost",
+  cache_write_cost_1h: "cache_creation_input_token_cost_above_1hr",
 };
 
 export interface ModelEditFormValues {
@@ -281,8 +278,8 @@ export const toModelEditFormValues = (localModelData: any, isWildcardModel: bool
 });
 
 const displayCost = (localModelData: any, field: TouchedPricingField): string => {
-  const { param, info } = COST_SOURCES[field];
-  const rate = localModelData?.litellm_params?.[param] ?? localModelData?.model_info?.[info];
+  const key = COST_SOURCES[field];
+  const rate = localModelData?.litellm_params?.[key] ?? localModelData?.model_info?.[key];
   return rate != null ? (Number(rate) * 1_000_000).toFixed(4) : "Not Set";
 };
 
