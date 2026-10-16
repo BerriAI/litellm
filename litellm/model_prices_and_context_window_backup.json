@@ -75231,5 +75231,32 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true
+    },
+    "baseten/reflection/Beam-1.0": {
+        "cache_read_input_token_cost": 1.3e-07,
+        "input_cost_per_token": 1.3e-06,
+        "litellm_provider": "baseten",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 4.3e-06,
+        "source": "https://inference.baseten.co/v1/models",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "nebius/reflection/beam": {
+        "input_cost_per_token": 2.5e-07,
+        "litellm_provider": "nebius",
+        "max_input_tokens": 1048576,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 1e-06,
+        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/reflection%2Fbeam",
+        "supports_function_calling": true,
+        "supports_reasoning": true
     }
 }
