@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 import httpx
 import pytest
 import respx
-from openai import AsyncOpenAI, OpenAI
+from openai import AsyncOpenAI, AzureOpenAI, OpenAI
 from openai._types import Response as SDKResponse
 from pydantic import BaseModel, ConfigDict, JsonValue
 
@@ -219,6 +219,79 @@ async def test_acompletion_returns_prompt_cache_details_over_injected_transport(
     prompt_tokens_details: Final = response.usage.prompt_tokens_details
     assert isinstance(prompt_tokens_details, PromptTokensDetails)
     assert prompt_tokens_details.cached_tokens == 7
+
+
+_REASONING_TOOL_CALL_REPLY: Final = {
+    "id": "chatcmpl-fake-stream",
+    "object": "chat.completion",
+    "created": 0,
+    "model": "o4-mini",
+    "choices": [
+        {
+            "index": 0,
+            "finish_reason": "tool_calls",
+            "message": {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_weather",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                    },
+                    {
+                        "id": "call_time",
+                        "type": "function",
+                        "function": {"name": "get_time", "arguments": '{"city": "Paris"}'},
+                    },
+                ],
+            },
+        }
+    ],
+    "usage": {
+        "prompt_tokens": 85,
+        "completion_tokens": 1955,
+        "total_tokens": 2040,
+        "prompt_tokens_details": {"cached_tokens": 64},
+        "completion_tokens_details": {"reasoning_tokens": 1920},
+    },
+}
+
+
+def test_azure_o_series_fake_stream_keeps_every_tool_call_and_token_detail():
+    request_bodies: Final[list[dict[str, object]]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        request_bodies.append(json.loads(request.content))
+        return httpx.Response(200, json=_REASONING_TOOL_CALL_REPLY)
+
+    client: Final = AzureOpenAI(
+        api_key="transport-only",
+        api_version="2025-03-01-preview",
+        azure_endpoint="https://fake-stream.openai.azure.com",
+        http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+    )
+    chunks: Final = list(
+        litellm.completion(
+            model="azure/o_series/reasoning-deployment",
+            api_key="transport-only",
+            api_version="2025-03-01-preview",
+            api_base="https://fake-stream.openai.azure.com",
+            client=client,
+            messages=[{"role": "user", "content": "weather and time in Paris?"}],
+            stream=True,
+            stream_options={"include_usage": True},
+            num_retries=0,
+        )
+    )
+    rebuilt: Final = litellm.stream_chunk_builder(chunks)
+
+    assert [body.get("stream") for body in request_bodies] == [None]
+    assert rebuilt is not None
+    assert rebuilt.choices[0].finish_reason == "tool_calls"
+    assert [call.function.name for call in rebuilt.choices[0].message.tool_calls] == ["get_weather", "get_time"]
+    assert rebuilt.usage.prompt_tokens_details.cached_tokens == 64
+    assert rebuilt.usage.completion_tokens_details.reasoning_tokens == 1920
 
 
 @respx.mock
