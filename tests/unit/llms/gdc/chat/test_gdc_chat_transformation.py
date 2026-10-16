@@ -686,7 +686,7 @@ class TestGDCGeminiConfig:
 class TestCompleteGDC:
     @patch("litellm.main.base_llm_http_handler.completion")
     def test_complete_gdc_resolves_key_and_base(self, mock_completion, monkeypatch):
-        from litellm.main import gdc_transformation
+        from litellm.native.chat_providers.handlers import gdc_transformation
 
         mock_completion.return_value = MagicMock()
         monkeypatch.setattr(litellm, "gdc_key", "resolved-key", raising=False)

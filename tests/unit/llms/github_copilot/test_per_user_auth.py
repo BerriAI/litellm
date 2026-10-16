@@ -550,7 +550,7 @@ def test_e2e_completion_per_user_credential(per_user_credential):
 
 def test_e2e_completion_per_user_session_token_wins_over_caller_authorization(per_user_credential):
     """The session token reaches the wire even when the caller passes their own
-    Authorization in extra_headers (chat dispatches through _complete_custom_openai)."""
+    Authorization in extra_headers (chat dispatches through complete_custom_openai)."""
     with (
         github_http(_exchange_responder()),
         _no_authenticator(),

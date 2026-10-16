@@ -47,7 +47,7 @@ def s3_object_reader(bucket_name: str) -> SyncBucketObjectReader:
         import boto3
         from botocore.credentials import Credentials
 
-        from litellm.main import bedrock_converse_chat_completion
+        from litellm.native.chat_providers.handlers import bedrock_converse_chat_completion
 
         credentials: Final[Credentials] = bedrock_converse_chat_completion.get_credentials()
         s3_client: Final = boto3.client(
