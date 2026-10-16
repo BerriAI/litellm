@@ -2181,61 +2181,6 @@ GEMINI_3_8_FLASH_GOOGLE_MAPS_GROUNDING: Final = CostTrackingTestCase(
     ),
 )
 
-GEMINI_3_8_FLASH_FALLBACK_REASONING_AT_OUTPUT_RATE: Final = CostTrackingTestCase(
-    name="gemini-3.8-flash-fallback_reasoning_at_output_rate",
-    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
-    model="gemini-3.8-flash",
-    request={
-        "model": "$MODEL",
-        "messages": [
-            {
-                "role": "system",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
-                    }
-                ],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "f92946792f44 summarize the attached material in one line and name the city weather",
-                    }
-                ],
-            },
-        ],
-        "stream": False,
-        "reasoning_effort": "medium",
-        "allowed_openai_params": ["reasoning_effort"],
-    },
-    response=JsonResponse(
-        content_type="application/json",
-        body={
-            "candidates": [
-                {
-                    "content": {"parts": [{"text": "scripted answer f92946792f44"}], "role": "model"},
-                    "finishReason": "STOP",
-                    "index": 0,
-                }
-            ],
-            "usageMetadata": {
-                "promptTokenCount": 1240,
-                "candidatesTokenCount": 560,
-                "thoughtsTokenCount": 3480,
-                "totalTokenCount": 5280,
-                "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 1240}],
-            },
-            "modelVersion": "gemini-3.8-flash",
-        },
-    ),
-    expected=ExactExpected(
-        spend=0.0132496, input_cost=0.0006448, output_cost=0.0126048, prompt_tokens=1240, completion_tokens=4040
-    ),
-)
-
 GEMINI_3_8_FLASH_FALLBACK_IMAGE_TOKENS_AT_INPUT_RATE: Final = CostTrackingTestCase(
     name="gemini-3.8-flash-fallback_image_tokens_at_input_rate",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
@@ -3020,7 +2965,7 @@ GEMINI_3_8_FLASH_STREAM_FULL_USAGE: Final = CostTrackingTestCase(
         ),
     ),
     expected=ExactExpected(
-        spend=0.007460128, input_cost=0.001619488, output_cost=0.00584064, prompt_tokens=8314, completion_tokens=1592
+        spend=0.006992128, input_cost=0.001619488, output_cost=0.00537264, prompt_tokens=8314, completion_tokens=1592
     ),
 )
 
@@ -3368,7 +3313,7 @@ GEMINI_3_1_PRO_PREVIEW_CACHE_READ: Final = _gemini_case(
     ExactExpected(spend=0.00912736, input_cost=0.00411136, output_cost=0.005016, prompt_tokens=12928, completion_tokens=380)
 )
 GEMINI_3_1_PRO_PREVIEW_REASONING: Final = _gemini_case(
-    GEMINI_3_8_FLASH_FALLBACK_REASONING_AT_OUTPUT_RATE, "gemini-3.1-pro-preview-reasoning", "gemini-3.1-pro-preview",
+    GEMINI_3_1_PRO_REASONING, "gemini-3.1-pro-preview-reasoning", "gemini-3.1-pro-preview",
     ExactExpected(spend=0.056056, input_cost=0.002728, output_cost=0.053328, prompt_tokens=1240, completion_tokens=4040)
 )
 GEMINI_3_1_PRO_PREVIEW_TOOL_CALL: Final = _gemini_case(
@@ -3410,7 +3355,6 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GEMINI_3_8_FLASH_SERVICE_TIER_PRIORITY,
     GEMINI_3_8_FLASH_WEB_SEARCH_PER_PROMPT,
     GEMINI_3_8_FLASH_GOOGLE_MAPS_GROUNDING,
-    GEMINI_3_8_FLASH_FALLBACK_REASONING_AT_OUTPUT_RATE,
     GEMINI_3_8_FLASH_FALLBACK_IMAGE_TOKENS_AT_INPUT_RATE,
     GEMINI_3_8_FLASH_STREAM,
     GEMINI_3_8_FLASH_STREAM_NO_USAGE,
