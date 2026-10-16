@@ -147,6 +147,7 @@ from litellm.proxy.common_utils.realtime_utils import (  # noqa: F401, RUF100  #
     realtime_request_body,
 )
 from litellm.proxy.management_helpers.auto_router_availability import AutoRouterCatalogEntry, build_auto_router_catalog
+from litellm.proxy.management_helpers.model_group_custom_fields import model_group_custom_fields
 from litellm.router_utils.access_windows import access_windows_config_error
 from litellm.router_utils.add_retry_fallback_headers import (
     get_fallback_errors_from_headers,
@@ -17050,10 +17051,7 @@ def get_model_group_info(
 ) -> list[ModelGroupInfoProxy]:
     model_groups: Final[list[ModelGroupInfoProxy]] = []
 
-    unique_models: Final = []
-    for model in all_models_str:
-        if model not in unique_models:
-            unique_models.append(model)
+    unique_models: Final = tuple(dict.fromkeys(all_models_str))
 
     for model in unique_models:
         if model_group is not None and model_group != model:
@@ -17062,7 +17060,14 @@ def get_model_group_info(
         _model_group_info = llm_router.get_model_group_info(model_group=model)
 
         if _model_group_info is not None:
-            model_groups.append(ModelGroupInfoProxy.model_validate(_model_group_info.model_dump()))
+            model_groups.append(
+                ModelGroupInfoProxy.model_validate(
+                    {
+                        **_model_group_info.model_dump(),
+                        **model_group_custom_fields(llm_router.get_model_list_of_routed_group(model)),
+                    }
+                )
+            )
         else:
             model_group_info = ModelGroupInfoProxy(
                 model_group=model,

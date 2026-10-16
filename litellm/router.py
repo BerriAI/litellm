@@ -263,7 +263,6 @@ from litellm.router_utils.handle_error import (
     send_llm_exception_alert,
 )
 from litellm.router_utils.health_state_cache import DeploymentHealthCache
-from litellm.router_utils.model_group_custom_fields import merged_custom_metadata, merged_custom_tags
 from litellm.router_utils.pre_call_checks.continuation_prefill_check import (
     MID_STREAM_CONTINUATION_MARKER,
     ContinuationOutput,
@@ -11844,13 +11843,10 @@ class Router:
         reasoning_efforts_initialized = False
         reasoning_efforts_unknown = False
         model_list: Final = self.get_model_list_of_routed_group(model_group)
-        configured_model_infos: Final = tuple(_configured_model_info(m) for m in model_list)
         model_group_description: Final[str | None] = next(
-            (d for d in (info.get("description") for info in configured_model_infos) if isinstance(d, str)),
+            (d for d in (_configured_model_info(m).get("description") for m in model_list) if isinstance(d, str)),
             None,
         )
-        model_group_custom_tags: Final = merged_custom_tags(configured_model_infos)
-        model_group_custom_metadata: Final = merged_custom_metadata(configured_model_infos)
         for model in model_list:
             is_match = False
             if (
@@ -11958,8 +11954,6 @@ class Router:
                         "providers": [llm_provider],
                         "description": model_group_description,
                         **model_info,
-                        "custom_tags": model_group_custom_tags,
-                        "custom_metadata": model_group_custom_metadata,
                         "supports_fast_mode": True,
                         "supported_reasoning_efforts": None,
                     }

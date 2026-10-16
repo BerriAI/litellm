@@ -1,7 +1,7 @@
 import asyncio
 import json
 from datetime import datetime
-from typing import Any, Dict, Final, List, Optional, Union
+from typing import Any, Dict, Final, List, Optional, TypeAlias, Union
 from unittest.mock import Mock
 
 import pytest
@@ -15,6 +15,7 @@ from litellm.types.guardrails import GuardrailEventHooks
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
+from litellm.router import Router
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     check_complete_credentials,
@@ -1600,6 +1601,82 @@ def test_get_model_group_info():
         model_group="openai/tts-1",
     )
     assert len(model_list) == 1
+
+
+def _custom_metadata_router(*model_infos: dict[object, object]) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": f"fake-{index}"},
+                "model_info": model_info,
+            }
+            for index, model_info in enumerate(model_infos)
+        ]
+    )
+
+
+_CustomFieldsCase: TypeAlias = tuple[
+    tuple[dict[object, object], ...], tuple[str, ...] | None, dict[str, str | int | float | bool] | None
+]
+_CUSTOM_FIELDS_CASES: Final[tuple[_CustomFieldsCase, ...]] = (
+    ((), None, None),
+    (({},), None, None),
+    (
+        ({"custom_tags": ["deprecated", "ptu"], "custom_metadata": {"retirement_date": "2027-03-01"}},),
+        ("deprecated", "ptu"),
+        {"retirement_date": "2027-03-01"},
+    ),
+    (
+        ({}, {"custom_tags": ["ptu"], "custom_metadata": {"provisioned_ptu": 100, "gsu": False}}),
+        ("ptu",),
+        {"provisioned_ptu": 100, "gsu": False},
+    ),
+    (
+        (
+            {"custom_tags": ["ptu", "eu"], "custom_metadata": {"provisioned_ptu": 100, "region": "eu"}},
+            {"custom_tags": ["eu", "deprecated"], "custom_metadata": {"provisioned_ptu": 50, "max_tpm": 1.5}},
+        ),
+        ("ptu", "eu", "deprecated"),
+        {"provisioned_ptu": 100, "region": "eu", "max_tpm": 1.5},
+    ),
+    (
+        ({"custom_tags": ["ok", 7, None, {"x": 1}], "custom_metadata": {"owner": "ml", "nested": {"a": 1}}},),
+        ("ok",),
+        {"owner": "ml"},
+    ),
+    (({"custom_tags": "ptu", "custom_metadata": ["not", "a", "map"]},), None, None),
+    (
+        (
+            {
+                "custom_metadata": {
+                    2027: "retirement",
+                    "nan": float("nan"),
+                    "inf": float("inf"),
+                    "neg_inf": float("-inf"),
+                    "max_tpm": 1.5,
+                }
+            },
+        ),
+        None,
+        {"max_tpm": 1.5},
+    ),
+)
+
+
+@pytest.mark.parametrize(("model_infos", "expected_tags", "expected_metadata"), _CUSTOM_FIELDS_CASES)
+def test_get_model_group_info_merges_custom_tags_and_metadata_across_deployments(
+    model_infos: tuple[dict[object, object], ...],
+    expected_tags: tuple[str, ...] | None,
+    expected_metadata: dict[str, str | int | float | bool] | None,
+) -> None:
+    from litellm.proxy.proxy_server import get_model_group_info
+
+    router: Final = _custom_metadata_router({"description": "first"}, *model_infos)
+
+    (group,) = get_model_group_info(llm_router=router, all_models_str=["gpt-4"], model_group="gpt-4")
+
+    assert (group.custom_tags, group.custom_metadata) == (expected_tags, expected_metadata)
 
 
 @pytest.fixture
