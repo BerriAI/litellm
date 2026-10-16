@@ -364,12 +364,14 @@ class TestBedrockRealtimeResponseCreate:
             "amazon.nova-sonic-v1:0",
         )
 
-    def test_response_create_before_session_update_is_noop(self):
+    def test_response_create_before_session_update_starts_prompt_with_defaults(self):
         config = BedrockRealtimeConfig()
 
         messages = config.transform_realtime_request(json.dumps({"type": "response.create"}), "amazon.nova-sonic-v1:0")
 
-        assert messages == []
+        events = [next(iter(json.loads(message)["event"])) for message in messages]
+        assert events[:5] == ["sessionStart", "promptStart", "contentStart", "textInput", "contentEnd"]
+        assert "audioInput" in events[5:]
 
     def test_response_create_emits_spoken_trigger_audio(self):
         config = BedrockRealtimeConfig()
@@ -1536,6 +1538,14 @@ class TestBedrockRealtimeUserEventsAndUsage:
             ({"modalities": ["text"]}, False),
             ({"tools": [CONFLICT_TOOL]}, False),
             ({"tools": [{"parameters": OBJECT_PARAMETERS, "name": "get_weather", "type": "function"}]}, False),
+            (
+                {"tools": [{"type": "function", "function": {"name": "get_weather", "parameters": OBJECT_PARAMETERS}}]},
+                False,
+            ),
+            ({"tools": None}, False),
+            ({"voice": None}, False),
+            ({"output_sample_rate_hertz": 24000.0}, False),
+            ({"output_sample_rate_hertz": 16000.0}, True),
             ({"tools": [{"type": "function", "name": "get_time", "parameters": OBJECT_PARAMETERS}]}, True),
             ({"tools": []}, True),
             ({"instructions": "Be brief."}, True),
@@ -1644,6 +1654,7 @@ class TestBedrockRealtimeUserEventsAndUsage:
             ({"temperature": float("nan")}, "session.temperature"),
             ({"max_response_output_tokens": float("inf")}, "session.max_response_output_tokens"),
             ({"max_response_output_tokens": True}, "session.max_response_output_tokens"),
+            ({"output_sample_rate_hertz": "16000"}, "session.output_sample_rate_hertz"),
         ],
     )
     def test_malformed_number_setting_is_rejected_without_drop_params(self, session, param):
@@ -1672,6 +1683,60 @@ class TestBedrockRealtimeUserEventsAndUsage:
         assert config.session_update_rejection({"type": "session.update", "session": session}) is None
         inference: Final = self._inference_configuration(config, session)
         assert (inference["temperature"], inference["maxTokens"]) == (0.7, 1024)
+
+    @staticmethod
+    def _audio_output_configuration(session: dict[str, object]) -> dict[str, object]:
+        messages: Final = BedrockRealtimeConfig().transform_session_update_event(
+            {"type": "session.update", "session": session}
+        )
+        return json.loads(messages[1])["event"]["promptStart"]["audioOutputConfiguration"]
+
+    @pytest.mark.parametrize("output_sample_rate_hertz", [16000, 16000.0])
+    def test_output_sample_rate_reaches_prompt_start_as_an_integer(self, output_sample_rate_hertz):
+        audio_output: Final = self._audio_output_configuration({"output_sample_rate_hertz": output_sample_rate_hertz})
+        assert audio_output["sampleRateHertz"] == 16000
+        assert isinstance(audio_output["sampleRateHertz"], int)
+
+    def test_null_voice_keeps_the_default_voice(self):
+        assert self._audio_output_configuration({"voice": None})["voiceId"] == "matthew"
+
+    @pytest.mark.parametrize(
+        "client_event",
+        [
+            {"type": "conversation.item.create", "item": {"type": "message", "role": "user", "content": []}},
+            {"type": "input_audio_buffer.append", "audio": base64.b64encode(bytes(320)).decode()},
+            {"type": "response.create"},
+        ],
+    )
+    def test_first_input_without_an_applied_session_update_starts_the_prompt_once(self, client_event):
+        config: Final = BedrockRealtimeConfig()
+        rejected: Final = {"type": "session.update", "session": {"temperature": "warm"}}
+        assert config.session_update_rejection(rejected) is not None
+
+        first: Final = config.transform_realtime_request(json.dumps(client_event), "amazon.nova-2-sonic-v1:0")
+        second: Final = config.transform_realtime_request(json.dumps(client_event), "amazon.nova-2-sonic-v1:0")
+
+        first_events: Final = [json.loads(message)["event"] for message in first]
+        assert [next(iter(event)) for event in first_events[:2]] == ["sessionStart", "promptStart"]
+        assert first_events[2]["contentStart"]["role"] == "SYSTEM"
+        assert first_events[0]["sessionStart"]["inferenceConfiguration"]["temperature"] == 0.7
+        assert not any("promptStart" in json.loads(message)["event"] for message in second)
+
+    @pytest.mark.parametrize(
+        "tool_use,name,arguments",
+        [
+            ({"toolUseId": "t1", "content": '{"city":"Paris"}'}, "", '{"city":"Paris"}'),
+            (
+                {"toolUseId": "t1", "toolName": "get_weather", "content": {"city": "Paris"}},
+                "get_weather",
+                '{"city": "Paris"}',
+            ),
+        ],
+    )
+    def test_tool_use_with_missing_name_or_object_content_is_forwarded(self, tool_use, name, arguments):
+        events: Final = self._run(BedrockRealtimeConfig(), [{"event": {"toolUse": tool_use}}])
+        (function_call,) = [e for e in events if e["type"] == "response.function_call_arguments.done"]
+        assert (function_call["name"], function_call["arguments"]) == (name, arguments)
 
     def test_tool_use_without_tool_use_id_is_forwarded_with_empty_call_id(self):
         events: Final = self._run(

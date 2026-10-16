@@ -172,9 +172,11 @@ def test_tool_call_round_trip(
 
         session.send(user_message("What's the weather in Paris right now?"))
         session.send(ResponseCreate())
-        final = _tool_call_loop(session, max_rounds=4)
+        final_answer = _tool_call_loop(session, max_rounds=4)
 
-        assert "72" in transcript(final), "follow-up did not use the tool result"
+        assert "72" in transcript(final_answer), (
+            "the answer after the tool results did not use them"
+        )
 
 
 def _tool_call_loop(session: RealtimeSession, *, max_rounds: int) -> tuple[ReceivedEvent, ...]:
@@ -183,11 +185,9 @@ def _tool_call_loop(session: RealtimeSession, *, max_rounds: int) -> tuple[Recei
     Nova 2 Sonic emits two tool calls per question, each inside its own response.done,
     so a one-call round trip cannot wait for "the" follow-up: the second response.done
     is another call, not the answer. The loop sends one function_call_output per call
-    then a single response.create, and stops at the first call-free response.done."""
-    all_events: list[ReceivedEvent] = []
+    then a single response.create, and returns the events of the first call-free round."""
     for round_index in range(max_rounds):
         events = session.collect_until("response.done", timeout=60)
-        all_events.extend(events)
         done = parse_last(events, "response.done", ResponseDone)
         assert done is not None
         calls = tuple(
@@ -195,7 +195,7 @@ def _tool_call_loop(session: RealtimeSession, *, max_rounds: int) -> tuple[Recei
         )
         if not calls:
             assert round_index > 0, "model did not emit a function call"
-            return tuple(all_events)
+            return events
         done_args = tuple(
             FunctionCallArgumentsDone.model_validate_json(event.payload)
             for event in events

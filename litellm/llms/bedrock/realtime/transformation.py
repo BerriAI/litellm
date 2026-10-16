@@ -9,7 +9,7 @@ import dataclasses
 import json
 import math
 import uuid as uuid_lib
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final, Literal
 
@@ -62,12 +62,23 @@ class BedrockContentEnd(LiteLLMBaseModel):
     type: str | None = None
 
 
+def _tool_function(tool: JsonValue) -> Mapping[str, JsonValue] | None:
+    if not isinstance(tool, dict) or tool.get("type") != "function":
+        return None
+    function: Final = tool.get("function")
+    return function if isinstance(function, dict) and function else tool
+
+
 class BedrockToolUse(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     toolUseId: str = ""
-    toolName: str
-    content: str = "{}"
+    toolName: str = ""
+    content: JsonValue = "{}"
+
+    @property
+    def arguments(self) -> str:
+        return self.content if isinstance(self.content, str) else json.dumps(self.content)
 
 
 class BedrockUsageTokenDetails(LiteLLMBaseModel):
@@ -96,6 +107,9 @@ TRIGGER_AUDIO_BYTES_PER_SECOND: Final = TRIGGER_AUDIO_SAMPLE_RATE_HERTZ * 2
 TRIGGER_LEADING_SILENCE: Final = bytes(TRIGGER_AUDIO_BYTES_PER_SECOND // 2)
 TRIGGER_TRAILING_SILENCE: Final = bytes(TRIGGER_AUDIO_BYTES_PER_SECOND * 3)
 TRIGGER_AUDIO_CHUNK_SIZE: Final = 1024
+PROMPT_STARTING_CLIENT_EVENT_TYPES: Final = frozenset(
+    ("input_audio_buffer.append", "input_audio_buffer.commit", "conversation.item.create", "response.create")
+)
 
 
 def _number_setting(value: JsonValue) -> float | None:
@@ -104,7 +118,7 @@ def _number_setting(value: JsonValue) -> float | None:
     return float(value)
 
 
-def _token_count_setting(value: JsonValue) -> int | None:
+def _integer_setting(value: JsonValue) -> int | None:
     number: Final = _number_setting(value)
     return None if number is None else int(number)
 
@@ -112,14 +126,16 @@ def _token_count_setting(value: JsonValue) -> int | None:
 def _malformed_number_settings(session_config: Mapping[str, JsonValue]) -> tuple[str, ...]:
     temperature: Final = session_config.get("temperature")
     max_output_tokens: Final = session_config.get("max_response_output_tokens")
+    output_rate_hertz: Final = session_config.get("output_sample_rate_hertz")
     malformed: Final = (
         ("temperature", temperature is not None and _number_setting(temperature) is None),
         (
             "max_response_output_tokens",
             max_output_tokens is not None
             and max_output_tokens != "inf"
-            and _token_count_setting(max_output_tokens) is None,
+            and _integer_setting(max_output_tokens) is None,
         ),
+        ("output_sample_rate_hertz", output_rate_hertz is not None and _integer_setting(output_rate_hertz) is None),
     )
     return tuple(name for name, is_malformed in malformed if is_malformed)
 
@@ -135,7 +151,7 @@ class BedrockSessionUpdateRejection:
 class BedrockLockedSessionSettings:
     """The session settings Bedrock Nova Sonic locks in once the prompt starts."""
 
-    tools: JsonValue
+    tools_json: str
     system_prompt: str
     voice_id: str
     output_sample_rate_hertz: int
@@ -196,7 +212,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         self._assistant_block_open = False
         self._response_done_pending = False
         self._started_settings = BedrockLockedSessionSettings(
-            tools=[],
+            tools_json="[]",
             system_prompt="",
             voice_id=self.voice_id,
             output_sample_rate_hertz=self.output_sample_rate_hertz,
@@ -224,7 +240,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         """Bedrock requires session configuration."""
         return True
 
-    def session_configuration_request(self, model: str, tools: list[dict] | None = None) -> str:
+    def session_configuration_request(self, model: str, tools: Sequence[JsonValue] | None = None) -> str:
         """
         Create initial session configuration for Bedrock Nova Sonic.
 
@@ -263,29 +279,19 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         # Return as a marker that we've sent the configuration
         return json.dumps({"session_start": session_start, "prompt_start": prompt_start})
 
-    def _transform_tools_to_bedrock_format(self, tools: list[dict]) -> list[dict]:
-        """
-        Transform OpenAI tool format to Bedrock tool format.
-
-        Args:
-            tools: List of OpenAI format tools
-
-        Returns:
-            List of Bedrock format tools
-        """
-        bedrock_tools: Final = []
-        for tool in tools:
-            if tool.get("type") == "function":
-                function = tool.get("function") or tool
-                bedrock_tool = {
-                    "toolSpec": {
-                        "name": function.get("name", ""),
-                        "description": function.get("description", ""),
-                        "inputSchema": {"json": json.dumps(function.get("parameters", {}))},
-                    }
+    def _transform_tools_to_bedrock_format(self, tools: Sequence[JsonValue]) -> tuple[Mapping[str, JsonValue], ...]:
+        functions: Final = (_tool_function(tool) for tool in tools)
+        return tuple(
+            {
+                "toolSpec": {
+                    "name": function.get("name", ""),
+                    "description": function.get("description", ""),
+                    "inputSchema": {"json": json.dumps(function.get("parameters", {}))},
                 }
-                bedrock_tools.append(bedrock_tool)
-        return bedrock_tools
+            }
+            for function in functions
+            if function is not None
+        )
 
     def _map_audio_format_to_sample_rate(self, audio_format: str, is_output: bool = True) -> int:
         """
@@ -346,7 +352,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         messages.append(json.dumps(session_start))
 
         # Send prompt start
-        tools: Final = session_config.get("tools")
+        tools: Final[Sequence[JsonValue] | None] = session_config.get("tools")
         prompt_start_config: Final[Mapping[str, object]] = {
             "promptName": self.prompt_name,
             "textOutputConfiguration": {"mediaType": self.text_media_type},
@@ -428,30 +434,36 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
     def _apply_locked_settings(
         self, session_config: Mapping[str, JsonValue], base: BedrockLockedSessionSettings
     ) -> BedrockLockedSessionSettings:
-        output_rate_hertz: Final = session_config.get("output_sample_rate_hertz")
+        output_audio_format: Final = session_config.get("output_audio_format")
         temperature: Final = session_config.get("temperature")
         max_output_tokens: Final = session_config.get("max_response_output_tokens")
-        tools: Final = (session_config["tools"] or []) if "tools" in session_config else base.tools
-        system_prompt: Final = (
-            str(session_config["instructions"] or "") if "instructions" in session_config else base.system_prompt
+        requested_tools: Final = session_config.get("tools")
+        instructions: Final = session_config.get("instructions")
+        voice: Final = session_config.get("voice")
+        tools_json: Final = (
+            json.dumps(self._transform_tools_to_bedrock_format(requested_tools))
+            if isinstance(requested_tools, list)
+            else base.tools_json
         )
-        voice_id: Final = str(session_config["voice"]) if "voice" in session_config else base.voice_id
+        system_prompt: Final = base.system_prompt if instructions is None else str(instructions)
+        voice_id: Final = base.voice_id if voice is None else str(voice)
         format_sample_rate: Final = (
-            self._map_audio_format_to_sample_rate(str(session_config["output_audio_format"]), is_output=True)
-            if "output_audio_format" in session_config
-            else base.output_sample_rate_hertz
+            base.output_sample_rate_hertz
+            if output_audio_format is None
+            else self._map_audio_format_to_sample_rate(str(output_audio_format), is_output=True)
         )
+        requested_output_rate: Final = _integer_setting(session_config.get("output_sample_rate_hertz"))
         output_sample_rate_hertz: Final = (
-            output_rate_hertz if isinstance(output_rate_hertz, int) else format_sample_rate
+            requested_output_rate if requested_output_rate is not None else format_sample_rate
         )
         requested_temperature: Final = _number_setting(temperature)
-        requested_max_tokens: Final = _token_count_setting(max_output_tokens)
+        requested_max_tokens: Final = _integer_setting(max_output_tokens)
         locked_temperature: Final = requested_temperature if requested_temperature is not None else base.temperature
         explicit_max_tokens: Final = requested_max_tokens if requested_max_tokens is not None else base.max_tokens
         max_tokens: Final = None if max_output_tokens == "inf" else explicit_max_tokens
         return dataclasses.replace(
             base,
-            tools=tools,
+            tools_json=tools_json,
             system_prompt=system_prompt,
             voice_id=voice_id,
             output_sample_rate_hertz=output_sample_rate_hertz,
@@ -470,7 +482,8 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 code="invalid_type",
                 message=(
                     f"Invalid type for 'session.{malformed[0]}': Bedrock Nova Sonic needs a number for temperature "
-                    "and a number or 'inf' for max_response_output_tokens. Set drop_params to drop it instead"
+                    "and output_sample_rate_hertz, and a number or 'inf' for max_response_output_tokens. "
+                    "Set drop_params to drop it instead"
                 ),
                 param=f"session.{malformed[0]}",
             )
@@ -778,18 +791,21 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             return []
 
         message_type: Final = json_message.get("type")
-
-        # Route to appropriate transformation method
+        prompt_start_messages: Final = (
+            self.transform_session_update_event({"session": {}})
+            if message_type in PROMPT_STARTING_CLIENT_EVENT_TYPES and not self.prompt_started
+            else []
+        )
         if message_type == "session.update":
             return self.transform_session_update_event(json_message)
         elif message_type == "input_audio_buffer.append":
-            return self.transform_input_audio_buffer_append_event(json_message)
+            return prompt_start_messages + self.transform_input_audio_buffer_append_event(json_message)
         elif message_type == "input_audio_buffer.commit":
-            return self.transform_input_audio_buffer_commit_event(json_message)
+            return prompt_start_messages + self.transform_input_audio_buffer_commit_event(json_message)
         elif message_type == "conversation.item.create":
-            return self.transform_conversation_item_create_event(json_message)
+            return prompt_start_messages + self.transform_conversation_item_create_event(json_message)
         elif message_type == "response.create":
-            return self.transform_response_create_event(json_message)
+            return prompt_start_messages + self.transform_response_create_event(json_message)
         elif message_type == "response.cancel":
             return self.transform_response_cancel_event(json_message)
         else:
@@ -1384,7 +1400,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             item_id=item_id,
             output_index=output_index,
             call_id=tool_use.toolUseId,
-            delta=tool_use.content,
+            delta=tool_use.arguments,
         )
 
         function_call_event: Final = OpenAIRealtimeFunctionCallArgumentsDone(
@@ -1395,7 +1411,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             output_index=output_index,
             call_id=tool_use.toolUseId,
             name=tool_use.toolName,
-            arguments=tool_use.content,
+            arguments=tool_use.arguments,
         )
 
         completed_item: Final[OpenAIRealtimeStreamResponseOutputItem] = {
@@ -1405,7 +1421,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             "status": "completed",
             "call_id": tool_use.toolUseId,
             "name": tool_use.toolName,
-            "arguments": tool_use.content,
+            "arguments": tool_use.arguments,
         }
         output_item_done: Final = OpenAIRealtimeOutputItemDone(
             type="response.output_item.done",

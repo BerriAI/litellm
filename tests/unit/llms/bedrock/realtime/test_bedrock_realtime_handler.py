@@ -676,19 +676,22 @@ class TestBedrockRealtimeSessionLifecycle:
         ]
         assert len(prompt_starts) == 1
 
-
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "drop_params,expected_errors,expected_temperatures",
-        [(False, [("invalid_type", "session.temperature")], []), (True, [], [0.7])],
+        "drop_params,expected_errors",
+        [(False, [("invalid_type", "session.temperature")]), (True, [])],
     )
-    async def test_malformed_number_setting_is_rejected_or_dropped_per_drop_params(
-        self, stub_aws_sdk_client, drop_params, expected_errors, expected_temperatures
+    async def test_malformed_number_setting_is_rejected_or_dropped_and_the_session_still_answers(
+        self, stub_aws_sdk_client, drop_params, expected_errors
     ):
         stream: Final = ScriptedBedrockStream([])
         stub_aws_sdk_client["streams"] = [stream]
+        user_text: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
         websocket: Final = ConnectedClientWS(
-            [json.dumps({"type": "session.update", "session": {"temperature": "0.2", "modalities": ["text"]}})]
+            [
+                json.dumps({"type": "session.update", "session": {"temperature": "0.2", "modalities": ["text"]}}),
+                json.dumps({"type": "conversation.item.create", "item": user_text}),
+            ]
         )
 
         await BedrockRealtime().async_realtime(
@@ -708,7 +711,9 @@ class TestBedrockRealtimeSessionLifecycle:
             payload["event"]["sessionStart"] for payload in sent_to_bedrock if "sessionStart" in payload["event"]
         ]
         assert [(error["code"], error["param"]) for error in errors] == expected_errors
-        assert [start["inferenceConfiguration"]["temperature"] for start in session_starts] == expected_temperatures
+        assert [start["inferenceConfiguration"]["temperature"] for start in session_starts] == [0.7]
+        assert next(iter(sent_to_bedrock[0]["event"])) == "sessionStart"
+        assert any(payload["event"].get("textInput", {}).get("content") == "hi" for payload in sent_to_bedrock)
 
 
 class TestBedrockRealtimeProviderFailurePropagation:
