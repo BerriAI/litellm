@@ -39,11 +39,11 @@ _OPENROUTER_REGIONAL_HOSTNAMES: Final[Mapping[str, str]] = MappingProxyType(
 _DEFAULT_OPENROUTER_API_BASE: Final[str] = "https://openrouter.ai/api/v1"
 
 
-def _extract_region_value(params: Mapping[str, object] | None) -> str | None:
-    if params is None or not isinstance(params, Mapping):
+def _extract_region_value(params: object) -> str | None:
+    if not isinstance(params, Mapping):
         return None
     for key in ("region", "region_name", "data_residency"):
-        val: Final[object] = params.get(key)
+        val: object = params.get(key)
         if isinstance(val, str) and val.strip():
             return val.strip()
     return None
@@ -51,9 +51,9 @@ def _extract_region_value(params: Mapping[str, object] | None) -> str | None:
 
 def resolve_openrouter_api_base(
     api_base: str | None = None,
-    region: str | None = None,
-    litellm_params: Mapping[str, object] | None = None,
-    optional_params: Mapping[str, object] | None = None,
+    region: object = None,
+    litellm_params: object = None,
+    optional_params: object = None,
 ) -> str:
     """
     Resolve the OpenRouter API base URL based on custom api_base, explicit region, or environment.
@@ -85,7 +85,8 @@ def resolve_openrouter_api_base(
         else (litellm_data_residency if isinstance(litellm_data_residency, str) else None)
     )
 
-    resolved_region: Final[str | None] = region_from_params or region_from_optional or region or attr_region
+    explicit_region: Final[str | None] = region.strip() if isinstance(region, str) and region.strip() else None
+    resolved_region: Final[str | None] = region_from_params or region_from_optional or explicit_region or attr_region
 
     if resolved_region is not None:
         normalized_region: Final[str] = resolved_region.strip().lower()

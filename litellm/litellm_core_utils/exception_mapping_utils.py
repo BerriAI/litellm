@@ -2240,7 +2240,7 @@ def _map_openrouter_exception(
                     message=f"OpenRouterRegionNotSupportedError: {exception_provider} - {error_str}",
                     model=model,
                     llm_provider=custom_llm_provider,
-                    response=response_obj if isinstance(response_obj, httpx.Response) else None,
+                    response=getattr(original_exception, "response", None),
                     litellm_debug_info=extra_information,
                     region=inferred_region,
                 )

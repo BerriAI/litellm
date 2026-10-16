@@ -61,25 +61,15 @@ class OpenrouterConfig(OpenAIGPTConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,  # mutable-ok: overrides OpenAIGPTConfig.get_complete_url signature
-        litellm_params: dict,  # mutable-ok: overrides OpenAIGPTConfig.get_complete_url signature
+        optional_params: dict,  # pyright: ignore[reportMissingTypeArgument,reportUnknownParameterType]  # mutable-ok: overrides OpenAIGPTConfig.get_complete_url signature
+        litellm_params: dict,  # pyright: ignore[reportMissingTypeArgument,reportUnknownParameterType]  # mutable-ok: overrides OpenAIGPTConfig.get_complete_url signature
         stream: bool | None = None,
     ) -> str:
-        casted_optional_params: Final[Mapping[str, object]] = (
-            cast(  # cast-ok: type discipline for untyped optional_params
-                Mapping[str, object], optional_params
-            )
-        )
-        casted_litellm_params: Final[Mapping[str, object]] = (
-            cast(  # cast-ok: type discipline for untyped litellm_params
-                Mapping[str, object], litellm_params
-            )
-        )
         resolved_base: Final = resolve_openrouter_api_base(
             api_base=api_base,
             region=self.region,
-            litellm_params=casted_litellm_params,
-            optional_params=casted_optional_params,
+            litellm_params=litellm_params,
+            optional_params=optional_params,
         ).rstrip("/")
         endpoint: Final = "chat/completions"
         if endpoint in resolved_base:

@@ -3413,28 +3413,17 @@ def _complete_openrouter(ctx: CompletionDispatchContext) -> _CompletionDispatchR
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
 
-    ## Load Config
-    config: Final = litellm.OpenrouterConfig.get_config()
-    casted_optional_params: Final[Mapping[str, object]] = cast(  # cast-ok: type discipline for untyped optional_params
-        Mapping[str, object], optional_params
-    )
-    raw_region: Final[object] = (
-        litellm_params.get("region")
-        or litellm_params.get("region_name")
-        or litellm_params.get("data_residency")
-        or casted_optional_params.get("region")
-        or casted_optional_params.get("region_name")
-        or casted_optional_params.get("data_residency")
-        or getattr(ctx.provider_config, "region", None)
-        or getattr(litellm.OpenrouterConfig, "region", None)
-    )
-    resolved_region: Final[str | None] = raw_region if isinstance(raw_region, str) else None
     api_base = resolve_openrouter_api_base(  # rebind-ok: regional endpoint resolution for openrouter
         api_base=api_base,
-        region=resolved_region,
+        region=getattr(ctx.provider_config, "region", None) or getattr(litellm.OpenrouterConfig, "region", None),
+        litellm_params=litellm_params,
+        optional_params=optional_params,
     )
     litellm_params["api_base"] = api_base
     litellm_params["data_residency"] = infer_openrouter_data_residency("openrouter", api_base)
+
+    ## Load Config
+    config: Final = litellm.OpenrouterConfig.get_config()
 
     api_key = (
         api_key
@@ -6799,24 +6788,11 @@ def embedding(
                 headers=headers,
             )
         elif custom_llm_provider == "openrouter":
-            casted_optional_params: Final[Mapping[str, object]] = (
-                cast(  # cast-ok: type discipline for untyped optional_params
-                    Mapping[str, object], optional_params
-                )
-            )
-            raw_region: Final[object] = (
-                litellm_params_dict.get("region")
-                or litellm_params_dict.get("region_name")
-                or litellm_params_dict.get("data_residency")
-                or casted_optional_params.get("region")
-                or casted_optional_params.get("region_name")
-                or casted_optional_params.get("data_residency")
-                or getattr(litellm.OpenrouterConfig, "region", None)
-            )
-            resolved_region: Final[str | None] = raw_region if isinstance(raw_region, str) else None
             api_base = resolve_openrouter_api_base(  # rebind-ok: regional endpoint resolution for openrouter
                 api_base=api_base,
-                region=resolved_region,
+                region=getattr(litellm.OpenrouterConfig, "region", None),
+                litellm_params=litellm_params_dict,
+                optional_params=optional_params,
             )
             litellm_params_dict["api_base"] = api_base
             litellm_params_dict["data_residency"] = infer_openrouter_data_residency("openrouter", api_base)
