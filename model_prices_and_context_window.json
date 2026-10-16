@@ -32498,11 +32498,13 @@
         "supports_vision": true
     },
     "github_copilot/claude-opus-5": {
+        "deprecation_date": "2026-11-16",
         "litellm_provider": "github_copilot",
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
         "max_tokens": 64000,
         "mode": "chat",
+        "source": "https://github.blog/changelog/2026-10-15-upcoming-deprecation-of-selected-github-copilot-models-in-mid-november",
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/messages"
@@ -32828,11 +32830,13 @@
         "supports_vision": true
     },
     "github_copilot/gpt-5.6-terra": {
+        "deprecation_date": "2026-11-16",
         "litellm_provider": "github_copilot",
         "max_input_tokens": 272000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "responses",
+        "source": "https://github.blog/changelog/2026-10-15-upcoming-deprecation-of-selected-github-copilot-models-in-mid-november",
         "supported_endpoints": [
             "/v1/responses"
         ],
@@ -75076,14 +75080,14 @@
         "supports_vision": true
     },
     "vertex_ai/deepseek-ai/deepseek-v4.1-flash-maas": {
-        "cache_read_input_token_cost": 0.0,
-        "input_cost_per_token": 0.0,
+        "cache_read_input_token_cost": 3e-08,
+        "input_cost_per_token": 3e-07,
         "litellm_provider": "vertex_ai-deepseek_models",
         "max_input_tokens": 1048576,
         "max_output_tokens": 1048576,
         "max_tokens": 1048576,
         "mode": "chat",
-        "output_cost_per_token": 0.0,
+        "output_cost_per_token": 1.2e-06,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_regions": [
             "global"
@@ -75128,5 +75132,40 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "thinking_always_on": true
+    },
+    "baseten/meta-models/muse-spark-open": {
+        "cache_read_input_token_cost": 1.5e-07,
+        "input_cost_per_token": 1.25e-06,
+        "litellm_provider": "baseten",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 4.25e-06,
+        "source": "https://inference.baseten.co/v1/models",
+        "supports_audio_input": true,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": false,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "baseten/nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B": {
+        "cache_read_input_token_cost": 4e-08,
+        "input_cost_per_token": 2e-07,
+        "litellm_provider": "baseten",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 5e-07,
+        "source": "https://inference.baseten.co/v1/models",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
     }
 }
