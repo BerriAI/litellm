@@ -12,7 +12,7 @@ from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams, Respons
 PARAMETERS: Final = tuple(ResponsesAPIOptionalRequestParams.__annotations__)
 
 
-def body_params(request: Mapping[str, object]) -> dict[str, object]:
+def body_params(request: Mapping[str, object]) -> Mapping[str, object]:
     return known_params(PARAMETERS, request)
 
 

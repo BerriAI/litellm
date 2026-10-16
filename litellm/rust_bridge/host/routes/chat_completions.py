@@ -27,7 +27,7 @@ _TRANSPORT_PARAMETERS: Final = frozenset(
 PARAMETERS: Final = tuple(name for name in OPENAI_CHAT_COMPLETION_PARAMS if name not in _TRANSPORT_PARAMETERS)
 
 
-def body_params(request: Mapping[str, object]) -> dict[str, object]:
+def body_params(request: Mapping[str, object]) -> Mapping[str, object]:
     return known_params(PARAMETERS, request)
 
 

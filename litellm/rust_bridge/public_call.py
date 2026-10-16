@@ -71,7 +71,7 @@ def optional_sequence(value: object) -> Sequence[object] | None:
     return cast("Sequence[object]", value)  # cast-ok: the same caller-owned object is handed on unchanged
 
 
-def known_params(names: Collection[str], request: Mapping[str, object]) -> dict[str, object]:
+def known_params(names: Collection[str], request: Mapping[str, object]) -> Mapping[str, object]:
     return {name: value for name, value in request.items() if name in names and value is not None}
 
 

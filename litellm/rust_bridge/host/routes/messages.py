@@ -59,7 +59,7 @@ def response(value: Mapping[str, object]) -> AnthropicMessagesResponse:
     )
 
 
-def body_params(request: Mapping[str, object]) -> dict[str, object]:
+def body_params(request: Mapping[str, object]) -> Mapping[str, object]:
     return known_params(_BODY_FIELDS, request)
 
 
