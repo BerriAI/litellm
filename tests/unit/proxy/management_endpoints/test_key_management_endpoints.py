@@ -22370,7 +22370,7 @@ async def _rotate_to_new_master_key(mock_prisma_client: AsyncMock, monkeypatch) 
         await rotate_master_key(
             prisma_client=mock_prisma_client,
             user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="test-user"
+                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="test-user"
             ),
             current_master_key="sk-old-master-key",
             new_master_key="sk-new-master-key",
