@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 import json
 import threading
 import time
@@ -10,6 +11,7 @@ import pytest
 import litellm
 from litellm import verbose_logger
 from litellm._logging import session_id_var, trace_id_var
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import (
     CustomStreamWrapper,
@@ -6621,3 +6623,42 @@ async def test_leaving_an_async_with_block_closes_the_provider_stream():
     async with _wrapper_over(stream):
         pass
     assert stream.close_calls == 1
+
+
+_chunk_context_marker: Final = contextvars.ContextVar("_chunk_context_marker", default="unset")
+
+
+class _ContextRecordingLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen: Final[list[str]] = []  # mutable-ok: records one entry per callback invocation
+
+    async def async_log_stream_event(
+        self, kwargs: object, response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.seen.append(_chunk_context_marker.get())
+        _chunk_context_marker.set("set by an earlier chunk")
+
+
+def _wait_for_callbacks(logger: _ContextRecordingLogger, expected: int) -> None:
+    deadline: Final = time.monotonic() + 2
+    while len(logger.seen) < expected and time.monotonic() < deadline:
+        time.sleep(0.005)
+    time.sleep(0.005)
+
+
+def test_sync_stream_runs_each_async_chunk_callback_in_a_fresh_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    logger: Final = _ContextRecordingLogger()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    stream: Final = completion(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="one two three four five six",
+        stream=True,
+    )
+    assert isinstance(stream, CustomStreamWrapper)
+
+    received: Final = [_wait_for_callbacks(logger, n) for n, _ in enumerate(stream, start=1)]
+
+    assert len(logger.seen) == len(received)
+    assert set(logger.seen) == {"unset"}
