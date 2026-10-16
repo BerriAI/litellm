@@ -11,8 +11,8 @@ from pydantic import ConfigDict, TypeAdapter
 import litellm
 from litellm.llms.base import BaseLLM
 from litellm.llms.custom_httpx.http_handler import (
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.llms.together_ai.rerank.transformation import TogetherAIRerankConfig
 from litellm.types.rerank import RerankRequest, RerankResponse
@@ -38,7 +38,7 @@ class TogetherAIRerank(BaseLLM):
         max_chunks_per_doc: int | None = None,
         _is_async: bool | None = False,
     ) -> RerankResponse:
-        client: Final = _get_httpx_client()
+        client: Final = get_httpx_client()
 
         request_data: Final = RerankRequest(
             model=model,
@@ -72,7 +72,7 @@ class TogetherAIRerank(BaseLLM):
 
         _json_response: Final = _JSON_DICT.validate_python(response.json())
 
-        return TogetherAIRerankConfig()._transform_response(_json_response)
+        return TogetherAIRerankConfig().transform_response(_json_response)
 
     async def async_rerank(  # New async method
         self,
@@ -97,4 +97,4 @@ class TogetherAIRerank(BaseLLM):
 
         _json_response: Final = _JSON_DICT.validate_python(response.json())
 
-        return TogetherAIRerankConfig()._transform_response(_json_response)
+        return TogetherAIRerankConfig().transform_response(_json_response)

@@ -2,7 +2,7 @@
 
 Harness logic, so it lives here rather than under tests/e2e, which holds only
 tests that drive a live proxy. The harness modules are imported off
-``PYTHONPATH=tests/e2e``, the way the Code Quality workflow's
+``PYTHONPATH=tests/e2e``, the way the lint workflow's code-quality job's
 test_e2e_metadata step runs this file. Call order, the failing test's last step,
 the per-test reset and the JUnit attach are pinned end to end in
 test_e2e_junit_report.py.
@@ -11,17 +11,23 @@ test_e2e_junit_report.py.
 from __future__ import annotations
 
 import ast
+import importlib
 import inspect
 import re
 import string
+import sys
 import threading
+import time
 import warnings
+from collections import Counter
 from collections.abc import Callable, Generator, Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import fields, replace
+from dataclasses import MISSING, dataclass, fields, is_dataclass, replace
+from functools import cache, reduce
+from itertools import chain
 from pathlib import Path
-from types import UnionType
-from typing import Final, cast, get_args, get_type_hints
+from types import ModuleType, UnionType
+from typing import Final, Union, cast, get_args, get_origin, get_type_hints
 
 import pytest
 from e2e_metadata import (
@@ -39,12 +45,11 @@ from e2e_metadata import (
     environment_secrets,
     meta,
     step,
+    step_properties,
     subject_properties,
 )
 from junit_properties import package_from_nodeid, result_properties, source_from_item
-from proxy_client import ProxyClient
 from pydantic import BaseModel, Field
-from pydantic.fields import FieldInfo
 
 
 @pytest.fixture(autouse=True)
@@ -316,6 +321,15 @@ class TestStepRecording:
             delete_team()
         assert [Path(warning.filename).name for warning in caught] == [Path(__file__).name]
 
+    def test_a_harness_wait_the_test_calls_directly_is_a_step_in_its_report(self) -> None:
+        """A test that only waits through a bare harness helper, never a typed
+        client, still has that wait in its JUnit story. The stamp is old enough
+        that the helper returns without sleeping."""
+        from e2e_config import PROPAGATION_TIMEOUT, settle_propagation
+
+        settle_propagation(written_at=time.monotonic() - PROPAGATION_TIMEOUT)
+        assert step_properties() == (("step", "Wait for the last control-plane write to reach every proxy replica"),)
+
 
 class _KeyBody(BaseModel):
     models: list[str] = []
@@ -335,48 +349,180 @@ class _DeploymentBody(BaseModel):
     params: _Params
 
 
-def _field_type(annotation: object) -> object:
-    """`X | None` is `X`: a placeholder reads the field when it is set."""
-    present: Final = tuple(arg for arg in get_args(annotation) if arg is not type(None))
-    return present[0] if isinstance(annotation, UnionType) and len(present) == 1 else annotation
+def _alternatives(annotation: object) -> tuple[object, ...]:
+    if not (isinstance(annotation, UnionType) or get_origin(annotation) is Union):
+        return (annotation,)
+    return tuple(arg for arg in cast("tuple[object, ...]", get_args(annotation)) if arg is not type(None))
 
 
-def _placeholders(owner: type) -> Iterator[tuple[str, str]]:
-    tree: Final = ast.parse(inspect.getsource(owner))
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.FunctionDef):
-            continue
-        for decorator in node.decorator_list:
-            match decorator:
-                case ast.Call(func=ast.Name(id="step"), args=[ast.Constant(value=str(label))]):
-                    for _, field, _, _ in string.Formatter().parse(label):
-                        if field is not None:
-                            yield node.name, field
-                case _:
-                    pass
+def _evaluated(annotation: object, module: str) -> object:
+    holder: Final = type("Hint", (), {"__annotations__": {"value": annotation}, "__module__": module})
+    hints: Final[Mapping[str, object]] = get_type_hints(holder)
+    return hints["value"]
 
 
-def _dotted_placeholders(owner: type) -> Iterator[tuple[str, str]]:
-    return ((method, field) for method, field in _placeholders(owner) if "." in field)
+@dataclass(frozen=True, slots=True)
+class StepHelper:
+    path: Path
+    qualname: str
+    label: str
+    owner: object
+    function: Callable[..., object]
+
+    @property
+    def where(self) -> str:
+        return f"{self.path.relative_to(E2E_DIR)}::{self.qualname}"
+
+    def hint(self, placeholder: str) -> object:
+        root: Final = placeholder.split(".")[0]
+        if root == "self":
+            return self.owner
+        annotation: Final = cast("object", inspect.signature(self.function).parameters[root].annotation)
+        return _evaluated(annotation, self.function.__module__)
 
 
-def _fields_read(owner: type, method: str, field: str) -> tuple[FieldInfo, ...] | None:
-    """The model fields a dotted placeholder reads, outermost first, or None if one doesn't exist."""
-    root, *attributes = field.split(".")
-    wrapped: Final = cast("Callable[..., object]", getattr(owner, method))
-    hints: Final[Mapping[str, object]] = get_type_hints(inspect.unwrap(wrapped))
-    current: object = _field_type(hints[root])  # rebind-ok: walks one type per attribute
-    read: tuple[FieldInfo, ...] = ()  # rebind-ok: grows one field per attribute
-    for attribute in attributes:
-        if not (isinstance(current, type) and issubclass(current, BaseModel) and attribute in current.model_fields):
+@dataclass(frozen=True, slots=True)
+class FieldRead:
+    always_set: bool
+    annotation: object
+
+
+def _model_field(owner: type[BaseModel], attribute: str) -> FieldRead | None:
+    info: Final = owner.model_fields.get(attribute)
+    if info is None:
+        return None
+    return FieldRead(info.is_required() or (info.default_factory is None and info.default is not None), info.annotation)
+
+
+def _dataclass_field(owner: type, attribute: str) -> FieldRead | None:
+    found: Final = next((field for field in fields(owner) if field.name == attribute), None)
+    if found is None:
+        return None
+    always_set: Final = found.default_factory is MISSING and found.default is not None
+    return FieldRead(always_set, _evaluated(found.type, owner.__module__))
+
+
+def _attribute(owner: object, attribute: str) -> FieldRead | None:
+    if isinstance(owner, type) and issubclass(owner, BaseModel):
+        return _model_field(owner, attribute)
+    if isinstance(owner, type) and is_dataclass(owner):
+        return _dataclass_field(owner, attribute)
+    return None
+
+
+STEP_DECORATOR: Final = re.compile(r"^[ \t]*@step\(", re.MULTILINE)
+
+
+def _is_step(decorator: ast.expr) -> bool:
+    match decorator:
+        case ast.Call(func=ast.Name(id="step")):
+            return True
+        case _:
+            return False
+
+
+def _decorated_defs(body: list[ast.stmt], prefix: str = "") -> Iterator[str]:
+    for node in body:
+        match node:
+            case ast.ClassDef(name=name, body=inner):
+                yield from _decorated_defs(inner, f"{prefix}{name}.")
+            case (
+                ast.FunctionDef(name=name, decorator_list=decorators)
+                | ast.AsyncFunctionDef(name=name, decorator_list=decorators)
+            ):
+                yield from (f"{prefix}{name}" for decorator in decorators if _is_step(decorator))
+            case _:
+                pass
+
+
+def _import_root(directory: Path) -> Path:
+    return _import_root(directory.parent) if (directory / "__init__.py").exists() else directory
+
+
+@contextmanager
+def _importable_from(directory: Path) -> Generator[None]:
+    sys.path.insert(0, str(directory))
+    try:
+        yield
+    finally:
+        sys.path.remove(str(directory))
+
+
+def _imported(path: Path) -> ModuleType:
+    root: Final = _import_root(path.parent)
+    with _importable_from(root):
+        module: Final = importlib.import_module(".".join(path.relative_to(root).with_suffix("").parts))
+    assert module.__file__ is not None and Path(module.__file__).resolve() == path, (
+        f"{path} imports as {module.__name__}, which is {module.__file__}"
+    )
+    return module
+
+
+def _helper(path: Path, module: ModuleType, qualname: str) -> StepHelper:
+    *scope, name = qualname.split(".")
+    owner: Final = reduce(lambda found, part: cast("object", getattr(found, part)), scope, cast("object", module))
+    wrapper: Final = cast("Callable[..., object]", getattr(owner, name))
+    label: Final = cast("object", inspect.getclosurevars(wrapper).nonlocals.get("label"))
+    assert isinstance(label, str), f"{path}::{qualname} is not wrapped by @step"
+    return StepHelper(path, qualname, label, owner, cast("Callable[..., object]", inspect.unwrap(wrapper)))
+
+
+def _helpers_in(path: Path) -> tuple[StepHelper, ...]:
+    qualnames: Final = tuple(_decorated_defs(ast.parse(path.read_text()).body))
+    if not qualnames:
+        return ()
+    module: Final = _imported(path)
+    return tuple(_helper(path, module, qualname) for qualname in qualnames)
+
+
+def _harness_files() -> tuple[Path, ...]:
+    return tuple(sorted(path.resolve() for path in E2E_DIR.rglob("*.py") if "node_modules" not in path.parts))
+
+
+@cache
+def step_helpers() -> tuple[StepHelper, ...]:
+    return tuple(chain.from_iterable(_helpers_in(path) for path in _harness_files()))
+
+
+def _placeholders() -> Iterator[tuple[StepHelper, str]]:
+    for helper in step_helpers():
+        for _, field, _, _ in string.Formatter().parse(helper.label):
+            if field is not None:
+                yield helper, field
+
+
+def _dotted_placeholders() -> Iterator[tuple[StepHelper, str]]:
+    return ((helper, field) for helper, field in _placeholders() if "." in field)
+
+
+@dataclass(frozen=True, slots=True)
+class PlaceholderRead:
+    fields: tuple[FieldRead, ...]
+    printed: tuple[object, ...]
+
+
+def _read(helper: StepHelper, field: str) -> PlaceholderRead | None:
+    """The fields a placeholder reads, outermost first, across every member of a union,
+    and the types it ends up printing, or None if one of the fields doesn't exist."""
+    read: PlaceholderRead = PlaceholderRead((), _alternatives(helper.hint(field)))  # rebind-ok: one hop per attribute
+    for attribute in field.split(".")[1:]:
+        found = tuple(_attribute(owner, attribute) for owner in read.printed)
+        hop = tuple(entry for entry in found if entry is not None)
+        if len(hop) != len(found):
             return None
-        read = (*read, current.model_fields[attribute])  # rebind-ok: grows one field per attribute
-        current = _field_type(read[-1].annotation)  # rebind-ok: walks one type per attribute
+        printed = tuple(chain.from_iterable(_alternatives(entry.annotation) for entry in hop))
+        read = PlaceholderRead((*read.fields, *hop), printed)
     return read
+
+
+def _fields_read(helper: StepHelper, field: str) -> tuple[FieldRead, ...] | None:
+    read: Final = _read(helper, field)
+    return None if read is None else read.fields
 
 
 SECRET_NAME: Final = re.compile(
     r"secret|password|api_key|access_key|private_key|credential_values|^token$|(access|auth|bearer|refresh|session)_token$"
+    r"|^key$|credentials$|headers$|_host$|_endpoint$|^api_base$"
 )
 
 
@@ -393,15 +539,14 @@ def _models_in(annotation: object, seen: frozenset[type] = frozenset()) -> froze
     return frozenset[type[BaseModel]]().union(*(_models_in(arg, seen) for arg in args))
 
 
-def _printed_models(owner: type) -> frozenset[type[BaseModel]]:
-    def hint(method: str, field: str) -> object:
-        wrapped: Final = cast("Callable[..., object]", getattr(owner, method))
-        hints: Final = cast("Mapping[str, object]", get_type_hints(inspect.unwrap(wrapped)))
-        return hints[field.split(".")[0]]
+def _printed(helper: StepHelper, field: str) -> tuple[object, ...]:
+    read: Final = _read(helper, field)
+    return () if read is None else read.printed
 
-    return frozenset[type[BaseModel]]().union(
-        *(_models_in(hint(method, field)) for method, field in _placeholders(owner))
-    )
+
+def _printed_models() -> frozenset[type[BaseModel]]:
+    printed: Final = chain.from_iterable(_printed(helper, field) for helper, field in _placeholders())
+    return frozenset[type[BaseModel]]().union(*(_models_in(annotation) for annotation in printed))
 
 
 class TestLabelTemplates:
@@ -460,32 +605,37 @@ class TestLabelTemplates:
         with pytest.raises(TypeError, match=r"body\.messages\[0\]"):
             _ = step("Send {body.messages[0]}")(chat)
 
-    @pytest.mark.parametrize("owner", [ProxyClient], ids=["ProxyClient"])
-    def test_every_dotted_placeholder_in_the_harness_names_a_real_field(self, owner: type) -> None:
+    def test_every_step_in_the_harness_is_checked(self) -> None:
+        written: Final = Counter({path: len(STEP_DECORATOR.findall(path.read_text())) for path in _harness_files()})
+        discovered: Final = Counter(helper.path for helper in step_helpers())
+        assert written[E2E_DIR / "proxy_client.py"] > 0
+        assert discovered == +written
+
+    def test_every_dotted_placeholder_in_the_harness_names_a_real_field(self) -> None:
         """A dotted placeholder is read on every live call, so one naming a field the
         request model doesn't have would fail the test calling it, not the label."""
-        placeholders: Final = tuple(_dotted_placeholders(owner))
+        placeholders: Final = tuple(_dotted_placeholders())
         assert placeholders
-        assert [
-            f"{method}: {field}" for method, field in placeholders if _fields_read(owner, method, field) is None
-        ] == []
+        missing: Final = tuple(
+            f"{helper.where}: {field}" for helper, field in placeholders if _fields_read(helper, field) is None
+        )
+        assert missing == ()
 
-    @pytest.mark.parametrize("owner", [ProxyClient], ids=["ProxyClient"])
-    def test_every_dotted_placeholder_in_the_harness_reads_a_field_the_caller_must_set(self, owner: type) -> None:
-        """A field with a default is usually left unset, and an unset field prints
-        nothing, so the step would read "Save a provider credential for "."""
+    def test_every_dotted_placeholder_in_the_harness_reads_a_field_that_is_always_set(self) -> None:
+        """A field that defaults to None is usually left unset, and an unset field
+        prints as None, so the step would read "Save a provider credential for None".
+        A required field or one with a real default, like a discriminator, always reads."""
         unset: Final = tuple(
-            f"{method}: {field}"
-            for method, field in _dotted_placeholders(owner)
-            if not all(info.is_required() for info in _fields_read(owner, method, field) or ())
+            f"{helper.where}: {field}"
+            for helper, field in _dotted_placeholders()
+            if not all(read.always_set for read in _fields_read(helper, field) or ())
         )
         assert unset == ()
 
-    @pytest.mark.parametrize("owner", [ProxyClient], ids=["ProxyClient"])
-    def test_every_secret_field_a_label_can_print_is_hidden(self, owner: type) -> None:
+    def test_every_secret_field_a_label_can_print_is_hidden(self) -> None:
         """A `{body}` label prints nested models too, so a callback's credentials
         inside key metadata would land in the public report unless marked `repr=False`."""
-        models: Final = _printed_models(owner)
+        models: Final = _printed_models()
         assert models
         exposed: Final = sorted(
             f"{model.__name__}.{name}"

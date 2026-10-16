@@ -10,11 +10,10 @@ https://platform.openai.com/docs/api-reference/responses-streaming
 
 import asyncio
 import json
-from collections.abc import Callable, Mapping, Sequence
-from typing import TYPE_CHECKING, Final, TypeAlias
+from collections.abc import AsyncIterable, Callable, Mapping, Sequence
+from typing import TYPE_CHECKING, Final, Protocol, TypeAlias, runtime_checkable
 
 from fastapi import Request, Response
-from fastapi.responses import StreamingResponse
 from starlette.types import Message
 from typing_extensions import ReadOnly, TypedDict
 
@@ -73,6 +72,12 @@ class _StreamEvent(TypedDict, total=False):
 
 class _StreamEventParser:
     parse: Callable[[str], _StreamEvent] = staticmethod(json.loads)
+
+
+@runtime_checkable
+class _StreamsBody(Protocol):
+    @property
+    def body_iterator(self) -> AsyncIterable[str | bytes | memoryview]: ...
 
 
 def _sse_frame_data(frame: str) -> str | None:
@@ -141,7 +146,7 @@ async def background_streaming_task(
         # Make streaming request.
         # Pre-call checks (rate limits, guardrails, budget) were already run
         # before polling ID creation, so skip them here to avoid double-counting.
-        response: Final[StreamingResponse] = await processor.base_process_llm_request(
+        response: Final = await processor.base_process_llm_request(
             request=detach_request_from_client(request),
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -216,13 +221,13 @@ async def background_streaming_task(
                 last_update_time = current_time
 
         # Handle StreamingResponse
-        if not hasattr(response, "body_iterator"):
+        if not isinstance(response, _StreamsBody):
             verbose_proxy_logger.warning(
                 "background_streaming_task: response for %s has no body_iterator; this may indicate a misconfiguration or provider error",
                 polling_id,
             )
 
-        if hasattr(response, "body_iterator"):
+        if isinstance(response, _StreamsBody):
             async for chunk in response.body_iterator:
                 # Parse chunk
                 if isinstance(chunk, bytes):

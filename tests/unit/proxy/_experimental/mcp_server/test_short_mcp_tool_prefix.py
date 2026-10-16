@@ -345,7 +345,7 @@ class TestManagerShortPrefix:
 
 
 class TestShortPrefixCollisionResolution:
-    """``_assign_unique_short_prefix`` must rehash on collision.
+    """``assign_unique_short_prefix`` must rehash on collision.
 
     The dedup path is exercised by forcing two distinct ``server_id``
     values to both hash to the same natural prefix via a monkeypatched
@@ -355,7 +355,7 @@ class TestShortPrefixCollisionResolution:
     def test_no_op_when_flag_off(self):
         manager = MCPServerManager()
         server = _make_server(server_id="abc")
-        manager._assign_unique_short_prefix(server)
+        manager.assign_unique_short_prefix(server)
         assert server.short_prefix is None
 
     def test_assigns_natural_hash_when_no_collision(self, monkeypatch):
@@ -364,7 +364,7 @@ class TestShortPrefixCollisionResolution:
         monkeypatch.setenv("LITELLM_USE_SHORT_MCP_TOOL_PREFIX", "true")
         manager = MCPServerManager()
         server = _make_server(server_id="abc")
-        manager._assign_unique_short_prefix(server)
+        manager.assign_unique_short_prefix(server)
 
         assert server.short_prefix == mcp_utils.compute_short_server_prefix("abc")
 
@@ -394,9 +394,9 @@ class TestShortPrefixCollisionResolution:
 
         # Pretend both are already in the registry so dedup sees both.
         manager.registry[first.server_id] = first
-        manager._assign_unique_short_prefix(first)
+        manager.assign_unique_short_prefix(first)
         manager.registry[second.server_id] = second
-        manager._assign_unique_short_prefix(second)
+        manager.assign_unique_short_prefix(second)
 
         assert first.short_prefix == "AAA"
         assert second.short_prefix == "AAB"
@@ -408,7 +408,7 @@ class TestShortPrefixCollisionResolution:
         server = _make_server(server_id="abc")
         server.short_prefix = "ZZZ"  # pretend a previous registration set this
 
-        manager._assign_unique_short_prefix(server)
+        manager.assign_unique_short_prefix(server)
 
         assert server.short_prefix == "ZZZ"
 

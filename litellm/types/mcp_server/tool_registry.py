@@ -1,7 +1,7 @@
 from collections.abc import Callable
 from typing import Any, ClassVar
 
-from pydantic import ConfigDict
+from pydantic import ConfigDict, Field
 
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -12,6 +12,7 @@ class MCPTool(LiteLLMBaseModel):
     description: str
     input_schema: dict[str, Any]
     handler: Callable
+    server_id: str | None = Field(default=None, frozen=True)
 
 
 class ToolSchema(LiteLLMBaseModel):

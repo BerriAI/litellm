@@ -34,7 +34,7 @@ from litellm._logging import (
     _parse_json_logs_env,
     _plain_log_format,
     _stdout_truncation_marker,
-    _turn_on_json,
+    turn_on_json,
     format_base64_size,
     session_id_var,
     set_session_id,
@@ -63,7 +63,7 @@ class CacheHitCustomLogger(CustomLogger):
 
 def test_json_mode_emits_one_record_per_logger(capfd):
     # Turn on JSON logging
-    _turn_on_json()
+    turn_on_json()
     # Make sure our loggers will emit INFO-level records
     for lg in (verbose_logger, verbose_router_logger, verbose_proxy_logger):
         lg.setLevel(logging.INFO)
@@ -896,7 +896,7 @@ def test_disabled_diagnostic_call_does_not_render_arguments(caplog):
 
 def test_truncation_filter_survives_json_reconfiguration():
     """The cap lives on the loggers, so swapping handlers (JSON mode) can't drop it."""
-    _turn_on_json()
+    turn_on_json()
 
     for lg in (verbose_logger, verbose_router_logger, verbose_proxy_logger):
         assert any(isinstance(f, StdoutLogTruncationFilter) for f in lg.filters), f"{lg.name} lost stdout truncation"
@@ -1766,3 +1766,27 @@ def test_diagnostic_filter_redacts_a_non_string_message_object(monkeypatch, nati
     assert DiagnosticProcessingFilter().filter(record) is True
 
     assert secret not in record.getMessage()
+
+
+class _StrCountingValue:
+    str_calls = 0
+
+    def __str__(self) -> str:
+        _StrCountingValue.str_calls += 1
+        return "cached-vector"
+
+
+def test_print_verbose_formats_args_only_when_set_verbose_is_on(monkeypatch, capsys):
+    import litellm._logging as logging_module
+
+    _StrCountingValue.str_calls = 0
+
+    monkeypatch.setattr(logging_module, "set_verbose", False)
+    logging_module.print_verbose("key %s value %s", "k1", _StrCountingValue())
+    assert _StrCountingValue.str_calls == 0
+    assert capsys.readouterr().out == ""
+
+    monkeypatch.setattr(logging_module, "set_verbose", True)
+    logging_module.print_verbose("key %s value %s", "k1", _StrCountingValue())
+    assert _StrCountingValue.str_calls == 1
+    assert capsys.readouterr().out == "key k1 value cached-vector\n"

@@ -34,7 +34,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     TOKEN_INCREMENT_SCRIPT,
     ParallelSlotAcquisition,
     RequestRateLimiterStash,
-    _PROXY_MaxParallelRequestsHandler_v3,
+    PROXY_MaxParallelRequestsHandler_v3,
 )
 from litellm.proxy.spend_tracking.spend_counter_batch import PendingSpendIncrement
 from litellm.proxy.utils import InternalUsageCache
@@ -99,10 +99,10 @@ def _names(client: FakeClient, index: int = 0) -> list[str]:
     return [command[0] for command in client.pipelines[index].commands]
 
 
-def _limiter(redis_cache: FakeRedisCache) -> _PROXY_MaxParallelRequestsHandler_v3:
+def _limiter(redis_cache: FakeRedisCache) -> PROXY_MaxParallelRequestsHandler_v3:
     dual_cache = DualCache()
     dual_cache.attach_redis_cache(redis_cache)
-    return _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(dual_cache=dual_cache))
+    return PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(dual_cache=dual_cache))
 
 
 def _slot_stash(slot_id: str, *counter_keys: str) -> RequestRateLimiterStash:

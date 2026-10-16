@@ -1204,8 +1204,10 @@ def test_speech_response_without_a_byte_count_produces_no_output() -> None:
     assert data.choices_out == ()
 
 
-def test_speech_binary_response_is_logged_as_its_summary_not_dropped() -> None:
-    import httpx
+@pytest.mark.parametrize("http_module", ("httpx", "httpx2"))
+def test_speech_binary_response_is_logged_as_its_summary_not_dropped(http_module: str) -> None:
+    httpx: Final = pytest.importorskip(http_module)
+    from openai import HttpxBinaryResponseContent as SDKBinaryResponse
 
     from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
     from litellm.litellm_core_utils.litellm_logging import _extract_response_obj_and_hidden_params
@@ -1216,13 +1218,17 @@ def test_speech_binary_response_is_logged_as_its_summary_not_dropped() -> None:
     set_provider_response_headers_in_hidden_params(speech, raw.headers)
     response_obj, hidden_params = _extract_response_obj_and_hidden_params(speech, None)
 
+    assert isinstance(speech, SDKBinaryResponse)
+    assert speech.response is raw
+    assert speech.read() == raw.content
     assert response_obj == {"object": "binary", "content_type": "audio/mpeg", "num_bytes": 1234}
     assert hidden_params is not None
     assert hidden_params["headers"]["content-type"] == "audio/mpeg"
 
 
-def test_speech_binary_response_still_streaming_reports_the_bytes_downloaded_so_far() -> None:
-    import httpx
+@pytest.mark.parametrize("http_module", ("httpx", "httpx2"))
+def test_speech_binary_response_still_streaming_reports_the_bytes_downloaded_so_far(http_module: str) -> None:
+    httpx: Final = pytest.importorskip(http_module)
 
     from litellm.types.llms.openai import HttpxBinaryResponseContent
 
@@ -1684,6 +1690,19 @@ def test_capture_message_content_normalizer_only_touches_strings():
 
     with pytest.raises(ValidationError):
         OpenTelemetryV2Config(capture_message_content=123)
+
+
+def test_unknown_capture_message_content_env_is_kept_as_a_plain_string_that_captures_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "Invalid-Mode")
+
+    config: Final = OpenTelemetryV2Config()
+
+    assert type(config.capture_message_content) is str
+    assert config.capture_message_content == "invalid-mode"
+    assert config.capture_span_content is False
+    assert config.model_dump()["capture_message_content"] == "invalid-mode"
 
 
 def test_v2_flag_is_off_by_default(monkeypatch):

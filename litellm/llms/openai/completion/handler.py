@@ -12,7 +12,7 @@ from litellm.types.llms.openai import AllMessageValues, OpenAITextCompletionUser
 from litellm.types.utils import LlmProviders, ModelResponse, TextCompletionResponse
 from litellm.utils import ProviderConfigManager
 
-from ..common_utils import BaseOpenAILLM, OpenAIError
+from ..common_utils import BaseOpenAILLM, OpenAIAsyncHTTPClient, OpenAIError, OpenAIHTTPClient
 from .transformation import OpenAITextCompletionConfig
 
 
@@ -129,7 +129,7 @@ class OpenAITextCompletion(BaseLLM):
                     openai_client = OpenAI(
                         api_key=api_key,
                         base_url=api_base,
-                        http_client=litellm.client_session,
+                        http_client=litellm.client_session or OpenAIHTTPClient(),
                         timeout=timeout,
                         max_retries=max_retries,
                         organization=organization,
@@ -181,7 +181,7 @@ class OpenAITextCompletion(BaseLLM):
                 openai_aclient = AsyncOpenAI(
                     api_key=api_key,
                     base_url=api_base,
-                    http_client=BaseOpenAILLM._get_async_http_client(),
+                    http_client=BaseOpenAILLM.get_async_http_client(),
                     timeout=timeout,
                     max_retries=max_retries,
                     organization=organization,
@@ -204,7 +204,7 @@ class OpenAITextCompletion(BaseLLM):
             )
             ## RESPONSE OBJECT
             response_obj: Final = TextCompletionResponse(**response_json)
-            response_obj._hidden_params.original_response = json.dumps(response_json)
+            response_obj.hidden_params.original_response = json.dumps(response_json)
             return response_obj
         except Exception as e:
             status_code: Final = getattr(e, "status_code", 500)
@@ -233,7 +233,7 @@ class OpenAITextCompletion(BaseLLM):
             openai_client = OpenAI(
                 api_key=api_key,
                 base_url=api_base,
-                http_client=litellm.client_session,
+                http_client=litellm.client_session or OpenAIHTTPClient(),
                 timeout=timeout,
                 max_retries=max_retries,
                 organization=organization,
@@ -290,7 +290,7 @@ class OpenAITextCompletion(BaseLLM):
             openai_client = AsyncOpenAI(
                 api_key=api_key,
                 base_url=api_base,
-                http_client=litellm.aclient_session,
+                http_client=litellm.aclient_session or OpenAIAsyncHTTPClient(),
                 timeout=timeout,
                 max_retries=max_retries,
                 organization=organization,

@@ -240,7 +240,7 @@ class TestCooldownCacheExceptionMasking:
 
         # Test masking behavior with these settings
         long_string = "A" * 100  # 100 character string
-        masked = cache.exception_masker._mask_value(long_string)
+        masked = cache.exception_masker.mask_value(long_string)
 
         # Should show first 50 characters, then all asterisks
         expected = "A" * 50 + "*" * 50

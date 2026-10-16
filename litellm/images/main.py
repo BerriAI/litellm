@@ -5,6 +5,8 @@ from collections.abc import Coroutine
 from functools import partial
 from typing import TYPE_CHECKING, Final, Literal, Optional, cast, overload
 
+from pydantic import TypeAdapter, ValidationError
+
 if TYPE_CHECKING:
     from litellm.images.utils import ImageEditRequestUtils
 
@@ -17,6 +19,9 @@ from litellm import client
 from litellm.constants import DEFAULT_IMAGE_ENDPOINT_MODEL
 from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
 from litellm.exceptions import LiteLLMUnknownProvider
+from litellm.litellm_core_utils.get_llm_provider_logic import (
+    invalid_provider_routing_hints_message,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_request_utils import flatten_form_field_values
@@ -52,6 +57,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     LITELLM_IMAGE_VARIATION_PROVIDERS,
     LlmProviders,
+    ProviderRoutingHints,
 )
 from litellm.utils import (
     ImageResponse,
@@ -59,6 +65,8 @@ from litellm.utils import (
     get_llm_provider,
     get_optional_params_image_gen,
 )
+
+_PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
 
 # Cache for ImageEditRequestUtils to avoid repeated __getattr__ calls
 _ImageEditRequestUtils_cache: Optional["ImageEditRequestUtils"] = None
@@ -92,6 +100,12 @@ async def aimage_generation(*args, **kwargs) -> ImageResponse:
     model: Final = args[0] if len(args) > 0 else kwargs["model"]
     ### PASS ARGS TO Image Generation ###
     kwargs["aimg_generation"] = True
+    try:
+        provider_hints: Final = _PROVIDER_ROUTING_HINTS.validate_python(kwargs)
+    except ValidationError as error:
+        raise litellm.BadRequestError(
+            message=invalid_provider_routing_hints_message(error), model=model, llm_provider=""
+        ) from error
     custom_llm_provider = None
     try:
         # Use a partial function to pass your keyword arguments
@@ -101,7 +115,11 @@ async def aimage_generation(*args, **kwargs) -> ImageResponse:
         ctx: Final = contextvars.copy_context()
         func_with_context: Final = partial(ctx.run, func)
 
-        _, custom_llm_provider, _, _ = get_llm_provider(model=model, api_base=kwargs.get("api_base", None))
+        _, custom_llm_provider, _, _ = get_llm_provider(
+            model=model,
+            custom_llm_provider=provider_hints.get("custom_llm_provider"),
+            api_base=provider_hints.get("api_base"),
+        )
 
         # Await normally
         init_response: Final = await loop.run_in_executor(None, func_with_context)
@@ -230,7 +248,7 @@ def image_generation(
         else:
             model = "dall-e-2"
             custom_llm_provider = "openai"  # default to dall-e-2 on openai
-        model_response._hidden_params["model"] = model
+        model_response.hidden_params["model"] = model
         openai_params: Final = [
             "user",
             "request_timeout",

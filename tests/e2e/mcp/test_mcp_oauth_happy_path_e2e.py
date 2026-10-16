@@ -18,6 +18,7 @@ from typing import Final, Literal
 import pytest
 from e2e_config import LINEAR_MCP_URL, LINEAR_READONLY_TOOL, LINEAR_STORAGE_STATE, unique_marker
 from e2e_http import AuthHeaders, NoBody, get_external, unwrap
+from e2e_metadata import Domain, Route, Subject, meta
 from idp import Identity, Keycloak
 from lifecycle import ResourceManager
 from models import (
@@ -88,6 +89,12 @@ class TestMcpOauthHappyPath:
     @pytest.mark.covers("mcp.list_tools.oauth.succeeds")
     @pytest.mark.covers("mcp.call_tool.oauth.succeeds")
     @pytest.mark.covers("mcp.call_tool.oauth.persists_across_processes")
+    @meta(
+        Subject(
+            domain=Domain.MCP,
+            route=Route.MCP,
+        )
+    )
     @pytest.mark.parametrize("route", ("aggregate_sso", "explicit_header_jwt"))
     @pytest.mark.parametrize("observed", (False, True), ids=("direct", "observed"))
     def test_consent_list_call_and_cold_restart(
