@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="430" viewBox="0 0 980 430" font-family="Helvetica, Arial, sans-serif" font-size="13">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#333"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="980" height="430" fill="#ffffff"/>
+  <text x="20" y="30" font-size="17" font-weight="bold" fill="#111">Graceful drain state machine (drain::serve)</text>
+
+  <!-- states -->
+  <g>
+    <rect x="20" y="70" width="200" height="130" rx="10" fill="#e8f4ea" stroke="#2e7d32" stroke-width="1.5"/>
+    <text x="120" y="95" text-anchor="middle" font-weight="bold" fill="#1b5e20">Serving</text>
+    <text x="32" y="120" fill="#222">listener accepting</text>
+    <text x="32" y="140" fill="#222">/health/readiness 200</text>
+    <text x="32" y="160" fill="#222">{"status":"healthy",...}</text>
+    <text x="32" y="180" fill="#222">litellm_gateway_draining 0</text>
+  </g>
+  <g>
+    <rect x="270" y="70" width="210" height="130" rx="10" fill="#fff6e0" stroke="#e0a000" stroke-width="1.5"/>
+    <text x="375" y="95" text-anchor="middle" font-weight="bold" fill="#8a5a00">Unready</text>
+    <text x="282" y="120" fill="#222">listener still accepting</text>
+    <text x="282" y="140" fill="#222">/health/readiness 503</text>
+    <text x="282" y="160" fill="#222">{"status":"shutting_down"}</text>
+    <text x="282" y="180" fill="#222">liveness stays 200</text>
+  </g>
+  <g>
+    <rect x="530" y="70" width="220" height="130" rx="10" fill="#e6effa" stroke="#1565c0" stroke-width="1.5"/>
+    <text x="640" y="95" text-anchor="middle" font-weight="bold" fill="#0d47a1">Draining</text>
+    <text x="542" y="120" fill="#222">listener closed: connect refused</text>
+    <text x="542" y="140" fill="#222">idle keep-alive conns closed</text>
+    <text x="542" y="160" fill="#222">in-flight requests and streams</text>
+    <text x="542" y="180" fill="#222">run to completion</text>
+  </g>
+  <g>
+    <rect x="800" y="70" width="160" height="130" rx="10" fill="#f2f2f2" stroke="#555" stroke-width="1.5"/>
+    <text x="880" y="95" text-anchor="middle" font-weight="bold" fill="#222">Exit</text>
+    <text x="812" y="120" fill="#222">drained</text>
+    <text x="812" y="140" fill="#222">window_elapsed</text>
+    <text x="812" y="160" fill="#222">interrupted</text>
+    <text x="812" y="180" fill="#222">then MCP closes</text>
+  </g>
+
+  <!-- transitions -->
+  <line x1="220" y1="120" x2="268" y2="120" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="222" y="230" fill="#333">SIGTERM / SIGINT</text>
+  <text x="222" y="248" fill="#333">sets Draining flag</text>
+
+  <line x1="480" y1="120" x2="528" y2="120" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="440" y="230" fill="#333">after LITELLM_UNREADY_DELAY_SECONDS</text>
+  <text x="440" y="248" fill="#333">(default 0): cancel token, axum</text>
+  <text x="440" y="266" fill="#333">with_graceful_shutdown stops accept</text>
+
+  <line x1="750" y1="120" x2="798" y2="120" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="730" y="230" fill="#333">all connections done, or</text>
+  <text x="730" y="248" fill="#333">LITELLM_DRAIN_SECONDS (default 900)</text>
+  <text x="730" y="266" fill="#333">elapsed, or a second signal</text>
+
+  <path d="M375,200 C375,330 880,330 880,202" fill="none" stroke="#999" stroke-width="1.3" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+  <text x="560" y="318" fill="#666">second signal during the unready delay: exit at once</text>
+
+  <text x="20" y="370" fill="#333">The same CancellationToken that stops accepting also ends MCP sessions, so long-lived MCP streams do not hold the drain open.</text>
+  <text x="20" y="392" fill="#333">An NLB deregistration delay of 900 s pairs with the default window: the target stops getting new flows while its open streams finish.</text>
+</svg>

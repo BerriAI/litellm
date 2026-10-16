@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="520" viewBox="0 0 980 520" font-family="Helvetica, Arial, sans-serif" font-size="13">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#333"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="980" height="520" fill="#ffffff"/>
+  <text x="20" y="30" font-size="17" font-weight="bold" fill="#111">Request metering: one middleware, labels resolved without re-reading the body</text>
+
+  <!-- request path -->
+  <rect x="20" y="60" width="150" height="60" rx="8" fill="#f2f2f2" stroke="#555"/>
+  <text x="95" y="86" text-anchor="middle" font-weight="bold">TCP listener</text>
+  <text x="95" y="105" text-anchor="middle" fill="#333">tap_io: TCP_NODELAY</text>
+
+  <rect x="210" y="60" width="210" height="110" rx="8" fill="#e6effa" stroke="#1565c0"/>
+  <text x="315" y="84" text-anchor="middle" font-weight="bold" fill="#0d47a1">metrics::track</text>
+  <text x="222" y="106" fill="#222">in_flight += 1</text>
+  <text x="222" y="125" fill="#222">route = MatchedPath (Arc clone)</text>
+  <text x="222" y="144" fill="#222">observe::scope(next.run(req))</text>
+  <text x="222" y="163" fill="#222">task-local slot = None</text>
+
+  <rect x="460" y="60" width="230" height="110" rx="8" fill="#e8f4ea" stroke="#2e7d32"/>
+  <text x="575" y="84" text-anchor="middle" font-weight="bold" fill="#1b5e20">auth + inference handler</text>
+  <text x="472" y="106" fill="#222">resolve_deployment(model)</text>
+  <text x="472" y="125" fill="#222">  observe::record(group, deployment)</text>
+  <text x="472" y="144" fill="#222">  slot = {model_group, api_base}</text>
+  <text x="472" y="163" fill="#222">upstream call, response headers</text>
+
+  <rect x="730" y="60" width="230" height="110" rx="8" fill="#fff6e0" stroke="#e0a000"/>
+  <text x="845" y="84" text-anchor="middle" font-weight="bold" fill="#8a5a00">after headers</text>
+  <text x="742" y="106" fill="#222">model index = table[group]</text>
+  <text x="742" y="125" fill="#222">series(route, (model, status))</text>
+  <text x="742" y="144" fill="#222">429 / 5xx (not 501) with slot:</text>
+  <text x="742" y="163" fill="#222">  failures[(deployment, status)]++</text>
+
+  <line x1="170" y1="90" x2="208" y2="90" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="420" y1="115" x2="458" y2="115" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="690" y1="115" x2="728" y2="115" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- body wrapper -->
+  <rect x="460" y="220" width="500" height="110" rx="8" fill="#f7eefa" stroke="#7b1fa2"/>
+  <text x="710" y="244" text-anchor="middle" font-weight="bold" fill="#4a148c">response body: map_frame closure owns Pending</text>
+  <text x="472" y="268" fill="#222">first data frame: time_to_first_byte.observe(elapsed)</text>
+  <text x="472" y="288" fill="#222">body finished or dropped (client gone): Pending::drop</text>
+  <text x="472" y="308" fill="#222">  latency.observe(elapsed), in_flight -= 1</text>
+  <line x1="845" y1="170" x2="845" y2="218" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- storage -->
+  <rect x="20" y="220" width="400" height="160" rx="8" fill="#f2f2f2" stroke="#555"/>
+  <text x="220" y="244" text-anchor="middle" font-weight="bold">Metrics (Arc, built from config at startup)</text>
+  <text x="32" y="268" fill="#222">model_labels: Vec&lt;String&gt;  (0 = unresolved)</text>
+  <text x="32" y="288" fill="#222">models: name -&gt; {index, [(api_base, deployment)]}</text>
+  <text x="32" y="308" fill="#222">series: RwLock&lt;route -&gt; (model, status) -&gt; Arc&lt;Series&gt;&gt;</text>
+  <text x="32" y="328" fill="#222">  Series = latency + TTFB histograms (atomics)</text>
+  <text x="32" y="348" fill="#222">failures: RwLock&lt;(deployment, status) -&gt; AtomicU64&gt;</text>
+  <text x="32" y="368" fill="#222">in_flight: AtomicI64, draining: Arc&lt;AtomicBool&gt;</text>
+  <line x1="728" y1="140" x2="422" y2="260" stroke="#999" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+
+  <!-- scrape -->
+  <rect x="460" y="370" width="500" height="120" rx="8" fill="#ffffff" stroke="#333"/>
+  <text x="710" y="394" text-anchor="middle" font-weight="bold">GET /metrics (gateway auth by default, not metered)</text>
+  <text x="472" y="416" fill="#222" font-family="monospace" font-size="12">litellm_proxy_total_requests_metric_total{route,model,status}</text>
+  <text x="472" y="434" fill="#222" font-family="monospace" font-size="12">litellm_request_total_latency_metric_bucket{...,le}</text>
+  <text x="472" y="452" fill="#222" font-family="monospace" font-size="12">litellm_request_time_to_first_byte_metric_bucket{...,le}</text>
+  <text x="472" y="470" fill="#222" font-family="monospace" font-size="12">litellm_deployment_failure_responses_total{model,api_base}</text>
+  <text x="472" y="486" fill="#222" font-family="monospace" font-size="12">litellm_in_flight_requests, litellm_gateway_draining</text>
+  <line x1="220" y1="380" x2="458" y2="430" stroke="#999" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+  <text x="20" y="410" fill="#333">Hot path: one read lock + hash lookup,</text>
+  <text x="20" y="428" fill="#333">a few relaxed atomic adds; the write lock</text>
+  <text x="20" y="446" fill="#333">is taken once per new label set</text>
+</svg>

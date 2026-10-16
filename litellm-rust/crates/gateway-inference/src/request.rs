@@ -118,10 +118,12 @@ pub(crate) fn resolve_deployment<'a>(
         .get("model")
         .and_then(Value::as_str)
         .ok_or_else(|| Error::InvalidBody("model is required".into()))?;
-    gateway
+    let deployment = gateway
         .models
         .get(model)
-        .ok_or_else(|| Error::UnknownModel(model.to_owned()))
+        .ok_or_else(|| Error::UnknownModel(model.to_owned()))?;
+    crate::observe::record(model, deployment);
+    Ok(deployment)
 }
 
 async fn parse_multipart(mut multipart: Multipart) -> Result<InferenceBody, Error> {

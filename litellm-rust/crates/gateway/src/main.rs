@@ -44,7 +44,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let settings: Settings = settings::from_iter(std::env::vars_os())?;
     let level = settings.log_level();
     Logger::new(StderrSink { level }).install_global()?;
-    let config = Config::load(settings.litellm_config)?;
+    let config = Config::load(&settings.litellm_config)?;
     let inference = litellm_gateway::build_inference(&config)?;
     let ui = match std::env::var_os("LITELLM_UI_PATH") {
         Some(directory) => {
@@ -65,11 +65,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
     let shutdown = tokio_util::sync::CancellationToken::new();
     let _shutdown_guard = shutdown.clone().drop_guard();
-    let signal_shutdown = shutdown.clone();
-    tokio::spawn(async move {
-        shutdown_signal().await;
-        signal_shutdown.cancel();
-    });
     let mcp = litellm_gateway::build_mcp(
         &config,
         inference.secrets.clone(),
@@ -106,11 +101,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     tracing::info!(%address, models = config.model_list.len(), log_level = %level, "gateway listening");
 
-    let result = axum::serve(
-        listener,
+    let draining = litellm_gateway::health::Draining::default();
+    let metrics = litellm_gateway::metrics::Metrics::new(&config, draining.flag());
+    let metrics_auth = litellm_gateway::metrics_auth(&config, inference.secrets.clone());
+    let app = litellm_gateway::with_ops(
         litellm_gateway::router(inference, &config, ui, mcp_router),
+        metrics,
+        draining.clone(),
+        metrics_auth,
+    );
+    let result = litellm_gateway::drain::serve(
+        listener,
+        app,
+        draining,
+        settings.drain(),
+        shutdown.clone(),
+        shutdown_signal,
     )
-    .with_graceful_shutdown(shutdown.clone().cancelled_owned())
     .await;
     shutdown.cancel();
     if let Some(mcp) = mcp {

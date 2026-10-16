@@ -1,5 +1,8 @@
 mod auth;
+pub mod drain;
 mod error;
+pub mod health;
+pub mod metrics;
 mod secrets;
 pub use error::Error;
 
@@ -132,6 +135,49 @@ pub fn router(
         Some(ui) => inference.merge(ui),
         None => inference,
     }
+}
+
+/// `None` only when `litellm_settings.require_auth_for_metrics_endpoint` is explicitly `false`,
+/// matching the Python proxy's default of requiring auth.
+pub fn metrics_auth(
+    config: &Config,
+    secrets: Arc<dyn litellm_secrets::source::SecretSource>,
+) -> Option<Auth> {
+    let public = matches!(
+        config
+            .litellm_settings
+            .additional_fields
+            .get("require_auth_for_metrics_endpoint"),
+        Some(litellm_config::Value::Bool(false))
+    );
+    (!public).then(|| Auth::from_config(config, secrets))
+}
+
+/// Meters every route of `app`, adds the public, unmetered probes and adds an unmetered
+/// `/metrics` behind `metrics_auth` when one is given.
+pub fn with_ops(
+    app: Router,
+    metrics: metrics::Metrics,
+    draining: health::Draining,
+    metrics_auth: Option<Auth>,
+) -> Router {
+    let scrape = Router::new().route(
+        "/metrics",
+        axum::routing::get(metrics::handler).with_state(metrics.clone()),
+    );
+    let scrape = match metrics_auth {
+        Some(auth) => scrape.route_layer(axum::middleware::from_fn_with_state(
+            auth,
+            litellm_gateway_auth::authenticate,
+        )),
+        None => scrape,
+    };
+    app.layer(axum::middleware::from_fn_with_state(
+        metrics,
+        metrics::track,
+    ))
+    .merge(health::router(draining))
+    .merge(scrape)
 }
 
 async fn log_request(request: Request, next: Next) -> Response {

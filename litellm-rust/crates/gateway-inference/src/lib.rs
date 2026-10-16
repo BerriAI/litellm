@@ -8,6 +8,7 @@ mod caching;
 mod chat_completions;
 mod error;
 pub mod messages;
+pub mod observe;
 mod ocr;
 mod request;
 mod responses;

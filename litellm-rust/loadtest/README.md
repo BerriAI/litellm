@@ -75,6 +75,18 @@ gateway samples and mock hit counts, and prints the summary.
 - **Shed** (in the loadgen log): arrivals dropped because the generator hit `max_in_flight`. Any
   shedding means the generator, not the gateway, was the limit, and the run is invalid.
 
+## Gateway metrics and drain
+
+- `GET /metrics` on the gateway port serves Prometheus text: request count, latency and time to
+  first byte by route, model group and status, `litellm_in_flight_requests`, and
+  `litellm_deployment_failure_responses_total` by deployment `api_base`. Scrape it before and
+  after a run to cross-check the loadgen numbers from the gateway's side. Like the Python proxy
+  it needs a key by default (`curl -H "authorization: Bearer sk-loadtest-master" .../metrics`).
+  Set `litellm_settings.require_auth_for_metrics_endpoint: false` to make it public
+- `GET /health/readiness` turns 503 on SIGTERM. The listener closes after
+  `LITELLM_UNREADY_DELAY_SECONDS` (default 0), then open requests and streams get up to
+  `LITELLM_DRAIN_SECONDS` (default 900, the NLB deregistration delay) to finish
+
 ## Until the gateway gains these features
 
 - Virtual keys: the Rust gateway only accepts the master key today, so pass `-key sk-loadtest-master`
