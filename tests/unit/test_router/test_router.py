@@ -3230,6 +3230,133 @@ async def test_acompletion_streaming_iterator_continuation_usage_sums_both_legs(
     assert streamed[-1].usage.completion_tokens == primary_usage.completion_tokens + 5
 
 
+class _CutSSE(httpx.AsyncByteStream):
+    def __init__(self, content: str) -> None:
+        self._content: Final = content
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield f'data: {json.dumps({"id": "cut", "object": "chat.completion.chunk", "created": 1700000000, "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": self._content}, "finish_reason": None}]})}\n\n'.encode()
+        raise httpx.RemoteProtocolError("peer closed connection without sending complete message body")
+
+
+_BACKUP_SSE: Final = "".join(
+    f"data: {json.dumps(chunk)}\n\n"
+    for chunk in (
+        {"id": "b", "object": "chat.completion.chunk", "created": 1700000000, "model": "mistral-large-latest",
+         "choices": [{"index": 0, "delta": {"role": "assistant", "content": " self-attention."}, "finish_reason": None}]},
+        {"id": "b", "object": "chat.completion.chunk", "created": 1700000000, "model": "mistral-large-latest",
+         "choices": [{"index": 0, "delta": {"content": ""}, "finish_reason": "stop"}],
+         "usage": {"prompt_tokens": 91, "completion_tokens": 5, "total_tokens": 96}},
+    )
+) + "data: [DONE]\n\n"
+
+
+class _SpendRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.successes: Final[list[dict[str, object]]] = []
+        self.failures: Final[list[dict[str, object]]] = []
+        self.spend_rows: Final[list[dict[str, object]]] = []
+        self.succeeded: Final = asyncio.Event()
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+        self.successes.append(kwargs["standard_logging_object"])
+        self.spend_rows.append(get_logging_payload(kwargs, response_obj, start_time, end_time))
+        self.succeeded.set()
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self.failures.append(kwargs["standard_logging_object"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cut_groups", [("primary",), ("primary", "middle")], ids=["one_break", "two_breaks"])
+async def test_continued_stream_success_log_bills_every_cut_leg(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, cut_groups: tuple[str, ...]
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _SpendRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=_CutSSE("Transformers use"))
+    )
+    respx_mock.post(host="api.deepseek.com").mock(
+        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=_CutSSE(" learned"))
+    )
+    respx_mock.post(host="api.mistral.ai").mock(
+        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, text=_BACKUP_SSE)
+    )
+    router: Final = Router(
+        model_list=[
+            {"model_name": "primary", "litellm_params": {"model": "openai/gpt-4o", "api_key": "k1"}},
+            {"model_name": "middle", "litellm_params": {"model": "deepseek/deepseek-chat", "api_key": "k2"}},
+            {"model_name": "backup", "litellm_params": {"model": "mistral/mistral-large-latest", "api_key": "k3"}},
+        ],
+        fallbacks=[{"primary": ["middle" if "middle" in cut_groups else "backup"]}, {"middle": ["backup"]}],
+        enable_mid_stream_fallback_continuation=True,
+    )
+
+    response: Final = await router.acompletion(
+        model="primary",
+        messages=[{"role": "user", "content": "How do transformers work?"}],
+        stream=True,
+        stream_options={"include_usage": True},
+    )
+    chunks: Final = [chunk async for chunk in response]
+    await asyncio.wait_for(recorder.succeeded.wait(), timeout=10)
+    await asyncio.sleep(0.5)
+
+    backup_prompt_cost, backup_completion_cost = litellm.cost_per_token(
+        model="mistral/mistral-large-latest", prompt_tokens=91, completion_tokens=5
+    )
+    success: Final = recorder.successes[-1]
+    assert len(recorder.failures) == len(cut_groups)
+    assert all(failure["response_cost"] > 0 for failure in recorder.failures)
+    assert success["response_cost"] == pytest.approx(
+        sum(failure["response_cost"] for failure in recorder.failures) + backup_prompt_cost + backup_completion_cost
+    )
+    assert success["prompt_tokens"] == sum(failure["prompt_tokens"] for failure in recorder.failures) + 91
+    assert success["completion_tokens"] == sum(failure["completion_tokens"] for failure in recorder.failures) + 5
+    assert success["cost_breakdown"]["total_cost"] == pytest.approx(success["response_cost"])
+    spend_row: Final = recorder.spend_rows[-1]
+    assert (spend_row["spend"], spend_row["prompt_tokens"], spend_row["completion_tokens"]) == (
+        success["response_cost"],
+        success["prompt_tokens"],
+        success["completion_tokens"],
+    )
+    client_usage: Final = next(chunk.usage for chunk in reversed(chunks) if getattr(chunk, "usage", None))
+    assert (client_usage.prompt_tokens, client_usage.completion_tokens) == (
+        success["prompt_tokens"],
+        success["completion_tokens"],
+    )
+
+
+def test_carry_partial_spend_to_fallback_adds_the_partial_the_cut_stream_inherited():
+    from litellm.types.utils import Usage
+
+    cut_logging: Final = LiteLLMLogging(
+        model="deepseek-chat", messages=[], stream=True, call_type="acompletion",
+        start_time=datetime.now(), litellm_call_id="cut", function_id="cut",
+    )
+    cut_logging.model_call_details["response_cost"] = 0.002
+    cut_logging.record_continued_partial(usage=Usage(prompt_tokens=40, completion_tokens=7, total_tokens=47), response_cost=0.001)
+    fallback_logging: Final = LiteLLMLogging(
+        model="mistral-large-latest", messages=[], stream=True, call_type="acompletion",
+        start_time=datetime.now(), litellm_call_id="fallback", function_id="fallback",
+    )
+
+    Router._carry_partial_spend_to_fallback(
+        cast(CustomStreamWrapper, SimpleNamespace(logging_obj=cut_logging)),
+        SimpleNamespace(logging_obj=fallback_logging),
+        Usage(prompt_tokens=60, completion_tokens=3, total_tokens=63),
+    )
+
+    carried_usage: Final = fallback_logging.model_call_details["continued_partial_usage"]
+    assert (carried_usage.prompt_tokens, carried_usage.completion_tokens) == (100, 10)
+    assert fallback_logging.model_call_details["continued_partial_cost"] == pytest.approx(0.003)
+
+
 @pytest.mark.asyncio
 async def test_acompletion_streaming_iterator_plain_fallback_keeps_the_fallback_usage():
     from litellm.exceptions import MidStreamFallbackError

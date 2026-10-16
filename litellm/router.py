@@ -3127,6 +3127,30 @@ class Router:
         setattr(fallback_item, "usage", combined_usage)
 
     @staticmethod
+    def _carry_partial_spend_to_fallback(
+        cut_stream: CustomStreamWrapper, fallback_response: object, partial_usage: Usage | None
+    ) -> None:
+        """Bill the cut stream's partial, and any partial it inherited, on the continuation's success log."""
+        from litellm.cost_calculator import BaseTokenUsageProcessor
+
+        fallback_logging: Final = getattr(fallback_response, "logging_obj", None)
+        cut_details: Final = cut_stream.logging_obj.model_call_details
+        cut_cost: Final = cut_details.get("response_cost")
+        inherited_usage: Final = cut_details.get("continued_partial_usage")
+        inherited_cost: Final = cut_details.get("continued_partial_cost")
+        if partial_usage is None or not isinstance(fallback_logging, LiteLLMLogging):
+            return
+        fallback_logging.record_continued_partial(
+            usage=BaseTokenUsageProcessor.combine_usage_objects(
+                usage_objects=[partial_usage, inherited_usage]
+                if isinstance(inherited_usage, Usage)
+                else [partial_usage]
+            ),
+            response_cost=(float(cut_cost) if isinstance(cut_cost, (int, float)) else 0.0)
+            + (inherited_cost if isinstance(inherited_cost, float) else 0.0),
+        )
+
+    @staticmethod
     def _prepare_fallback_hidden_params(
         fallback_response: object,
     ) -> tuple[dict[str, object], dict[str, object]]:
@@ -3312,6 +3336,10 @@ class Router:
 
                     # If fallback returns a streaming response, iterate over it
                     if hasattr(fallback_response, "__aiter__"):
+                        if continuation_output is not None:
+                            Router._carry_partial_spend_to_fallback(
+                                model_response, fallback_response, complete_response_object_usage
+                            )
                         prepared_fallback_hidden_params = Router._adopt_fallback_response_headers(
                             wrapper_ref, fallback_response
                         )

@@ -544,6 +544,38 @@ async def test_bedrock_converse_replays_reasoning_to_claude_only_as_base64_of_cl
     assert assistant_content == [*sent, {"text": "hello"}]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    "model, final_text",
+    [("us.anthropic.claude-sonnet-4-6", "Leaves fall"), ("us.amazon.nova-pro-v1:0", "Leaves fall \n")],
+    ids=["claude", "nova"],
+)
+async def test_bedrock_converse_strips_trailing_whitespace_from_a_final_assistant_turn_for_claude_only(
+    use_async: bool, model: str, final_text: str
+):
+    """Claude on Converse 400s on a final assistant turn ending in whitespace, which a cut stream's prefill often has."""
+    messages: Final = [
+        {"role": "user", "content": "Write a haiku."},
+        {"role": "assistant", "content": "Sure.  "},
+        {"role": "user", "content": "About autumn."},
+        {"role": "assistant", "content": "Leaves fall \n"},
+    ]
+
+    result: Final = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages, model=model, llm_provider="bedrock"
+        )
+        if use_async
+        else _bedrock_converse_messages_pt(messages=messages, model=model, llm_provider="bedrock")
+    )
+
+    assert [m["content"] for m in result if m["role"] == "assistant"] == [
+        [{"text": "Sure.  "}],
+        [{"text": final_text}],
+    ]
+
+
 def test_translate_thinking_blocks_keeps_dropping_redacted_data_when_called_the_old_way():
     """Outside callers that only pass the thinking blocks keep the old behavior, with no redactedContent sent."""
     assert BedrockConverseMessagesProcessor.translate_thinking_blocks_to_reasoning_content_blocks(

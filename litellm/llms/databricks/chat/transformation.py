@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     merge_consecutive_system_messages,
     strip_litellm_internal_message_fields,
     strip_name_from_message,
+    strip_prefill_prefix_field,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.base_utils import (
@@ -486,6 +487,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         Databricks does not support:
         - 'name' in user message.
         - litellm's internal `thinking_blocks` / `reasoning_content` on assistant messages.
+        - the `prefix` prefill flag Mistral and DeepSeek read, which Claude does not need to continue an assistant turn.
         - non-Claude json_object "json" checks read only string content, so a single text block is sent as a string.
         """
         new_messages = []
@@ -495,7 +497,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             else:
                 _message = message
             _message = strip_name_from_message(_message, allowed_name_roles=["user"])
-            _message = strip_litellm_internal_message_fields(_message)
+            _message = strip_prefill_prefix_field(strip_litellm_internal_message_fields(_message))
             # Move message-level cache_control into a content block when content is a string.
             if "cache_control" in _message and isinstance(_message.get("content"), str):
                 _message = self._move_cache_control_into_string_content_block(_message)

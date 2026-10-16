@@ -51102,7 +51102,7 @@
         "supported_regions": [
             "global"
         ],
-        "supports_assistant_prefill": true,
+        "supports_assistant_prefill": false,
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -51123,7 +51123,7 @@
         "supported_regions": [
             "us-central1"
         ],
-        "supports_assistant_prefill": true,
+        "supports_assistant_prefill": false,
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,

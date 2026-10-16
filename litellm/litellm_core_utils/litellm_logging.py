@@ -2257,6 +2257,35 @@ class Logging(LiteLLMLoggingBaseClass):
         self.model_call_details["combined_usage_object"] = usage
         self.model_call_details["response_cost"] = response_cost
 
+    def record_continued_partial(self, usage: Usage, response_cost: float) -> None:
+        """Bill what a cut stream already consumed on this continuation's success log, so spend counts both calls."""
+        self.model_call_details["continued_partial_usage"] = usage
+        self.model_call_details["continued_partial_cost"] = response_cost
+
+    def _add_continued_partial_spend(self, response: object) -> None:
+        partial_usage: Final = self.model_call_details.get("continued_partial_usage")
+        partial_cost: Final = self.model_call_details.get("continued_partial_cost")
+        own_usage: Final = getattr(response, "usage", None)
+        own_cost: Final = self.model_call_details.get("response_cost")
+        if not (isinstance(partial_usage, Usage) and isinstance(partial_cost, float) and isinstance(own_usage, Usage)):
+            return
+        from litellm.cost_calculator import BaseTokenUsageProcessor
+
+        self.model_call_details["combined_usage_object"] = BaseTokenUsageProcessor.combine_usage_objects(
+            usage_objects=[own_usage, partial_usage]
+        )
+        if not isinstance(own_cost, (int, float)):
+            return
+        self.model_call_details["response_cost"] = own_cost + partial_cost
+        if self.cost_breakdown is not None:
+            self.cost_breakdown = self.cost_breakdown | CostBreakdown(
+                total_cost=own_cost + partial_cost,
+                additional_costs={
+                    **self.cost_breakdown.get("additional_costs", {}),
+                    "mid_stream_partial_cost": partial_cost,
+                },
+            )
+
     def record_assembled_response_for_failure(self, assembled: ModelResponse) -> None:
         """Bill a fully streamed response on the failure log when a post-call hook rejects it."""
         usage: Final = getattr(assembled, "usage", None)
@@ -2876,6 +2905,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 self.model_call_details["response_cost"] = self.response_cost_calculator(
                     result=complete_streaming_response
                 )
+                self._add_continued_partial_spend(complete_streaming_response)
                 self._merge_hidden_params_from_response_into_metadata(complete_streaming_response)
                 logged_streaming_response: Final = self._with_client_facing_stream_model(complete_streaming_response)
                 self.model_call_details["complete_streaming_response"] = logged_streaming_response
@@ -3414,6 +3444,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     self.model,
                 )
                 self.model_call_details["response_cost"] = None
+            self._add_continued_partial_spend(complete_streaming_response)
 
             self._merge_hidden_params_from_response_into_metadata(complete_streaming_response)
 
