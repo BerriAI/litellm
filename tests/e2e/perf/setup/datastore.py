@@ -107,11 +107,11 @@ class RedisCommand:
         invalidations (PUBLISH, DEL), the spend buffers the pods flush and any other write happen after the
         response or on a timer. Reads on keys these rules do not know stay unclassified and count in neither."""
         key: Final = self.key.removeprefix(_REDIS_NAMESPACE)
+        if key.startswith(("litellm_config:", "daily_", "cronjob_lock:", "litellm_spend", "litellm_daily")):
+            return "background"
         if self.inside_script or self.command in {"EVALSHA", "EVAL"}:
             return "awaited"
-        if self.command in {"PUBLISH", "DEL", "SCRIPT", "INFO", "MONITOR"} or key.startswith(
-            ("litellm_config:", "daily_", "cronjob_lock:", "litellm_spend", "litellm_daily")
-        ):
+        if self.command in {"PUBLISH", "DEL", "SCRIPT", "INFO", "MONITOR"}:
             return "background"
         if key.startswith("spend:"):
             return "awaited" if self.command in _REDIS_READS else "background"
