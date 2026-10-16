@@ -6,9 +6,11 @@ path used for OpenAI and Azure models.
 """
 
 import json
-from collections.abc import Iterable, Mapping, Sequence
-from itertools import groupby
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from itertools import chain, groupby
 from typing import Any, Final, cast
+
+from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
@@ -52,6 +54,7 @@ from litellm.types.llms.openai import (
 
 REASONING_SUMMARY_PART_SEPARATOR: Final = "\n\n"
 RESPONSES_INCLUDE_ENCRYPTED_REASONING: Final = "reasoning.encrypted_content"
+_OBJECTS: Final = TypeAdapter(tuple[object, ...])
 
 
 class LiteLLMAnthropicToResponsesAPIAdapter:
@@ -224,6 +227,56 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         return [*parts[:-1], with_prompt_cache_breakpoint(parts[-1], prompt_cache_breakpoint)]
 
     @staticmethod
+    def _list_items(value: object) -> tuple[object, ...]:
+        return _OBJECTS.validate_python(value) if isinstance(value, list) else ()
+
+    @staticmethod
+    def _text_block_error(block: object) -> str | None:
+        match block:
+            case {"type": "text", "text": str()}:
+                return None
+            case {"type": "text", "text": object()}:
+                return "Input should be a valid string"
+            case {"type": "text"}:
+                return "Field required"
+            case _:
+                return None
+
+    @staticmethod
+    def _tool_result_text_part(block: object) -> str | None:
+        match block:
+            case {"type": "text", "text": str(text)}:
+                return text
+            case _:
+                return None
+
+    @classmethod
+    def _tool_result_text_parts(cls, tool_result: Mapping[str, object]) -> tuple[str, ...]:
+        parts: Final = map(cls._tool_result_text_part, cls._list_items(tool_result.get("content")))
+        return tuple(part for part in parts if part is not None)
+
+    @classmethod
+    def _user_content_blocks(cls, message: Mapping[str, object]) -> tuple[object, ...]:
+        return cls._list_items(message.get("content")) if message.get("role") == "user" else ()
+
+    @classmethod
+    def _tool_result_text_errors(cls, block: object) -> Iterator[str]:
+        match block:
+            case {"type": "tool_result", "tool_use_id": object() as tool_use_id, "content": object() as content}:
+                return (
+                    f"tool_result {tool_use_id} content.{index}.text: {error}"
+                    for index, error in enumerate(map(cls._text_block_error, cls._list_items(content)))
+                    if error is not None
+                )
+            case _:
+                return iter(())
+
+    @classmethod
+    def malformed_tool_result_text_error(cls, messages: Iterable[Mapping[str, object]]) -> str | None:
+        blocks: Final = chain.from_iterable(map(cls._user_content_blocks, messages))
+        return "; ".join(chain.from_iterable(map(cls._tool_result_text_errors, blocks))) or None
+
+    @staticmethod
     def _translate_midturn_system_content_to_responses(
         content: str | Iterable[AnthropicSystemMessageContent],
     ) -> list[dict[str, object]]:  # mutable-ok: API message payload
@@ -371,10 +424,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         elif btype == "tool_result":
                             tool_use_id = block.get("tool_use_id", "")
                             inner = block.get("content")
+                            tool_result_block = cast(Mapping[str, object], block)  # cast-ok: TypedDict upcast
                             tool_breakpoint, covered_image_parts, later_image_parts = (
-                                self._tool_result_images_by_breakpoint(
-                                    cast(Mapping[str, object], block)  # cast-ok: TypedDict upcast
-                                )
+                                self._tool_result_images_by_breakpoint(tool_result_block)
                             )
                             document_candidates = (
                                 tuple(
@@ -391,10 +443,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                             elif isinstance(inner, str):
                                 output_text = inner
                             elif isinstance(inner, list):
-                                parts = [
-                                    c.get("text", "") for c in inner if isinstance(c, dict) and c.get("type") == "text"
-                                ]
-                                output_text = "\n".join(parts)
+                                output_text = "\n".join(self._tool_result_text_parts(tool_result_block))
                                 if covered_image_parts or later_image_parts:
                                     output_text = (
                                         f"{output_text}\n{TOOL_RESULT_IMAGE_PLACEHOLDER}"

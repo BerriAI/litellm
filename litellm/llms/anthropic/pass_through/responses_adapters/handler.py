@@ -14,8 +14,8 @@ from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
     supports_openai_prompt_cache_breakpoint,
 )
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import cache_control_as_prompt_cache_breakpoint
+from litellm.responses.litellm_completion_transformation.transformation import drops_unsupported_params
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
     AllAnthropicMessageValues,
@@ -57,6 +57,20 @@ def _provider_returns_encrypted_reasoning(model: str, custom_llm_provider: objec
     return responses_config is not None and "include" in responses_config.get_supported_openai_params(provider_model)
 
 
+def _reject_malformed_tool_result_text(
+    messages: AnthropicRequestMessages, model: str, forwarded_kwargs: Mapping[str, object]
+) -> None:
+    if drops_unsupported_params(forwarded_kwargs.get("drop_params")):
+        return
+    error: Final = _ADAPTER.malformed_tool_result_text_error(messages)
+    if error is None:
+        return
+    provider: Final = forwarded_kwargs.get("custom_llm_provider")
+    raise litellm.BadRequestError(
+        message=error, model=model, llm_provider=provider if isinstance(provider, str) else ""
+    )
+
+
 def _reads_prompt_cache_breakpoint(model: str, forwarded_kwargs: Mapping[str, object]) -> bool:
     provider: Final = forwarded_kwargs.get("custom_llm_provider")
     return AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
@@ -89,7 +103,7 @@ def _prompt_cache_block_rewrite(model: str, forwarded_kwargs: Mapping[str, objec
         return cache_control_as_prompt_cache_breakpoint
     if _model_takes_prompt_cache_breakpoint(model, forwarded_kwargs):
         return None
-    if normalize_drop_params(forwarded_kwargs.get("drop_params")) is True or litellm.drop_params is True:
+    if drops_unsupported_params(forwarded_kwargs.get("drop_params")):
         return _without_prompt_cache_breakpoint
     return None
 
@@ -135,6 +149,7 @@ def _build_responses_kwargs(
     Build the kwargs dict to pass directly to litellm.responses() / litellm.aresponses().
     """
     forwarded_kwargs: Final = _forwarded_kwargs(extra_kwargs)
+    _reject_malformed_tool_result_text(messages, model, forwarded_kwargs)
     block_rewrite: Final = _prompt_cache_block_rewrite(model, forwarded_kwargs)
     request_messages: Final[AnthropicRequestMessages] = (
         [
