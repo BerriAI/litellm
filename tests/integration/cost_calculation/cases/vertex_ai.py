@@ -2,7 +2,7 @@
 
 PARITY pairs the streamed case with its plain twin where both bill the same row."""
 
-from typing import Final
+from typing import Final, cast
 
 from integration.cost_calculation.cases.anthropic import (
     CLAUDE_FABLE_5_1_INPUT_TEXT,
@@ -22,6 +22,31 @@ from integration.cost_calculation.cost_tracking_case import (
     SseResponse,
 )
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase, sse_frames
+
+
+def _gemini_case_response(response: JsonResponse | SseResponse, model_version: str) -> JsonResponse | SseResponse:
+    match response:
+        case JsonResponse():
+            return response.model_copy(update={"body": {**response.body, "modelVersion": model_version}})
+        case SseResponse():
+            return response.model_copy(
+                update={
+                    "frames": tuple(frame.replace("gemini-3.8-flash", model_version) for frame in response.frames)
+                }
+            )
+
+
+def _gemini_case(
+    sibling: CostTrackingTestCase, name: str, model: str, expected: ExactExpected
+) -> CostTrackingTestCase:
+    return sibling.model_copy(
+        update={
+            "name": name,
+            "model": model,
+            "response": _gemini_case_response(cast(JsonResponse | SseResponse, sibling.response), "gemini-3.1-pro-preview"),
+            "expected": expected,
+        }
+    )
 
 
 def _vertex_claude_stream_response(model: str, stop_reason: str, text_deltas: tuple[str, ...]) -> SseResponse:
@@ -3082,6 +3107,28 @@ VERTEX_AI_CLAUDE_FABLE_5_1_STREAM: Final = CLAUDE_FABLE_5_1_STREAM.model_copy(
 )
 
 
+GEMINI_3_1_PRO_PREVIEW_INPUT_TEXT: Final = _gemini_case(
+    GEMINI_3_8_FLASH_INPUT_TEXT, "gemini-3.1-pro-preview-input_text", "gemini-3.1-pro-preview",
+    ExactExpected(spend=0.0094864, input_cost=0.004048, output_cost=0.0054384, prompt_tokens=1840, completion_tokens=412)
+)
+GEMINI_3_1_PRO_PREVIEW_STREAM: Final = _gemini_case(
+    GEMINI_3_8_FLASH_STREAM, "gemini-3.1-pro-preview-stream", "gemini-3.1-pro-preview",
+    ExactExpected(spend=0.0094864, input_cost=0.004048, output_cost=0.0054384, prompt_tokens=1840, completion_tokens=412)
+)
+GEMINI_3_1_PRO_PREVIEW_CACHE_READ: Final = _gemini_case(
+    GEMINI_3_8_FLASH_CACHE_READ, "gemini-3.1-pro-preview-cache_read", "gemini-3.1-pro-preview",
+    ExactExpected(spend=0.00912736, input_cost=0.00411136, output_cost=0.005016, prompt_tokens=12928, completion_tokens=380)
+)
+GEMINI_3_1_PRO_PREVIEW_REASONING: Final = _gemini_case(
+    GEMINI_3_8_FLASH_FALLBACK_REASONING_AT_OUTPUT_RATE, "gemini-3.1-pro-preview-reasoning", "gemini-3.1-pro-preview",
+    ExactExpected(spend=0.056056, input_cost=0.002728, output_cost=0.053328, prompt_tokens=1240, completion_tokens=4040)
+)
+GEMINI_3_1_PRO_PREVIEW_TOOL_CALL: Final = _gemini_case(
+    GEMINI_3_8_FLASH_TOOL_CALL, "gemini-3.1-pro-preview-tool_call", "gemini-3.1-pro-preview",
+    ExactExpected(spend=0.0094864, input_cost=0.004048, output_cost=0.0054384, prompt_tokens=1840, completion_tokens=412)
+)
+
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GEMINI_3_1_PRO_INPUT_TEXT,
     GEMINI_3_1_PRO_CACHE_READ,
@@ -3137,6 +3184,11 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     VERTEX_AI_CLAUDE_OPUS_5_5_STREAM,
     VERTEX_AI_CLAUDE_FABLE_5_1_INPUT_TEXT,
     VERTEX_AI_CLAUDE_FABLE_5_1_STREAM,
+    GEMINI_3_1_PRO_PREVIEW_INPUT_TEXT,
+    GEMINI_3_1_PRO_PREVIEW_STREAM,
+    GEMINI_3_1_PRO_PREVIEW_CACHE_READ,
+    GEMINI_3_1_PRO_PREVIEW_REASONING,
+    GEMINI_3_1_PRO_PREVIEW_TOOL_CALL,
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
@@ -3157,9 +3209,13 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     ),
     StreamParityTestCase(plain=VERTEX_AI_CLAUDE_OPUS_5_5_INPUT_TEXT, streamed=VERTEX_AI_CLAUDE_OPUS_5_5_STREAM),
     StreamParityTestCase(plain=VERTEX_AI_CLAUDE_FABLE_5_1_INPUT_TEXT, streamed=VERTEX_AI_CLAUDE_FABLE_5_1_STREAM),
+    StreamParityTestCase(plain=GEMINI_3_1_PRO_PREVIEW_INPUT_TEXT, streamed=GEMINI_3_1_PRO_PREVIEW_STREAM),
 )
 
-BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = bridge_pairs(
-    (GEMINI_3_8_FLASH_INPUT_TEXT, GEMINI_3_8_FLASH_CACHE_READ, GEMINI_3_8_FLASH_STREAM),
-    ("/v1/responses", "/v1/messages"),
+BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
+    *bridge_pairs(
+        (GEMINI_3_8_FLASH_INPUT_TEXT, GEMINI_3_8_FLASH_CACHE_READ, GEMINI_3_8_FLASH_STREAM),
+        ("/v1/responses", "/v1/messages"),
+    ),
+    *bridge_pairs((GEMINI_3_1_PRO_PREVIEW_INPUT_TEXT,), ("/v1/responses",)),
 )
