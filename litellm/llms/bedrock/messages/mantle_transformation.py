@@ -56,11 +56,18 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
     model ID in the request body (unlike Bedrock Invoke which puts it in the URL).
     """
 
+    BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS = (
+        AmazonAnthropicClaudeMessagesConfig.BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS | {"service_tier"}
+    )
+
     @property
     def beta_headers_provider(self) -> str:
         return "bedrock_mantle"
 
     def should_filter_anthropic_beta_headers(self) -> bool:
+        return False
+
+    def drops_dangerous_tool_use_beta_without_safeguards(self) -> bool:
         return False
 
     def get_complete_url(

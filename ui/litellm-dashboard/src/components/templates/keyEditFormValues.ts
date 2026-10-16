@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { UseFormSetValue } from "react-hook-form";
 
 import { KeyResponse } from "../key_team_helpers/key_list";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
@@ -219,3 +220,8 @@ export const toSubmittedValues = (
   auto_rotate: values.auto_rotate,
   rotation_interval: values.rotation_interval,
 });
+
+export const clearMcpGrants = (setValue: UseFormSetValue<KeyEditFormValues>) => {
+  setValue("mcp_servers_and_groups", { servers: [], accessGroups: [], toolsets: [] });
+  setValue("mcp_tool_permissions", {});
+};
