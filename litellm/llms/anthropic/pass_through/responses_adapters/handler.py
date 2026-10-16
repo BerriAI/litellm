@@ -307,8 +307,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
         if not isinstance(result, ResponsesAPIResponse):
             raise ValueError(f"Expected ResponsesAPIResponse, got {type(result)}")
 
+        served: Final = await with_safeguard_results(_ADAPTER.translate_response(result), safeguards_evaluator)
         _record_bridged_response(responses_kwargs, result)
-        return await with_safeguard_results(_ADAPTER.translate_response(result), safeguards_evaluator)
+        return served
 
     @staticmethod
     def anthropic_messages_handler(
