@@ -597,6 +597,19 @@ def test_bridged_chain_history(rigs: Rigs, correlated: bool, shape: str, replays
     assert _user_markers(replayed[0]) == (markers if replays_turn_1 else markers[1:])
 
 
+def test_bridged_chains_sharing_a_metadata_session_replay_each_others_turns(rigs: Rigs) -> None:
+    shared: Final[dict[str, JsonValue]] = {"metadata": {"session_id": _token("convo")}}
+    markers: Final = (_marker(), _marker(), _marker())
+    first: Final = _turn(rigs.flag_on, markers[0], fields=shared)
+    _turn(rigs.flag_on, markers[1], fields=shared)
+
+    _turn(rigs.flag_on, markers[2], first)
+
+    replayed: Final = rigs.flag_on.upstream_bodies(markers[2])
+    assert len(replayed) == 1, replayed
+    assert _user_markers(replayed[0]) == markers
+
+
 @dataclass(frozen=True, slots=True)
 class Owners:
     first: str
