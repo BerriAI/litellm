@@ -3,7 +3,7 @@ Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
 """
 
 import json
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from typing import Final, Literal, cast, overload
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -25,6 +25,7 @@ from litellm.types.llms.openai import (
 
 from ....utils import remove_additional_properties, remove_strict_from_schema
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
+from ..common_utils import CACHE_SALT_FIELD, derive_cache_salt, get_cache_salt_caller, with_caller_cache_salt
 
 
 class HostedVLLMChatConfig(OpenAIGPTConfig):
@@ -43,9 +44,12 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                 converted_tools.append(tool)
                 continue
 
-            custom_tool = tool.get("custom", {})
-            if not isinstance(custom_tool, dict):
-                custom_tool = {}
+            raw_custom_tool = tool.get("custom")
+            custom_tool: Mapping[str, object] = (
+                cast("Mapping[str, object]", raw_custom_tool)  # cast-ok: tool definitions are free-form JSON
+                if isinstance(raw_custom_tool, dict)
+                else {}
+            )
 
             tool_name = custom_tool.get("name") or tool.get("name") or f"custom_tool_{idx}"
             tool_description = custom_tool.get("description") or tool.get("description")
@@ -75,9 +79,7 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         return converted_tools
 
     def get_supported_openai_params(self, model: str) -> list[str]:
-        params: Final = super().get_supported_openai_params(model)
-        params.extend(["reasoning_effort", "thinking"])
-        return params
+        return [*super().get_supported_openai_params(model), "reasoning_effort", "thinking"]
 
     def map_openai_params(
         self,
@@ -104,6 +106,38 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                     )
 
         return super().map_openai_params(non_default_params, optional_params, model, drop_params)
+
+    def transform_request(
+        self,
+        model: str,
+        messages: list[AllMessageValues],  # mutable-ok: overrides the base class signature
+        optional_params: dict[str, object],  # mutable-ok: overrides the base class signature
+        litellm_params: dict[str, object],  # mutable-ok: overrides the base class signature
+        headers: dict[str, str],  # mutable-ok: overrides the base class signature
+    ) -> dict[str, object]:  # mutable-ok: overrides the base class signature
+        request: Final = cast(  # cast-ok: the base transform returns an untyped dict
+            "dict[str, object]",
+            super().transform_request(
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                headers=headers,
+            ),
+        )
+        caller: Final = get_cache_salt_caller(litellm_params)
+        if caller is None:
+            return request
+        return {**request, CACHE_SALT_FIELD: derive_cache_salt(caller, request.get(CACHE_SALT_FIELD))}
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        return with_caller_cache_salt(extra_body, get_cache_salt_caller(litellm_params))
 
     def _get_openai_compatible_provider_info(
         self, api_base: str | None, api_key: str | None

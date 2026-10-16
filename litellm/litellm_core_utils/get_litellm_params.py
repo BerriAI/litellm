@@ -78,6 +78,7 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "github_copilot_auth_type",
             "github_copilot_user_session",
             "fireworks_forward_user_id",
+            "hosted_vllm_cache_salt",
             PROVIDER_AFFINITY_HEADER_KWARG_KEY,
         }
     )
