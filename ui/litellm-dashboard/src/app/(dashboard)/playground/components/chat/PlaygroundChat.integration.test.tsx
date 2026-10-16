@@ -540,4 +540,31 @@ describe("PlaygroundChat", () => {
       ),
     );
   });
+
+  it("leaves replace-key mode on cancel or when the MCP dialog closes", async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchMCPServers).mockResolvedValue([
+      { server_id: "srv-byok", alias: "Linear", is_byok: true, has_user_credential: true },
+    ]);
+    vi.mocked(listMCPTools).mockResolvedValue({ error: "401 from upstream" });
+    preload({ selectedModel: "gpt-fast", selectedMCPServers: JSON.stringify(["srv-byok"]) });
+    renderChat();
+
+    await settled();
+    await user.click(screen.getByRole("button", { name: "MCP" }));
+    await user.click(await screen.findByRole("button", { name: "Replace key" }));
+    expect(await screen.findByLabelText("Linear API key")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByLabelText("Linear API key")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Replace key" }));
+    expect(await screen.findByLabelText("Linear API key")).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByLabelText("Linear API key")).not.toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "MCP" }));
+
+    expect(await screen.findByRole("button", { name: "Replace key" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Linear API key")).not.toBeInTheDocument();
+    expect(credentialPost).not.toHaveBeenCalled();
+  });
 });

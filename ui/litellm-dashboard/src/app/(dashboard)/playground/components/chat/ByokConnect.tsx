@@ -26,10 +26,12 @@ export function ByokConnect({
   server,
   name,
   onConnected,
+  onCancel,
 }: {
   server: MCPServer;
   name: string;
   onConnected: () => void;
+  onCancel?: () => void;
 }) {
   const [credential, setCredential] = useState("");
   const [save, setSave] = useState(true);
@@ -104,10 +106,17 @@ export function ByokConnect({
         </FieldLabel>
         <Switch id={saveId} checked={save} onCheckedChange={setSave} />
       </Field>
-      <Button size="sm" className="w-fit" onClick={() => void connect()} disabled={isSaving}>
-        {isSaving && <Spinner />}
-        Connect
-      </Button>
+      <div className="flex gap-2">
+        <Button size="sm" onClick={() => void connect()} disabled={isSaving}>
+          {isSaving && <Spinner />}
+          Connect
+        </Button>
+        {onCancel && (
+          <Button variant="ghost" size="sm" onClick={onCancel} disabled={isSaving}>
+            Cancel
+          </Button>
+        )}
+      </div>
     </FieldGroup>
   );
 }

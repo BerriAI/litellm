@@ -217,6 +217,7 @@ export function McpDialog({
       onSelect={() => {
         setFocused(row.value);
         setToolQuery("");
+        setReplacingKey(null);
       }}
       summary={summary(row)}
     />
@@ -255,6 +256,7 @@ export function McpDialog({
             setReplacingKey(null);
             onCredentialSaved();
           }}
+          onCancel={needsKey(server) ? undefined : () => setReplacingKey(null)}
         />
       );
     const replaceKey = server.is_byok ? (
@@ -328,7 +330,7 @@ export function McpDialog({
   const nothingAvailable = !isLoading && servers.length === 0 && toolsets.length === 0;
 
   return (
-    <Dialog defaultOpen={defaultOpen}>
+    <Dialog defaultOpen={defaultOpen} onOpenChange={(open) => !open && setReplacingKey(null)}>
       <DialogTrigger render={<InputGroupButton size="xs" aria-label="MCP" />}>
         <Blocks />
         MCP
