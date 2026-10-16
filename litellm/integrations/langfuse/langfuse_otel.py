@@ -1,7 +1,7 @@
 import base64
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Optional
@@ -24,7 +24,7 @@ from litellm.types.utils import StandardCallbackDynamicParams
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span | Any
+    Span = _Span
 else:
     Span = Any
 
@@ -198,18 +198,19 @@ class LangfuseOtelLogger(OpenTelemetry):
                                     }
                                 )
                     elif item_type == "message":
+                        item_content: Sequence[object] = getattr(item, "content", [{}])
                         output_items_data.append(
                             {
                                 "role": getattr(item, "role", "assistant"),
-                                "content": getattr(getattr(item, "content", [{}])[0], "text", ""),
+                                "content": getattr(item_content[0], "text", ""),
                             }
                         )
                     elif item_type == "function_call":
-                        arguments_str = getattr(item, "arguments", "{}")
+                        item_arguments: object = getattr(item, "arguments", "{}")
                         arguments_obj = (
-                            safe_json_loads(arguments_str, default={})
-                            if isinstance(arguments_str, str)
-                            else arguments_str
+                            safe_json_loads(item_arguments, default={})
+                            if isinstance(item_arguments, str)
+                            else item_arguments
                         )
                         langfuse_tool_call = {
                             "id": getattr(item, "id", ""),

@@ -4,17 +4,20 @@ import json
 import uuid
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
-from typing import Final
+from pathlib import Path
+from typing import Final, Literal
 
 import anthropic
 import openai
 import pytest
+import yaml
 from openai.types import Completion
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice
 from openai.types.chat.chat_completion_chunk import ChoiceDeltaToolCall
 from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows
+from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
@@ -1398,3 +1401,308 @@ async def test_concurrent_valid_and_malformed_turns_are_each_answered_in_their_o
         assert statuses == ["failure"] * 4 + ["success"] * 8, statuses
         for answer in answers:
             assert _spend_row(answer.id) == _billed(model)
+
+
+_SYSTEM_CONTENT_ERROR: Final = "system message content must be a string or a list of content parts, got"
+_PRIMARY_DOWN: Final = Reply(status=500, body=json.dumps({"error": "primary ollama is down"}).encode())
+
+SystemEndpoint = Literal["chat", "messages", "responses"]
+
+
+def _terse_system() -> str:
+    return f"You are a terse weather bot {uuid.uuid4().hex}."
+
+
+def _list_system(text: str) -> dict[str, JsonValue]:
+    return {"role": "system", "content": [{"type": "text", "text": text}]}
+
+
+def _with_system(system: JsonValue) -> list[JsonValue]:
+    return [system, *_first_turn()]
+
+
+def _null_system_turn() -> list[dict[str, JsonValue]]:
+    return [{"role": "system", "content": None}, *_first_turn()]
+
+
+def _path_of(endpoint: SystemEndpoint) -> str:
+    match endpoint:
+        case "chat":
+            return "/v1/chat/completions"
+        case "messages":
+            return "/v1/messages"
+        case "responses":
+            return "/v1/responses"
+
+
+def _list_system_body(endpoint: SystemEndpoint, model: str, system: str, stream: bool) -> dict[str, JsonValue]:
+    match endpoint:
+        case "chat":
+            return {
+                "model": model,
+                "stream": stream,
+                "tools": [_WEATHER_TOOL],
+                "messages": _with_system(_list_system(system)),
+            }
+        case "messages":
+            return {
+                "model": model,
+                "stream": stream,
+                "max_tokens": 64,
+                "tools": [_ANTHROPIC_TOOL],
+                "system": [{"type": "text", "text": system}],
+                "messages": [*_first_turn()],
+            }
+        case "responses":
+            return {
+                "model": model,
+                "stream": stream,
+                "store": False,
+                "tools": [_RESPONSES_TOOL],
+                "input": _with_system({"role": "system", "content": [{"type": "input_text", "text": system}]}),
+            }
+
+
+def _reply_in_kind(request: Request) -> Reply:
+    streamed: Final = _JSON_OBJECT.validate_json(request.body).get("stream") is True
+    return _streamed_reply(_CALL_JSON) if streamed else _generate_reply(_CALL_JSON)
+
+
+def _prompts(wire: Wire) -> list[str]:
+    return [_prompt_of(_JSON_OBJECT.validate_json(request.body)) for request in _generate_calls(wire)]
+
+
+def _assert_system_instructed_once(prompt: str, system: str) -> None:
+    _assert_instructed_once(prompt, "get_weather")
+    assert prompt.split("### System:\n", 1)[1].startswith(system), prompt
+
+
+def _assert_prompt_replaces_the_system_content(prompt: str) -> None:
+    _assert_instructed_once(prompt, "get_weather")
+    assert prompt.startswith(f"### System:\n{_INSTRUCTION}"), prompt
+
+
+@pytest.mark.parametrize("stream", [pytest.param(False, id="sync"), pytest.param(True, id="stream")])
+@pytest.mark.parametrize("endpoint", ["chat", "messages", "responses"])
+def test_fallback_after_a_failed_list_system_turn_sends_the_instruction_once(
+    gateway: Gateway, endpoint: SystemEndpoint, stream: bool
+) -> None:
+    system: Final = _terse_system()
+    with (
+        _ollama_server(lambda _: _PRIMARY_DOWN) as primary_wire,
+        _ollama_server(_reply_in_kind) as fallback_wire,
+        gateway.scenario() as scenario,
+    ):
+        primary: Final = scenario.model(model=f"ollama/{_BACKEND}", api_base=primary_wire.url, api_key=_API_KEY)
+        fallback: Final = scenario.model(model=f"ollama/{_BACKEND}", api_base=fallback_wire.url, api_key=_API_KEY)
+        code, text = _post(
+            gateway,
+            _path_of(endpoint),
+            {**_list_system_body(endpoint, primary, system, stream), "fallbacks": [fallback], "num_retries": 0},
+        )
+        assert code == 200, text
+        assert "get_weather" in text, text
+        primary_prompts: Final = _prompts(primary_wire)
+        assert len(primary_prompts) == 1, primary_prompts
+        _assert_system_instructed_once(primary_prompts[0], system)
+        fallback_prompts: Final = _prompts(fallback_wire)
+        assert len(fallback_prompts) == 1, fallback_prompts
+        _assert_system_instructed_once(fallback_prompts[0], system)
+
+
+def test_retry_after_a_failed_list_system_turn_sends_the_instruction_once(gateway: Gateway) -> None:
+    system: Final = _terse_system()
+    attempts: Final = itertools.count()
+
+    def respond(_: Request) -> Reply:
+        return _PRIMARY_DOWN if next(attempts) == 0 else _generate_reply(_CALL_JSON)
+
+    with _ollama_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=f"ollama/{_BACKEND}", api_base=wire.url, api_key=_API_KEY)
+        payload: Final = _post_chat(
+            gateway, model, [_list_system(system), *_first_turn()], tools=[_WEATHER_TOOL], num_retries=1
+        )
+        prompts: Final = _prompts(wire)
+        assert len(prompts) == 2, prompts
+        for prompt in prompts:
+            _assert_system_instructed_once(prompt, system)
+        assert _spend_row(_id_of(payload)) == _billed(model)
+
+
+def _post_cacheable_chat(
+    gateway: Gateway, model: str, messages: Sequence[dict[str, JsonValue]]
+) -> dict[str, JsonValue]:
+    response: Final = gateway.request(
+        "POST", "/v1/chat/completions", {"model": model, "messages": list(messages), "tools": [_WEATHER_TOOL]}
+    )
+    assert response.status_code == 200, response.text
+    return _JSON_OBJECT.validate_json(response.text)
+
+
+def test_identical_list_system_turns_are_answered_from_the_response_cache(gateway: Gateway) -> None:
+    messages: Final = [_list_system(_terse_system()), *_first_turn()]
+    with _ollama_server(lambda _: _generate_reply(_CALL_JSON)) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=f"ollama/{_BACKEND}", api_base=wire.url, api_key=_API_KEY)
+        first: Final = _post_cacheable_chat(gateway, model, messages)
+        first_id: Final = _id_of(first)
+        assert _spend_row(first_id) == _billed(model)
+        second: Final = _post_cacheable_chat(gateway, model, messages)
+        assert _id_of(second) == first_id, (first, second)
+        assert _first_message(second) == _first_message(first), (first, second)
+        assert len(_generate_calls(wire)) == 1
+        rows: Final = _cache_rows(model)
+        assert [row["request_id"] for row in rows if row["cache_hit"] != "True"] == [first_id], rows
+        assert len([row for row in rows if row["cache_hit"] == "True"]) == 1, rows
+
+
+@pytest.mark.parametrize(
+    ("system", "type_name"),
+    [
+        pytest.param({"role": "system", "content": None}, "NoneType", id="null"),
+        pytest.param({"role": "system"}, "NoneType", id="missing"),
+        pytest.param({"role": "system", "content": {"text": "Be brief, secret-7f3a."}}, "dict", id="dict"),
+    ],
+)
+def test_system_content_that_is_neither_text_nor_parts_is_a_400_naming_only_its_type(
+    gateway: Gateway, system: dict[str, JsonValue], type_name: str
+) -> None:
+    with _ollama_server(lambda _: _generate_reply(_CALL_JSON)) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=f"ollama/{_BACKEND}", api_base=wire.url, api_key=_API_KEY)
+        code, text = _post(
+            gateway,
+            "/v1/chat/completions",
+            {"model": model, "messages": _with_system(system), "tools": [_WEATHER_TOOL]},
+        )
+        assert code == 400, text
+        assert f"{_SYSTEM_CONTENT_ERROR} {type_name}." in _error_message(text), text
+        assert "secret-7f3a" not in text, text
+        assert _generate_calls(wire) == ()
+        assert [row["status"] for row in _model_spend_rows(model, 1)] == ["failure"]
+        _post_chat(gateway, model, _first_turn(), tools=[_WEATHER_TOOL])
+        _assert_instructed_once(_prompt_of(_only_generate(wire)), "get_weather")
+
+
+@pytest.mark.parametrize("content", [pytest.param("", id="empty-string"), pytest.param([], id="empty-list")])
+def test_empty_system_content_carries_the_instruction_once(gateway: Gateway, content: JsonValue) -> None:
+    with _ollama_server(lambda _: _generate_reply(_CALL_JSON)) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=f"ollama/{_BACKEND}", api_base=wire.url, api_key=_API_KEY)
+        _post_chat(gateway, model, [{"role": "system", "content": content}, *_first_turn()], tools=[_WEATHER_TOOL])
+        _assert_instructed_once(_prompt_of(_only_generate(wire)), "get_weather")
+
+
+@pytest.mark.parametrize(
+    "drop_params", [pytest.param(True, id="true"), pytest.param(1, id="int-1"), pytest.param("true", id="string-true")]
+)
+def test_drop_params_sends_the_function_prompt_in_place_of_null_system_content(
+    gateway: Gateway, drop_params: JsonValue
+) -> None:
+    with _ollama_server(lambda _: _generate_reply(_CALL_JSON)) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=f"ollama/{_BACKEND}", api_base=wire.url, api_key=_API_KEY)
+        payload: Final = _post_chat(gateway, model, _null_system_turn(), tools=[_WEATHER_TOOL], drop_params=drop_params)
+        _assert_prompt_replaces_the_system_content(_prompt_of(_only_generate(wire)))
+        assert _spend_row(_id_of(payload)) == _billed(model)
+
+
+def test_deployment_drop_params_sends_the_function_prompt_in_place_of_null_system_content(gateway: Gateway) -> None:
+    with _ollama_server(lambda _: _generate_reply(_CALL_JSON)) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=f"ollama/{_BACKEND}", api_base=wire.url, api_key=_API_KEY, drop_params=True)
+        payload: Final = _post_chat(gateway, model, _null_system_turn(), tools=[_WEATHER_TOOL])
+        _assert_prompt_replaces_the_system_content(_prompt_of(_only_generate(wire)))
+        assert _spend_row(_id_of(payload)) == _billed(model)
+
+
+@pytest.mark.parametrize(
+    "drop_params",
+    [pytest.param([True], id="list"), pytest.param("", id="empty-string"), pytest.param("x" * 5120, id="5kb-string")],
+)
+def test_drop_params_that_does_not_mean_true_keeps_the_400(gateway: Gateway, drop_params: JsonValue) -> None:
+    with _ollama_server(lambda _: _generate_reply(_CALL_JSON)) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=f"ollama/{_BACKEND}", api_base=wire.url, api_key=_API_KEY)
+        code, text = _post(
+            gateway,
+            "/v1/chat/completions",
+            {"model": model, "messages": [*_null_system_turn()], "tools": [_WEATHER_TOOL], "drop_params": drop_params},
+        )
+        assert code == 400, text
+        assert f"{_SYSTEM_CONTENT_ERROR} NoneType." in _error_message(text), text
+        assert _generate_calls(wire) == ()
+
+
+def test_the_same_dropped_null_system_turn_twice_is_forwarded_twice(gateway: Gateway) -> None:
+    with _ollama_server(lambda _: _generate_reply(_CALL_JSON)) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=f"ollama/{_BACKEND}", api_base=wire.url, api_key=_API_KEY)
+        first: Final = _post_chat(gateway, model, _null_system_turn(), tools=[_WEATHER_TOOL], drop_params=True)
+        second: Final = _post_chat(gateway, model, _null_system_turn(), tools=[_WEATHER_TOOL], drop_params=True)
+        assert first["id"] != second["id"], (first["id"], second["id"])
+        prompts: Final = _prompts(wire)
+        assert len(prompts) == 2, prompts
+        for prompt in prompts:
+            _assert_prompt_replaces_the_system_content(prompt)
+
+
+def test_null_system_content_on_an_unauthenticated_request_is_a_401_before_translation(gateway: Gateway) -> None:
+    with _ollama_server(lambda _: _generate_reply(_CALL_JSON)) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=f"ollama/{_BACKEND}", api_base=wire.url, api_key=_API_KEY)
+        code, text = _post(
+            gateway,
+            "/v1/chat/completions",
+            {"model": model, "messages": [*_null_system_turn()], "tools": [_WEATHER_TOOL]},
+            key=f"sk-not-a-key-{uuid.uuid4().hex}",
+        )
+        assert code == 401, text
+        assert _generate_calls(wire) == ()
+
+
+def _config_storing_prompts(directory: Path) -> Path:
+    config: Final = _JSON_OBJECT.validate_python(
+        yaml.safe_load((Path(__file__).resolve().parents[1] / "proxy_config.yaml").read_text())
+    )
+    settings: Final = config["general_settings"]
+    assert isinstance(settings, dict), config
+    path: Final = directory / "store-prompts.yaml"
+    path.write_text(
+        yaml.safe_dump({**config, "general_settings": {**settings, "store_prompts_in_spend_logs": True}})
+    )
+    return path
+
+
+def _id_of(payload: dict[str, JsonValue]) -> str:
+    identity: Final = payload["id"]
+    assert isinstance(identity, str), payload
+    return identity
+
+
+def _first_message(payload: dict[str, JsonValue]) -> JsonValue:
+    choices: Final = payload["choices"]
+    assert isinstance(choices, list) and choices, payload
+    choice: Final = choices[0]
+    assert isinstance(choice, dict), payload
+    return choice["message"]
+
+
+def _stored_messages(request_id: str) -> JsonValue:
+    rows: Final = eventually(
+        lambda: read_rows('SELECT proxy_server_request FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (request_id,)),
+        lambda found: len(found) == 1,
+        seconds=70,
+    )
+    return _JSON_OBJECT.validate_python(rows[0]["proxy_server_request"])["messages"]
+
+
+@pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+def test_spend_row_stores_the_list_system_turn_the_caller_sent(gateway: Gateway, tmp_path: Path) -> None:
+    messages: Final = [_list_system(_terse_system()), *_first_turn()]
+    with (
+        _ollama_server(lambda _: _PRIMARY_DOWN) as primary_wire,
+        _ollama_server(lambda _: _generate_reply(_CALL_JSON)) as fallback_wire,
+        owned_proxy(gateway, tmp_path, {}, config=_config_storing_prompts(tmp_path), workers=2) as logged,
+        logged.scenario() as scenario,
+    ):
+        primary: Final = scenario.model(model=f"ollama/{_BACKEND}", api_base=primary_wire.url, api_key=_API_KEY)
+        fallback: Final = scenario.model(model=f"ollama/{_BACKEND}", api_base=fallback_wire.url, api_key=_API_KEY)
+        direct: Final = _post_chat(logged, fallback, messages, tools=[_WEATHER_TOOL])
+        rescued: Final = _post_chat(
+            logged, primary, messages, tools=[_WEATHER_TOOL], fallbacks=[fallback], num_retries=0
+        )
+        for payload in (direct, rescued):
+            assert _stored_messages(_id_of(payload)) == messages
