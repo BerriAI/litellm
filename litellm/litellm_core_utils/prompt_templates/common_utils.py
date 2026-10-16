@@ -1894,6 +1894,11 @@ def strip_litellm_internal_message_fields(message: AllMessageValues) -> AllMessa
     return _message_without_fields(message, LITELLM_INTERNAL_MESSAGE_FIELDS)
 
 
+def strip_prefill_prefix_field(message: AllMessageValues) -> AllMessageValues:
+    """Drop the ``prefix`` flag Mistral and DeepSeek read off a prefill, for endpoints that reject unknown keys."""
+    return _message_without_fields(message, frozenset({"prefix"}))
+
+
 def filter_value_from_dict(dictionary: dict, key: str, depth: int = 0) -> Any:
     """
     Filters a value from a dictionary
