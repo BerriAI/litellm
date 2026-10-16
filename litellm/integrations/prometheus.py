@@ -2601,21 +2601,6 @@ class PrometheusLogger(CustomLogger):
                 _labels,
             )
 
-    @staticmethod
-    def _bounded_failed_request_model_label(model: object, standard_logging_payload: StandardLoggingPayload) -> object:
-        """
-        Bound the legacy ``model`` label on the failed-request metric.
-
-        When no deployment served the call (no ``model_id``), ``model`` is the
-        raw name the caller sent, e.g. a model the key is not allowed to use.
-        Collapse unrecognized names into the shared ``other`` bucket so callers
-        cannot mint unlimited series. Names of real deployments keep their label,
-        and with no proxy router (plain SDK use) nothing is collapsed.
-        """
-        if standard_logging_payload.get("model_id"):
-            return model
-        return _bounded_requested_model_label(model, router_originated=True)
-
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         verbose_logger.debug(
             "prometheus Logging - Enters failure logging function (kwargs keys: %s)",
@@ -2627,9 +2612,14 @@ class PrometheusLogger(CustomLogger):
         if self._should_skip_metrics_for_invalid_key(kwargs=kwargs, standard_logging_payload=standard_logging_payload):
             return
 
-        model: Final = self._bounded_failed_request_model_label(
-            model=kwargs.get("model", ""),
-            standard_logging_payload=standard_logging_payload,
+        deployment_model_id: Final = standard_logging_payload.get("model_id", "")  # pyright: ignore[reportUnknownVariableType]  # StandardLoggingPayload.get is partially unknown
+        requested_name: Final = kwargs.get("model", "")  # pyright: ignore[reportUnknownVariableType]  # kwargs is an untyped callback argument
+        # With no deployment behind the call, the name is whatever the caller sent (for example a model the
+        # key may not use). Bound it like ``requested_model`` so unknown names share one series.
+        model: Final = (
+            _bounded_requested_model_label(requested_name, router_originated=True)
+            if not deployment_model_id and isinstance(requested_name, str)
+            else requested_name
         )
 
         litellm_params: Final = kwargs.get("litellm_params", {}) or {}
@@ -2652,7 +2642,7 @@ class PrometheusLogger(CustomLogger):
                 team=user_api_team,
                 team_alias=user_api_team_alias,
                 user=user_id,
-                model_id=standard_logging_payload.get("model_id", ""),
+                model_id=deployment_model_id,
                 requested_model=standard_logging_payload.get("model_group"),
                 api_provider=standard_logging_payload.get("custom_llm_provider"),
                 custom_metadata_labels=get_custom_labels_from_metadata(
