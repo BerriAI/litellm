@@ -1572,6 +1572,25 @@ class TestConverseStreamFrames:
         ]
 
 
+def _tool_use_start_frame(index: int, tool_use_id: str, name: str) -> bytes:
+    tool_use = {"toolUseId": tool_use_id, "name": name, "type": "tool_use"}
+    return _build_event_stream_frame("contentBlockStart", {"contentBlockIndex": index, "start": {"toolUse": tool_use}})
+
+
+def _tool_call_stream(tool_input: str) -> tuple[bytes, ...]:
+    return (
+        _build_event_stream_frame("messageStart", {"role": "assistant"}),
+        _build_event_stream_frame("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": "Checking."}}),
+        _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 0}),
+        _tool_use_start_frame(1, "tooluse_1", "lookup_order"),
+        _build_event_stream_frame(
+            "contentBlockDelta", {"contentBlockIndex": 1, "delta": {"toolUse": {"input": tool_input}}}
+        ),
+        _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 1}),
+        _build_event_stream_frame("messageStop", {"stopReason": "max_tokens"}),
+    )
+
+
 class TestConverseStreamGuardrailRelay:
     @pytest.mark.asyncio
     async def test_sampled_stream_relays_frames_as_received_and_scans_one_text_per_block(self, monkeypatch):
@@ -1713,6 +1732,79 @@ class TestConverseStreamGuardrailRelay:
         }
         assert [(scan.get("stream"), scan.get("response")) for scan in sent] == [(True, None), (True, finished)]
         assert later.received_marks == [(None, None)]
+
+    @pytest.mark.asyncio
+    async def test_noma_gets_the_finished_answer_with_its_reasoning_and_tool_calls_as_converse_blocks(
+        self, monkeypatch, respx_mock: respx.MockRouter
+    ):
+        route = respx_mock.post(f"{_NOMA_API_BASE}/litellm/guardrail").respond(json={"action": "NONE"})
+        stream = (
+            _build_event_stream_frame("messageStart", {"role": "assistant"}),
+            _build_event_stream_frame(
+                "contentBlockDelta", {"contentBlockIndex": 0, "delta": {"reasoningContent": {"text": "Look it up."}}}
+            ),
+            _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 0}),
+            _build_event_stream_frame("contentBlockDelta", {"contentBlockIndex": 1, "delta": {"text": "Checking."}}),
+            _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 1}),
+            _tool_use_start_frame(2, "tooluse_1", "lookup_order"),
+            *(
+                _build_event_stream_frame(
+                    "contentBlockDelta", {"contentBlockIndex": 2, "delta": {"toolUse": {"input": fragment}}}
+                )
+                for fragment in ('{"order_', 'id": "A1"}')
+            ),
+            _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 2}),
+            _tool_use_start_frame(3, "tooluse_2", "list_orders"),
+            _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 3}),
+            _build_event_stream_frame("messageStop", {"stopReason": "tool_use"}),
+        )
+
+        await _relay_through_post_call_guardrail(stream, _noma_guardrail(monkeypatch), monkeypatch)
+
+        finished = json.loads(route.calls[-1].request.content)["request_data"]["response"]
+        assert finished == {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {"reasoningContent": {"reasoningText": {"text": "Look it up."}}},
+                        {"text": "Checking."},
+                        {
+                            "toolUse": {
+                                "toolUseId": "tooluse_1",
+                                "name": "lookup_order",
+                                "type": "tool_use",
+                                "input": {"order_id": "A1"},
+                            }
+                        },
+                        {"toolUse": {"toolUseId": "tooluse_2", "name": "list_orders", "type": "tool_use", "input": {}}},
+                    ],
+                }
+            },
+            "stopReason": "tool_use",
+        }
+
+    @pytest.mark.parametrize(
+        "tool_input",
+        [
+            pytest.param('{"order_id": "A', id="cut-short"),
+            pytest.param('{"order_id": NaN}', id="nan"),
+            pytest.param("[" * 10_000, id="nested-too-deep"),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_noma_gets_a_tool_input_that_is_not_json_as_streamed(
+        self, monkeypatch, respx_mock: respx.MockRouter, tool_input: str
+    ):
+        route = respx_mock.post(f"{_NOMA_API_BASE}/litellm/guardrail").respond(json={"action": "NONE"})
+
+        relayed = await _relay_through_post_call_guardrail(
+            _tool_call_stream(tool_input), _noma_guardrail(monkeypatch), monkeypatch
+        )
+
+        assert relayed == b"".join(_tool_call_stream(tool_input))
+        finished = json.loads(route.calls[-1].request.content)["request_data"]["response"]
+        assert finished["output"]["message"]["content"][1]["toolUse"]["input"] == tool_input
 
     @pytest.mark.asyncio
     async def test_guardrails_scanning_after_noma_see_the_request_without_its_stream_marks(

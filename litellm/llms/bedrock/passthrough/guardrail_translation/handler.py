@@ -465,8 +465,61 @@ def _reads_stream_marks(guardrail: "CustomGuardrail") -> bool:
     return getattr(guardrail, "reads_stream_marks", False) is True
 
 
+def _json_object_member(value: object, key: str) -> Mapping[str, object] | None:
+    """``value[key]`` when both are JSON objects, else None."""
+    try:
+        return _JSON_OBJECT.validate_python(_JSON_OBJECT.validate_python(value).get(key))
+    except ValidationError:
+        return None
+
+
+def _reject_json_constant(name: str) -> object:
+    raise ValueError(f"{name} is not JSON")
+
+
+def _finished_tool_input(text: str) -> object:
+    """A tool call's streamed input as the JSON document Converse returns, or the text as received when it is not
+    JSON (cut short, rewritten by a guardrail, or holding NaN or nesting too deep to send on)."""
+    try:
+        return json.loads(text, parse_constant=_reject_json_constant) if text else {}
+    except (ValueError, RecursionError):
+        return text
+
+
+def _finished_converse_content(
+    frames: Sequence[ConverseStreamFrame], groups: _StreamTextGroups
+) -> list[dict[str, object]]:  # mutable-ok: the content of the finished response guardrails receive
+    """The finished reply's text, reasoning and tool-call blocks, shaped as a non-streaming Converse response
+    holds them."""
+    texts: Final = dict(zip(groups.groups, groups.texts()))
+    tool_starts: Final[dict[int | None, Mapping[str, object]]] = {}  # mutable-ok: built in one pass over the frames
+    keys: Final[dict[_StreamGroupKey, None]] = {}  # mutable-ok: blocks in stream order, built in one pass
+    for frame in frames:
+        tool_use = (
+            _json_object_member(_json_object_member(frame.payload, "start"), "toolUse")
+            if frame.event_type == "contentBlockStart"
+            else None
+        )
+        if tool_use is not None:
+            tool_starts[frame.block_index] = tool_use
+            keys[(frame.block_index, "tool")] = None
+        keys.update((key, None) for key, _ in frame.scanned_texts())
+    content: Final[list[dict[str, object]]] = []  # mutable-ok: built in one pass over the blocks
+    for block_index, kind in keys:
+        text = texts.get((block_index, kind), "")
+        if kind == "tool":
+            tool_start = tool_starts.get(block_index, {})
+            named = {name: tool_start[name] for name in ("toolUseId", "name", "type") if name in tool_start}
+            content.append({"toolUse": {**named, "input": _finished_tool_input(text)}})
+        elif text and kind == "reasoning":
+            content.append({"reasoningContent": {"reasoningText": {"text": text}}})
+        elif text:
+            content.append({"text": text})
+    return content
+
+
 def _stream_marked_request_data(
-    request_data: Mapping[str, object], frames: Sequence[ConverseStreamFrame], texts: Sequence[str], ended: bool
+    request_data: Mapping[str, object], frames: Sequence[ConverseStreamFrame], groups: _StreamTextGroups, ended: bool
 ) -> dict[str, object]:  # mutable-ok: the request dict guardrails receive
     """``request_data`` with the marks chat completions gives a streamed answer: ``stream`` on every scan and, once
     the stream has ended, the finished ``response``."""
@@ -480,7 +533,7 @@ def _stream_marked_request_data(
         ),
         None,
     )
-    message: Final = {"role": "assistant", "content": [{"text": text} for text in texts]}
+    message: Final = {"role": "assistant", "content": _finished_converse_content(frames, groups)}
     response: Final = {"output": {"message": message}, **({"stopReason": stop_reason} if stop_reason else {})}
     return {**request_data, "stream": True, "response": response}
 
@@ -767,7 +820,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             litellm_logging_obj=litellm_logging_obj,
             user_api_key_dict=user_api_key_dict,
             request_data=(
-                _stream_marked_request_data(request_data, frames, groups.texts(), ended)
+                _stream_marked_request_data(request_data, frames, groups, ended)
                 if request_data is not None and _reads_stream_marks(guardrail_to_apply)
                 else request_data
             ),
