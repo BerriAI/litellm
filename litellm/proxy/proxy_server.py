@@ -14463,11 +14463,10 @@ async def _try_provider_token_count(
 
 
 def _routed_litellm_params(router: Router, model: str) -> tuple[Mapping[str, object], ...]:
-    named: Final = router.get_model_list(model_name=model) or ()
-    if named:
-        return tuple(deployment["litellm_params"] for deployment in named)
-    by_id: Final = router.get_deployment(model_id=model)
-    return () if by_id is None else (by_id.litellm_params.model_dump(),)
+    by_id: Final = None if model in router.model_names else router.get_deployment(model_id=model)
+    if by_id is not None:
+        return (by_id.litellm_params.model_dump(),)
+    return tuple(deployment["litellm_params"] for deployment in router.get_model_list(model_name=model) or ())
 
 
 def _count_context_management(

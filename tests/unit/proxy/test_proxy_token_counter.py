@@ -1324,8 +1324,23 @@ async def test_gemini_messages_count_tokens_applies_the_context_edits_inference_
                 },
             ],
         ),
+        (
+            "gemini-agent-deployment-id",
+            [
+                {"model_name": "*", "litellm_params": {"model": "gemini/*", "api_key": "test-key"}},
+                {
+                    "model_name": "gemini-agent",
+                    "litellm_params": {
+                        "model": "gemini/gemini-2.5-flash",
+                        "api_key": "test-key",
+                        "additional_drop_params": ["context_management"],
+                    },
+                    "model_info": {"id": "gemini-agent-deployment-id"},
+                },
+            ],
+        ),
     ),
-    ids=("group-member-drops", "deployment-id-drops"),
+    ids=("group-member-drops", "deployment-id-drops", "deployment-id-drops-beside-a-wildcard"),
 )
 async def test_gemini_messages_count_tokens_keeps_tool_results_when_a_routable_deployment_drops_context_management(
     requested_model: str, model_list: list[dict[str, JsonValue]]
