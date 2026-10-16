@@ -1297,13 +1297,14 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         Also gates re-emission after a block transition: when an upstream
         chunk both *triggers* a new content block (its type differs from the
         active block) and *carries* delta content, that content belongs to
-        the new block. The synthesized ``content_block_start`` only ever
-        carries an empty body — see
-        ``_translate_streaming_openai_chunk_to_anthropic_content_block``,
-        which returns an empty ``TextBlock``/``ToolUseBlock``/thinking block —
-        so the trigger chunk's delta must be re-queued or the first token of
-        the new block (the first non-empty text/thinking delta, or bundled
-        tool arguments) is silently dropped.
+        the new block. The synthesized ``content_block_start`` from
+        ``_translate_streaming_openai_chunk_to_anthropic_content_block``
+        carries an empty text, tool-use or unsigned thinking body, and only a
+        signed thinking block's text rides on the start because its delta is
+        a ``signature_delta``. So the trigger chunk's delta must be re-queued
+        or the first token of the new block (the first non-empty text or
+        unsigned thinking delta, or bundled tool arguments) is silently
+        dropped.
 
         Delta types outside ``StreamingContentBlockDeltaType`` — the closed
         set the translate layer can produce — are treated as empty. The
