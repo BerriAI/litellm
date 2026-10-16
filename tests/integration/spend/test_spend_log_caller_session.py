@@ -139,6 +139,20 @@ class Collector:
             if object_value(found.get("gen_ai.response.id", {})).get("stringValue") == response_id
         )
 
+    def conversation_ids(self, conversations: frozenset[str]) -> tuple[str, ...]:
+        with self.guard:
+            batches: Final = tuple(self.accepted)
+        responded: Final = (
+            object_value(found.get("gen_ai.conversation.id", {})).get("stringValue")
+            for found in (_attributes(span) for batch in batches for span in _spans(batch))
+            if "gen_ai.response.id" in found
+        )
+        return tuple(
+            conversation
+            for conversation in responded
+            if isinstance(conversation, str) and conversation in conversations
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class Rig:
@@ -377,6 +391,24 @@ def test_conversation_span_keeps_the_trace_header_and_no_internal_key(rigs: Rigs
 
     assert spans[0]["gen_ai.conversation.id"] == {"stringValue": trace}, spans
     assert CALLER_SESSION_KEY not in json.dumps(spans[0]), spans
+
+
+def test_a_continued_chains_conversation_spans_keep_each_turns_trace_header(rigs: Rigs) -> None:
+    traces: Final = (_token("trace"), _token("trace"))
+    first: Final = _turn(rigs.flag_on, _marker(), headers={"x-litellm-trace-id": traces[0]})
+    _turn(
+        rigs.flag_on,
+        _marker(),
+        first,
+        headers={"x-litellm-trace-id": traces[1]},
+        fields={"litellm_session_id": _token("convo")},
+    )
+
+    conversations: Final = eventually(
+        lambda: rigs.sink.conversation_ids(frozenset(traces)), lambda found: len(found) == 2, seconds=30
+    )
+
+    assert sorted(conversations) == sorted(traces), conversations
 
 
 @pytest.mark.parametrize("endpoint", list(PATHS))

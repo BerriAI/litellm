@@ -566,17 +566,12 @@ class ChatCompletionSession(TypedDict, total=False):
 ########### End of Initialize Classes used for Responses API  ###########
 
 
-def _continuing_session_fields(chain_session: str, metadata_by_key: Mapping[str, object]) -> Mapping[str, object]:
-    stamped: Final = {
-        key: _STR_KEY_DICT_ADAPTER.validate_python(metadata)
-        for key, metadata in metadata_by_key.items()
-        if isinstance(metadata, dict) and CALLER_SESSION_ID_METADATA_KEY in metadata
-    }
-    without_caller_session: Final = {
-        key: {field: value for field, value in metadata.items() if field != CALLER_SESSION_ID_METADATA_KEY}
-        for key, metadata in stamped.items()
-    }
-    return {"litellm_session_id": chain_session, **without_caller_session}
+def _chain_session_metadata(chain_session: str, request_kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    key: Final = "litellm_metadata" if request_kwargs.get("litellm_metadata") else "metadata"
+    metadata: Final = request_kwargs.get(key)
+    if not isinstance(metadata, dict):
+        return MappingProxyType({})
+    return {key: {**_STR_KEY_DICT_ADAPTER.validate_python(metadata), CALLER_SESSION_ID_METADATA_KEY: chain_session}}
 
 
 class LiteLLMCompletionResponsesConfig:
@@ -1107,18 +1102,12 @@ class LiteLLMCompletionResponsesConfig:
         litellm_completion_request["messages"] = combined_messages
         chain_session: Final = chat_completion_session.get("litellm_session_id")
         litellm_completion_request["litellm_trace_id"] = chain_session
-        continuing_session_fields: Final[Mapping[str, object]] = (
-            _continuing_session_fields(
-                chain_session,
-                {
-                    "metadata": request_kwargs.get("metadata"),
-                    "litellm_metadata": request_kwargs.get("litellm_metadata"),
-                },
-            )
+        chain_session_metadata: Final[Mapping[str, object]] = (
+            _chain_session_metadata(chain_session, request_kwargs)
             if chain_session and litellm.request_correlation_in_logs
             else MappingProxyType({})
         )
-        return {**litellm_completion_request, **continuing_session_fields}
+        return {**litellm_completion_request, **chain_session_metadata}
 
     @staticmethod
     def _transform_response_input_param_to_chat_completion_message(

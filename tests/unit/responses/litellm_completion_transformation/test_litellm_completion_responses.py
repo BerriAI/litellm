@@ -6467,7 +6467,7 @@ def test_transform_request_reads_service_tier_from_responses_api_request() -> No
     assert result["service_tier"] == "priority"
 
 
-def _continued_chain_request(caller_metadata: Mapping[str, object]) -> Mapping[str, object]:
+def _continued_chain_request(request_kwargs: Mapping[str, object]) -> Mapping[str, object]:
     async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
         assert previous_response_id == "resp_turn_1"
         return ChatCompletionSession(
@@ -6481,37 +6481,53 @@ def _continued_chain_request(caller_metadata: Mapping[str, object]) -> Mapping[s
                 "model": _CLAUDE_ON_BEDROCK,
                 "custom_llm_provider": "bedrock",
                 "messages": [{"role": "user", "content": "turn 2"}],
-                "metadata": caller_metadata,
+                "metadata": request_kwargs.get("metadata"),
             },
             instructions=None,
             session_lookup=session_lookup,
-            request_kwargs={"metadata": caller_metadata, "litellm_metadata": caller_metadata},
+            request_kwargs=request_kwargs,
         )
     )
 
 
-def test_a_continued_chain_keeps_its_session_over_the_turns_caller_session_under_request_correlation(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("request_kwargs", "logged_metadata_key"),
+    [
+        (
+            {
+                "metadata": {"tag": "client"},
+                "litellm_metadata": {CALLER_SESSION_ID_METADATA_KEY: "turn-session", "user_api_key": "hashed"},
+            },
+            "litellm_metadata",
+        ),
+        ({"metadata": {"user_api_key": "hashed"}}, "metadata"),
+    ],
+)
+def test_a_continued_chain_logs_its_spend_under_the_chain_session_with_request_correlation(
+    monkeypatch: pytest.MonkeyPatch, request_kwargs: Mapping[str, object], logged_metadata_key: str
 ):
     monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
-    caller_metadata: Final = {CALLER_SESSION_ID_METADATA_KEY: "turn-session", "team": "red"}
+    sent_kwargs: Final = deepcopy(request_kwargs)
 
-    request: Final = _continued_chain_request(caller_metadata)
-
-    assert request["litellm_trace_id"] == request["litellm_session_id"] == "chain-session"
-    assert request["metadata"] == request["litellm_metadata"] == {"team": "red"}
-    assert caller_metadata == {CALLER_SESSION_ID_METADATA_KEY: "turn-session", "team": "red"}
-
-
-def test_a_continued_chain_leaves_the_turns_session_fields_alone_without_request_correlation(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    monkeypatch.setattr(litellm, "request_correlation_in_logs", False)
-    caller_metadata: Final = {CALLER_SESSION_ID_METADATA_KEY: "turn-session", "team": "red"}
-
-    request: Final = _continued_chain_request(caller_metadata)
+    request: Final = _continued_chain_request(request_kwargs)
 
     assert request["litellm_trace_id"] == "chain-session"
     assert "litellm_session_id" not in request
+    assert request[logged_metadata_key] == {
+        **TypeAdapter(dict[str, object]).validate_python(request_kwargs[logged_metadata_key]),
+        CALLER_SESSION_ID_METADATA_KEY: "chain-session",
+    }
+    assert request_kwargs == sent_kwargs
+
+
+def test_a_continued_chain_leaves_the_turns_metadata_alone_without_request_correlation(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", False)
+    caller_metadata: Final = {CALLER_SESSION_ID_METADATA_KEY: "turn-session", "user_api_key": "hashed"}
+
+    request: Final = _continued_chain_request({"metadata": caller_metadata, "litellm_metadata": caller_metadata})
+
+    assert request["litellm_trace_id"] == "chain-session"
     assert "litellm_metadata" not in request
-    assert request["metadata"] == caller_metadata
+    assert request["metadata"] == {CALLER_SESSION_ID_METADATA_KEY: "turn-session", "user_api_key": "hashed"}
