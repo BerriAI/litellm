@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import os
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import ExitStack, asynccontextmanager
 from types import SimpleNamespace
 from typing import Final
@@ -16,7 +16,7 @@ from fastapi import HTTPException, Request
 import litellm
 from litellm._uuid import uuid
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.proxy._types import LiteLLM_UserTable, NewUserResponse
+from litellm.proxy._types import LiteLLM_UserTable, NewUserResponse, ProxyException
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
 from litellm.proxy.management_endpoints.types import CustomOpenID
@@ -25,9 +25,11 @@ from litellm.proxy.management_endpoints.ui_sso import (
     MicrosoftSSOHandler,
     SSOAuthenticationHandler,
     _complete_cli_sso_callback_session,
+    _insert_sso_user_or_find_concurrent_insert,
     _setup_team_mappings,
     _sync_user_role_from_jwt_role_map,
     cli_sso_callback,
+    insert_sso_user,
     normalize_email,
     process_sso_jwt_access_token,
     sso_lookup_user_ids,
@@ -1403,50 +1405,80 @@ async def test_upsert_sso_user_no_role_in_sso_response():
     assert "user_role" not in call_args.kwargs["data"]
 
 
-def _users_by_id(*rows: LiteLLM_UserTable) -> MagicMock:
-    by_id: Final = {row.user_id: row for row in rows}
-    prisma: Final = MagicMock()
-    prisma.writer_db.litellm_usertable.find_unique = AsyncMock(side_effect=lambda where: by_id.get(where["user_id"]))
-    return prisma
+class _UserTable:
+    def __init__(self, *rows: LiteLLM_UserTable) -> None:
+        self.rows: dict[str, LiteLLM_UserTable] = {row.user_id: row for row in rows}
+
+    async def find_first(self, where: dict[str, dict[str, str]]) -> LiteLLM_UserTable | None:
+        ((field, condition),) = where.items()
+
+        def matches(stored: object) -> bool:
+            if condition.get("mode") == "insensitive":
+                return str(stored).lower() == condition["equals"].lower()
+            return stored == condition["equals"]
+
+        return next((row for row in self.rows.values() if matches(getattr(row, field))), None)
+
+    async def find_unique(self, where: dict[str, str]) -> LiteLLM_UserTable | None:
+        return self.rows.get(where["user_id"])
 
 
-async def _first_sign_in(prisma: MagicMock, duplicate: str) -> NewUserResponse | LiteLLM_UserTable | None:
-    from litellm.proxy.utils import handle_exception_on_proxy
+def _users_db(table: _UserTable) -> SimpleNamespace:
+    database: Final = SimpleNamespace(litellm_usertable=table)
+    return SimpleNamespace(db=database, writer_db=database)
 
-    rejected: Final = handle_exception_on_proxy(HTTPException(status_code=409, detail={"error": duplicate}))
-    with patch("litellm.proxy.management_endpoints.ui_sso.new_user", AsyncMock(side_effect=rejected)):
-        return await SSOAuthenticationHandler.upsert_sso_user(
-            result=CustomOpenID(id="sso-subject", email="person@example.com", display_name="Person", team_ids=[]),
-            user_info=None,
-            user_email="person@example.com",
-            user_defined_values={
-                "user_id": "sso-subject",
-                "user_email": "person@example.com",
-                "user_role": None,
-                "max_budget": None,
-                "budget_duration": None,
-                "models": [],
-            },
+
+async def _first_sign_in(table: _UserTable, **join: object) -> NewUserResponse | LiteLLM_UserTable:
+    prisma: Final = _users_db(table)
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        return await _insert_sso_user_or_find_concurrent_insert(
+            insert=insert_sso_user(
+                result_openid=CustomOpenID(id="sso-subject", email="person@example.com", team_ids=[]),
+                user_defined_values={
+                    "user_id": "sso-subject",
+                    "user_email": "person@example.com",
+                    "user_role": None,
+                    "max_budget": None,
+                    "budget_duration": None,
+                    "models": [],
+                },
+            ),
+            user_id="sso-subject",
             prisma_client=prisma,
+            **join,
         )
 
 
 @pytest.mark.asyncio
-async def test_upsert_sso_user_signs_in_to_the_account_a_concurrent_first_sign_in_created():
+async def test_first_sign_in_signs_in_to_the_account_a_concurrent_first_sign_in_created():
     winner: Final = LiteLLM_UserTable(user_id="sso-subject", user_email="person@example.com", user_role="internal_user")
 
-    signed_in: Final = await _first_sign_in(_users_by_id(winner), "User with id sso-subject already exists")
+    signed_in: Final = await _first_sign_in(_UserTable(winner))
 
     assert signed_in == winner
 
 
 @pytest.mark.asyncio
-async def test_upsert_sso_user_does_not_sign_in_to_another_account_holding_the_email():
-    other: Final = LiteLLM_UserTable(user_id="someone-else", user_email="person@example.com", user_role="proxy_admin")
+async def test_first_sign_in_does_not_sign_in_to_another_account_holding_the_email():
+    other: Final = LiteLLM_UserTable(user_id="someone-else", user_email="Person@example.com", user_role="proxy_admin")
 
-    signed_in: Final = await _first_sign_in(_users_by_id(other), "User with email person@example.com already exists")
+    with pytest.raises(ProxyException, match=r"User with email Person@example\.com already exists"):
+        await _first_sign_in(_UserTable(other))
 
-    assert signed_in is None
+
+@pytest.mark.asyncio
+async def test_first_sign_in_joins_default_teams_the_concurrent_first_sign_in_has_not_joined_yet(monkeypatch):
+    monkeypatch.setattr(litellm, "default_internal_user_params", {"teams": ["team-joined", "team-pending"]})
+    table: Final = _UserTable(
+        LiteLLM_UserTable(user_id="sso-subject", user_email="person@example.com", teams=["team-joined"])
+    )
+
+    async def join(user: LiteLLM_UserTable, teams: Sequence[object], prisma_client: object) -> None:
+        table.rows[user.user_id] = user.model_copy(update={"teams": [*user.teams, *map(str, teams)]})
+
+    signed_in: Final = await _first_sign_in(table, join_default_teams=join)
+
+    assert signed_in.teams == ["team-joined", "team-pending"]
 
 
 def test_get_user_email_and_id_extracts_microsoft_role():
