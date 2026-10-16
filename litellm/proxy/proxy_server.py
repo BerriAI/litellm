@@ -8317,9 +8317,7 @@ class ProxyConfig:
         environment_before_db: Final = self._captured_environment_before_db()
         environment_read: Final = next(self._environment_read_numbers)
         sections: Final = tuple(self._settings_stores)
-        responses: Final = await asyncio.gather(
-            *(self._config_section_row(prisma_client, section) for section in sections)
-        )
+        responses: Final = await asyncio.gather(*(get_config_param(prisma_client, section) for section in sections))
         for section, response in zip(sections, responses):
             if response is None or (param_value := getattr(response, "param_value", None)) is None:
                 continue
@@ -8332,8 +8330,8 @@ class ProxyConfig:
             if section == "litellm_settings":
                 self._apply_litellm_settings_db_values(self._prepared_db_settings_values(section, param_value))
             elif section == "environment_variables":
-                self._apply_db_environment_variables(
-                    param_value, _config_row_revision(response), environment_before_db, environment_read
+                await self._apply_db_environment_variables_row(
+                    prisma_client, response, environment_before_db, environment_read
                 )
             else:
                 self._settings_stores[section].apply_db_row(
@@ -8344,15 +8342,25 @@ class ProxyConfig:
         self._warn_about_shadowed_db_settings()
         return self._config_with_resolved_settings(config)
 
-    async def _config_section_row(self, prisma_client: PrismaClient, section: Section) -> object | None:
-        cached: Final = await get_config_param(prisma_client, section)
-        if section != "environment_variables" or not self._is_behind_applied_environment_revision(cached):
-            return cached
+    async def _apply_db_environment_variables_row(
+        self, prisma_client: PrismaClient, row: object, environment_before_db: Mapping[str, str], read: int
+    ) -> None:
+        current: Final = await self._environment_row_not_behind_the_applied_one(prisma_client, row)
+        if current is None or (param_value := getattr(current, "param_value", None)) is None:
+            return
+        self._apply_db_environment_variables(param_value, _config_row_revision(current), environment_before_db, read)
+
+    async def _environment_row_not_behind_the_applied_one(
+        self, prisma_client: PrismaClient, row: object
+    ) -> object | None:
+        if not self._is_behind_applied_environment_revision(row):
+            return row
+        applied_revision: Final = self._db_environment_revision
         try:
-            return await call_with_db_reconnect_retry(
+            writer_row: Final = await call_with_db_reconnect_retry(
                 prisma_client,
                 lambda: ConfigRepository(prisma_client, use_writer=True).table.find_unique(
-                    where={"param_name": section}
+                    where={"param_name": "environment_variables"}
                 ),
                 reason="environment_variables_writer_read_failure",
             )
@@ -8365,6 +8373,7 @@ class ProxyConfig:
                 e,
             )
             return None
+        return writer_row if self._db_environment_revision == applied_revision else None
 
     def _is_behind_applied_environment_revision(self, row: object) -> bool:
         applied_revision: Final = self._db_environment_revision
