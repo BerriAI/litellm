@@ -22,7 +22,9 @@ from litellm.proxy.ui_crud_endpoints.latest_release_endpoints import (
     _default_cache,
     _default_client,
     _default_fetch_lock,
+    _GitHubRelease,
     count_release_bullets,
+    earlier_releases_in_line,
     get_latest_release_info,
 )
 from tests._master_key import MASTER_KEY
@@ -278,13 +280,22 @@ class TestPatchReleaseAggregatesMinorLine:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "outcome",
-        [httpx.ConnectError("boom"), _github_response(status=403, payload={"message": "rate limited"})],
-        ids=["unreachable", "rate_limited"],
+        [
+            httpx.ConnectError("boom"),
+            _github_response(status=403, payload={"message": "rate limited"}),
+            httpx.Response(200, content=b"not json"),
+        ],
+        ids=["unreachable", "rate_limited", "not_json"],
     )
     async def test_release_list_failure_is_unavailable(self, outcome: httpx.Response | Exception):
         client = _RecordingClient([_github_response(payload=PATCH_RELEASE), outcome])
         result = await get_latest_release_info(client=client, cache=_fresh_cache(), fetch_lock=asyncio.Lock())
         assert isinstance(result, LatestReleaseUnavailable)
+
+    def test_non_semver_latest_tag_has_no_earlier_releases(self):
+        latest = _GitHubRelease.model_validate(_release("v1.102.1-hotfix", "* fix: hotfix\n"))
+        releases = tuple(_GitHubRelease.model_validate(release) for release in RECENT_RELEASES)
+        assert earlier_releases_in_line(latest, releases) == ()
 
 
 class TestLatestReleaseInfoEndpoint:
