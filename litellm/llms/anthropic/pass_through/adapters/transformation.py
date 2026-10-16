@@ -804,6 +804,7 @@ class LiteLLMAnthropicMessagesAdapter:
             "name",
             "input_schema",
             "description",
+            "custom",
             "cache_control",
             "strict",
             "type",

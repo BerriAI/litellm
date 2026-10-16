@@ -8,7 +8,7 @@ import re
 from collections.abc import Container, Mapping, MutableMapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Annotated, Any, ClassVar, Final, Literal, TypeVar
+from typing import Annotated, Any, ClassVar, Final, Literal, TypeVar, cast
 from urllib.parse import quote, urlparse
 
 import httpx
@@ -110,12 +110,37 @@ _INFERENCE_PROFILE_MINOR_RE: Final = re.compile(r":\d+$")
 _DATED_RELEASE_SUFFIX_RE: Final = re.compile(r"-\d{8}$")
 _DOTTED_VERSION_RE: Final = re.compile(r"(\d)\.(\d)")
 _CLAUDE_CODE_BILLING_HEADER_PREFIX: Final = "x-anthropic-billing-header:"
-OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
+OBJECT_MAPPING_ADAPTER: Final[TypeAdapter[dict[object, object]]] = TypeAdapter(dict[object, object])
 _CLAUDE_CODE_OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
 _CLAUDE_CODE_USER_AGENT_PREFIXES: Final = ("claude-cli/", "claude-code/")
+
+
+def _tool_without_custom_field(tool: object) -> object:
+    if not isinstance(tool, dict):
+        return tool
+
+    tool_dict: Final = OBJECT_MAPPING_ADAPTER.validate_python(tool)
+    if "custom" not in tool_dict:
+        return cast(object, tool)
+
+    without_custom: Final = {key: value for key, value in tool_dict.items() if key != "custom"}
+    custom: Final = tool_dict["custom"]
+    if not isinstance(custom, dict) or "defer_loading" in tool_dict:
+        return without_custom
+
+    custom_dict: Final = OBJECT_MAPPING_ADAPTER.validate_python(custom)
+    defer_loading: Final = custom_dict.get("defer_loading")
+    if not isinstance(defer_loading, bool):
+        return without_custom
+
+    return {**without_custom, "defer_loading": defer_loading}
+
+
+def tools_without_custom_field(tools: Sequence[object]) -> list[object]:
+    return [_tool_without_custom_field(tool) for tool in tools]
 
 
 def is_anthropic_messages_url(url: str) -> bool:
