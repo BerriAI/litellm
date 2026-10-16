@@ -20,7 +20,6 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
     model_budget_start_time_cache_key,
     resolve_model_budget,
 )
-from litellm.types.caching import RedisPipelineIncrementOperation
 
 
 async def _reset_at_of_open_window(
@@ -500,18 +499,14 @@ async def test_async_log_success_event_pushes_redis_increments_when_redis_config
 
 
 @pytest.mark.asyncio
-async def test_model_budget_limiter_without_redis_keeps_one_merged_increment_per_key():
+async def test_model_budget_limiter_without_redis_tracks_spend_locally_and_queues_nothing():
     dual_cache = DualCache()
     limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
     spend_key = "virtual_key_spend:test-key:gpt-4:1d"
 
     await limiter._increment_spend_in_current_window(spend_key=spend_key, response_cost=0.01, ttl=86400)
-    await limiter._increment_spend_in_current_window(spend_key=spend_key, response_cost=0.02, ttl=86000)
 
-    assert await dual_cache.async_get_cache(spend_key) == pytest.approx(0.03)
-    assert list(limiter._increments_awaiting_redis.values()) == [
-        RedisPipelineIncrementOperation(key=spend_key, increment_value=pytest.approx(0.03), ttl=86000)
-    ]
+    assert await dual_cache.async_get_cache(spend_key) == 0.01
     assert limiter.redis_increment_operation_queue == []
 
 

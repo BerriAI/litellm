@@ -21,8 +21,10 @@ anthropic:
 import asyncio
 import builtins
 import logging
+import math
 import time
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from itertools import groupby
 from types import MappingProxyType
@@ -105,14 +107,18 @@ def _sum_increments_by_key(operations: Sequence[RedisPipelineIncrementOperation]
     return MappingProxyType({key: sum(operation["increment_value"] for operation in group) for key, group in by_key})
 
 
-def _add_increment(
-    earlier: RedisPipelineIncrementOperation | None, later: RedisPipelineIncrementOperation
-) -> RedisPipelineIncrementOperation:
-    if earlier is None:
-        return later
-    return RedisPipelineIncrementOperation(
-        key=later["key"], increment_value=earlier["increment_value"] + later["increment_value"], ttl=later["ttl"]
-    )
+@dataclass(frozen=True, slots=True)
+class _SpendAwaitingRedis:
+    spend: float
+    expires_at: float
+
+
+def _add_spend_awaiting_redis(
+    earlier: _SpendAwaitingRedis | None, spend: float, ttl: int, now: float
+) -> _SpendAwaitingRedis:
+    if earlier is None or earlier.expires_at <= now:
+        return _SpendAwaitingRedis(spend=spend, expires_at=now + ttl)
+    return _SpendAwaitingRedis(spend=earlier.spend + spend, expires_at=earlier.expires_at)
 
 
 def budget_window_seconds(started_at: float, budget_duration: str) -> int:
@@ -130,7 +136,7 @@ class RouterBudgetLimiting(CustomLogger):
         self.dual_cache = dual_cache
         self._clock = clock
         self.redis_increment_operation_queue: list[RedisPipelineIncrementOperation] = []
-        self._increments_awaiting_redis: dict[str, RedisPipelineIncrementOperation] = {}  # mutable-ok: O(1) merges
+        self._spend_awaiting_redis: dict[str, _SpendAwaitingRedis] = {}  # mutable-ok: O(1) merges
         self._redis_increment_queue_lock = asyncio.Lock()
         self._redis_increment_flush_lock = asyncio.Lock()
         self._detached_increment_operations: tuple[RedisPipelineIncrementOperation, ...] | None = None
@@ -416,8 +422,9 @@ class RouterBudgetLimiting(CustomLogger):
         Runs once the budget start time exists in Redis Cache (on the 2nd and subsequent requests to the same provider)
 
         - Increments the spend in memory cache (so spend instantly updated in memory)
-        - Queues the increment for the batched Redis pipeline. With no Redis attached yet, it keeps one merged
-          increment per key instead, so memory stays bounded and a Redis attached later still receives that spend
+        - Queues the increment for the batched Redis pipeline. With no Redis attached yet, it holds one merged
+          spend per key until its budget window ends, capped at the in-memory cache's size, so a Redis attached
+          later still receives that spend
         """
         increment_op: Final = RedisPipelineIncrementOperation(
             key=spend_key,
@@ -431,11 +438,22 @@ class RouterBudgetLimiting(CustomLogger):
                 ttl=ttl,
             )
             if self.dual_cache.redis_cache is None:
-                self._increments_awaiting_redis[spend_key] = _add_increment(
-                    self._increments_awaiting_redis.get(spend_key), increment_op
-                )
+                self._hold_spend_until_redis_attaches(spend_key=spend_key, response_cost=response_cost, ttl=ttl)
                 return
             self.redis_increment_operation_queue.append(increment_op)
+
+    def _hold_spend_until_redis_attaches(self, spend_key: str, response_cost: float, ttl: int) -> None:
+        now: Final = self._clock()
+        max_keys: Final = self.dual_cache.in_memory_cache.max_size_in_memory
+        if spend_key not in self._spend_awaiting_redis and len(self._spend_awaiting_redis) >= max_keys:
+            self._spend_awaiting_redis = {
+                key: held for key, held in self._spend_awaiting_redis.items() if held.expires_at > now
+            }
+        if spend_key not in self._spend_awaiting_redis and len(self._spend_awaiting_redis) >= max_keys:
+            return
+        self._spend_awaiting_redis[spend_key] = _add_spend_awaiting_redis(
+            self._spend_awaiting_redis.get(spend_key), spend=response_cost, ttl=ttl, now=now
+        )
 
     def _get_redis_increment_queue_lock(self) -> asyncio.Lock:
         return self._redis_increment_queue_lock
@@ -444,13 +462,20 @@ class RouterBudgetLimiting(CustomLogger):
         async with self._get_redis_increment_queue_lock():
             if self._detached_increment_operations is not None:
                 return self._detached_increment_operations
+            now: Final = self._clock()
             increment_operations_to_flush: Final = (
-                *self._increments_awaiting_redis.values(),
+                *(
+                    RedisPipelineIncrementOperation(
+                        key=key, increment_value=held.spend, ttl=math.ceil(held.expires_at - now)
+                    )
+                    for key, held in self._spend_awaiting_redis.items()
+                    if held.expires_at > now
+                ),
                 *self.redis_increment_operation_queue,
             )
+            self._spend_awaiting_redis = {}
             if not increment_operations_to_flush:
                 return increment_operations_to_flush
-            self._increments_awaiting_redis = {}
             self.redis_increment_operation_queue = []
             self._detached_increment_operations = increment_operations_to_flush
             return increment_operations_to_flush

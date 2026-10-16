@@ -1,6 +1,7 @@
 import asyncio
 import gc
 import logging
+import time
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -9,6 +10,7 @@ import pytest
 
 import litellm
 from litellm.caching.caching import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache, RedisCircuitBreakerOpenError
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.types.caching import RedisPipelineIncrementOperation
@@ -489,7 +491,8 @@ def _new_router_budget_limiter(
     budget_limiter.redis_increment_operation_queue = (
         list(redis_increment_operation_queue) if redis_increment_operation_queue is not None else []
     )
-    budget_limiter._increments_awaiting_redis = {}
+    budget_limiter._clock = time.time
+    budget_limiter._spend_awaiting_redis = {}
     budget_limiter._redis_increment_queue_lock = queue_lock if queue_lock is not None else asyncio.Lock()
     budget_limiter._redis_increment_flush_lock = asyncio.Lock()
     budget_limiter._detached_increment_operations = None
@@ -513,6 +516,54 @@ async def test_redis_attached_after_traffic_receives_the_spend_recorded_before_i
 
     assert redis_cache.values[_SPEND_KEY] == 60.0
     assert await dual_cache.in_memory_cache.async_get_cache(_SPEND_KEY) == 60.0
+
+
+class _ManualClock:
+    def __init__(self, now: float) -> None:
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+
+async def _attach_redis_and_sync(budget_limiter: RouterBudgetLimiting, dual_cache: DualCache) -> dict[str, float]:
+    redis_cache: Final = _MockRedisCache(initial_values={})
+    dual_cache.redis_cache = redis_cache
+    await budget_limiter._sync_in_memory_spend_with_redis()
+    return redis_cache.values
+
+
+@pytest.mark.asyncio
+async def test_spend_held_for_a_late_redis_frees_ended_windows_and_then_stops_taking_new_keys(
+    disable_budget_sync,
+) -> None:
+    clock: Final = _ManualClock(now=1_000.0)
+    dual_cache: Final = DualCache(in_memory_cache=InMemoryCache(max_size_in_memory=2, clock=clock))
+    budget_limiter: Final = RouterBudgetLimiting(dual_cache=dual_cache, provider_budget_config=None, clock=clock)
+
+    await budget_limiter._increment_spend_in_current_window(spend_key="ends_first", response_cost=1.0, ttl=10)
+    await budget_limiter._increment_spend_in_current_window(spend_key="still_open", response_cost=2.0, ttl=1_000)
+    clock.now += 20
+    await budget_limiter._increment_spend_in_current_window(spend_key="opened_later", response_cost=3.0, ttl=1_000)
+    await budget_limiter._increment_spend_in_current_window(spend_key="over_the_cap", response_cost=4.0, ttl=1_000)
+    await budget_limiter._increment_spend_in_current_window(spend_key="still_open", response_cost=0.5, ttl=980)
+
+    assert await _attach_redis_and_sync(budget_limiter, dual_cache) == {"still_open": 2.5, "opened_later": 3.0}
+
+
+@pytest.mark.asyncio
+async def test_spend_held_for_a_late_redis_ends_with_its_budget_window(disable_budget_sync) -> None:
+    clock: Final = _ManualClock(now=1_000.0)
+    dual_cache: Final = DualCache(in_memory_cache=InMemoryCache(clock=clock))
+    budget_limiter: Final = RouterBudgetLimiting(dual_cache=dual_cache, provider_budget_config=None, clock=clock)
+
+    await budget_limiter._increment_spend_in_current_window(spend_key="reopened", response_cost=1.0, ttl=10)
+    clock.now += 20
+    await budget_limiter._increment_spend_in_current_window(spend_key="reopened", response_cost=5.0, ttl=1_000)
+    await budget_limiter._increment_spend_in_current_window(spend_key="ended", response_cost=2.0, ttl=10)
+    clock.now += 20
+
+    assert await _attach_redis_and_sync(budget_limiter, dual_cache) == {"reopened": 5.0}
 
 
 @pytest.mark.asyncio

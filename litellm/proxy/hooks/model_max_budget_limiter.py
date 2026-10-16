@@ -384,7 +384,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         self.dual_cache = dual_cache
         self._clock = clock
         self.redis_increment_operation_queue = []
-        self._increments_awaiting_redis = {}
+        self._spend_awaiting_redis = {}
         self._redis_increment_queue_lock = asyncio.Lock()
         self._redis_increment_flush_lock = asyncio.Lock()
         self._detached_increment_operations = None
