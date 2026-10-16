@@ -52,10 +52,13 @@ const isFilled = (content: MessageType["content"]): boolean => typeof content !=
 const isTurn = (message: MessageType | undefined, role: "user" | "assistant"): boolean =>
   message?.role === role && isText(message) && isFilled(message.content);
 
+const isReply = (history: readonly MessageType[], index: number): boolean =>
+  isTurn(history[index], "assistant") && !history[index + 1]?.isError;
+
 const inExchange = (history: readonly MessageType[], index: number): boolean =>
   isTurn(history[index], "user")
-    ? isTurn(history[index + 1], "assistant")
-    : isTurn(history[index], "assistant") && isTurn(history[index - 1], "user");
+    ? isReply(history, index + 1)
+    : isReply(history, index) && isTurn(history[index - 1], "user");
 
 export const textHistory = (history: readonly MessageType[]): ApiMessage[] =>
   history.filter((_, index) => inExchange(history, index)).map(({ role, content }) => ({ role, content }));

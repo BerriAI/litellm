@@ -1,6 +1,19 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
+import {
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  Brain,
+  Clock,
+  Coins,
+  DatabaseZap,
+  Gauge,
+  RotateCw,
+  Server,
+  Shuffle,
+  Timer,
+} from "lucide-react";
 import type { MessageType } from "@/components/chat_ui/types";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
@@ -27,16 +40,19 @@ function TraceRow({ title, description, children }: { title: string; description
   );
 }
 
-type StatValue = Readonly<{ label: string; value: string | undefined }>;
+type StatValue = Readonly<{ label: string; icon: ReactNode; value: string | undefined }>;
 
 function StatGrid({ stats }: { stats: readonly StatValue[] }) {
-  const shown = stats.filter((stat): stat is { label: string; value: string } => stat.value !== undefined);
+  const shown = stats.filter((stat): stat is StatValue & { value: string } => stat.value !== undefined);
   if (shown.length === 0) return null;
   return (
     <ItemGroup className="grid grid-cols-3 gap-x-4 gap-y-3 py-2 has-data-[size=sm]:gap-y-3">
       {shown.map((stat) => (
         <Item key={stat.label} size="sm" className="flex-col flex-nowrap items-start gap-0.5 p-0">
-          <ItemDescription className="whitespace-nowrap">{stat.label}</ItemDescription>
+          <ItemDescription className="inline-flex items-center gap-1 whitespace-nowrap [&_svg]:size-3.5">
+            {stat.icon}
+            {stat.label}
+          </ItemDescription>
           <ItemTitle className="tabular-nums">{stat.value}</ItemTitle>
         </Item>
       ))}
@@ -117,9 +133,9 @@ function Routing({ message }: { message: MessageType }) {
       )}
       <StatGrid
         stats={[
-          { label: "Fallbacks", value: count(trace?.attemptedFallbacks) },
-          { label: "Retries", value: count(trace?.attemptedRetries) },
-          { label: "Overhead", value: millis(trace?.overheadMs) },
+          { label: "Fallbacks", icon: <Shuffle />, value: count(trace?.attemptedFallbacks) },
+          { label: "Retries", icon: <RotateCw />, value: count(trace?.attemptedRetries) },
+          { label: "Overhead", icon: <Gauge />, value: millis(trace?.overheadMs) },
         ]}
       />
       {!reported && (
@@ -160,18 +176,20 @@ function SpeedAndCost({ message }: { message: MessageType }) {
         stats={[
           {
             label: "First token",
+            icon: <Timer />,
             value: message.timeToFirstToken === undefined ? undefined : formatSeconds(message.timeToFirstToken),
           },
           {
             label: "Total",
+            icon: <Clock />,
             value: message.totalLatency === undefined ? undefined : formatSeconds(message.totalLatency),
           },
-          { label: "Cost", value: cost === undefined ? undefined : formatCost(cost) },
-          { label: "Tokens in", value: count(usage?.promptTokens) },
-          { label: "Tokens out", value: count(usage?.completionTokens) },
-          { label: "Cached", value: count(usage?.cacheReadTokens) },
-          { label: "Reasoning", value: count(usage?.reasoningTokens) },
-          { label: "Gateway time", value: millis(message.trace?.responseMs) },
+          { label: "Cost", icon: <Coins />, value: cost === undefined ? undefined : formatCost(cost) },
+          { label: "Tokens in", icon: <ArrowDownToLine />, value: count(usage?.promptTokens) },
+          { label: "Tokens out", icon: <ArrowUpFromLine />, value: count(usage?.completionTokens) },
+          { label: "Cached", icon: <DatabaseZap />, value: count(usage?.cacheReadTokens) },
+          { label: "Reasoning", icon: <Brain />, value: count(usage?.reasoningTokens) },
+          { label: "Gateway time", icon: <Server />, value: millis(message.trace?.responseMs) },
         ]}
       />
     </TraceSection>

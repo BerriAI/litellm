@@ -13,7 +13,7 @@ import { createChatMultimodalMessage } from "../chat_ui/ChatImageUtils";
 import { createMultimodalMessage } from "../chat_ui/ResponsesImageUtils";
 import { addFiles, toAttachment, type DraftFile } from "./composerFiles";
 import { dispatchRequest, type DirectToolCall, type DispatchContext } from "./dispatchRequest";
-import type { Capabilities } from "./endpointCapabilities";
+import type { AttachKind, Capabilities } from "./endpointCapabilities";
 import type { PlaygroundSettings } from "./playgroundSettings";
 
 const MODEL_ENDPOINTS: readonly EndpointType[] = [
@@ -94,11 +94,22 @@ const untilAborted = <T extends object>(target: T, signal: AbortSignal): T =>
     },
   });
 
+type Draft = Readonly<{ kind: AttachKind | null; files: readonly DraftFile[] }>;
+
+type PreparedRequest = Readonly<{
+  direct: Omit<DirectToolCall, "arguments"> | null;
+  toolArguments: Record<string, unknown>;
+  userMessage: Awaited<ReturnType<typeof apiMessage>>;
+}>;
+
 export function usePlaygroundSend(deps: SendDeps) {
   const [text, setText] = useState("");
-  const [files, setFiles] = useState<readonly DraftFile[]>([]);
+  const [draft, setDraft] = useState<Draft>({ kind: null, files: [] });
   const [isLoading, setIsLoading] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const preparing = useRef(false);
+  const files = draft.kind === deps.capabilities.attach ? draft.files : [];
+  const setFiles = (next: readonly DraftFile[]) => setDraft({ kind: deps.capabilities.attach, files: next });
 
   const attach = (incoming: readonly File[]) => {
     if (!deps.capabilities.attach) return;
@@ -132,17 +143,17 @@ export function usePlaygroundSend(deps: SendDeps) {
     toast.info("Request cancelled");
   };
 
-  const send = async () => {
-    const { settings, chat } = deps;
+  const prepare = async (): Promise<PreparedRequest | null> => {
+    const { settings } = deps;
     const missing = missingInput(deps, text, files);
     if (missing !== null) {
       if (missing) toast.fromError(missing);
-      return;
+      return null;
     }
     const direct = settings.endpoint === EndpointType.MCP ? deps.directCall() : null;
     if (settings.endpoint === EndpointType.MCP && !direct) {
       toast.fromError("Pick an MCP server and a tool to call");
-      return;
+      return null;
     }
     const toolArguments = await (direct
       ? deps.toolArgsForm.current?.getSubmitValues().catch((error: unknown) => {
@@ -150,18 +161,30 @@ export function usePlaygroundSend(deps: SendDeps) {
           return null;
         })
       : Promise.resolve({}));
-    if (toolArguments === null) return;
-    if (!deps.signedIn) return;
+    if (toolArguments === null) return null;
+    if (!deps.signedIn) return null;
     if (!deps.apiKey) {
       toast.fromError("Please provide a Virtual Key or select Current UI Session");
-      return;
+      return null;
     }
 
     const userMessage = await apiMessage(settings.endpoint, text, files[0]?.file).catch(() => null);
     if (!userMessage) {
       toast.fromError("Failed to process the attachment. Please try again.");
-      return;
+      return null;
     }
+    return { direct, toolArguments: toolArguments ?? {}, userMessage };
+  };
+
+  const send = async () => {
+    if (preparing.current || abortRef.current) return;
+    preparing.current = true;
+    const prepared = await prepare().finally(() => {
+      preparing.current = false;
+    });
+    if (!prepared || !deps.apiKey) return;
+    const { settings, chat } = deps;
+    const { direct, toolArguments, userMessage } = prepared;
 
     const traceId = chat.messageTraceId ?? uuidv4();
     if (!chat.messageTraceId) chat.setMessageTraceId(traceId);
@@ -174,7 +197,7 @@ export function usePlaygroundSend(deps: SendDeps) {
         content: text,
         model: requestedModel,
         ...(files.length > 0 ? { attachments: files.map(toAttachment) } : {}),
-        ...(direct ? { mcpToolCall: { tool: direct.tool, arguments: toolArguments ?? {} } } : {}),
+        ...(direct ? { mcpToolCall: { tool: direct.tool, arguments: toolArguments } } : {}),
       },
     ]);
     chat.clearMCPEvents();
@@ -208,9 +231,9 @@ export function usePlaygroundSend(deps: SendDeps) {
         customHeaders: deps.customHeaders,
         mcpServers: deps.mcpServers,
         mcpToolsets: deps.mcpToolsets,
-        directCall: direct ? { ...direct, arguments: toolArguments ?? {} } : null,
+        directCall: direct ? { ...direct, arguments: toolArguments } : null,
         chat: live,
-        codeInterpreter: deps.codeInterpreter,
+        codeInterpreter: untilAborted(deps.codeInterpreter, controller.signal),
         onHeaders: (headers) => {
           captured.headers = headers;
         },

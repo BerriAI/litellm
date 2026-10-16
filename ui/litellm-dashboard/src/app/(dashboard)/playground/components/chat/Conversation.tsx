@@ -226,7 +226,7 @@ function AssistantReply({
         ) : (
           <ReplyBody message={message} />
         )}
-        <MessageFooter className="items-start gap-2 px-0 font-normal">
+        <MessageFooter className="items-center gap-2 px-0 font-normal">
           <div className="min-w-0 flex-1">
             {message.a2aMetadata ? (
               <A2AMetrics

@@ -1,4 +1,4 @@
-import { act, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders as render, testQueryClient } from "@/../tests/test-utils";
@@ -417,5 +417,74 @@ describe("PlaygroundChat", () => {
     expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
     expect(screen.getByText("call-fresh")).toBeInTheDocument();
     expect(screen.queryByText("call-stopped")).not.toBeInTheDocument();
+  });
+
+  it("sends once when Enter is pressed twice before the first request starts", async () => {
+    const user = userEvent.setup();
+    const first = deferred();
+    chatRequest.mockImplementation(async (...args: ChatArgs) => {
+      await first.promise;
+      args[1]("Hi there", args[2]);
+    });
+    preload({ selectedModel: "gpt-fast" });
+    renderChat();
+
+    const message = screen.getByRole("textbox", { name: "Message" });
+    await user.type(message, "hello");
+    fireEvent.keyDown(message, { key: "Enter" });
+    fireEvent.keyDown(message, { key: "Enter" });
+
+    await waitFor(() => expect(chatRequest).toHaveBeenCalled());
+    await act(async () => {
+      first.release();
+      await chatRequest.mock.results[0]?.value;
+    });
+    expect(chatRequest).toHaveBeenCalledTimes(1);
+    expect(screen.getAllByText("hello")).toHaveLength(1);
+  });
+
+  it("drops a chat attachment when the endpoint cannot use it", async () => {
+    const user = userEvent.setup();
+    preload({ selectedModel: "gpt-fast" });
+    renderChat();
+
+    fireEvent.drop(screen.getByRole("textbox", { name: "Message" }), {
+      dataTransfer: { files: [new File(["%PDF"], "notes.pdf", { type: "application/pdf" })] },
+    });
+    expect(await screen.findByRole("button", { name: "Remove notes.pdf" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Endpoint" }));
+    await user.click(await screen.findByRole("menuitemradio", { name: "/v1/audio/transcriptions" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Endpoint" })).toHaveTextContent("audio/transcriptions"),
+    );
+    expect(screen.queryByRole("button", { name: "Remove notes.pdf" })).not.toBeInTheDocument();
+  });
+
+  it("keeps a stopped request's code output off the newer reply", async () => {
+    const user = userEvent.setup();
+    const first = deferred();
+    responsesRequest
+      .mockImplementationOnce(async (...args: ResponsesArgs) => {
+        await first.promise;
+        args[18]?.({ code: "print('stopped run')", containerId: "c-1", annotations: [] });
+      })
+      .mockImplementationOnce(async (...args: ResponsesArgs) => {
+        args[1]("assistant", "fresh reply", args[2]);
+      });
+    preload({ endpointType: "responses", selectedModel: "gpt-fast" });
+    renderChat();
+
+    await send(user, "first");
+    await user.click(await screen.findByRole("button", { name: "Stop" }));
+    await send(user, "second");
+    expect(await screen.findByText("fresh reply")).toBeInTheDocument();
+    await act(async () => {
+      first.release();
+      await responsesRequest.mock.results[0]?.value;
+    });
+
+    expect(screen.queryByText("Python Code Executed")).not.toBeInTheDocument();
   });
 });
