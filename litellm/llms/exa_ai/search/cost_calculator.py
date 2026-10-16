@@ -17,17 +17,17 @@ EXA_AI_PRICING_MODEL_BY_TYPE: Final[Mapping[str, str]] = MappingProxyType(
 )
 
 
-def _non_negative_number(value: object) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+def _non_negative_int(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         return None
-    return float(value)
+    return value
 
 
 def _requested_results(optional_params: Mapping[str, object]) -> int:
     for key in ("max_results", "numResults"):
-        requested = _non_negative_number(optional_params.get(key))
+        requested: Final = _non_negative_int(optional_params.get(key))
         if requested is not None:
-            return int(requested)
+            return requested
     return EXA_AI_INCLUDED_RESULTS
 
 

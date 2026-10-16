@@ -14,7 +14,13 @@ SCHEMA: Final = {"type": "text", "description": "A concise answer"}
 RESULT: Final = {"title": "Source", "url": "https://example.com", "highlights": ["evidence"]}
 OUTPUT: Final = {"content": "answer", "grounding": []}
 EVENTS: Final = (
-    {"type": "results", "results": [RESULT], "requestId": "id"},
+    {
+        "type": "results",
+        "results": [RESULT],
+        "requestId": "id",
+        "warnings": [{"code": "IGNORED_FIELD", "path": "/startCrawlDate", "message": "Ignored"}],
+        "notices": [{"code": "RESTRICTIONS_RELAXED", "path": "/query", "message": "Relaxed"}],
+    },
     {"type": "text-delta", "delta": "discarded"},
     {"type": "stream-reset", "streamReset": True},
     {
@@ -87,6 +93,8 @@ async def test_search_stream_preserves_events_and_final_response(respx_mock: res
     assert json.loads(route.calls.last.request.content)["stream"] is True
     assert stream.final_response is not None
     assert stream.final_response.model_dump()["output"] == OUTPUT
+    assert stream.final_response.model_dump()["warnings"] == EVENTS[0]["warnings"]
+    assert stream.final_response.model_dump()["notices"] == EVENTS[0]["notices"]
     assert stream.final_response.results[0].snippet == "evidence"
     assert stream.final_response.model_dump()["costDollars"] == EVENTS[-1]["costDollars"]
     assert stream.final_response.model_dump()["choices"] == EVENTS[-1]["choices"]

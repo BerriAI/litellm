@@ -469,6 +469,7 @@ def test_exa_estimate_prices_one_request_however_many_queries_it_joins() -> None
 @pytest.mark.parametrize(
     ("search_type", "pricing_model"),
     [
+        ("instant", "exa_ai/search-instant"),
         ("auto", "exa_ai/search"),
         ("fast", "exa_ai/search"),
         ("deep-lite", "exa_ai/search-deep"),
@@ -485,3 +486,24 @@ def test_exa_estimate_uses_the_price_of_its_search_type(search_type: str, pricin
         model_info["input_cost_per_query"],
         0.0,
     )
+
+
+@pytest.mark.parametrize("native_count", [1, 100])
+def test_exa_estimate_uses_the_result_count_sent_to_provider(native_count: int) -> None:
+    from litellm.search.cost_calculator import search_provider_cost_per_query
+
+    params: Final = {"max_results": 25, "numResults": native_count}
+    outgoing: Final = ExaAISearchConfig().transform_search_request("question", params)
+    assert outgoing["numResults"] == 25
+    assert search_provider_cost_per_query("exa_ai/search", "exa_ai", optional_params=params) == (
+        search_provider_cost_per_query("exa_ai/search", "exa_ai", optional_params=outgoing)
+    )
+
+
+@pytest.mark.parametrize("count", [True, -1, 1.5, float("nan"), float("inf"), "25"])
+def test_exa_estimate_ignores_invalid_result_counts(count: object) -> None:
+    from litellm.search.cost_calculator import search_provider_cost_per_query
+
+    assert search_provider_cost_per_query(
+        "exa_ai/search", "exa_ai", optional_params={"numResults": count}
+    ) == search_provider_cost_per_query("exa_ai/search", "exa_ai")
