@@ -10,6 +10,8 @@ import pytest
 
 pytest.importorskip("opentelemetry")
 
+from opentelemetry import trace  # noqa: E402  # needs the importorskip above
+from opentelemetry.context import Context  # noqa: E402  # needs the importorskip above
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter  # noqa: E402
 
 import litellm  # noqa: E402
@@ -61,8 +63,8 @@ def _logger(*, capture: str = "span_only", mappers: Sequence[str] = ("genai", "l
     return build_otel_v2_logger(config=cfg, tracer_provider=tracer_provider), exporter
 
 
-def _start_root(logger):
-    root = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+def _start_root(logger, parent_context: Context | None = None):
+    root = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME, parent_context)
     set_request_root_span(root)
     return root
 
@@ -328,11 +330,24 @@ def test_unrenderable_output_never_raises_into_the_request():
     assert INPUT_ATTR not in attrs and OUTPUT_ATTR not in attrs
 
 
+def _inbound_traceparent() -> Context:
+    caller: Final = trace.SpanContext(
+        trace_id=0x4BF92F3577B34DA6A3CE929D0E0E4736,
+        span_id=0x00F067AA0BA902B7,
+        is_remote=True,
+        trace_flags=trace.TraceFlags(trace.TraceFlags.SAMPLED),
+    )
+    return trace.set_span_in_context(trace.NonRecordingSpan(caller))
+
+
 def _run_named_request(
-    logger: OpenTelemetryV2, exporter: InMemorySpanExporter, litellm_params: Mapping[str, object]
+    logger: OpenTelemetryV2,
+    exporter: InMemorySpanExporter,
+    litellm_params: Mapping[str, object],
+    parent_context: Context | None = None,
 ) -> tuple[Mapping[str, object], Mapping[str, object]]:
     response: Final = ModelResponse(choices=[Choices(message=Message(role="assistant", content="pong"))])
-    root: Final = _start_root(logger)
+    root: Final = _start_root(logger, parent_context)
     logger.log_pre_api_call(
         model="gpt-5.4-mini",
         messages=[],
@@ -389,13 +404,37 @@ def test_body_metadata_trace_name_names_the_root_and_the_generation():
     assert generation_attrs[TRACE_NAME_ATTR] == "from-body"
 
 
-def test_unnamed_request_derives_the_trace_name_on_both_spans():
+def test_unnamed_request_derives_the_trace_name_on_the_root_only():
     logger, exporter = _logger()
 
     root_attrs, generation_attrs = _run_named_request(logger, exporter, {"proxy_server_request": {"headers": {}}})
 
     assert root_attrs[TRACE_NAME_ATTR] == "litellm-acompletion"
-    assert generation_attrs[TRACE_NAME_ATTR] == "litellm-acompletion"
+    assert TRACE_NAME_ATTR not in generation_attrs
+
+
+def test_unnamed_request_under_an_inbound_traceparent_leaves_the_trace_name_to_the_caller():
+    logger, exporter = _logger()
+
+    root_attrs, generation_attrs = _run_named_request(
+        logger, exporter, {"proxy_server_request": {"headers": {}}}, _inbound_traceparent()
+    )
+
+    assert TRACE_NAME_ATTR not in root_attrs and TRACE_NAME_ATTR not in generation_attrs
+
+
+def test_named_request_under_an_inbound_traceparent_keeps_the_caller_trace_name():
+    logger, exporter = _logger()
+
+    root_attrs, generation_attrs = _run_named_request(
+        logger,
+        exporter,
+        {"metadata": {"trace_name": "from-body"}, "proxy_server_request": {"headers": {}}},
+        _inbound_traceparent(),
+    )
+
+    assert root_attrs[TRACE_NAME_ATTR] == "from-body"
+    assert generation_attrs[TRACE_NAME_ATTR] == "from-body"
 
 
 @pytest.mark.parametrize("capture", ["span_only", "no_content"])
@@ -420,7 +459,8 @@ def test_body_metadata_user_session_and_tags_land_on_the_root_and_the_generation
         assert attrs["user.id"] == "user-42"
         assert attrs["session.id"] == "session-7"
         assert tuple(attrs["langfuse.trace.tags"]) == ("prod", "eval", "nightly")
-        assert attrs[TRACE_NAME_ATTR] == "litellm-acompletion"
+    assert root_attrs[TRACE_NAME_ATTR] == "litellm-acompletion"
+    assert TRACE_NAME_ATTR not in generation_attrs
 
 
 def test_langfuse_user_and_session_headers_beat_body_metadata_on_both_spans():
@@ -491,9 +531,8 @@ def test_a_request_without_trace_controls_stamps_none_of_them():
 
     caller_only: Final = tuple(attr for attr in TRACE_CONTROL_ATTRS if attr != TRACE_NAME_ATTR)
     assert set(caller_only).isdisjoint(root_attrs)
-    assert set(caller_only).isdisjoint(generation_attrs)
     assert root_attrs[TRACE_NAME_ATTR] == "litellm-acompletion"
-    assert generation_attrs[TRACE_NAME_ATTR] == "litellm-acompletion"
+    assert set(TRACE_CONTROL_ATTRS).isdisjoint(generation_attrs)
 
 
 @pytest.mark.parametrize(

@@ -1,6 +1,7 @@
 import json
 import threading
 import uuid
+from itertools import product
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,8 +15,10 @@ from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 from opentelemetry.proto.common.v1.common_pb2 import AnyValue
+from opentelemetry.proto.trace.v1.trace_pb2 import Span
 
 REDACTED: Final = "redacted-by-litellm"
+TRACE_FIELDS: Final = ("langfuse.trace.name", "langfuse.trace.input", "langfuse.trace.output", "langfuse.trace.tags")
 SURFACE_CALL_TYPES: Final = {
     "chat": "acompletion",
     "chat_stream": "acompletion",
@@ -29,20 +32,21 @@ ANTHROPIC_MODEL: Final = "anthropic/claude-sonnet-4-5-20250929"
 
 @dataclass(frozen=True, slots=True)
 class SpanRecord:
+    name: str
     trace_id: str
     parent_span_id: str
     attributes: Mapping[str, object]
 
-    def tags(self) -> list[object]:
+    def tags(self) -> tuple[object, ...]:
         """The trace tags Langfuse ingestion reads from the raw attribute."""
         raw: Final = self.attributes.get("langfuse.trace.tags")
         if isinstance(raw, tuple):
-            return list(raw)
+            return raw
         if not isinstance(raw, str) or not raw:
-            return []
+            return ()
         if raw.strip().startswith("["):
-            return json.loads(raw)
-        return [tag.strip() for tag in raw.split(",")] if "," in raw else [raw]
+            return tuple(json.loads(raw))
+        return tuple(tag.strip() for tag in raw.split(",")) if "," in raw else (raw,)
 
 
 def _attribute_value(value: AnyValue) -> object:
@@ -52,17 +56,21 @@ def _attribute_value(value: AnyValue) -> object:
     return getattr(value, kind) if kind is not None else None
 
 
+def _exported_spans(body: bytes) -> Iterator[Span]:
+    for resource in ExportTraceServiceRequest.FromString(body).resource_spans:
+        for scope in resource.scope_spans:
+            yield from scope.spans
+
+
 def _span_records(body: bytes) -> tuple[SpanRecord, ...]:
-    export: Final = ExportTraceServiceRequest.FromString(body)
     return tuple(
         SpanRecord(
+            name=span.name,
             trace_id=span.trace_id.hex(),
             parent_span_id=span.parent_span_id.hex(),
             attributes={pair.key: _attribute_value(pair.value) for pair in span.attributes},
         )
-        for resource in export.resource_spans
-        for scope in resource.scope_spans
-        for span in scope.spans
+        for span in _exported_spans(body)
     )
 
 
@@ -75,6 +83,7 @@ class LangfuseSink:
         self.outage: Final = threading.Event()
         self.accepted: Final[list[SpanRecord]] = []  # mutable-ok: spans accumulate as the exporter delivers them
         self.roots: Final[list[SpanRecord]] = []  # mutable-ok: root spans accumulate as the exporter delivers them
+        self.spans: Final[list[SpanRecord]] = []  # mutable-ok: every span accumulates as the exporter delivers it
         self.refusals: Final[list[int]] = []  # mutable-ok: one entry per batch refused during the outage
 
     def respond(self, request: Request) -> Reply:
@@ -91,6 +100,7 @@ class LangfuseSink:
                 record for record in records if record.attributes.get("langfuse.observation.type") == "generation"
             )
             self.roots.extend(record for record in records if not record.parent_span_id)
+            self.spans.extend(records)
         return Reply(body=b"")
 
     def matching(self, marker: str) -> tuple[SpanRecord, ...]:
@@ -100,6 +110,10 @@ class LangfuseSink:
 
     def one(self, marker: str) -> SpanRecord:
         return eventually(lambda: self.matching(marker), lambda found: len(found) == 1, seconds=70)[0]
+
+    def in_trace(self, trace_id: str) -> tuple[SpanRecord, ...]:
+        with self.lock:
+            return tuple(record for record in self.spans if record.trace_id == trace_id)
 
     def root_of(self, span: SpanRecord) -> SpanRecord:
         def roots() -> tuple[SpanRecord, ...]:
@@ -241,6 +255,12 @@ def _chat(
     return response.text
 
 
+def _trace_fields(spans: tuple[SpanRecord, ...]) -> Iterator[str]:
+    """Every trace-level key any of the spans carries."""
+    for record in spans:
+        yield from (key for key in record.attributes if key in TRACE_FIELDS)
+
+
 def _assert_derived(span: SpanRecord, call_type: str) -> None:
     attributes: Final = span.attributes
     assert attributes.get("langfuse.trace.name") == f"litellm-{call_type}", attributes
@@ -262,14 +282,32 @@ def test_every_surface_derives_trace_name_io_and_tags(v1: Rig, surface: str) -> 
     assert any(str(tag).startswith("cache_hit:") for tag in span.tags()), span.tags()
 
 
-def test_inbound_traceparent_keeps_the_caller_trace_and_derives_trace_fields(v1: Rig) -> None:
+def test_inbound_traceparent_joins_the_caller_trace_without_derived_trace_fields(v1: Rig) -> None:
     marker: Final = "lit8281-parent-" + uuid.uuid4().hex
     trace_id: Final = uuid.uuid4().hex
     parent_id: Final = uuid.uuid4().hex[:16]
     _chat(v1, marker, headers={"traceparent": f"00-{trace_id}-{parent_id}-01"})
     span: Final = v1.sink.one(marker)
     assert (span.trace_id, span.parent_span_id) == (trace_id, parent_id), span
-    _assert_derived(span, "acompletion")
+    assert not set(TRACE_FIELDS) & set(span.attributes), span.attributes
+    assert marker in str(span.attributes.get("langfuse.observation.input")), span.attributes
+    assert span.attributes.get("langfuse.observation.output") is not None, span.attributes
+
+
+def test_inbound_traceparent_still_carries_the_caller_trace_name_and_tags(v1: Rig) -> None:
+    marker: Final = "lit8281-parent-caller-" + uuid.uuid4().hex
+    trace_id: Final = uuid.uuid4().hex
+    _chat(
+        v1,
+        marker,
+        metadata={"trace_name": "caller-trace", "tags": ["caller-tag"]},
+        headers={"traceparent": f"00-{trace_id}-{uuid.uuid4().hex[:16]}-01"},
+    )
+    span: Final = v1.sink.one(marker)
+    assert span.trace_id == trace_id, span
+    assert span.attributes.get("langfuse.trace.name") == "caller-trace", span.attributes
+    assert span.tags() == ("caller-tag",), span.attributes
+    assert not {"langfuse.trace.input", "langfuse.trace.output"} & set(span.attributes), span.attributes
 
 
 def test_caller_trace_name_and_tags_win_over_derived_values(v1: Rig) -> None:
@@ -277,20 +315,20 @@ def test_caller_trace_name_and_tags_win_over_derived_values(v1: Rig) -> None:
     _chat(v1, marker, metadata={"trace_name": "caller-trace", "tags": ["caller-tag", "second-tag"]})
     span: Final = v1.sink.one(marker)
     assert span.attributes["langfuse.trace.name"] == "caller-trace", span.attributes
-    assert span.tags()[:2] == ["caller-tag", "second-tag"], span.tags()
+    assert span.tags()[:2] == ("caller-tag", "second-tag"), span.tags()
     assert span.attributes.get("langfuse.trace.input") == span.attributes.get("langfuse.observation.input")
 
 
 @pytest.mark.parametrize(
     ("metadata", "headers", "expected"),
     [
-        pytest.param({"tags": "c1, c2"}, None, ["c1", "c2"], id="body_comma_string"),
-        pytest.param({"tags": '["j1", "j2"]'}, None, ["j1", "j2"], id="body_json_array_string"),
-        pytest.param(None, {"langfuse_tags": "h1,h2"}, ["h1", "h2"], id="header_comma_string"),
+        pytest.param({"tags": "c1, c2"}, None, ("c1", "c2"), id="body_comma_string"),
+        pytest.param({"tags": '["j1", "j2"]'}, None, ("j1", "j2"), id="body_json_array_string"),
+        pytest.param(None, {"langfuse_tags": "h1,h2"}, ("h1", "h2"), id="header_comma_string"),
     ],
 )
 def test_string_caller_tags_keep_the_tags_langfuse_split_them_into(
-    v1: Rig, metadata: Mapping[str, object] | None, headers: Mapping[str, str] | None, expected: list[str]
+    v1: Rig, metadata: Mapping[str, object] | None, headers: Mapping[str, str] | None, expected: tuple[str, ...]
 ) -> None:
     marker: Final = "lit8281-strtags-" + uuid.uuid4().hex
     _chat(v1, marker, metadata=metadata, headers=headers)
@@ -312,7 +350,7 @@ def test_joined_trace_keeps_caller_tags_and_gets_no_derived_trace_fields(v1: Rig
     span: Final = v1.sink.one(marker)
     attributes: Final = span.attributes
     assert attributes.get("langfuse.trace.existing_id") == existing, attributes
-    assert span.tags() == ["join-tag"], attributes
+    assert span.tags() == ("join-tag",), attributes
     assert "langfuse.trace.name" not in attributes, attributes
     assert "langfuse.trace.input" not in attributes, attributes
     assert "langfuse.trace.output" not in attributes, attributes
@@ -410,29 +448,42 @@ def test_identical_requests_each_log_exactly_one_span_with_derived_fields(v1: Ri
         _assert_derived(span, "acompletion")
 
 
-def test_otel_v2_derives_the_trace_name_and_leaves_trace_io_to_the_root_observation(v2: Rig) -> None:
+def test_otel_v2_names_the_request_root_and_leaves_trace_io_to_the_root_observation(v2: Rig) -> None:
     derived: Final = "lit8281-v2-" + uuid.uuid4().hex
     caller: Final = "lit8281-v2-caller-" + uuid.uuid4().hex
     _chat(v2, derived)
     _chat(v2, caller, metadata={"trace_name": "caller-trace", "tags": ["caller-tag"]})
     derived_span: Final = v2.sink.one(derived)
-    assert derived_span.attributes.get("langfuse.trace.name") == "litellm-acompletion", derived_span.attributes
-    assert not {"langfuse.trace.input", "langfuse.trace.output"} & set(derived_span.attributes), derived_span.attributes
+    assert not set(_trace_fields((derived_span,))), derived_span.attributes
     root: Final = v2.sink.root_of(derived_span)
     assert root.attributes.get("langfuse.trace.name") == "litellm-acompletion", root.attributes
     assert derived in str(root.attributes.get("langfuse.observation.input")), root.attributes
     assert root.attributes.get("langfuse.observation.output") is not None, root.attributes
     caller_span: Final = v2.sink.one(caller)
     assert caller_span.attributes.get("langfuse.trace.name") == "caller-trace", caller_span.attributes
-    assert caller_span.tags() == ["caller-tag"], caller_span.attributes
+    assert caller_span.tags() == ("caller-tag",), caller_span.attributes
 
 
-def test_otel_v2_llm_only_root_generation_is_named_after_the_call_type(v2_llm_only: Rig) -> None:
+def test_otel_v2_inbound_traceparent_leaves_the_trace_name_to_the_caller(v2: Rig) -> None:
+    marker: Final = "lit8281-v2-parent-" + uuid.uuid4().hex
+    trace_id: Final = uuid.uuid4().hex
+    _chat(v2, marker, headers={"traceparent": f"00-{trace_id}-{uuid.uuid4().hex[:16]}-01"})
+    span: Final = v2.sink.one(marker)
+    assert span.trace_id == trace_id, span
+    spans: Final = eventually(
+        lambda: v2.sink.in_trace(trace_id),
+        lambda found: any(record.parent_span_id != span.parent_span_id for record in found),
+        seconds=70,
+    )
+    assert not set(_trace_fields(spans)), spans
+
+
+def test_otel_v2_llm_only_root_generation_keeps_its_span_name_as_the_trace_name(v2_llm_only: Rig) -> None:
     marker: Final = "lit8281-v2-llm-only-" + uuid.uuid4().hex
     _chat(v2_llm_only, marker)
     span: Final = v2_llm_only.sink.one(marker)
     assert span.parent_span_id == "", span
-    assert span.attributes.get("langfuse.trace.name") == "litellm-acompletion", span.attributes
+    assert span.attributes.get("langfuse.trace.name") == span.name, span
     assert marker in str(span.attributes.get("langfuse.observation.input")), span.attributes
 
 
@@ -445,9 +496,9 @@ def test_destination_outage_mid_burst_lands_every_span_once_with_derived_fields(
     finally:
         v1.sink.outage.clear()
     assert len(answered) == 4 * len(SURFACES)
-    expected: Final = {f"{marker}-{surface}-{index}": surface for surface in SURFACES for index in range(4)}
+    expected: Final = {f"{marker}-{surface}-{index}": surface for surface, index in product(SURFACES, range(4))}
 
-    def landed() -> dict[str, tuple[SpanRecord, ...]]:
+    def landed() -> Mapping[str, tuple[SpanRecord, ...]]:
         return {identity: v1.sink.matching(identity) for identity in expected}
 
     spans: Final = eventually(landed, lambda found: all(len(records) >= 1 for records in found.values()), seconds=120)

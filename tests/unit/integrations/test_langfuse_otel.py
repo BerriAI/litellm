@@ -1,19 +1,22 @@
 import base64
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
 from openai.types.responses import ResponseFunctionToolCall
+from opentelemetry import trace
+from opentelemetry.context import Context
 from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.trace import Span
 
 import litellm
 from litellm.constants import REDACTED_BY_LITELLM
 from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
-from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
+from litellm.integrations.opentelemetry import LITELLM_PROXY_REQUEST_SPAN_NAME, OpenTelemetry, OpenTelemetryConfig
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import Choices, ModelResponse, StandardCallbackDynamicParams
 
@@ -913,7 +916,7 @@ class TestLangfuseOtelResponsesAPI:
                 == "The weather in San Francisco is sunny, 20°C."
             )
 
-            trace_output_calls = [
+            trace_output_calls: Final = [
                 call
                 for call in mock_safe_set_attribute.call_args_list
                 if call.args[1] == LangfuseSpanAttributes.TRACE_OUTPUT.value
@@ -1030,135 +1033,133 @@ class TestLangfuseOtelResponsesAPI:
             assert output_data[0]["arguments"] == {}
 
 
-class _RecordingSpan:
-    def __init__(self) -> None:
-        self.attributes: dict[str, object] = {}
+_TRACER: Final = TracerProvider().get_tracer("langfuse-otel-tests")
+TRACE_FIELD_KEYS: Final = (
+    "langfuse.trace.name",
+    "langfuse.trace.input",
+    "langfuse.trace.output",
+    "langfuse.trace.tags",
+)
+CALLER: Final = trace.SpanContext(
+    trace_id=0x4BF92F3577B34DA6A3CE929D0E0E4736,
+    span_id=0x00F067AA0BA902B7,
+    is_remote=True,
+    trace_flags=trace.TraceFlags(trace.TraceFlags.SAMPLED),
+)
+CHAT_KWARGS: Final = {
+    "call_type": "acompletion",
+    "messages": [{"role": "user", "content": "weather?"}],
+}
 
-    def set_attribute(self, key: str, value: object) -> None:
-        self.attributes[key] = value
+
+def _chat_response(content: str) -> ModelResponse:
+    return ModelResponse(
+        id="chatcmpl-derived",
+        model="gpt-4o",
+        choices=[Choices(finish_reason="stop", message={"role": "assistant", "content": content})],
+    )
+
+
+def _stamped(span: Span, kwargs: Mapping[str, object], response_obj: object = None) -> Mapping[str, object]:
+    LangfuseOtelLogger._set_langfuse_specific_attributes(span, kwargs, response_obj)
+    span.end()
+    return dict(getattr(span, "attributes", None) or {})
 
 
 def _emitted(kwargs: Mapping[str, object], response_obj: object = None) -> Mapping[str, object]:
-    span: Final = _RecordingSpan()
-    LangfuseOtelLogger._set_langfuse_specific_attributes(span, kwargs, response_obj)
-    return span.attributes
+    return _stamped(_TRACER.start_span("litellm_request"), kwargs, response_obj)
+
+
+def _trace_fields(attributes: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: attributes[key] for key in TRACE_FIELD_KEYS if key in attributes}
+
+
+class _PresetCache:
+    @staticmethod
+    def get_preset_cache_key_from_kwargs(**kwargs: object) -> str:  # kwargs-ok: mirrors Cache's signature
+        return "preset-abc"
 
 
 class TestDerivedTraceFields:
-    def test_chat_call_derives_trace_name_input_and_output(self):
-        response_obj = ModelResponse(
-            id="chatcmpl-derived",
-            model="gpt-4o",
-            choices=[
-                Choices(
-                    finish_reason="stop",
-                    message={"role": "assistant", "content": "Sunny."},
-                )
-            ],
-        )
-        attributes = _emitted(
-            {
-                "call_type": "acompletion",
-                "messages": [{"role": "user", "content": "weather?"}],
-                "litellm_params": {"metadata": {}},
-            },
-            response_obj,
-        )
+    def test_chat_call_derives_trace_name_input_and_output(self) -> None:
+        attributes: Final = _emitted({**CHAT_KWARGS, "litellm_params": {"metadata": {}}}, _chat_response("Sunny."))
 
         assert attributes["langfuse.trace.name"] == "litellm-acompletion"
         assert attributes["langfuse.trace.input"] == attributes["langfuse.observation.input"]
         assert attributes["langfuse.trace.output"] == attributes["langfuse.observation.output"]
-        assert json.loads(attributes["langfuse.trace.input"]) == [{"role": "user", "content": "weather?"}]
-        assert json.loads(attributes["langfuse.trace.output"]) == {"role": "assistant", "content": "Sunny."}
+        assert json.loads(str(attributes["langfuse.trace.input"])) == [{"role": "user", "content": "weather?"}]
+        assert json.loads(str(attributes["langfuse.trace.output"])) == {"role": "assistant", "content": "Sunny."}
 
-    def test_missing_call_type_defaults_to_completion(self):
-        attributes = _emitted(
-            {
-                "messages": [{"role": "user", "content": "hi"}],
-                "litellm_params": {"metadata": {}},
-            }
+    def test_missing_call_type_defaults_to_completion(self) -> None:
+        attributes: Final = _emitted(
+            {"messages": [{"role": "user", "content": "hi"}], "litellm_params": {"metadata": {}}}
         )
+
         assert attributes["langfuse.trace.name"] == "litellm-completion"
 
-    def test_caller_trace_name_wins_and_is_the_only_name(self):
-        attributes = _emitted(
-            {
-                "call_type": "acompletion",
-                "litellm_params": {"metadata": {"trace_name": "caller-trace"}},
-            }
+    def test_caller_trace_name_wins_and_is_the_only_name(self) -> None:
+        attributes: Final = _emitted(
+            {"call_type": "acompletion", "litellm_params": {"metadata": {"trace_name": "caller-trace"}}}
         )
+
         assert attributes["langfuse.trace.name"] == "caller-trace"
 
-    def test_existing_trace_id_keeps_caller_tags_and_leaves_derived_trace_fields_off(self, monkeypatch):
+    def test_existing_trace_id_keeps_caller_tags_and_leaves_derived_trace_fields_off(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setattr(litellm, "langfuse_default_tags", ["cache_hit"])
-        response_obj = ModelResponse(
-            id="chatcmpl-joined",
-            model="gpt-4o",
-            choices=[
-                Choices(
-                    finish_reason="stop",
-                    message={"role": "assistant", "content": "hi"},
-                )
-            ],
-        )
-        attributes = _emitted(
+        attributes: Final = _emitted(
             {
-                "call_type": "acompletion",
-                "messages": [{"role": "user", "content": "hi"}],
+                **CHAT_KWARGS,
                 "cache_hit": True,
-                "litellm_params": {
-                    "metadata": {"existing_trace_id": "abc123", "tags": ["experiment"]},
-                },
+                "litellm_params": {"metadata": {"existing_trace_id": "abc123", "tags": ["experiment"]}},
                 "standard_logging_object": {"request_tags": ["injected"]},
             },
-            response_obj,
+            _chat_response("hi"),
         )
-        assert "langfuse.trace.name" not in attributes
+
+        assert _trace_fields(attributes) == {"langfuse.trace.tags": json.dumps(["experiment"])}
         assert attributes["langfuse.trace.existing_id"] == "abc123"
-        assert "langfuse.trace.input" not in attributes
-        assert "langfuse.trace.output" not in attributes
-        assert json.loads(attributes["langfuse.trace.tags"]) == ["experiment"]
         assert "langfuse.observation.input" in attributes
         assert "langfuse.observation.output" in attributes
 
     @pytest.mark.parametrize(
         ("mask_flags", "masked_trace_keys"),
         [
-            ({"mask_input": True}, {"langfuse.trace.input"}),
-            ({"mask_output": True}, {"langfuse.trace.output"}),
-            ({"mask_input": True, "mask_output": True}, {"langfuse.trace.input", "langfuse.trace.output"}),
-            ({"mask_input": "true", "mask_output": "TRUE"}, {"langfuse.trace.input", "langfuse.trace.output"}),
-            ({"mask_input": "false", "mask_output": "False"}, set()),
-            ({"mask_input": False, "mask_output": None}, set()),
+            ({"mask_input": True}, frozenset({"langfuse.trace.input"})),
+            ({"mask_output": True}, frozenset({"langfuse.trace.output"})),
+            ({"mask_input": True, "mask_output": True}, frozenset({"langfuse.trace.input", "langfuse.trace.output"})),
+            (
+                {"mask_input": "true", "mask_output": "TRUE"},
+                frozenset({"langfuse.trace.input", "langfuse.trace.output"}),
+            ),
+            ({"mask_input": "false", "mask_output": "False"}, frozenset()),
+            ({"mask_input": False, "mask_output": None}, frozenset()),
         ],
     )
-    def test_mask_flags_redact_the_derived_trace_io(self, mask_flags, masked_trace_keys):
-        response_obj = ModelResponse(
-            id="chatcmpl-masked",
-            model="gpt-4o",
-            choices=[Choices(finish_reason="stop", message={"role": "assistant", "content": "secret answer"})],
-        )
-        attributes = _emitted(
+    def test_mask_flags_redact_the_derived_trace_io(
+        self, mask_flags: Mapping[str, object], masked_trace_keys: frozenset[str]
+    ) -> None:
+        attributes: Final = _emitted(
             {
                 "call_type": "acompletion",
                 "messages": [{"role": "user", "content": "secret question"}],
                 "litellm_params": {"metadata": mask_flags},
             },
-            response_obj,
+            _chat_response("secret answer"),
         )
-        trace_io = {
-            key: attributes[key] for key in ("langfuse.trace.input", "langfuse.trace.output") if key in attributes
-        }
-        observation_of = {
+        observation_of: Final = {
             "langfuse.trace.input": attributes["langfuse.observation.input"],
             "langfuse.trace.output": attributes["langfuse.observation.output"],
         }
-        assert trace_io == {
-            key: REDACTED_BY_LITELLM if key in masked_trace_keys else observation_of[key] for key in observation_of
+
+        assert {key: attributes.get(key) for key in observation_of} == {
+            key: REDACTED_BY_LITELLM if key in masked_trace_keys else observation
+            for key, observation in observation_of.items()
         }
 
-    def test_responses_api_output_mirrors_observation_output_items(self):
-        response_obj = ResponsesAPIResponse(
+    def test_responses_api_output_mirrors_observation_output_items(self) -> None:
+        response_obj: Final = ResponsesAPIResponse(
             id="response-derived",
             created_at=1625247700,
             output=[
@@ -1172,16 +1173,11 @@ class TestDerivedTraceFields:
                 )
             ],
         )
-        attributes = _emitted(
-            {
-                "call_type": "aresponses",
-                "litellm_params": {"metadata": {}},
-            },
-            response_obj,
-        )
+        attributes: Final = _emitted({"call_type": "aresponses", "litellm_params": {"metadata": {}}}, response_obj)
+
         assert attributes["langfuse.trace.name"] == "litellm-aresponses"
         assert attributes["langfuse.trace.output"] == attributes["langfuse.observation.output"]
-        assert json.loads(attributes["langfuse.trace.output"]) == [
+        assert json.loads(str(attributes["langfuse.trace.output"])) == [
             {
                 "id": "fc-1",
                 "name": "get_weather",
@@ -1191,19 +1187,18 @@ class TestDerivedTraceFields:
             }
         ]
 
-    def test_tags_merge_caller_request_and_default_tags_in_order(self, monkeypatch):
+    def test_tags_merge_caller_request_and_default_tags_in_order(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(litellm, "langfuse_default_tags", ["cache_hit", "user_api_key_alias"])
-        attributes = _emitted(
+        attributes: Final = _emitted(
             {
                 "call_type": "acompletion",
                 "cache_hit": True,
-                "litellm_params": {
-                    "metadata": {"tags": ["a", "b"], "user_api_key_alias": "k1"},
-                },
+                "litellm_params": {"metadata": {"tags": ["a", "b"], "user_api_key_alias": "k1"}},
                 "standard_logging_object": {"request_tags": ["b", "c"]},
             }
         )
-        assert json.loads(attributes["langfuse.trace.tags"]) == [
+
+        assert json.loads(str(attributes["langfuse.trace.tags"])) == [
             "a",
             "b",
             "c",
@@ -1211,37 +1206,22 @@ class TestDerivedTraceFields:
             "user_api_key_alias:k1",
         ]
 
-    def test_cache_key_default_tag_falls_back_to_preset_cache_key(self, monkeypatch):
-        class _PresetCache:
-            @staticmethod
-            def get_preset_cache_key_from_kwargs(**kwargs) -> str:
-                return "preset-abc"
-
+    @pytest.mark.parametrize(
+        ("metadata", "expected"),
+        [
+            ({}, ["cache_key:preset-abc"]),
+            ({"hidden_params": {"cache_key": "explicit-key"}}, ["cache_key:explicit-key"]),
+        ],
+        ids=["falls_back_to_the_preset_cache_key", "prefers_hidden_params_over_the_preset"],
+    )
+    def test_cache_key_default_tag(
+        self, monkeypatch: pytest.MonkeyPatch, metadata: Mapping[str, object], expected: Sequence[str]
+    ) -> None:
         monkeypatch.setattr(litellm, "langfuse_default_tags", ["cache_key"])
         monkeypatch.setattr(litellm, "cache", _PresetCache())
-        attributes = _emitted(
-            {
-                "call_type": "acompletion",
-                "litellm_params": {"metadata": {}},
-            }
-        )
-        assert json.loads(attributes["langfuse.trace.tags"]) == ["cache_key:preset-abc"]
+        attributes: Final = _emitted({"call_type": "acompletion", "litellm_params": {"metadata": metadata}})
 
-    def test_cache_key_default_tag_prefers_hidden_params_over_preset(self, monkeypatch):
-        class _PresetCache:
-            @staticmethod
-            def get_preset_cache_key_from_kwargs(**kwargs) -> str:
-                return "preset-abc"
-
-        monkeypatch.setattr(litellm, "langfuse_default_tags", ["cache_key"])
-        monkeypatch.setattr(litellm, "cache", _PresetCache())
-        attributes = _emitted(
-            {
-                "call_type": "acompletion",
-                "litellm_params": {"metadata": {"hidden_params": {"cache_key": "explicit-key"}}},
-            }
-        )
-        assert json.loads(attributes["langfuse.trace.tags"]) == ["cache_key:explicit-key"]
+        assert json.loads(str(attributes["langfuse.trace.tags"])) == expected
 
     @pytest.mark.parametrize(
         ("caller_tags", "expected"),
@@ -1253,60 +1233,131 @@ class TestDerivedTraceFields:
             ("", ["req"]),
         ],
     )
-    def test_caller_tags_are_read_the_way_langfuse_reads_a_raw_tags_value(self, caller_tags, expected):
-        attributes = _emitted(
+    def test_caller_tags_are_read_the_way_langfuse_reads_a_raw_tags_value(
+        self, caller_tags: object, expected: Sequence[str]
+    ) -> None:
+        attributes: Final = _emitted(
             {
                 "call_type": "acompletion",
                 "litellm_params": {"metadata": {"tags": caller_tags}},
                 "standard_logging_object": {"request_tags": ["req"]},
             }
         )
-        assert json.loads(attributes["langfuse.trace.tags"]) == expected
 
-    def test_no_tags_anywhere_leaves_trace_tags_unset(self):
-        attributes = _emitted(
-            {
-                "call_type": "acompletion",
-                "litellm_params": {"metadata": {}},
-            }
-        )
+        assert json.loads(str(attributes["langfuse.trace.tags"])) == expected
+
+    def test_no_tags_anywhere_leaves_trace_tags_unset(self) -> None:
+        attributes: Final = _emitted({"call_type": "acompletion", "litellm_params": {"metadata": {}}})
+
         assert "langfuse.trace.tags" not in attributes
 
-    def test_empty_string_role_is_omitted_from_output(self):
-        response_obj = {
-            "id": "chatcmpl-norole",
-            "choices": [{"message": {"role": "", "content": "hi"}}],
-        }
-        attributes = _emitted(
-            {
-                "call_type": "acompletion",
-                "litellm_params": {"metadata": {}},
-            },
-            response_obj,
-        )
-        assert json.loads(attributes["langfuse.observation.output"]) == {"content": "hi"}
+    def test_empty_string_role_is_omitted_from_output(self) -> None:
+        response_obj: Final = {"id": "chatcmpl-norole", "choices": [{"message": {"role": "", "content": "hi"}}]}
+        attributes: Final = _emitted({"call_type": "acompletion", "litellm_params": {"metadata": {}}}, response_obj)
 
-    def test_no_messages_leaves_trace_input_unset_but_emits_output(self):
-        response_obj = ModelResponse(
-            id="chatcmpl-nomsg",
-            model="gpt-4o",
-            choices=[
-                Choices(
-                    finish_reason="stop",
-                    message={"role": "assistant", "content": "hi"},
-                )
-            ],
+        assert json.loads(str(attributes["langfuse.observation.output"])) == {"content": "hi"}
+
+    def test_no_messages_leaves_trace_input_unset_but_emits_output(self) -> None:
+        attributes: Final = _emitted(
+            {"call_type": "acompletion", "litellm_params": {"metadata": {}}}, _chat_response("hi")
         )
-        attributes = _emitted(
-            {
-                "call_type": "acompletion",
-                "litellm_params": {"metadata": {}},
-            },
-            response_obj,
-        )
+
         assert "langfuse.trace.input" not in attributes
         assert "langfuse.observation.input" not in attributes
         assert attributes["langfuse.trace.output"] == attributes["langfuse.observation.output"]
+
+
+def _proxy_span(parent: Context | None = None) -> Span:
+    return _TRACER.start_span(LITELLM_PROXY_REQUEST_SPAN_NAME, context=parent)
+
+
+def _child_of(parent: Span) -> Span:
+    return _TRACER.start_span("litellm_request", context=trace.set_span_in_context(parent))
+
+
+def _carrying(parent: Span, key: str = "metadata") -> Mapping[str, object]:
+    return {**CHAT_KWARGS, "litellm_params": {key: {"litellm_parent_otel_span": parent}}}
+
+
+class TestDerivedTraceFieldsOnlyOnTracesLitellmStarts:
+    """litellm derives a trace's name, io and tags only when its own span opened the trace."""
+
+    def test_a_span_under_an_inbound_traceparent_joins_the_caller_trace(self) -> None:
+        span: Final = _TRACER.start_span(
+            "litellm_request", context=trace.set_span_in_context(trace.NonRecordingSpan(CALLER))
+        )
+
+        attributes: Final = _stamped(span, {**CHAT_KWARGS, "litellm_params": {"metadata": {}}}, _chat_response("ok"))
+
+        assert _trace_fields(attributes) == {}
+        assert "langfuse.observation.input" in attributes and "langfuse.observation.output" in attributes
+
+    def test_the_active_app_span_litellm_writes_onto_keeps_its_trace_fields(self) -> None:
+        with _TRACER.start_as_current_span("checkout") as app_span:
+            app_span.set_attribute("langfuse.trace.name", "checkout")
+
+            attributes: Final = _stamped(
+                app_span, {**CHAT_KWARGS, "litellm_params": {"metadata": {}}}, _chat_response("ok")
+            )
+
+        assert _trace_fields(attributes) == {"langfuse.trace.name": "checkout"}
+
+    def test_a_litellm_root_span_derives_while_an_app_span_is_current(self) -> None:
+        with _TRACER.start_as_current_span("checkout"):
+            span: Final = _TRACER.start_span("litellm_request", context=Context())
+
+            attributes: Final = _stamped(
+                span, {**CHAT_KWARGS, "litellm_params": {"metadata": {}}}, _chat_response("ok")
+            )
+
+        assert attributes["langfuse.trace.name"] == "litellm-acompletion"
+
+    def test_a_span_under_a_caller_provided_parent_span_joins_the_caller_trace(self) -> None:
+        caller_span: Final = _TRACER.start_span("caller-root")
+
+        attributes: Final = _stamped(_child_of(caller_span), _carrying(caller_span), _chat_response("ok"))
+
+        assert _trace_fields(attributes) == {}
+
+    @pytest.mark.parametrize("key", ["metadata", "litellm_metadata"])
+    def test_a_span_under_litellms_own_unparented_proxy_span_derives(self, key: str) -> None:
+        proxy_span: Final = _proxy_span()
+
+        attributes: Final = _stamped(_child_of(proxy_span), _carrying(proxy_span, key), _chat_response("ok"))
+
+        assert attributes["langfuse.trace.name"] == "litellm-acompletion"
+        assert attributes["langfuse.trace.input"] == attributes["langfuse.observation.input"]
+        assert attributes["langfuse.trace.output"] == attributes["langfuse.observation.output"]
+
+    def test_a_span_under_a_proxy_span_with_an_inbound_traceparent_joins_the_caller_trace(self) -> None:
+        proxy_span: Final = _proxy_span(trace.set_span_in_context(trace.NonRecordingSpan(CALLER)))
+
+        attributes: Final = _stamped(_child_of(proxy_span), _carrying(proxy_span), _chat_response("ok"))
+
+        assert _trace_fields(attributes) == {}
+
+    def test_a_span_whose_parent_is_not_the_carried_proxy_span_joins_that_parent_trace(self) -> None:
+        other_parent: Final = _TRACER.start_span("caller-root")
+
+        attributes: Final = _stamped(_child_of(other_parent), _carrying(_proxy_span()), _chat_response("ok"))
+
+        assert _trace_fields(attributes) == {}
+
+    def test_an_inbound_traceparent_still_carries_the_caller_trace_name_and_tags(self) -> None:
+        span: Final = _TRACER.start_span(
+            "litellm_request", context=trace.set_span_in_context(trace.NonRecordingSpan(CALLER))
+        )
+
+        attributes: Final = _stamped(
+            span,
+            {**CHAT_KWARGS, "litellm_params": {"metadata": {"trace_name": "caller-trace", "tags": ["caller"]}}},
+            _chat_response("ok"),
+        )
+
+        assert _trace_fields(attributes) == {
+            "langfuse.trace.name": "caller-trace",
+            "langfuse.trace.tags": json.dumps(["caller"]),
+        }
 
 
 LANGFUSE_ENV_ONLY: Final = {

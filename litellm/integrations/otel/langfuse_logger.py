@@ -26,7 +26,10 @@ class LangfuseOpenTelemetryV2(OpenTelemetryV2):
         root: Final = request_root_span()
         if root is not None and root.is_recording():
             root.set_attributes(
-                LangfuseMapper.trace_attributes(caller_trace_controls(kwargs), as_str(kwargs.get("call_type")))
+                LangfuseMapper.trace_attributes(
+                    caller_trace_controls(kwargs),
+                    as_str(kwargs.get("call_type")) if getattr(root, "parent", None) is None else None,
+                )
             )
         super().log_pre_api_call(model, messages, kwargs)
 

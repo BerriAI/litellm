@@ -6,6 +6,8 @@ from datetime import datetime
 from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, Optional, Protocol, runtime_checkable
 
+from opentelemetry import trace
+
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import REDACTED_BY_LITELLM
@@ -13,7 +15,7 @@ from litellm.integrations.arize import _utils
 from litellm.integrations.langfuse.langfuse_otel_attributes import (
     LangfuseLLMObsOTELAttributes,
 )
-from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
+from litellm.integrations.opentelemetry import LITELLM_PROXY_REQUEST_SPAN_NAME, OpenTelemetry, OpenTelemetryConfig
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.secret_managers.main import str_to_bool
@@ -71,6 +73,48 @@ def _caller_tag_list(value: object) -> tuple[str, ...]:
     if isinstance(parsed, str) and parsed:
         return tuple(tag.strip() for tag in parsed.split(",")) if "," in parsed else (parsed,)
     return ()
+
+
+def _parent_of(span: object) -> trace.SpanContext | None:
+    parent: Final = getattr(span, "parent", None)
+    return parent if isinstance(parent, trace.SpanContext) else None
+
+
+def _litellm_proxy_span(kwargs: Mapping[str, object]) -> trace.Span | None:
+    """The proxy request span another OTel callback opened for this request, when the request carries one."""
+    litellm_params: Final = _as_gettable(kwargs.get("litellm_params")) or {}
+    carried: Final = (
+        (_as_gettable(litellm_params.get(key)) or {}).get("litellm_parent_otel_span")
+        for key in ("metadata", "litellm_metadata")
+    )
+    return next(
+        (
+            span
+            for span in carried
+            if isinstance(span, trace.Span) and getattr(span, "name", None) == LITELLM_PROXY_REQUEST_SPAN_NAME
+        ),
+        None,
+    )
+
+
+def _starts_its_own_trace(span: object, kwargs: Mapping[str, object]) -> bool:
+    """Whether the trace `span` belongs to was started by litellm rather than by the app calling it.
+
+    litellm writes onto the app's own span when one is active, and otherwise parents its span to an inbound
+    traceparent, a caller-provided span or its proxy request span. The trace is litellm's only when its span has no
+    parent, or hangs off a proxy request span that has none.
+    """
+    if span is trace.get_current_span():
+        return False
+    parent: Final = _parent_of(span)
+    if parent is None:
+        return True
+    proxy_span: Final = _litellm_proxy_span(kwargs)
+    return (
+        proxy_span is not None
+        and _parent_of(proxy_span) is None
+        and proxy_span.get_span_context().span_id == parent.span_id
+    )
 
 
 class LangfuseOtelLogger(OpenTelemetry):
@@ -235,7 +279,9 @@ class LangfuseOtelLogger(OpenTelemetry):
         metadata: Final = LangfuseOtelLogger._extract_langfuse_metadata(kwargs)
         LangfuseOtelLogger._set_metadata_attributes(span=span, metadata=metadata)
 
-        joins_existing_trace: Final = metadata.get("existing_trace_id") is not None
+        joins_existing_trace: Final = metadata.get("existing_trace_id") is not None or not _starts_its_own_trace(
+            span, kwargs
+        )
         if metadata.get("trace_name") is None and not joins_existing_trace:
             safe_set_attribute(
                 span,

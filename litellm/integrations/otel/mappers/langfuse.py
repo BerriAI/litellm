@@ -103,6 +103,6 @@ class LangfuseMapper:
     def _llm_call(cls, data: LLMCallSpanData) -> AttributeMap:
         return {
             **collect(cls._LLM_CALL_ATTRS, data),
-            **cls.trace_attributes(data.trace, data.call_type),
+            **cls.trace_attributes(data.trace),
             **collect(cls._BLOB_ATTRS, data),
         }
