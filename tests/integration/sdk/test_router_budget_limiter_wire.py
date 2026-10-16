@@ -286,15 +286,13 @@ async def test_router_without_redis_tracks_spend_but_queues_no_redis_increments(
     with wire_server(_peer) as wire:
         router: Final = _isolated_budget_router(f"{wire.url}/openai/v1", redis_client=None)
         first: Final = await _complete_and_wait_for_spend(router, previous=0.0)
-        assert router.router_budget_logger is not None
-        held_keys_after_first: Final = len(router.router_budget_logger._spend_awaiting_redis)
         second: Final = await _complete_and_wait_for_spend(router, previous=first)
         third: Final = await _complete_and_wait_for_spend(router, previous=second)
         wire.drain()
 
     assert third > second > first > 0.0
+    assert router.router_budget_logger is not None
     assert router.router_budget_logger.redis_increment_operation_queue == []
-    assert len(router.router_budget_logger._spend_awaiting_redis) == held_keys_after_first
 
 
 async def _wait_for_redis_spend(redis_client: Redis, at_least: float) -> float:
