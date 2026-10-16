@@ -3,6 +3,8 @@ import json
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
@@ -28,6 +30,8 @@ else:
 # Cold Storage Handler
 ########################################################
 COLD_STORAGE_HANDLER: Final = ColdStorageHandler()
+_LOGGED_RESPONSE: Final = TypeAdapter(Mapping[str, object])
+_STORED_REQUEST: Final = TypeAdapter(dict[str, object])
 ########################################################
 
 
@@ -159,7 +163,22 @@ class ResponsesSessionHandler:
         # Add Output messages for this Spend Log
         ############################################################
         _response_output: Final = spend_log.get("response", "{}")
-        if isinstance(_response_output, dict) and _response_output and _response_output != {}:
+        responses_output: Final = (
+            _LOGGED_RESPONSE.validate_python(_response_output).get("output")
+            if isinstance(_response_output, dict)
+            else None
+        )
+        if isinstance(responses_output, list):
+            output_items: Final = cast(ResponseInputParam, responses_output)  # cast-ok: logged output replays as input
+            chat_completion_message_history.extend(
+                LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                    input=output_items,
+                    responses_api_request={},
+                    replay_reasoning=True,
+                    item_cache_control=item_cache_control,
+                )
+            )
+        elif isinstance(_response_output, dict) and _response_output and _response_output != {}:
             # transform `ChatCompletion Response` to `ResponsesAPIResponse`
             model_response: Final = ModelResponse(**_response_output)
             for choice in model_response.choices:
@@ -176,30 +195,23 @@ class ResponsesSessionHandler:
         Get the parsed proxy server request from the spend log
         """
         proxy_server_request: Final[str | dict] = spend_log.get("proxy_server_request") or "{}"
-        proxy_server_request_dict: dict | None = None
-        if isinstance(proxy_server_request, dict):
-            proxy_server_request_dict = proxy_server_request
-        else:
-            proxy_server_request_dict = json.loads(proxy_server_request)
+        proxy_server_request_dict: Final = _STORED_REQUEST.validate_python(
+            proxy_server_request if isinstance(proxy_server_request, dict) else json.loads(proxy_server_request)
+        )
 
         ############################################################
         # Check if user has setup cold storage for session handling
         ############################################################
-        if ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_server_request_dict):
-            # Try to get cold storage object key from spend log metadata
-            _proxy_server_request_dict: dict | None = None
-            cold_storage_object_key = ResponsesSessionHandler._get_cold_storage_object_key_from_spend_log(spend_log)
-            if cold_storage_object_key:
-                # Use the object key directly from metadata
-                _proxy_server_request_dict = (
-                    await ResponsesSessionHandler.get_proxy_server_request_from_cold_storage_with_object_key(
-                        object_key=cold_storage_object_key,
-                    )
-                )
-            if _proxy_server_request_dict:
-                proxy_server_request_dict = _proxy_server_request_dict
-
-        return proxy_server_request_dict
+        if not ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_server_request_dict):
+            return proxy_server_request_dict
+        cold_storage_object_key: Final = ResponsesSessionHandler._get_cold_storage_object_key_from_spend_log(spend_log)
+        if not cold_storage_object_key:
+            return proxy_server_request_dict
+        return (
+            await ResponsesSessionHandler.get_proxy_server_request_from_cold_storage_with_object_key(
+                object_key=cold_storage_object_key,
+            )
+        ) or proxy_server_request_dict
 
     @staticmethod
     def _get_cold_storage_object_key_from_spend_log(
@@ -241,13 +253,9 @@ class ResponsesSessionHandler:
         """
         verbose_proxy_logger.debug("inside get_proxy_server_request_from_cold_storage_with_object_key...")
 
-        proxy_server_request_dict: Final = (
-            await COLD_STORAGE_HANDLER.get_proxy_server_request_from_cold_storage_with_object_key(
-                object_key=object_key,
-            )
+        return await COLD_STORAGE_HANDLER.get_proxy_server_request_from_cold_storage_with_object_key(
+            object_key=object_key,
         )
-
-        return proxy_server_request_dict
 
     @staticmethod
     def _should_check_cold_storage_for_full_payload(
