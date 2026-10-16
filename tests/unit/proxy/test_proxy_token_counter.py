@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import respx
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, JsonValue
 
@@ -154,6 +155,9 @@ async def test_count_request_tokens_respects_deployment_use_token_counting_api(
                 "model_name": "nova",
                 "litellm_params": {
                     "model": "bedrock/us.amazon.nova-pro-v1:0",
+                    "api_base": "https://bedrock-count-tokens.test",
+                    "aws_access_key_id": "test-access-key",
+                    "aws_secret_access_key": "test-secret-key",
                     "aws_region_name": "us-east-1",
                 },
                 "model_info": model_info,
@@ -162,17 +166,19 @@ async def test_count_request_tokens_respects_deployment_use_token_counting_api(
     )
     monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
 
-    mock_count_tokens: Final = AsyncMock(return_value={"input_tokens": 999})
-    with patch(
-        "litellm.llms.bedrock.count_tokens.handler.BedrockCountTokensHandler.handle_count_tokens_request",
-        new=mock_count_tokens,
-    ):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(url__regex=r"^https://bedrock-count-tokens\.test/.*/count-tokens$").respond(
+            200, json={"inputTokens": 999}
+        )
         response: Final = await count_request_tokens(
             TokenCountRequest(model="nova", messages=[{"role": "user", "content": "hello there"}]),
             call_endpoint=True,
         )
+    litellm.in_memory_llm_clients_cache.flush_cache()
 
-    assert mock_count_tokens.await_count == expected_api_calls
+    assert route.call_count == expected_api_calls
     assert response.total_tokens > 0
     assert (response.total_tokens == 999) is (expected_api_calls == 1)
     assert (response.tokenizer_type == "bedrock_api") is (expected_api_calls == 1)
