@@ -23,14 +23,8 @@ E    +  where 500 = <Response [500 Internal Server Error]>.status_code
 
 == main b5870df967 (base53), the new cell: 200, mask applied, vendor tool ignored
 E   AssertionError: assert {'messages': [{'role': 'user', 'content': [{'text': 'Card **** please.'}]}]} == {'messages': [{'role': 'user', 'content': [{'text': 'Card **** please.'}]}], 'toolConfig': {'tools': [{'toolSpec': {'name': 'retrieve', 'description': 'retrieve', 'inputSchema': {'json': {'type': 'object', 'properties': {}, 'required': []}}}}]}}
-E   AssertionError: assert {'tools': [{'toolSpec': {'name': 'lookup_card', 'description': 'Looks up cards like 4111 1111 1111 1111', 'inputSchema': {'json': {'type': 'object', 'properties': {'card': {'type': 'string', 'description': 'for example 4111 1111 1111 1111'}}}}}}, {'cachePoint': {'type': 'default'}}, {'toolSpec': {'name': 'refund', 'description': 'Refunds an order', 'inputSchema': {'json'
-E   AssertionError: assert {'tools': [{'toolSpec': {'name': 'lookup_card', 'description': 'Looks up cards like 4111 1111 1111 1111', 'inputSchema': {'json': {'type': 'object', 'properties': {'card': {'type': 'string', 'description': 'for example 4111 1111 1111 1111'}}}}}}, {'cachePoint': {'type': 'default'}}, {'toolSpec': {'name': 'refund', 'description': 'Refunds an order', 'inputSchema': {'json'
-E   AssertionError: assert [{'role': 'user', 'content': [{'text': 'Order details below.'}, {'text': ''}]}] == [{'role': 'user', 'content': [{'text': 'Order details below.'}]}]
-E   AssertionError: {"output": {"message": {"role": "assistant", "content": [{"text": "guarded reply"}]}}, "stopReason": "end_turn", "usage": {"inputTokens": 7, "outputTokens": 2, "totalTokens": 9}, "metrics": {"latencyMs": 1}}
-E   AssertionError: State did not converge: 200
-E   AssertionError: assert {'tools': [{'toolSpec': {'name': 'github-create_issue', 'inputSchema': {'json': {'type': 'object'}}}}, {'toolSpec': {'name': 'slack-post_message', 'inputSchema': {'json': {'type': 'object'}}}}, {'toolSpec': {'name': 'get_weather', 'inputSchema': {'json': {'type': 'object'}}}}]} == {'tools': [{'toolSpec': {'name': 'github-create_issue', 'inputSchema': {'json': {'type': 'o
 
-== e1892f5354 (head53-1, head53-2): 31 passed twice, Bedrock got
+== e1892f5354 (head53-1, head53-2): 31 passed twice, Bedrock got (the head legs ran on the uncommitted tree that was then committed unchanged as e1892f5354)
 {"messages":[{"role":"user","content":[{"text":"Card **** please."}]}],"toolConfig":{"tools":[{"toolSpec":{"name":"retrieve","description":"retrieve","inputSchema":{"json":{"type":"object","properties":{},"required":[]}}}}]}}
 
 Unit: TestConverseGuardrailsThatReadFlatTextsOnly::test_tool_added_to_a_request_without_tools_reaches_bedrock_only_from_guardrails_that_get_tools fails both cells on 0a7aa7be37 and passes on e1892f5354
