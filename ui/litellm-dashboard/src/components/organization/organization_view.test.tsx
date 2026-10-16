@@ -149,6 +149,39 @@ test("should display empty state when organization has no members", async () => 
   });
 });
 
+test("keeps the members pager on its page when an admin opens a member's edit dialog", async () => {
+  const members = Array.from({ length: 30 }, (_, index) => ({
+    user_id: `user${index + 1}`,
+    user_email: `user${index + 1}@example.com`,
+    user_role: "internal_user",
+    spend: 0,
+    user: { user_alias: `alias${String(index + 1).padStart(2, "0")}` },
+  }));
+  mockUseOrganization.mockReturnValue({ data: { ...mockOrg, members }, isLoading: false } as unknown as ReturnType<
+    typeof useOrganization
+  >);
+
+  const user = userEvent.setup();
+  renderWithProviders(
+    <OrganizationInfoView
+      organizationId="org_123"
+      onClose={() => {}}
+      accessToken="test-token"
+      is_org_admin={true}
+      is_proxy_admin={false}
+      userModels={[]}
+    />,
+  );
+
+  await user.click(screen.getByRole("tab", { name: "Members" }));
+  await user.click(screen.getByTestId("pagination-next"));
+  expect(screen.getByText("Showing 26-30 of 30")).toBeInTheDocument();
+
+  await user.click(within(screen.getByRole("row", { name: /alias27/ })).getByTestId("edit-member"));
+
+  expect(screen.getByText("Showing 26-30 of 30")).toBeInTheDocument();
+});
+
 test("should display team aliases when teams are available", async () => {
   const orgWithTeams = {
     ...mockOrg,

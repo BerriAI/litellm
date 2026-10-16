@@ -65,7 +65,7 @@ class _GeminiPeer:
         return requests
 
 
-def _deployment(gateway: Gateway, scenario: Scenario, api_base: str) -> str:
+def _deployment(gateway: Gateway, scenario: Scenario, api_base: str, **parameters: JsonValue) -> str:
     return scenario.model(
         model=f"vertex_ai/{_MODEL}",
         api_base=api_base,
@@ -73,6 +73,7 @@ def _deployment(gateway: Gateway, scenario: Scenario, api_base: str) -> str:
         vertex_project=_PROJECT,
         vertex_location=_LOCATION,
         vertex_credentials=service_account_json(_PROJECT, gateway.upstream_url.rstrip("/")),
+        **parameters,
     )
 
 
@@ -165,6 +166,140 @@ def test_messages_and_count_tokens_send_matching_gemini_context(
         )
         count_body: Final = _json_body(next(request for request in requests if request.target.endswith(":countTokens")))
         assert count_body == _count_tokens_request_from_generate_content(generated_body)
+
+
+_LOOKUP_TOOL: Final[JsonValue] = {
+    "name": "lookup",
+    "description": "Look up a value",
+    "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+}
+_CONTENT_BLOCK_BODIES: Final[Mapping[str, Mapping[str, JsonValue]]] = MappingProxyType(
+    {
+        "base64-pdf": {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Summarize the document."},
+                        {
+                            "type": "document",
+                            "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQK"},
+                        },
+                    ],
+                }
+            ],
+        },
+        "base64-image": {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aW1hZ2U="}},
+                        {"type": "text", "text": "What is this?"},
+                    ],
+                }
+            ],
+        },
+        "tool-turns": {
+            "tools": [_LOOKUP_TOOL],
+            "messages": [
+                {"role": "user", "content": "Look up the value."},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "Looking it up."},
+                        {"type": "tool_use", "id": "toolu_01", "name": "lookup", "input": {"query": "value"}},
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "42"}],
+                },
+            ],
+        },
+    }
+)
+
+
+def _ai_studio_deployment(scenario: Scenario, api_base: str, **parameters: JsonValue) -> str:
+    return scenario.model(model=f"gemini/{_MODEL}", api_base=api_base, api_key="scripted-gemini-key", **parameters)
+
+
+def _counted_contents(count_body: Mapping[str, JsonValue]) -> JsonValue:
+    if "contents" in count_body:
+        return count_body["contents"]
+    return _JSON_OBJECT.validate_python(count_body["generateContentRequest"])["contents"]
+
+
+@pytest.mark.parametrize("provider", ("vertex_ai", "gemini"))
+@pytest.mark.parametrize("case", sorted(_CONTENT_BLOCK_BODIES))
+def test_count_tokens_sends_the_contents_messages_inference_sends(gateway: Gateway, provider: str, case: str) -> None:
+    peer: Final = _GeminiPeer()
+    with wire_server(peer) as wire, gateway.scenario() as scenario:
+        model: Final = (
+            _deployment(gateway, scenario, wire.url)
+            if provider == "vertex_ai"
+            else _ai_studio_deployment(scenario, wire.url)
+        )
+        body: Final = {"model": model, **_CONTENT_BLOCK_BODIES[case]}
+        generated: Final = gateway.request("POST", "/v1/messages", {**body, "max_tokens": 16})
+        counted: Final = gateway.request("POST", "/v1/messages/count_tokens", body)
+        assert generated.status_code == 200, generated.text
+        assert counted.status_code == 200, counted.text
+        assert _JSON_OBJECT.validate_json(counted.content)["input_tokens"] == _COUNT, counted.text
+        requests: Final = peer.drain()
+        generated_body: Final = _json_body(
+            next(request for request in requests if request.target.endswith(":generateContent"))
+        )
+        count_body: Final = _json_body(next(request for request in requests if request.target.endswith(":countTokens")))
+        assert _counted_contents(count_body) == generated_body["contents"]
+
+
+_UNCONVERTIBLE_MESSAGES: Final[JsonValue] = [
+    {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Summarize the notes."},
+            {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "notes"}},
+            {"type": "search_result", "source": "https://example.com/notes", "title": "Notes", "content": []},
+        ],
+    },
+    {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_01", "name": "search", "input": {}}]},
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "tool_result",
+                "tool_use_id": "toolu_01",
+                "content": [
+                    {
+                        "type": "search_result",
+                        "source": "https://example.com/hits",
+                        "title": "Hits",
+                        "content": [{"type": "text", "text": "hit"}],
+                    }
+                ],
+            }
+        ],
+    },
+]
+
+
+@pytest.mark.parametrize("provider", ("vertex_ai", "gemini"))
+def test_count_tokens_rejects_blocks_it_cannot_convert(gateway: Gateway, provider: str) -> None:
+    peer: Final = _GeminiPeer()
+    with wire_server(peer) as wire, gateway.scenario() as scenario:
+        model: Final = (
+            _deployment(gateway, scenario, wire.url)
+            if provider == "vertex_ai"
+            else _ai_studio_deployment(scenario, wire.url)
+        )
+        response: Final = gateway.request(
+            "POST", "/v1/messages/count_tokens", {"model": model, "messages": _UNCONVERTIBLE_MESSAGES}
+        )
+        assert response.status_code == 400, response.text
+        assert "document with a text source, search_result, search_result inside a tool_result" in response.text
+        assert peer.drain() == ()
 
 
 def test_count_tokens_keeps_each_text_block_in_system_instruction(gateway: Gateway) -> None:
@@ -460,3 +595,110 @@ def test_concurrent_count_waves_recover_after_vertex_count_outage(gateway: Gatew
             tuple(_json_body(request) for request in requests)
             == ({"contents": [{"role": "user", "parts": [{"text": _USER}]}]},) * 9
         )
+
+
+_CONTENTS: Final[JsonValue] = [{"role": "user", "parts": [{"text": _USER}]}]
+_OPENAI_TOOLS: Final[JsonValue] = [
+    {
+        "type": "function",
+        "function": {"name": "noop", "description": "Return no output", "parameters": {"type": "object"}},
+    }
+]
+
+
+def _provider_deployment(
+    gateway: Gateway, scenario: Scenario, provider: str, api_base: str, **parameters: JsonValue
+) -> str:
+    if provider == "vertex_ai":
+        return _deployment(gateway, scenario, api_base, **parameters)
+    return _ai_studio_deployment(scenario, api_base, **parameters)
+
+
+def _count(gateway: Gateway, body: Mapping[str, JsonValue], call_endpoint: bool = True) -> httpx.Response:
+    return gateway.request(
+        "POST", "/utils/token_counter", body, params={"call_endpoint": "true" if call_endpoint else "false"}
+    )
+
+
+def _total_tokens(response: httpx.Response) -> JsonValue:
+    return _JSON_OBJECT.validate_json(response.content)["total_tokens"]
+
+
+@pytest.mark.parametrize(
+    ("provider", "empty_conversation"),
+    (("vertex_ai", {}), ("gemini", {}), ("gemini", {"messages": []}), ("gemini", {"contents": []})),
+    ids=("vertex-prompt-only", "ai-studio-prompt-only", "ai-studio-empty-messages", "ai-studio-empty-contents"),
+)
+def test_utils_token_counter_sends_a_prompt_as_the_user_turn_of_its_messages_form(
+    gateway: Gateway, provider: str, empty_conversation: Mapping[str, JsonValue]
+) -> None:
+    peer: Final = _GeminiPeer()
+    with wire_server(peer) as wire, gateway.scenario() as scenario:
+        model: Final = _provider_deployment(gateway, scenario, provider, wire.url)
+        prompted: Final = _count(gateway, {"model": model, "prompt": _USER, **empty_conversation})
+        prompted_requests: Final = _count_requests(wire)
+        as_message: Final = _count(gateway, {"model": model, "messages": _MESSAGES})
+        message_requests: Final = _count_requests(wire)
+    assert prompted.status_code == 200, prompted.text
+    assert as_message.status_code == 200, as_message.text
+    assert _total_tokens(prompted) == _COUNT, prompted.text
+    assert len(prompted_requests) == 1
+    assert len(message_requests) == 1
+    assert _counted_contents(_json_body(prompted_requests[0])) == _counted_contents(_json_body(message_requests[0]))
+
+
+@pytest.mark.parametrize(
+    ("conversation", "call_endpoint"),
+    (({"messages": _MESSAGES}, True), ({"contents": _CONTENTS}, True), ({"messages": _MESSAGES}, False)),
+    ids=("provider-count-messages", "provider-count-contents", "local-count-messages"),
+)
+def test_utils_token_counter_rejects_a_prompt_next_to_a_conversation_without_calling_the_provider(
+    gateway: Gateway, conversation: Mapping[str, JsonValue], call_endpoint: bool
+) -> None:
+    peer: Final = _GeminiPeer()
+    with wire_server(peer) as wire, gateway.scenario() as scenario:
+        model: Final = _ai_studio_deployment(scenario, wire.url)
+        response: Final = _count(gateway, {"model": model, "prompt": "hi", **conversation}, call_endpoint)
+        requests: Final = _count_requests(wire)
+    assert response.status_code == 400, response.text
+    assert _JSON_OBJECT.validate_python(_JSON_OBJECT.validate_json(response.content)["error"])["param"] == "prompt"
+    assert requests == ()
+
+
+@pytest.mark.parametrize("call_endpoint", (True, False), ids=("provider-count", "local-count"))
+def test_utils_token_counter_counts_only_the_conversation_when_drop_params_drops_the_prompt(
+    gateway: Gateway, call_endpoint: bool
+) -> None:
+    peer: Final = _GeminiPeer()
+    with wire_server(peer) as wire, gateway.scenario() as scenario:
+        model: Final = _ai_studio_deployment(scenario, wire.url, drop_params=True)
+        mixed: Final = _count(gateway, {"model": model, "prompt": "hi", "messages": _MESSAGES}, call_endpoint)
+        mixed_requests: Final = _count_requests(wire)
+        alone: Final = _count(gateway, {"model": model, "messages": _MESSAGES}, call_endpoint)
+        alone_requests: Final = _count_requests(wire)
+    assert mixed.status_code == 200, mixed.text
+    assert alone.status_code == 200, alone.text
+    assert _total_tokens(mixed) == _total_tokens(alone)
+    assert [_counted_contents(_json_body(request)) for request in mixed_requests] == [
+        _counted_contents(_json_body(request)) for request in alone_requests
+    ]
+
+
+@pytest.mark.parametrize(
+    "extra",
+    ({"system": "Follow the system instruction."}, {"tools": _OPENAI_TOOLS}),
+    ids=("system", "tools"),
+)
+def test_utils_token_counter_counts_a_local_prompt_with_system_or_tools_like_its_messages_form(
+    gateway: Gateway, extra: Mapping[str, JsonValue]
+) -> None:
+    peer: Final = _GeminiPeer()
+    with wire_server(peer) as wire, gateway.scenario() as scenario:
+        model: Final = _ai_studio_deployment(scenario, wire.url)
+        prompted: Final = _count(gateway, {"model": model, "prompt": _USER, **extra}, call_endpoint=False)
+        as_message: Final = _count(gateway, {"model": model, "messages": _MESSAGES, **extra}, call_endpoint=False)
+        requests: Final = _count_requests(wire)
+    assert prompted.status_code == 200, prompted.text
+    assert as_message.status_code == 200, as_message.text
+    assert _total_tokens(prompted) == _total_tokens(as_message)
+    assert requests == ()
