@@ -229,6 +229,62 @@ def test_response_cost_calculator_custom_pricing_ignores_upstream_response_cost_
     assert cost == pytest.approx(expected_cost)
 
 
+def _header_cost_chat_response(additional_headers: dict[str, str]) -> ModelResponse:
+    response: Final = ModelResponse(
+        model="cc-header-cost-chat",
+        choices=[Choices(message=Message(content="ok"))],
+        usage=Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+    )
+    response._hidden_params = {"additional_headers": additional_headers}
+    return response
+
+
+def _cost_with_upstream_headers(monkeypatch: pytest.MonkeyPatch, additional_headers: dict[str, str]) -> float:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.register_model(
+        model_cost={
+            "cc-header-cost-chat": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 0.001,
+                "output_cost_per_token": 0.002,
+            }
+        }
+    )
+    return response_cost_calculator(
+        response_object=_header_cost_chat_response(additional_headers),
+        model="cc-header-cost-chat",
+        custom_llm_provider="openai",
+        call_type="completion",
+        optional_params={},
+    )
+
+
+@pytest.mark.parametrize("header_cost", ("-5", "not-a-number", "nan", "inf"))
+def test_response_cost_calculator_prices_from_the_map_when_upstream_cost_header_is_not_billable(
+    monkeypatch: pytest.MonkeyPatch,
+    header_cost: str,
+) -> None:
+    price_map_cost: Final = _cost_with_upstream_headers(monkeypatch, {})
+
+    cost: Final = _cost_with_upstream_headers(monkeypatch, {"llm_provider-x-litellm-response-cost": header_cost})
+
+    assert price_map_cost > 0
+    assert cost == pytest.approx(price_map_cost)
+
+
+@pytest.mark.parametrize(("header_cost", "expected_cost"), (("0", 0.0), ("0.25", 0.25)))
+def test_response_cost_calculator_bills_a_finite_non_negative_upstream_cost_header(
+    monkeypatch: pytest.MonkeyPatch,
+    header_cost: str,
+    expected_cost: float,
+) -> None:
+    cost: Final = _cost_with_upstream_headers(monkeypatch, {"llm_provider-x-litellm-response-cost": header_cost})
+
+    assert cost == expected_cost
+
+
 def test_response_cost_calculator_keeps_optional_params_out_of_hidden_params():
     class MockResponse(BaseModel):
         pass
