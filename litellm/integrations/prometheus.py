@@ -2602,9 +2602,7 @@ class PrometheusLogger(CustomLogger):
             )
 
     @staticmethod
-    def _bounded_failed_request_model_label(
-        model: object, standard_logging_payload: dict | StandardLoggingPayload
-    ) -> object:
+    def _bounded_failed_request_model_label(model: object, standard_logging_payload: StandardLoggingPayload) -> object:
         """
         Bound the legacy ``model`` label on the failed-request metric.
 
