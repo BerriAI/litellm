@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import Callable, Sequence
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -44,12 +44,59 @@ async def _served_catalog_tool() -> str:
     return "ok"
 
 
+@pytest.mark.parametrize(
+    ("settings", "mcp_servers", "toolset_id", "auth_state", "raises"),
+    [
+        ({"mcp_require_explicit_server_scope": True}, None, None, None, True),
+        ({"mcp_require_explicit_server_scope": True}, None, None, "unscoped", True),
+        ({"mcp_require_explicit_server_scope": True}, ["alpha"], None, None, False),
+        ({"mcp_require_explicit_server_scope": True}, [], None, None, True),
+        ({"mcp_require_explicit_server_scope": True}, None, "toolset-id", None, False),
+        ({"mcp_require_explicit_server_scope": True}, None, None, "sealed", False),
+        ({"mcp_require_explicit_server_scope": False}, None, None, None, False),
+        ({}, None, None, None, False),
+    ],
+)
+def test_explicit_server_scope_setting_only_rejects_unscoped_aggregate_requests(
+    settings: dict[str, bool],
+    mcp_servers: list[str] | None,
+    toolset_id: str | None,
+    auth_state: Literal["unscoped", "sealed"] | None,
+    raises: bool,
+) -> None:
+    from fastapi import HTTPException
+
+    auth: Final[UserAPIKeyAuth | None] = (
+        None if auth_state is None else UserAPIKeyAuth(api_key=None, user_id="scope-test")
+    )
+    if auth_state == "sealed" and auth is not None:
+        auth.mcp_session_resource_server_ids = ("alpha-id",)
+
+    with patch("litellm.proxy.proxy_server.general_settings", settings):
+        if raises:
+            with pytest.raises(HTTPException) as exc_info:
+                operations.raise_if_unscoped_aggregate_request(mcp_servers, auth, toolset_id)
+            assert exc_info.value.status_code == 400
+            assert exc_info.value.detail == {
+                "error": "mcp_server_scope_required",
+                "message": (
+                    "This gateway requires an explicit MCP server scope: connect to /mcp/<server_name> "
+                    "or send the x-mcp-servers header."
+                ),
+            }
+        else:
+            operations.raise_if_unscoped_aggregate_request(mcp_servers, auth, toolset_id)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["direct", "virtual", "proxy"])
 @pytest.mark.parametrize("verdict", ["allow", "block", "obo_error", "evaluate_error", "missing"])
 async def test_mapped_caller_bearer_reaches_agent_evaluation(
-    monkeypatch: pytest.MonkeyPatch, _mcp_request_ctx: Callable[..., ServerRequestContext],
-    mode: str, verdict: str, caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    _mcp_request_ctx: Callable[..., ServerRequestContext],
+    mode: str,
+    verdict: str,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     from urllib.parse import parse_qs
 
@@ -66,18 +113,31 @@ async def test_mapped_caller_bearer_reaches_agent_evaluation(
     from litellm.proxy.guardrails.guardrail_hooks.agent_365.agent_365 import Agent365Guardrail
 
     bearer: Final = "signed.caller.assertion"
-    request: Final = Request({
-        "type": "http", "method": "POST", "path": "/mcp",
-        "headers": [] if verdict == "missing" else [(b"authorization", f"Bearer {bearer}".encode())],
-    })
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp",
+            "headers": [] if verdict == "missing" else [(b"authorization", f"Bearer {bearer}".encode())],
+        }
+    )
     auth: Final = UserAPIKeyAuth(
-        api_key="stored-key-hash", user_id="mapped-caller", jwt_claims={"sub": "mapped-caller"},
-        object_permission={"object_permission_id": "mapped", "mcp_servers": ["guarded"], "mcp_tool_search_enabled": mode == "virtual"},
+        api_key="stored-key-hash",
+        user_id="mapped-caller",
+        jwt_claims={"sub": "mapped-caller"},
+        object_permission={
+            "object_permission_id": "mapped",
+            "mcp_servers": ["guarded"],
+            "mcp_tool_search_enabled": mode == "virtual",
+        },
     )
     oauth, raw, _, _ = MCPRequestHandler.scrub_gateway_admission_credentials(
-        admitted=False, admitted_credential=bearer,
+        admitted=False,
+        admitted_credential=bearer,
         oauth2_headers={"Authorization": f"Bearer {bearer}"},
-        raw_headers=dict(request.headers), mcp_auth_header=None, mcp_server_auth_headers=None,
+        raw_headers=dict(request.headers),
+        mcp_auth_header=None,
+        mcp_server_auth_headers=None,
     )
     assert "authorization" not in raw
     provider_requests: Final[asyncio.Queue[str]] = asyncio.Queue()
@@ -92,9 +152,13 @@ async def test_mapped_caller_bearer_reaches_agent_evaluation(
         assert exchange.headers["authorization"] == "Bearer delegated-token"
         if verdict == "evaluate_error":
             return httpx.Response(503, json={"error": "unavailable"})
-        return httpx.Response(200, json={
-            "allowed": verdict == "allow", "defender": {"status": "Evaluated", "verdict": "Allow" if verdict == "allow" else "Block"},
-        })
+        return httpx.Response(
+            200,
+            json={
+                "allowed": verdict == "allow",
+                "defender": {"status": "Evaluated", "verdict": "Allow" if verdict == "allow" else "Block"},
+            },
+        )
 
     executions: Final[asyncio.Queue[str]] = asyncio.Queue()
 
@@ -107,36 +171,55 @@ async def test_mapped_caller_bearer_reaches_agent_evaluation(
 
     handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(provider))
     guardrail: Final = Agent365Guardrail(
-        guardrail_name="agent-evaluation", tenant_id="tenant", client_id="gateway", client_secret="secret",
-        async_handler=handler, event_hook="pre_mcp_call", default_on=True,
+        guardrail_name="agent-evaluation",
+        tenant_id="tenant",
+        client_id="gateway",
+        client_secret="secret",
+        async_handler=handler,
+        event_hook="pre_mcp_call",
+        default_on=True,
     )
     monkeypatch.setattr(litellm, "callbacks", [guardrail])
     managed: Final = MCPServer(
-        server_id="guarded", name="guarded", transport=MCPTransport.http,
-        spec_path="/catalog.yaml", allow_all_keys=True,
+        server_id="guarded",
+        name="guarded",
+        transport=MCPTransport.http,
+        spec_path="/catalog.yaml",
+        allow_all_keys=True,
     )
     monkeypatch.setitem(operations.global_mcp_server_manager.registry, managed.server_id, managed)
     global_mcp_tool_registry.register_tool(
-        name="guarded-echo", description="Echo", input_schema={"type": "object"}, handler=tool,
+        name="guarded-echo",
+        description="Echo",
+        input_schema={"type": "object"},
+        handler=tool,
     )
     previous: Final = auth_context_var.set(None)
     proxy_mode: Final = _mcp_proxy_mode.set(mode == "proxy")
-    tool_id: Final = mcp_proxy_tool_id(with_mcp_proxy_identity(
-        MCPTool(name="guarded-echo", input_schema={"type": "object"}), managed.server_id,
-    ))
+    tool_id: Final = mcp_proxy_tool_id(
+        with_mcp_proxy_identity(
+            MCPTool(name="guarded-echo", input_schema={"type": "object"}),
+            managed.server_id,
+        )
+    )
     params: Final = {
         "direct": CallToolRequestParams(name="guarded-echo", arguments={}),
-        "virtual": CallToolRequestParams(name="mcp_tool_call", arguments={"tool_name": "guarded-echo", "arguments": {}}),
+        "virtual": CallToolRequestParams(
+            name="mcp_tool_call", arguments={"tool_name": "guarded-echo", "arguments": {}}
+        ),
         "proxy": CallToolRequestParams(name="call_tool", arguments={"tool_id": tool_id, "arguments": {}}),
     }[mode]
     try:
         gateway.set_auth_context(
-            auth, mcp_servers=[managed.server_id], oauth2_headers=oauth,
+            auth,
+            mcp_servers=[managed.server_id],
+            oauth2_headers=oauth,
             raw_headers={"authorization": "Bearer previous.caller.assertion"} if verdict == "missing" else raw,
         )
         async with gateway._legacy_operation_context(_mcp_request_ctx(request=request), trace=False) as context:
             result: Final = await GatewayOperations().execute(
-                CallToolRequest(params=params), context,
+                CallToolRequest(params=params),
+                context,
             )
         assert isinstance(result, CallToolResult)
         assert result.is_error is (verdict != "allow")
@@ -162,12 +245,16 @@ async def test_listing_records_only_tools_the_caller_received(
 ) -> None:
     manager: Final = operations.global_mcp_server_manager
     server: Final = MCPServer(
-        server_id="served-catalog", name="served-catalog", transport=MCPTransport.http,
-        spec_path="/catalog.yaml", allow_all_keys=True,
+        server_id="served-catalog",
+        name="served-catalog",
+        transport=MCPTransport.http,
+        spec_path="/catalog.yaml",
+        allow_all_keys=True,
         allowed_tools=["echo"] if restriction == "server" else None,
     )
     auth: Final = UserAPIKeyAuth(
-        api_key="sk-served-catalog", user_id="lister",
+        api_key="sk-served-catalog",
+        user_id="lister",
         object_permission={
             "object_permission_id": "served-permission",
             "mcp_servers": [server.server_id],
@@ -181,18 +268,24 @@ async def test_listing_records_only_tools_the_caller_received(
     monkeypatch.setattr(litellm, "callbacks", [capture])
     for name in ("echo", "status"):
         global_mcp_tool_registry.register_tool(
-            name=f"served-catalog-{name}", description=f"{name} description",
-            input_schema={"type": "object"}, handler=_served_catalog_tool,
+            name=f"served-catalog-{name}",
+            description=f"{name} description",
+            input_schema={"type": "object"},
+            handler=_served_catalog_tool,
         )
     try:
         if surface == "mcp":
             listing: Final = await operations._list_mcp_tools(
-                user_api_key_auth=auth, mcp_servers=[server.server_id], record_listing=True,
+                user_api_key_auth=auth,
+                mcp_servers=[server.server_id],
+                record_listing=True,
             )
             assert [tool.name for tool in listing.tools] == ["served-catalog-echo"]
         else:
             rest_listing: Final = await rest_endpoints._get_tools_for_single_server(
-                server, None, user_api_key_auth=auth,
+                server,
+                None,
+                user_api_key_auth=auth,
             )
             assert [tool.name for tool in rest_listing] == ["echo"]
         granted: Final = auth.model_copy(update={"object_permission": None})
@@ -203,7 +296,10 @@ async def test_listing_records_only_tools_the_caller_received(
         assert (served.description, served.input_schema) == ("echo description", {"type": "object"})
         server.allowed_tools = None
         result: Final = await manager.call_tool(
-            server_name=server.server_id, name="status", arguments={}, user_api_key_auth=granted,
+            server_name=server.server_id,
+            name="status",
+            arguments={},
+            user_api_key_auth=granted,
             proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
         )
         assert result.is_error is False
@@ -276,7 +372,7 @@ async def test_legacy_adapter_cleans_context_after_cancelled_operation():
 
     previous_session = server.active_mcp_session_var.get()
     previous_request = active_mcp_request_ctx_var.get()
-    request = SimpleNamespace(session=object(), protocol_version="2025-06-18")
+    request = SimpleNamespace(session=object(), protocol_version="2025-06-18", method="tools/call")
     auth = (None, None, None, None, None, None, None)
 
     async def cancelled_operation():
@@ -303,7 +399,7 @@ async def test_legacy_adapter_cleans_context_when_trace_setup_fails():
 
     previous_session = server.active_mcp_session_var.get()
     previous_request = active_mcp_request_ctx_var.get()
-    request = SimpleNamespace(session=object())
+    request = SimpleNamespace(session=object(), protocol_version="2025-06-18", method="tools/call")
 
     async def enter_operation():
         async with server._legacy_operation_context(request, trace=True):
@@ -403,6 +499,54 @@ def _catalog_case(method):
     return cases[method]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "disabled,operation",
+    [
+        ("prompts", "prompts/list"),
+        ("prompts", "prompts/get"),
+        ("resources", "resources/list"),
+        ("resources", "resources/templates/list"),
+        ("resources", "resources/read"),
+    ],
+)
+async def test_disabled_capability_never_reaches_upstream(
+    disabled: str, operation: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from unittest.mock import MagicMock
+
+    from mcp.shared.exceptions import MCPError
+    from mcp.types import METHOD_NOT_FOUND
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import catalog
+
+    monkeypatch.setitem(proxy_server.general_settings, "mcp_disabled_capabilities", [disabled])
+    request, _client_method, manager_method, upstream_value, result_field = _catalog_case(operation)
+    server: Final = MCPServer(
+        server_id="catalog-disabled", name="catalog", server_name="catalog", transport=MCPTransport.http
+    )
+    upstream: Final = AsyncMock(return_value=upstream_value)
+    manager: Final = operations.global_mcp_server_manager
+    context: Final = prepare_context(UserAPIKeyAuth(api_key=hash_token("sk-disabled")), mcp_servers=[server.server_id])
+    with (
+        patch.object(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server])),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock(enforce_mcp_server_rate_limits=AsyncMock())),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch.dict(manager.registry, {server.server_id: server}),
+        patch.object(manager, manager_method, upstream),
+        patch.object(catalog, "fetch_optional_catalog_page", upstream),
+    ):
+        if result_field is None:
+            with pytest.raises(MCPError) as rejected:
+                await GatewayOperations().execute(request, context)
+            assert rejected.value.error.code == METHOD_NOT_FOUND
+        else:
+            result = await GatewayOperations().execute(request, context)
+            assert getattr(result, result_field) == []
+    upstream.assert_not_awaited()
+
+
 def _mcp_rate_limited_proxy_logging() -> ProxyLogging:
     proxy_logging: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
     proxy_logging.proxy_hook_mapping["parallel_request_limiter"] = PROXY_MaxParallelRequestsHandler_v3(
@@ -452,9 +596,7 @@ async def test_mcp_server_rpm_limits_every_catalog_operation(operation: str) -> 
             resources=[types.Resource(name="document", uri="https://example.com/document")]
         ),
         "resources/templates/list": types.ListResourceTemplatesResult(
-            resource_templates=[
-                types.ResourceTemplate(name="document", uri_template="https://example.com/{name}")
-            ]
+            resource_templates=[types.ResourceTemplate(name="document", uri_template="https://example.com/{name}")]
         ),
         "prompts/get": GetPromptResult(messages=[]),
         "resources/read": types.ReadResourceResult(contents=[]),
@@ -537,9 +679,7 @@ async def test_tools_call_warmup_does_not_consume_mcp_server_rpm() -> None:
     )
     caller: Final = UserAPIKeyAuth(api_key=hash_token("sk-catalog-warmup"))
     proxy_logging: Final = _mcp_rate_limited_proxy_logging()
-    upstream: Final = AsyncMock(
-        return_value=[types.Tool(name="echo", inputSchema={"type": "object"})]
-    )
+    upstream: Final = AsyncMock(return_value=[types.Tool(name="echo", inputSchema={"type": "object"})])
     with (
         patch.object(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server])),
         patch.object(operations.global_mcp_server_manager, "server_exposes_tool", return_value=False),
@@ -565,7 +705,6 @@ async def test_tools_call_warmup_does_not_consume_mcp_server_rpm() -> None:
     assert [tool.name for tool in listing.tools] == ["echo"]
 
 
-
 def _scoped_rig(
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[MCPServer, MCPServer, AsyncMock, AsyncMock]:
@@ -585,9 +724,7 @@ def _scoped_rig(
     manager.config_mcp_servers = {server.server_id: server for server in (memory, other)}
     monkeypatch.setattr(proxy_server, "prisma_client", None)
     monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
-    monkeypatch.setattr(
-        manager, "get_allowed_mcp_servers", AsyncMock(return_value=[memory.server_id, other.server_id])
-    )
+    monkeypatch.setattr(manager, "get_allowed_mcp_servers", AsyncMock(return_value=[memory.server_id, other.server_id]))
     monkeypatch.setattr(global_mcp_tool_registry, "published_tools", {})
     listing: Final = AsyncMock()
     monkeypatch.setattr(operations, "_get_tools_from_mcp_servers", listing)
@@ -646,6 +783,7 @@ async def test_bare_tool_name_without_a_single_server_scope_is_still_unresolved_
     assert unresolved.value.status_code == 404
     listing.assert_not_awaited()
     handled.assert_not_awaited()
+
 
 @pytest.mark.asyncio
 async def test_tools_call_pre_call_check_enforces_mcp_server_rpm() -> None:
@@ -794,8 +932,13 @@ async def test_catalog_helpers_preserve_context_results_and_failure_policy(metho
             if collection:
                 helper = getattr(operations, "_list_mcp_" + collection)
                 result = await helper(
-                    user_api_key_auth=caller, mcp_auth_header=None, mcp_servers=["catalog"],
-                    mcp_server_auth_headers=None, oauth2_headers=None, raw_headers=headers, client_ip="192.0.2.41",
+                    user_api_key_auth=caller,
+                    mcp_auth_header=None,
+                    mcp_servers=["catalog"],
+                    mcp_server_auth_headers=None,
+                    oauth2_headers=None,
+                    raw_headers=headers,
+                    client_ip="192.0.2.41",
                 )
                 assert result == (payload if state == "success" else [])
             else:
@@ -1107,7 +1250,9 @@ async def test_discovery_preserves_caller_scope_and_proxy_restrictions():
     from mcp.types import DiscoverRequest, ListToolsResult, Tool
 
     listed = AsyncMock(return_value=ListToolsResult(tools=[Tool(name="allowed", input_schema={"type": "object"})]))
-    context = prepare_context(UserAPIKeyAuth(user_id="scoped"), mcp_servers=["only-this"], mcp_proxy_mode=True, protocol_version="2025-06-18")
+    context = prepare_context(
+        UserAPIKeyAuth(user_id="scoped"), mcp_servers=["only-this"], mcp_proxy_mode=True, protocol_version="2025-06-18"
+    )
     with patch("litellm.proxy._experimental.mcp_server.operations._execute_handle_list_tools", listed):
         result = await GatewayOperations().execute(DiscoverRequest(), context)
     assert result.capabilities.tools is not None
@@ -1134,16 +1279,34 @@ async def test_discovery_denial_cannot_advertise_tools():
 @pytest.mark.parametrize("available", ["none", "resources", "templates", "prompts"])
 async def test_discovery_lists_each_capability_with_the_same_caller(available):
     from mcp.types import (
-        DiscoverRequest, ListToolsResult, ListPromptsResult, ListResourcesResult,
-        ListResourceTemplatesResult, Prompt, Resource, ResourceTemplate,
+        DiscoverRequest,
+        ListToolsResult,
+        ListPromptsResult,
+        ListResourcesResult,
+        ListResourceTemplatesResult,
+        Prompt,
+        Resource,
+        ResourceTemplate,
     )
     from litellm.proxy._experimental.mcp_server import operations
 
     context = prepare_context(UserAPIKeyAuth(user_id="scoped"), mcp_servers=["authorized"])
     tools = AsyncMock(return_value=ListToolsResult(tools=[]))
-    prompts = AsyncMock(return_value=ListPromptsResult(prompts=[Prompt(name="allowed")] if available == "prompts" else []))
-    resources = AsyncMock(return_value=ListResourcesResult(resources=[Resource(name="allowed", uri="test://allowed")] if available == "resources" else []))
-    templates = AsyncMock(return_value=ListResourceTemplatesResult(resource_templates=[ResourceTemplate(name="allowed", uri_template="test://{id}")] if available == "templates" else []))
+    prompts = AsyncMock(
+        return_value=ListPromptsResult(prompts=[Prompt(name="allowed")] if available == "prompts" else [])
+    )
+    resources = AsyncMock(
+        return_value=ListResourcesResult(
+            resources=[Resource(name="allowed", uri="test://allowed")] if available == "resources" else []
+        )
+    )
+    templates = AsyncMock(
+        return_value=ListResourceTemplatesResult(
+            resource_templates=[ResourceTemplate(name="allowed", uri_template="test://{id}")]
+            if available == "templates"
+            else []
+        )
+    )
     with (
         patch.object(operations, "_execute_handle_list_tools", tools),
         patch.object(operations, "_execute_list_prompts", prompts),
@@ -1156,6 +1319,50 @@ async def test_discovery_lists_each_capability_with_the_same_caller(available):
     assert (result.capabilities.resources is not None) == (available in {"resources", "templates"})
     for listing in (tools, prompts, resources, templates):
         assert listing.await_args.args[0] is context
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disabled", ["prompts", "resources"])
+async def test_discovery_skips_disabled_capability_listings(disabled: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    from mcp.types import (
+        DiscoverRequest,
+        ListPromptsResult,
+        ListResourcesResult,
+        ListResourceTemplatesResult,
+        ListToolsResult,
+        Prompt,
+        Resource,
+        ResourceTemplate,
+    )
+
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setitem(proxy_server.general_settings, "mcp_disabled_capabilities", [disabled])
+    context: Final = prepare_context(UserAPIKeyAuth(user_id="scoped"), mcp_servers=["authorized"])
+    tools: Final = AsyncMock(return_value=ListToolsResult(tools=[]))
+    prompts: Final = AsyncMock(return_value=ListPromptsResult(prompts=[Prompt(name="allowed")]))
+    resources: Final = AsyncMock(
+        return_value=ListResourcesResult(resources=[Resource(name="allowed", uri="test://allowed")])
+    )
+    templates: Final = AsyncMock(
+        return_value=ListResourceTemplatesResult(
+            resource_templates=[ResourceTemplate(name="allowed", uri_template="test://{id}")]
+        )
+    )
+    with (
+        patch.object(operations, "_execute_handle_list_tools", tools),
+        patch.object(operations, "_execute_list_prompts", prompts),
+        patch.object(operations, "_execute_list_resources", resources),
+        patch.object(operations, "_execute_list_resource_templates", templates),
+    ):
+        result = await GatewayOperations().execute(DiscoverRequest(), context)
+    assert (result.capabilities.prompts is None) == (disabled == "prompts")
+    assert (result.capabilities.resources is None) == (disabled == "resources")
+    if disabled == "prompts":
+        prompts.assert_not_awaited()
+    else:
+        resources.assert_not_awaited()
+        templates.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1214,6 +1421,7 @@ async def test_discovery_shares_one_server_admission_across_catalog_listings() -
         AsyncMock(side_effect=fetch_resources),
         AsyncMock(side_effect=fetch_resource_templates),
     )
+
     async def fetch_optional_page(
         _context: OperationContext,
         request: types.ListPromptsRequest | types.ListResourcesRequest | types.ListResourceTemplatesRequest,
@@ -1257,13 +1465,24 @@ async def test_discovery_shares_one_server_admission_across_catalog_listings() -
 @pytest.mark.asyncio
 @pytest.mark.parametrize("outcome", ["success", "failure", "cancel"])
 async def test_discovery_concurrent_listings_drain_on_failure_and_cancellation(outcome):
-    from mcp.types import DiscoverRequest, ListToolsResult, ListPromptsResult, ListResourcesResult, ListResourceTemplatesResult
+    from mcp.types import (
+        DiscoverRequest,
+        ListToolsResult,
+        ListPromptsResult,
+        ListResourcesResult,
+        ListResourceTemplatesResult,
+    )
     from litellm.proxy._experimental.mcp_server import operations
 
     ready = [asyncio.Event() for _ in range(4)]
     closed = [asyncio.Event() for _ in range(4)]
     release = asyncio.Event()
-    responses = (ListToolsResult(tools=[]), ListPromptsResult(prompts=[]), ListResourcesResult(resources=[]), ListResourceTemplatesResult(resource_templates=[]))
+    responses = (
+        ListToolsResult(tools=[]),
+        ListPromptsResult(prompts=[]),
+        ListResourcesResult(resources=[]),
+        ListResourceTemplatesResult(resource_templates=[]),
+    )
 
     def listing(index):
         async def run(*args, **kwargs):
@@ -1277,6 +1496,7 @@ async def test_discovery_concurrent_listings_drain_on_failure_and_cancellation(o
                 return responses[index]
             finally:
                 closed[index].set()
+
         return run
 
     with (
@@ -1285,19 +1505,21 @@ async def test_discovery_concurrent_listings_drain_on_failure_and_cancellation(o
         patch.object(operations, "_execute_list_resources", side_effect=listing(2)),
         patch.object(operations, "_execute_list_resource_templates", side_effect=listing(3)),
     ):
-        task = asyncio.create_task(GatewayOperations().execute(DiscoverRequest(), prepare_context(UserAPIKeyAuth(user_id="scoped"))))
+        task = asyncio.create_task(
+            GatewayOperations().execute(DiscoverRequest(), prepare_context(UserAPIKeyAuth(user_id="scoped")))
+        )
         try:
-            await asyncio.wait_for(asyncio.gather(*(event.wait() for event in ready)), 1)
+            await asyncio.gather(*(event.wait() for event in ready))
             if outcome == "cancel":
                 task.cancel()
             else:
                 release.set()
             if outcome == "success":
-                result = await asyncio.wait_for(task, 1)
+                result = await task
                 assert result.capabilities.model_dump(exclude_none=True) == {}
             else:
                 with pytest.raises(asyncio.CancelledError if outcome == "cancel" else ValueError):
-                    await asyncio.wait_for(task, 1)
+                    await task
             assert all(event.is_set() for event in closed)
             assert tools.call_args.kwargs["log_list_tools_to_spendlogs"] is False
         finally:
@@ -1314,7 +1536,8 @@ async def test_tools_listing_preserves_explicit_spend_log_policy(log_enabled):
     listing = AsyncMock(return_value=operations.AggregateToolListing(tools=[], outcomes={}))
     with patch.object(operations, "_list_mcp_tools", listing):
         result = await operations._execute_handle_list_tools(
-            prepare_context(UserAPIKeyAuth(user_id="caller")), PaginatedRequestParams(),
+            prepare_context(UserAPIKeyAuth(user_id="caller")),
+            PaginatedRequestParams(),
             log_list_tools_to_spendlogs=log_enabled,
         )
     assert result.tools == []
@@ -1351,7 +1574,10 @@ async def test_list_mcp_tools_records_the_catalog_only_when_asked(
 @pytest.mark.asyncio
 async def test_discovery_keeps_one_catalog_revision_across_concurrent_listings(monkeypatch):
     from mcp.types import (
-        DiscoverRequest, ListToolsResult, ListPromptsResult, ListResourcesResult,
+        DiscoverRequest,
+        ListToolsResult,
+        ListPromptsResult,
+        ListResourcesResult,
         ListResourceTemplatesResult,
     )
     from litellm.proxy import proxy_server
@@ -1365,8 +1591,12 @@ async def test_discovery_keeps_one_catalog_revision_across_concurrent_listings(m
     monkeypatch.setattr(proxy_server, "prisma_client", None)
     monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
     observed = []
-    responses = (ListToolsResult(tools=[]), ListPromptsResult(prompts=[]),
-                 ListResourcesResult(resources=[]), ListResourceTemplatesResult(resource_templates=[]))
+    responses = (
+        ListToolsResult(tools=[]),
+        ListPromptsResult(prompts=[]),
+        ListResourcesResult(resources=[]),
+        ListResourceTemplatesResult(resource_templates=[]),
+    )
 
     def listing(index):
         async def run(*args, **kwargs):
@@ -1374,6 +1604,7 @@ async def test_discovery_keeps_one_catalog_revision_across_concurrent_listings(m
                 observed.append(manager.get_mcp_server_by_id(original.server_id).name)
                 manager.registry = {updated.server_id: updated}
                 return responses[index]
+
         return run
 
     with (
@@ -1402,8 +1633,12 @@ async def test_local_handler_freshness_tracks_registered_owner_with_overlapping_
     monkeypatch.setattr(proxy_server, "prisma_client", None)
     manager = MCPServerManager()
     now = datetime.now(timezone.utc)
-    private = MCPServer(server_id="private", name="billing", alias="billing", transport=MCPTransport.http, updated_at=now)
-    allowed = MCPServer(server_id="allowed", name="billing_admin", alias="billing-admin", transport=MCPTransport.http, updated_at=now)
+    private = MCPServer(
+        server_id="private", name="billing", alias="billing", transport=MCPTransport.http, updated_at=now
+    )
+    allowed = MCPServer(
+        server_id="allowed", name="billing_admin", alias="billing-admin", transport=MCPTransport.http, updated_at=now
+    )
     manager.config_mcp_servers = {server.server_id: server for server in (private, allowed)}
     monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
     monkeypatch.setattr(global_mcp_tool_registry, "published_tools", {})
@@ -1411,7 +1646,9 @@ async def test_local_handler_freshness_tracks_registered_owner_with_overlapping_
     global_mcp_tool_registry.register_tool("billing-admin-export", "export", {}, handler, server_id=private.server_id)
 
     async with manager.catalog.operation():
-        manager.config_mcp_servers[changed_server_id] = manager.config_mcp_servers[changed_server_id].model_copy(update={"updated_at": now + timedelta(seconds=1)})
+        manager.config_mcp_servers[changed_server_id] = manager.config_mcp_servers[changed_server_id].model_copy(
+            update={"updated_at": now + timedelta(seconds=1)}
+        )
         if changed_server_id == "private":
             with pytest.raises(HTTPException) as denied:
                 await operations._handle_local_mcp_tool("billing-admin-export", {})
@@ -1540,9 +1777,15 @@ async def test_continuation_preserves_current_authority_unavailable_error(monkey
     monkeypatch.setattr(proxy_server, "prisma_client", None)
     caller = UserAPIKeyAuth(api_key="sk-owned-key-without-database")
     caller.via_virtual_key = True
-    request = {"prompts/list": ListPromptsRequest, "resources/list": ListResourcesRequest, "resources/templates/list": ListResourceTemplatesRequest}[method]
+    request = {
+        "prompts/list": ListPromptsRequest,
+        "resources/list": ListResourcesRequest,
+        "resources/templates/list": ListResourceTemplatesRequest,
+    }[method]
     with pytest.raises(MCPError, match="Server misconfigured: no database connection"):
-        await GatewayOperations().execute(request(params=PaginatedRequestParams(cursor="existing-state")), prepare_context(caller))
+        await GatewayOperations().execute(
+            request(params=PaginatedRequestParams(cursor="existing-state")), prepare_context(caller)
+        )
 
 
 @pytest.mark.asyncio
@@ -1552,13 +1795,17 @@ async def test_virtual_tool_catalog_rejects_a_cursor_and_preserves_its_complete_
 
     from litellm.proxy._types import LiteLLM_ObjectPermissionTable
 
-    caller = UserAPIKeyAuth(object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="search", mcp_tool_search_enabled=True))
+    caller = UserAPIKeyAuth(
+        object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="search", mcp_tool_search_enabled=True)
+    )
     context = prepare_context(caller)
     result = await GatewayOperations().execute(ListToolsRequest(), context)
     assert result.tools
     assert result.next_cursor is None
     with pytest.raises(MCPError, match="fresh listing"):
-        await GatewayOperations().execute(ListToolsRequest(params=PaginatedRequestParams(cursor="existing-state")), context)
+        await GatewayOperations().execute(
+            ListToolsRequest(params=PaginatedRequestParams(cursor="existing-state")), context
+        )
 
 
 @pytest.mark.asyncio
@@ -1573,7 +1820,9 @@ async def test_optional_catalog_preserves_revoked_user_error(monkeypatch, reques
 
     monkeypatch.setattr(proxy_server, "general_settings", {"supported_db_objects": []})
     table = SimpleNamespace(find_unique=AsyncMock(return_value=None))
-    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(writer_db=SimpleNamespace(litellm_usertable=table)))
+    monkeypatch.setattr(
+        proxy_server, "prisma_client", SimpleNamespace(writer_db=SimpleNamespace(litellm_usertable=table))
+    )
     monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
     caller = UserAPIKeyAuth(user_id="revoked-catalog-user")
     caller.mcp_admitted_user_subject = True
@@ -1603,7 +1852,9 @@ async def test_tool_continuation_failure_requires_a_fresh_listing(monkeypatch: p
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("gateway", [False, True])
-async def test_initial_tool_listing_preserves_legacy_error_fallback(monkeypatch: pytest.MonkeyPatch, gateway: bool) -> None:
+async def test_initial_tool_listing_preserves_legacy_error_fallback(
+    monkeypatch: pytest.MonkeyPatch, gateway: bool
+) -> None:
     from mcp.types import ListToolsRequest
 
     fetch: Final = AsyncMock(side_effect=RuntimeError("catalog temporarily unavailable"))
@@ -1624,12 +1875,20 @@ def test_discovery_extra_headers_exclude_gateway_admission_key(header_name: str)
     caller_key: Final = "Bearer sk-admission-only"
     raw_headers: Final = {"x-litellm-api-key": caller_key, "x-tenant": "tenant-control"}
     server: Final = MCPServer(
-        server_id="header-boundary", name="header-boundary", transport=MCPTransport.http,
-        url="https://example.invalid/mcp", auth_type=MCPAuth.none,
+        server_id="header-boundary",
+        name="header-boundary",
+        transport=MCPTransport.http,
+        url="https://example.invalid/mcp",
+        auth_type=MCPAuth.none,
         extra_headers=[header_name, "X-Tenant"],
     )
     auth_header, extra_headers = operations._prepare_mcp_server_headers(
-        server, None, None, None, raw_headers, UserAPIKeyAuth(api_key="sk-admission-only"),
+        server,
+        None,
+        None,
+        None,
+        raw_headers,
+        UserAPIKeyAuth(api_key="sk-admission-only"),
     )
     assert auth_header is None
     assert extra_headers == {"X-Tenant": "tenant-control"}
@@ -1639,17 +1898,27 @@ def test_discovery_extra_headers_exclude_gateway_admission_key(header_name: str)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("request_kind", ["absent", "non_starlette", "without_bearer", "admission_key"])
 async def test_guardrail_context_never_recovers_a_previous_request_bearer(
-    _mcp_request_ctx: Callable[..., ServerRequestContext], request_kind: str, monkeypatch: pytest.MonkeyPatch,
+    _mcp_request_ctx: Callable[..., ServerRequestContext],
+    request_kind: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from mcp.server.auth.middleware.auth_context import auth_context_var
     from starlette.requests import Request
     from litellm.proxy._experimental.mcp_server import server as gateway
 
     request: Final = (
-        None if request_kind == "absent" else object() if request_kind == "non_starlette" else Request({
-            "type": "http", "method": "POST", "path": "/mcp",
-            "headers": [(b"authorization", b"Bearer sk-current-key")] if request_kind == "admission_key" else [],
-        })
+        None
+        if request_kind == "absent"
+        else object()
+        if request_kind == "non_starlette"
+        else Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/mcp",
+                "headers": [(b"authorization", b"Bearer sk-current-key")] if request_kind == "admission_key" else [],
+            }
+        )
     )
     previous: Final = auth_context_var.set(None)
     try:
@@ -1661,7 +1930,9 @@ async def test_guardrail_context_never_recovers_a_previous_request_bearer(
         monkeypatch.setattr(litellm, "callbacks", [capture])
         async with gateway._legacy_operation_context(_mcp_request_ctx(request=request), trace=False) as context:
             await operations.global_mcp_server_manager.pre_call_tool_check(
-                name="echo", arguments={}, server_name="guarded",
+                name="echo",
+                arguments={},
+                server_name="guarded",
                 user_api_key_auth=context.user_api_key_auth,
                 proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
                 server=MCPServer(server_id="guarded", name="guarded", transport=MCPTransport.http, allow_all_keys=True),
@@ -1672,3 +1943,56 @@ async def test_guardrail_context_never_recovers_a_previous_request_bearer(
         assert capture.data["incoming_bearer_token"] is None
     finally:
         auth_context_var.reset(previous)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delay", ["target", "probe", "exhausted"])
+async def test_discovery_optional_probes_use_remaining_listing_budget(delay, monkeypatch):
+    from types import SimpleNamespace
+    from mcp.types import (
+        DiscoverRequest, ListToolsResult, ListPromptsResult, ListResourcesResult,
+        ListResourceTemplatesResult, ToolsCapability, Tool,
+    )
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import subscriptions
+
+    entered = asyncio.Event()
+    cleaned = asyncio.Event()
+
+    async def blocked(*args, **kwargs):
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleaned.set()
+
+    async def tools(*args, **kwargs):
+        if delay == "exhausted":
+            await asyncio.sleep(0.08)
+        return ListToolsResult(tools=[Tool(name="usable", input_schema={"type": "object"})])
+
+    target = SimpleNamespace(
+        server=SimpleNamespace(protocol_version="2026-07-28", transport="http"),
+        client=SimpleNamespace(run_with_session=blocked),
+    )
+    monkeypatch.setitem(proxy_server.general_settings, "mcp_advertised_versions", ["2026-07-28"])
+    # The existing listing budget includes optional target preparation and handshakes.
+    monkeypatch.setattr(operations, "MCP_TOOL_LISTING_TIMEOUT", 0.05, raising=False)
+    with (
+        patch.object(operations, "_execute_handle_list_tools", side_effect=tools),
+        patch.object(operations, "_execute_list_prompts", return_value=ListPromptsResult(prompts=[])),
+        patch.object(operations, "_execute_list_resources", return_value=ListResourcesResult(resources=[])),
+        patch.object(operations, "_execute_list_resource_templates", return_value=ListResourceTemplatesResult(resource_templates=[])),
+        patch.object(operations, "_mcp_server_rate_limit_rejection", return_value=None),
+        patch.object(subscriptions, "_targets", side_effect=blocked if delay == "target" else None, return_value=(target,)) as targets,
+    ):
+        context = prepare_context(UserAPIKeyAuth(user_id="scoped"), protocol_version="2026-07-28")
+        result = await asyncio.wait_for(GatewayOperations().execute(DiscoverRequest(), context), 0.5)
+    assert result.capabilities.tools == ToolsCapability()
+    assert result.capabilities.resources is None
+    if delay == "exhausted":
+        targets.assert_not_awaited()
+        assert not entered.is_set()
+    else:
+        assert entered.is_set()
+        assert cleaned.is_set()

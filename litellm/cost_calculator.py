@@ -556,12 +556,11 @@ def cost_per_token(
 
     assert custom_llm_provider is not None  # caller-supplied or get_llm_provider
 
-    model_without_prefix = model
     model_parts: Final = model.split("/", 1)
-    if len(model_parts) > 1:
-        model_without_prefix = model_parts[1]
-    else:
-        model_without_prefix = model
+    model_is_provider_relative: Final = (
+        model_with_provider == f"{custom_llm_provider}/{model}" and model_with_provider in model_cost_ref
+    )
+    model_without_prefix: Final = model if len(model_parts) == 1 or model_is_provider_relative else model_parts[1]
     """
     Code block that formats model to lookup in litellm.model_cost
     Option1. model = "bedrock/ap-northeast-1/anthropic.claude-instant-v1". This is the most accurate since it is region based. Should always be option 1
@@ -1403,7 +1402,7 @@ def completion_cost(
     total_time: float | None = 0.0,  # used for replicate, sagemaker
     call_type: CallTypesLiteral | None = None,
     ### REGION ###
-    custom_llm_provider=None,
+    custom_llm_provider: str | None = None,
     region_name=None,  # used for bedrock pricing
     ### IMAGE GEN ###
     size: str | None = None,
@@ -1549,6 +1548,7 @@ def completion_cost(
             region_name=region_name,
         )
 
+        requested_model: Final = model
         potential_model_names: Final = [
             selected_model,
             _get_response_model(completion_response),
@@ -1708,15 +1708,17 @@ def completion_cost(
                                 video_generation_cost,
                             )
 
-                            return (
-                                video_generation_cost(
-                                    model=model,
-                                    duration_seconds=duration_seconds,
-                                    custom_llm_provider=custom_llm_provider,
-                                    model_info=_video_model_info,
-                                    video_resolution=video_resolution,
-                                )
-                                * video_count
+                            return video_generation_cost(
+                                model=model,
+                                duration_seconds=duration_seconds,
+                                custom_llm_provider=custom_llm_provider,
+                                model_info=_video_model_info,
+                                video_resolution=video_resolution,
+                            ) * video_count + _video_input_image_cost(
+                                requested_model or model,
+                                custom_llm_provider,
+                                _video_model_info,
+                                getattr(completion_response, "usage", None),
                             )
                     # Fallback to default video cost calculation if no duration available
                     return default_video_cost_calculator(
@@ -2166,6 +2168,27 @@ def response_cost_calculator(
         return response_cost
     except Exception as e:
         raise e
+
+
+def _video_input_image_cost(
+    model: str,
+    custom_llm_provider: str | None,
+    model_info: ModelInfo | None,
+    usage: object,
+) -> float:
+    match usage:
+        case {"billable_input_image_count": int(billable_input_images)} if billable_input_images > 0:
+            deployment_rate: Final = model_info.get("input_cost_per_image") if model_info is not None else None
+            image_rate: Final = (
+                deployment_rate
+                if deployment_rate is not None
+                else litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider).get(
+                    "input_cost_per_image"
+                )
+            )
+            return billable_input_images * image_rate if isinstance(image_rate, (int, float)) else 0.0
+        case _:
+            return 0.0
 
 
 _LOGGED_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])

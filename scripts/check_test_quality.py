@@ -88,6 +88,13 @@ TQ011   An integration-test assertion that compares an elapsed time against a nu
         is a literal when it is built only from numbers, or names a module-level number.
         Only `assert` statements are examined, so a polling deadline in a `while` loop is
         left alone. Same path scope as TQ010.
+TQ012   A port read back from a port-0 bind: `sock.bind((host, 0))` in a function
+        that also calls `getsockname`. The number is free only until the socket
+        closes, so a server started on it later can lose it to another process and
+        fail with "Address already in use". Take the port from `allocate_port()` in
+        tests/integration/_support/ports.py, which hands each pytest worker its own
+        block of ports. Every file under tests/integration is examined, including
+        tests/integration/_support.
 
 Every rule is suppressible with `# test-quality-ok: <reason>` on the reported
 line, following the repo's `*-ok: <reason>` convention. A suppression without a
@@ -172,7 +179,7 @@ SUBPROCESS_SPAWNS: Final = frozenset(("run", "Popen", "check_output", "check_cal
 INTERPRETER_ISOLATION_FLAGS: Final = frozenset(("-I", "-P"))
 
 RULE_CODES: Final = frozenset((
-    "TQ000", "TQ001", "TQ002", "TQ003", "TQ004", "TQ005", "TQ006", "TQ007", "TQ009", "TQ010", "TQ011",
+    "TQ000", "TQ001", "TQ002", "TQ003", "TQ004", "TQ005", "TQ006", "TQ007", "TQ009", "TQ010", "TQ011", "TQ012",
 ))
 
 INTEGRATION_ROOT: Final = ("tests", "integration")
@@ -181,6 +188,8 @@ SIGNAL_SENDERS: Final = frozenset(("os.kill", "os.killpg"))
 PROCESS_CONTROL_SIGNALS: Final = frozenset(("SIGKILL", "SIGSTOP", "SIGCONT"))
 ZERO_ARGUMENT_PROCESS_CONTROLS: Final = frozenset(("kill", "terminate", "suspend", "resume"))
 SIGNAL_METHOD: Final = "send_signal"
+BIND_METHOD: Final = "bind"
+PORT_READBACK: Final = "getsockname"
 CLOCK_READERS: Final = frozenset((
     "time.monotonic", "time.perf_counter", "time.time",
     "time.monotonic_ns", "time.perf_counter_ns", "time.time_ns",
@@ -877,6 +886,50 @@ def iter_wall_clock_bound_violations(path: Path, tree: ast.Module) -> Iterator[V
         )
 
 
+def is_integration_tree_path(path: Path) -> bool:
+    parts: Final = path.parts
+    return any(parts[index:index + 2] == INTEGRATION_ROOT for index in range(len(parts) - 1))
+
+
+def _calls_in_scope(node: ast.AST, scope: ast.AST) -> Iterator[tuple[ast.Call, ast.AST]]:
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, ast.Call):
+            yield child, scope
+        inner: Final = child if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) else scope
+        yield from _calls_in_scope(child, inner)
+
+
+def _binds_port_zero(call: ast.Call) -> bool:
+    if not isinstance(call.func, ast.Attribute) or call.func.attr != BIND_METHOD or not call.args:
+        return False
+    address: Final = call.args[0]
+    return (
+        isinstance(address, ast.Tuple)
+        and len(address.elts) == 2
+        and isinstance(address.elts[1], ast.Constant)
+        and address.elts[1].value == 0
+    )
+
+
+def _reads_back_port(scope: ast.AST) -> bool:
+    return any(isinstance(node, ast.Attribute) and node.attr == PORT_READBACK for node in ast.walk(scope))
+
+
+def iter_port_readback_violations(path: Path, tree: ast.Module) -> Iterator[Violation]:
+    if not is_integration_tree_path(path):
+        return
+    for call, scope in _calls_in_scope(tree, tree):
+        if _binds_port_zero(call) and _reads_back_port(scope):
+            yield Violation(
+                path,
+                call.lineno,
+                "TQ012",
+                "a port read back from a port-0 bind is free only until the socket closes, so a server started on "
+                "it later can lose it to another process; take the port from allocate_port() in "
+                f"tests/integration/_support/ports.py (suppress: `# {SUPPRESSION_TOKEN}: <reason>`)",
+            )
+
+
 def iter_conftest_inventory_violations(path: Path, tree: ast.Module) -> Iterator[Violation]:
     if path.name != CONFTEST_NAME:
         return
@@ -916,6 +969,7 @@ def check_file(path: Path) -> tuple[Violation, ...]:
             *iter_child_interpreter_violations(path, tree),
             *iter_process_signal_violations(path, tree),
             *iter_wall_clock_bound_violations(path, tree),
+            *iter_port_readback_violations(path, tree),
         )
         if violation.line not in skip
     )

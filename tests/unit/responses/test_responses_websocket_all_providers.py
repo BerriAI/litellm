@@ -8,6 +8,7 @@ Tests that:
 """
 
 import json
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -2803,6 +2804,178 @@ class TestWebSocketChunkTypes:
         assert serialized is not None
         assert "response.reasoning_content.done" in serialized
         assert "Complete reasoning" in serialized
+
+
+class TestResponsesWebSocketCredentials:
+    @staticmethod
+    async def _upstream_handshake_headers(**call_kwargs: object) -> Mapping[str, str]:
+        from asyncio import Future, get_running_loop
+        from types import TracebackType
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.responses import main as responses_main
+
+        captured_headers: Final[Future[Mapping[str, str]]] = get_running_loop().create_future()
+
+        class FakeConnect:
+            def __init__(
+                self,
+                _url: str,
+                *,
+                additional_headers: Mapping[str, str],
+                **_kwargs: object,
+            ) -> None:
+                captured_headers.set_result(dict(additional_headers))
+
+            async def __aenter__(self) -> None:
+                raise RuntimeError("stop at upstream handshake")
+
+            async def __aexit__(
+                self,
+                _exc_type: type[BaseException] | None,
+                _exc: BaseException | None,
+                _tb: TracebackType | None,
+            ) -> None:
+                return None
+
+        websocket: Final = MagicMock()
+        websocket.close = AsyncMock()
+        with patch("websockets.connect", FakeConnect):
+            await responses_main._aresponses_websocket.__wrapped__(
+                websocket=websocket,
+                litellm_logging_obj=MagicMock(),
+                **call_kwargs,
+            )
+
+        assert captured_headers.done(), "the request never reached the native upstream websocket"
+        return captured_headers.result()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "api_base,explicit_key,global_key,expected_key",
+        [
+            ("https://upstream.invalid/v1", "deployment-key", None, "deployment-key"),
+            ("https://upstream.invalid/v1", "deployment-key", "global-key", "deployment-key"),
+            ("https://upstream.invalid/v1", None, "global-key", "global-key"),
+        ],
+    )
+    async def test_openai_websocket_authorization(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        api_base: str,
+        explicit_key: str | None,
+        global_key: str | None,
+        expected_key: str,
+    ) -> None:
+        import litellm
+
+        monkeypatch.setattr(litellm, "api_key", global_key)
+        monkeypatch.setattr(litellm, "openai_key", None)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.setenv("LITELLM_RUST", "false")
+
+        headers: Final = await self._upstream_handshake_headers(
+            model="gpt-6-astra",
+            custom_llm_provider="openai",
+            api_key=explicit_key,
+            api_base=api_base,
+        )
+
+        assert headers["Authorization"] == f"Bearer {expected_key}"
+
+    @pytest.mark.asyncio
+    async def test_azure_websocket_without_its_own_key_never_gets_the_openai_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import litellm
+
+        monkeypatch.setattr(litellm, "api_key", None)
+        monkeypatch.setattr(litellm, "openai_key", None)
+        monkeypatch.setattr(litellm, "azure_key", None)
+        monkeypatch.setenv("OPENAI_API_KEY", "openai-global-key")
+        monkeypatch.setenv("AZURE_API_KEY", "azure-env-key")
+        monkeypatch.delenv("AZURE_OPENAI_API_KEY", raising=False)
+        monkeypatch.setenv("LITELLM_RUST", "false")
+
+        headers: Final = await self._upstream_handshake_headers(
+            model="gpt-6-astra",
+            custom_llm_provider="azure",
+            api_base="https://resource.openai.azure.com",
+        )
+
+        assert headers["api-key"] == "azure-env-key"
+        assert "openai-global-key" not in " ".join(headers.values())
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "custom_llm_provider,api_base,deployment_key,expected_key",
+        [
+            (None, "https://api.deepseek.com/v1", "deployment-key", "deployment-key"),
+            ("openai", "https://api.deepseek.com/v1", "deployment-key", "deployment-key"),
+            ("openai", "https://api.deepseek.com/v1", None, "deepseek-env-key"),
+            ("openai", "https://api.mistral.ai/v1", "deployment-key", "deployment-key"),
+        ],
+    )
+    async def test_deployment_on_a_known_provider_host_completes_through_that_provider(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        custom_llm_provider: str | None,
+        api_base: str,
+        deployment_key: str | None,
+        expected_key: str,
+    ) -> None:
+        from unittest.mock import AsyncMock, patch
+
+        import httpx
+        import respx
+
+        import litellm
+        from litellm.responses import main as responses_main
+
+        chunks: Final = (
+            {"choices": [{"index": 0, "delta": {"role": "assistant", "content": "OK"}, "finish_reason": None}]},
+            {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+        )
+        stream: Final = "".join(
+            f"data: {json.dumps({'id': 'chatcmpl-1', 'object': 'chat.completion.chunk', 'created': 1, 'model': 'astra-chat', **chunk})}\n\n"
+            for chunk in chunks
+        )
+
+        def refuse_native_socket(*_args: object, **_kwargs: object) -> None:
+            raise ConnectionRefusedError("this host has no Responses WebSocket")
+
+        monkeypatch.setattr(litellm, "api_key", None)
+        monkeypatch.setattr(litellm, "openai_key", None)
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        monkeypatch.setenv("OPENAI_API_KEY", "openai-env-key")
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-env-key")
+        monkeypatch.setenv("MISTRAL_API_KEY", "mistral-env-key")
+        monkeypatch.setenv("LITELLM_RUST", "false")
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock()
+        websocket.close = AsyncMock()
+        websocket.receive_text = AsyncMock(side_effect=RuntimeError("client closed"))
+
+        with respx.mock(assert_all_called=False) as upstream, patch("websockets.connect", refuse_native_socket):
+            chat_completions: Final = upstream.post(f"{api_base}/chat/completions").mock(
+                return_value=httpx.Response(
+                    200, text=stream + "data: [DONE]\n\n", headers={"content-type": "text/event-stream"}
+                )
+            )
+            await responses_main._aresponses_websocket.__wrapped__(
+                model="astra-chat",
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=deployment_key,
+                first_message=json.dumps({"type": "response.create", "model": "astra-chat", "input": "Reply OK"}),
+                websocket=websocket,
+                litellm_logging_obj=MagicMock(),
+            )
+
+        sent_types: Final = [json.loads(call.args[0]).get("type") for call in websocket.send_text.await_args_list]
+        assert chat_completions.called, f"the request never reached {api_base}/chat/completions, client saw {sent_types}"
+        assert chat_completions.calls.last.request.headers["Authorization"] == f"Bearer {expected_key}"
+        assert "response.completed" in sent_types
 
 
 class TestNativeWebSocketUrlConstruction:

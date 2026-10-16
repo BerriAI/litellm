@@ -1697,6 +1697,7 @@ class ResponsePartAddedEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.RESPONSE_PART_ADDED]
     item_id: str
     output_index: int
+    summary_index: int = 0
     part: dict
 
 
@@ -2270,6 +2271,16 @@ class OpenAIRealtimeContentPartDone(TypedDict):
     type: Literal["response.content_part.done"]
 
 
+class OpenAIRealtimeFunctionCallArgumentsDelta(TypedDict):
+    type: ReadOnly[Literal["response.function_call_arguments.delta"]]
+    event_id: ReadOnly[str]
+    response_id: ReadOnly[str]
+    item_id: ReadOnly[str]
+    output_index: ReadOnly[int]
+    call_id: ReadOnly[str]
+    delta: ReadOnly[str]
+
+
 class OpenAIRealtimeFunctionCallArgumentsDone(TypedDict):
     type: Literal["response.function_call_arguments.done"]
     event_id: str
@@ -2437,6 +2448,7 @@ OpenAIRealtimeEvents = (
     | OpenAIRealtimeResponseAudioDone
     | OpenAIRealtimeContentPartDone
     | OpenAIRealtimeOutputItemDone
+    | OpenAIRealtimeFunctionCallArgumentsDelta
     | OpenAIRealtimeFunctionCallArgumentsDone
     | OpenAIRealtimeDoneEvent
     | OpenAIRealtimeInputAudioBufferSpeechEvent

@@ -227,7 +227,7 @@ class VertexAIModelRoute(str, Enum):
 VERTEX_AI_MODEL_ROUTES: Final = [f"{route.value}/" for route in VertexAIModelRoute]
 
 
-def get_vertex_ai_model_route(model: str, litellm_params: dict | None = None) -> VertexAIModelRoute:
+def get_vertex_ai_model_route(model: str, litellm_params: Mapping[str, object] | None = None) -> VertexAIModelRoute:
     """
     Determine which handler to use for a Vertex AI model based on the model name.
 
@@ -258,10 +258,9 @@ def get_vertex_ai_model_route(model: str, litellm_params: dict | None = None) ->
         VertexAIPartnerModels,
     )
 
-    # Check base_model in litellm_params for gemini override
-    if litellm_params and litellm_params.get("base_model") is not None:
-        if "gemini" in litellm_params["base_model"]:
-            return VertexAIModelRoute.GEMINI
+    base_model: Final = litellm_params.get("base_model") if litellm_params else None
+    if isinstance(base_model, str) and "gemini" in base_model:
+        return VertexAIModelRoute.GEMINI
 
     # Check for agent_engine models (Reasoning Engines)
     if "agent_engine/" in model:
@@ -297,6 +296,13 @@ def get_vertex_ai_model_route(model: str, litellm_params: dict | None = None) ->
 
     # Default to non-gemini (legacy vertex models like chat-bison, text-bison, etc.)
     return VertexAIModelRoute.NON_GEMINI
+
+
+GEMINI_API_ROUTES: Final = frozenset({VertexAIModelRoute.GEMINI, VertexAIModelRoute.NON_GEMINI})
+
+
+def uses_vertex_gemini_api(model: str, litellm_params: Mapping[str, object] | None = None) -> bool:
+    return get_vertex_ai_model_route(model, litellm_params) in GEMINI_API_ROUTES
 
 
 def get_supports_system_message(
@@ -1285,6 +1291,11 @@ class VertexAITokenCounter(BaseTokenCounter):
         deployment = deployment or {}
         count_tokens_params_request: Final = copy.deepcopy(deployment.get("litellm_params", {}))
 
+        if not VertexAIPartnerModels.is_vertex_partner_model(model_to_use) and not uses_vertex_gemini_api(
+            model_to_use, count_tokens_params_request
+        ):
+            return None
+
         # Check if this is a partner model (Claude, Mistral, etc.)
         if VertexAIPartnerModels.is_vertex_partner_model(model_to_use):
             # Use partner models token counter
@@ -1343,30 +1354,56 @@ class VertexAITokenCounter(BaseTokenCounter):
                     original_response=result,
                 )
         else:
+            from litellm.llms.vertex_ai.count_tokens.context import (
+                VertexGeminiCountContextError,
+                count_context_error_response,
+                vertex_gemini_count_context,
+            )
             from litellm.llms.vertex_ai.count_tokens.handler import VertexAITokenCounter
             from litellm.llms.vertex_ai.gemini.transformation import (
                 gemini_convert_messages_with_history,  # pyright: ignore[reportPrivateUsage]  # shared helper already used by gemini/chat, context_caching, and vertex_and_google_ai_studio_gemini
             )
 
+            count_context: Final = vertex_gemini_count_context(system=system, tools=tools)
+            if isinstance(count_context, VertexGeminiCountContextError):
+                return count_context_error_response(count_context, request_model, model_to_use)
+
             resolved_contents: Final = (
-                contents if contents is not None else gemini_convert_messages_with_history(messages=messages or [])
+                contents
+                if contents is not None
+                else gemini_convert_messages_with_history(
+                    messages=messages or []  # pyright: ignore[reportArgumentType]  # preserve direct caller message handling
+                )
             )
 
             count_tokens_params: Final = {
                 "model": model_to_use,
                 "contents": resolved_contents,
+                "system_instruction": count_context.system_instruction,
+                "tools": count_context.tools,
             }
             count_tokens_params_request.update(count_tokens_params)
-            result = await VertexAITokenCounter().acount_tokens(
-                **count_tokens_params_request,
-            )
+            try:
+                result = await VertexAITokenCounter().acount_tokens(
+                    **count_tokens_params_request,
+                )
+            except litellm.APIError as error:
+                return TokenCountResponse(
+                    total_tokens=0,
+                    request_model=request_model,
+                    model_used=model_to_use,
+                    tokenizer_type="gemini",
+                    error=True,
+                    error_message=error.message,
+                    status_code=error.status_code,
+                )
 
-            if result is not None and "totalTokens" in result:
+            if "totalTokens" in result:
                 return TokenCountResponse(
                     total_tokens=result["totalTokens"],
                     request_model=request_model,
                     model_used=model_to_use,
-                    tokenizer_type=result.get("tokenizer_used", ""),
+                    tokenizer_type=result.get("tokenizer_used", "gemini"),
                     original_response=result,
                 )
 
