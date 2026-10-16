@@ -13274,7 +13274,7 @@ class Router:
             and not skip_inline_token_count
             and any(limit is not None for limit in deployment_max_input_tokens),
         )
-        rejectable_params: Final = (
+        rejectable_params: Final[frozenset[str]] = (
             self._pre_call_check_rejectable_params(request_kwargs)
             if request_kwargs is not None and litellm.drop_params is False
             else frozenset()
@@ -13358,9 +13358,16 @@ class Router:
             - First check for rate limit errors (if this is true, it means the model passed the context window check but failed the rate limit check)
             """
 
-            if deployments_lacking_params and all(deployments_lacking_params):
+            if (
+                deployments_lacking_params
+                and all(deployments_lacking_params)
+                and all(
+                    self._deployment_rejects_params(deployment, model, rejectable_params)
+                    for deployment in self.get_all_deployments(model_name=model)
+                )
+            ):
                 raise litellm.UnsupportedParamsError(
-                    message=f"no available deployment of model={model} supports {sorted(rejectable_params)}. To drop these, set `litellm.drop_params=True`, or send allowed_openai_params={sorted(rejectable_params)} to pass them through",
+                    message=f"no deployment of model={model} supports {sorted(rejectable_params)}. To drop these, set `litellm.drop_params=True`, or send allowed_openai_params={sorted(rejectable_params)} to pass them through",
                     model=model,
                 )
             if _rate_limit_error is True:  # allow generic fallback logic to take place

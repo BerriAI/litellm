@@ -26818,3 +26818,26 @@ def test_pre_call_checks_keeps_deployment_whose_unsupported_param_is_allowed_or_
     )
 
     assert [d["model_info"]["id"] for d in filtered] == ["only"]
+
+
+def test_pre_call_checks_keeps_retryable_429_when_a_cooling_down_deployment_supports_the_param(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    model_list: Final = [
+        {
+            "model_name": "mixed-json-mode",
+            "litellm_params": {"model": f"openai/{deployment_model}", "api_key": "my-fake-key"},
+            "model_info": {"id": deployment_model, "max_input_tokens": 100},
+        }
+        for deployment_model in ("gpt-3.5-turbo-16k", "gpt-4o")
+    ]
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
+    without_json_mode: Final = [d for d in router.model_list if d["model_info"]["id"] == "gpt-3.5-turbo-16k"]
+
+    filtered: Final = router._pre_call_checks(
+        model="mixed-json-mode",
+        healthy_deployments=without_json_mode,
+        messages=[{"role": "user", "content": "hi"}],
+        request_kwargs={"response_format": {"type": "json_object"}},
+    )
+
+    assert filtered == []
