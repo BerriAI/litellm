@@ -203,6 +203,69 @@ async def test_meta_realtime_dispatches_to_base_handler_with_meta_config(monkeyp
     assert captured["query_params"] == {"model": "muse-voice-transcribe-1.0", "intent": "transcription"}
 
 
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider"),
+    [("gpt-realtime-2.1", "openai"), ("openai/gpt-realtime-2.1", None)],
+)
+@pytest.mark.asyncio
+async def test_arealtime_forwards_explicit_api_key_to_openai(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    custom_llm_provider: str | None,
+) -> None:
+    captured: dict[str, object] = {}
+
+    async def capture_realtime(**kwargs: object) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+    monkeypatch.setattr(realtime_main.openai_realtime, "async_realtime", capture_realtime)
+    provider_kwargs: Final = {} if custom_llm_provider is None else {"custom_llm_provider": custom_llm_provider}
+
+    await realtime_main._arealtime.__wrapped__(
+        model=model,
+        websocket=MagicMock(),
+        litellm_logging_obj=FakeLogging(),
+        api_key="sk-stored-credential",
+        **provider_kwargs,
+    )
+
+    assert captured["api_key"] == "sk-stored-credential"
+
+
+@pytest.mark.asyncio
+async def test_arealtime_prefers_deployment_api_key_over_global_openai_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_async_realtime: Final = AsyncMock()
+    monkeypatch.setattr(realtime_main.openai_realtime, "async_realtime", mock_async_realtime)
+    monkeypatch.setattr(litellm, "api_key", "sk-global-key")
+    monkeypatch.setattr(litellm, "openai_key", None)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    def fake_get_llm_provider(
+        model: str,
+        api_base: str | None = None,
+        api_key: str | None = None,
+        custom_llm_provider: str | None = None,
+    ) -> tuple[str, str, str | None, str | None]:
+        return model, "openai", None, None
+
+    monkeypatch.setattr(realtime_main, "get_llm_provider", fake_get_llm_provider)
+
+    await realtime_main._arealtime.__wrapped__(
+        model="gpt-realtime-2.1",
+        websocket=MagicMock(),
+        litellm_logging_obj=FakeLogging(),
+        api_key="sk-deployment-key",
+        custom_llm_provider="openai",
+    )
+
+    assert mock_async_realtime.call_args.kwargs["api_key"] == "sk-deployment-key"
+
+
 @pytest.mark.asyncio
 async def test_arealtime_vertex_branch_resolves_credentials_under_a_bound(monkeypatch):
     """The wiring half of the regression: the vertex branch of _arealtime must
