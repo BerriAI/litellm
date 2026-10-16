@@ -309,7 +309,7 @@ def _is_marked_server_tool_call(tool_call: object) -> bool:
     return (
         isinstance(tool_call_id, str)
         and tool_call_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX)
-        and _attribute_or_key(tool_call, "cache_control") is not None
+        and _carries_cache_breakpoint(tool_call)
     )
 
 

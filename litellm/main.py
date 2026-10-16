@@ -1110,14 +1110,22 @@ def _reaches_converse(
     custom_llm_provider: str | None,
     model: str,
     route_params: Mapping[str, object],
-    additional_drop_params: Sequence[str] | None,
+    additional_drop_params: object,
 ) -> bool:
     """A Bedrock model on the native Chat Completions route still reaches Converse when the request needs it."""
     if isinstance(provider_config, AmazonConverseConfig):
         return True
+    if custom_llm_provider != "bedrock":
+        return False
     return (
-        custom_llm_provider == "bedrock"
-        and bedrock_route_for_request(model, route_params, additional_drop_params) == "converse"
+        bedrock_route_for_request(
+            model,
+            route_params,
+            None
+            if additional_drop_params is None
+            else _ADDITIONAL_DROP_PARAMS_ADAPTER.validate_python(additional_drop_params),
+        )
+        == "converse"
     )
 
 
@@ -5646,14 +5654,12 @@ def completion(
             and normalize_drop_params(cast(object, kwargs["drop_params"])) is True  # cast-ok: untyped request kwargs
         )
         request_tools: Final = cast(list[object] | None, tools)  # cast-ok: completion types tools as a bare List
-        converse_may_send_tools: Final = AmazonConverseConfig.may_send_tools(
-            tools=request_tools,
-            functions=cast(object, functions),  # cast-ok: completion types functions as a bare List
-            response_format=cast(object, response_format),  # cast-ok: completion types response_format as a bare dict
-            web_search_options=web_search_options,
-            messages=routed_messages,
+        claude_cache_target: Final = provider_config is not None and _is_claude_prompt_cache_target(
+            custom_llm_provider=custom_llm_provider,
+            model=model,
+            base_model=base_model if isinstance(base_model, str) else None,
         )
-        reaches_converse: Final = _reaches_converse(
+        reaches_converse: Final = claude_cache_target and _reaches_converse(
             provider_config,
             custom_llm_provider,
             model,
@@ -5668,11 +5674,14 @@ def completion(
                     **non_default_params,
                 }
             ),
-            (
-                _ADDITIONAL_DROP_PARAMS_ADAPTER.validate_python(kwargs["additional_drop_params"])
-                if kwargs.get("additional_drop_params") is not None
-                else None
-            ),
+            kwargs.get("additional_drop_params"),
+        )
+        converse_may_send_tools: Final = reaches_converse and AmazonConverseConfig.may_send_tools(
+            tools=request_tools,
+            functions=cast(object, functions),  # cast-ok: completion types functions as a bare List
+            response_format=cast(object, response_format),  # cast-ok: completion types response_format as a bare dict
+            web_search_options=web_search_options,
+            messages=routed_messages,
         )
         claude_cache: Final = (
             resolved_claude_prompt_cache(
@@ -5687,19 +5696,16 @@ def completion(
                         AmazonConverseConfig.tool_config_cache_control(
                             non_default_params.get("cache_control_injection_points")
                         )
-                        if reaches_converse and converse_may_send_tools
+                        if converse_may_send_tools
                         else None
                     ),
+                    function_marks_on_wire=not reaches_converse,
+                    pairs_unanswered_tool_calls=litellm.modify_params is True,
                 ),
                 model=model,
                 llm_provider=custom_llm_provider,
             )
-            if provider_config is not None
-            and _is_claude_prompt_cache_target(
-                custom_llm_provider=custom_llm_provider,
-                model=model,
-                base_model=base_model if isinstance(base_model, str) else None,
-            )
+            if claude_cache_target
             else None
         )
         provider_messages: Final = cast(  # cast-ok: completion() only renames marks and drops tool_search calls

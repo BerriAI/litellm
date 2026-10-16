@@ -759,6 +759,29 @@ def test_a_breakpoint_reaches_bedrock_mantle_claude_as_cache_control(respx_mock:
     ]
 
 
+def test_a_string_additional_drop_params_still_reaches_claude_on_the_anthropic_route(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").respond(
+        json={
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-opus-5-5",
+            "content": [{"type": "text", "text": "hi"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+    )
+
+    response: Final = litellm.completion(
+        model="anthropic/claude-opus-5-5",
+        messages=[{"role": "user", "content": "Say hi."}],
+        api_key="fake",
+        additional_drop_params="temperature",
+    )
+
+    assert (route.call_count, response.choices[0].message.content) == (1, "hi")
+
+
 _WEATHER_TOOL: Final = {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}
 
 

@@ -28,6 +28,10 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _convert_to_bedrock_tool_call_invoke,
     convert_to_anthropic_tool_invoke,
 )
+from litellm.llms.anthropic.chat.prompt_cache_breakpoints import (
+    ClaudePromptCache,
+    claude_prompt_cache,
+)
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantToolCall
@@ -1270,6 +1274,53 @@ def test_cache_control_hook_counts_a_server_tool_call_mark_only_when_anthropic_r
     census: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(messages)
 
     assert (census, _wire_cache_marks(messages, model)) == (expected_breakpoints, expected_breakpoints)
+
+
+def _translated_for_claude(messages: list[AllMessageValues], modify_params: bool) -> list[AllMessageValues]:
+    outcome: Final = claude_prompt_cache(
+        messages,
+        None,
+        {},
+        drop_params=False,
+        tool_history_as_text=False,
+        tool_config_cache_control=None,
+        function_marks_on_wire=True,
+        pairs_unanswered_tool_calls=modify_params,
+    )
+    assert isinstance(outcome, ClaudePromptCache), outcome
+    return cast(list[AllMessageValues], list(outcome.messages))
+
+
+@pytest.mark.parametrize(
+    ("follow_ups", "modify_params", "expected_breakpoints"),
+    [
+        pytest.param((), False, 0, id="trailing_call_rebuilt_from_its_kept_result"),
+        pytest.param((), True, 1, id="trailing_call_replayed_with_the_modify_params_placeholder"),
+        pytest.param((_SEARCH_ANSWER,), False, 1, id="replayed_with_the_client_answer"),
+        pytest.param((_SEARCH_ANSWER, _GO_ON), False, 0, id="client_answer_replaced_by_the_kept_result"),
+    ],
+)
+def test_cache_control_hook_counts_a_breakpoint_on_a_server_tool_call_only_when_claude_receives_its_mark(
+    monkeypatch: pytest.MonkeyPatch,
+    follow_ups: tuple[AllMessageValues, ...],
+    modify_params: bool,
+    expected_breakpoints: int,
+):
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
+    search_call: Final = {
+        **{key: value for key, value in _SEARCH_CALL.items() if key != "cache_control"},
+        "prompt_cache_breakpoint": {"mode": "explicit"},
+    }
+    messages: Final = [
+        cast(AllMessageValues, {"role": "user", "content": "Weather in Paris?"}),
+        _replayed_search_call(search_call),
+        *follow_ups,
+    ]
+
+    census: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(messages)
+    received: Final = _wire_cache_marks(_translated_for_claude(messages, modify_params))
+
+    assert (census, received) == (expected_breakpoints, expected_breakpoints)
 
 
 @pytest.mark.parametrize(

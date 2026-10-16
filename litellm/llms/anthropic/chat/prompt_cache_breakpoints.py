@@ -50,6 +50,7 @@ class _Placed:
     path: _Path
     ttl: Literal["5m", "1h"]
     kind: _Kind
+    translated: bool
     first_read: tuple[int, ...]
     last_read: tuple[int, ...]
 
@@ -447,13 +448,16 @@ def _on_wire(
     tools: Sequence[object],
     unsent_call_ids: frozenset[str],
     tool_history_as_text: bool,
+    function_marks_on_wire: bool,
 ) -> bool:
     """Claude sends a message-level mark on string content, or on list content only for a tool result, and none on
-    a developer message, which reaches it as a system message without one; a mark under ``function`` only when the
-    tool carries none of its own; no tool_search call nobody answered; and no mark on tool history the route sends
-    as text."""
+    a developer message, which reaches it as a system message without one; a mark under ``function`` only on a route
+    that sends one and when the tool carries none of its own; no tool_search call nobody answered; and no mark on
+    tool history the route sends as text."""
     if path[0] == "tools":
-        return len(path) == 2 or (_fields(tools[int(path[1])]) or {}).get("cache_control") is None
+        return len(path) == 2 or (
+            function_marks_on_wire and (_fields(tools[int(path[1])]) or {}).get("cache_control") is None
+        )
     message: Final = _fields(messages[int(path[1])]) or {}
     if tool_history_as_text and _is_tool_history(message):
         return False
@@ -467,10 +471,10 @@ def _ttl(cache_control: object) -> Literal["5m", "1h"]:
     return "1h" if (_fields(cache_control) or {}).get("ttl") == "1h" else "5m"
 
 
-def _kind(path: _Path, cache_control: object, translated: frozenset[_Path]) -> _Kind:
-    if path not in translated:
-        return "written"
-    return "free" if (_fields(cache_control) or {}).get("ttl") is None else "explicit"
+def _kind(cache_control: object, from_breakpoint: bool) -> _Kind:
+    if (_fields(cache_control) or {}).get("ttl") is None:
+        return "free"
+    return "explicit" if from_breakpoint else "written"
 
 
 def _chosen(mark: _Placed, ttl: Literal["5m", "1h"]) -> bool:
@@ -514,9 +518,9 @@ def _loosened(marks: Sequence[_Placed], drop_params: bool) -> tuple[_Placed, ...
 
 
 def _settled(marks: Sequence[_Placed], drop_params: bool) -> tuple[_Placed, ...]:
-    """A breakpoint without a ttl takes 1h when Claude may read a 1h mark after it and no 5m mark before it, so the
-    request stays valid for Claude; under ``drop_params`` a ttl the client set on a breakpoint that breaks that order
-    is dropped first."""
+    """A mark without a ttl, a breakpoint's or a ``cache_control`` the request already carries, takes 1h when Claude
+    may read a 1h mark after it and no 5m mark before it, so the request stays valid for Claude; under
+    ``drop_params`` a ttl the client set on a breakpoint that breaks that order is dropped first."""
     loosened: Final = _loosened(marks, drop_params)
     first_five: Final = _first_five(loosened)
     last_hour: Final = max((mark.last_read for mark in loosened if _chosen(mark, "1h")), default=(-1,))
@@ -530,20 +534,12 @@ def _settled(marks: Sequence[_Placed], drop_params: bool) -> tuple[_Placed, ...]
 
 def _route_marks(
     tool_config_cache_control: ChatCompletionCachedContent | None, request_mark: object
-) -> tuple[tuple[_Path, object, _Kind], ...]:
-    """The cachePoint a route appends after the tools takes 1h like a breakpoint when it sets no ttl. Neither it nor
-    the request-level mark is ever dropped."""
-    tool_config_kind: Final[_Kind] = (
-        "free" if tool_config_cache_control is None or tool_config_cache_control.get("ttl") is None else "written"
-    )
+) -> tuple[tuple[_Path, object, bool], ...]:
+    """Neither the cachePoint a route appends after the tools nor the request-level mark is ever dropped."""
     return (
-        *(() if tool_config_cache_control is None else ((_TOOL_CONFIG, tool_config_cache_control, tool_config_kind),)),
-        *(() if request_mark is None else ((_REQUEST, request_mark, "written"),)),
+        *(() if tool_config_cache_control is None else ((_TOOL_CONFIG, tool_config_cache_control, False),)),
+        *(() if request_mark is None else ((_REQUEST, request_mark, False),)),
     )
-
-
-def _droppable(mark: _Placed) -> bool:
-    return mark.kind != "written" and mark.path != _TOOL_CONFIG
 
 
 def claude_prompt_cache(
@@ -554,13 +550,17 @@ def claude_prompt_cache(
     drop_params: bool,
     tool_history_as_text: bool,
     tool_config_cache_control: ChatCompletionCachedContent | None,
+    function_marks_on_wire: bool,
+    pairs_unanswered_tool_calls: bool,
 ) -> ClaudePromptCache | UnsupportedPromptCacheParam:
     """``prompt_cache_breakpoint`` marks renamed to ``cache_control``. A mark Claude cannot honor is reported unless
     ``drop_params``, which keeps what Claude can use and, when the request ends up with more than Claude's four
     breakpoints, drops the earliest translated ones. A request-level ``cache_control`` in ``params`` and the
     ``tool_config_cache_control`` cachePoint a route appends after the tools each take one of the four, and marks on
-    tool history a ``tool_history_as_text`` route flattens take none. A request carrying no breakpoint is returned as
-    written."""
+    tool history a ``tool_history_as_text`` route flattens, marks under a tool's ``function`` on a route without
+    ``function_marks_on_wire``, and marks on a tool_search call nobody answered, unless the route
+    ``pairs_unanswered_tool_calls`` with a placeholder result, take none. A request carrying no breakpoint is returned
+    as written."""
     listed_tools: Final = tools or ()
     if not any(map(_message_carries_breakpoint, messages)) and not any(map(_tool_carries_breakpoint, listed_tools)):
         return ClaudePromptCache(tuple(messages), None if tools is None else tuple(tools))
@@ -588,14 +588,16 @@ def claude_prompt_cache(
     translated: Final = _translated(hoisted_messages, hoisted_tools)
     leading_system_count: Final = _leading_system_count(messages)
     run_ends: Final = _run_ends(messages)
-    unsent_call_ids: Final = unanswered_tool_search_call_ids(messages)
+    unsent_call_ids: Final = frozenset() if pairs_unanswered_tool_calls else unanswered_tool_search_call_ids(messages)
     request_mark: Final = params.get("cache_control")
-    placements: Final[tuple[tuple[_Path, object, _Kind], ...]] = (
+    placements: Final[tuple[tuple[_Path, object, bool], ...]] = (
         *(
-            (path, block.get("cache_control"), _kind(path, block.get("cache_control"), translated))
+            (path, block.get("cache_control"), path in translated)
             for path, block in _markable(renamed_messages, renamed_tools)
             if block.get("cache_control") is not None
-            and _on_wire(path, renamed_messages, renamed_tools, unsent_call_ids, tool_history_as_text)
+            and _on_wire(
+                path, renamed_messages, renamed_tools, unsent_call_ids, tool_history_as_text, function_marks_on_wire
+            )
         ),
         *_route_marks(tool_config_cache_control, request_mark),
     )
@@ -604,17 +606,18 @@ def claude_prompt_cache(
             _Placed(
                 path,
                 _ttl(cache_control),
-                kind,
+                _kind(cache_control, from_breakpoint),
+                from_breakpoint,
                 _wire_position(path, leading_system_count),
                 _last_read(path, messages, leading_system_count, run_ends),
             )
-            for path, cache_control, kind in placements
+            for path, cache_control, from_breakpoint in placements
         ),
         key=lambda mark: mark.first_read,
     )
     excess: Final = len(marks) - MAX_CACHE_CONTROL_BLOCKS
     dropped: Final[frozenset[_Path]] = (
-        frozenset(tuple(mark.path for mark in marks if _droppable(mark))[:excess])
+        frozenset(tuple(mark.path for mark in marks if mark.translated)[:excess])
         if excess > 0 and drop_params
         else frozenset()
     )

@@ -24,6 +24,8 @@ def _cache(
     *,
     drop_params: bool = False,
     tool_config_cache_control: ChatCompletionCachedContent | None = None,
+    function_marks_on_wire: bool = True,
+    pairs_unanswered_tool_calls: bool = False,
 ) -> ClaudePromptCache | UnsupportedPromptCacheParam:
     return claude_prompt_cache(
         messages,
@@ -32,6 +34,8 @@ def _cache(
         drop_params=drop_params,
         tool_history_as_text=False,
         tool_config_cache_control=tool_config_cache_control,
+        function_marks_on_wire=function_marks_on_wire,
+        pairs_unanswered_tool_calls=pairs_unanswered_tool_calls,
     )
 
 
@@ -42,9 +46,17 @@ def _resolved(
     *,
     drop_params: bool = False,
     tool_config_cache_control: ChatCompletionCachedContent | None = None,
+    function_marks_on_wire: bool = True,
+    pairs_unanswered_tool_calls: bool = False,
 ) -> ClaudePromptCache:
     outcome: Final = _cache(
-        messages, tools, params, drop_params=drop_params, tool_config_cache_control=tool_config_cache_control
+        messages,
+        tools,
+        params,
+        drop_params=drop_params,
+        tool_config_cache_control=tool_config_cache_control,
+        function_marks_on_wire=function_marks_on_wire,
+        pairs_unanswered_tool_calls=pairs_unanswered_tool_calls,
     )
     assert isinstance(outcome, ClaudePromptCache), outcome
     return outcome
@@ -191,7 +203,14 @@ def test_a_breakpoint_a_client_cache_control_wins_over_is_still_reported(
     assert outcome.value == _THIRTY_MINUTES
 
 
-def test_a_breakpoint_on_a_tool_search_call_nobody_answered_takes_no_slot_from_the_system_mark_under_drop_params():
+@pytest.mark.parametrize(
+    ("pairs_unanswered_tool_calls", "system_mark"),
+    [(False, {"cache_control": _EPHEMERAL}), (True, {})],
+    ids=["dropped_unanswered", "answered_with_a_placeholder"],
+)
+def test_a_breakpoint_on_a_tool_search_call_nobody_answered_takes_a_slot_only_when_the_route_answers_it(
+    pairs_unanswered_tool_calls: bool, system_mark: dict[str, object]
+):
     search_call: Final = {
         "id": "srvtoolu_01search",
         "type": "function",
@@ -205,9 +224,47 @@ def test_a_breakpoint_on_a_tool_search_call_nobody_answered_takes_no_slot_from_t
         {"role": "user", "content": "Which section mentions watchlists?"},
     ]
 
-    result: Final = _resolved(messages, drop_params=True)
+    result: Final = _resolved(messages, drop_params=True, pairs_unanswered_tool_calls=pairs_unanswered_tool_calls)
 
-    assert result.messages[0] == {"role": "system", "content": [_part("sys", cache_control=_EPHEMERAL)]}
+    assert result.messages[0] == {"role": "system", "content": [_part("sys", **system_mark)]}
+
+
+def test_a_cache_control_without_a_ttl_takes_the_hour_a_later_breakpoint_asks_for():
+    result: Final = _resolved(
+        [
+            {"role": "system", "content": [_part("sys", cache_control=_EPHEMERAL)]},
+            {"role": "user", "content": [_part("ask", prompt_cache_breakpoint={"mode": "explicit", "ttl": "1h"})]},
+        ]
+    )
+
+    assert list(result.messages) == [
+        {"role": "system", "content": [_part("sys", cache_control=_ONE_HOUR)]},
+        {"role": "user", "content": [_part("ask", cache_control=_ONE_HOUR)]},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("function_marks_on_wire", "system_mark"),
+    [(True, _EPHEMERAL), (False, _ONE_HOUR)],
+    ids=["route_sends_function_marks", "route_drops_function_marks"],
+)
+def test_a_five_minute_mark_under_a_tools_function_holds_back_an_hour_only_on_a_route_that_sends_it(
+    function_marks_on_wire: bool, system_mark: dict[str, object]
+):
+    five_minutes: Final = {"type": "ephemeral", "ttl": "5m"}
+    tool: Final = {"type": "function", "function": {"name": "t", "cache_control": five_minutes}}
+
+    result: Final = _resolved(
+        [
+            {"role": "system", "content": [_part("sys", prompt_cache_breakpoint=_EXPLICIT)]},
+            {"role": "user", "content": [_part("ask", prompt_cache_breakpoint={"mode": "explicit", "ttl": "1h"})]},
+        ],
+        [tool],
+        function_marks_on_wire=function_marks_on_wire,
+    )
+
+    assert result.messages[0] == {"role": "system", "content": [_part("sys", cache_control=system_mark)]}
+    assert list(result.tools or ()) == [tool]
 
 
 @pytest.mark.parametrize(
@@ -341,10 +398,10 @@ def test_a_breakpoint_read_after_the_last_one_hour_mark_keeps_the_default_ttl():
     ("system", "ask", "as_written", "under_drop_params"),
     [
         (
-            {"cache_control": _EPHEMERAL},
+            {"cache_control": {"type": "ephemeral", "ttl": "5m"}},
             {"prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}},
-            ({"cache_control": _EPHEMERAL}, {"cache_control": _ONE_HOUR}),
-            ({"cache_control": _EPHEMERAL}, {"cache_control": _EPHEMERAL}),
+            ({"cache_control": {"type": "ephemeral", "ttl": "5m"}}, {"cache_control": _ONE_HOUR}),
+            ({"cache_control": {"type": "ephemeral", "ttl": "5m"}}, {"cache_control": _EPHEMERAL}),
         ),
         (
             {"prompt_cache_breakpoint": {"mode": "explicit", "ttl": "5m"}},
