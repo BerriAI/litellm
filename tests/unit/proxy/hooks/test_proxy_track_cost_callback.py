@@ -137,6 +137,46 @@ async def test_async_post_call_failure_hook_carries_guardrail_info_from_litellm_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("metadata_buckets", "expected_model_group"),
+    [
+        ({"metadata": {}, "litellm_metadata": {"model_group": "ws-budget-sock"}}, "ws-budget-sock"),
+        ({"metadata": {"model_group": "caller-group"}, "litellm_metadata": {"model_group": "routed"}}, "caller-group"),
+        ({"metadata": {}, "litellm_metadata": {}}, ""),
+    ],
+)
+async def test_async_post_call_failure_hook_logs_the_routed_model_group_on_the_failure_row(
+    metadata_buckets: dict, expected_model_group: str
+):
+    request_data: Final = {
+        "model": "ws-budget-sock",
+        "input": "Reply with exactly the word two",
+        "proxy_server_request": {"request_id": "test_request_id"},
+        **metadata_buckets,
+    }
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await ProxyDBLogger().async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=litellm.RateLimitError(
+                message="crossed budget", llm_provider="", model="ws-budget-sock"
+            ),
+            user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key"),
+        )
+
+    row: Final = get_logging_payload(
+        kwargs=mock_update_database.call_args[1]["kwargs"],
+        response_obj={},
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert row["model_group"] == expected_model_group
+
+
+@pytest.mark.asyncio
 async def test_async_post_call_failure_hook_does_not_clobber_guardrail_info_in_metadata():
     logger = ProxyDBLogger()
     metadata_bucket_info = [{"guardrail_name": "from-metadata-bucket"}]

@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
+from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     get_key_object,
@@ -98,6 +99,19 @@ def _proxy_stamped_used_client_oauth_token(
     proxy_metadata: Final = request_data.get(proxy_bucket)
     stamped: Final = proxy_metadata.get("used_client_oauth_token") if isinstance(proxy_metadata, dict) else None
     return stamped if isinstance(stamped, bool) else None
+
+
+def _str_keyed_fields(value: object) -> Mapping[str, object]:
+    return value if is_str_keyed_mapping(value) else {}
+
+
+def _routed_model_group_fallback(request_data: Mapping[str, object]) -> Mapping[str, str]:
+    caller_metadata: Final = request_data.get("metadata")
+    if is_str_keyed_mapping(caller_metadata) and caller_metadata.get("model_group"):
+        return {}
+    routed_metadata: Final = request_data.get("litellm_metadata")
+    model_group: Final = routed_metadata.get("model_group") if is_str_keyed_mapping(routed_metadata) else None
+    return {"model_group": model_group} if isinstance(model_group, str) and model_group else {}
 
 
 def _failure_snapshot_with_guardrails_recorded_after_it(
@@ -220,10 +234,11 @@ class _ProxyDBLogger(CustomLogger):
             metadata=_metadata, original_exception=original_exception
         )
 
-        _metadata["used_client_oauth_token"] = _proxy_stamped_used_client_oauth_token(request_data, request_route)
+        request_fields: Final = _str_keyed_fields(request_data)
+        _metadata["used_client_oauth_token"] = _proxy_stamped_used_client_oauth_token(request_fields, request_route)
 
         existing_metadata: Final[dict] = request_data.get("metadata", None) or {}
-        existing_metadata.update(_metadata)
+        existing_metadata.update({**_routed_model_group_fallback(request_fields), **_metadata})
 
         litellm_metadata_bucket: Final = request_data.get("litellm_metadata")
         if (
