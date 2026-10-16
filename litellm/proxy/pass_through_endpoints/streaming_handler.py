@@ -147,7 +147,7 @@ class PassThroughStreamingHandler:
         route_streaming_logging: RouteStreamingLogging | None = None,
     ):
         resolved_route_streaming_logging: Final[RouteStreamingLogging] = (
-            route_streaming_logging or PassThroughStreamingHandler._route_streaming_logging_to_handler
+            route_streaming_logging or PassThroughStreamingHandler.route_streaming_logging_to_handler
         )
         raw_bytes: Final[list[bytes]] = []
         resolved_request_body: Final[dict[str, object]] = request_body or {}
@@ -220,7 +220,7 @@ class PassThroughStreamingHandler:
                     PassThroughStreamingHandler._stamp_first_chunk_if_needed(litellm_logging_obj)
                     complete_frames, pending = split_complete_sse_frames(pending + chunk)
                     if complete_frames:
-                        yield ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
+                        yield ProxyBaseLLMRequestProcessing.process_chunk_with_cost_injection(
                             complete_frames, resolved_model_name, litellm_logging_obj
                         )
                 if pending:
@@ -308,7 +308,7 @@ class PassThroughStreamingHandler:
         return parse_anthropic_error_event(complete_frames)
 
     @staticmethod
-    async def _route_streaming_logging_to_handler(
+    async def route_streaming_logging_to_handler(
         litellm_logging_obj: LiteLLMLoggingObj,
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
@@ -406,6 +406,8 @@ class PassThroughStreamingHandler:
         except Exception as e:
             verbose_proxy_logger.error("Error in _route_streaming_logging_to_handler: %s", e)
 
+    _route_streaming_logging_to_handler = route_streaming_logging_to_handler
+
     @staticmethod
     def _build_passthrough_logging_result(
         litellm_logging_obj: LiteLLMLoggingObj,
@@ -430,7 +432,7 @@ class PassThroughStreamingHandler:
         kwargs: dict = {}
         if endpoint_type == EndpointType.ANTHROPIC:
             anthropic_passthrough_logging_handler_result: Final = (
-                AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
+                AnthropicPassthroughLoggingHandler.handle_logging_anthropic_collected_chunks(
                     litellm_logging_obj=litellm_logging_obj,
                     passthrough_success_handler_obj=passthrough_success_handler_obj,
                     url_route=url_route,
@@ -445,7 +447,7 @@ class PassThroughStreamingHandler:
             kwargs = anthropic_passthrough_logging_handler_result["kwargs"]
         elif endpoint_type == EndpointType.VERTEX_AI:
             vertex_passthrough_logging_handler_result: Final = (
-                VertexPassthroughLoggingHandler._handle_logging_vertex_collected_chunks(
+                VertexPassthroughLoggingHandler.handle_logging_vertex_collected_chunks(
                     litellm_logging_obj=litellm_logging_obj,
                     passthrough_success_handler_obj=passthrough_success_handler_obj,
                     url_route=url_route,
@@ -481,7 +483,7 @@ class PassThroughStreamingHandler:
             )
         elif endpoint_type == EndpointType.OPENAI:
             openai_passthrough_logging_handler_result: Final = (
-                OpenAIPassthroughLoggingHandler._handle_logging_openai_collected_chunks(
+                OpenAIPassthroughLoggingHandler.handle_logging_openai_collected_chunks(
                     litellm_logging_obj=litellm_logging_obj,
                     passthrough_success_handler_obj=passthrough_success_handler_obj,
                     url_route=url_route,

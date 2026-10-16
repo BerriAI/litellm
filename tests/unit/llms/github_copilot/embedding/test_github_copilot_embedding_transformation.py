@@ -76,9 +76,7 @@ def test_github_copilot_embedding_config_get_complete_url():
     assert url == "https://api.githubcopilot.com/embeddings"
 
     # Test with custom API base from authenticator
-    config.authenticator.get_api_base.return_value = (
-        "https://api.enterprise.githubcopilot.com"
-    )
+    config.authenticator.get_api_base.return_value = "https://api.enterprise.githubcopilot.com"
     url = config.get_complete_url(
         api_base=None,
         api_key=None,
@@ -258,3 +256,56 @@ def test_transform_embedding_response_rejects_a_body_that_is_not_an_object(body:
 def test_transform_embedding_response_object_without_data_is_an_invalid_response_object():
     with pytest.raises(Exception, match="Invalid response object"):
         _transform(httpx.Response(200, json={"model": "text-embedding-3-small"}))
+
+
+def test_validate_environment_uses_per_user_session_and_skips_authenticator():
+    """With a per-user session the Authorization header carries the caller's Copilot token
+    and the shared Authenticator is never consulted."""
+    from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
+
+    config = GithubCopilotEmbeddingConfig()
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.side_effect = AssertionError("shared authenticator must not run")
+
+    session = GithubCopilotUserSession(token="user-copilot-token", api_base="https://api.githubcopilot.com")
+    headers = config.validate_environment(
+        headers={},
+        model="github_copilot/text-embedding-3-small",
+        messages=[],
+        optional_params={},
+        litellm_params={"github_copilot_user_session": session},
+    )
+    assert headers["Authorization"] == "Bearer user-copilot-token"
+    config.authenticator.get_api_key.assert_not_called()
+
+
+def test_per_user_session_token_wins_over_caller_authorization():
+    from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
+
+    config = GithubCopilotEmbeddingConfig()
+    config.authenticator = MagicMock()
+    session = GithubCopilotUserSession(token="user-copilot-token", api_base="https://api.githubcopilot.com")
+    headers = config.validate_environment(
+        headers={"Authorization": "Bearer caller-token"},
+        model="github_copilot/text-embedding-3-small",
+        messages=[],
+        optional_params={},
+        litellm_params={"github_copilot_user_session": session},
+    )
+    assert headers["Authorization"] == "Bearer user-copilot-token"
+
+
+def test_get_complete_url_prefers_per_user_session_api_base():
+    from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
+
+    config = GithubCopilotEmbeddingConfig()
+    config.authenticator = MagicMock()
+    session = GithubCopilotUserSession(token="t", api_base="https://tenant.githubcopilot.com")
+    url = config.get_complete_url(
+        api_base="https://attacker.example",
+        api_key=None,
+        model="m",
+        optional_params={},
+        litellm_params={"github_copilot_user_session": session},
+    )
+    assert url == "https://tenant.githubcopilot.com/embeddings"

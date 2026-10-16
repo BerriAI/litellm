@@ -1,6 +1,7 @@
 import asyncio
+import base64
 import json
-from collections.abc import Coroutine, Mapping
+from collections.abc import Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -11,15 +12,28 @@ from websockets.exceptions import ConnectionClosed
 from websockets.frames import Close
 
 import litellm
-from litellm.constants import REALTIME_SESSION_FAILURE_LOGGED_KEY, REALTIME_SESSION_SUCCESS_LOGGED_KEY
+from litellm.constants import (
+    REALTIME_METERED_USAGE_KEY,
+    REALTIME_SESSION_FAILURE_LOGGED_KEY,
+    REALTIME_SESSION_SUCCESS_LOGGED_KEY,
+)
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.realtime_streaming import (
     RealTimeStreaming,
     client_sent_openai_beta_realtime_header,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.xai.realtime.transformation import XAIRealtimeNormalizer
+from litellm.llms.xai.realtime.usage_meter import XAIRealtimeUsageMeter
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.llms.xai import RealtimeMeteredUsage
+from litellm.types.realtime import RealtimeResponseTransformInput, RealtimeResponseTypedDict
 from litellm.types.utils import GenericGuardrailAPIInputs
+
+
+def _mock_logging() -> MagicMock:
+    return MagicMock(dispatch_success_handlers=AsyncMock(), dispatch_failure_handlers=AsyncMock())
 
 
 def _make_transcript_event(text: str, item_id: str = "item_x") -> bytes:
@@ -36,7 +50,7 @@ def test_realtime_streaming_store_message():
     # Setup
     websocket = MagicMock()
     backend_ws = MagicMock()
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
 
     # Test 1: Session created event (string input)
@@ -109,7 +123,7 @@ def test_make_disable_auto_response_message_produces_ga_shape():
     """
     websocket = MagicMock()
     backend_ws = MagicMock()
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
 
     raw = streaming._make_disable_auto_response_message()
@@ -132,7 +146,7 @@ def test_make_disable_auto_response_message_produces_beta_shape_for_beta_clients
     websocket = MagicMock()
     websocket.scope = {"headers": [(b"openai-beta", b"realtime=v1")]}
     backend_ws = MagicMock()
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
 
     raw = streaming._make_disable_auto_response_message()
@@ -154,7 +168,7 @@ async def test_backend_to_client_send_text_receives_str_not_bytes():
             ConnectionClosed(None, None),
         ]
     )
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
     logging_obj.dispatch_success_handlers = AsyncMock()
@@ -179,7 +193,7 @@ async def test_backend_to_client_skips_non_utf8_binary_frames():
             ConnectionClosed(None, None),
         ]
     )
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
@@ -195,7 +209,7 @@ def _xai_streaming(client_ws=None, backend_ws=None, logging_obj=None):
     return RealTimeStreaming(
         client_ws or MagicMock(),
         backend_ws or MagicMock(),
-        logging_obj or MagicMock(),
+        logging_obj or _mock_logging(),
         event_normalizer=XAIRealtimeNormalizer(),
     )
 
@@ -414,7 +428,7 @@ async def test_backend_to_client_drops_ping_events():
             ConnectionClosed(None, None),
         ]
     )
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
     streaming = _xai_streaming(client_ws, backend_ws, logging_obj)
@@ -449,7 +463,7 @@ async def test_backend_to_client_normalizes_empty_response_usage():
             ConnectionClosed(None, None),
         ]
     )
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
     streaming = _xai_streaming(client_ws, backend_ws, logging_obj)
@@ -482,7 +496,7 @@ async def test_backend_to_client_beta_receives_normalized_events():
             ConnectionClosed(None, None),
         ]
     )
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
     streaming = _xai_streaming(client_ws, backend_ws, logging_obj)
@@ -517,7 +531,7 @@ async def test_backend_to_client_stores_normalized_events_for_logging():
             ConnectionClosed(None, None),
         ]
     )
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
     streaming = _xai_streaming(client_ws, backend_ws, logging_obj)
@@ -551,7 +565,7 @@ async def test_client_ack_messages_keeps_beta_session_shape_for_beta_clients():
     )
     backend_ws = MagicMock()
     backend_ws.send = AsyncMock()
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.pre_call = MagicMock()
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
 
@@ -588,7 +602,7 @@ async def test_client_ack_messages_keeps_beta_session_shape_for_beta_backend():
     )
     backend_ws = MagicMock()
     backend_ws.send = AsyncMock()
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.pre_call = MagicMock()
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj, backend_uses_beta_protocol=True)
 
@@ -622,7 +636,7 @@ async def test_provider_config_path_translates_ga_events_for_beta_clients():
     client_ws.scope = {"headers": [(b"openai-beta", b"realtime=v1")]}
     client_ws.send_text = AsyncMock()
     backend_ws = MagicMock()
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
 
     provider_config = MagicMock()
     provider_config.transform_realtime_response = MagicMock(
@@ -676,7 +690,7 @@ def test_collect_user_input_from_text_conversation_item():
     """
     websocket = MagicMock()
     backend_ws = MagicMock()
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
 
     msg = json.dumps(
@@ -701,7 +715,7 @@ def test_collect_user_input_from_session_update_instructions():
     """
     websocket = MagicMock()
     backend_ws = MagicMock()
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
 
     msg = json.dumps(
@@ -724,7 +738,7 @@ def test_collect_user_input_from_transcription_event():
     """
     websocket = MagicMock()
     backend_ws = MagicMock()
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
 
     event_obj = {
@@ -745,7 +759,7 @@ def test_collect_user_input_ignores_irrelevant_events():
     """
     websocket = MagicMock()
     backend_ws = MagicMock()
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
 
     # input_audio_buffer.append should not be collected
@@ -765,7 +779,7 @@ def test_collect_user_input_empty_transcript_not_collected():
     """
     websocket = MagicMock()
     backend_ws = MagicMock()
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
 
     event_obj = {
@@ -778,13 +792,67 @@ def test_collect_user_input_empty_transcript_not_collected():
 
 
 @pytest.mark.asyncio
+async def test_usage_meter_snapshot_stored_in_model_call_details():
+    """xAI metered usage from raw client/backend frames reaches the spend log."""
+    client_ws = MagicMock()
+    client_ws.send_text = AsyncMock()
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[
+            json.dumps(
+                {"type": "session.created", "session": {"turn_detection": {"type": None}}}
+            ).encode(),
+            json.dumps(
+                {"type": "response.output_audio.delta", "delta": base64.b64encode(b"x" * 24000).decode()}
+            ).encode(),
+            ConnectionClosed(None, None),
+        ]
+    )
+    logging_obj: Final = _mock_logging()
+    logging_obj.model_call_details = {}
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    logging_obj.dispatch_success_handlers = AsyncMock()
+    streaming = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        logging_obj,
+        event_normalizer=XAIRealtimeNormalizer(),
+        usage_meter=XAIRealtimeUsageMeter(),
+    )
+
+    await streaming._send_to_backend(json.dumps({"type": "session.update", "session": {"turn_detection": None}}))
+    await streaming._send_to_backend(
+        json.dumps({"type": "input_audio_buffer.append", "audio": base64.b64encode(b"y" * 48000).decode()})
+    )
+    await streaming._send_to_backend(
+        json.dumps(
+            {
+                "type": "conversation.item.create",
+                "item": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+            }
+        )
+    )
+    await streaming.backend_to_client_send_messages()
+    await streaming.log_messages()
+
+    metered = logging_obj.model_call_details[REALTIME_METERED_USAGE_KEY]
+    assert isinstance(metered, RealtimeMeteredUsage)
+    assert metered.push_to_talk is True
+    assert metered.audio_seconds_sent == 1.0
+    assert metered.audio_seconds_received == 0.5
+    assert metered.text_messages == 1
+
+
+@pytest.mark.asyncio
 async def test_log_messages_sets_input_messages_on_logging_obj():
     """
     Test that log_messages() sets input_messages on the logging object's model_call_details.
     """
     websocket = MagicMock()
     backend_ws = MagicMock()
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.model_call_details = {"messages": "default-message-value"}
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
@@ -830,7 +898,7 @@ async def test_transcription_captured_in_backend_to_client():
     )
     backend_ws.send = AsyncMock()
 
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.model_call_details = {"messages": "default-message-value"}
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
@@ -876,7 +944,7 @@ async def test_transcription_session_captures_usage_and_skips_response_create():
     backend_ws.recv = AsyncMock(side_effect=[session_created, completed, ConnectionClosed(None, None)])
     backend_ws.send = AsyncMock()
 
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.model_call_details = {}
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
@@ -903,37 +971,75 @@ async def test_transcription_session_captures_usage_and_skips_response_create():
     )
 
 
-@pytest.mark.asyncio
-async def test_non_transcription_completed_event_still_triggers_response_create():
-    """
-    Regression guard: a normal (non-transcription) session with no guardrails must
-    keep triggering response.create on a completed transcription event.
-    """
-    client_ws = MagicMock()
-    client_ws.send_text = AsyncMock()
+class _PassthroughRealtimeConfig(BaseRealtimeConfig):
+    def validate_environment(self, headers: dict, model: str, api_key: str | None = None) -> dict:
+        return headers
 
-    completed = json.dumps(
-        {
-            "type": "conversation.item.input_audio_transcription.completed",
-            "transcript": "hi",
-            "item_id": "item_1",
+    def get_complete_url(self, api_base: str | None, model: str, api_key: str | None = None) -> str:
+        return api_base or ""
+
+    def transform_realtime_request(
+        self, message: str, model: str, session_configuration_request: str | None = None
+    ) -> Sequence[str | bytes]:
+        return (message,)
+
+    def transform_realtime_response(
+        self,
+        message: str | bytes,
+        model: str,
+        logging_obj: LiteLLMLoggingObj,
+        realtime_response_transform_input: RealtimeResponseTransformInput,
+    ) -> RealtimeResponseTypedDict:
+        return {
+            "response": [json.loads(message)],
+            "current_output_item_id": realtime_response_transform_input["current_output_item_id"],
+            "current_response_id": realtime_response_transform_input["current_response_id"],
+            "current_delta_chunks": realtime_response_transform_input["current_delta_chunks"],
+            "current_conversation_id": realtime_response_transform_input["current_conversation_id"],
+            "current_item_chunks": realtime_response_transform_input["current_item_chunks"],
+            "current_delta_type": realtime_response_transform_input["current_delta_type"],
+            "session_configuration_request": realtime_response_transform_input["session_configuration_request"],
         }
-    ).encode()
 
-    backend_ws = MagicMock()
-    backend_ws.recv = AsyncMock(side_effect=[completed, ConnectionClosed(None, None)])
-    backend_ws.send = AsyncMock()
 
-    logging_obj = MagicMock()
-    logging_obj.async_success_handler = AsyncMock()
-    logging_obj.success_handler = MagicMock()
+@pytest.mark.asyncio
+@pytest.mark.parametrize("through_provider_config", [False, True], ids=["raw", "provider_config"])
+@pytest.mark.parametrize(
+    "event_hook,expected_response_creates",
+    [
+        (None, 0),
+        (GuardrailEventHooks.pre_call, 0),
+        (GuardrailEventHooks.post_call, 0),
+        (GuardrailEventHooks.realtime_input_transcription, 1),
+    ],
+    ids=["no_guardrail", "pre_call", "post_call", "realtime_input_transcription"],
+)
+async def test_transcript_triggers_response_create_only_when_a_transcript_guardrail_owns_the_turn(
+    monkeypatch: pytest.MonkeyPatch,
+    through_provider_config: bool,
+    event_hook: GuardrailEventHooks | None,
+    expected_response_creates: int,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_transcription_guardrail(event_hook)] if event_hook else [])
+    completed: Final = _make_transcript_event("what are the opening hours tomorrow")
+    backend_ws: Final = MagicMock(
+        recv=AsyncMock(side_effect=[completed, ConnectionClosed(None, None)]),
+        send=AsyncMock(),
+    )
+    client_ws: Final = MagicMock(send_text=AsyncMock())
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        _mock_logging(),
+        provider_config=_PassthroughRealtimeConfig() if through_provider_config else None,
+    )
 
-    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
     await streaming.backend_to_client_send_messages()
 
-    assert streaming._is_transcription_session is False
-    sent_to_backend = [json.loads(c.args[0]) for c in backend_ws.send.call_args_list if c.args]
-    assert any(e.get("type") == "response.create" for e in sent_to_backend)
+    assert [json.loads(call.args[0]) for call in backend_ws.send.await_args_list] == [
+        {"type": "response.create"}
+    ] * expected_response_creates
+    assert [json.loads(call.args[0]) for call in client_ws.send_text.await_args_list] == [json.loads(completed)]
 
 
 def test_client_session_update_does_not_mark_transcription_session():
@@ -1115,7 +1221,7 @@ def test_capture_transcription_usage_deduplicates_when_already_stored():
 async def test_client_ack_caches_setup_to_prevent_duplicate_session_update_setup():
     websocket = MagicMock()
     backend_ws = MagicMock()
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.pre_call = MagicMock()
 
     # Two session.update messages arrive before setupComplete round-trip.
@@ -1162,7 +1268,7 @@ async def test_failed_content_send_does_not_block_later_setup():
     even though the backend never received any content."""
     websocket = MagicMock()
     backend_ws = MagicMock()
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
 
     provider_config = MagicMock()
     provider_config.transform_realtime_request = MagicMock(side_effect=lambda m, *a, **k: [m])
@@ -1200,7 +1306,7 @@ def test_collect_session_tools_from_session_update():
     """
     websocket = MagicMock()
     backend_ws = MagicMock()
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
 
     msg = json.dumps(
@@ -1237,7 +1343,7 @@ def test_collect_tool_calls_from_response_done():
     """
     websocket = MagicMock()
     backend_ws = MagicMock()
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
     streaming.logged_real_time_event_types = "*"
 
@@ -1272,7 +1378,7 @@ def test_tool_calls_not_collected_from_non_function_call_output():
     """
     websocket = MagicMock()
     backend_ws = MagicMock()
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
     streaming.logged_real_time_event_types = "*"
 
@@ -1303,7 +1409,7 @@ async def test_log_messages_includes_tools_in_model_call_details():
     """
     websocket = MagicMock()
     backend_ws = MagicMock()
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.model_call_details = {"messages": "default-message-value"}
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
@@ -1373,7 +1479,7 @@ async def test_realtime_guardrail_blocks_prompt_injection(monkeypatch: pytest.Mo
     )
     backend_ws.send = AsyncMock()
 
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
@@ -1449,7 +1555,7 @@ async def test_realtime_guardrail_allows_clean_transcript(monkeypatch: pytest.Mo
     )
     backend_ws.send = AsyncMock()
 
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
@@ -1499,7 +1605,7 @@ async def test_realtime_text_input_guardrail_blocks_and_returns_error(monkeypatc
     backend_ws.send = AsyncMock()
     backend_ws.recv = AsyncMock(side_effect=ConnectionClosed(None, None))
 
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.pre_call = MagicMock()
 
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
@@ -1592,7 +1698,7 @@ async def test_realtime_function_call_output_guardrail_blocks_and_returns_error(
     backend_ws.send = AsyncMock()
     backend_ws.recv = AsyncMock(side_effect=ConnectionClosed(None, None))
 
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.pre_call = MagicMock()
 
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
@@ -1670,7 +1776,7 @@ async def test_realtime_function_call_output_guardrail_allows_clean_output(monke
     backend_ws.send = AsyncMock()
     backend_ws.recv = AsyncMock(side_effect=ConnectionClosed(None, None))
 
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.pre_call = MagicMock()
 
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
@@ -1729,7 +1835,7 @@ async def test_realtime_text_input_guardrail_uses_pre_call_mode(monkeypatch: pyt
 
     client_ws = MagicMock()
     backend_ws = MagicMock()
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
 
     assert streaming._has_realtime_guardrails() is True, (
@@ -1773,7 +1879,7 @@ async def test_realtime_session_created_injects_session_update_for_audio_guardra
     backend_ws.recv = AsyncMock(side_effect=[session_created_event, ConnectionClosed(None, None)])
     backend_ws.send = AsyncMock()
 
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
 
@@ -1829,7 +1935,7 @@ async def test_realtime_session_created_does_not_inject_session_update_for_pre_c
     backend_ws.recv = AsyncMock(side_effect=[session_created_event, ConnectionClosed(None, None)])
     backend_ws.send = AsyncMock()
 
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
 
@@ -1871,7 +1977,7 @@ async def test_pre_call_and_post_call_guardrails_do_not_disable_server_vad(monke
 
     client_ws = MagicMock()
     backend_ws = MagicMock()
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     streaming = RealTimeStreaming(
         client_ws,
         backend_ws,
@@ -1926,7 +2032,7 @@ async def test_end_session_after_n_fails_closes_connection(monkeypatch: pytest.M
     backend_ws.send = AsyncMock()
     backend_ws.close = AsyncMock()
 
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
@@ -1971,7 +2077,7 @@ async def test_on_violation_end_session_closes_on_first_fail(monkeypatch: pytest
     backend_ws.send = AsyncMock()
     backend_ws.close = AsyncMock()
 
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
@@ -2010,7 +2116,7 @@ async def test_provider_path_suppresses_duplicate_session_created_after_syntheti
         }
     )
 
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.litellm_trace_id = "trace_1"
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
@@ -2062,7 +2168,7 @@ async def test_duplicate_session_created_still_triggers_guardrail_turn_detection
         }
     )
 
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.litellm_trace_id = "trace_1"
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
@@ -2098,7 +2204,7 @@ async def test_guardrail_update_respects_idempotency_flag():
     backend_ws = MagicMock()
     backend_ws.send = AsyncMock()
 
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.litellm_trace_id = "trace_1"
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
@@ -2147,7 +2253,7 @@ async def test_guardrail_turn_detection_injected_into_first_session_update_defer
     backend_ws = MagicMock()
     backend_ws.send = AsyncMock()
 
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.litellm_trace_id = "trace_1"
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
@@ -2213,7 +2319,7 @@ async def test_guardrail_turn_detection_injection_tolerates_non_dict_value(
     backend_ws = MagicMock()
     backend_ws.send = AsyncMock()
 
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.litellm_trace_id = "trace_1"
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
@@ -2245,8 +2351,7 @@ async def test_guardrail_turn_detection_injection_tolerates_non_dict_value(
     injected_turn_detection = session_obj.get("turn_detection") or session_obj.get("audio", {}).get("input", {}).get(
         "turn_detection"
     )
-    assert isinstance(injected_turn_detection, dict)
-    assert injected_turn_detection["create_response"] is False
+    assert injected_turn_detection == {"type": "server_vad", "create_response": False}
     assert streaming._guardrail_turn_detection_update_sent is True
 
 
@@ -2276,7 +2381,7 @@ async def test_subsequent_session_update_cannot_reenable_vad_when_guardrails_act
     backend_ws = MagicMock()
     backend_ws.send = AsyncMock()
 
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.litellm_trace_id = "trace_1"
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
@@ -2311,8 +2416,7 @@ async def test_subsequent_session_update_cannot_reenable_vad_when_guardrails_act
     forwarded_turn_detection = session_obj.get("turn_detection") or session_obj.get("audio", {}).get("input", {}).get(
         "turn_detection"
     )
-    assert isinstance(forwarded_turn_detection, dict)
-    assert forwarded_turn_detection["create_response"] is False
+    assert forwarded_turn_detection == {"type": "server_vad", "create_response": False}
 
 
 @pytest.mark.asyncio
@@ -2330,7 +2434,7 @@ async def test_follow_up_setup_updates_cached_session_configuration_request():
     backend_ws = MagicMock()
     backend_ws.send = AsyncMock()
 
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
 
@@ -2379,7 +2483,7 @@ async def test_deferred_setup_buffers_audio_until_backend_setup_complete(monkeyp
     client_ws.receive_text = AsyncMock(side_effect=[audio_msg, ConnectionClosed(None, None)])
     backend_ws = MagicMock()
     backend_ws.send = AsyncMock()
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
 
     config = GeminiRealtimeConfig()
     streaming = RealTimeStreaming(
@@ -2413,7 +2517,7 @@ async def test_deferred_setup_sends_session_update_before_buffered_audio(monkeyp
     client_ws.receive_text = AsyncMock(side_effect=[audio_msg, session_update, ConnectionClosed(None, None)])
     backend_ws = MagicMock()
     backend_ws.send = AsyncMock()
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     config = GeminiRealtimeConfig()
 
     streaming = RealTimeStreaming(
@@ -2442,7 +2546,7 @@ async def test_deferred_setup_flush_buffers_audio_received_during_flush():
     new_audio_msg = json.dumps({"type": "input_audio_buffer.append", "audio": "new-audio"})
     client_ws.receive_text = AsyncMock(side_effect=[new_audio_msg, ConnectionClosed(None, None)])
     backend_ws = MagicMock()
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
 
     provider_config = MagicMock()
     provider_config.requires_session_configuration = MagicMock(return_value=False)
@@ -2505,7 +2609,7 @@ async def test_deferred_setup_flush_buffers_audio_received_during_flush():
 async def test_deferred_setup_flush_retains_unsent_messages_after_send_failure():
     client_ws = MagicMock()
     backend_ws = MagicMock()
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
     buffered_messages = [
         json.dumps({"type": "input_audio_buffer.append", "audio": "AA=="}),
@@ -2547,7 +2651,7 @@ async def test_deferred_setup_flushes_audio_on_backend_session_created(monkeypat
             ConnectionClosed(None, None),
         ]
     )
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.litellm_trace_id = "trace_defer"
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
@@ -2586,7 +2690,7 @@ async def test_deferred_setup_caps_non_audio_buffered_messages(monkeypatch):
     )
     backend_ws = MagicMock()
     backend_ws.send = AsyncMock()
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
 
     streaming = RealTimeStreaming(
         client_ws,
@@ -2617,7 +2721,7 @@ async def test_deferred_setup_caps_non_audio_buffered_bytes(monkeypatch):
     client_ws.receive_text = AsyncMock(side_effect=[audio_msg, big_non_audio, ConnectionClosed(None, None)])
     backend_ws = MagicMock()
     backend_ws.send = AsyncMock()
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
 
     streaming = RealTimeStreaming(
         client_ws,
@@ -2649,7 +2753,7 @@ def _ga_client_ws():
 
 def _streaming_with(client_ws):
     backend_ws = MagicMock()
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
     return RealTimeStreaming(client_ws, backend_ws, logging_obj)
@@ -2711,7 +2815,7 @@ async def test_beta_client_receives_translated_audio_delta():
     frame = json.dumps({"type": "response.output_audio.delta", "delta": "QUJD", "event_id": "e1"})
     backend_ws = MagicMock()
     backend_ws.recv = AsyncMock(side_effect=[frame.encode(), ConnectionClosed(None, None)])
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
@@ -2730,7 +2834,7 @@ async def test_ga_client_receives_raw_passthrough():
     frame = json.dumps({"type": "response.output_audio.delta", "delta": "QUJD", "event_id": "e1"})
     backend_ws = MagicMock()
     backend_ws.recv = AsyncMock(side_effect=[frame.encode(), ConnectionClosed(None, None)])
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
@@ -2750,7 +2854,7 @@ async def test_beta_client_non_translated_event_forwarded_raw():
     frame = json.dumps({"type": "error", "error": {"message": "boom"}})
     backend_ws = MagicMock()
     backend_ws.recv = AsyncMock(side_effect=[frame.encode(), ConnectionClosed(None, None)])
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
@@ -2767,7 +2871,7 @@ async def test_beta_client_drops_conversation_item_done():
     frame = json.dumps({"type": "conversation.item.done", "item": {"id": "i1"}})
     backend_ws = MagicMock()
     backend_ws.recv = AsyncMock(side_effect=[frame.encode(), ConnectionClosed(None, None)])
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
@@ -2793,7 +2897,7 @@ async def test_audio_delta_frame_parsed_at_most_once():
     frame = json.dumps({"type": "response.output_audio.delta", "delta": "QUJD", "event_id": "e1"})
     backend_ws = MagicMock()
     backend_ws.recv = AsyncMock(side_effect=[frame.encode(), ConnectionClosed(None, None)])
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
@@ -2829,7 +2933,7 @@ def test_collapse_buffered_audio_messages_applies_clear_semantics():
 async def test_deferred_setup_clear_drops_buffered_appends_on_flush():
     client_ws = MagicMock()
     backend_ws = MagicMock()
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
 
     old_audio = json.dumps({"type": "input_audio_buffer.append", "audio": "old"})
@@ -2851,7 +2955,7 @@ async def test_deferred_setup_clear_drops_buffered_appends_on_flush():
 async def test_deferred_setup_clear_drops_appends_when_buffered():
     client_ws = MagicMock()
     backend_ws = MagicMock()
-    logging_obj = MagicMock()
+    logging_obj: Final = _mock_logging()
     streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
 
     old_audio = json.dumps({"type": "input_audio_buffer.append", "audio": "old"})
@@ -2865,10 +2969,10 @@ async def test_deferred_setup_clear_drops_appends_when_buffered():
     assert streaming._pending_messages_until_setup == [new_audio]
 
 
-def _transcription_guardrail():
-    """A minimal real CustomGuardrail registered for the realtime transcript hook."""
-    from litellm.integrations.custom_guardrail import CustomGuardrail
-    from litellm.types.guardrails import GuardrailEventHooks
+def _transcription_guardrail(
+    event_hook: GuardrailEventHooks = GuardrailEventHooks.realtime_input_transcription,
+) -> CustomGuardrail:
+    """A minimal real CustomGuardrail registered for one realtime event hook."""
 
     class _TranscriptionGuardrail(CustomGuardrail):
         async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
@@ -2876,7 +2980,7 @@ def _transcription_guardrail():
 
     return _TranscriptionGuardrail(
         guardrail_name="test_transcription_guard",
-        event_hook=GuardrailEventHooks.realtime_input_transcription,
+        event_hook=event_hook,
         default_on=True,
     )
 
@@ -2962,7 +3066,7 @@ async def test_provider_config_path_captures_transcription_usage():
     client_ws.send_text = AsyncMock()
     backend_ws: Final = MagicMock()
     backend_ws.send = AsyncMock()
-    logging_obj: Final = MagicMock()
+    logging_obj: Final = _mock_logging()
 
     usage: Final[RealtimeInputAudioTranscriptionUsage] = {
         "type": "tokens",
@@ -3025,7 +3129,7 @@ async def test_session_close_flushes_unbilled_transcription_usage():
     client_ws.send_text = AsyncMock()
     backend_ws: Final = MagicMock()
     backend_ws.recv = AsyncMock(side_effect=[b'{"serverContent": {}}', ConnectionClosed(None, None)])
-    logging_obj: Final = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
     logging_obj.dispatch_success_handlers = AsyncMock()
@@ -3101,7 +3205,7 @@ async def test_session_close_flush_noop_without_unbilled_usage():
     client_ws.send_text = AsyncMock()
     backend_ws: Final = MagicMock()
     backend_ws.recv = AsyncMock(side_effect=ConnectionClosed(None, None))
-    logging_obj: Final = MagicMock()
+    logging_obj: Final = _mock_logging()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
     logging_obj.dispatch_success_handlers = AsyncMock()
@@ -3645,7 +3749,7 @@ async def test_transcription_guardrail_sends_no_session_update_after_transcripti
     streaming: Final = RealTimeStreaming(
         client_ws,
         backend_ws,
-        MagicMock(),
+        _mock_logging(),
         provider_config=provider_config,
         model="gpt-4o-transcribe",
         force_transcription_model="gpt-4o-transcribe",
@@ -3680,7 +3784,9 @@ async def test_provider_transcription_session_created_flags_session_without_inte
     backend_ws: Final = MagicMock()
     backend_ws.recv = AsyncMock(side_effect=[json.dumps(session_created).encode(), ConnectionClosed(None, None)])
     backend_ws.send = AsyncMock()
-    streaming: Final = RealTimeStreaming(client_ws, backend_ws, MagicMock(), provider_config=provider_config, model="m")
+    streaming: Final = RealTimeStreaming(
+        client_ws, backend_ws, _mock_logging(), provider_config=provider_config, model="m"
+    )
 
     await streaming.backend_to_client_send_messages()
 
@@ -3799,7 +3905,7 @@ async def test_transcription_session_guardrail_block_only_reports_violation(
     streaming: Final = RealTimeStreaming(
         client_ws,
         backend_ws,
-        MagicMock(),
+        _mock_logging(),
         provider_config=_passthrough_transcription_config() if uses_provider_config else None,
         model="gpt-4o-transcribe",
         force_transcription_model="gpt-4o-transcribe",
@@ -3819,3 +3925,317 @@ async def test_transcription_session_guardrail_block_only_reports_violation(
     sent_to_backend: Final = [call.args[0] for call in backend_ws.send.await_args_list]
     assert sent_to_backend == [], sent_to_backend
     assert backend_ws.close.await_count == (1 if expect_session_closed else 0)
+
+
+_GA_GUARDRAIL_GATE: Final = {
+    "type": "realtime",
+    "audio": {"input": {"turn_detection": {"type": "server_vad", "create_response": False}}},
+}
+
+
+async def _forwarded_ga_session_updates(
+    monkeypatch: pytest.MonkeyPatch,
+    *client_sessions: dict[str, object],
+    event_normalizer: XAIRealtimeNormalizer | None = None,
+) -> tuple[dict[str, object], ...]:
+    """Run a GA client's session.updates through a transcript-guardrailed proxy and return the forwarded sessions."""
+    monkeypatch.setattr(litellm, "callbacks", [_transcription_guardrail()])
+    client_ws: Final = AsyncMock()
+    client_ws.scope = {"headers": []}
+    client_ws.receive_text = AsyncMock(
+        side_effect=[
+            *(json.dumps({"type": "session.update", "session": session}) for session in client_sessions),
+            ConnectionClosed(None, None),
+        ]
+    )
+    backend_ws: Final = MagicMock()
+    backend_ws.send = AsyncMock()
+    logging_obj: Final = MagicMock()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    await RealTimeStreaming(client_ws, backend_ws, logging_obj, event_normalizer=event_normalizer).client_ack_messages()
+    return tuple(json.loads(call.args[0])["session"] for call in backend_ws.send.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_first_ga_session_update_keeps_client_turn_detection_when_guardrail_disables_auto_response(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A transcript guardrail only flips create_response: the client's nested GA
+    turn_detection, its type included, must reach the backend intact, or OpenAI
+    rejects the whole update and the client's session config is lost."""
+    forwarded: Final = await _forwarded_ga_session_updates(
+        monkeypatch,
+        {
+            "type": "realtime",
+            "instructions": "hi",
+            "audio": {
+                "input": {
+                    "turn_detection": {"type": "server_vad", "silence_duration_ms": 700, "create_response": True},
+                    "transcription": {"model": "gpt-4o-transcribe"},
+                }
+            },
+        },
+    )
+
+    gate, client_update = forwarded
+    assert gate == _GA_GUARDRAIL_GATE
+    assert "turn_detection" not in client_update
+    assert client_update["instructions"] == "hi"
+    assert client_update["audio"]["input"] == {
+        "turn_detection": {"type": "server_vad", "silence_duration_ms": 700, "create_response": False},
+        "transcription": {"model": "gpt-4o-transcribe"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_first_ga_session_update_without_turn_detection_gets_a_typed_gate(monkeypatch: pytest.MonkeyPatch):
+    forwarded: Final = await _forwarded_ga_session_updates(monkeypatch, {"type": "realtime", "instructions": "hi"})
+
+    gate, client_update = forwarded
+    assert gate == _GA_GUARDRAIL_GATE
+    assert "turn_detection" not in client_update
+    assert client_update["audio"]["input"]["turn_detection"] == {"type": "server_vad", "create_response": False}
+
+
+@pytest.mark.asyncio
+async def test_later_ga_session_update_without_turn_detection_is_forwarded_without_one(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """OpenAI keeps the earlier create_response=false for a field left unset, while a
+    bare create_response carries no type and gets the whole update rejected."""
+    forwarded: Final = await _forwarded_ga_session_updates(
+        monkeypatch,
+        {"type": "realtime", "audio": {"input": {"turn_detection": {"type": "server_vad", "create_response": True}}}},
+        {"type": "realtime", "instructions": "later"},
+    )
+
+    gate, first, later = forwarded
+    assert gate == _GA_GUARDRAIL_GATE
+    assert first["audio"]["input"]["turn_detection"] == {"type": "server_vad", "create_response": False}
+    assert later == {"type": "realtime", "instructions": "later"}
+
+
+_XAI_TYPED_VAD_SESSION: Final = {
+    "type": "realtime",
+    "audio": {"input": {"turn_detection": {"type": "server_vad", "silence_duration_ms": 700}}},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "client_sessions",
+    [
+        pytest.param(({"type": "realtime", "instructions": "hi"},), id="no-turn-detection"),
+        pytest.param(({"type": "realtime", "audio": {"input": {"turn_detection": None}}},), id="push-to-talk"),
+        pytest.param((_XAI_TYPED_VAD_SESSION,), id="typed-server-vad"),
+        pytest.param(
+            ({"type": "realtime", "instructions": "hi"}, _XAI_TYPED_VAD_SESSION), id="later-typed-server-vad"
+        ),
+    ],
+)
+async def test_xai_session_update_gate_leaves_out_the_vad_type(
+    monkeypatch: pytest.MonkeyPatch, client_sessions: tuple[dict[str, object], ...]
+):
+    """xAI answers on its own under a typed turn_detection even with create_response off,
+    so every turn_detection the proxy forwards to xAI under the guardrail must carry no type."""
+    forwarded: Final = await _forwarded_ga_session_updates(
+        monkeypatch, *client_sessions, event_normalizer=XAIRealtimeNormalizer()
+    )
+
+    assert [session["audio"]["input"]["turn_detection"] for session in forwarded] == [
+        {"create_response": False}
+    ] * (len(client_sessions) + 1)
+
+
+@pytest.mark.asyncio
+async def test_xai_session_created_gate_leaves_out_the_vad_type(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "callbacks", [_transcription_guardrail()])
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock()
+    backend_ws: Final = MagicMock()
+    backend_ws.send = AsyncMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[
+            json.dumps({"type": "session.created", "session": {"turn_detection": {"type": None}}}).encode(),
+            ConnectionClosed(None, None),
+        ]
+    )
+    logging_obj: Final = _mock_logging()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    streaming: Final = RealTimeStreaming(client_ws, backend_ws, logging_obj, event_normalizer=XAIRealtimeNormalizer())
+
+    await streaming.backend_to_client_send_messages()
+
+    sent: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+    assert sent == [
+        {
+            "type": "session.update",
+            "session": {"type": "realtime", "audio": {"input": {"turn_detection": {"create_response": False}}}},
+        }
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "client_turn_detection",
+    [
+        pytest.param({"type": "semantic_vad", "eagerness": "low"}, id="semantic-vad"),
+        pytest.param({"type": "server_vad", "silence_duration_ms": 700}, id="tuned-server-vad"),
+    ],
+)
+async def test_guardrail_gate_goes_ahead_of_a_session_update_sent_before_session_created(
+    monkeypatch: pytest.MonkeyPatch, client_turn_detection: dict[str, object]
+):
+    """OpenAI applies events in order, so the gate must precede a client update sent on connect:
+    the client's turn_detection then wins, and when OpenAI refuses that update the gate still holds."""
+    monkeypatch.setattr(litellm, "callbacks", [_transcription_guardrail()])
+    client_ws: Final = AsyncMock()
+    client_ws.scope = {"headers": []}
+    client_ws.receive_text = AsyncMock(
+        side_effect=[
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {"type": "realtime", "audio": {"input": {"turn_detection": client_turn_detection}}},
+                }
+            ),
+            ConnectionClosed(None, None),
+        ]
+    )
+    backend_ws: Final = MagicMock()
+    backend_ws.send = AsyncMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[json.dumps({"type": "session.created", "session": {}}).encode(), ConnectionClosed(None, None)]
+    )
+    logging_obj: Final = _mock_logging()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    streaming: Final = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+
+    await streaming.client_ack_messages()
+    await streaming.backend_to_client_send_messages()
+
+    sent: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+    assert [event["session"]["audio"]["input"]["turn_detection"] for event in sent] == [
+        {"type": "server_vad", "create_response": False},
+        {**client_turn_detection, "create_response": False},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_client_never_sees_the_error_caused_by_the_guardrail_cancel(monkeypatch: pytest.MonkeyPatch):
+    """OpenAI answers the guardrail's response.cancel with response_cancel_not_active when nothing
+    is answering yet, an error about an event the client never sent."""
+
+    class _BlockingGuardrail(CustomGuardrail):
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            raise ValueError("blocked")
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+            _BlockingGuardrail(
+                guardrail_name="blocking", event_hook=GuardrailEventHooks.realtime_input_transcription, default_on=True
+            )
+        ],
+    )
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock()
+    backend_ws: Final = MagicMock()
+    backend_ws.send = AsyncMock()
+
+    def cancel_not_active(event_id: str) -> bytes:
+        return json.dumps(
+            {"type": "error", "error": {"code": "response_cancel_not_active", "event_id": event_id}}
+        ).encode()
+
+    def proxy_cancel_event_id() -> str:
+        sent = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+        return next(event["event_id"] for event in sent if event["type"] == "response.cancel")
+
+    backend_frames: Final = iter(
+        (
+            lambda: _make_transcript_event("blocked words"),
+            lambda: cancel_not_active(proxy_cancel_event_id()),
+            lambda: cancel_not_active("evt_from_client"),
+            lambda: cancel_not_active("litellm_guardrail_from_client"),
+        )
+    )
+
+    async def recv(**_kwargs: object) -> bytes:
+        frame = next(backend_frames, None)
+        if frame is None:
+            raise ConnectionClosed(None, None)
+        return frame()
+
+    backend_ws.recv = recv
+    logging_obj: Final = _mock_logging()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+
+    await RealTimeStreaming(client_ws, backend_ws, logging_obj).backend_to_client_send_messages()
+
+    client_errors: Final = [
+        event["error"] for call in client_ws.send_text.await_args_list if (event := json.loads(call.args[0]))["type"] == "error"
+    ]
+    assert [(error["code"], error.get("event_id")) for error in client_errors] == [
+        ("content_policy_violation", None),
+        ("response_cancel_not_active", "evt_from_client"),
+        ("response_cancel_not_active", "litellm_guardrail_from_client"),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("event_normalizer", "expected_frames"),
+    [
+        (None, ["response.cancel", "conversation.item.delete", "conversation.item.create", "response.create"]),
+        (XAIRealtimeNormalizer(), ["response.cancel", "conversation.item.create", "response.create"]),
+    ],
+    ids=["deletes_the_blocked_item", "xai_keeps_the_item_it_cannot_delete"],
+)
+async def test_blocked_transcript_is_removed_from_the_conversation_before_the_refusal_turn(
+    monkeypatch: pytest.MonkeyPatch,
+    event_normalizer: XAIRealtimeNormalizer | None,
+    expected_frames: list[str],
+):
+    class _BlockingGuardrail(CustomGuardrail):
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            raise ValueError("blocked")
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+            _BlockingGuardrail(
+                guardrail_name="blocking", event_hook=GuardrailEventHooks.realtime_input_transcription, default_on=True
+            )
+        ],
+    )
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock()
+    backend_ws: Final = MagicMock()
+    backend_ws.send = AsyncMock()
+    backend_frames: Final = iter((_make_transcript_event("blocked words", item_id="item_blocked"),))
+
+    async def recv(**_kwargs: object) -> bytes:
+        frame = next(backend_frames, None)
+        if frame is None:
+            raise ConnectionClosed(None, None)
+        return frame
+
+    backend_ws.recv = recv
+    logging_obj: Final = _mock_logging()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+
+    await RealTimeStreaming(
+        client_ws, backend_ws, logging_obj, event_normalizer=event_normalizer
+    ).backend_to_client_send_messages()
+
+    sent: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+    assert [event["type"] for event in sent] == expected_frames
+    assert all(event["item_id"] == "item_blocked" for event in sent if event["type"] == "conversation.item.delete")

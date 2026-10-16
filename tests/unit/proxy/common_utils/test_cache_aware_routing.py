@@ -363,7 +363,7 @@ async def test_router_applies_opt_in_and_preserves_failure_semantics(
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
     from litellm.proxy import proxy_server
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-    from litellm.proxy.hooks.parallel_request_limiter_v3 import _PROXY_MaxParallelRequestsHandler_v3
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
     from litellm.proxy.utils import ProxyLogging
     from litellm.router_strategy.complexity_router.context_compaction import initialize_compaction_state
 
@@ -390,7 +390,7 @@ async def test_router_applies_opt_in_and_preserves_failure_semantics(
         ]
     )
     logging: Final = ProxyLogging(UserApiKeyCache())
-    logging.proxy_hook_mapping["parallel_request_limiter"] = _PROXY_MaxParallelRequestsHandler_v3(
+    logging.proxy_hook_mapping["parallel_request_limiter"] = PROXY_MaxParallelRequestsHandler_v3(
         logging.internal_usage_cache
     )
     await _observed(logging.internal_usage_cache.dual_cache, expires_at=1e100)
