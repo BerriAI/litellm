@@ -80,7 +80,8 @@ def _extract_raw_candidates(v: object) -> tuple[str, ...]:
 
 
 def _clean_and_validate_email(raw: str) -> str | None:
-    clean: Final = raw.replace("\r", "").replace("\n", "").strip()
+    trimmed: Final = raw.strip()
+    clean: Final = trimmed.replace("\r", "").replace("\n", "")
     if not clean:
         return None
     if not _EMAIL_REGEX.match(clean):
@@ -263,7 +264,7 @@ def check_spend_report_email_status() -> SpendReportEmailStatusResponse:
     )
 
 
-async def _send_with_enterprise_logger(
+async def _send_with_enterprise_email_provider(
     module_name: str,
     class_name: str,
     from_email: str,
@@ -275,17 +276,19 @@ async def _send_with_enterprise_logger(
         module: Final = importlib.import_module(module_name)
     except ImportError:
         return False
-    logger_cls: Final[object] = getattr(module, class_name, None)
-    if not callable(logger_cls):
+    provider_cls: Final[object] = getattr(module, class_name, None)
+    if not callable(provider_cls):
         return False
-    logger_instance: Final[object] = logger_cls()
-    send_fn: Final[Callable[..., Awaitable[object]] | None] = getattr(logger_instance, "send_email", None)
+    provider_instance: Final[object] = provider_cls()
+    send_fn: Final[Callable[..., Awaitable[object]] | None] = getattr(provider_instance, "send_email", None)
     if send_fn is None:
         return False
+    clean_to_emails: Final[tuple[str, ...]] = tuple(e.strip().replace("\r", "").replace("\n", "") for e in to_email)
+    clean_subj: Final[str] = subject.strip().replace("\r", "").replace("\n", "")
     await send_fn(
         from_email=from_email,
-        to_email=list(to_email),
-        subject=subject,
+        to_email=list(clean_to_emails),
+        subject=clean_subj,
         html_body=html,
     )
     return True
@@ -300,7 +303,7 @@ async def default_email_sender(
         sg_sender_email: Final = (
             os.getenv("SENDGRID_SENDER_EMAIL") or os.getenv("SMTP_SENDER_EMAIL") or "notifications@alerts.litellm.ai"
         )
-        sg_sent: Final = await _send_with_enterprise_logger(
+        sg_sent: Final = await _send_with_enterprise_email_provider(
             module_name="litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email",
             class_name="SendGridEmailLogger",
             from_email=sg_sender_email,
@@ -314,7 +317,7 @@ async def default_email_sender(
 
     if os.getenv("RESEND_API_KEY"):
         resend_sender_email: Final = os.getenv("SMTP_SENDER_EMAIL") or "notifications@alerts.litellm.ai"
-        resend_sent: Final = await _send_with_enterprise_logger(
+        resend_sent: Final = await _send_with_enterprise_email_provider(
             module_name="litellm_enterprise.enterprise_callbacks.send_emails.resend_email",
             class_name="ResendEmailLogger",
             from_email=resend_sender_email,
@@ -918,8 +921,10 @@ async def send_spend_report_email(
 
     actual_sender: Final = email_sender if email_sender is not None else default_email_sender
 
-    team_subject_suffix: Final = f" - Team: {team_id}" if team_id else ""
-    subject: Final = f"LiteLLM {frequency.capitalize()} Spend Report{team_subject_suffix} ({resolved_start_date} to {resolved_end_date})"
+    clean_team_id: Final = team_id.strip().replace("\r", "").replace("\n", "") if team_id else ""
+    team_subject_suffix: Final = f" - Team: {clean_team_id}" if clean_team_id else ""
+    raw_subject: Final = f"LiteLLM {frequency.capitalize()} Spend Report{team_subject_suffix} ({resolved_start_date} to {resolved_end_date})"
+    subject: Final = raw_subject.strip().replace("\r", "").replace("\n", "")
     for clean_email in resolved_recipients:
         await actual_sender(
             receiver_email=clean_email,

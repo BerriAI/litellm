@@ -7358,8 +7358,8 @@ async def send_email(
         raise ValueError(f"No HTML body provided for SMTP email. {html}")
 
     ## EMAIL SETUP ##
-    clean_receiver_email: Final = str(receiver_email).replace("\r", "").replace("\n", "").strip()
-    clean_subject: Final = str(subject).replace("\r", "").replace("\n", "").strip()
+    clean_receiver_email: Final = str(receiver_email).strip().replace("\r", "").replace("\n", "")
+    clean_subject: Final = str(subject).strip().replace("\r", "").replace("\n", "")
     email_message: Final = MIMEMultipart()
     email_message["From"] = sender_email
     email_message["To"] = clean_receiver_email
@@ -7387,7 +7387,7 @@ async def send_email(
         )
 
     except Exception:
-        verbose_proxy_logger.exception("An error occurred while sending the email")
+        verbose_proxy_logger.error("An error occurred while sending the email")
 
 
 def hash_token(token: str):
