@@ -1952,6 +1952,7 @@ class TestResponsesWSFirstFrameModelAuth:
 
         proxy_logging_obj = MagicMock()
         proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.arelease_max_parallel_requests_on_disconnect = AsyncMock(return_value=None)
         user_api_key_dict = MagicMock()
 
         with (
@@ -2016,6 +2017,7 @@ class TestResponsesWSFirstFrameModelAuth:
         )
         proxy_logging_obj = MagicMock()
         proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.arelease_max_parallel_requests_on_disconnect = AsyncMock(return_value=None)
         user_api_key_dict = MagicMock()
 
         with (
