@@ -4448,6 +4448,7 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         from litellm.completion_extras.litellm_responses_transformation.transformation import (
             LiteLLMResponsesTransformationHandler,
+            responses_provider_metadata,
         )
 
         served_id: Final = _provider_response_id(result)
@@ -4472,7 +4473,9 @@ class Logging(LiteLLMLoggingBaseClass):
                 "usage-only ModelResponse to keep the spend_logs row.",
                 str(e),
             )
-            model_response: Final = litellm.ModelResponse(id=served_id)
+            model_response: Final = litellm.ModelResponse(
+                id=served_id, **responses_provider_metadata(result.model_extra)
+            )
             model_response.model = self.model
             usage: Final = result.usage
             if usage is not None and ResponseAPILoggingUtils.is_response_api_usage(usage):
