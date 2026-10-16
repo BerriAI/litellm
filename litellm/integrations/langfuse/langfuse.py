@@ -69,15 +69,32 @@ def _widened_items(mapping: Mapping[str, object]) -> Iterable[tuple[object, obje
     return mapping.items()
 
 
-def _is_session_header_trace(metadata: Mapping[str, object], proxy_server_request: object) -> bool:
-    """The proxy records what set the trace id. A trace id that is only a session header's value
-    is not a real trace, so each call gets its own trace inside that session, unless the caller
-    named a Langfuse trace explicitly."""
-    if metadata.get(TRACE_ID_SOURCE_METADATA_KEY) != "session_header":
-        return False
+def _string_headers(raw_headers: Mapping[str, object]) -> Mapping[str, str]:
+    return MappingProxyType(
+        {key: value for key, value in _widened_items(raw_headers) if isinstance(key, str) and isinstance(value, str)}
+    )
+
+
+def _trace_id_source(metadata: Mapping[str, object], trace_id: object, raw_headers: Mapping[str, object]) -> object:
+    """Request setup records what set the trace id. A log that skipped request setup (an SDK call,
+    an MCP round inside a response) only carries the headers, so resolve the source from them."""
+    from litellm.proxy.litellm_pre_call_utils import resolve_session_context
+
+    recorded_source: Final = metadata.get(TRACE_ID_SOURCE_METADATA_KEY)
+    if recorded_source is not None:
+        return recorded_source
+    context: Final = resolve_session_context(_string_headers(raw_headers))
+    return context.trace_source if context.trace_id == trace_id else None
+
+
+def _is_session_header_trace(metadata: Mapping[str, object], trace_id: object, proxy_server_request: object) -> bool:
+    """A trace id that is only a session header's value is not a real trace, so each call gets its
+    own trace inside that session, unless the caller named a Langfuse trace explicitly."""
     request: Final = _object_mapping(proxy_server_request)
     raw_headers: Final = _object_mapping(request.get("headers")) if request is not None else None
     if raw_headers is None:
+        return False
+    if _trace_id_source(metadata, trace_id, raw_headers) != "session_header":
         return False
     return all(
         not (isinstance(key, str) and key.lower() == "langfuse_trace_id") for key, _ in _widened_items(raw_headers)
@@ -116,7 +133,7 @@ def langfuse_trace_id(
         if standard_trace_id is not None
         else litellm_trace_id or litellm_call_id
     )
-    if _is_session_header_trace(metadata, proxy_server_request):
+    if _is_session_header_trace(metadata, trace_id, proxy_server_request):
         return litellm_call_id or trace_id
     return trace_id
 

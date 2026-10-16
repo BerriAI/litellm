@@ -1906,8 +1906,9 @@ def test_every_proxy_session_header_shape_is_classified_as_a_session_alias():
         LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
             headers=dict(headers), data=data, _metadata_variable_name="metadata"
         )
-        assert _is_session_header_trace(data["metadata"], {"headers": dict(headers)}) is True, headers
-        assert _is_session_header_trace({}, {"headers": dict(headers)}) is False, headers
+        assert _is_session_header_trace(data["metadata"], expected, {"headers": dict(headers)}) is True, headers
+        assert _is_session_header_trace({}, expected, {"headers": dict(headers)}) is True, headers
+        assert _is_session_header_trace({}, "other-trace-9f8e7d6c", {"headers": dict(headers)}) is False, headers
 
     explicit_trace: Final = {"x-litellm-trace-id": session, "x-litellm-session-id": session}
     data = {"metadata": {}}
@@ -1915,14 +1916,15 @@ def test_every_proxy_session_header_shape_is_classified_as_a_session_alias():
         headers=explicit_trace, data=data, _metadata_variable_name="metadata"
     )
     assert data["metadata"][TRACE_ID_SOURCE_METADATA_KEY] == "trace_header"
-    assert _is_session_header_trace(data["metadata"], {"headers": explicit_trace}) is False
+    assert _is_session_header_trace(data["metadata"], session, {"headers": explicit_trace}) is False
+    assert _is_session_header_trace({}, session, {"headers": explicit_trace}) is False
 
     named_trace: Final = {"x-litellm-session-id": session, "langfuse_trace_id": "explicit-trace"}
     data = {"metadata": {}}
     LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
         headers=named_trace, data=data, _metadata_variable_name="metadata"
     )
-    assert _is_session_header_trace(data["metadata"], {"headers": named_trace}) is False
+    assert _is_session_header_trace(data["metadata"], session, {"headers": named_trace}) is False
 
 
 def test_session_affinity_beside_traceparent_keeps_the_real_trace():
@@ -1939,7 +1941,8 @@ def test_session_affinity_beside_traceparent_keeps_the_real_trace():
     )
     assert data["metadata"]["trace_id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
     assert data["metadata"]["session_id"] == headers["x-session-affinity"]
-    assert _is_session_header_trace(data["metadata"], {"headers": dict(headers)}) is False
+    assert _is_session_header_trace(data["metadata"], data["metadata"]["trace_id"], {"headers": dict(headers)}) is False
+    assert _is_session_header_trace({}, data["metadata"]["trace_id"], {"headers": dict(headers)}) is False
 
 
 @pytest.mark.parametrize(
