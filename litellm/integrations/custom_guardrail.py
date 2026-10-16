@@ -256,8 +256,8 @@ class CustomGuardrail(CustomLogger):
         scan_raw_request: bool = False,
         only_scan_new_messages: bool = False,
         timeout: float | None = None,
-        **kwargs,
-    ):
+        **kwargs: object,
+    ) -> None:
         """
         Initialize the CustomGuardrail class
 
@@ -303,7 +303,7 @@ class CustomGuardrail(CustomLogger):
         self.run_in_parallel: bool = run_in_parallel
         self.scan_raw_request: bool = scan_raw_request
         self.only_scan_new_messages: bool = only_scan_new_messages
-        stream_scope_arg: Final[object] = cast(object, kwargs.pop("stream_scope", None))  # cast-ok: config
+        stream_scope_arg: Final[object] = kwargs.pop("stream_scope", None)
         self.apply_stream_scope(stream_scope_arg)
         self.logging_only_scope = None
         self.logging_only_continue_on_input_failure = False
