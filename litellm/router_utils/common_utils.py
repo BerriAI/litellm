@@ -47,7 +47,8 @@ def request_user_api_key_auth(request_kwargs: Mapping[str, object]) -> object:
 def is_proxy_admin_request(request_kwargs: Mapping[str, object] | None) -> bool:
     if request_kwargs is None:
         return False
-    return getattr(request_user_api_key_auth(request_kwargs), "user_role", None) == "proxy_admin"
+    user_role: Final[object] = getattr(request_user_api_key_auth(request_kwargs), "user_role", None)
+    return user_role == "proxy_admin"
 
 
 _is_proxy_admin_request = is_proxy_admin_request

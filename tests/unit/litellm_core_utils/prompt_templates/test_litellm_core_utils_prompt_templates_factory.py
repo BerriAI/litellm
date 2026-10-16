@@ -4,6 +4,8 @@ import logging
 import os
 import re
 import time
+from collections.abc import Callable
+from copy import deepcopy
 from typing import Final, List
 from unittest.mock import MagicMock, patch
 
@@ -37,6 +39,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
 )
 from litellm.types.llms.openai import ChatCompletionAssistantMessage, ChatCompletionToolMessage
+from litellm.types.utils import ChatCompletionMessageToolCall, Function
 from litellm.utils import (
     _invalidate_model_cost_lowercase_map,
     function_setup,
@@ -67,17 +70,98 @@ from litellm.types.llms.bedrock import BedrockConverseReasoningContentBlock
 from litellm.types.llms.openai import AllMessageValues
 
 
-def test_function_call_prompt_preserves_append_failure_for_non_string_content() -> None:
-    messages = [{"role": "system", "content": None}]
+READ_FILE: Final[list[object]] = [{"name": "read_file", "description": "Read the contents of a file."}]
+USER_TURN: Final[dict[str, object]] = {"role": "user", "content": "Read the file."}
+HELPFUL_PART: Final[dict[str, object]] = {"type": "text", "text": "You are helpful."}
 
-    with pytest.raises(AttributeError):
-        function_call_prompt(messages, [])
+
+def _ollama_function_call_prompt(
+    messages: list[dict[str, object]], functions: list[object], drop_params: bool = False
+) -> list[dict[str, object]]:
+    return function_call_prompt(messages, functions, model="llama3", llm_provider="ollama", drop_params=drop_params)
+
+
+def _read_file_prompt() -> object:
+    prompt: Final = _ollama_function_call_prompt([USER_TURN], READ_FILE)[-1]["content"]
+    assert "Read the contents of a file." in str(prompt)
+    return prompt
+
+
+@pytest.mark.parametrize(
+    ("history", "expected"),
+    (
+        ((USER_TURN,), lambda prompt: [USER_TURN, {"role": "system", "content": prompt}]),
+        (
+            ({"role": "system", "content": "You are helpful."}, USER_TURN),
+            lambda prompt: [{"role": "system", "content": f"You are helpful. {prompt}"}, USER_TURN],
+        ),
+        (
+            ({"role": "system", "content": [HELPFUL_PART]}, USER_TURN),
+            lambda prompt: [
+                {"role": "system", "content": [HELPFUL_PART, {"type": "text", "text": f" {prompt}"}]},
+                USER_TURN,
+            ],
+        ),
+        (
+            ({"role": "system", "content": "You are helpful."}, USER_TURN, {"role": "system", "content": "Be brief."}),
+            lambda prompt: [
+                {"role": "system", "content": f"You are helpful. {prompt}"},
+                USER_TURN,
+                {"role": "system", "content": f"Be brief. {prompt}"},
+            ],
+        ),
+    ),
+    ids=("no_system", "string_content", "list_content", "two_system_messages"),
+)
+def test_function_call_prompt_sends_the_schema_once_per_turn_of_a_reused_history(
+    history: tuple[dict[str, object], ...],
+    expected: Callable[[object], list[dict[str, object]]],
+) -> None:
+    reused_history: Final = deepcopy(list(history))
+
+    turns: Final = tuple(_ollama_function_call_prompt(reused_history, READ_FILE) for _ in range(3))
+
+    assert reused_history == list(history)
+    assert all(turn == expected(_read_file_prompt()) for turn in turns)
+
+
+UNREADABLE_SYSTEM_CONTENT: Final = pytest.mark.parametrize(
+    "content",
+    (
+        None,
+        {"type": "text", "text": "private system prompt"},
+        ({"type": "text", "text": "private system prompt"},),
+        {"private system prompt"},
+        (part for part in ("private system prompt",)),
+    ),
+    ids=("none", "dict", "tuple", "set", "generator"),
+)
+
+
+@UNREADABLE_SYSTEM_CONTENT
+def test_function_call_prompt_answers_400_for_unreadable_system_content_without_echoing_it(content: object) -> None:
+    with pytest.raises(litellm.BadRequestError) as error:
+        _ollama_function_call_prompt([{"role": "system", "content": content}, USER_TURN], READ_FILE)
+
+    assert error.value.status_code == 400
+    assert "private system prompt" not in str(error.value)
+
+
+@UNREADABLE_SYSTEM_CONTENT
+def test_function_call_prompt_sends_only_the_function_prompt_for_unreadable_content_under_drop_params(
+    content: object,
+) -> None:
+    prompted: Final = _ollama_function_call_prompt(
+        [{"role": "system", "content": content}, USER_TURN], READ_FILE, drop_params=True
+    )
+
+    assert prompted == [{"role": "system", "content": _read_file_prompt()}, USER_TURN]
 
 
 def test_function_call_prompt_lets_the_model_answer_after_a_function_result() -> None:
     messages: Final[list[dict[str, object]]] = [{"role": "system", "content": "Be terse."}]
 
-    prompted: Final = function_call_prompt(messages, [{"name": "get_weather"}])
+    prompted: Final = _ollama_function_call_prompt(messages, [{"name": "get_weather"}])
 
     system: Final = str(prompted[0]["content"])
     assert "JSON OUTPUT ONLY" not in system
@@ -3436,6 +3520,67 @@ def test_sanitize_messages_combined_case_a_and_case_d():
         }, f"Expected tool_call_ids {{call_missing, call_duped}}, got {tool_ids}"
     finally:
         litellm.modify_params = original
+
+
+def test_sanitize_messages_drops_tool_results_the_latest_assistant_turn_did_not_ask_for(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+    weather_call: Final = {"id": "call_a", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+    time_call: Final = ChatCompletionMessageToolCall(
+        id="call_b", type="function", function=Function(name="get_time", arguments="{}")
+    )
+    weather_answer: Final = {"role": "tool", "tool_call_id": "call_a", "content": "18C"}
+    time_answer: Final = {"role": "tool", "tool_call_id": "call_b", "content": "noon"}
+    asked_for_time: Final = {"role": "assistant", "content": None, "tool_calls": [time_call]}
+    done: Final = {"role": "assistant", "content": "Done"}
+    messages: Final = (
+        {"role": "user", "content": "Weather?"},
+        {"role": "assistant", "content": None, "tool_calls": [weather_call]},
+        weather_answer,
+        {"role": "user", "content": "Time?"},
+        asked_for_time,
+        time_answer,
+        weather_answer,
+        done,
+        time_answer,
+    )
+
+    sanitized: Final = sanitize_messages_for_tool_calling(list(messages))
+
+    assert tuple(sanitized) == (*messages[:6], done)
+
+
+def _sanitize_seconds(answers: int) -> float:
+    tool_calls: Final = [
+        {"id": f"call_{index}", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+        for index in range(answers)
+    ]
+    messages: Final = (
+        {"role": "user", "content": "Weather everywhere?"},
+        {"role": "assistant", "content": None, "tool_calls": tool_calls},
+        *({"role": "tool", "tool_call_id": f"call_{index}", "content": "18C"} for index in range(answers)),
+        {"role": "user", "content": "And now?"},
+    )
+
+    def once() -> float:
+        started: Final = time.perf_counter()
+        sanitized: Final = sanitize_messages_for_tool_calling(list(messages))
+        elapsed: Final = time.perf_counter() - started
+        assert tuple(sanitized) == messages
+        return elapsed
+
+    return min(once() for _ in range(3))
+
+
+def test_sanitize_messages_cost_grows_linearly_with_the_number_of_answered_tool_calls(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+
+    growth: Final = _sanitize_seconds(4000) / _sanitize_seconds(1000)
+
+    assert growth < 11.0, f"cost grew {growth:.1f}x for 4x the tool answers"
 
 
 def test_anthropic_messages_pt_file_block_preserves_cache_control():

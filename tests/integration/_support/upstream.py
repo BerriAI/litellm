@@ -567,10 +567,10 @@ class Provider:
                 Route("/triton/embeddings", triton_embeddings, methods=["POST"]),
                 Route("/vector_stores/{vector_store_id}/search", self.vector_store_search, methods=["POST"]),
                 Route("/__interactions/{interaction_id}", self.interaction_state, methods=["PUT", "DELETE"]),
-                Route("/v1beta/interactions/{interaction_id}:cancel", self.cancel_interaction, methods=["POST"]),
+                Route("/v1beta/interactions/{interaction_id}/cancel", self.cancel_interaction, methods=["POST"]),
                 Route("/v1beta/interactions/{interaction_id}", self.interaction, methods=["GET", "DELETE"]),
                 Route(
-                    "/{prefix:path}/v1beta/interactions/{interaction_id}:cancel",
+                    "/{prefix:path}/v1beta/interactions/{interaction_id}/cancel",
                     self.cancel_interaction,
                     methods=["POST"],
                 ),

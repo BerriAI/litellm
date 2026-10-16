@@ -6,7 +6,7 @@ from typing import Final
 import litellm
 from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS
 from litellm.rust_bridge import failures
-from litellm.rust_bridge.public_call import optional_str
+from litellm.rust_bridge.public_call import known_params, optional_str
 from litellm.types.utils import ModelResponse
 
 _TRANSPORT_PARAMETERS: Final = frozenset(
@@ -25,6 +25,10 @@ _TRANSPORT_PARAMETERS: Final = frozenset(
     }
 )
 PARAMETERS: Final = tuple(name for name in OPENAI_CHAT_COMPLETION_PARAMS if name not in _TRANSPORT_PARAMETERS)
+
+
+def body_params(request: Mapping[str, object]) -> Mapping[str, object]:
+    return known_params(PARAMETERS, request)
 
 
 def connection_defaults(provider: str) -> tuple[str | None, str | None]:

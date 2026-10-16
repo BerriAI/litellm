@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import socket
 import subprocess
 import sys
 import uuid
@@ -24,6 +23,7 @@ from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process, paused, stop_child
 from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from openai import APIStatusError, AsyncOpenAI, BadRequestError, OpenAI
 from openai.types import Video
 from openai.types.eval_create_response import EvalCreateResponse as _Eval
@@ -1504,9 +1504,7 @@ def _healthy(url: str) -> int:
 
 @contextmanager
 def _upstream(directory: Path) -> Iterator[tuple[subprocess.Popen[bytes], str]]:
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        port: Final = int(reserve.getsockname()[1])
+    port: Final = allocate_port()
     root: Final = Path(__file__).resolve().parents[2]
     url: Final = f"http://127.0.0.1:{port}"
     with (directory / "upstream.log").open("w") as log:

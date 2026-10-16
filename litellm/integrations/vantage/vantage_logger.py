@@ -9,6 +9,8 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from typing_extensions import TypedDict, Unpack
+
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -22,6 +24,10 @@ else:
     AsyncIOScheduler = Any
 
 VANTAGE_USAGE_DATA_JOB_NAME: Final = "vantage_export_usage_data"
+
+
+class _CustomLoggerOptions(TypedDict, total=False, extra_items=object):
+    pass
 
 
 class VantageLogger(FocusLogger):
@@ -43,7 +49,7 @@ class VantageLogger(FocusLogger):
         base_url: str | None = None,
         frequency: str | None = None,
         interval_seconds: int | None = None,
-        **kwargs: Any,
+        **kwargs: Unpack[_CustomLoggerOptions],
     ) -> None:
         resolved_api_key: Final = api_key or os.getenv("VANTAGE_API_KEY")
         resolved_token: Final = integration_token or os.getenv("VANTAGE_INTEGRATION_TOKEN")

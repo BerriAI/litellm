@@ -3,8 +3,8 @@ from typing import Final
 import pytest
 
 import litellm
-from litellm.rust_bridge.ocr.route_host import UpstreamFailure, map_failure
-from litellm.rust_bridge.ocr.route_host import response as build_ocr_response
+from litellm.rust_bridge.host.routes.ocr import UpstreamFailure, map_failure
+from litellm.rust_bridge.host.routes.ocr import response as build_ocr_response
 from litellm.rust_bridge.public_call import NativeCall
 
 REQUEST: Final = NativeCall(

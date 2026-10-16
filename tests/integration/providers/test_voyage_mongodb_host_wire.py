@@ -2,7 +2,6 @@ import asyncio
 import json
 import os
 import re
-import socket
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -17,6 +16,7 @@ from integration._support.database import read_rows
 from integration._support.forward_proxy import ForwardProxy, refusing_forward_proxy
 from integration._support.process import owned_proxy, owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
+from integration._support.ports import allocate_port
 from openai import APIStatusError, AsyncOpenAI, OpenAI
 from pydantic import JsonValue, TypeAdapter
 
@@ -617,15 +617,8 @@ def _spend_rows(call_id: str) -> list[dict[str, JsonValue]]:
     return read_rows('SELECT request_id FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (call_id,))
 
 
-def _reserve_port() -> int:
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        address: Final[Callable[[], tuple[str, int]]] = reserve.getsockname
-        return address()[1]
-
-
 async def test_forward_proxy_outage_mid_traffic_recovers_with_the_right_hosts(gateway: Gateway, tmp_path: Path) -> None:
-    port: Final = _reserve_port()
+    port: Final = allocate_port()
     config: Final = _write_config(tmp_path, "outage", _isolated_deployments(gateway.upstream_url))
     with owned_proxy(
         gateway,

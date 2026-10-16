@@ -1,4 +1,3 @@
-import functools
 import glob
 import os
 import random
@@ -13,10 +12,10 @@ from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Optional, Protocol, Union
-from urllib.parse import unquote, urlsplit
 
 from litellm_proxy_extras import prisma_toolchain
 from litellm_proxy_extras._logging import logger
+from litellm_proxy_extras._redaction import _redact_credentials
 from litellm_proxy_extras.migration_lock import held_migration_lock
 from litellm_proxy_extras.prisma_toolchain import (
     PRISMA_COMMAND_TIMEOUT_ENV_VAR,
@@ -210,51 +209,6 @@ def _max_migration_timestamp(names) -> int:
     if not names:
         return 0
     return max(_migration_timestamp(n) for n in names)
-
-
-_REDACTED: Final = "REDACTED"
-_PASSWORD_QUERY_KEYS: Final = frozenset(("password", "sslpassword"))
-
-
-@functools.cache
-def _secret_shape_redactor() -> Callable[[str], str]:
-    try:
-        from litellm._logging import redact_secrets
-    except ImportError:
-        return lambda text: text
-    return redact_secrets
-
-
-def _url_passwords(url: str) -> frozenset[str]:
-    try:
-        parts: Final = urlsplit(url)
-    except ValueError:
-        return frozenset()
-    query_pairs: Final = tuple(pair.partition("=") for pair in parts.query.split("&"))
-    raw_query_passwords: Final = tuple(
-        value for key, separator, value in query_pairs if separator and key.lower() in _PASSWORD_QUERY_KEYS
-    )
-    raw_passwords: Final = ((parts.password,) if parts.password else ()) + raw_query_passwords
-    return frozenset(password for password in raw_passwords + tuple(map(unquote, raw_passwords)) if password)
-
-
-def _configured_database_passwords() -> frozenset[str]:
-    database_url: Final = os.getenv("DATABASE_URL")
-    direct_url: Final = os.getenv("DIRECT_URL")
-    database_passwords: Final = _url_passwords(database_url) if database_url else frozenset()
-    direct_passwords: Final = _url_passwords(direct_url) if direct_url else frozenset()
-    return database_passwords | direct_passwords
-
-
-def _redact_credentials(text: str) -> str:
-    """Mask configured database passwords before passing the text to LiteLLM redaction."""
-    passwords: Final = sorted(_configured_database_passwords(), key=len, reverse=True)
-    alternation: Final = "|".join(re.escape(password) for password in passwords)
-    password_pattern: Final = (
-        re.compile(rf"(?<![A-Za-z0-9_])(?:{alternation})(?![A-Za-z0-9_])", re.IGNORECASE) if passwords else None
-    )
-    result: Final = password_pattern.sub(_REDACTED, text) if password_pattern is not None else text
-    return _secret_shape_redactor()(result)
 
 
 def _redacted_command(command: object) -> Union[str, tuple[str, ...], list[str]]:
@@ -789,16 +743,23 @@ class ProxyExtrasDBManager:
         (connection_limit, pool_timeout, schema, pgbouncer, sslaccept, ...) and
         translate Prisma's TLS params back, since libpq reads ``sslcert`` as a
         client certificate where Prisma reads it as the CA."""
-        from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
+        from urllib.parse import parse_qsl, quote, unquote, urlencode, urlparse, urlunparse
 
         parsed: Final = urlparse(url)
+        netloc: Final = parsed.netloc
+        userinfo, separator, hostport = netloc.rpartition("@")
+        user, password_separator, password = userinfo.partition(":")
+        canonical_userinfo: Final = quote(unquote(user), safe="") + (
+            password_separator + quote(unquote(password), safe="") if password_separator else ""
+        )
+        canonical_netloc: Final = f"{canonical_userinfo}{separator}{hostport}" if separator else netloc
         if not parsed.query:
-            return url
+            return url if canonical_netloc == netloc else urlunparse(parsed._replace(netloc=canonical_netloc))
         pairs: Final = tuple(parse_qsl(parsed.query))
         kept: Final = tuple((k, v) for k, v in pairs if k in LIBPQ_URL_PARAMS)
         sslaccept: Final = next((v for k, v in pairs if k == "sslaccept"), None)
         libpq_pairs: Final = ProxyExtrasDBManager._libpq_tls_params(kept, sslaccept)
-        return urlunparse(parsed._replace(query=urlencode(libpq_pairs, quote_via=quote)))
+        return urlunparse(parsed._replace(netloc=canonical_netloc, query=urlencode(libpq_pairs, quote_via=quote)))
 
     @staticmethod
     def _libpq_tls_params(

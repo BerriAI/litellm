@@ -116,16 +116,17 @@ class AmazonCohereChatConfig:
         stop_sequences: str | None = None,
         raw_prompting: bool | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = types.MappingProxyType(locals().copy())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
 
     @classmethod
     def get_config(cls):
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("__")
             and not isinstance(
                 v,
@@ -830,7 +831,7 @@ class AWSEventStreamDecoder:
 
     def iter_bytes(
         self, iterator: Iterator[bytes], *, response_headers: Mapping[str, str] | None = None
-    ) -> Iterator[GChunk | ModelResponseStream | dict]:
+    ) -> Iterator[GChunk | ModelResponseStream | dict[str, object]]:
         """Given an iterator that yields lines, iterate over it & yield every event encountered"""
         from botocore.eventstream import EventStreamBuffer
 

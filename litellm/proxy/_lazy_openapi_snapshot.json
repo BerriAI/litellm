@@ -42856,6 +42856,24 @@
               }
             },
             {
+              "description": "Filter MCP servers by internal user scope. When provided (and team_id is not), returns the union of the servers each of the user's teams has access to plus globally available (allow_all_keys) servers. A user who belongs to no team gets the unscoped list. Used by the Internal User and Virtual Key edit UIs.",
+              "in": "query",
+              "name": "user_id",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Filter MCP servers by internal user scope. When provided (and team_id is not), returns the union of the servers each of the user's teams has access to plus globally available (allow_all_keys) servers. A user who belongs to no team gets the unscoped list. Used by the Internal User and Virtual Key edit UIs.",
+                "title": "User Id"
+              }
+            },
+            {
               "description": "Annotate each returned server with connected_app_reachable: whether a connected app authorized by the calling user (a gateway OAuth session) is served this server on the aggregate MCP endpoint.",
               "in": "query",
               "name": "connected_app_view",
