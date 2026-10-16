@@ -155,8 +155,9 @@ def streamed_text(frames: Sequence[Frame]) -> str:
 
 
 def verdict(request: Request) -> Reply:
-    texts: Final = [str(text) for text in json.loads(request.body)["texts"]]
-    if any(BLOCKED_WORD in text for text in texts):
+    body: Final = json.loads(request.body)
+    texts: Final = [str(text) for text in body["texts"]]
+    if any(BLOCKED_WORD in text for text in texts) or BLOCKED_WORD in json.dumps(body.get("tool_calls")):
         return Reply(body=json.dumps({"action": "BLOCKED", "blocked_reason": BLOCK_REASON}).encode())
     if any(MASKED_WORD in text for text in texts):
         masked: Final = [text.replace(MASKED_WORD, MASK) for text in texts]
@@ -592,6 +593,39 @@ def test_held_stream_block_returns_an_error_before_any_frame(rig: Rig) -> None:
     marker: Final = f"invoke-{uuid.uuid4().hex}"
     rig.scripts[marker] = Reply(
         content_type=EVENT_STREAM, chunks=claude_frames(f"The secret {marker} is ", BLOCKED_WORD)
+    )
+    outcome: Final = rig.invoke_stream(HELD, marker)
+    assert outcome.events == () and outcome.rejected_before_stream is not None, outcome
+    assert "(400)" in outcome.rejected_before_stream, outcome
+
+
+def test_held_stream_the_upstream_breaks_off_still_scans_its_tool_input(rig: Rig) -> None:
+    marker: Final = f"invoke-{uuid.uuid4().hex}"
+    text_frames: Final = claude_frames(f"Looking up {marker}")
+    tool_use: Final = {"type": "tool_use", "id": "toolu_relay", "name": "lookup", "input": {}}
+    upstream_error: Final = aws_event_stream_frame(
+        {
+            ":exception-type": "modelStreamErrorException",
+            ":content-type": "application/json",
+            ":message-type": "exception",
+        },
+        json.dumps({"message": "upstream stream broke"}).encode(),
+    )
+    rig.scripts[marker] = Reply(
+        content_type=EVENT_STREAM,
+        chunks=(
+            *text_frames[:4],
+            chunk_frame({"type": "content_block_start", "index": 1, "content_block": tool_use}),
+            chunk_frame(
+                {
+                    "type": "content_block_delta",
+                    "index": 1,
+                    "delta": {"type": "input_json_delta", "partial_json": json.dumps({"query": BLOCKED_WORD})},
+                }
+            ),
+            chunk_frame({"type": "content_block_stop", "index": 1}),
+            upstream_error,
+        ),
     )
     outcome: Final = rig.invoke_stream(HELD, marker)
     assert outcome.events == () and outcome.rejected_before_stream is not None, outcome

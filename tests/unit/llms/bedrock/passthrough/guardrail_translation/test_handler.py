@@ -2100,6 +2100,22 @@ class _RequestDataRecordingGuardrail(CustomGuardrail):
         return inputs
 
 
+class _ToolInputRecordingGuardrail(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="tool-recorder", event_hook=GuardrailEventHooks.post_call, default_on=True)
+        self.tool_arguments: list[list[str]] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.tool_arguments.append([call.function.arguments for call in inputs.get("tool_calls") or []])
+        return inputs
+
+
 def _invoke_delta_frame(index: int, delta: dict) -> bytes:
     return _invoke_chunk_frame({"type": "content_block_delta", "index": index, "delta": delta})
 
@@ -2456,6 +2472,7 @@ class TestInvokeStreamGuardrailRelay:
         assert all(stream is True for stream, _, _ in guardrail.scans)
         responses_seen = [responses for _, responses, _ in guardrail.scans]
         assert responses_seen == sorted(set(responses_seen)), responses_seen
+        assert [finish_reason for _, _, finish_reason in guardrail.scans[:-1]] == [None] * (len(guardrail.scans) - 1)
 
     @pytest.mark.asyncio
     async def test_the_held_scan_sees_the_whole_stream_and_its_finish_reason(self, monkeypatch):
@@ -2483,6 +2500,43 @@ class TestInvokeStreamGuardrailRelay:
         )
 
         assert guardrail.scans == [(True, len(stream) + 1, "stop")]
+
+    @pytest.mark.parametrize("holds_until_moderated", [True, False], ids=["held", "sampled"])
+    @pytest.mark.asyncio
+    async def test_a_stream_the_upstream_breaks_off_still_gets_its_tool_input_scanned(
+        self, monkeypatch, holds_until_moderated: bool
+    ):
+        guardrail = _ToolInputRecordingGuardrail()
+        stream = (
+            _invoke_chunk_frame(
+                {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}
+            ),
+            _invoke_delta_frame(0, {"type": "text_delta", "text": "Calling the tool"}),
+            _invoke_chunk_frame({"type": "content_block_stop", "index": 0}),
+            _invoke_chunk_frame(
+                {
+                    "type": "content_block_start",
+                    "index": 1,
+                    "content_block": {"type": "tool_use", "id": "toolu_1", "name": "lookup", "input": {}},
+                }
+            ),
+            _invoke_delta_frame(1, {"type": "input_json_delta", "partial_json": '{"card": "4111 1111 1111 1111"}'}),
+            _invoke_chunk_frame({"type": "content_block_stop", "index": 1}),
+            _build_frame(
+                {
+                    ":exception-type": "modelStreamErrorException",
+                    ":content-type": "application/json",
+                    ":message-type": "exception",
+                },
+                b'{"message":"Model stream error"}',
+            ),
+        )
+
+        await _relay_through_post_call_guardrail(
+            stream, guardrail, monkeypatch, holds_until_moderated=holds_until_moderated, endpoint=_INVOKE_STREAM
+        )
+
+        assert guardrail.tool_arguments[-1] == ['{"card": "4111 1111 1111 1111"}']
 
     @pytest.mark.asyncio
     async def test_sampled_scan_key_reads_the_received_text_once_a_guardrail_rewrote_it(self):

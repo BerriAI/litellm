@@ -644,19 +644,37 @@ def _sse_events(sse: bytes) -> tuple[Mapping[str, object], ...]:
     )
 
 
-def _invoke_stream_has_ended(frames: Sequence[InvokeStreamFrame]) -> bool:
-    """Ended on a ``message_delta`` with a ``stop_reason``, as a ``/v1/messages`` stream ends, or once the upstream
-    has ended."""
+def _invoke_message_stopped(frames: Sequence[InvokeStreamFrame]) -> bool:
+    """Whether a ``message_delta`` with a ``stop_reason`` came, as a ``/v1/messages`` stream ends."""
     return any(
-        frame.ends_stream
-        or (
-            frame.event is not None
-            and frame.event.get("type") == "message_delta"
-            and isinstance(delta := frame.event.get("delta"), Mapping)
-            and _JSON_OBJECT.validate_python(delta).get("stop_reason") is not None
-        )
+        frame.event is not None
+        and frame.event.get("type") == "message_delta"
+        and isinstance(delta := frame.event.get("delta"), Mapping)
+        and _JSON_OBJECT.validate_python(delta).get("stop_reason") is not None
         for frame in frames
     )
+
+
+def _invoke_stream_has_ended(frames: Sequence[InvokeStreamFrame]) -> bool:
+    """Ended on a ``message_delta`` with a ``stop_reason`` or once the upstream has ended."""
+    return any(frame.ends_stream for frame in frames) or _invoke_message_stopped(frames)
+
+
+_UPSTREAM_ENDED_SSE: Final = _anthropic_sse(
+    {
+        "type": "message_delta",
+        "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+        "usage": {"output_tokens": 0},
+    }
+)
+
+
+def _invoke_scan_sse(frames: Sequence[InvokeStreamFrame], events: Sequence[bytes]) -> tuple[bytes, ...]:
+    """The ``/v1/messages`` events to scan for these frames, closed with a ``message_delta`` when the upstream ended
+    without one so the translation scans them as a whole stream, tool calls included."""
+    if any(frame.ends_stream for frame in frames) and not _invoke_message_stopped(frames):
+        return (*events, _UPSTREAM_ENDED_SSE)
+    return tuple(events)
 
 
 async def _scan_invoke_stream(
@@ -670,7 +688,8 @@ async def _scan_invoke_stream(
     streaming and those events as its ``responses``. Once the stream has ended, the rewrites are written back into the
     frames, which reach the caller only when the stream is held until moderated."""
     received: Final = tuple(frame.sse() for frame in frames)
-    scanned: Final[list[object]] = list(received)  # mutable-ok: the /v1/messages translation rewrites it in place
+    scan_events: Final = _invoke_scan_sse(frames, received)
+    scanned: Final[list[object]] = list(scan_events)  # mutable-ok: the /v1/messages translation rewrites it in place
     if request_data is not None:
         request_data["stream"] = True  # rebind-ok: marks the request guardrails receive as a stream
         request_data["responses"] = scanned  # rebind-ok: each scan sees every event relayed so far
@@ -1125,7 +1144,9 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
     def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
         invoke_frames: Final = _invoke_frames(responses_so_far)
         if invoke_frames:
-            return AnthropicMessagesHandler().get_streaming_scan_key([frame.received_sse() for frame in invoke_frames])
+            return AnthropicMessagesHandler().get_streaming_scan_key(
+                list(_invoke_scan_sse(invoke_frames, [frame.received_sse() for frame in invoke_frames]))
+            )
         frames: Final = _converse_frames(responses_so_far)
         return StreamingScanKey(
             texts=_group_stream_texts([frame.received_texts() for frame in frames]).texts(),
