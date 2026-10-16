@@ -26,6 +26,14 @@ from integration.cost_calculation.stream_parity.case import StreamParityTestCase
 from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase, bridge_pairs
 
 
+def _response_for_model(response: JsonResponse, model: str) -> JsonResponse:
+    return response.model_copy(update={"body": {**response.body, "model": model}})
+
+
+def _stream_for_model(response: SseResponse, model: str) -> SseResponse:
+    return response.model_copy(update={"frames": tuple(frame.replace("gpt-6-luna", model) for frame in response.frames)})
+
+
 # gpt-5.3-codex
 GPT_5_3_CODEX_INPUT_TEXT: Final = CostTrackingTestCase(
     name="gpt-5.3-codex-input_text",
@@ -11183,6 +11191,171 @@ GPT_6_ASTRA_CACHE_WRITE_5M: Final = with_response_usage(
     ExactExpected(spend=0.2148, input_cost=0.192, output_cost=0.0228, prompt_tokens=12928, completion_tokens=380),
 )
 
+GPT_5_6_TERRA_INPUT_TEXT: Final = GPT_6_LUNA_INPUT_TEXT.model_copy(
+    update={
+        "name": "gpt-5.6-terra-input_text",
+        "model": "gpt-5.6-terra",
+        "response": _response_for_model(cast(JsonResponse, GPT_6_LUNA_INPUT_TEXT.response), "gpt-5.6-terra"),
+        "expected": ExactExpected(
+            spend=0.0112112,
+            input_cost=0.004784,
+            output_cost=0.0064272,
+            prompt_tokens=1840,
+            completion_tokens=412,
+        ),
+    }
+)
+GPT_5_6_TERRA_STREAM: Final = GPT_6_LUNA_STREAM.model_copy(
+    update={
+        "name": "gpt-5.6-terra-stream",
+        "model": "gpt-5.6-terra",
+        "response": _stream_for_model(cast(SseResponse, GPT_6_LUNA_STREAM.response), "gpt-5.6-terra"),
+        "expected": ExactExpected(
+            spend=0.0112112,
+            input_cost=0.004784,
+            output_cost=0.0064272,
+            prompt_tokens=1840,
+            completion_tokens=412,
+        ),
+    }
+)
+GPT_5_6_TERRA_SERVICE_TIER_FLEX: Final = GPT_6_LUNA_SERVICE_TIER_FLEX.model_copy(
+    update={
+        "name": "gpt-5.6-terra-service_tier_flex",
+        "model": "gpt-5.6-terra",
+        "response": _response_for_model(cast(JsonResponse, GPT_6_LUNA_SERVICE_TIER_FLEX.response), "gpt-5.6-terra"),
+        "expected": ExactExpected(
+            spend=0.0056056,
+            input_cost=0.002392,
+            output_cost=0.0032136,
+            prompt_tokens=1840,
+            completion_tokens=412,
+        ),
+    }
+)
+GPT_5_6_TERRA_SERVICE_TIER_PRIORITY: Final = GPT_6_LUNA_SERVICE_TIER_PRIORITY.model_copy(
+    update={
+        "name": "gpt-5.6-terra-service_tier_priority",
+        "model": "gpt-5.6-terra",
+        "response": _response_for_model(
+            cast(JsonResponse, GPT_6_LUNA_SERVICE_TIER_PRIORITY.response), "gpt-5.6-terra"
+        ),
+        "expected": ExactExpected(
+            spend=0.0224224,
+            input_cost=0.009568,
+            output_cost=0.0128544,
+            prompt_tokens=1840,
+            completion_tokens=412,
+        ),
+    }
+)
+GPT_5_6_TERRA_RESPONSES_NATIVE_JSON: Final = GPT_6_LUNA_RESPONSES_NATIVE_JSON.model_copy(
+    update={
+        "name": "gpt-5.6-terra-responses_native_json",
+        "model": "gpt-5.6-terra",
+        "response": _response_for_model(
+            cast(JsonResponse, GPT_6_LUNA_RESPONSES_NATIVE_JSON.response), "gpt-5.6-terra"
+        ),
+        "expected": ExactExpected(
+            spend=0.0112112,
+            input_cost=0.004784,
+            output_cost=0.0064272,
+            prompt_tokens=1840,
+            completion_tokens=412,
+        ),
+    }
+)
+GPT_5_6_TERRA_RESPONSES_DEPLOYMENT_JSON: Final = GPT_6_LUNA_RESPONSES_DEPLOYMENT_JSON.model_copy(
+    update={
+        "name": "gpt-5.6-terra-responses_deployment_json",
+        "model": "gpt-5.6-terra",
+        "deployment": Deployment(model="openai/responses/gpt-5.6-terra"),
+        "response": _response_for_model(
+            cast(JsonResponse, GPT_6_LUNA_RESPONSES_DEPLOYMENT_JSON.response), "gpt-5.6-terra"
+        ),
+        "expected": ExactExpected(
+            spend=0.0112112,
+            input_cost=0.004784,
+            output_cost=0.0064272,
+            prompt_tokens=1840,
+            completion_tokens=412,
+        ),
+    }
+)
+GPT_5_6_TERRA_CHAT_BRIDGED_JSON: Final = GPT_6_LUNA_CHAT_BRIDGED_JSON.model_copy(
+    update={
+        "name": "gpt-5.6-terra-chat_bridged_json",
+        "model": "gpt-5.6-terra",
+        "deployment": Deployment(model="openai/responses/gpt-5.6-terra"),
+        "response": _response_for_model(cast(JsonResponse, GPT_6_LUNA_CHAT_BRIDGED_JSON.response), "gpt-5.6-terra"),
+        "expected": ExactExpected(
+            spend=0.0112112,
+            input_cost=0.004784,
+            output_cost=0.0064272,
+            prompt_tokens=1840,
+            completion_tokens=412,
+        ),
+    }
+)
+GPT_5_6_TERRA_CACHE_READ: Final = GPT_6_LUNA_CACHE_READ.model_copy(
+    update={
+        "name": "gpt-5.6-terra-cache_read",
+        "model": "gpt-5.6-terra",
+        "response": _response_for_model(cast(JsonResponse, GPT_6_LUNA_CACHE_READ.response), "gpt-5.6-terra"),
+        "expected": ExactExpected(
+            spend=0.01078688,
+            input_cost=0.00485888,
+            output_cost=0.005928,
+            prompt_tokens=12928,
+            completion_tokens=380,
+        ),
+    }
+)
+GPT_5_6_TERRA_CACHE_WRITE_5M: Final = GPT_6_LUNA_CACHE_WRITE_5M.model_copy(
+    update={
+        "name": "gpt-5.6-terra-cache_write_5m",
+        "model": "gpt-5.6-terra",
+        "response": _response_for_model(
+            cast(JsonResponse, GPT_6_LUNA_CACHE_WRITE_5M.response), "gpt-5.6-terra"
+        ),
+        "expected": ExactExpected(
+            spend=0.047528,
+            input_cost=0.0416,
+            output_cost=0.005928,
+            prompt_tokens=12928,
+            completion_tokens=380,
+        ),
+    }
+)
+GPT_5_6_TERRA_REASONING: Final = GPT_6_LUNA_REASONING.model_copy(
+    update={
+        "name": "gpt-5.6-terra-reasoning",
+        "model": "gpt-5.6-terra",
+        "response": _response_for_model(cast(JsonResponse, GPT_6_LUNA_REASONING.response), "gpt-5.6-terra"),
+        "expected": ExactExpected(
+            spend=0.066248,
+            input_cost=0.003224,
+            output_cost=0.063024,
+            prompt_tokens=1240,
+            completion_tokens=4040,
+        ),
+    }
+)
+GPT_5_6_TERRA_TOOL_CALL: Final = GPT_6_LUNA_TOOL_CALL.model_copy(
+    update={
+        "name": "gpt-5.6-terra-tool_call",
+        "model": "gpt-5.6-terra",
+        "response": _response_for_model(cast(JsonResponse, GPT_6_LUNA_TOOL_CALL.response), "gpt-5.6-terra"),
+        "expected": ExactExpected(
+            spend=0.0112112,
+            input_cost=0.004784,
+            output_cost=0.0064272,
+            prompt_tokens=1840,
+            completion_tokens=412,
+        ),
+    }
+)
+
 
 GPT_5_6_SLASH_ALIAS: Final = GPT_5_6_INPUT_TEXT.model_copy(
     update={"name": "gpt-5.6-slash_alias", "alias": "openai/custom/gpt-5.6-$MARKER"}
@@ -11190,6 +11363,87 @@ GPT_5_6_SLASH_ALIAS: Final = GPT_5_6_INPUT_TEXT.model_copy(
 
 GPT_5_6_SLASH_ALIAS_STREAM: Final = GPT_5_6_STREAM.model_copy(
     update={"name": "gpt-5.6-slash_alias_stream", "alias": "openai/custom/gpt-5.6-$MARKER"}
+)
+
+GPT_5_6_RESPONSES_IMAGE_GENERATION_TOOL_TOKENS: Final = CostTrackingTestCase(
+    name="gpt-5.6-responses_image_generation_tool_tokens",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-5.6",
+    endpoint="/v1/responses",
+    request={
+        "model": "$MODEL",
+        "input": "draw a duck",
+        "tools": [{"type": "image_generation", "model": "gpt-image-next", "quality": "low", "size": "1024x1024"}],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "resp_$REQUEST_ID",
+            "object": "response",
+            "created_at": 1700000000,
+            "status": "completed",
+            "model": "gpt-5.6",
+            "tools": [
+                {
+                    "type": "image_generation",
+                    "background": "auto",
+                    "model": "gpt-image-next",
+                    "moderation": "auto",
+                    "n": 1,
+                    "output_compression": 100,
+                    "output_format": "png",
+                    "quality": "low",
+                    "size": "1024x1024",
+                }
+            ],
+            "output": [
+                {
+                    "type": "image_generation_call",
+                    "id": "ig_$REQUEST_ID",
+                    "status": "completed",
+                    "action": "generate",
+                    "background": "opaque",
+                    "output_format": "png",
+                    "quality": "low",
+                    "revised_prompt": "a duck",
+                    "size": "1024x1024",
+                    "result": "AAAA",
+                },
+                {
+                    "type": "message",
+                    "id": "msg_$REQUEST_ID",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "scripted response", "annotations": []}],
+                },
+            ],
+            "usage": {
+                "input_tokens": 1840,
+                "output_tokens": 412,
+                "total_tokens": 2252,
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens_details": {"reasoning_tokens": 0},
+            },
+            "tool_usage": {
+                "image_gen": {
+                    "input_tokens": 32,
+                    "input_tokens_details": {"image_tokens": 0, "text_tokens": 32},
+                    "output_tokens": 196,
+                    "output_tokens_details": {"image_tokens": 196, "text_tokens": 0},
+                    "total_tokens": 228,
+                },
+                "web_search": {"num_requests": 0},
+            },
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.01004232,
+        input_cost=0.00322,
+        output_cost=0.005768,
+        prompt_tokens=1840,
+        completion_tokens=412,
+        tool_usage_cost=0.00105432,
+    ),
 )
 
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
@@ -11336,6 +11590,7 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GPT_5_6_RESPONSES_WEB_SEARCH_REPORTED_COUNT_MIXED_ACTIONS,
     GPT_5_6_RESPONSES_WEB_SEARCH_REPORTED_COUNT_OPEN_PAGE_ONLY,
     GPT_5_6_RESPONSES_WEB_SEARCH_REPORTED_COUNT_MIXED_ACTIONS_STREAM,
+    GPT_5_6_RESPONSES_IMAGE_GENERATION_TOOL_TOKENS,
     GPT_5_3_CODEX_RESPONSES_FILE_SEARCH,
     GPT_5_6_RESPONSES_SERVICE_TIER_FLEX,
     GPT_5_6_RESPONSES_SERVICE_TIER_PRIORITY,
@@ -11403,6 +11658,17 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GPT_6_1_SOL_CACHE_WRITE_5M,
     GPT_6_LUNA_CACHE_WRITE_5M,
     GPT_6_ASTRA_CACHE_WRITE_5M,
+    GPT_5_6_TERRA_INPUT_TEXT,
+    GPT_5_6_TERRA_STREAM,
+    GPT_5_6_TERRA_RESPONSES_NATIVE_JSON,
+    GPT_5_6_TERRA_RESPONSES_DEPLOYMENT_JSON,
+    GPT_5_6_TERRA_CHAT_BRIDGED_JSON,
+    GPT_5_6_TERRA_CACHE_READ,
+    GPT_5_6_TERRA_CACHE_WRITE_5M,
+    GPT_5_6_TERRA_REASONING,
+    GPT_5_6_TERRA_SERVICE_TIER_FLEX,
+    GPT_5_6_TERRA_SERVICE_TIER_PRIORITY,
+    GPT_5_6_TERRA_TOOL_CALL,
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
@@ -11431,6 +11697,7 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(plain=GPT_6_LUNA_INPUT_TEXT, streamed=GPT_6_LUNA_STREAM),
     StreamParityTestCase(plain=GPT_6_ASTRA_INPUT_TEXT, streamed=GPT_6_ASTRA_STREAM),
     StreamParityTestCase(plain=GPT_6_1_SOL_INPUT_TEXT, streamed=GPT_6_1_SOL_STREAM),
+    StreamParityTestCase(plain=GPT_5_6_TERRA_INPUT_TEXT, streamed=GPT_5_6_TERRA_STREAM),
 )
 
 BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
@@ -11463,4 +11730,7 @@ BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
     BridgeCostParityTestCase(native=GPT_6_LUNA_RESPONSES_DEPLOYMENT_JSON, bridged=GPT_6_LUNA_CHAT_BRIDGED_JSON),
     BridgeCostParityTestCase(native=GPT_6_ASTRA_RESPONSES_DEPLOYMENT_JSON, bridged=GPT_6_ASTRA_CHAT_BRIDGED_JSON),
     BridgeCostParityTestCase(native=GPT_6_1_SOL_RESPONSES_DEPLOYMENT_JSON, bridged=GPT_6_1_SOL_CHAT_BRIDGED_JSON),
+    BridgeCostParityTestCase(
+        native=GPT_5_6_TERRA_RESPONSES_DEPLOYMENT_JSON, bridged=GPT_5_6_TERRA_CHAT_BRIDGED_JSON
+    ),
 )

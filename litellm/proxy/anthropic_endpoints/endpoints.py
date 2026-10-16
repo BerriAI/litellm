@@ -3,11 +3,13 @@ Unified /v1/messages endpoint - (Anthropic Spec)
 """
 
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import JsonValue
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.anthropic_interface.exceptions import (
@@ -29,6 +31,7 @@ from litellm.proxy.common_request_processing import (
     create_response,
     log_llm_api_exception,
     proxy_exception_from_http_exception,
+    proxy_exception_from_route_error,
     resolve_litellm_call_id,
 )
 from litellm.proxy.common_utils.error_body_call_id import error_body_call_id
@@ -43,7 +46,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     openai_error_type,
     with_litellm_call_id,
 )
-from litellm.types.utils import TokenCountResponse
+from litellm.proxy.litellm_pre_call_utils import should_auto_drop_params_for_agentic_cli
 
 router: Final = APIRouter()
 
@@ -299,6 +302,26 @@ def _requested_output_format(data: Mapping[str, JsonValue]) -> JsonValue:
     return output_config.get("format")
 
 
+_COUNTED_LITELLM_PARAMS: Final = ("additional_drop_params", "drop_params")
+
+
+class _CountTokensBodyOptions(TypedDict):
+    output_format: ReadOnly[JsonValue]
+    context_management: ReadOnly[JsonValue]
+    request_litellm_params: ReadOnly[Mapping[str, JsonValue]]
+
+
+def _count_tokens_body_options(data: Mapping[str, JsonValue], auto_drop_params: bool) -> _CountTokensBodyOptions:
+    sent_params: Final[Mapping[str, JsonValue]] = {key: data[key] for key in _COUNTED_LITELLM_PARAMS if key in data}
+    return {
+        "output_format": _requested_output_format(data),
+        "context_management": data.get("context_management"),
+        "request_litellm_params": MappingProxyType(
+            {"drop_params": True, **sent_params} if auto_drop_params else sent_params
+        ),
+    }
+
+
 @router.post(
     "/v1/messages/count_tokens",
     tags=["[beta] Anthropic Messages Token Counting"],
@@ -328,7 +351,7 @@ async def count_tokens(
     
     Returns: {"input_tokens": <number>}
     """
-    from litellm.proxy.proxy_server import count_request_tokens
+    from litellm.proxy.proxy_server import count_request_tokens, proxy_config
 
     litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
     try:
@@ -340,10 +363,10 @@ async def count_tokens(
         messages: Final = data.get("messages", [])
 
         if not model_name:
-            raise HTTPException(status_code=400, detail={"error": "model parameter is required"})
+            raise HTTPException(status_code=400, detail="model parameter is required")
 
         if not messages:
-            raise HTTPException(status_code=400, detail={"error": "messages parameter is required"})
+            raise HTTPException(status_code=400, detail="messages parameter is required")
 
         # Create TokenCountRequest for the internal endpoint
         from litellm.proxy._types import TokenCountRequest
@@ -359,32 +382,22 @@ async def count_tokens(
             request=token_request,
             call_endpoint=True,
             messages_format="anthropic",
-            output_format=_requested_output_format(data),
+            **_count_tokens_body_options(
+                data,
+                should_auto_drop_params_for_agentic_cli(
+                    request.headers.get("user-agent", ""), "drop_params" in data, proxy_config
+                ),
+            ),
         )
-        _token_response_dict: dict = {}
-        if isinstance(token_response, TokenCountResponse):
-            _token_response_dict = token_response.model_dump()
-        elif isinstance(token_response, dict):
-            _token_response_dict = token_response
-
-        # Convert the internal response to Anthropic API format
-        return {"input_tokens": _token_response_dict.get("total_tokens", 0)}
-
-    except HTTPException:
-        raise
+    except HTTPException as e:
+        return _anthropic_error_json_response(proxy_exception_from_http_exception(e, {}), request)
     except ProxyException as e:
-        status_code: Final = int(e.code) if e.code and e.code.isdigit() else 500
-        detail: Final = AnthropicExceptionMapping.transform_to_anthropic_error(
-            status_code=status_code,
-            raw_message=e.message,
-        )
-        raise HTTPException(
-            status_code=status_code,
-            detail=detail,
-        )
+        return _anthropic_error_json_response(e, request)
     except Exception as e:
         log_llm_api_exception(e, litellm_call_id)
-        raise HTTPException(status_code=500, detail={"error": f"Internal server error: {e}"})
+        return _anthropic_error_json_response(proxy_exception_from_route_error(e), request)
+    else:
+        return {"input_tokens": token_response.total_tokens}
 
 
 @router.post(

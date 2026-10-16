@@ -14,7 +14,7 @@ from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import TokenCountMessagesFormat, TokenCountResponse
+from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat, TokenCountResponse
 
 GEMINI_IMAGE_ASPECT_RATIOS: Final[dict[str, float]] = {
     "1:1": 1 / 1,
@@ -497,23 +497,36 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
         system: object | None = None,
         messages_format: TokenCountMessagesFormat = "openai",
         output_format: JsonValue = None,
+        context_management: CountContextManagement | None = None,
     ) -> TokenCountResponse | None:
         import copy
 
         from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter
         from litellm.llms.vertex_ai.count_tokens.context import (
             VertexGeminiCountContextError,
+            count_context_edits,
             count_context_error_response,
             gemini_count_contents,
             inference_request_view,
             provider_error_response,
+            unconvertible_messages_error,
             vertex_gemini_count_context,
         )
 
-        request_view: Final = inference_request_view(messages or [], system, messages_format)
+        request_view: Final = await inference_request_view(
+            messages or [],
+            system,
+            messages_format,
+            count_context_edits(context_management, tools, (deployment or {}).get("litellm_params", {}), model_to_use),
+        )
+        if isinstance(request_view, VertexGeminiCountContextError):
+            return count_context_error_response(request_view, request_model, model_to_use)
         count_context: Final = vertex_gemini_count_context(system=request_view.system, tools=tools)
         if isinstance(count_context, VertexGeminiCountContextError):
             return count_context_error_response(count_context, request_model, model_to_use)
+        blocks_error: Final = unconvertible_messages_error(request_view.messages, messages_format)
+        if blocks_error is not None:
+            return count_context_error_response(blocks_error, request_model, model_to_use)
 
         deployment = deployment or {}
         count_tokens_params_request: Final = copy.deepcopy(deployment.get("litellm_params", {}))
