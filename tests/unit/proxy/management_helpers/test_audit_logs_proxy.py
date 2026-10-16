@@ -501,45 +501,67 @@ async def test_create_audit_log_for_update_does_not_track_when_no_row_is_written
     assert drain_returned_while_caller_was_running
 
 
+async def _io_that_never_finishes(*args: object, **kwargs: object) -> None:
+    await asyncio.Event().wait()
+
+
 @pytest.mark.asyncio
-async def test_hook_spawn_with_io_delay_drained_before_shutdown():
+async def test_key_generated_audit_write_is_drained_while_the_invite_email_hangs():
+    from litellm.proxy._types import GenerateKeyRequest, GenerateKeyResponse
+    from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
+
     mock_prisma: Final = MagicMock()
     writes: Final[list[dict[str, Any]]] = []
-    drain_completed: Final[list[bool]] = [False]
-
-    async def _mock_create(data: dict[str, Any]) -> None:
-        assert not drain_completed[0]
-        writes.append(data)
-
-    mock_prisma.db.litellm_auditlog.create = AsyncMock(side_effect=_mock_create)
-
-    async def _hook_with_preceding_io() -> None:
-        await asyncio.sleep(0)
-        await create_audit_log_for_update(
-            request_data=LiteLLM_AuditLogs(
-                id=str(uuid.uuid4()),
-                updated_at=datetime.now(timezone.utc),
-                changed_by="admin",
-                table_name=LitellmTableNames.KEY_TABLE_NAME,
-                object_id="token-hook",
-                action="created",
-                updated_values="{}",
-                before_value=None,
-            )
-        )
+    mock_prisma.db.litellm_auditlog.create = AsyncMock(side_effect=lambda data: writes.append(data))
 
     with (
         patch("litellm.store_audit_logs", True),
         patch("litellm.proxy.proxy_server.premium_user", True),
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch.object(KeyManagementEventHooks, "_send_key_created_email", side_effect=_io_that_never_finishes),
     ):
-        hook_task: Final = track_audit_task(asyncio.create_task(_hook_with_preceding_io()))
+        hook: Final = asyncio.create_task(
+            KeyManagementEventHooks.async_key_generated_hook(
+                data=GenerateKeyRequest(send_invite_email=True),
+                response=GenerateKeyResponse(key="sk-new", token_id="hashed-new"),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-admin", user_id="admin"),
+            )
+        )
+        await asyncio.sleep(0)
         await drain_audit_tasks(timeout=2.0)
-        drain_completed[0] = True
+        hook.cancel()
 
-        assert hook_task.done()
-        assert len(writes) == 1
-        assert writes[0]["object_id"] == "token-hook"
+    assert [(write["object_id"], write["action"]) for write in writes] == [("hashed-new", "created")]
+
+
+@pytest.mark.asyncio
+async def test_user_created_audit_write_is_drained_while_the_invite_email_hangs():
+    from litellm.proxy._types import NewUserRequest, NewUserResponse
+    from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
+
+    mock_prisma: Final = MagicMock()
+    writes: Final[list[dict[str, Any]]] = []
+    mock_prisma.db.litellm_auditlog.create = AsyncMock(side_effect=lambda data: writes.append(data))
+    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value={"user_id": "new-user"})
+
+    with (
+        patch("litellm.store_audit_logs", True),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch.object(UserManagementEventHooks, "async_send_user_invitation_email", side_effect=_io_that_never_finishes),
+    ):
+        hook: Final = asyncio.create_task(
+            UserManagementEventHooks.async_user_created_hook(
+                data=NewUserRequest(user_id="new-user", send_invite_email=True),
+                response=NewUserResponse(key="sk-new", user_id="new-user"),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-admin", user_id="admin"),
+            )
+        )
+        await asyncio.sleep(0)
+        await drain_audit_tasks(timeout=2.0)
+        hook.cancel()
+
+    assert [(write["object_id"], write["action"]) for write in writes] == [("new-user", "created")]
 
 
 @pytest.mark.asyncio

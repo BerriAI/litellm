@@ -290,6 +290,34 @@ async def test_proxy_shutdown_skips_gateway_flush_without_a_database(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_proxy_shutdown_without_a_database_drains_audit_callbacks_before_the_rest_of_teardown(monkeypatch):
+    calls: list[str] = []  # mutable-ok: records call order, which is the assertion
+    monkeypatch.setattr(ps, "prisma_client", None, raising=False)
+    monkeypatch.setattr(
+        ps, "drain_post_call_redis_batches", AsyncMock(side_effect=lambda: calls.append("redis")), raising=False
+    )
+
+    fake_jwt = MagicMock()
+    fake_jwt.close = AsyncMock()
+    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "cache", None, raising=False)
+    monkeypatch.setattr(litellm, "success_callback", [], raising=False)
+
+    async def _audit_callback_still_sending() -> None:
+        await asyncio.sleep(0.05)
+        calls.append("audit")
+
+    track_audit_task(asyncio.create_task(_audit_callback_still_sending()))
+    await asyncio.wait_for(proxy_shutdown_event(), timeout=2.0)
+
+    assert calls == ["audit", "redis"]
+
+
+@pytest.mark.asyncio
 async def test_proxy_shutdown_event_prisma_disconnect_raises_error(monkeypatch):
     fake_prisma = MagicMock()
     fake_prisma.disconnect = AsyncMock(side_effect=RuntimeError("db gone"))

@@ -651,13 +651,11 @@ async def new_user(
         #########################################################
         ########## USER CREATED HOOK ################
         #########################################################
-        track_audit_task(
-            asyncio.create_task(
-                UserManagementEventHooks.async_user_created_hook(
-                    data=data,
-                    response=new_user_response,
-                    user_api_key_dict=user_api_key_dict,
-                )
+        asyncio.create_task(
+            UserManagementEventHooks.async_user_created_hook(
+                data=data,
+                response=new_user_response,
+                user_api_key_dict=user_api_key_dict,
             )
         )
         #########################################################
