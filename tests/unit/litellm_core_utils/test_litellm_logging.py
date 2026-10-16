@@ -3268,6 +3268,26 @@ def test_get_extra_header_tags():
                 delattr(litellm, "extra_spend_tag_headers")
 
 
+def test_get_extra_header_tags_matches_headers_case_insensitively():
+    """Header field names are case-insensitive (RFC 9110 section 5.1), so a
+    request header must become a spend tag even when its casing differs from
+    the extra_spend_tag_headers config entry."""
+    with patch.object(litellm, "extra_spend_tag_headers", ["x-customer-id", "X-Session-ID"], create=True):
+        tags = StandardLoggingPayloadSetup._get_extra_header_tags(
+            proxy_server_request={
+                "headers": {
+                    "X-Customer-Id": "cust_98765",
+                    "x-session-id": "sess_123",
+                }
+            }
+        )
+
+    assert tags == [
+        "x-customer-id: cust_98765",
+        "X-Session-ID: sess_123",
+    ]
+
+
 def test_response_cost_calculator_with_response_cost_in_hidden_params(logging_obj):
     from litellm import Router
 

@@ -6537,10 +6537,16 @@ class StandardLoggingPayloadSetup:
         request_headers: Final = cast(  # cast-ok: request headers are untyped framework data
             dict[str, str], headers
         )
+        lowercased_request_headers: Final[Mapping[str, str]] = MappingProxyType(
+            {
+                request_header_name.lower(): request_header_value
+                for request_header_name, request_header_value in request_headers.items()
+            }
+        )
 
         header_tags: Final = []
         for header_name in extra_headers:
-            header_value = request_headers.get(header_name)
+            header_value = lowercased_request_headers.get(header_name.lower())
             if header_value:
                 header_tags.append(f"{header_name}: {header_value}")
 
