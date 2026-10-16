@@ -1695,13 +1695,54 @@ describe("ModelInfoView", () => {
       const [cacheRead, cacheWrite] = screen.getAllByPlaceholderText("Defaults to Input Cost if blank");
       await user.type(cacheRead, "5");
       await user.type(cacheWrite, "9");
+      await user.type(screen.getByPlaceholderText("Defaults to the cost map 1 hour rate, else Cache Write Cost"), "15");
 
       const payload = await save(user);
 
-      expect(payload.litellm_params).toMatchObject({
+      const expectedPricing = {
         output_cost_per_token: 0.000012,
         cache_read_input_token_cost: 0.000005,
         cache_creation_input_token_cost: 0.000009,
+        cache_creation_input_token_cost_above_1hr: 0.000015,
+      };
+      expect(payload.litellm_params).toMatchObject(expectedPricing);
+    });
+
+    describe("1 hour cache write tier", () => {
+      const withCacheWriteTiers = {
+        ...defaultModelData,
+        litellm_params: {
+          ...defaultModelData.litellm_params,
+          cache_creation_input_token_cost: 0.00000375,
+          cache_creation_input_token_cost_above_1hr: 0.000006,
+        },
+      };
+
+      beforeEach(() => {
+        mockUseModelsInfo.mockReturnValue({ data: { data: [withCacheWriteTiers] }, isLoading: false, error: null });
+        mockModelInfoV1Call.mockResolvedValue({ data: [withCacheWriteTiers] });
+      });
+
+      it("shows both configured cache write rates per million tokens", async () => {
+        render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+        expect(await screen.findByText("Cache Write Cost (1 hour, per 1M tokens)")).toBeInTheDocument();
+        expect(screen.getByText("3.7500")).toBeInTheDocument();
+        expect(screen.getByText("6.0000")).toBeInTheDocument();
+      });
+
+      it("clearing the 1 hour rate sends an explicit null and keeps the 5 minute rate", async () => {
+        const user = userEvent.setup();
+        await enterEditMode(user);
+
+        const oneHour = screen.getByPlaceholderText("Defaults to the cost map 1 hour rate, else Cache Write Cost");
+        expect(oneHour).toHaveValue(6);
+        await user.clear(oneHour);
+
+        const payload = await save(user);
+
+        expect(payload.litellm_params.cache_creation_input_token_cost_above_1hr).toBeNull();
+        expect(payload.litellm_params.cache_creation_input_token_cost).toBe(0.00000375);
       });
     });
 
