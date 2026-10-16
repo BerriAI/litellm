@@ -13,8 +13,11 @@ from dataclasses import dataclass
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
+import litellm
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.agents import AgentCaller
 
@@ -2689,3 +2692,59 @@ def test_forwarding_headers_minted_bearer_replaces_a_forwarded_authorization_of_
     )
 
     assert merged == {"X-Custom": "kept", "Authorization": "Bearer minted-token"}
+
+
+_UPSTREAM_STATUS_ONLY_ERROR: Final = {
+    "jsonrpc": "2.0",
+    "id": "req-1",
+    "error": {"code": -32603, "message": "Not Found"},
+}
+
+
+@pytest.mark.parametrize(
+    ("upstream_body", "relayed_event"),
+    [
+        (
+            b'{"jsonrpc":"2.0","id":"up-1","error":{"code":-32001,"message":"Task not found"}}',
+            {"jsonrpc": "2.0", "id": "up-1", "error": {"code": -32001, "message": "Task not found"}},
+        ),
+        (b'{"error":"quota exceeded"}', {"error": "quota exceeded", "id": "req-1"}),
+        (b'{"jsonrpc":"2.0","id":"up-1","result":{"ok":true}}', _UPSTREAM_STATUS_ONLY_ERROR),
+        (b'["error"]', _UPSTREAM_STATUS_ONLY_ERROR),
+        (b'"error"', _UPSTREAM_STATUS_ONLY_ERROR),
+        (b"null", _UPSTREAM_STATUS_ONLY_ERROR),
+        (b"7", _UPSTREAM_STATUS_ONLY_ERROR),
+        (b"\xff\xfe", _UPSTREAM_STATUS_ONLY_ERROR),
+        (b"", _UPSTREAM_STATUS_ONLY_ERROR),
+        (b'{"error":null}', {"error": None, "id": "req-1"}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_failed_upstream_stream_relays_its_body_only_when_that_is_a_json_object_with_an_error(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    upstream_body: bytes,
+    relayed_event: Mapping[str, object],
+):
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _a2a_sse_event_source
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    upstream: Final = respx_mock.post("http://backend-agent:10001").mock(
+        return_value=httpx.Response(404, content=upstream_body)
+    )
+
+    events: Final = [
+        event
+        async for event in _a2a_sse_event_source(
+            "http://backend-agent:10001",
+            {"jsonrpc": "2.0", "id": "req-1", "method": "tasks/resubscribe"},
+            request_id="req-1",
+        )
+    ]
+
+    assert json.dumps(events, sort_keys=True) == json.dumps([relayed_event], sort_keys=True), upstream_body
+    assert json.loads(upstream.calls.last.request.content) == {
+        "jsonrpc": "2.0",
+        "id": "req-1",
+        "method": "tasks/resubscribe",
+    }

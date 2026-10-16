@@ -122,7 +122,7 @@ class OperationContext:
 
 
 class ProgressCallback(Protocol):
-    async def __call__(self, progress: float, total: float | None, /) -> None: ...
+    async def __call__(self, progress: float, total: float | None, message: str | None = None, /) -> None: ...
 
 
 class ClientInteraction(Protocol):

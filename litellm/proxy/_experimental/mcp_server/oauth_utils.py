@@ -2,9 +2,13 @@
 (BYOK + discoverable / pass-through OAuth proxy)."""
 
 import os
+import re
+from collections.abc import Mapping
+from dataclasses import dataclass
 from ipaddress import ip_address
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, NoReturn
-from urllib.parse import ParseResult, urlparse, urlsplit, urlunparse, urlunsplit
+from urllib.parse import ParseResult, parse_qsl, urlencode, urlparse, urlsplit, urlunparse, urlunsplit
 
 from fastapi import HTTPException, Request
 from starlette.types import Scope
@@ -53,6 +57,9 @@ _TRUSTED_NATIVE_REDIRECT_URIS_ENV: Final = "MCP_TRUSTED_NATIVE_REDIRECT_URIS"
 _DEFAULT_NATIVE_REDIRECT_URIS: Final[list[str]] = [
     "cursor://anysphere.cursor-mcp/oauth/callback",
 ]
+
+_GOOGLE_AUTHORIZATION_HOSTS: Final = frozenset({"accounts.google.com"})
+_GOOGLE_OFFLINE_ACCESS_PARAMS: Final = MappingProxyType({"access_type": "offline", "prompt": "consent"})
 
 _warned_invalid_proxy_base_url: str | None = None
 
@@ -110,6 +117,17 @@ def redact_mcp_resource_url(url: str | None) -> str | None:
 _redact_mcp_resource_url: Final = redact_mcp_resource_url
 
 
+def build_upstream_authorize_url(authorization_url: str, params: Mapping[str, str]) -> str:
+    parsed: Final = urlparse(authorization_url)
+    provider_defaults: Final = (
+        _GOOGLE_OFFLINE_ACCESS_PARAMS
+        if parsed.hostname in _GOOGLE_AUTHORIZATION_HOSTS
+        else MappingProxyType[str, str]({})
+    )
+    merged: Final = {**provider_defaults, **dict(parse_qsl(parsed.query)), **params}
+    return urlunparse(parsed._replace(query=urlencode(merged)))
+
+
 def _resolve_proxy_base_url_env() -> str | None:
     global _warned_invalid_proxy_base_url
     configured: Final = os.environ.get("PROXY_BASE_URL", "").strip()
@@ -128,6 +146,12 @@ def _resolve_proxy_base_url_env() -> str | None:
         )
         _warned_invalid_proxy_base_url = configured
     return None
+
+
+def configured_proxy_base_url() -> str | None:
+    """The operator-configured public origin (``PROXY_BASE_URL``), or None when the gateway only
+    knows itself through the current request's Host and forwarded headers."""
+    return _resolve_proxy_base_url_env()
 
 
 CIMD_METADATA_PATH: Final = "/oauth/client-metadata.json"
@@ -819,3 +843,32 @@ def build_upstream_oauth2_token_request(
     if not resource:
         return client_auth
     return TokenEndpointClientAuth(headers=client_auth.headers, body={**client_auth.body, "resource": resource})
+
+
+UPSTREAM_SCOPE_PREFIX: Final = "litellm:mcp_scope:"
+
+
+@dataclass(frozen=True, slots=True)
+class UpstreamScope:
+    server_id: str
+    permission: str
+
+
+def encode_upstream_scope(server_id: str, permission: str) -> str:
+    return f"{UPSTREAM_SCOPE_PREFIX}{server_id.encode().hex()}:{permission.encode().hex()}"
+
+
+def decode_upstream_scope(token: str) -> UpstreamScope | None:
+    encoded: Final = token.removeprefix(UPSTREAM_SCOPE_PREFIX).split(":")
+    if not token.startswith(UPSTREAM_SCOPE_PREFIX) or len(encoded) != 2:
+        return None
+    try:
+        server_id: Final = bytes.fromhex(encoded[0]).decode()
+        permission: Final = bytes.fromhex(encoded[1]).decode()
+    except (ValueError, UnicodeError):
+        return None
+    if not server_id or re.fullmatch(r"[!#-\[\]-~]+", permission) is None:
+        return None
+    if encode_upstream_scope(server_id, permission) != token:
+        return None
+    return UpstreamScope(server_id, permission)

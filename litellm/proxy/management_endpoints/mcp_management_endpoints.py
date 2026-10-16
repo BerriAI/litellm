@@ -23,6 +23,7 @@ from collections.abc import AsyncGenerator, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from itertools import chain
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -61,6 +62,7 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME, MCP_GATEWAY_SESSION_ID_PREFIX_LENGTH
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
     LITELLM_MCP_SERVER_NAME,
@@ -100,6 +102,10 @@ TEMPORARY_MCP_SERVER_REDIS_KEY_PREFIX: Final = "litellm:mcp:temporary_server"
 
 class _HasServerId(Protocol):
     server_id: str
+
+
+def _session_cookie_claims(claims: Mapping[str, object]) -> Mapping[str, object]:
+    return claims
 
 
 def does_mcp_server_exist(mcp_server_records: Iterable[_HasServerId], mcp_server_id: str) -> bool:
@@ -204,6 +210,7 @@ if MCP_AVAILABLE:
     )
     from litellm.proxy._types import (
         LiteLLM_MCPServerTable,
+        LiteLLM_ObjectPermissionTable,
         LitellmUserRoles,
         MakeMCPServersPublicRequest,
         MCPApprovalStatus,
@@ -585,13 +592,13 @@ if MCP_AVAILABLE:
         if decrypted_json is None:
             return None
         try:
-            loaded: Final = json.loads(decrypted_json)
+            loaded: Final = _CACHED_VALUE.validate_python(json.loads(decrypted_json))
         except Exception as e:
             verbose_proxy_logger.debug("Invalid decrypted temporary MCP payload in Redis cache: %s", e)
             return None
-        if not isinstance(loaded, dict):
+        payload_dict: Final = as_str_mapping(loaded)
+        if payload_dict is None:
             return None
-        payload_dict: Final[dict[str, object]] = loaded
 
         try:
             return MCPServer.model_validate(payload_dict)
@@ -1202,6 +1209,43 @@ if MCP_AVAILABLE:
             return "view_all"
         return "restricted"
 
+    def _redacted_server_tables(server_ids: Iterable[str]) -> list[LiteLLM_MCPServerTable]:
+        registered: Final = (global_mcp_server_manager.get_mcp_server_by_id(server_id) for server_id in server_ids)
+        tables: Final = [
+            global_mcp_server_manager.build_mcp_server_table(server) for server in registered if server is not None
+        ]
+        return _redact_mcp_credentials_list(tables)
+
+    async def _granted_mcp_server_ids(
+        object_permission_id: str | None,
+        loaded: LiteLLM_ObjectPermissionTable | None,
+    ) -> frozenset[str]:
+        """Server ids an object_permission row grants directly, through access groups, tool permissions or
+        toolsets, resolved by the same resolvers runtime MCP auth uses."""
+        from litellm.proxy.auth.auth_checks import get_object_permission
+        from litellm.proxy.management_helpers.object_permission_utils import (
+            _resolve_team_allowed_mcp_servers,  # pyright: ignore[reportPrivateUsage]  # same resolver runtime MCP auth calls
+        )
+        from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+        if object_permission_id is None:
+            return frozenset()
+        object_permission: Final = loaded or await get_object_permission(
+            object_permission_id=object_permission_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
+        if object_permission is None:
+            return frozenset()
+        toolset_grants: Final = await global_mcp_server_manager.resolve_toolset_tool_permissions(
+            toolset_ids=list(object_permission.mcp_toolsets or [])
+        )
+        return frozenset(
+            await _resolve_team_allowed_mcp_servers(
+                team_object_permission=object_permission, prisma_client=prisma_client
+            )
+        ) | frozenset(toolset_grants)
+
     @catalog_operation(lambda: global_mcp_server_manager)
     async def _get_team_scoped_mcp_server_list(
         team_id: str,
@@ -1231,15 +1275,51 @@ if MCP_AVAILABLE:
         if not all_allowed_ids:
             return []
 
-        # Collect servers from registry
-        servers: Final[list[LiteLLM_MCPServerTable]] = []
-        for server_id in all_allowed_ids:
-            server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
-            if server is not None:
-                mcp_server_table = global_mcp_server_manager.build_mcp_server_table(server)
-                servers.append(mcp_server_table)
+        return _redacted_server_tables(all_allowed_ids)
 
-        return _redact_mcp_credentials_list(servers)
+    @catalog_operation(lambda: global_mcp_server_manager)
+    async def _get_user_scoped_mcp_server_list(
+        user_id: str,
+    ) -> Sequence[LiteLLM_MCPServerTable] | None:
+        """
+        Return MCP servers scoped to an internal user: the union of the team-scoped
+        lists of every team the user belongs to plus the servers the user's own
+        object_permission grants. Used by the Internal User and
+        Virtual Key edit UIs to populate the MCP server dropdown. ``None`` when the
+        user is in no team, so the caller falls back to the unscoped list.
+        """
+        from litellm.proxy.auth.auth_checks import TeamNotFoundError, get_user_object
+        from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+        from litellm.types.proxy.auth.auth_checks import UserNotFoundError
+
+        try:
+            user_obj: Final = await get_user_object(
+                user_id=user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                user_id_upsert=False,
+                check_db_only=True,
+            )
+        except UserNotFoundError as e:
+            raise HTTPException(status_code=404, detail={"error": str(e)}) from e
+        if user_obj is None or not user_obj.teams:
+            return None
+
+        async def _team_servers(team_id: str) -> Sequence[LiteLLM_MCPServerTable] | None:
+            try:
+                return await _get_team_scoped_mcp_server_list(team_id)
+            except TeamNotFoundError:
+                return None
+
+        per_team: Final = [await _team_servers(team_id) for team_id in user_obj.teams]
+        existing_teams: Final = [servers for servers in per_team if servers is not None]
+        if not existing_teams:
+            return None
+        own_grants: Final = _redacted_server_tables(
+            await _granted_mcp_server_ids(user_obj.object_permission_id, user_obj.object_permission)
+        )
+        by_id: Final = {server.server_id: server for server in chain.from_iterable([*existing_teams, own_grants])}
+        return list(by_id.values())
 
     @catalog_operation(lambda: global_mcp_server_manager)
     async def _resolve_accessible_mcp_servers(
@@ -1274,6 +1354,28 @@ if MCP_AVAILABLE:
             return frozenset()
         return frozenset(await global_mcp_server_manager.get_allowed_mcp_servers(admitted))
 
+    async def _user_scoped_servers_for_request(
+        user_api_key_dict: UserAPIKeyAuth,
+        user_id: str | None,
+    ) -> Sequence[LiteLLM_MCPServerTable] | None:
+        """The user-scoped list for ``GET /v1/mcp/server?user_id=``, or ``None`` when no user
+        scope applies (no user_id, or the user belongs to no team). Only admins may scope to
+        another user, and restricted virtual keys may not use the filter at all."""
+        if not isinstance(user_id, str) or not user_id.strip():
+            return None
+        if _is_restricted_virtual_key_request(user_api_key_dict):
+            raise HTTPException(
+                status_code=403,
+                detail="Restricted virtual keys cannot query user-scoped MCP servers.",
+            )
+        sanitized_user_id: Final = user_id.strip()
+        if not user_api_key_has_admin_view(user_api_key_dict) and sanitized_user_id != user_api_key_dict.user_id:
+            raise HTTPException(
+                status_code=403,
+                detail="You do not have permission to view MCP servers for this user.",
+            )
+        return await _get_user_scoped_mcp_server_list(sanitized_user_id)
+
     @router.get(
         "/server",
         description="Returns the mcp server list with associated teams",
@@ -1288,6 +1390,13 @@ if MCP_AVAILABLE:
             description="Filter MCP servers by team scope. When provided, returns only "
             "servers the team has access to plus globally available (allow_all_keys) servers. "
             "Used by the Create Key UI to show team-scoped MCP servers.",
+        ),
+        user_id: str | None = Query(
+            None,
+            description="Filter MCP servers by internal user scope. When provided (and team_id is "
+            "not), returns the union of the servers each of the user's teams has access to plus "
+            "globally available (allow_all_keys) servers. A user who belongs to no team gets the "
+            "unscoped list. Used by the Internal User and Virtual Key edit UIs.",
         ),
         connected_app_view: bool = Query(
             False,
@@ -1304,6 +1413,10 @@ if MCP_AVAILABLE:
 
         # Filter by team scope (for Create Key UI)
         curl --location 'http://localhost:4000/v1/mcp/server?team_id=team-123' \
+        --header 'Authorization: Bearer your_api_key_here'
+
+        # Filter by internal user scope (for User / Key edit UI)
+        curl --location 'http://localhost:4000/v1/mcp/server?user_id=user-123' \
         --header 'Authorization: Bearer your_api_key_here'
         ```
         """
@@ -1350,8 +1463,13 @@ if MCP_AVAILABLE:
                 await _get_team_scoped_mcp_server_list(sanitized_team_id), key=_mcp_server_display_order
             )
         else:
-            servers: Final = await _resolve_accessible_mcp_servers(user_api_key_dict)
-            redacted_mcp_servers = sorted(_redact_mcp_credentials_list(servers), key=_mcp_server_display_order)
+            user_scoped_servers: Final = await _user_scoped_servers_for_request(user_api_key_dict, user_id)
+            servers: Final = (
+                user_scoped_servers
+                if user_scoped_servers is not None
+                else _redact_mcp_credentials_list(await _resolve_accessible_mcp_servers(user_api_key_dict))
+            )
+            redacted_mcp_servers = sorted(servers, key=_mcp_server_display_order)
 
         if connected_app_view is True and is_ui_session_credential(user_api_key_dict):
             reachable_ids: Final = await _connected_app_reachable_server_ids(user_api_key_dict)
@@ -1361,14 +1479,14 @@ if MCP_AVAILABLE:
         # Annotate has_user_credential for BYOK servers (single batched query)
         from litellm.proxy.proxy_server import prisma_client as _byok_prisma_client
 
-        user_id: Final = user_api_key_dict.user_id or ""
-        if user_id and _byok_prisma_client is not None:
+        caller_user_id: Final = user_api_key_dict.user_id or ""
+        if caller_user_id and _byok_prisma_client is not None:
             byok_server_ids: Final = [s.server_id for s in redacted_mcp_servers if getattr(s, "is_byok", False)]
             if byok_server_ids:
                 cred_rows: Final[
                     Sequence[prisma_models.LiteLLM_MCPUserCredentials]
                 ] = await MCPUserCredentialsRepository(_byok_prisma_client).table.find_many(
-                    where={"user_id": user_id, "server_id": {"in": byok_server_ids}}
+                    where={"user_id": caller_user_id, "server_id": {"in": byok_server_ids}}
                 )
                 cred_set: Final = {r.server_id for r in cred_rows}
                 for server in redacted_mcp_servers:
@@ -2194,8 +2312,9 @@ if MCP_AVAILABLE:
                         # UI session cookies may omit exp; don't require it.
                         options={"verify_exp": False, "verify_aud": False},
                     )
-                    if decoded.get("login_method") in ("sso", "username_password"):
-                        cookie_key: Final[str] = decoded.get("key", "")
+                    session_claims: Final = _session_cookie_claims(decoded)
+                    if session_claims.get("login_method") in ("sso", "username_password"):
+                        cookie_key: Final = session_claims.get("key", "")
                         if cookie_key:
                             api_key = f"Bearer {cookie_key}"
                 except _jwt.InvalidTokenError:
@@ -2448,7 +2567,7 @@ if MCP_AVAILABLE:
                 response_types=data.get("response_types", []),
                 token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
                 fallback_client_id=server_id,
-                persist_credentials=_user_is_full_admin(user_api_key_dict),
+                replace_stale_client=_user_is_full_admin(user_api_key_dict),
                 client_redirect_uris=client_redirect_uris,
                 client_application_type=client_application_type,
             )
@@ -3369,10 +3488,12 @@ if MCP_AVAILABLE:
         "openapi_registry.json",
     )
 
+    _OPENAPI_REGISTRY_ADAPTER: Final = TypeAdapter(dict[str, object])
+
     @functools.lru_cache(maxsize=1)
     def _load_openapi_registry() -> dict[str, object]:
         with open(_OPENAPI_REGISTRY_PATH, "r") as f:
-            data: Final[dict[str, object]] = json.load(f)
+            data: Final = _OPENAPI_REGISTRY_ADAPTER.validate_python(json.load(f))
         return data
 
     @router.get(
