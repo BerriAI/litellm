@@ -3927,3 +3927,120 @@ async def test_transcription_session_guardrail_block_only_reports_violation(
     sent_to_backend: Final = [call.args[0] for call in backend_ws.send.await_args_list]
     assert sent_to_backend == [], sent_to_backend
     assert backend_ws.close.await_count == (1 if expect_session_closed else 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "live_backend_name"),
+    [("gemini", "Gemini Live"), ("vertex_ai", "Vertex AI Live")],
+)
+async def test_dropped_session_update_in_eager_mode_sends_error_to_client(
+    provider: str,
+    live_backend_name: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Eager setup consumes the single setup Live accepts, so the client's first
+    session.update is dropped. The client must hear an error naming deferred
+    setup instead of assuming its tools and instructions reached the model"""
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
+    from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
+    from litellm.llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig
+
+    provider_config: Final = (
+        GeminiRealtimeConfig()
+        if provider == "gemini"
+        else VertexAIRealtimeConfig(access_token="tok", project="proj", location="us-central1")
+    )
+    session_update: Final = json.dumps(
+        {
+            "type": "session.update",
+            "session": {
+                "instructions": "Use lookup_order for order questions.",
+                "tools": [{"type": "function", "name": "lookup_order"}],
+            },
+        }
+    )
+    client_ws = AsyncMock()
+    client_ws.receive_text = AsyncMock(side_effect=[session_update, ConnectionClosed(None, None)])
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+
+    streaming: Final = RealTimeStreaming(
+        websocket=client_ws,
+        backend_ws=backend_ws,
+        logging_obj=_mock_logging(),
+        provider_config=provider_config,
+        model="gemini-2.5-flash",
+    )
+    # The eager setup already went out when the session connected.
+    streaming.session_configuration_request = provider_config.session_configuration_request("gemini-2.5-flash")
+
+    await streaming.client_ack_messages()
+
+    sent_to_backend: Final = [call.args[0] for call in backend_ws.send.await_args_list]
+    assert sent_to_backend == [], sent_to_backend
+    sent_to_client: Final = [json.loads(call.args[0]) for call in client_ws.send_text.await_args_list]
+    assert len(sent_to_client) == 1, sent_to_client
+    error_event: Final = sent_to_client[0]
+    assert error_event["type"] == "error", error_event
+    assert error_event["error"]["type"] == "invalid_request_error", error_event
+    assert live_backend_name in error_event["error"]["message"], error_event
+    assert "LITELLM_GEMINI_LIVE_DEFER_SETUP" in error_event["error"]["message"], error_event
+
+
+class _SilentDropRealtimeConfig(BaseRealtimeConfig):
+    def validate_environment(self, headers: dict, model: str, api_key: str | None = None) -> dict:
+        return headers
+
+    def get_complete_url(self, api_base: str | None, model: str, api_key: str | None = None) -> str:
+        return api_base or ""
+
+    def transform_realtime_request(
+        self,
+        message: str,
+        model: str,
+        session_configuration_request: str | None = None,
+    ) -> Sequence[str | bytes]:
+        return ()
+
+    def transform_realtime_response(
+        self,
+        message: str | bytes,
+        model: str,
+        logging_obj: LiteLLMLoggingObj,
+        realtime_response_transform_input: RealtimeResponseTransformInput,
+    ) -> RealtimeResponseTypedDict:
+        raise NotImplementedError
+
+
+@pytest.mark.asyncio
+async def test_dropped_session_update_stays_silent_without_a_provider_explanation() -> None:
+    """A provider that declines to explain the drop keeps the relay silent, and
+    a relay without a provider config has nobody to ask, so neither may put an
+    error frame on the client websocket"""
+    session_update: Final = json.dumps({"type": "session.update", "session": {"tools": []}})
+    client_ws = AsyncMock()
+    client_ws.receive_text = AsyncMock(side_effect=[session_update, ConnectionClosed(None, None)])
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+
+    streaming: Final = RealTimeStreaming(
+        websocket=client_ws,
+        backend_ws=backend_ws,
+        logging_obj=_mock_logging(),
+        provider_config=_SilentDropRealtimeConfig(),
+        model="gpt-realtime",
+    )
+    await streaming.client_ack_messages()
+    assert [call.args[0] for call in backend_ws.send.await_args_list] == []
+    assert client_ws.send_text.await_count == 0, client_ws.send_text.await_args_list
+
+    configless_client_ws = AsyncMock()
+    configless_streaming: Final = RealTimeStreaming(
+        websocket=configless_client_ws,
+        backend_ws=MagicMock(),
+        logging_obj=_mock_logging(),
+        model="gpt-realtime",
+    )
+    await configless_streaming._notify_client_of_dropped_session_update()
+    assert configless_client_ws.send_text.await_count == 0, configless_client_ws.send_text.await_args_list
