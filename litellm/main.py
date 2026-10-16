@@ -3415,7 +3415,7 @@ def _complete_openrouter(ctx: CompletionDispatchContext) -> _CompletionDispatchR
 
     ## Load Config
     config: Final = litellm.OpenrouterConfig.get_config()
-    api_base = resolve_openrouter_api_base(
+    api_base = resolve_openrouter_api_base(  # rebind-ok: regional endpoint resolution for openrouter
         api_base=api_base,
         region=getattr(config, "region", None),
         litellm_params=litellm_params,
@@ -6788,7 +6788,7 @@ def embedding(
                 headers=headers,
             )
         elif custom_llm_provider == "openrouter":
-            api_base = resolve_openrouter_api_base(
+            api_base = resolve_openrouter_api_base(  # rebind-ok: regional endpoint resolution for openrouter
                 api_base=api_base,
                 litellm_params=litellm_params_dict,
                 optional_params=optional_params,

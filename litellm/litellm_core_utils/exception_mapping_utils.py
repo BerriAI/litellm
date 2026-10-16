@@ -2225,15 +2225,17 @@ def _map_openrouter_exception(
             )
         elif original_exception.status_code == 404:
             if "supporting your data region" in error_str.lower():
-                response_obj = getattr(original_exception, "response", None)
-                inferred_region = None
-                if response_obj is not None and getattr(response_obj, "url", None):
-                    from litellm.llms.openrouter.data_residency import infer_openrouter_data_residency
+                response_obj: Final = getattr(original_exception, "response", None)
+                from litellm.llms.openrouter.data_residency import infer_openrouter_data_residency
 
-                    inferred_region = infer_openrouter_data_residency(
+                inferred_region: Final[str | None] = (
+                    infer_openrouter_data_residency(
                         custom_llm_provider="openrouter",
                         api_base=str(response_obj.url),
                     )
+                    if response_obj is not None and getattr(response_obj, "url", None)
+                    else None
+                )
                 raise OpenRouterRegionNotSupportedError(
                     message=f"OpenRouterRegionNotSupportedError: {exception_provider} - {error_str}",
                     model=model,

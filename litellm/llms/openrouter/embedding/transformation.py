@@ -85,15 +85,14 @@ class OpenrouterEmbeddingConfig(BaseEmbeddingConfig):
         """
         Get the complete URL for OpenRouter Embedding API endpoint.
         """
-        api_base = resolve_openrouter_api_base(
+        resolved_base: Final = resolve_openrouter_api_base(
             api_base=api_base,
             litellm_params=litellm_params,
             optional_params=optional_params,
-        )
-        api_base = api_base.rstrip("/")
+        ).rstrip("/")
 
         # Return the embeddings endpoint
-        return f"{api_base}/embeddings"
+        return f"{resolved_base}/embeddings"
 
     def transform_embedding_request(
         self,

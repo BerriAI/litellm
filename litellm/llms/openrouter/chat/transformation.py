@@ -52,31 +52,29 @@ class OpenrouterConfig(OpenAIGPTConfig):
     def __init__(
         self,
         region: str | None = None,
-        **kwargs: object,
     ) -> None:
         self.region = region
-        super().__init__(**kwargs)
+        super().__init__()
 
     def get_complete_url(
         self,
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object] | None = None,
+        litellm_params: Mapping[str, object] | None = None,
         stream: bool | None = None,
     ) -> str:
-        api_base = resolve_openrouter_api_base(
+        resolved_base: Final = resolve_openrouter_api_base(
             api_base=api_base,
             region=self.region,
             litellm_params=litellm_params,
             optional_params=optional_params,
-        )
+        ).rstrip("/")
         endpoint: Final = "chat/completions"
-        api_base = api_base.rstrip("/")
-        if endpoint in api_base:
-            return api_base
-        return f"{api_base}/{endpoint}"
+        if endpoint in resolved_base:
+            return resolved_base
+        return f"{resolved_base}/{endpoint}"
 
     def get_supported_openai_params(self, model: str) -> list:
         """
