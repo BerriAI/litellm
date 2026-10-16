@@ -809,19 +809,17 @@ class UnifiedLLMGuardrails(CustomLogger):
                     if self._chunk_has_tool_calls(buffered_item)
                 )
 
-                async def checked_tail() -> AsyncGenerator[object, None]:
-                    try:
-                        async for tail_chunk in self._emit_stream_tail(
+                tail_chunks: Final = tuple(
+                    [
+                        chunk
+                        async for chunk in self._checked_stream_tail(
                             last_chunk=last_chunk,
                             final_round=_round,
                             responses_so_far=responses_so_far,
                             responses_yielded=responses_yielded,
-                        ):
-                            yield tail_chunk
-                    except _StreamTerminated as exc:
-                        yield exc
-
-                tail_chunks: Final = tuple([chunk async for chunk in checked_tail()])
+                        )
+                    ]
+                )
                 if tail_chunks and isinstance(tail_chunks[-1], _StreamTerminated):
                     for error_chunk in tail_chunks[:-1]:
                         yield error_chunk
@@ -842,6 +840,25 @@ class UnifiedLLMGuardrails(CustomLogger):
                 yield out
         except _StreamTerminated:
             return
+
+    async def _checked_stream_tail(
+        self,
+        *,
+        last_chunk: object | None,
+        final_round: Callable[[object, bool], AsyncGenerator[object, None]],
+        responses_so_far: Sequence[object],
+        responses_yielded: list[object],
+    ) -> AsyncGenerator[object, None]:
+        try:
+            async for chunk in self._emit_stream_tail(
+                last_chunk=last_chunk,
+                final_round=final_round,
+                responses_so_far=responses_so_far,
+                responses_yielded=responses_yielded,
+            ):
+                yield chunk
+        except _StreamTerminated as exc:
+            yield exc
 
     async def _emit_stream_tail(
         self,
