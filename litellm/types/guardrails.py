@@ -159,6 +159,7 @@ class SupportedGuardrailIntegrations(Enum):
     AIRIA = "airia"
     WINGBACK = "wingback"
     DECISION_MODEL = "decision_model"
+    SENSITIVE_DATA_ROUTING = "sensitive_data_routing"
 
 
 class Role(Enum):
