@@ -20,6 +20,7 @@ import { createParser, parseAsInteger, parseAsString, parseAsStringLiteral, useQ
 import { useCallback, useMemo, useState } from "react";
 
 import { useModelsInfo } from "../../hooks/models/useModels";
+import { ROUTING_STATUS_FILTER_ID, routingStatusToBlocked } from "../utils/routingStatus";
 import { transformModelData } from "../utils/modelDataTransformer";
 import {
   ALL_MODEL_GROUPS_VALUE,
@@ -57,6 +58,7 @@ const TABLE_STATE = {
   view_mode: parseAsStringLiteral(MODEL_VIEW_MODES).withDefault("current_team"),
   filter_team: parseAsString.withDefault(PERSONAL_TEAM_VALUE),
   access_group: parseAsString.withDefault(""),
+  status: parseAsString.withDefault(""),
   sort_by: parseAsStringLiteral(MODEL_TABLE_SORT_COLUMN_IDS),
   sort_order: parseAsStringLiteral(["asc", "desc"] as const).withDefault("asc"),
   page: boundedInteger(1, MAX_PAGE, 1),
@@ -96,6 +98,9 @@ const AllModelsTab = ({
   const modelViewMode = tableState.view_mode;
   const selectedTeamValue = tableState.filter_team;
   const selectedModelAccessGroupFilter = tableState.access_group || null;
+  const routingStatusFilter =
+    tableState.status === "active" || tableState.status === "paused" ? tableState.status : null;
+  const blockedForQuery: boolean | undefined = routingStatusToBlocked(routingStatusFilter);
   const pagination = useMemo<PaginationState>(
     () => ({ pageIndex: tableState.page - 1, pageSize: tableState.page_size }),
     [tableState.page, tableState.page_size],
@@ -150,6 +155,7 @@ const AllModelsTab = ({
     modelNameForQuery,
     accessGroupForQuery,
     wildcardOnlyForQuery,
+    blockedForQuery,
   );
   const isLoading = isLoadingModelsInfo || isLoadingModelCostMap;
 
@@ -177,8 +183,9 @@ const AllModelsTab = ({
           ? { id: MODEL_NAME_COLUMN_ID, value: selectedModelGroup }
           : null,
         selectedModelAccessGroupFilter ? { id: ACCESS_GROUPS_COLUMN_ID, value: selectedModelAccessGroupFilter } : null,
+        routingStatusFilter ? { id: ROUTING_STATUS_FILTER_ID, value: routingStatusFilter } : null,
       ].filter((entry) => entry !== null),
-    [selectedModelGroup, selectedModelAccessGroupFilter],
+    [selectedModelGroup, selectedModelAccessGroupFilter, routingStatusFilter],
   );
 
   const handleSearchChange = useCallback(
@@ -192,8 +199,13 @@ const AllModelsTab = ({
     const next = functionalUpdate(updater, columnFilters);
     const modelGroup = next.find((entry) => entry.id === MODEL_NAME_COLUMN_ID)?.value;
     const accessGroup = next.find((entry) => entry.id === ACCESS_GROUPS_COLUMN_ID)?.value;
+    const status = next.find((entry) => entry.id === ROUTING_STATUS_FILTER_ID)?.value;
     setSelectedModelGroup(typeof modelGroup === "string" ? modelGroup : ALL_MODEL_GROUPS_VALUE);
-    void setTableState({ access_group: typeof accessGroup === "string" ? accessGroup : null, page: null });
+    void setTableState({
+      access_group: typeof accessGroup === "string" ? accessGroup : null,
+      status: typeof status === "string" ? status : null,
+      page: null,
+    });
   };
 
   const handleSortingChange: OnChangeFn<SortingState> = (updater) => {

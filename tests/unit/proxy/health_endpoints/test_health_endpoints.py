@@ -1430,6 +1430,208 @@ async def test_health_services_endpoint_datadog_llm_observability():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "service", ["zerobus", "langsmith", "otel", "langfuse_otel", "datadog_llm_observability", "signoz"]
+)
+async def test_health_services_endpoint_tests_any_known_callback_configured_via_callbacks(service: str):
+    """A logger without its own health check, wired through litellm_settings.callbacks, gets the mock request."""
+    acompletion: Final = AsyncMock(return_value=MagicMock())
+    with (
+        patch("litellm.success_callback", []),
+        patch("litellm.callbacks", [service]),
+        patch("litellm.acompletion", acompletion),
+    ):
+        result = await health_services_endpoint(service=service)
+
+    assert result == {"status": "success", "message": f"Mock LLM request made - check {service}."}
+    acompletion.assert_awaited_once()
+    assert acompletion.await_args.kwargs["user"] == "litellm:/health/services"
+
+
+@pytest.mark.asyncio
+async def test_health_services_endpoint_tests_logger_configured_only_via_failure_callback():
+    """litellm_settings.failure_callback: [langsmith] is configured too, so Test sends the mock request."""
+    acompletion: Final = AsyncMock(return_value=MagicMock())
+    with (
+        patch("litellm.success_callback", []),
+        patch("litellm.callbacks", []),
+        patch("litellm.failure_callback", ["langsmith"]),
+        patch("litellm.acompletion", acompletion),
+    ):
+        result = await health_services_endpoint(service="langsmith")
+
+    assert result == {"status": "success", "message": "Mock LLM request made - check langsmith."}
+    acompletion.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_health_services_endpoint_matches_otel_instance_loaded_from_callbacks():
+    """The proxy swaps the "otel" string for an OpenTelemetry instance without a callback_name, it still counts."""
+    from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
+
+    acompletion: Final = AsyncMock(return_value=MagicMock())
+    otel_logger: Final = OpenTelemetry(config=OpenTelemetryConfig(exporter="console", skip_set_global=True))
+    with (
+        patch("litellm.success_callback", []),
+        patch("litellm.callbacks", [otel_logger]),
+        patch("litellm.acompletion", acompletion),
+    ):
+        result = await health_services_endpoint(service="otel")
+
+    assert result == {"status": "success", "message": "Mock LLM request made - check otel."}
+    acompletion.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_health_services_endpoint_matches_unregistered_nameless_instance_by_package():
+    """compression_interception is swapped for a logger outside CustomLoggerRegistry at startup, it still counts."""
+    from litellm.integrations.compression_interception.handler import CompressionInterceptionLogger
+
+    acompletion: Final = AsyncMock(return_value=MagicMock())
+    with (
+        patch("litellm.success_callback", []),
+        patch("litellm.callbacks", [CompressionInterceptionLogger()]),
+        patch("litellm.acompletion", acompletion),
+    ):
+        result = await health_services_endpoint(service="compression_interception")
+
+    assert result == {"status": "success", "message": "Mock LLM request made - check compression_interception."}
+    acompletion.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_health_services_endpoint_otel_instance_does_not_claim_arize_dedicated_check():
+    """A nameless OpenTelemetry logger shares arize's class, Test on arize must still run the Arize check."""
+    from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
+
+    acompletion: Final = AsyncMock(return_value=MagicMock())
+    otel_logger: Final = OpenTelemetry(config=OpenTelemetryConfig(exporter="console", skip_set_global=True))
+    with (
+        patch("litellm.success_callback", [otel_logger]),
+        patch("litellm.callbacks", [otel_logger]),
+        patch("litellm.acompletion", acompletion),
+        patch("litellm.integrations.arize.arize.ArizeLogger") as MockArizeLogger,
+    ):
+        mock_instance = MagicMock()
+        mock_instance.async_health_check = AsyncMock(return_value={"status": "healthy", "error_message": ""})
+        MockArizeLogger.return_value = mock_instance
+        result = await health_services_endpoint(service="arize")
+
+    assert result == {"status": "healthy", "message": "Arize is healthy"}
+    acompletion.assert_not_awaited()
+    mock_instance.async_health_check.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_health_services_endpoint_matches_otel_v2_instance_loaded_from_callbacks():
+    """The proxy swaps "otel" for an OpenTelemetryV2 instance, which has no registry entry, it still counts."""
+    from opentelemetry.sdk.trace import TracerProvider
+
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.model.config import OpenTelemetryV2Config
+
+    acompletion: Final = AsyncMock(return_value=MagicMock())
+    with (
+        patch("litellm.success_callback", []),
+        patch("litellm.failure_callback", []),
+        patch("litellm.callbacks", []),
+        patch("litellm.service_callback", []),
+        patch("litellm.input_callback", []),
+        patch("litellm._async_success_callback", []),
+        patch("litellm._async_failure_callback", []),
+        patch("litellm.proxy.proxy_server.open_telemetry_logger", MagicMock()),
+        patch("litellm.acompletion", acompletion),
+    ):
+        otel_v2_logger: Final = OpenTelemetryV2(
+            config=OpenTelemetryV2Config(exporter="in_memory"),
+            tracer_provider=TracerProvider(),
+        )
+        litellm.callbacks.append(otel_v2_logger)
+        result = await health_services_endpoint(service="otel")
+
+    assert result == {"status": "success", "message": "Mock LLM request made - check otel."}
+    acompletion.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_health_services_endpoint_rejects_otel_when_only_a_named_otel_v2_preset_is_configured():
+    """An arize-named OpenTelemetryV2 preset is not the plain otel callback, service=otel stays a 400."""
+    from opentelemetry.sdk.trace import TracerProvider
+
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.model.config import OpenTelemetryV2Config
+    from litellm.proxy._types import ProxyException
+
+    acompletion: Final = AsyncMock(return_value=MagicMock())
+    with (
+        patch("litellm.success_callback", []),
+        patch("litellm.failure_callback", []),
+        patch("litellm.callbacks", []),
+        patch("litellm.service_callback", []),
+        patch("litellm.input_callback", []),
+        patch("litellm._async_success_callback", []),
+        patch("litellm._async_failure_callback", []),
+        patch("litellm.proxy.proxy_server.open_telemetry_logger", MagicMock()),
+        patch("litellm.acompletion", acompletion),
+    ):
+        arize_v2_logger: Final = OpenTelemetryV2(
+            config=OpenTelemetryV2Config(exporter="in_memory"),
+            callback_name="arize",
+            tracer_provider=TracerProvider(),
+        )
+        litellm.callbacks.append(arize_v2_logger)
+        with pytest.raises(ProxyException) as exc:
+            await health_services_endpoint(service="otel")
+
+    assert exc.value.code == "400"
+    assert "not configured as a callback" in str(exc.value.message)
+    acompletion.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("service", ["sqs", "aws_sqs"])
+async def test_health_services_endpoint_keeps_dedicated_check_for_logger_configured_via_callbacks(service: str):
+    """callbacks: [aws_sqs] becomes a nameless SQSLogger at startup, Test on sqs or aws_sqs still runs its check."""
+    from litellm.integrations.sqs import SQSLogger
+
+    acompletion: Final = AsyncMock(return_value=MagicMock())
+    configured_logger: Final = SQSLogger()
+    with (
+        patch("litellm.success_callback", [configured_logger]),
+        patch("litellm.callbacks", [configured_logger]),
+        patch("litellm.acompletion", acompletion),
+        patch("litellm.integrations.sqs.SQSLogger") as MockSQSLogger,
+    ):
+        mock_instance = MagicMock()
+        mock_instance.async_health_check = AsyncMock(return_value={"status": "healthy", "error_message": ""})
+        MockSQSLogger.return_value = mock_instance
+        result = await health_services_endpoint(service=service)
+
+    assert result == {"status": "healthy", "message": ""}
+    acompletion.assert_not_awaited()
+    mock_instance.async_health_check.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_health_services_endpoint_rejects_known_but_unconfigured_callback():
+    """zerobus is a known logger, but with nothing configured the test is a 400, not an empty 200."""
+    from litellm.proxy._types import ProxyException
+
+    with (
+        patch("litellm.success_callback", []),
+        patch("litellm.failure_callback", []),
+        patch("litellm.callbacks", []),
+        patch("litellm._async_success_callback", []),
+        patch("litellm._async_failure_callback", []),
+        pytest.raises(ProxyException) as exc,
+    ):
+        await health_services_endpoint(service="zerobus")
+
+    assert exc.value.code == "400"
+    assert "not configured as a callback" in str(exc.value.message)
+
+
+@pytest.mark.asyncio
 async def test_health_services_endpoint_rejects_unknown_service():
     """
     Verify that an unknown service name is rejected with a 400 error.
@@ -4839,6 +5041,21 @@ class TestNoRedisWarning:
         ):
             assert await _show_no_redis_warning() is False
         prisma.db.query_raw.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("coordination_redis, router_redis", [(MagicMock(), None), (None, MagicMock())])
+    async def test_redis_answers_before_the_env_var_is_looked_up(self, monkeypatch, coordination_redis, router_redis):
+        monkeypatch.setattr(
+            _health_endpoints_module,
+            "get_secret_bool",
+            MagicMock(side_effect=AssertionError("env var looked up although Redis is configured")),
+        )
+        with (
+            patch("litellm.proxy.proxy_server.redis_usage_cache", coordination_redis),
+            patch("litellm.proxy.proxy_server.llm_router", self._router(router_redis)),
+            patch("litellm.proxy.proxy_server.prisma_client", self._prisma_with_workers(5)),
+        ):
+            assert await _show_no_redis_warning() is False
 
     @pytest.mark.asyncio
     async def test_stays_quiet_when_only_the_router_has_redis(self, monkeypatch):

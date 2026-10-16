@@ -814,6 +814,7 @@ def validate_model_cost_values(model_data, exceptions=None):
         "output_cost_per_pixel",
         "cost_per_second",
         "input_cost_per_second",
+        "input_cost_per_text_message",
         "output_cost_per_second",
         "output_cost_per_second_480p",
         "output_cost_per_second_720p",
@@ -1020,6 +1021,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_request": {"type": "number"},
                 "cost_per_second": {"type": "number"},
                 "input_cost_per_second": {"type": "number"},
+                "input_cost_per_text_message": {"type": "number"},
                 "input_cost_per_token": {"type": "number"},
                 "input_cost_per_token_above_128k_tokens": {"type": "number"},
                 "input_cost_per_audio_token_batches": {"type": "number"},
@@ -1133,6 +1135,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_tool_choice": {"type": "boolean"},
                 "supports_tool_search": {"type": "boolean"},
                 "supports_video_input": {"type": "boolean"},
+                "supports_box_questions": {"type": "boolean"},
                 "supports_vision": {"type": "boolean"},
                 "supports_web_search": {"type": "boolean"},
                 "supports_bedrock_runtime_chat_completions_tools_with_reasoning": {"type": "boolean"},
@@ -2415,6 +2418,87 @@ def test_register_model_openrouter_without_slash():
     assert "openai/gpt-4-turbo" in litellm.openrouter_models
 
 
+def test_register_model_makes_the_model_resolvable_and_wildcard_visible_without_a_restart():
+    model_name: Final = "my-tuned-gemini-regression"
+    try:
+        litellm.register_model(
+            {
+                model_name: {
+                    "litellm_provider": "vertex_ai-language-models",
+                    "mode": "chat",
+                    "input_cost_per_token": 0.000001,
+                    "output_cost_per_token": 0.000002,
+                }
+            },
+            persist_across_reloads=False,
+        )
+
+        _, provider, _, _ = litellm.get_llm_provider(model=model_name)
+
+        assert provider == "vertex_ai"
+        assert model_name in litellm.models_by_provider["vertex_ai"]
+    finally:
+        litellm.model_cost.pop(model_name, None)
+        litellm.vertex_language_models.discard(model_name)
+        litellm.models_by_provider["vertex_ai"].discard(model_name)
+
+
+@pytest.mark.parametrize(
+    ("litellm_provider", "wildcard", "provider_set"),
+    [
+        ("ai21", "ai21/*", "ai21_chat_models"),
+        ("vertex_ai-code-chat-models", "vertex_ai/*", "vertex_code_chat_models"),
+    ],
+)
+def test_registered_chat_model_lists_under_its_provider_wildcard(
+    litellm_provider: str, wildcard: str, provider_set: str
+) -> None:
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    model_name: Final = f"chat-listing-regression-{litellm_provider}"
+    try:
+        litellm.register_model(
+            {model_name: {"litellm_provider": litellm_provider, "mode": "chat"}}, persist_across_reloads=False
+        )
+
+        listed: Final = get_known_models_from_wildcard(wildcard)
+
+        assert f"{wildcard.removesuffix('*')}{model_name}" in listed
+    finally:
+        litellm.model_cost.pop(model_name, None)
+        getattr(litellm, provider_set).discard(model_name)
+        litellm.add_known_models(model_cost_map={})
+
+
+def test_priced_router_deployment_id_stays_out_of_wildcard_model_listing():
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    deployment_id: Final = "priced-deployment-id-regression"
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "priced-gemini",
+                "litellm_params": {
+                    "model": "gemini/gemini-2.5-flash",
+                    "api_key": "fake-key",
+                    "input_cost_per_token": 0.000001,
+                    "output_cost_per_token": 0.000002,
+                },
+                "model_info": {"id": deployment_id, "litellm_provider": "gemini", "mode": "chat"},
+            },
+            {"model_name": "gemini/*", "litellm_params": {"model": "gemini/*", "api_key": "fake-key"}},
+        ]
+    )
+
+    router.completion(model="priced-gemini", messages=[{"role": "user", "content": "hi"}], mock_response="ok")
+    listed: Final = get_known_models_from_wildcard("gemini/*")
+
+    assert "gemini/gemini-2.5-flash" in listed
+    assert f"gemini/{deployment_id}" not in listed
+    assert deployment_id not in litellm.models_by_provider["gemini"]
+    assert litellm.model_cost[deployment_id]["input_cost_per_token"] == 0.000001
+
+
 def test_reasoning_content_preserved_in_text_completion_wrapper():
     """Ensure reasoning_content is copied from delta to text_choices."""
     chunk = ModelResponseStream(
@@ -3568,6 +3652,64 @@ class TestDropParamsWithPromptCacheKey:
         assert "prompt_cache_key" not in result
         # temperature should remain (it's supported by Bedrock)
         assert result.get("temperature") == 0.7
+
+
+class TestGetOptionalParamsSpeedGate:
+    UNSUPPORTED_LEGS: Final = (
+        ("bedrock", "anthropic.claude-opus-4-8-v1:0"),
+        ("bedrock", "invoke/anthropic.claude-opus-4-8-v1:0"),
+        ("vertex_ai", "claude-opus-4-8"),
+        ("azure_ai", "claude-opus-4-8"),
+        ("openai", "gpt-5.6"),
+        ("azure", "gpt-5.6"),
+    )
+
+    @staticmethod
+    def _speed_anywhere(optional_params: Mapping[str, object]) -> bool:
+        extra_body: Final = optional_params.get("extra_body")
+        return "speed" in optional_params or (isinstance(extra_body, dict) and "speed" in extra_body)
+
+    @pytest.mark.parametrize("global_drop_params", [True, False])
+    @pytest.mark.parametrize(("custom_llm_provider", "model"), UNSUPPORTED_LEGS)
+    def test_drop_params_strips_speed_on_providers_without_fast_mode(
+        self, monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str, model: str, global_drop_params: bool
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+        result: Final = litellm.get_optional_params(
+            model=model, custom_llm_provider=custom_llm_provider, speed="fast", drop_params=not global_drop_params
+        )
+        assert not self._speed_anywhere(result), result
+
+    @pytest.mark.parametrize(("custom_llm_provider", "model"), [("openai", "gpt-5.6"), ("hosted_vllm", "my-model")])
+    def test_speed_is_forwarded_untouched_without_drop_params(
+        self, monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str, model: str
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        result: Final = litellm.get_optional_params(
+            model=model, custom_llm_provider=custom_llm_provider, speed="fast", drop_params=False
+        )
+        assert self._speed_anywhere(result), result
+
+    def test_drop_params_keeps_speed_for_a_downstream_litellm_proxy(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        result: Final = litellm.get_optional_params(
+            model="claude-opus-4-8", custom_llm_provider="litellm_proxy", speed="fast", drop_params=True
+        )
+        assert self._speed_anywhere(result), result
+
+    def test_speed_survives_on_a_direct_anthropic_fast_mode_model(
+        self, monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        fast_mode_model: Final = next(
+            name
+            for name, info in litellm.model_cost.items()
+            if info.get("supports_speed") is True and info.get("litellm_provider") == "anthropic"
+        )
+        result: Final = litellm.get_optional_params(
+            model=fast_mode_model, custom_llm_provider="anthropic", speed="fast", drop_params=True
+        )
+        assert result.get("speed") == "fast"
 
 
 class TestGetOptionalParamsDeepSeek:
@@ -6264,25 +6406,30 @@ async def test_wrapper_async_preserves_original_exception_when_hook_await_is_can
     the caller - not get replaced by CancelledError/TimeoutError from the hook's own
     await getting cancelled."""
 
+    hook_entered: Final = asyncio.Event()
+    hook_released: Final = asyncio.Event()
+
     class SlowLogger(CustomLogger):
         async def async_post_call_failure_deployment_hook(
             self, request_data, exception, call_type, fallback_depth=None
         ):
-            await asyncio.sleep(5)
+            hook_entered.set()
+            await hook_released.wait()
 
     monkeypatch.setattr(litellm, "callbacks", [SlowLogger()])
 
-    with pytest.raises(litellm.AuthenticationError):
-        await asyncio.wait_for(
-            litellm.acompletion(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": "hi"}],
-                mock_response=litellm.AuthenticationError(
-                    message="bad key", llm_provider="openai", model="gpt-4o-mini"
-                ),
-            ),
-            timeout=0.2,
+    call: Final = asyncio.create_task(
+        litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=litellm.AuthenticationError(message="bad key", llm_provider="openai", model="gpt-4o-mini"),
         )
+    )
+    assert await asyncio.wait_for(hook_entered.wait(), timeout=5)
+    call.cancel()
+
+    with pytest.raises(litellm.AuthenticationError):
+        await call
 
 
 @pytest.mark.asyncio
@@ -6941,6 +7088,32 @@ def test_get_model_info_gemini(monkeypatch):
         ):
             assert info.get("tpm") is not None, f"{model} does not have tpm"
             assert info.get("rpm") is not None, f"{model} does not have rpm"
+
+
+@pytest.mark.parametrize(
+    "model, litellm_params, expects_native_config",
+    [
+        ("gemini-2.5-flash", None, True),
+        ("xai/grok-4.6", None, False),
+        ("claude-haiku-4-5@20251001", None, False),
+        ("openai/gpt-oss-120b-maas", None, False),
+        ("gemma/gemma-3-12b-it", None, False),
+        ("agent_engine/1234567890", None, False),
+        ("openai/tuned-endpoint", {"base_model": "gemini-2.5-flash"}, True),
+    ],
+)
+def test_vertex_generate_content_config_follows_model_route(
+    model: str, litellm_params: dict[str, str] | None, expects_native_config: bool
+):
+    from litellm.llms.vertex_ai.google_genai.transformation import VertexAIGoogleGenAIConfig
+
+    config: Final = ProviderConfigManager.get_provider_google_genai_generate_content_config(
+        model=model, provider=litellm.LlmProviders.VERTEX_AI, litellm_params=litellm_params
+    )
+    if expects_native_config:
+        assert isinstance(config, VertexAIGoogleGenAIConfig)
+    else:
+        assert config is None
 
 
 @pytest.mark.parametrize(
@@ -9491,6 +9664,33 @@ def test_get_provider_audio_transcription_config_resolves_for_every_provider() -
 
     assert unexpected == {}
     assert isinstance(configs[LlmProviders.OPENAI], litellm.OpenAIWhisperAudioTranscriptionConfig)
+
+
+@pytest.mark.parametrize(
+    ("model", "optional_params", "expected_response_format"),
+    [
+        ("whisper-1", {}, "verbose_json"),
+        ("my-transcribe-whisper", {}, "verbose_json"),
+        ("whisper-1", {"response_format": "srt"}, "srt"),
+        ("gpt-4o-mini-transcribe", {}, None),
+        ("gpt-transcribe", {}, None),
+        ("gpt-transcribe", {"response_format": "text"}, "text"),
+    ],
+)
+def test_openai_transcription_defaults_verbose_json_only_for_whisper_models(
+    model: str, optional_params: dict[str, str], expected_response_format: str | None
+) -> None:
+    config: Final = ProviderConfigManager.get_provider_audio_transcription_config(
+        model=model, provider=LlmProviders.OPENAI
+    )
+    assert config is not None
+
+    request: Final = config.transform_audio_transcription_request(
+        model=model, audio_file=b"audio", optional_params=dict(optional_params), litellm_params={}
+    )
+
+    assert isinstance(request.data, dict)
+    assert request.data.get("response_format") == expected_response_format
 
 
 def test_get_valid_models_from_provider_cache_invalidation(monkeypatch):

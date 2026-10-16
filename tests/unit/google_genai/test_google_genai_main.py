@@ -63,6 +63,7 @@ NATIVE_TOP_LEVEL_FIELD_CASES = [
     ("toolConfig", {"functionCallingConfig": {"mode": "AUTO"}}),
     ("cachedContent", "cachedContents/abc123"),
     ("labels", {"team": "search"}),
+    ("continuationToken", "dG9rLTE="),
 ]
 
 
@@ -259,3 +260,29 @@ async def test_native_fields_forwarded_on_async_stream():
     body = mock_post.call_args.kwargs["json"]
     assert body["safetySettings"] == safety_settings
     assert "safetySettings" not in body.get("generationConfig", {})
+
+
+@pytest.mark.parametrize("base_model, uses_native_api", [("gemini-2.5-flash", True), (None, False)])
+def test_vertex_generate_content_routes_by_deployment_base_model(base_model, uses_native_api):
+    import datetime
+
+    from litellm.google_genai.main import GenerateContentHelper
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="vertex_ai/openai/tuned-endpoint",
+        messages=[],
+        stream=False,
+        call_type="agenerate_content",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="route-test",
+        function_id="route-test",
+    )
+    setup = GenerateContentHelper.setup_generate_content_call(
+        model="vertex_ai/openai/tuned-endpoint",
+        contents=[{"role": "user", "parts": [{"text": "Say hi"}]}],
+        litellm_logging_obj=logging_obj,
+        **({} if base_model is None else {"base_model": base_model}),
+    )
+
+    assert (setup.generate_content_provider_config is not None) is uses_native_api

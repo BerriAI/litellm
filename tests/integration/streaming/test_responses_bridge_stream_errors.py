@@ -1,8 +1,6 @@
 import json
-import socket
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
-from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -13,102 +11,46 @@ import openai
 import pytest
 import yaml
 from integration._support.client import (
-    JSON_OBJECT,
     Gateway,
-    eventually,
     gateway_from_environment,
     object_value,
     string_value,
 )
-from integration._support.database import read_rows
 from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.responses_stream import (
     AZURE_TARGET,
     OPENAI_TARGET,
     RATE_LIMIT_MESSAGE,
+    RATE_LIMIT_PREFIX,
+    SENTINEL_PREFIX,
+    assert_provider_typed_rate_limit,
     azure_rate_limit,
+    chat_body,
     chat_content,
     created,
+    data_frames,
     delta,
+    error_body,
     error_event,
     failed,
     frame,
     function_tools,
     healthy_stream,
+    messages_body,
+    openai_error_event,
+    openai_error_stream,
     rate_limited_stream,
     serve,
+    spend_row,
+    sse_events,
 )
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from pydantic import JsonValue
 
-_RATE_LIMIT_PREFIX: Final = "litellm.RateLimitError: "
-_SENTINEL_PREFIX: Final = "litellm.MidStreamFallbackError: "
 _PRIMARY: Final = "bridged-primary"
 _SPARE: Final = "bridged-spare"
 pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
-
-
-def chat_body(model: str, marker: str, **extra: JsonValue) -> dict[str, JsonValue]:
-    return {
-        "model": model,
-        "stream": True,
-        "messages": [{"role": "user", "content": marker}],
-        "tools": function_tools(),
-        "num_retries": 0,
-        "cache": {"no-cache": True},
-        **extra,
-    }
-
-
-def messages_body(model: str, marker: str) -> dict[str, JsonValue]:
-    return {
-        "model": model,
-        "max_tokens": 64,
-        "stream": True,
-        "messages": [{"role": "user", "content": marker}],
-        "tools": [
-            {
-                "name": "get_weather",
-                "description": "Weather for a city",
-                "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
-            }
-        ],
-        "num_retries": 0,
-        "cache": {"no-cache": True},
-    }
-
-
-def error_body(response: httpx.Response) -> Mapping[str, JsonValue]:
-    return object_value(JSON_OBJECT.validate_json(response.content)["error"])
-
-
-def data_frames(text: str) -> tuple[Mapping[str, JsonValue], ...]:
-    return tuple(
-        JSON_OBJECT.validate_json(line.removeprefix("data: "))
-        for line in text.splitlines()
-        if line.startswith("data: ") and line != "data: [DONE]"
-    )
-
-
-def spend_row(call_id: str) -> Mapping[str, JsonValue]:
-    rows: Final = eventually(
-        lambda: read_rows(
-            'SELECT litellm_call_id, status, model_group FROM "LiteLLM_SpendLogs" WHERE litellm_call_id = %s',
-            (call_id,),
-        ),
-        lambda found: len(found) >= 1,
-        seconds=70,
-    )
-    assert len(rows) == 1, rows
-    return rows[0]
-
-
-def assert_provider_typed_rate_limit(error: Mapping[str, JsonValue]) -> None:
-    assert error["type"] == "throttling_error", error
-    assert str(error["code"]) == "429", error
-    message: Final = string_value(error["message"])
-    assert message.startswith(_RATE_LIMIT_PREFIX) and RATE_LIMIT_MESSAGE in message, message
-    assert _SENTINEL_PREFIX not in message, message
 
 
 def assert_failed_once(wire: Wire, call_id: str, model: str, attempts: int = 1) -> tuple[Request, ...]:
@@ -167,14 +109,6 @@ class FallbackProxy:
     spare_port: int
 
 
-def _free_ports(count: int) -> tuple[int, ...]:
-    with ExitStack() as reserved:
-        sockets: Final = tuple(reserved.enter_context(socket.socket()) for _ in range(count))
-        for reserve in sockets:
-            reserve.bind(("127.0.0.1", 0))
-        return tuple(reserve.getsockname()[1] for reserve in sockets)
-
-
 def _fallback_config(directory: Path, primary_port: int, spare_port: int) -> Path:
     base: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     deployments: Final = [
@@ -197,7 +131,7 @@ def _fallback_config(directory: Path, primary_port: int, spare_port: int) -> Pat
 @pytest.fixture(scope="module")
 def fallback_proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[FallbackProxy]:
     directory: Final = tmp_path_factory.mktemp("bridged-fallbacks")
-    primary_port, spare_port = _free_ports(2)
+    primary_port, spare_port = allocate_port(), allocate_port()
     with (
         gateway_from_environment() as shared,
         owned_proxy(shared, directory, {}, config=_fallback_config(directory, primary_port, spare_port)) as owned,
@@ -237,6 +171,55 @@ def test_bridged_in_stream_rate_limit_whose_fallback_is_also_rate_limited_answer
         assert spend_row(response.headers["x-litellm-call-id"])["status"] == "failure"
 
 
+def test_bridged_top_level_rate_limit_falls_back_to_the_healthy_deployment(fallback_proxy: FallbackProxy) -> None:
+    identity: Final = "resp_" + uuid.uuid4().hex
+    limited: Final = openai_error_stream(identity, "rate_limit_exceeded", RATE_LIMIT_MESSAGE)
+    with (
+        wire_server(serve(limited, AZURE_TARGET), port=fallback_proxy.primary_port) as primary,
+        wire_server(
+            serve(healthy_stream(identity, "fallback answer"), AZURE_TARGET), port=fallback_proxy.spare_port
+        ) as spare,
+    ):
+        response: Final = _chat(fallback_proxy.gateway, chat_body(_PRIMARY, identity))
+        assert response.status_code == 200, response.text
+        assert chat_content(data_frames(response.text)) == "fallback answer", response.text
+        assert len(primary.drain()) == 1 and len(spare.drain()) == 1
+        row: Final = spend_row(response.headers["x-litellm-call-id"])
+        assert row["status"] == "success" and row["model_group"] == _SPARE, row
+
+
+_INVALID_PROMPT: Final = "Invalid prompt: your prompt was flagged."
+
+
+@pytest.mark.parametrize(
+    "rejection",
+    [
+        pytest.param(
+            error_event({"type": "invalid_request_error", "code": "invalid_prompt", "message": _INVALID_PROMPT}),
+            id="nested",
+        ),
+        pytest.param(openai_error_event("invalid_prompt", _INVALID_PROMPT), id="top_level"),
+    ],
+)
+def test_bridged_invalid_prompt_answers_a_bad_request_without_trying_the_fallback(
+    fallback_proxy: FallbackProxy, rejection: Mapping[str, JsonValue]
+) -> None:
+    identity: Final = "resp_" + uuid.uuid4().hex
+    with (
+        wire_server(
+            serve((frame(created(identity)), frame(rejection)), AZURE_TARGET), port=fallback_proxy.primary_port
+        ) as primary,
+        wire_server(
+            serve(healthy_stream(identity, "fallback answer"), AZURE_TARGET), port=fallback_proxy.spare_port
+        ) as spare,
+    ):
+        response: Final = _chat(fallback_proxy.gateway, chat_body(_PRIMARY, identity))
+        assert response.status_code == 400, response.text
+        message: Final = string_value(error_body(response)["message"])
+        assert message.startswith("litellm.BadRequestError: ") and _INVALID_PROMPT in message, message
+        assert len(primary.drain()) == 1 and len(spare.drain()) == 0
+
+
 def _in_stream_error_status(gateway: Gateway, stream: tuple[bytes, ...]) -> tuple[httpx.Response, str]:
     with wire_server(serve(stream, AZURE_TARGET)) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model="azure/gpt-6", api_base=wire.url, api_key="synthetic-azure-key")
@@ -258,7 +241,7 @@ def test_bridged_in_stream_server_error_reaches_the_client_as_the_provider_error
     message: Final = string_value(error["message"])
     assert str(error["code"]) == "500", error
     assert message.startswith("litellm.APIError: ") and "The server had an error" in message, message
-    assert _SENTINEL_PREFIX not in message, message
+    assert SENTINEL_PREFIX not in message, message
 
 
 def test_bridged_in_stream_invalid_prompt_is_a_bad_request_on_both_legs(gateway: Gateway) -> None:
@@ -274,7 +257,7 @@ def test_bridged_in_stream_invalid_prompt_is_a_bad_request_on_both_legs(gateway:
     message: Final = string_value(error["message"])
     assert str(error["code"]) == "400", error
     assert message.startswith("litellm.BadRequestError: ") and "Invalid prompt" in message, message
-    assert _SENTINEL_PREFIX not in message, message
+    assert SENTINEL_PREFIX not in message, message
 
 
 def test_bridged_error_event_without_an_error_object_is_a_provider_typed_internal_error(gateway: Gateway) -> None:
@@ -286,12 +269,20 @@ def test_bridged_error_event_without_an_error_object_is_a_provider_typed_interna
     message: Final = string_value(error["message"])
     assert str(error["code"]) == "500", error
     assert message.startswith("litellm.APIError: ") and "Response API in-stream error" in message, message
-    assert _SENTINEL_PREFIX not in message, message
+    assert SENTINEL_PREFIX not in message, message
 
 
 def test_bridged_error_event_with_a_numeric_code_is_a_throttling_error(gateway: Gateway) -> None:
     identity: Final = "resp_" + uuid.uuid4().hex
     stream: Final = (frame(created(identity)), frame(error_event({"code": "429", "message": RATE_LIMIT_MESSAGE})))
+    response, _ = _in_stream_error_status(gateway, stream)
+    assert response.status_code == 429, response.text
+    assert_provider_typed_rate_limit(error_body(response))
+
+
+def test_bridged_openai_error_event_keeps_the_provider_code_and_message(gateway: Gateway) -> None:
+    identity: Final = "resp_" + uuid.uuid4().hex
+    stream: Final = (frame(created(identity)), frame(openai_error_event("rate_limit_exceeded", RATE_LIMIT_MESSAGE)))
     response, _ = _in_stream_error_status(gateway, stream)
     assert response.status_code == 429, response.text
     assert_provider_typed_rate_limit(error_body(response))
@@ -323,8 +314,8 @@ def test_bridged_rate_limit_after_output_is_a_provider_typed_error_frame_behind_
     assert str(error["code"]) == "429", error
     assert error["type"] == "throttling_error", error
     message: Final = string_value(error["message"])
-    assert message.startswith(_RATE_LIMIT_PREFIX) and RATE_LIMIT_MESSAGE in message, message
-    assert _SENTINEL_PREFIX not in message, message
+    assert message.startswith(RATE_LIMIT_PREFIX) and RATE_LIMIT_MESSAGE in message, message
+    assert SENTINEL_PREFIX not in message, message
 
 
 def test_bridged_transport_drop_after_response_created_is_a_500_without_the_sentinel(gateway: Gateway) -> None:
@@ -346,7 +337,7 @@ def test_bridged_transport_drop_after_response_created_is_a_500_without_the_sent
         message: Final = string_value(error["message"])
         assert str(error["code"]) == "500", error
         assert "never sent" not in response.text
-        assert _SENTINEL_PREFIX not in message, message
+        assert SENTINEL_PREFIX not in message, message
         assert_failed_once(wire, response.headers["x-litellm-call-id"], model)
 
 
@@ -372,18 +363,8 @@ def test_plain_chat_http_rate_limit_is_a_throttling_error_on_both_legs(gateway: 
         error: Final = object_value(raised.value.body)
         assert error["type"] == "throttling_error" and str(error["code"]) == "429", error
         message: Final = string_value(error["message"])
-        assert message.startswith(_RATE_LIMIT_PREFIX) and "Rate limit reached" in message, message
+        assert message.startswith(RATE_LIMIT_PREFIX) and "Rate limit reached" in message, message
         assert_failed_once(wire, raised.value.response.headers["x-litellm-call-id"], model)
-
-
-def sse_events(text: str) -> tuple[tuple[str, Mapping[str, JsonValue]], ...]:
-    def parse(block: str) -> tuple[str, Mapping[str, JsonValue]]:
-        lines: Final = block.splitlines()
-        event: Final = next(line.removeprefix("event: ") for line in lines if line.startswith("event: "))
-        data: Final = next(line.removeprefix("data: ") for line in lines if line.startswith("data: "))
-        return event, JSON_OBJECT.validate_json(data)
-
-    return tuple(parse(block) for block in text.strip().split("\n\n") if "event: " in block)
 
 
 def assert_messages_errorframe(events: Sequence[tuple[str, Mapping[str, JsonValue]]]) -> None:
@@ -392,8 +373,8 @@ def assert_messages_errorframe(events: Sequence[tuple[str, Mapping[str, JsonValu
     error: Final = object_value(events[-1][1]["error"])
     assert error["type"] == "rate_limit_error", error
     message: Final = string_value(error["message"])
-    assert message.startswith(_RATE_LIMIT_PREFIX) and RATE_LIMIT_MESSAGE in message, message
-    assert message.count(_RATE_LIMIT_PREFIX) == 1 and _SENTINEL_PREFIX not in message, message
+    assert message.startswith(RATE_LIMIT_PREFIX) and RATE_LIMIT_MESSAGE in message, message
+    assert message.count(RATE_LIMIT_PREFIX) == 1 and SENTINEL_PREFIX not in message, message
 
 
 def test_messages_over_the_bridged_stream_carry_the_provider_error_once_in_the_errorframe(gateway: Gateway) -> None:

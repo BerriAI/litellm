@@ -3,9 +3,11 @@ import json
 from collections import deque
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from contextlib import suppress
+from dataclasses import dataclass
 from enum import Enum
+from functools import cache
 from io import BytesIO
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
@@ -15,6 +17,9 @@ from litellm._logging import verbose_proxy_logger
 from litellm.integrations.clickhouse.clickhouse_spend_logger import spend_log_row_from_payload
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.tracing.types import SpendLogPayload
+
+if TYPE_CHECKING:
+    from prometheus_client import Counter as PrometheusCounter
 
 MAX_EVENT_BYTES: Final = 1024 * 1024
 MAX_BUFFER_BYTES: Final = 32 * 1024 * 1024
@@ -89,11 +94,49 @@ def encode_record(value: Mapping[str, object]) -> bytes | ExportFailure:
         return ExportFailure.INVALID
 
 
+@dataclass(frozen=True, slots=True)
+class ExportCounters:
+    written: "PrometheusCounter | None"
+    dropped: "PrometheusCounter | None"
+
+    def add_written(self, count: int) -> None:
+        if self.written is not None:
+            self.written.inc(count)
+
+    def add_dropped(self, count: int) -> None:
+        if self.dropped is not None:
+            self.dropped.inc(count)
+
+
+@cache
+def lens_export_counters() -> ExportCounters:
+    try:
+        from prometheus_client import Counter
+    except ImportError:
+        return ExportCounters(written=None, dropped=None)
+    return ExportCounters(
+        written=Counter(
+            "litellm_lens_export_rows_written_total",
+            "Request records the Lens exporter delivered to the Lens service",
+        ),
+        dropped=Counter(
+            "litellm_lens_export_rows_dropped_total",
+            "Request records the Lens exporter dropped before the Lens service accepted them",
+        ),
+    )
+
+
 class LensExporter(CustomLogger):
-    def __init__(self, client: httpx.AsyncClient, sleep: Callable[[float], Awaitable[None]] = asyncio.sleep) -> None:
+    def __init__(
+        self,
+        client: httpx.AsyncClient,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        counters: ExportCounters | None = None,
+    ) -> None:
         super().__init__()
         self.client: Final = client
         self.sleep: Final = sleep
+        self.counters: Final = counters if counters is not None else lens_export_counters()
         self.queue: Final[deque[bytes]] = deque()  # mutable-ok: bounded producer-consumer queue
         self.wake: Final = asyncio.Event()
         self.closed = False
@@ -108,6 +151,14 @@ class LensExporter(CustomLogger):
         if self.task is None:
             self.task = asyncio.create_task(self._run())
 
+    def _wrote(self, count: int) -> None:
+        self.rows_written += count
+        self.counters.add_written(count)
+
+    def _drop(self, count: int) -> None:
+        self.rows_dropped += count
+        self.counters.add_dropped(count)
+
     def enqueue(self, record: bytes) -> bool:
         if (
             self.closed
@@ -115,7 +166,7 @@ class LensExporter(CustomLogger):
             or self.buffered_events >= MAX_BUFFER_EVENTS
             or self.buffered_bytes + len(record) > MAX_BUFFER_BYTES
         ):
-            self.rows_dropped += 1
+            self._drop(1)
             return False
         self.queue.append(record)
         self.buffered_events += 1
@@ -138,13 +189,13 @@ class LensExporter(CustomLogger):
         if raw is None or self.closed:
             return
         if self.buffered_events >= MAX_BUFFER_EVENTS or self.buffered_bytes >= MAX_BUFFER_BYTES:
-            self.rows_dropped += 1
+            self._drop(1)
             return
         try:
             checked: Final = _check_size(raw, MAX_EVENT_BYTES)
             if isinstance(checked, ExportFailure):
-                self.rows_dropped += 1
-                self._warn(checked.value)
+                self._drop(1)
+                self._log_failure(checked.value)
                 return
             payload: Final = _PAYLOAD.validate_python(raw)
             if str(payload.get("call_type", "")).startswith(("/v1/traces", "/v1/logs")):
@@ -152,24 +203,26 @@ class LensExporter(CustomLogger):
             row: Final = spend_log_row_from_payload(payload, kwargs)
             record: Final = encode_record(row)
             if isinstance(record, ExportFailure):
-                self.rows_dropped += 1
-                self._warn(record.value)
+                self._drop(1)
+                self._log_failure(record.value)
                 return
             self.enqueue(record)
         except ValidationError as error:
-            self.rows_dropped += 1
+            self._drop(1)
             fields: Final = tuple(
                 str(issue["loc"][0]) if issue["loc"] else "$"
                 for issue in error.errors(include_input=False, include_context=False, include_url=False)[:5]
             )
-            self._warn("invalid request record fields: " + ", ".join(fields))
+            self._log_failure("invalid request record fields: " + ", ".join(fields))
         except (ValueError, TypeError, OverflowError, RecursionError) as error:
-            self.rows_dropped += 1
-            self._warn(type(error).__name__)
+            self._drop(1)
+            self._log_failure(type(error).__name__)
 
-    def _warn(self, reason: str) -> None:
+    def _log_failure(self, reason: str) -> None:
         if reason != self.last_error:
-            verbose_proxy_logger.warning("Lens request export failed (%s); model requests continue", reason)
+            verbose_proxy_logger.error(
+                "Agent tracing store lens dropped request records (%s); model requests continue", reason
+            )
             self.last_error = reason
 
     def _batch(self) -> tuple[bytes, ...]:
@@ -196,13 +249,13 @@ class LensExporter(CustomLogger):
                         self.last_error = ""
                         return True
                     if response.status_code not in (429, 502, 503, 504):
-                        self._warn(f"HTTP {response.status_code}")
+                        self._log_failure(f"HTTP {response.status_code}")
                         return False
             except httpx.HTTPError:
                 pass
             if attempt < 2:
                 await self.sleep(float(1 << attempt))
-        self._warn("retry limit reached")
+        self._log_failure("retry limit reached")
         return False
 
     async def _run(self) -> None:
@@ -217,11 +270,11 @@ class LensExporter(CustomLogger):
         batch: Final = self._batch()
         try:
             if await self._send(batch):
-                self.rows_written += len(batch)
+                self._wrote(len(batch))
             else:
-                self.rows_dropped += len(batch)
+                self._drop(len(batch))
         except asyncio.CancelledError:
-            self.rows_dropped += len(batch)
+            self._drop(len(batch))
             raise
         finally:
             self.buffered_events -= len(batch)
@@ -237,7 +290,7 @@ class LensExporter(CustomLogger):
                 self.task.cancel()
                 with suppress(asyncio.CancelledError):
                     await self.task
-        self.rows_dropped += len(self.queue)
+        self._drop(len(self.queue))
         self.queue.clear()
         self.buffered_bytes = 0
         self.buffered_events = 0
