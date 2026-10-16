@@ -206,6 +206,7 @@ from litellm.router_utils.common_utils import (
     truncate_fallback_error_detail,
     warn_on_ignored_model_capability_flags,
     warn_on_provider_credential_mismatch,
+    with_admin_api_key_secret_reference,
     without_model_capability_flags,
     without_router_only_kwargs,
 )
@@ -9618,7 +9619,7 @@ class Router:
                         f"Invalid regex in tag_regex for model '{deployment.model_name}': {pattern!r} — {exc}"
                     ) from exc
 
-            deployment = self._add_deployment(deployment=deployment)
+            deployment = self._add_deployment(deployment=with_admin_api_key_secret_reference(deployment))
 
             model: Final = deployment.to_json(exclude_none=True)
 
@@ -10386,7 +10387,7 @@ class Router:
         declared_params: Final = deployment.litellm_params.model_dump(exclude_none=True)
         warn_on_provider_credential_mismatch(model_name=deployment.model_name, litellm_params=declared_params)
         warn_on_ignored_model_capability_flags(model_name=deployment.model_name, litellm_params=declared_params)
-        served: Final = without_model_capability_flags(deployment)
+        served: Final = with_admin_api_key_secret_reference(without_model_capability_flags(deployment))
 
         # add to model list
         _deployment: Final = served.to_json(exclude_none=True)

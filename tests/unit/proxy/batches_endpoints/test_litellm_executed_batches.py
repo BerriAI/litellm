@@ -595,15 +595,36 @@ async def test_litellm_executed_provider_for_leaves_a_server_with_its_own_files_
     assert probe.upstreams == [("http://vllm.test/v1/", "vllm-key")]
 
 
-async def test_litellm_executed_provider_for_probes_with_the_secret_behind_an_oidc_api_key(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("model_info", "expected_key"),
+    [({"id": "vllm-batch"}, "vllm-secret"), ({"id": "vllm-batch", "team_id": "team-1"}, None)],
+    ids=["proxy-level deployment", "team-scoped deployment"],
+)
+async def test_resolve_litellm_executed_provider_probes_with_the_secret_only_behind_an_admin_oidc_api_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, model_info: Mapping[str, str], expected_key: str | None
 ) -> None:
     monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
     token: Final = tmp_path / "token"
     token.write_text("vllm-secret")
+    reference: Final = f"oidc/file/{token}"
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": BATCH_MODEL,
+                "litellm_params": {**VLLM_CREDENTIALS, "api_key": reference},
+                "model_info": dict(model_info),
+            }
+        ]
+    )
     probe: Final = FakeFilesApiProbe(True, [])
-    await litellm_executed_provider_for({**VLLM_CREDENTIALS, "api_key": f"oidc/file/{token}"}, probe)
-    assert probe.upstreams == [("http://vllm.test/v1/", "vllm-secret")]
+
+    try:
+        provider: Final = await resolve_litellm_executed_provider(router, "vllm-batch", "team-1", probe)
+    finally:
+        router.discard()
+
+    assert provider == "hosted_vllm"
+    assert probe.upstreams == [("http://vllm.test/v1/", expected_key or reference)]
 
 
 @pytest.mark.parametrize(

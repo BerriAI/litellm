@@ -225,8 +225,8 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import (
     ABOVE_THRESHOLD_COST_KEY_PATTERN,
-    OIDC_SECRET_REFERENCE_PREFIX,
     OPENAI_RESPONSE_HEADERS,
+    AdminApiKeySecretReference,
     CallTypes,
     ChatCompletionDeltaToolCall,
     ChatCompletionMessageToolCall,
@@ -259,6 +259,7 @@ from litellm.types.utils import (
     TextCompletionResponse,
     TranscriptionResponse,
     Usage,
+    admin_api_key_secret_reference,
     is_litellm_owned_kwarg,
 )
 
@@ -738,24 +739,30 @@ def _named_credential_values(kwargs: Mapping[str, object]) -> Mapping[str, objec
             len(litellm.credential_list),
         )
         return MappingProxyType({})
-    return MappingProxyType({key: value for key, value in credential.credential_values.items() if key not in kwargs})
+    return MappingProxyType(
+        {
+            key: value
+            for key, value in admin_api_key_secret_reference(credential.credential_values).items()
+            if key not in kwargs
+        }
+    )
 
 
 def resolve_api_key_secret_reference(api_key: str | None, model: object, llm_provider: object) -> str | None:
-    if api_key is None or not api_key.startswith(OIDC_SECRET_REFERENCE_PREFIX):
+    if not isinstance(api_key, AdminApiKeySecretReference):
         return api_key
     return _secret_behind_api_key_reference(api_key, model=model, llm_provider=llm_provider)
 
 
-def _secret_behind_api_key_reference(reference: str, model: object, llm_provider: object) -> str:
+def _secret_behind_api_key_reference(reference: AdminApiKeySecretReference, model: object, llm_provider: object) -> str:
     if not reference.startswith(LOCAL_OIDC_SECRET_PREFIXES):
-        raise BadRequestError(
+        raise AuthenticationError(
             message=(
                 f"api_key {reference} is an oidc/ secret reference of a kind api_key does not support. "
                 "Use oidc/file/<absolute path> or oidc/env/<VARIABLE_NAME>."
             ),
-            model=model,
             llm_provider=llm_provider,
+            model=model,
         )
     match resolve_local_oidc_reference(reference):
         case UnresolvableSecretReference(reason=reason):
@@ -770,8 +777,8 @@ def _secret_behind_api_key_reference(reference: str, model: object, llm_provider
 
 def load_credentials_from_list(kwargs: dict[str, object]) -> None:
     """
-    Updates kwargs with the credentials if credential_name in kwarg, then swaps an oidc/ api_key reference for
-    the secret it points to, read now so a rotated token is used on the next call
+    Updates kwargs with the credentials if credential_name in kwarg, then swaps an admin-configured oidc/ api_key
+    reference for the secret it points to, read now so a rotated token is used on the next call
     """
     kwargs.update(_credential_updates(kwargs))
 
@@ -779,7 +786,7 @@ def load_credentials_from_list(kwargs: dict[str, object]) -> None:
 def _credential_updates(kwargs: Mapping[str, object]) -> Mapping[str, object]:
     credential_values: Final = _named_credential_values(kwargs)
     api_key: Final = kwargs.get("api_key", credential_values.get("api_key"))
-    if not (isinstance(api_key, str) and api_key.startswith(OIDC_SECRET_REFERENCE_PREFIX)):
+    if not isinstance(api_key, AdminApiKeySecretReference):
         return credential_values
     secret: Final = _secret_behind_api_key_reference(
         api_key, model=kwargs.get("model"), llm_provider=kwargs.get("custom_llm_provider")
@@ -8009,7 +8016,7 @@ def _provider_listing_params(
         return None
     params: Final = litellm_params.model_dump(exclude_none=True)
     api_key: Final = litellm_params.api_key
-    if api_key is None or not api_key.startswith(OIDC_SECRET_REFERENCE_PREFIX):
+    if not isinstance(api_key, AdminApiKeySecretReference):
         return params
     return {
         **params,

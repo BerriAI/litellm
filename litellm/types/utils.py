@@ -37,6 +37,7 @@ from pydantic import (
     ConfigDict,
     Field,
     FieldSerializationInfo,
+    GetCoreSchemaHandler,
     JsonValue,
     PrivateAttr,
     SkipValidation,
@@ -44,6 +45,7 @@ from pydantic import (
     field_validator,
 )
 from pydantic.main import IncEx
+from pydantic_core import core_schema
 from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 
 from litellm._logging import verbose_logger
@@ -4162,6 +4164,31 @@ API_KEY_SECRET_REFERENCE_REJECTION: Final = (
     "Rejected Request: api_key holds an oidc/ secret reference, which only a deployment or credential a proxy "
     "admin configures can carry."
 )
+
+
+class AdminApiKeySecretReference(str):
+    """An ``oidc/`` api_key reference read from a source only a proxy admin writes: a proxy-level deployment or a
+    stored credential. The call path swaps only this type for the secret it points to, so the same text arriving
+    in a request, a prompt template, or a row a non-admin wrote is sent as written."""
+
+    __slots__ = ()
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source: object, handler: GetCoreSchemaHandler) -> core_schema.CoreSchema:
+        return core_schema.is_instance_schema(cls, serialization=core_schema.to_string_ser_schema())
+
+
+def admin_api_key_secret_reference(params: Mapping[str, object]) -> Mapping[str, object]:
+    api_key: Final = params.get("api_key")
+    if (
+        not isinstance(api_key, str)
+        or isinstance(api_key, AdminApiKeySecretReference)
+        or not api_key.startswith(OIDC_SECRET_REFERENCE_PREFIX)
+    ):
+        return params
+    return {**params, "api_key": AdminApiKeySecretReference(api_key)}
+
+
 server_owned_wif_litellm_params: Final = (
     anthropic_wif_litellm_params
     + openai_wif_litellm_params

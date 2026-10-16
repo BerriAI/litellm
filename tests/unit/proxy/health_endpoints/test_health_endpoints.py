@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from importlib import import_module
+from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -738,6 +739,77 @@ def _test_connection_probe(
         ),
     ):
         yield ahealth_check
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_api_key", "request_params"),
+    [
+        ("oidc/file/{token}", {"model": "mistral/devstral-latest"}),
+        ("sk-stale", {"model": "mistral/devstral-latest", "api_key": "oidc/file/{token}"}),
+    ],
+    ids=["stored on the deployment", "typed into the probe by an admin"],
+)
+async def test_test_model_connection_sends_the_token_behind_an_admin_oidc_api_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_api_key: str,
+    request_params: Mapping[str, str],
+) -> None:
+    monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    token: Final = tmp_path / "token"
+    token.write_text("mistral-sa-token")
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "devstral",
+                "litellm_params": {
+                    "model": "mistral/devstral-latest",
+                    "api_key": deployment_api_key.format(token=token),
+                },
+                "model_info": {"id": "devstral-id"},
+            }
+        ]
+    )
+
+    try:
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.llm_router", router),
+            patch("litellm.proxy.proxy_server.premium_user", False),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                AsyncMock(),
+            ),
+            respx.mock(assert_all_called=True) as upstream,
+        ):
+            upstream.post("https://api.mistral.ai/v1/chat/completions").respond(
+                200,
+                json={
+                    "id": "chatcmpl-probe",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "devstral-latest",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                },
+            )
+            result: Final = await health_test_model_connection(
+                request=MagicMock(),
+                mode="chat",
+                litellm_params={key: value.format(token=token) for key, value in request_params.items()},
+                model_info={"id": "devstral-id"},
+                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, token="admin-token"),
+            )
+            sent: Final = upstream.calls.last.request.headers["Authorization"]
+    finally:
+        router.discard()
+
+    assert result["status"] == "success"
+    assert sent == "Bearer mistral-sa-token"
 
 
 MANTLE_CLAUDE_DEPLOYMENT: Final = MappingProxyType(

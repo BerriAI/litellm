@@ -6938,39 +6938,144 @@ def test_unresolvable_oidc_api_key_fails_closed_naming_the_reference_without_its
     "reference",
     ["oidc/env_path/MISTRAL_SA_TOKEN_PATH", "oidc/google/https://api.mistral.ai", "oidc/github/mistral"],
 )
-def test_oidc_api_key_of_a_kind_api_key_cannot_resolve_is_a_bad_request(
+def test_oidc_api_key_of_a_kind_api_key_cannot_resolve_fails_closed_as_an_authentication_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reference: str
 ) -> None:
     token: Final = _allowed_token_file(tmp_path, monkeypatch, "must-not-be-sent")
     monkeypatch.setenv("MISTRAL_SA_TOKEN_PATH", str(token))
+    monkeypatch.setattr(litellm, "credential_list", [_mistral_credential(reference)])
 
     with respx.mock(assert_all_called=False) as upstream:
         route: Final = upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
-        with pytest.raises(litellm.BadRequestError) as excinfo:
-            litellm.completion(model="mistral/devstral-latest", messages=_PING, api_key=reference)
+        with pytest.raises(litellm.AuthenticationError) as excinfo:
+            _ping_mistral_through("mistral-sa")
 
     assert not route.called
-    assert excinfo.value.status_code == 400
+    assert excinfo.value.status_code == 401
     assert reference in excinfo.value.message
 
 
-def test_provider_model_listing_sends_the_token_behind_an_oidc_api_key(
+@pytest.mark.asyncio
+async def test_router_fails_over_from_a_deployment_whose_oidc_api_key_kind_cannot_resolve(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "devstral",
+                "litellm_params": {
+                    "model": "mistral/devstral-latest",
+                    "api_key": "oidc/google/https://api.mistral.ai",
+                    "order": 1,
+                },
+            },
+            {
+                "model_name": "devstral",
+                "litellm_params": {"model": "mistral/devstral-latest", "api_key": "sk-healthy", "order": 2},
+            },
+        ],
+        num_retries=1,
+        retry_after=0,
+    )
+
+    try:
+        with respx.mock(assert_all_called=True) as upstream:
+            upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
+            response: Final = await router.acompletion(model="devstral", messages=_PING)
+            sent: Final = [call.request.headers["Authorization"] for call in upstream.calls]
+    finally:
+        router.discard()
+
+    assert response.choices[0].message.content == "pong"
+    assert sent == ["Bearer sk-healthy"]
+
+
+def test_an_oidc_api_key_sent_with_the_call_goes_upstream_as_written(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    token: Final = _allowed_token_file(tmp_path, monkeypatch, "server-secret")
+    reference: Final = f"oidc/file/{token}"
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
+        litellm.completion(model="mistral/devstral-latest", messages=_PING, api_key=reference)
+        sent: Final = upstream.calls.last.request.headers["Authorization"]
+
+    assert sent == f"Bearer {reference}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_info", "expected"),
+    [({}, "Bearer env-token"), ({"team_id": "team-1"}, "Bearer oidc/env/MISTRAL_SA_TOKEN")],
+    ids=["proxy-level deployment", "team-scoped deployment"],
+)
+async def test_router_resolves_an_oidc_api_key_only_on_a_proxy_level_deployment(
+    monkeypatch: pytest.MonkeyPatch, model_info: Mapping[str, str], expected: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("MISTRAL_SA_TOKEN", "env-token")
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "devstral",
+                "litellm_params": {"model": "mistral/devstral-latest", "api_key": "oidc/env/MISTRAL_SA_TOKEN"},
+                "model_info": dict(model_info),
+            }
+        ]
+    )
+
+    try:
+        with respx.mock(assert_all_called=True) as upstream:
+            upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
+            await router.acompletion(
+                model="devstral", messages=_PING, metadata={"user_api_key_team_id": "team-1"}
+            )
+            sent: Final = upstream.calls.last.request.headers["Authorization"]
+    finally:
+        router.discard()
+
+    assert sent == expected
+
+
+@pytest.mark.parametrize(
+    ("listing_params", "expected"),
+    [
+        (
+            lambda reference: LiteLLM_Params(
+                **litellm.Router(
+                    model_list=[{"model_name": "openai/*", "litellm_params": {"model": "openai/*", "api_key": reference}}]
+                ).get_model_list(model_name="openai/*")[0]["litellm_params"]
+            ),
+            lambda reference: "Bearer listing-token",
+        ),
+        (
+            lambda reference: LiteLLM_Params(model="openai/*", api_key=reference),
+            lambda reference: f"Bearer {reference}",
+        ),
+    ],
+    ids=["proxy-level deployment", "caller-built params"],
+)
+def test_provider_model_listing_sends_the_token_only_behind_a_deployment_oidc_api_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    listing_params: Callable[[str], LiteLLM_Params],
+    expected: Callable[[str], str],
+) -> None:
     token: Final = _allowed_token_file(tmp_path, monkeypatch, "listing-token")
+    reference: Final = f"oidc/file/{token}"
 
     with respx.mock(assert_all_called=True) as upstream:
         upstream.get("https://api.openai.com/v1/models").respond(
             200, json={"object": "list", "data": [{"id": "gpt-listed", "object": "model"}]}
         )
         listed: Final = get_valid_models(
-            check_provider_endpoint=True,
-            custom_llm_provider="openai",
-            litellm_params=LiteLLM_Params(model="openai/*", api_key=f"oidc/file/{token}"),
+            check_provider_endpoint=True, custom_llm_provider="openai", litellm_params=listing_params(reference)
         )
         sent: Final = upstream.calls.last.request.headers["Authorization"]
 
-    assert sent == "Bearer listing-token"
+    assert sent == expected(reference)
     assert any(model.endswith("gpt-listed") for model in listed)
 
 

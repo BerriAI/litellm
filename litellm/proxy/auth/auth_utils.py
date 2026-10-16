@@ -668,23 +668,25 @@ def is_request_body_safe(
             _reject_url_valued_fallback_target(target)
     litellm_params: Final = _coerce_metadata_to_dict(request_body.get("litellm_params"))
     if litellm_params is not None:
-        if manages_deployments:
-            reject_server_owned_wif_fields(litellm_params)
-        else:
-            reject_server_owned_wif_params(litellm_params)
-            reject_federated_credential_reference(litellm_params)
+        _reject_request_credential_params(litellm_params, manages_deployments=manages_deployments)
         litellm_params_metadata: Final = _coerce_metadata_to_dict(litellm_params.get("metadata"))
         if litellm_params_metadata is not None:
             _check_banned_params(
-                litellm_params_metadata,
-                general_settings,
-                llm_router,
-                model,
-                manages_deployments=manages_deployments,
+                litellm_params_metadata, general_settings, llm_router, model, manages_deployments=manages_deployments
             )
     for user_config_params in _user_config_litellm_params(request_body):  # pyright: ignore[reportUnknownArgumentType]  # request_body is an untyped dict
         reject_api_key_secret_reference(user_config_params)
     return True
+
+
+def _reject_request_credential_params(litellm_params: Mapping[str, object], *, manages_deployments: bool) -> None:
+    if manages_deployments:
+        reject_server_owned_wif_fields(litellm_params)
+    else:
+        reject_server_owned_wif_params(litellm_params)
+        reject_federated_credential_reference(litellm_params)
+    for nested_params in _nested_configs(litellm_params):
+        reject_api_key_secret_reference(nested_params)
 
 
 def _user_config_litellm_params(request_body: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
@@ -699,6 +701,12 @@ def _user_config_litellm_params(request_body: Mapping[str, object]) -> tuple[Map
     )
     defaults: Final = _coerce_metadata_to_dict(user_config.get("default_litellm_params"))
     return nested if defaults is None else (*nested, defaults)
+
+
+def _nested_configs(params: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    return tuple(
+        nested for key in _NESTED_CONFIG_KEYS if (nested := _coerce_metadata_to_dict(params.get(key))) is not None
+    )
 
 
 def _mappings_in(value: object) -> tuple[Mapping[str, object], ...]:

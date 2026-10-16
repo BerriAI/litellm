@@ -23,12 +23,21 @@ from litellm.types.router import (
     LiteLLM_Params,
     SkippedFallbackTarget,
 )
-from litellm.types.utils import LlmProviders, ProviderSpecificModelInfo
+from litellm.types.utils import LlmProviders, ProviderSpecificModelInfo, admin_api_key_secret_reference
 
 _V = TypeVar("_V")
 
 ROUTER_ONLY_CALL_KWARGS: Final = frozenset({"silent_model", "include_fallback_errors"})
 _OBJECT_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
+
+
+def with_admin_api_key_secret_reference(deployment: Deployment) -> Deployment:
+    if deployment.model_info.get("team_id") is not None:
+        return deployment
+    params: Final = admin_api_key_secret_reference({"api_key": deployment.litellm_params.api_key})
+    if params["api_key"] is deployment.litellm_params.api_key:
+        return deployment
+    return deployment.model_copy(update={"litellm_params": deployment.litellm_params.model_copy(update=dict(params))})
 
 
 def without_router_only_kwargs(kwargs: Mapping[str, _V]) -> dict[str, _V]:

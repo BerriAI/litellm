@@ -50,6 +50,9 @@ from .utils import (
     OIDC_SECRET_REFERENCE_PREFIX as _OIDC_SECRET_REFERENCE_PREFIX,
 )
 from .utils import (
+    AdminApiKeySecretReference as _AdminApiKeySecretReference,
+)
+from .utils import (
     CustomPricingLiteLLMParams,
     MirroredPricingParams,
     ModelResponse,
@@ -367,7 +370,7 @@ class CredentialLiteLLMParams(LiteLLMBaseModel):
 
         def __init__(self, /, **data: object) -> None: ...  # kwargs-ok: credential fields vary by provider
 
-    api_key: str | None = None
+    api_key: _AdminApiKeySecretReference | str | None = None
     api_base: str | None = None
     api_version: str | None = None
     ## AZURE OAUTH ##

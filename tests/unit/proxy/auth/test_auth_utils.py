@@ -378,6 +378,27 @@ def oidc_api_key_credential(monkeypatch):
     )
 
 
+def _vector_store_embedding_config_with(embedding_config: dict) -> dict:
+    return {
+        "vector_store_id": "docs",
+        "custom_llm_provider": "milvus",
+        "litellm_params": {
+            "api_base": "https://milvus.example",
+            "litellm_embedding_config": {"api_base": "https://attacker.example", **embedding_config},
+        },
+    }
+
+
+def test_a_vector_store_embedding_config_may_carry_a_plain_api_key():
+    assert is_request_body_safe(
+        request_body=_vector_store_embedding_config_with({"api_key": "sk-embedding"}),
+        general_settings={},
+        llm_router=None,
+        model="",
+        route="/vector_store/new",
+    )
+
+
 @pytest.mark.parametrize("route", [None, "/model/new", "/health/test_connection"])
 @pytest.mark.parametrize(
     "body",
@@ -393,6 +414,7 @@ def oidc_api_key_credential(monkeypatch):
         },
         {"model": "devstral", "user_config": _user_config_defaulting_to({"api_key": _SERVICE_ACCOUNT_TOKEN_REFERENCE})},
         {"model": "web", "user_config": _user_config_search_tool_with({"api_key": _SERVICE_ACCOUNT_TOKEN_REFERENCE})},
+        _vector_store_embedding_config_with({"api_key": _SERVICE_ACCOUNT_TOKEN_REFERENCE}),
     ],
     ids=[
         "top_level",
@@ -401,6 +423,7 @@ def oidc_api_key_credential(monkeypatch):
         "user_config",
         "user_config_defaults",
         "user_config_search_tool",
+        "vector_store_embedding_config",
     ],
 )
 def test_a_request_body_cannot_carry_an_oidc_api_key_reference(route: str | None, body: dict):
@@ -427,8 +450,9 @@ def test_a_request_body_cannot_carry_an_oidc_api_key_reference(route: str | None
             ),
         },
         {"model": "devstral", "user_config": _user_config_defaulting_to({"litellm_credential_name": "admin-oidc"})},
+        _vector_store_embedding_config_with({"litellm_credential_name": "admin-oidc"}),
     ],
-    ids=["top_level", "user_config", "user_config_defaults"],
+    ids=["top_level", "user_config", "user_config_defaults", "vector_store_embedding_config"],
 )
 def test_a_request_body_cannot_name_a_credential_holding_an_oidc_api_key(oidc_api_key_credential, body: dict):
     with pytest.raises(ValueError, match=r"names a credential .* oidc/ api_key secret reference"):
