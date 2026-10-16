@@ -1479,15 +1479,21 @@ def _get_wrapper_num_retries(kwargs: dict[str, Any], exception: Exception) -> tu
     return num_retries, kwargs
 
 
-def _get_wrapper_timeout(kwargs: dict[str, object], exception: Exception) -> float | int | httpx.Timeout | None:
-    """
-    Get the timeout from the kwargs
-    Used for the wrapper functions.
-    """
+def _reported_timeout(value: object) -> float | int | httpx.Timeout | None:
+    return value if isinstance(value, float | int | httpx.Timeout) else None
 
-    timeout: Final = cast(float | int | httpx.Timeout | None, kwargs.get("timeout", None))
 
-    return timeout
+def _get_wrapper_timeout(kwargs: dict[str, object], call_type: str) -> float | int | httpx.Timeout | None:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    stream_timeout: Final = _reported_timeout(kwargs.get("stream_timeout"))
+    if kwargs.get("stream") is not True or stream_timeout is None:
+        return _reported_timeout(kwargs.get("timeout"))
+    logging_obj: Final = kwargs.get("litellm_logging_obj")
+    if call_type != CallTypes.acompletion.value or not isinstance(logging_obj, Logging):
+        return stream_timeout
+    resolved_timeout: Final = logging_obj.litellm_params.get("timeout", stream_timeout)
+    return resolved_timeout if isinstance(resolved_timeout, float | int | httpx.Timeout) else None
 
 
 def check_coroutine(value) -> bool:
@@ -2325,7 +2331,7 @@ def client(original_function):
             if deployment_num_retries is not None:
                 setattr(e, "num_retries", deployment_num_retries)
 
-            timeout: Final = _get_wrapper_timeout(kwargs=kwargs, exception=e)
+            timeout: Final = _get_wrapper_timeout(kwargs=kwargs, call_type=call_type)
             setattr(e, "timeout", timeout)
             raise e
 

@@ -199,7 +199,8 @@ def test_sdk_timeout_coerces_read_timeout_for_providers_without_httpx_support(
         (StreamKind.LIVE, 1.0, 15.0, 15.0),
         (StreamKind.FAKED, 120.0, 15.0, 120.0),
         (StreamKind.FAKED, 1.0, 15.0, 15.0),
-        (StreamKind.FAKED, httpx.Timeout(5.0, read=None), 15.0, httpx.Timeout(5.0, read=None)),
+        (StreamKind.FAKED, httpx.Timeout(5.0, read=None), 15.0, httpx.Timeout(15.0, read=None)),
+        (StreamKind.FAKED, httpx.Timeout(1.0, read=120.0), 15.0, httpx.Timeout(15.0, read=120.0)),
     ),
 )
 def test_stream_timeout_bounds_a_live_stream_and_never_shortens_a_fake_one(

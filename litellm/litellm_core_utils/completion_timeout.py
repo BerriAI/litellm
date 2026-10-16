@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 from collections.abc import Callable, Mapping
 from enum import Enum
 from functools import partial
@@ -47,10 +46,22 @@ class CompletionTimeout:
         return float(global_timeout)
 
     @staticmethod
-    def _read_seconds(timeout: float | httpx.Timeout) -> float:
-        if isinstance(timeout, httpx.Timeout):
-            return math.inf if timeout.read is None else timeout.read
-        return timeout
+    def _longer_limit(first: float | None, second: float | None) -> float | None:
+        return None if first is None or second is None else max(first, second)
+
+    @staticmethod
+    def _longer(first: float | httpx.Timeout, second: float | httpx.Timeout) -> float | httpx.Timeout:
+        if not isinstance(first, httpx.Timeout) and not isinstance(second, httpx.Timeout):
+            return max(first, second)
+        first_limits: Final = httpx.Timeout(first)
+        second_limits: Final = httpx.Timeout(second)
+        longer: Final = CompletionTimeout._longer_limit
+        return httpx.Timeout(
+            connect=longer(first_limits.connect, second_limits.connect),
+            read=longer(first_limits.read, second_limits.read),
+            write=longer(first_limits.write, second_limits.write),
+            pool=longer(first_limits.pool, second_limits.pool),
+        )
 
     @staticmethod
     def for_stream(
@@ -59,7 +70,7 @@ class CompletionTimeout:
         """
         ``stream_timeout`` bounds each read of a live stream, so it replaces the request timeout there. A fake
         stream is one non-streaming request whose first byte arrives when generation ends, so it takes the longer
-        of the two and never fails sooner than the same call would with either one alone.
+        of each limit and never fails sooner than the same call would with either one alone.
         """
         if stream_timeout is None:
             return request_timeout
@@ -69,7 +80,7 @@ class CompletionTimeout:
             case StreamKind.LIVE:
                 return stream_timeout
             case StreamKind.FAKED:
-                return max((request_timeout, stream_timeout), key=CompletionTimeout._read_seconds)
+                return CompletionTimeout._longer(request_timeout, stream_timeout)
             case _:
                 assert_never(stream_kind)
 

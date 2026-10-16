@@ -529,7 +529,14 @@ async def acompletion(
     mock_timeout = kwargs.get("mock_timeout", None)
 
     if mock_timeout is True:
-        await _handle_mock_timeout_async(mock_timeout, timeout, model)
+        stream_timeout: Final = kwargs.get("stream_timeout")
+        await _handle_mock_timeout_async(
+            mock_timeout,
+            stream_timeout
+            if stream is True and isinstance(stream_timeout, int | float | str | httpx.Timeout)
+            else timeout,
+            model,
+        )
 
     loop: Final = asyncio.get_event_loop()
     custom_llm_provider = kwargs.get("custom_llm_provider", None)

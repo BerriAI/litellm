@@ -1960,7 +1960,7 @@ _BRIDGED_RESPONSE_ANSWER: Final = json.dumps(
 
 
 def test_responses_bridge_fake_stream_is_bounded_by_the_request_timeout_not_the_stream_timeout(
-    restore_model_registry,
+    restore_model_registry: None,
 ) -> None:
     model: Final = "openai/slow-responses-model"
     litellm.register_model(
@@ -6993,6 +6993,23 @@ def test_mock_request_with_mock_timeout_raises_litellm_timeout():
         )
 
     assert error.value.model == "gpt-5.6"
+
+
+@pytest.mark.asyncio
+async def test_async_mock_timeout_on_a_stream_waits_only_for_the_stream_timeout():
+    with pytest.raises(litellm.Timeout):
+        await asyncio.wait_for(
+            litellm.acompletion(
+                model="gpt-5.6",
+                messages=[{"role": "user", "content": "hello"}],
+                stream=True,
+                timeout=30.0,
+                stream_timeout=0.01,
+                mock_timeout=True,
+                num_retries=0,
+            ),
+            timeout=5,
+        )
 
 
 def test_router_mock_request_with_mock_timeout_raises_litellm_timeout():

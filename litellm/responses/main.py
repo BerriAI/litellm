@@ -1670,7 +1670,9 @@ def responses(
             timeout=CompletionTimeout.for_stream(
                 (StreamKind.FAKED if fake_stream else StreamKind.LIVE) if stream is True else StreamKind.NOT_STREAMED,
                 timeout or request_timeout,
-                None if litellm_params.stream_timeout is None else float(litellm_params.stream_timeout),
+                None
+                if stream is not True or litellm_params.stream_timeout is None
+                else float(litellm_params.stream_timeout),
             ),
             _is_async=_is_async,
             client=kwargs.get("client"),

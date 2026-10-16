@@ -16,7 +16,7 @@ import pytest
 import respx
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 
 def _expected_dir() -> Path:
@@ -1035,3 +1035,16 @@ async def test_a_native_responses_provider_places_every_point_itself():
 
     assert user_only == [0, 2, 4, 6]
     assert with_unmatchable_system == user_only
+
+
+def test_non_streamed_response_ignores_a_stream_timeout_it_never_uses() -> None:
+    answer: Final = json.dumps(_minimal_responses_api_payload("resp_unstreamed", "gpt-5.6")).encode()
+    client: Final = HTTPHandler(
+        client=httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, content=answer)))
+    )
+
+    response: Final = litellm.responses(
+        model="openai/gpt-5.6", input="hi", stream_timeout="unset", api_key="fake-key", client=client
+    )
+
+    assert response.output[0].content[0].text == "Done."
