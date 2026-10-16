@@ -813,7 +813,24 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
                 route=ROUTE_ENDPOINT_MAPPING.get(route_type, route_type),
                 param="model",
             )
-        team_model_name: Final = llm_router.map_team_model(data["model"], team_id) if team_id is not None else None
+        # Vector store routes match the team deployment to the store's provider
+        # instead of taking the team's first deployment.
+        team_model_provider: Final = (
+            data.get("custom_llm_provider")
+            if route_type
+            in [
+                "avector_store_search",
+                "avector_store_retrieve",
+                "avector_store_update",
+                "avector_store_delete",
+            ]
+            else None
+        )
+        team_model_name: Final = (
+            llm_router.map_team_model(data["model"], team_id, custom_llm_provider=team_model_provider)
+            if team_id is not None
+            else None
+        )
         if team_model_name is not None:
             data["model"] = team_model_name
             return getattr(llm_router, f"{route_type}")(**data)
