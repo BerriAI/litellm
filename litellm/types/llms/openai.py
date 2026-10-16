@@ -1421,10 +1421,26 @@ class WebSearchToolUsage(LiteLLMBaseModel):
     num_requests: NonNegativeInt
 
 
+class ImageGenTokenDetails(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    image_tokens: NonNegativeInt = 0
+    text_tokens: NonNegativeInt = 0
+
+
+class ImageGenToolUsage(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    total_tokens: NonNegativeInt = 0
+    input_tokens_details: ImageGenTokenDetails | None = None
+    output_tokens_details: ImageGenTokenDetails | None = None
+
+
 class ResponsesToolUsage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     web_search: WebSearchToolUsage | None = None
+    image_gen: ImageGenToolUsage | None = None
 
 
 ResponsesAPIStatus = Literal["completed", "failed", "in_progress", "cancelled", "queued", "incomplete"]

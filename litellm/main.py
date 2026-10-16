@@ -52,6 +52,7 @@ from litellm.utils import (
     get_litellm_params,
     get_optional_params,
     peek_reasoning_summary_aliases,
+    reasoning_effort_with_summary_alias,
     strip_reasoning_summary_aliases_from_optional_params,
 )
 
@@ -5684,8 +5685,14 @@ def completion(
             "base_model": base_model,
         }
         bedrock_responses_bridge_allowed: Final = acompletion is True and not skip_responses_api_bridge
+        provider_reasoning_effort: Final = reasoning_effort_with_summary_alias(
+            reasoning_effort,
+            non_default_params,
+            accepts_summary=provider_config is not None
+            and provider_config.accepts_reasoning_summary_in_reasoning_effort,
+        )
         optional_params = get_optional_params(
-            **optional_param_args,
+            **{**optional_param_args, "reasoning_effort": provider_reasoning_effort},
             **non_default_params,
             _litellm_responses_api_bridge_allowed=bedrock_responses_bridge_allowed,
         )
