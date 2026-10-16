@@ -2582,23 +2582,46 @@ def _with_native_redacted_data(
 _AnthropicMessageList: TypeAlias = list[AllAnthropicPassThroughMessageValues]
 
 
-def _tool_result_follows(rest: Sequence[AllMessageValues], replaced_server_tool_answers: frozenset[str]) -> bool:
-    same_turn: Final = itertools.takewhile(lambda message: message["role"] in ("user", "tool", "function"), rest)
-    return any(
-        message["role"] in ("tool", "function")
+def _client_tool_result(message: AllMessageValues, replaced_server_tool_answers: frozenset[str]) -> bool:
+    return (
+        message_field(message, "role") in ("tool", "function")
         and message_field(message, "tool_call_id") not in replaced_server_tool_answers
-        for message in same_turn
     )
 
 
-def _empty_user_message_blocks(
-    messages: Sequence[AllMessageValues], index: int, replaced_server_tool_answers: frozenset[str]
-) -> tuple[AnthropicMessagesTextParam, ...]:
-    if _tool_result_follows(messages[index + 1 :], replaced_server_tool_answers):
-        return ()
+def _tool_result_later_in_turn(
+    messages: Sequence[AllMessageValues], replaced_server_tool_answers: frozenset[str]
+) -> tuple[bool, ...]:
+    from_the_end: Final = itertools.accumulate(
+        reversed(messages),
+        lambda later, message: (
+            message_field(message, "role") in ("user", "tool", "function")
+            and (later or _client_tool_result(message, replaced_server_tool_answers))
+        ),
+        initial=False,
+    )
+    return tuple(from_the_end)[::-1][1:]
+
+
+def _empty_text_placeholder(message: AllMessageValues) -> AnthropicMessagesTextParam:
     placeholder: Final = AnthropicMessagesTextParam(type="text", text=_EMPTY_TEXT_PLACEHOLDER)
-    add_cache_control_to_content(anthropic_content_element=placeholder, original_content_element=messages[index])
-    return (placeholder,)
+    add_cache_control_to_content(anthropic_content_element=placeholder, original_content_element=message)
+    return placeholder
+
+
+def _cache_breakpoint_placeholder(
+    message: AllMessageValues, tool_result_follows: bool
+) -> tuple[AnthropicMessagesTextParam, ...]:
+    if tool_result_follows or not message_field(message, "cache_control"):
+        return ()
+    return (_empty_text_placeholder(message),)
+
+
+def _empty_user_turn_placeholder(span: Sequence[AllMessageValues]) -> AnthropicMessagesTextParam | None:
+    empty_user_message: Final = next(
+        (message for message in reversed(span) if message["role"] == "user" and not message.get("content")), None
+    )
+    return None if empty_user_message is None else _empty_text_placeholder(empty_user_message)
 
 
 def anthropic_messages_pt(
@@ -2655,6 +2678,7 @@ def anthropic_messages_pt(
     is_vertex_ai = llm_provider.startswith("vertex_ai") if llm_provider else False
     force_base64 = is_bedrock_invoke or is_vertex_ai
 
+    tool_result_later_in_turn: Final = _tool_result_later_in_turn(messages, replaced_server_tool_answers)
     msg_i = 0
     while msg_i < len(messages):
         user_content: list[AnthropicMessagesUserMessageValues] = []
@@ -2668,7 +2692,9 @@ def anthropic_messages_pt(
             ) = messages[msg_i]
             if user_message_types_block["role"] == "user":
                 if not (user_block_content := user_message_types_block.get("content")):
-                    user_content.extend(_empty_user_message_blocks(messages, msg_i, replaced_server_tool_answers))
+                    user_content.extend(
+                        _cache_breakpoint_placeholder(user_message_types_block, tool_result_later_in_turn[msg_i])
+                    )
                 elif isinstance(user_block_content, list):
                     for m in user_block_content:
                         if m.get("type", "") == "image_url":
@@ -2768,6 +2794,8 @@ def anthropic_messages_pt(
 
         if user_content:
             new_messages.append({"role": "user", "content": user_content})
+        elif (placeholder := _empty_user_turn_placeholder(messages[init_msg_i:msg_i])) is not None:
+            new_messages.append({"role": "user", "content": [placeholder]})
 
         # Track unique tool IDs in this merge block to avoid duplication
         unique_tool_ids: set[str] = set()
