@@ -530,6 +530,8 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     allow_client_keepalive_override: bool | None = False
     use_in_pass_through: bool | None = False
     use_litellm_proxy: bool | None = False
+    ## BASETEN ##
+    served_model_name: str | None = None  # override model name in request body (e.g. Baseten dedicated deployments)
     use_chat_completions_api: bool | None = None
     use_xai_oauth: bool | None = Field(
         default=False,
@@ -718,6 +720,8 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     ## PASS-THROUGH ENDPOINTS ##
     use_in_pass_through: bool | None
     litellm_credential_name: str | None
+    ## BASETEN ##
+    served_model_name: str | None  # override model name in request body (e.g. Baseten dedicated deployments)
     ## UNIFIED PROJECT/REGION ##
     region_name: str | None
     ## VERTEX AI ##

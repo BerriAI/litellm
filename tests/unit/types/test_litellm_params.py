@@ -131,6 +131,7 @@ OPTION_NAMES: Final = (
     "use_chat_completions_api",
     "use_in_pass_through",
     "allowed_openai_params",
+    "served_model_name",
     "fallbacks",
     "context_window_fallback_dict",
     "num_retries",
