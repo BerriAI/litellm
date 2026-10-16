@@ -250,6 +250,7 @@ def create_file(
                 api_base=optional_params.api_base,
                 api_key=optional_params.api_key,
                 organization=optional_params.organization,
+                project=optional_params.project,
             )
             response = openai_files_instance.create_file(
                 _is_async=_is_async,
@@ -258,6 +259,7 @@ def create_file(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 organization=openai_creds.organization,
+                project=openai_creds.project,
                 create_file_data=_create_file_request,
             )
         elif custom_llm_provider == "azure":
@@ -379,6 +381,7 @@ def file_retrieve(
                 api_base=optional_params.api_base,
                 api_key=optional_params.api_key,
                 organization=optional_params.organization,
+                project=optional_params.project,
             )
             response = openai_files_instance.retrieve_file(
                 file_id=file_id,
@@ -388,6 +391,7 @@ def file_retrieve(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 organization=openai_creds.organization,
+                project=openai_creds.project,
             )
         elif custom_llm_provider == "azure":
             azure_creds: Final = get_azure_credentials(
@@ -560,6 +564,7 @@ def file_delete(
                 api_base=optional_params.api_base,
                 api_key=optional_params.api_key,
                 organization=optional_params.organization,
+                project=optional_params.project,
             )
             response = openai_files_instance.delete_file(
                 file_id=file_id,
@@ -569,6 +574,7 @@ def file_delete(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 organization=openai_creds.organization,
+                project=openai_creds.project,
             )
         elif custom_llm_provider == "azure":
             azure_creds: Final = get_azure_credentials(
@@ -766,6 +772,7 @@ def file_list(
                 api_base=optional_params.api_base,
                 api_key=optional_params.api_key,
                 organization=optional_params.organization,
+                project=optional_params.project,
             )
             response = openai_files_instance.list_files(
                 purpose=purpose,
@@ -775,6 +782,7 @@ def file_list(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 organization=openai_creds.organization,
+                project=openai_creds.project,
             )
         elif custom_llm_provider == "azure":
             azure_creds: Final = get_azure_credentials(
@@ -963,6 +971,7 @@ def file_content(
                 api_base=optional_params.api_base,
                 api_key=optional_params.api_key,
                 organization=optional_params.organization,
+                project=optional_params.project,
             )
             response = openai_files_instance.file_content(
                 _is_async=_is_async,
@@ -972,6 +981,7 @@ def file_content(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 organization=openai_creds.organization,
+                project=openai_creds.project,
             )
         elif custom_llm_provider == "azure":
             azure_creds: Final = get_azure_credentials(
@@ -1082,6 +1092,7 @@ def file_content_streaming(
             api_base=optional_params.api_base,
             api_key=optional_params.api_key,
             organization=optional_params.organization,
+            project=optional_params.project,
         )
         response = openai_files_instance.file_content_streaming(
             _is_async=_is_async,
@@ -1091,6 +1102,7 @@ def file_content_streaming(
             timeout=timeout,
             max_retries=optional_params.max_retries,
             organization=openai_creds.organization,
+            project=openai_creds.project,
             chunk_size=chunk_size,
             client=client if isinstance(client, (OpenAI, AsyncOpenAI)) else None,
         )

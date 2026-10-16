@@ -3,6 +3,7 @@ import copy
 import pytest
 
 from litellm.proxy.common_utils.openai_endpoint_utils import (
+    apply_openai_project_to_data,
     remove_sensitive_info_from_deployment,
 )
 
@@ -121,3 +122,84 @@ def test_remove_sensitive_info_from_deployment_with_excluded_keys():
 
     # api_key should still be removed (popped) regardless of excluded_keys
     assert "api_key" not in sanitized_config["litellm_params"]
+
+
+# --------------------------------------------------------------------------- #
+# apply_openai_project_to_data: a caller-supplied OpenAI project selects which
+# project the proxy's shared credential acts inside, so it only reaches the
+# provider once the admin opted in with `forward_openai_project`.
+# --------------------------------------------------------------------------- #
+
+FORWARDED: dict = {"forward_openai_project": True}
+
+
+class _FakeRequest:
+    """Stand-in for the FastAPI request; the helper only reads `.headers`."""
+
+    def __init__(self, headers: dict | None = None):
+        self.headers = headers or {}
+
+
+def test_openai_project_is_dropped_without_the_forwarding_opt_in():
+    data = {"project": "proj_from_client"}
+
+    apply_openai_project_to_data(
+        data=data,
+        request=_FakeRequest({"OpenAI-Project": "proj_from_header"}),
+        general_settings={},
+    )
+
+    assert "project" not in data
+
+
+def test_openai_project_is_dropped_when_general_settings_is_missing():
+    data = {"project": "proj_from_client"}
+
+    apply_openai_project_to_data(data=data, request=_FakeRequest())
+
+    assert "project" not in data
+
+
+def test_openai_project_header_is_forwarded_when_opted_in():
+    data: dict = {}
+
+    apply_openai_project_to_data(data=data, request=_FakeRequest({"OpenAI-Project": "proj_a"}), general_settings=FORWARDED)
+
+    assert data["project"] == "proj_a"
+
+
+def test_openai_project_header_wins_over_the_request_body_value():
+    data = {"project": "proj_from_body"}
+
+    apply_openai_project_to_data(
+        data=data,
+        request=_FakeRequest({"OpenAI-Project": "proj_from_header"}),
+        general_settings=FORWARDED,
+    )
+
+    assert data["project"] == "proj_from_header"
+
+
+def test_openai_project_body_value_is_forwarded_when_opted_in_without_header():
+    data = {"project": "proj_from_body"}
+
+    apply_openai_project_to_data(data=data, request=_FakeRequest(), general_settings=FORWARDED)
+
+    assert data["project"] == "proj_from_body"
+
+
+def test_openai_project_ignores_a_non_string_body_value():
+    data = {"project": {"nested": "value"}}
+
+    apply_openai_project_to_data(data=data, request=_FakeRequest(), general_settings=FORWARDED)
+
+    assert "project" not in data
+
+
+def test_openai_project_stays_absent_when_no_caller_supplied_one():
+    data: dict = {"batch_id": "batch-1"}
+
+    apply_openai_project_to_data(data=data, request=_FakeRequest(), general_settings=FORWARDED)
+
+    assert "project" not in data
+    assert data == {"batch_id": "batch-1"}

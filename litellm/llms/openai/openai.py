@@ -1741,6 +1741,7 @@ class OpenAIFilesAPI(BaseLLM):
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         organization: str | None,
+        project: str | None = None,
         client: OpenAI | AsyncOpenAI | None = None,
         _is_async: bool = False,
     ) -> OpenAI | AsyncOpenAI | None:
@@ -1781,6 +1782,7 @@ class OpenAIFilesAPI(BaseLLM):
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         organization: str | None,
+        project: str | None = None,
         client: OpenAI | AsyncOpenAI | None = None,
     ) -> OpenAIFileObject | Coroutine[None, None, OpenAIFileObject]:
         openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
@@ -1789,6 +1791,7 @@ class OpenAIFilesAPI(BaseLLM):
             timeout=timeout,
             max_retries=max_retries,
             organization=organization,
+            project=project,
             client=client,
             _is_async=_is_async,
         )
@@ -1823,6 +1826,7 @@ class OpenAIFilesAPI(BaseLLM):
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         organization: str | None,
+        project: str | None = None,
         client: OpenAI | AsyncOpenAI | None = None,
     ) -> HttpxBinaryResponseContent | Coroutine[None, None, HttpxBinaryResponseContent]:
         openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
@@ -1831,6 +1835,7 @@ class OpenAIFilesAPI(BaseLLM):
             timeout=timeout,
             max_retries=max_retries,
             organization=organization,
+            project=project,
             client=client,
             _is_async=_is_async,
         )
@@ -1887,6 +1892,7 @@ class OpenAIFilesAPI(BaseLLM):
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         organization: str | None,
+        project: str | None = None,
         chunk_size: int = 1024 * 1024,
         client: OpenAI | AsyncOpenAI | None = None,
     ) -> FileContentStreamingResult:
@@ -1896,6 +1902,7 @@ class OpenAIFilesAPI(BaseLLM):
             timeout=timeout,
             max_retries=max_retries,
             organization=organization,
+            project=project,
             client=client,
             _is_async=_is_async,
         )
@@ -1951,6 +1958,7 @@ class OpenAIFilesAPI(BaseLLM):
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         organization: str | None,
+        project: str | None = None,
         client: OpenAI | AsyncOpenAI | None = None,
     ):
         openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
@@ -1959,6 +1967,7 @@ class OpenAIFilesAPI(BaseLLM):
             timeout=timeout,
             max_retries=max_retries,
             organization=organization,
+            project=project,
             client=client,
             _is_async=_is_async,
         )
@@ -1997,6 +2006,7 @@ class OpenAIFilesAPI(BaseLLM):
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         organization: str | None,
+        project: str | None = None,
         client: OpenAI | AsyncOpenAI | None = None,
     ):
         openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
@@ -2005,6 +2015,7 @@ class OpenAIFilesAPI(BaseLLM):
             timeout=timeout,
             max_retries=max_retries,
             organization=organization,
+            project=project,
             client=client,
             _is_async=_is_async,
         )
@@ -2045,6 +2056,7 @@ class OpenAIFilesAPI(BaseLLM):
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         organization: str | None,
+        project: str | None = None,
         purpose: str | None = None,
         client: OpenAI | AsyncOpenAI | None = None,
     ):
@@ -2054,6 +2066,7 @@ class OpenAIFilesAPI(BaseLLM):
             timeout=timeout,
             max_retries=max_retries,
             organization=organization,
+            project=project,
             client=client,
             _is_async=_is_async,
         )
@@ -2099,6 +2112,7 @@ class OpenAIBatchesAPI(BaseLLM):
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         organization: str | None,
+        project: str | None = None,
         client: OpenAI | AsyncOpenAI | None = None,
         _is_async: bool = False,
     ) -> OpenAI | AsyncOpenAI | None:
@@ -2139,6 +2153,7 @@ class OpenAIBatchesAPI(BaseLLM):
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         organization: str | None,
+        project: str | None = None,
         client: OpenAI | AsyncOpenAI | None = None,
     ) -> LiteLLMBatch | Coroutine[None, None, LiteLLMBatch]:
         openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
@@ -2147,6 +2162,7 @@ class OpenAIBatchesAPI(BaseLLM):
             timeout=timeout,
             max_retries=max_retries,
             organization=organization,
+            project=project,
             client=client,
             _is_async=_is_async,
         )
@@ -2183,6 +2199,7 @@ class OpenAIBatchesAPI(BaseLLM):
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         organization: str | None,
+        project: str | None = None,
         client: OpenAI | None = None,
     ):
         openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
@@ -2191,6 +2208,7 @@ class OpenAIBatchesAPI(BaseLLM):
             timeout=timeout,
             max_retries=max_retries,
             organization=organization,
+            project=project,
             client=client,
             _is_async=_is_async,
         )
@@ -2226,6 +2244,7 @@ class OpenAIBatchesAPI(BaseLLM):
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         organization: str | None,
+        project: str | None = None,
         client: OpenAI | None = None,
     ):
         openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
@@ -2234,6 +2253,7 @@ class OpenAIBatchesAPI(BaseLLM):
             timeout=timeout,
             max_retries=max_retries,
             organization=organization,
+            project=project,
             client=client,
             _is_async=_is_async,
         )
@@ -2273,6 +2293,7 @@ class OpenAIBatchesAPI(BaseLLM):
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         organization: str | None,
+        project: str | None = None,
         after: str | None = None,
         limit: int | None = None,
         client: OpenAI | None = None,
@@ -2283,6 +2304,7 @@ class OpenAIBatchesAPI(BaseLLM):
             timeout=timeout,
             max_retries=max_retries,
             organization=organization,
+            project=project,
             client=client,
             _is_async=_is_async,
         )
