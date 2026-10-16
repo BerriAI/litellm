@@ -1026,6 +1026,28 @@ async def test_additional_drop_params_removes_the_named_ark_fields_from_the_wire
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("dropped", "request_fields"),
+    [
+        pytest.param("user", {"user": "u-1"}, id="user"),
+        pytest.param("seconds", {"seconds": "8"}, id="seconds"),
+        pytest.param("size", {"size": "1920x1080"}, id="size"),
+        pytest.param("parameters", {"parameters": {"seed": 3}}, id="parameters"),
+        pytest.param("parameters", {"extra_body": {"parameters": {"seed": 3}}}, id="extra_body_parameters"),
+        pytest.param("image", {"image": {"gcsUri": "gs://b/a.png"}}, id="unsupported_image"),
+    ],
+)
+async def test_additional_drop_params_naming_a_request_field_sends_what_omitting_it_sends(
+    dropped: str, request_fields: dict[str, object]
+):
+    request: Final = {"model": f"volcengine/{SEEDANCE_2_5}", "prompt": "p"}
+
+    with_drop = await _wire_body(**request, **request_fields, additional_drop_params=[dropped])
+
+    assert with_drop == await _wire_body(**request)
+
+
+@pytest.mark.asyncio
 async def test_an_extra_body_duration_of_minus_one_is_rejected_before_anything_is_sent():
     with pytest.raises(UnsupportedParamsError, match="Ark-picked length"):
         _ = await _wire_body(model=f"volcengine/{SEEDANCE_2_5}", prompt="p", extra_body={"duration": -1})

@@ -318,6 +318,10 @@ def _additional_drop_keys(params: Mapping[str, object]) -> frozenset[str]:
         return frozenset()
 
 
+def _without(params: Mapping[str, object], keys: frozenset[str]) -> Mapping[str, object]:
+    return MappingProxyType({key: value for key, value in params.items() if key not in keys})
+
+
 def _malformed_fields(fields: Mapping[str, object]) -> tuple[tuple[str, str], ...]:
     try:
         _ = _KnownFields.model_validate(dict(fields))
@@ -551,29 +555,22 @@ class VolcEngineVideoConfig(BaseVideoConfig):
         model: str,
         drop_params: bool,
     ) -> dict[str, object]:  # mutable-ok: BaseVideoConfig contract
+        requested: Final = _without(video_create_optional_params, _additional_drop_keys(video_create_optional_params))
         unsupported: Final = next(
-            (
-                key
-                for key, value in video_create_optional_params.items()
-                if key in _UNSUPPORTED_BY_VOLCENGINE and value is not None
-            ),
+            (key for key, value in requested.items() if key in _UNSUPPORTED_BY_VOLCENGINE and value is not None),
             None,
         )
         if unsupported is not None and not drop_params:
             raise _droppable(model, f"'{unsupported}' is not supported by Volcengine video generation")
         passthrough: Final = MappingProxyType(
-            {
-                key: value
-                for key, value in video_create_optional_params.items()
-                if value is not None and key not in _MAPPED_ELSEWHERE
-            }
+            {key: value for key, value in requested.items() if value is not None and key not in _MAPPED_ELSEWHERE}
         )
         return {
-            **_user_fields(video_create_optional_params.get("user"), model, drop_params),
-            **_size_fields(video_create_optional_params.get("size"), model, drop_params),
-            **_duration_fields(video_create_optional_params.get("seconds"), model, drop_params),
+            **_user_fields(requested.get("user"), model, drop_params),
+            **_size_fields(requested.get("size"), model, drop_params),
+            **_duration_fields(requested.get("seconds"), model, drop_params),
             **passthrough,
-            **_parameters_fields(video_create_optional_params.get("parameters"), model, drop_params),
+            **_parameters_fields(requested.get("parameters"), model, drop_params),
         }
 
     def _resolve_api_key(self, api_key: str | None) -> str:
@@ -628,14 +625,13 @@ class VolcEngineVideoConfig(BaseVideoConfig):
         """
         drop_params: Final = _drops_params(litellm_params)
         dropped_by_config: Final = _additional_drop_keys(video_create_optional_request_params)
-        unpacked: Final = MappingProxyType(
+        kept: Final = _without(video_create_optional_request_params, dropped_by_config)
+        params: Final = _without(
             {
-                **{key: value for key, value in video_create_optional_request_params.items() if key != "parameters"},
-                **_parameters_fields(video_create_optional_request_params.get("parameters"), model, drop_params),
-            }
-        )
-        params: Final = MappingProxyType(
-            {key: value for key, value in unpacked.items() if key not in dropped_by_config}
+                **{key: value for key, value in kept.items() if key != "parameters"},
+                **_parameters_fields(kept.get("parameters"), model, drop_params),
+            },
+            dropped_by_config,
         )
         content: Final = _sent_content(prompt, params, model, drop_params)
         if params.get("frames") is not None and not drop_params:
