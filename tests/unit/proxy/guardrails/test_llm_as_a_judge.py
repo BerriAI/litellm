@@ -17,6 +17,7 @@ from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import (
     initialize_guardrail,
 )
 from litellm.types.guardrails import GuardrailEventHooks, Mode
+from litellm.types.router import RouterModelGroupAliasItem
 from litellm.types.utils import LLM_AS_A_JUDGE_GUARDRAIL_CALL_ORIGIN
 
 # ---------------------------------------------------------------------------
@@ -598,19 +599,22 @@ def _judge_response_mock() -> MagicMock:
     return MagicMock(choices=[MagicMock(message=MagicMock(content=json.dumps(_make_verdict_response(90.0))))])
 
 
-def _real_router(model_list, **router_kwargs):
+def _real_router(
+    model_list,
+    model_group_alias: dict[str, str | RouterModelGroupAliasItem] | None = None,
+):
     """Build a real Router so the router-membership decision is exercised for
     real (wildcards, model_group_alias, exact names), stubbing only the outbound
     completion so no network call is made."""
     from litellm import Router
 
-    router = Router(model_list=model_list, **router_kwargs)
+    router = Router(model_list=model_list, model_group_alias=model_group_alias)
     router.acompletion = AsyncMock(return_value=_judge_response_mock())
     return router
 
 
 @pytest.mark.parametrize(
-    "model_list, router_kwargs, judge_model",
+    "model_list, model_group_alias, judge_model",
     [
         (
             [
@@ -619,12 +623,12 @@ def _real_router(model_list, **router_kwargs):
                     "litellm_params": {"model": "anthropic/claude-sonnet-4-6", "api_key": "sk-ant-test"},
                 }
             ],
-            {},
+            None,
             "my-judge-alias",
         ),
         (
             [{"model_name": "anthropic/*", "litellm_params": {"model": "anthropic/*", "api_key": "sk-ant-test"}}],
-            {},
+            None,
             "anthropic/claude-sonnet-4-6",
         ),
         (
@@ -634,7 +638,7 @@ def _real_router(model_list, **router_kwargs):
                     "litellm_params": {"model": "anthropic/claude-sonnet-4-6", "api_key": "sk-ant-test"},
                 }
             ],
-            {"model_group_alias": {"my-judge-alias": "backing-group"}},
+            {"my-judge-alias": "backing-group"},
             "my-judge-alias",
         ),
         (
@@ -644,7 +648,7 @@ def _real_router(model_list, **router_kwargs):
                     "litellm_params": {"model": "anthropic/claude-sonnet-4-6", "api_key": "sk-ant-test"},
                 }
             ],
-            {"model_group_alias": {"my-judge-alias": {"model": "backing-group", "hidden": True}}},
+            {"my-judge-alias": {"model": "backing-group", "hidden": True}},
             "my-judge-alias",
         ),
     ],
@@ -653,13 +657,16 @@ def _real_router(model_list, **router_kwargs):
 @pytest.mark.asyncio
 @patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion", new_callable=AsyncMock)
 async def test_judge_routes_through_router_for_router_served_model(
-    mock_sdk_completion, model_list, router_kwargs, judge_model
+    mock_sdk_completion,
+    model_list,
+    model_group_alias: dict[str, str | RouterModelGroupAliasItem] | None,
+    judge_model,
 ):
     """Any judge_model the Router can serve must resolve its credentials via the
     Router. Wildcard and alias shapes regress the naive `judge_model in
     get_model_names()` check, which reports patterns/aliases literally and so
     routes a servable model to the SDK, where deployment creds do not resolve."""
-    router = _real_router(model_list, **router_kwargs)
+    router = _real_router(model_list, model_group_alias)
     guardrail = _make_guardrail(judge_model=judge_model, router_provider=lambda: router)
     inputs = {"texts": ["good response"]}
     request_data: dict = {"messages": [{"role": "user", "content": "hi"}], "metadata": {}}

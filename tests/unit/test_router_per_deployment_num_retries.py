@@ -359,10 +359,20 @@ class TestNoProviderRetryAmplification:
             await session.aclose()
 
     @staticmethod
-    def _router(api_base: str, litellm_params: dict, **router_kwargs) -> Router:
+    def _router(
+        api_base: str,
+        litellm_params: dict,
+        *,
+        num_retries: int,
+        retry_policy: RetryPolicy | None = None,
+    ) -> Router:
         params = {"model": "openai/gpt-4o-mini", "api_base": api_base, "api_key": "sk-fake"}
         params.update(litellm_params)
-        return Router(model_list=[{"model_name": "mock", "litellm_params": params}], **router_kwargs)
+        return Router(
+            model_list=[{"model_name": "mock", "litellm_params": params}],
+            num_retries=num_retries,
+            retry_policy=retry_policy,
+        )
 
     async def _call_and_count(self, router: Router, **call_kwargs) -> int:
         counter = self._install_counting_upstream()

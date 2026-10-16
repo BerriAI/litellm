@@ -12,6 +12,7 @@ from litellm.proxy.common_utils.discoverable_model_filter import (
     discoverable_rows,
     undiscoverable_model_names,
 )
+from litellm.types.router import RouterModelGroupAliasItem
 
 
 def _deployment(model_name: str, model: str = "openai/gpt-4o", **model_info):
@@ -22,8 +23,11 @@ def _deployment(model_name: str, model: str = "openai/gpt-4o", **model_info):
     }
 
 
-def _router(*deployments, **router_kwargs) -> Router:
-    return Router(model_list=list(deployments), **router_kwargs)
+def _router(
+    *deployments,
+    model_group_alias: dict[str, str | RouterModelGroupAliasItem] | None = None,
+) -> Router:
+    return Router(model_list=list(deployments), model_group_alias=model_group_alias)
 
 
 def _non_admin() -> UserAPIKeyAuth:
