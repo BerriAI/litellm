@@ -1,7 +1,6 @@
 import asyncio
 import json
 import re
-import socket
 import threading
 import uuid
 from collections.abc import Callable, Iterator, Mapping
@@ -22,6 +21,7 @@ from integration._support.database import read_rows
 from integration._support.mcp import mcp_peer, register_mcp, tool_names
 from integration._support.process import OwnedProxy, owned_proxy, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from openai import AsyncOpenAI, OpenAI
 from pydantic import BaseModel, JsonValue
 
@@ -1285,10 +1285,7 @@ def _blocked_stream_events(text: str) -> tuple[dict[str, object], ...]:
 
 
 def _dead_api_base() -> str:
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        port: Final = reserve.getsockname()[1]
-    return f"http://127.0.0.1:{port}/v1"
+    return f"http://127.0.0.1:{allocate_port()}/v1"
 
 
 @pytest.mark.covers("other.observability.guardrails.responses_pre_call_denial_openai_sdk_streams_typed_message")

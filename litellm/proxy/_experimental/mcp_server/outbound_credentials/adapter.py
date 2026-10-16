@@ -21,7 +21,7 @@ from pydantic import SecretStr
 from typing_extensions import assert_never
 
 from litellm.experimental_mcp_client.client import MCPClient, strip_auth_scheme, to_basic_credentials
-from litellm.proxy._experimental.mcp_server.exceptions import MCPServerURLCredentialsError
+from litellm.proxy._experimental.mcp_server.exceptions import TOKEN_EXCHANGE_SUBJECT_ERROR, MCPServerURLCredentialsError
 from litellm.proxy._experimental.mcp_server.oauth_utils import resolve_upstream_resource
 from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error, Ok, Result
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
@@ -402,7 +402,7 @@ def raise_token_exchange_challenge(
     )
     raise HTTPException(
         status_code=401,
-        detail="Unauthorized",
+        detail="Unauthorized" if encoded_claims else TOKEN_EXCHANGE_SUBJECT_ERROR,
         headers={"WWW-Authenticate": www_authenticate},
     )
 

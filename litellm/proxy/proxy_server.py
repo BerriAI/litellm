@@ -90,6 +90,7 @@ from litellm.litellm_core_utils.bug_report import (
 )
 from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
+    initialize_sentry,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -172,6 +173,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     StreamingChoices,
     TextCompletionResponse,
+    TokenCountMessagesFormat,
     TokenCountResponse,
     echoed_cost_map_pricing_fields,
     is_server_derived_pricing_key,
@@ -712,6 +714,7 @@ from litellm.proxy.management_endpoints.router_settings_endpoints import (
 from litellm.proxy.management_endpoints.session_endpoints import (
     router as session_management_router,
 )
+from litellm.proxy.management_endpoints.sso.saml_sso import SAML_AUTHN_REQUEST_TTL_SECONDS
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
     router as tag_management_router,
 )
@@ -2828,6 +2831,7 @@ user_api_key_cache: UserApiKeyCache = UserApiKeyCache(
 )
 spend_counter_cache: Final = DualCache(default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value)
 cli_sso_session_cache: Final = DualCache(default_in_memory_ttl=CLI_SSO_SESSION_TTL_SECONDS)
+saml_sso_cache: Final = DualCache(default_in_memory_ttl=SAML_AUTHN_REQUEST_TTL_SECONDS)
 model_max_budget_limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=spend_counter_cache)
 litellm.logging_callback_manager.add_litellm_callback(model_max_budget_limiter)
 redis_usage_cache: RedisCache | None = None  # redis cache used for tracking spend, tpm/rpm limits
@@ -4962,6 +4966,16 @@ def _is_remote_module_url(value: object) -> bool:
     return isinstance(value, str) and (value.startswith("s3://") or value.startswith("gcs://"))
 
 
+def sentry_is_configured(general_settings: Mapping[str, object]) -> bool:
+    alerting: Final = general_settings.get("alerting")
+    return (
+        "sentry" in litellm.input_callback
+        or "sentry" in litellm.success_callback
+        or "sentry" in litellm.failure_callback
+        or (isinstance(alerting, list) and "sentry" in alerting)
+    )
+
+
 def _scrub_guardrail_inner(inner: dict[str, JsonValue]) -> None:
     """Strip remote-URL entries from a guardrail's ``callbacks`` list
     and ``guardrail`` (v2 module-path) field. Mutates in place."""
@@ -5179,12 +5193,13 @@ def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: 
     """
     Wires an established coordination Redis into the proxy-level caches that
     consume it directly: the spend counter cache, the CLI SSO login-session
-    cache, the cluster-wide config cache, and (only when opted in) the
-    virtual-key auth cache.
+    cache, the SAML SSO sign-in cache, the cluster-wide config cache, and (only
+    when opted in) the virtual-key auth cache.
 
-    The CLI SSO login-session cache is always backed by Redis when available so
-    that the browser SSO flow behind `lite login` survives landing on different
-    workers; it must not be gated behind enable_redis_auth_cache.
+    The CLI SSO login-session cache and the SAML SSO sign-in cache are always
+    backed by Redis when available so that the browser SSO flows behind
+    `lite login` and SAML sign-in survive landing on different workers; they
+    must not be gated behind enable_redis_auth_cache.
     """
     spend_counter_cache.attach_redis_cache(
         redis_cache,
@@ -5193,6 +5208,10 @@ def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: 
     cli_sso_session_cache.attach_redis_cache(
         redis_cache,
         default_redis_ttl=CLI_SSO_SESSION_TTL_SECONDS,
+    )
+    saml_sso_cache.attach_redis_cache(
+        redis_cache,
+        default_redis_ttl=SAML_AUTHN_REQUEST_TTL_SECONDS,
     )
     if enable_redis_auth_cache is True:
         user_api_key_cache.attach_redis_cache(
@@ -6911,6 +6930,9 @@ class ProxyConfig:
         if general_settings is None:
             general_settings = {}
 
+        if sentry_is_configured(general_settings):
+            initialize_sentry()
+
         typed_general_settings: Final = _GENERAL_SETTINGS_VIEW.validate_python(general_settings)
         ConfigGeneralSettings.model_validate(
             MappingProxyType(
@@ -6926,6 +6948,12 @@ class ProxyConfig:
             from litellm.types.mcp import MCPAdvertisedVersions
 
             TypeAdapter(MCPAdvertisedVersions).validate_python(general_settings["mcp_advertised_versions"])
+
+        disabled_mcp_capabilities: Final = typed_general_settings.get("mcp_disabled_capabilities")
+        if disabled_mcp_capabilities is not None:
+            from litellm.types.mcp import MCPDisabledCapabilities
+
+            TypeAdapter(MCPDisabledCapabilities).validate_python(disabled_mcp_capabilities)
 
         if os.getenv("NUM_WORKERS", "1") != "1" and redis_usage_cache is None:
             warn_login_counters_are_per_worker(os.getenv("NUM_WORKERS", "1"))
@@ -14395,6 +14423,8 @@ async def _try_provider_token_count(
     request_model: str,
     tools: list | None = None,
     system: str | None = None,
+    messages_format: TokenCountMessagesFormat = "openai",
+    output_format: JsonValue = None,
 ) -> Optional["TokenCountResponse"]:
     """Attempt provider-specific token counting. Returns result on success, None to fall through to local counting."""
     if not provider_counter.should_use_token_counting_api(custom_llm_provider=custom_llm_provider):
@@ -14408,6 +14438,8 @@ async def _try_provider_token_count(
             request_model=request_model,
             tools=tools,
             system=system,
+            messages_format=messages_format,
+            output_format=output_format,
         )
     except httpx.HTTPStatusError as e:
         error_message: Final = getattr(e, "message", None) or str(e)
@@ -14450,8 +14482,15 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
     Returns:
         TokenCountResponse
     """
-    global llm_router
+    return await count_request_tokens(request=request, call_endpoint=call_endpoint)
 
+
+async def count_request_tokens(
+    request: TokenCountRequest,
+    call_endpoint: bool = False,
+    messages_format: TokenCountMessagesFormat = "openai",
+    output_format: JsonValue = None,
+) -> TokenCountResponse:
     prompt: Final = request.prompt
     messages: Final = request.messages
     contents: Final = request.contents
@@ -14510,6 +14549,8 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
             request_model=request.model,
             tools=tools,
             system=system,
+            messages_format=messages_format,
+            output_format=output_format,
         )
         if result is not None:
             return result
@@ -18814,9 +18855,11 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "always_include_stream_usage": "Boolean",
         "forward_client_headers_to_llm_api": "Boolean",
         "mcp_required_fields": "List",
+        "mcp_disabled_capabilities": "List",
         "cancel_on_disconnect": "Boolean",
         "disable_auto_add_proxy_admin_to_teams": "Boolean",
         "apply_user_budget_to_team_keys": "Boolean",
+        "agent_access_default_deny": "Boolean",
         "user_api_key_cache_max_size": "Integer",
         "transcribe_media_buckets": "List",
     }
