@@ -353,7 +353,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
                     "data": image_chunk["data"],
                 }
 
-    def _normalize_bedrock_tool_search_tools(self, optional_params: dict) -> dict:
+    def _normalize_bedrock_tool_search_tools(self, optional_params: dict) -> dict[str, object]:
         """
         Convert tool search entries to the format supported by the Bedrock Invoke API.
         """
