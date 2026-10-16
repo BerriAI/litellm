@@ -61,9 +61,7 @@ def resolve_openrouter_api_base(
     resolved_region = None
     if isinstance(litellm_params, dict):
         resolved_region = (
-            litellm_params.get("region")
-            or litellm_params.get("region_name")
-            or litellm_params.get("data_residency")
+            litellm_params.get("region") or litellm_params.get("region_name") or litellm_params.get("data_residency")
         )
     if not resolved_region and isinstance(optional_params, dict):
         resolved_region = (
@@ -73,11 +71,7 @@ def resolve_openrouter_api_base(
         )
     if not resolved_region:
         resolved_region = (
-            region
-            or getattr(litellm, "openrouter_region", None)
-            or getattr(litellm, "openrouter_data_residency", None)
-            or get_secret_str("OPENROUTER_REGION")
-            or get_secret_str("OPENROUTER_DATA_RESIDENCY")
+            region or getattr(litellm, "openrouter_region", None) or getattr(litellm, "openrouter_data_residency", None)
         )
 
     if resolved_region and isinstance(resolved_region, str):
@@ -90,15 +84,11 @@ def resolve_openrouter_api_base(
             return "https://eu.openrouter.ai/api/v1"
         if normalized_region.startswith(("us-", "us_", "usa-", "usa_")):
             return "https://us.openrouter.ai/api/v1"
-        # Dynamic regional hostname for future OpenRouter regions without breaking client-side
-        return f"https://{normalized_region}.openrouter.ai/api/v1"
+        raise ValueError(
+            f"Unsupported OpenRouter region: '{resolved_region}'. Supported regions are 'eu', 'us', 'global'."
+        )
 
-    return (
-        api_base
-        or litellm.api_base
-        or get_secret_str("OPENROUTER_API_BASE")
-        or _DEFAULT_OPENROUTER_API_BASE
-    )
+    return api_base or litellm.api_base or get_secret_str("OPENROUTER_API_BASE") or _DEFAULT_OPENROUTER_API_BASE
 
 
 def infer_openrouter_data_residency(

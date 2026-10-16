@@ -43,18 +43,34 @@ def test_resolve_openrouter_api_base(api_base, region, expected):
     assert resolve_openrouter_api_base(api_base=api_base, region=region) == expected
 
 
-def test_resolve_openrouter_api_base_env_var(monkeypatch):
-    monkeypatch.setenv("OPENROUTER_REGION", "eu")
+def test_resolve_openrouter_api_base_litellm_attrs(monkeypatch):
+    monkeypatch.setattr(litellm, "openrouter_region", "eu", raising=False)
     assert resolve_openrouter_api_base() == "https://eu.openrouter.ai/api/v1"
+    monkeypatch.delattr(litellm, "openrouter_region", raising=False)
+    monkeypatch.setattr(litellm, "openrouter_data_residency", "us", raising=False)
+    assert resolve_openrouter_api_base() == "https://us.openrouter.ai/api/v1"
 
 
-def test_resolve_openrouter_api_base_dynamic_region():
-    assert resolve_openrouter_api_base(region="apac") == "https://apac.openrouter.ai/api/v1"
+def test_resolve_openrouter_api_base_unsupported_region_raises():
+    with pytest.raises(ValueError, match="Unsupported OpenRouter region"):
+        resolve_openrouter_api_base(region="apac")
+    with pytest.raises(ValueError, match="Unsupported OpenRouter region"):
+        resolve_openrouter_api_base(region="collector.attacker.example/")
 
 
 def test_resolve_openrouter_api_base_from_dict_params():
     assert resolve_openrouter_api_base(litellm_params={"region": "eu"}) == "https://eu.openrouter.ai/api/v1"
+    assert resolve_openrouter_api_base(litellm_params={"region_name": "us"}) == "https://us.openrouter.ai/api/v1"
+    assert resolve_openrouter_api_base(litellm_params={"data_residency": "eu"}) == "https://eu.openrouter.ai/api/v1"
     assert resolve_openrouter_api_base(optional_params={"region": "us"}) == "https://us.openrouter.ai/api/v1"
+    assert resolve_openrouter_api_base(optional_params={"region_name": "eu"}) == "https://eu.openrouter.ai/api/v1"
+    assert resolve_openrouter_api_base(optional_params={"data_residency": "us"}) == "https://us.openrouter.ai/api/v1"
+    assert (
+        resolve_openrouter_api_base(api_base="https://openrouter.ai", region="eu") == "https://eu.openrouter.ai/api/v1"
+    )
+    assert (
+        resolve_openrouter_api_base(api_base="http://openrouter.ai", region="us") == "https://us.openrouter.ai/api/v1"
+    )
 
 
 @pytest.mark.parametrize(
@@ -79,10 +95,7 @@ def test_infer_openrouter_data_residency(api_base, expected):
 
 @pytest.mark.parametrize("custom_llm_provider", [None, "openai", "anthropic", "azure", "bedrock"])
 def test_infer_openrouter_data_residency_non_openrouter(custom_llm_provider):
-    assert (
-        infer_openrouter_data_residency(custom_llm_provider, "https://eu.openrouter.ai/api/v1")
-        is None
-    )
+    assert infer_openrouter_data_residency(custom_llm_provider, "https://eu.openrouter.ai/api/v1") is None
 
 
 def test_get_litellm_params_infers_openrouter_data_residency():
@@ -177,6 +190,38 @@ def test_openrouter_region_not_supported_error_mapping():
         )
     assert not isinstance(exc_info_standard.value, OpenRouterRegionNotSupportedError)
 
+    # 3. 404 with no response object or no URL
+    fake_exc_no_resp = Exception("404 Not Found")
+    fake_exc_no_resp.status_code = 404
+    with pytest.raises(OpenRouterRegionNotSupportedError) as exc_no_resp:
+        _map_openrouter_exception(
+            model="openrouter/anthropic/claude-sonnet-4",
+            original_exception=fake_exc_no_resp,
+            custom_llm_provider="openrouter",
+            error_str=error_msg,
+            exception_type="NotFoundError",
+            exception_provider="openrouter",
+            extra_information="",
+        )
+    assert exc_no_resp.value.region is None
+
+    # 4. Exception class default initialization
+    custom_err = OpenRouterRegionNotSupportedError(message="error", model="test-model")
+    assert custom_err.llm_provider == "openrouter"
+    assert custom_err.region is None
+
+
+def test_openrouter_chat_config_endpoint_already_in_api_base():
+    cfg = OpenrouterConfig(region="eu")
+    url = cfg.get_complete_url(
+        api_base="https://eu.openrouter.ai/api/v1/chat/completions",
+        api_key="sk-test",
+        model="anthropic/claude-3-opus",
+        optional_params={},
+        litellm_params={},
+    )
+    assert url == "https://eu.openrouter.ai/api/v1/chat/completions"
+
 
 def test_openrouter_completion_with_region_parameter(monkeypatch):
     """Test that completion() resolves regional api_base and tracks data_residency."""
@@ -213,4 +258,3 @@ def test_openrouter_completion_with_region_parameter(monkeypatch):
     assert captured_litellm_params.get("api_base") == "https://eu.openrouter.ai/api/v1"
     assert captured_litellm_params.get("data_residency") == "eu"
     assert resp.choices[0].message.content == "Hello from EU"
-
