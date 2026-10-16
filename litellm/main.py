@@ -5778,6 +5778,7 @@ def completion(
                 key: kwargs[key]
                 for key in (
                     *AWS_CREDENTIAL_KWARGS_KEYS,
+                    "fireworks_shared_session_affinity",
                     *ANTHROPIC_WIF_KWARGS_KEYS,
                     *OPENAI_WIF_KWARGS_KEYS,
                     *OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS,

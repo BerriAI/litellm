@@ -79,6 +79,7 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "github_copilot_user_session",
             "fireworks_forward_user_id",
             PROVIDER_AFFINITY_HEADER_KWARG_KEY,
+            "fireworks_shared_session_affinity",
         }
     )
     | AWS_CREDENTIAL_KWARGS_KEYS
