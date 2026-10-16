@@ -14,7 +14,14 @@ from e2e_http import NoBody, get_external, post_external, unwrap
 from memory_readings import RssCapture, RssReading, WorkerKey
 from pydantic import BaseModel
 
-from setup.datastore import DbCounters, RedisCounters
+from setup.datastore import (
+    DbCounters,
+    RedisCommand,
+    RedisCounters,
+    StatementCalls,
+    calls_in,
+    statement_deltas,
+)
 from setup.mocks.reply_common import Provider
 from setup.performance_test_case import Limit, Metric, MockLatency, PerformanceTestCase
 from setup.wire import WireRecord
@@ -105,12 +112,20 @@ class Observation:
     db_after: DbCounters | None = None
     redis_before: RedisCounters | None = None
     redis_after: RedisCounters | None = None
+    redis_commands: tuple[RedisCommand, ...] | None = None
     gateway_cpu_seconds: float | None = None
 
     def per_request(self, before: int | None, after: int | None) -> float | None:
         if before is None or after is None or not self.records:
             return None
         return (after - before) / len(self.records)
+
+    def count_per_request(self, count: int | None) -> float | None:
+        return None if count is None or not self.records else count / len(self.records)
+
+    @property
+    def statements(self) -> tuple[StatementCalls, ...] | None:
+        return statement_deltas(self.db_before, self.db_after)
 
     @property
     def retried_markers(self) -> frozenset[str]:
@@ -190,11 +205,13 @@ def observe(metric: Metric, percentile_rank: int | None, observation: Observatio
     if metric == "unexpected_status_count":
         return float(observation.unexpected_status_count())
     if metric == "postgres_calls_per_request":
-        db_before, db_after = observation.db_before, observation.db_after
-        return observation.per_request(db_before and db_before.commits, db_after and db_after.commits)
+        return observation.count_per_request(calls_in("awaited", observation.statements))
+    if metric == "postgres_background_calls_per_request":
+        return observation.count_per_request(calls_in("background", observation.statements))
     if metric == "redis_calls_per_request":
-        redis_before, redis_after = observation.redis_before, observation.redis_after
-        return observation.per_request(redis_before and redis_before.commands, redis_after and redis_after.commands)
+        return observation.count_per_request(calls_in("awaited", observation.redis_commands))
+    if metric == "redis_background_calls_per_request":
+        return observation.count_per_request(calls_in("background", observation.redis_commands))
     if metric == "cpu_seconds_per_request":
         cpu: Final = observation.gateway_cpu_seconds
         return None if cpu is None or not observation.records else cpu / len(observation.records)
@@ -224,7 +241,9 @@ REPORTED: Final[tuple[tuple[Metric, int | None], ...]] = (
     ("time_to_first_token_seconds", 99),
     ("memory_growth_megabytes", None),
     ("postgres_calls_per_request", None),
+    ("postgres_background_calls_per_request", None),
     ("redis_calls_per_request", None),
+    ("redis_background_calls_per_request", None),
     ("cpu_seconds_per_request", None),
 )
 
@@ -272,6 +291,7 @@ def render(case: PerformanceTestCase, observation: Observation, rows: list[Row])
         flag = "  OVER" if row.over else "  MISSING" if row.missing else ""
         lines.append(f"  {row.label:32} {observed:>12} {limit:>12}{flag}")
     lines.extend(_diagnostics(observation))
+    lines.extend(_datastore_lines(observation))
     for record in failures:
         lines.append(
             f"  wrong: seq {record.seq} {record.caller} {record.endpoint}{' stream' if record.stream else ''} status {record.status}: {record.error}"
@@ -290,8 +310,48 @@ def _diagnostics(observation: Observation) -> list[str]:
         f"    guardrail missed {observation.guardrail_missed() if observation.guardrail_calls else 'n/a'}",
         f"    retried share {len(observation.retried_markers) / count:.4f}",
         f"    spend logged share {'n/a' if share is None else f'{share:.3f}'}",
+        f"    postgres transactions per request {_fmt(observation.per_request(_commits(observation.db_before), _commits(observation.db_after)))}",
+        f"    redis commands per request {_fmt(observation.per_request(_commands(observation.redis_before), _commands(observation.redis_after)))}",
         f"    redis connected clients {_clients(observation.redis_before)} -> {_clients(observation.redis_after)}",
     ]
+
+
+def _datastore_lines(observation: Observation) -> list[str]:
+    """What the per-request Postgres and Redis counts are made of, so a red run names the statement or
+    command that grew. `plumbing` (BEGIN, COMMIT, session settings) and `unclassified` count in neither limit."""
+    count: Final = max(1, len(observation.records))
+    lines: list[str] = []
+    for title, items in (
+        ("postgres statements", observation.statements),
+        ("redis commands", observation.redis_commands),
+    ):
+        if items is None:
+            lines.append(f"  {title}: n/a")
+            continue
+        for bucket in ("awaited", "background", "plumbing", "unclassified"):
+            in_bucket = sorted((item for item in items if item.bucket == bucket), key=_item_count, reverse=True)
+            total = sum(_item_count(item) for item in in_bucket)
+            if not in_bucket:
+                continue
+            lines.append(f"  {title} {bucket}: {total / count:.3f} per request, {len(in_bucket)} distinct")
+            lines.extend(f"    {_item_count(item) / count:8.3f}  {item.summary}" for item in in_bucket[:8])
+    return lines
+
+
+def _item_count(item: StatementCalls | RedisCommand) -> int:
+    return item.calls if isinstance(item, StatementCalls) else item.count
+
+
+def _commits(counters: DbCounters | None) -> int | None:
+    return None if counters is None else counters.commits
+
+
+def _commands(counters: RedisCounters | None) -> int | None:
+    return None if counters is None else counters.commands
+
+
+def _fmt(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.3f}"
 
 
 def _clients(counters: RedisCounters | None) -> str:

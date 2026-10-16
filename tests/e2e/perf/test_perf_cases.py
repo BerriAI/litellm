@@ -9,11 +9,13 @@ import time
 from typing import Final
 
 import pytest
+from cases import CASES
 from idp import Keycloak
 from lifecycle import ResourceManager
 from memory_readings import read_rss_everywhere
 from models import SpendLogsParams
-from cases import CASES
+from proxy_client import ProxyClient
+from setup.datastore import read_db_counters, read_redis_counters, redis_monitor
 from setup.observe import (
     Observation,
     evaluate,
@@ -25,11 +27,9 @@ from setup.observe import (
 )
 from setup.performance_test_case import PerformanceTestCase
 from setup.plan import build_plan
-from setup.datastore import read_db_counters, read_redis_counters
 from setup.podcpu import gateway_cpu_sampler
 from setup.provision import MOCK_PROVIDERS, build_setup, guardrail_url, mock_url
 from setup.run import run_plan
-from proxy_client import ProxyClient
 
 pytestmark = [pytest.mark.perf, pytest.mark.quiet_stack]
 _SPEND_SAMPLE: Final = 40
@@ -61,9 +61,11 @@ def test_perf_case(case: PerformanceTestCase, proxy: ProxyClient, idp: Keycloak,
     db_before: Final = read_db_counters()
     redis_before: Final = read_redis_counters()
     run_started: Final = time.monotonic()
-    with gateway_cpu_sampler() as cpu:
+    with gateway_cpu_sampler() as cpu, redis_monitor() as monitor:
         outcome: Final = run_plan(case, plan, setup)
     run_finished: Final = time.monotonic()
+    db_after: Final = read_db_counters()
+    redis_after: Final = read_redis_counters()
     rss_after: Final = read_rss_everywhere(proxy)
     rss_read: Final = time.monotonic()
     assert outcome.records, f"locust wrote no records (exit {outcome.locust_exit}):\n{outcome.locust_output}"
@@ -74,8 +76,6 @@ def test_perf_case(case: PerformanceTestCase, proxy: ProxyClient, idp: Keycloak,
         proxy, served_call_ids[:: max(1, len(served_call_ids) // _SPEND_SAMPLE)][:_SPEND_SAMPLE]
     )
     spend_read: Final = time.monotonic()
-    db_after: Final = read_db_counters()
-    redis_after: Final = read_redis_counters()
     mock_requests: Final = tuple(seen for url in mock_urls.values() for seen in read_mock_requests(url))
     guardrail_calls: Final = tuple(read_guardrail_calls(guardrail_url())) if case.guardrails else ()
     mocks_read: Final = time.monotonic()
@@ -91,6 +91,7 @@ def test_perf_case(case: PerformanceTestCase, proxy: ProxyClient, idp: Keycloak,
         db_after=db_after,
         redis_before=redis_before,
         redis_after=redis_after,
+        redis_commands=monitor.commands,
         gateway_cpu_seconds=cpu.seconds,
     )
     rows, exceeded_limits = evaluate(case, observation)
