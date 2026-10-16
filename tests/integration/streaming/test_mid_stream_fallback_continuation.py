@@ -5,6 +5,7 @@ import hashlib
 import itertools
 import json
 import math
+import operator
 import threading
 import uuid
 from collections.abc import Callable, Generator, Iterable, Iterator, Mapping, Sequence
@@ -21,7 +22,7 @@ from integration._support.database import read_rows, scratch_database
 from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 from openai.types.chat import ChatCompletionChunk
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 
 pytestmark: Final = pytest.mark.timeout(4 * graceful_stop_seconds() + 120)
 
@@ -52,6 +53,8 @@ TOOL_CALL_DELTA: Final[Mapping[str, JsonValue]] = {
     "function": {"name": "get_weather", "arguments": ""},
 }
 NOTHING_SEEN: Final[tuple[ChatCompletionChunk, ...]] = ()
+ALLOW_EVERYTHING: Final = "def apply_guardrail(inputs, request_data, input_type):\n    return allow()\n"
+EVENT_BATCH: Final = TypeAdapter(list[dict[str, JsonValue]])
 
 
 @functools.cache
@@ -168,6 +171,22 @@ def no_prefill(request: Request) -> Reply:
     return complete_stream(f"chatcmpl-{marker_of(request)}-plain", PLAIN_TEXT, (9, 2))
 
 
+def accept_events(request: Request) -> Reply:
+    return Reply()
+
+
+def registered_guardrail(name: str, mode: str) -> dict[str, JsonValue]:
+    return {
+        "guardrail_name": name,
+        "litellm_params": {
+            "guardrail": "custom_code",
+            "mode": mode,
+            "default_on": False,
+            "custom_code": ALLOW_EVERYTHING,
+        },
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class Rig:
     gateway: Gateway
@@ -176,6 +195,7 @@ class Rig:
     relay: Wire
     backup: Wire
     no_prefill: Wire
+    events: Wire
 
 
 def joined_text(chunks: Iterable[ChatCompletionChunk]) -> str:
@@ -250,11 +270,18 @@ def write_config(
     model_entries: Sequence[Mapping[str, JsonValue]],
     fallbacks: Sequence[Mapping[str, JsonValue]],
     router_settings: Mapping[str, JsonValue],
+    guardrails: Sequence[Mapping[str, JsonValue]],
 ) -> Path:
     base: Final = JSON_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
     config: Final = {
         **base,
         "model_list": [dict(entry) for entry in model_entries],
+        "litellm_settings": {
+            **object_value(base["litellm_settings"]),
+            "callbacks": ["generic_api"],
+            "DEFAULT_FLUSH_INTERVAL_SECONDS": 1,
+        },
+        "guardrails": [dict(entry) for entry in guardrails],
         "router_settings": {
             **object_value(base["router_settings"]),
             "num_retries": 0,
@@ -273,14 +300,15 @@ def booted_rig(
     fallbacks: Sequence[Mapping[str, JsonValue]],
     router_settings: Mapping[str, JsonValue],
     workers: int,
+    guardrails: Sequence[Mapping[str, JsonValue]] = (),
 ) -> Generator[Rig]:
     with ExitStack() as stack:
         shared: Final = stack.enter_context(gateway_from_environment())
         database_url: Final = stack.enter_context(scratch_database())
         wires: Final = tuple(
-            stack.enter_context(wire_server(respond)) for respond in (primary, relay, backup, no_prefill)
+            stack.enter_context(wire_server(respond)) for respond in (primary, relay, backup, no_prefill, accept_events)
         )
-        primary_wire, relay_wire, backup_wire, no_prefill_wire = wires
+        primary_wire, relay_wire, backup_wire, no_prefill_wire, events_wire = wires
         config: Final = write_config(
             directory,
             (
@@ -295,18 +323,19 @@ def booted_rig(
             ),
             fallbacks,
             router_settings,
+            guardrails,
         )
         gateway: Final = stack.enter_context(
             owned_proxy(
                 shared,
                 directory,
-                {"DATABASE_URL": database_url},
+                {"DATABASE_URL": database_url, "GENERIC_LOGGER_ENDPOINT": events_wire.url},
                 config=config,
                 remove_environment=("DATABASE_URL_READ_REPLICA",),
                 workers=workers,
             )
         )
-        yield Rig(gateway, database_url, primary_wire, relay_wire, backup_wire, no_prefill_wire)
+        yield Rig(gateway, database_url, primary_wire, relay_wire, backup_wire, no_prefill_wire, events_wire)
 
 
 @pytest.fixture(scope="module")
@@ -319,7 +348,25 @@ def configured(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
         {"relay": ["backup"]},
         {"primary-shared": ["no-prefill-shared"]},
     )
-    with booted_rig(tmp_path_factory.mktemp("continuation-configured"), fallbacks, {SETTING: True}, 2) as rig:
+    with booted_rig(
+        tmp_path_factory.mktemp("continuation-configured"),
+        fallbacks,
+        {SETTING: True},
+        2,
+        (registered_guardrail("input-check", "pre_call"),),
+    ) as rig:
+        yield rig
+
+
+@pytest.fixture(scope="module")
+def output_guarded(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
+    with booted_rig(
+        tmp_path_factory.mktemp("continuation-output-guarded"),
+        ({"primary": ["backup"]},),
+        {SETTING: True},
+        2,
+        (registered_guardrail("output-check", "post_call"),),
+    ) as rig:
         yield rig
 
 
@@ -635,3 +682,68 @@ def test_turning_the_setting_on_at_runtime_continues_on_a_prefill_fallback(unset
         ]
     finally:
         rig.gateway.post("/config/update", {"router_settings": {SETTING: False}})
+
+
+def test_a_registered_output_guardrail_keeps_the_original_error(output_guarded: Rig) -> None:
+    marker: Final = uuid.uuid4().hex
+    received: Final = stream(
+        output_guarded,
+        new_key(output_guarded),
+        "primary",
+        f"text-cut {marker}",
+        (after_text(marker, "primary", JOINED_PARTIAL),),
+    )
+    assert (received.error is not None, received.text) == (True, JOINED_PARTIAL), received.chunks
+    assert len(chat_bodies(output_guarded.primary, marker)) == 1
+    assert chat_bodies(output_guarded.backup, marker) == ()
+
+
+def test_a_request_fallback_bringing_its_own_messages_keeps_the_original_error(configured: Rig) -> None:
+    marker: Final = uuid.uuid4().hex
+    received: Final = stream(
+        configured,
+        new_key(configured),
+        "primary",
+        f"text-cut {marker}",
+        (after_text(marker, "primary", JOINED_PARTIAL),),
+        {"fallbacks": [{"model": "backup", "messages": [{"role": "user", "content": f"start over {marker}"}]}]},
+    )
+    assert (received.error is not None, received.text) == (True, JOINED_PARTIAL), received.chunks
+    assert len(chat_bodies(configured.primary, marker)) == 1
+    assert chat_bodies(configured.backup, marker) == ()
+
+
+def carries_tag(event: Mapping[str, JsonValue], marker: str) -> bool:
+    tags: Final = event.get("request_tags")
+    return isinstance(tags, list) and marker in tags
+
+
+def tagged_events(batches: Iterable[Request], marker: str) -> tuple[dict[str, JsonValue], ...]:
+    events: Final = itertools.chain.from_iterable(EVENT_BATCH.validate_json(batch.body) for batch in batches)
+    return tuple(event for event in events if carries_tag(event, marker))
+
+
+def logged_events(sink: Wire, marker: str) -> Iterator[tuple[dict[str, JsonValue], ...]]:
+    return itertools.accumulate((tagged_events(sink.drain(), marker) for _ in itertools.count()), operator.add)
+
+
+def test_the_cut_call_logs_its_failure_under_its_own_deployment_and_price(configured: Rig) -> None:
+    marker: Final = uuid.uuid4().hex
+    received: Final = stream(
+        configured,
+        new_key(configured),
+        "primary",
+        f"text-cut {marker}",
+        (after_text(marker, "primary", JOINED_PARTIAL),),
+        {"metadata": {"tags": [marker]}},
+    )
+    assert received.error is None, received.error
+    polls: Final = logged_events(configured.events, marker)
+    events: Final = eventually(lambda: next(polls), lambda logged: len(logged) >= 2, seconds=30)
+    assert sorted(str(event["status"]) for event in events) == ["failure", "success"], events
+    failure: Final = next(event for event in events if event["status"] == "failure")
+    assert failure["model_group"] == "primary", failure
+    assert str(failure["api_base"]).startswith(configured.primary.url), failure
+    tokens: Final = (failure["prompt_tokens"], failure["completion_tokens"])
+    assert isinstance(tokens[0], int) and isinstance(tokens[1], int) and tokens[0] > 0 and tokens[1] > 0, failure
+    assert close(amount(failure["response_cost"]), cost((tokens[0], tokens[1]), PRIMARY_PRICES)), failure
