@@ -11,11 +11,12 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast  # noqa: TID251  # response_format is a plain JSON object
 
 import httpx
 from pydantic import TypeAdapter
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.gigachat.utils import convert_usage, get_api_base
@@ -51,6 +52,13 @@ def is_valid_json(value: str) -> bool:
 
 class GigaChatError(BaseLLMException):
     """GigaChat API error."""
+
+
+def _is_supported_response_format(value: object) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    response_format: Final = cast("dict[str, object]", value)  # cast-ok: the provider sends a JSON object
+    return response_format.get("type") in (None, "text", "json_schema")
 
 
 class GigaChatConfig(BaseConfig):
@@ -144,7 +152,6 @@ class GigaChatConfig(BaseConfig):
             "top_p",
             "max_tokens",
             "max_completion_tokens",
-            "stop",
             "tools",
             "tool_choice",
             "functions",
@@ -173,9 +180,6 @@ class GigaChatConfig(BaseConfig):
                 optional_params["top_p"] = value
             elif param in ("max_tokens", "max_completion_tokens"):
                 optional_params["max_tokens"] = value
-            elif param == "stop":
-                # GigaChat doesn't support stop sequences
-                pass
             elif param == "tools":
                 # Convert tools to functions format
                 if isinstance(value, Sequence):
@@ -214,6 +218,19 @@ class GigaChatConfig(BaseConfig):
                     ]
                     optional_params["function_call"] = {"name": schema_name}
                     optional_params["_structured_output"] = True
+                elif not _is_supported_response_format(value):  # pyright: ignore[reportUnknownArgumentType]  # value
+                    from litellm.utils import UnsupportedParamsError
+
+                    if litellm.drop_params is not True and drop_params is not True:
+                        raise UnsupportedParamsError(
+                            status_code=400,
+                            message=(
+                                "GigaChat does not support response_format="
+                                f"{value!r}. Use response_format={{'type': 'json_schema', "
+                                "'json_schema': {...}}} instead, or set `drop_params=True` "
+                                "to drop it."
+                            ),
+                        )
 
         return optional_params
 
