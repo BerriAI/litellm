@@ -10,6 +10,7 @@ Bearer/SigV4 auth chain, and the wire request through the public entrypoint.
 """
 
 import json
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
@@ -455,8 +456,8 @@ class TestBetaHeadersOnTheWire:
 
     @pytest.mark.asyncio
     @respx.mock
-    async def test_client_dangerous_tool_use_beta_reaches_mantle_without_safeguards(self):
-        route = await self._send(extra_headers={"anthropic-beta": "dangerous-tool-use-2026-09-03"})
+    async def test_client_dangerous_tool_use_beta_reaches_mantle_without_safeguards(self) -> None:
+        route: Final = await self._send(extra_headers={"anthropic-beta": "dangerous-tool-use-2026-09-03"})
 
         assert _sent_betas(route) == ["dangerous-tool-use-2026-09-03"]
         assert "safeguards" not in _sent_body(route)
