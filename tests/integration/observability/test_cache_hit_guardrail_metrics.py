@@ -1,6 +1,5 @@
 import asyncio
 import json
-import subprocess
 import uuid
 from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
@@ -15,7 +14,7 @@ import pytest
 import yaml
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
-from integration._support.process import owned_proxy_process
+from integration._support.process import OwnedProxy, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from prometheus_client.parser import text_string_to_metric_families
 
@@ -178,7 +177,7 @@ class Rig:
     guardrail_name: str
     policy: Wire
     provider: Wire
-    process: subprocess.Popen[bytes]
+    owned: OwnedProxy
 
 
 @contextmanager
@@ -228,7 +227,7 @@ def _rig(
                 identity,
                 policy,
                 provider,
-                owned.process,
+                owned,
             )
 
 

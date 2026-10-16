@@ -116,6 +116,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
                 "Content-Type": "application/json",
             },
             json=request_body,
+            timeout=self.timeout,
         )
 
         verbose_proxy_logger.debug("OpenAI Moderation guard response: %s", response.json())

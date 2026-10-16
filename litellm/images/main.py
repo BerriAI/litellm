@@ -5,6 +5,8 @@ from collections.abc import Coroutine
 from functools import partial
 from typing import TYPE_CHECKING, Final, Literal, Optional, cast, overload
 
+from pydantic import TypeAdapter, ValidationError
+
 if TYPE_CHECKING:
     from litellm.images.utils import ImageEditRequestUtils
 
@@ -17,6 +19,9 @@ from litellm import client
 from litellm.constants import DEFAULT_IMAGE_ENDPOINT_MODEL
 from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
 from litellm.exceptions import LiteLLMUnknownProvider
+from litellm.litellm_core_utils.get_llm_provider_logic import (
+    invalid_provider_routing_hints_message,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_request_utils import flatten_form_field_values
@@ -25,7 +30,7 @@ from litellm.llms.base_llm import BaseImageEditConfig, BaseImageGenerationConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.custom_llm import CustomLLM
-from litellm.utils import exception_type, get_litellm_params
+from litellm.utils import exception_type, filter_out_litellm_params, get_litellm_params
 
 #################### Initialize provider clients ####################
 llm_http_handler: BaseLLMHTTPHandler = BaseLLMHTTPHandler()
@@ -52,7 +57,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     LITELLM_IMAGE_VARIATION_PROVIDERS,
     LlmProviders,
-    all_litellm_params,
+    ProviderRoutingHints,
 )
 from litellm.utils import (
     ImageResponse,
@@ -60,6 +65,8 @@ from litellm.utils import (
     get_llm_provider,
     get_optional_params_image_gen,
 )
+
+_PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
 
 # Cache for ImageEditRequestUtils to avoid repeated __getattr__ calls
 _ImageEditRequestUtils_cache: Optional["ImageEditRequestUtils"] = None
@@ -93,6 +100,12 @@ async def aimage_generation(*args, **kwargs) -> ImageResponse:
     model: Final = args[0] if len(args) > 0 else kwargs["model"]
     ### PASS ARGS TO Image Generation ###
     kwargs["aimg_generation"] = True
+    try:
+        provider_hints: Final = _PROVIDER_ROUTING_HINTS.validate_python(kwargs)
+    except ValidationError as error:
+        raise litellm.BadRequestError(
+            message=invalid_provider_routing_hints_message(error), model=model, llm_provider=""
+        ) from error
     custom_llm_provider = None
     try:
         # Use a partial function to pass your keyword arguments
@@ -102,7 +115,11 @@ async def aimage_generation(*args, **kwargs) -> ImageResponse:
         ctx: Final = contextvars.copy_context()
         func_with_context: Final = partial(ctx.run, func)
 
-        _, custom_llm_provider, _, _ = get_llm_provider(model=model, api_base=kwargs.get("api_base", None))
+        _, custom_llm_provider, _, _ = get_llm_provider(
+            model=model,
+            custom_llm_provider=provider_hints.get("custom_llm_provider"),
+            api_base=provider_hints.get("api_base"),
+        )
 
         # Await normally
         init_response: Final = await loop.run_in_executor(None, func_with_context)
@@ -231,7 +248,7 @@ def image_generation(
         else:
             model = "dall-e-2"
             custom_llm_provider = "openai"  # default to dall-e-2 on openai
-        model_response._hidden_params["model"] = model
+        model_response.hidden_params["model"] = model
         openai_params: Final = [
             "user",
             "request_timeout",
@@ -249,11 +266,7 @@ def image_generation(
             "size",
             "style",
         ]
-        litellm_params: Final = all_litellm_params
-        default_params: Final = openai_params + litellm_params
-        non_default_params: Final = {
-            k: v for k, v in kwargs.items() if k not in default_params
-        }  # model-specific params - pass them straight to the model/provider
+        non_default_params: Final = filter_out_litellm_params(kwargs, excluding=openai_params)
 
         image_generation_config: BaseImageGenerationConfig | None = None
         if custom_llm_provider is not None and custom_llm_provider in LlmProviders._member_map_.values():
@@ -757,11 +770,7 @@ def image_edit(
             "style",
             "async_call",
         ]
-        litellm_params_list: Final = all_litellm_params
-        default_params: Final = openai_params + litellm_params_list
-        non_default_params: Final = {
-            k: v for k, v in kwargs.items() if k not in default_params
-        }  # model-specific params - pass them straight to the model/provider
+        non_default_params: Final = filter_out_litellm_params(kwargs, excluding=openai_params)
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         model_info: Final = kwargs.get("model_info", None)
@@ -885,6 +894,7 @@ def image_edit(
                 **image_edit_request_params,
                 "litellm_call_id": litellm_call_id,
                 "model_info": model_info,
+                "vertex_location": litellm_params.vertex_location,
             },
             custom_llm_provider=custom_llm_provider,
         )

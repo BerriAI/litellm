@@ -213,7 +213,7 @@ Run the container API tests:
 
 ```bash
 cd /Users/ishaanjaffer/github/litellm
-python -m pytest tests/test_litellm/containers/ -v
+python -m pytest tests/unit/containers/ -v
 ```
 
 Test via proxy:

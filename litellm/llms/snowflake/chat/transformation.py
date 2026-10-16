@@ -96,7 +96,7 @@ def _decoded_messages(response: _MessagesResponse) -> _AnthropicMessagesResponse
     return response.json()
 
 
-def _is_claude_model(model: str) -> bool:
+def is_snowflake_claude_model(model: str) -> bool:
     """Return True if model name (after stripping snowflake/ prefix) is a Claude model."""
     name: Final = model.lower().removeprefix("snowflake/")
     return any(name.startswith(p) for p in _CLAUDE_MODEL_PREFIXES)
@@ -126,7 +126,7 @@ def _convert_image_url_to_anthropic(block: Mapping[str, object]) -> object:
     cache_control: Final = block.get("cache_control")
     if cache_control is None:
         return converted
-    return {**converted, "cache_control": cache_control}  # mutable-ok: JSON wire block
+    return {**converted, "cache_control": cache_control}
 
 
 def _image_url_field(image_url: object, key: str) -> str | None:
@@ -142,7 +142,7 @@ def _data_uri_media_type(url: str) -> str:
 def _convert_image_url_blocks_to_anthropic(content: object) -> object:
     if not isinstance(content, list):
         return content
-    return [  # mutable-ok: JSON wire blocks
+    return [
         _convert_image_url_to_anthropic(block)
         if isinstance(block, Mapping) and block.get("type") == "image_url"
         else block
@@ -172,7 +172,7 @@ def _convert_tool_result_to_anthropic(
     )
     if cache_control is None:
         return converted
-    return {**converted, "cache_control": cache_control}  # mutable-ok: JSON wire block
+    return {**converted, "cache_control": cache_control}
 
 
 def _signed_thinking_blocks(msg: object) -> list[dict[str, object]]:  # mutable-ok: JSON wire blocks
@@ -183,8 +183,8 @@ def _signed_thinking_blocks(msg: object) -> list[dict[str, object]]:  # mutable-
     """
     blocks: Final = msg.get("thinking_blocks") if isinstance(msg, dict) else getattr(msg, "thinking_blocks", None)
     if not isinstance(blocks, list):
-        return []  # mutable-ok: JSON wire blocks
-    return [  # mutable-ok: JSON wire blocks
+        return []
+    return [
         dict(block)
         for block in blocks
         if isinstance(block, Mapping) and (block.get("signature") or block.get("type") == "redacted_thinking")
@@ -222,7 +222,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             "tools",
             "tool_choice",
         ]
-        if _is_claude_model(model):
+        if is_snowflake_claude_model(model):
             params.append("thinking")
         return params
 
@@ -236,7 +236,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         stream: bool | None = None,
     ) -> str:
         api_base = self._get_api_base(api_base, optional_params)
-        if _is_claude_model(model):
+        if is_snowflake_claude_model(model):
             return f"{api_base}/cortex/v1/messages"
         return f"{api_base}/cortex/v1/chat/completions"
 
@@ -259,7 +259,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             api_key=api_key,
             api_base=api_base,
         )
-        if _is_claude_model(model):
+        if is_snowflake_claude_model(model):
             headers["anthropic-version"] = ANTHROPIC_VERSION
         return headers
 
@@ -289,7 +289,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                 anthropic_tools.append(anthropic_tool)
             else:
                 anthropic_tools.append(
-                    {**tool, "input_schema": _clean_input_schema(tool["input_schema"])}  # mutable-ok: JSON wire tool
+                    {**tool, "input_schema": _clean_input_schema(tool["input_schema"])}
                     if "input_schema" in tool
                     else tool
                 )
@@ -318,10 +318,10 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
 
             if role == "system":
                 if isinstance(content, str) and content:
-                    system_parts.append({"type": "text", "text": content})  # mutable-ok: JSON wire system block
+                    system_parts.append({"type": "text", "text": content})
                 elif isinstance(content, list):
                     system_parts.extend(
-                        {  # mutable-ok: JSON wire system block
+                        {
                             "type": "text",
                             "text": block.get("text", ""),
                             **({"cache_control": block["cache_control"]} if "cache_control" in block else {}),
@@ -383,12 +383,10 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                 ):
                     conversation[-1]["content"].append(tool_result_block)
                 else:
-                    conversation.append(
-                        {"role": "user", "content": [tool_result_block]}  # mutable-ok: JSON wire message
-                    )
+                    conversation.append({"role": "user", "content": [tool_result_block]})
             else:
                 conversation.append(
-                    {  # mutable-ok: JSON wire message
+                    {
                         "role": role,
                         "content": _convert_image_url_blocks_to_anthropic(content),
                     }
@@ -408,7 +406,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         stream: Final[bool] = optional_params.pop("stream", False) or False
         extra_body: Final = optional_params.pop("extra_body", {})
 
-        if _is_claude_model(model):
+        if is_snowflake_claude_model(model):
             return self._transform_request_anthropic(model, messages, optional_params, stream, extra_body)
         return self._transform_request_openai(model, messages, optional_params, stream, extra_body)
 
@@ -424,7 +422,9 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         litellm_params: dict[str, object],  # mutable-ok: BaseConfig signature
         headers: dict[str, object],  # mutable-ok: BaseConfig signature
     ) -> dict[str, object]:  # mutable-ok: BaseConfig signature
-        inlined_messages: Final = await async_inline_remote_media(messages) if _is_claude_model(model) else messages
+        inlined_messages: Final = (
+            await async_inline_remote_media(messages) if is_snowflake_claude_model(model) else messages
+        )
         return self.transform_request(model, inlined_messages, optional_params, litellm_params, headers)
 
     def _transform_request_openai(
@@ -501,7 +501,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         model_name: Final = model.removeprefix("snowflake/")
 
         body: Final[dict[str, object]] = normalize_cache_control_in_anthropic_payload(  # mutable-ok: JSON wire body
-            {  # mutable-ok: JSON wire body
+            {
                 "model": model_name,
                 "messages": conversation,
                 "stream": stream,
@@ -510,9 +510,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             }
         )
         if system is not None:
-            body["system"] = normalize_cache_control_in_anthropic_payload(
-                {"system": system}  # mutable-ok: JSON wire payload
-            )["system"]
+            body["system"] = normalize_cache_control_in_anthropic_payload({"system": system})["system"]
 
         if "max_tokens" not in body:
             body["max_tokens"] = 4096  # reasonable default; Anthropic API max varies by model
@@ -533,7 +531,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
-        if _is_claude_model(model):
+        if is_snowflake_claude_model(model):
             return self._transform_response_anthropic(
                 model, raw_response, model_response, logging_obj, request_data, messages
             )
@@ -562,7 +560,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         returned_response.model = "snowflake/" + (returned_response.model or "")
 
         if model is not None:
-            returned_response._hidden_params["model"] = model
+            returned_response.hidden_params["model"] = model
 
         return returned_response
 
@@ -627,7 +625,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         model_response.id = response_json.get("id", "")
 
         if model is not None:
-            model_response._hidden_params["model"] = model
+            model_response.hidden_params["model"] = model
 
         return model_response
 

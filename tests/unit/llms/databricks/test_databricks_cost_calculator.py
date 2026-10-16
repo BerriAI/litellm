@@ -16,6 +16,7 @@ NEW_MODELS: Final = (
     "databricks/databricks-claude-opus-4-7",
     "databricks/databricks-claude-opus-4-8",
     "databricks/databricks-claude-opus-5",
+    "databricks/databricks-claude-opus-5-5",
     "databricks/databricks-claude-sonnet-5",
     "databricks/databricks-claude-fable-5",
     "databricks/databricks-claude-fable-5-1",
@@ -32,6 +33,7 @@ PRICE_FIELDS: Final = (
     "cache_read_input_token_cost",
 )
 PUBLISHED_DBU_PER_MILLION: Final = {
+    "databricks/databricks-claude-opus-5-5": ("57.143", "285.714", "71.429", "2.857"),
     "databricks/databricks-claude-fable-5-1": ("142.858", "714.286", "178.572", "3.572"),
     "databricks/databricks-claude-fable-5": ("142.858", "714.286", "178.572", "14.286"),
     "databricks/databricks-claude-opus-5": ("71.429", "357.143", "89.286", "7.143"),
@@ -118,6 +120,7 @@ def _dollars_per_token(dbu_per_million: str) -> float:
     [
         "databricks/databricks-claude-opus-4-8",
         "databricks/databricks-claude-opus-5",
+        "databricks/databricks-claude-opus-5-5",
         "databricks/databricks-claude-sonnet-5",
     ],
 )
@@ -151,8 +154,6 @@ def test_uncached_request_bills_every_prompt_token_at_the_input_rate(local_model
 
     assert prompt_cost == pytest.approx(1000 * info["input_cost_per_token"])
     assert completion_cost == pytest.approx(200 * info["output_cost_per_token"])
-
-
 
 
 @pytest.mark.parametrize("model", NEW_MODELS)
@@ -229,3 +230,28 @@ def test_sonnet_5_ships_standard_rates_not_introductory(local_model_cost_map: No
 
     for field in PRICE_FIELDS:
         assert sonnet_5[field] == pytest.approx(sonnet_4_6[field]), field
+
+
+def test_cost_per_token_bills_the_served_priority_tier(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rates: Final = {
+        "input_cost_per_token": 0.001,
+        "output_cost_per_token": 0.002,
+        "input_cost_per_token_priority": 0.01,
+        "output_cost_per_token_priority": 0.02,
+        "litellm_provider": "databricks",
+        "mode": "chat",
+    }
+    monkeypatch.setitem(litellm.model_cost, "databricks/dbrx-tiered-test", rates)
+    usage: Final = Usage(prompt_tokens=30, completion_tokens=40, total_tokens=70)
+
+    prompt_cost, completion_cost = cost_per_token(
+        model="databricks/dbrx-tiered-test", usage=usage, service_tier="priority"
+    )
+    assert prompt_cost == pytest.approx(30 * 0.01)
+    assert completion_cost == pytest.approx(40 * 0.02)
+
+    prompt_cost, completion_cost = cost_per_token(model="databricks/dbrx-tiered-test", usage=usage)
+    assert prompt_cost == pytest.approx(30 * 0.001)
+    assert completion_cost == pytest.approx(40 * 0.002)

@@ -27,7 +27,7 @@ router: Final = APIRouter(prefix=MANAGEMENT_V1_PREFIX)
 
 @router.post(
     "/teams/{team_id}/members/bulk_delete",
-    tags=["team management"],  # mutable-ok: FastAPI types `tags` as list[str], not Sequence
+    tags=["team management"],
     dependencies=(Depends(user_api_key_auth), Depends(reject_unknown_query_params)),
     response_model=BulkTeamMemberDeleteResponse,
 )
@@ -51,7 +51,7 @@ async def bulk_delete_team_members_action(
     Example curl:
     ```
     curl --location 'http://0.0.0.0:4000/management/v1/teams/team-1/members/bulk_delete' \
-        --header 'Authorization: Bearer sk-1234' \
+        --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
         --header 'Content-Type: application/json' \
         --data '{"members": [{"user_id": "user-1"}, {"user_email": "user-2@example.com"}]}'
     ```
@@ -99,7 +99,7 @@ async def bulk_delete_team_members_action(
 
 @router.post(
     "/teams/{team_id}/members/bulk_update",
-    tags=["team management"],  # mutable-ok: FastAPI types `tags` as list[str], not Sequence
+    tags=["team management"],
     dependencies=(Depends(user_api_key_auth), Depends(reject_unknown_query_params)),
     response_model=BulkTeamMemberBudgetUpdateResponse,
 )
@@ -135,7 +135,7 @@ async def bulk_update_team_member_budgets_action(
     Example curl:
     ```
     curl --location 'http://0.0.0.0:4000/management/v1/teams/team-1/members/bulk_update' \
-        --header 'Authorization: Bearer sk-1234' \
+        --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
         --header 'Content-Type: application/json' \
         --data '{"members": [{"user_id": "user-1", "max_budget_in_team": 10}, {"user_email": "user-2@example.com", "max_budget_in_team": 10, "budget_duration": "30d"}]}'
     ```

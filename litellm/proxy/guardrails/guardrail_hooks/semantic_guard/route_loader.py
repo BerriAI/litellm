@@ -7,7 +7,7 @@ then builds a SemanticRouter for prompt matching.
 
 import os
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 import yaml
 
@@ -28,7 +28,7 @@ class SemanticGuardRouteLoader:
     """Loads route definitions from YAML templates and custom configs, builds SemanticRouter."""
 
     @staticmethod
-    def load_builtin_template(template_name: str) -> dict[str, Any]:
+    def load_builtin_template(template_name: str) -> dict[str, object]:
         """Load a built-in route template YAML by name."""
         file_path: Final = os.path.join(ROUTE_TEMPLATES_DIR, f"{template_name}.yaml")
         if not os.path.exists(file_path):
@@ -50,7 +50,7 @@ class SemanticGuardRouteLoader:
         return sorted(templates)
 
     @staticmethod
-    def load_custom_routes_file(file_path: str) -> list[dict[str, Any]]:
+    def load_custom_routes_file(file_path: str) -> list[dict[str, object]]:
         """Load custom routes from a YAML file."""
         if not os.path.exists(file_path):
             raise ValueError(f"SemanticGuard: custom routes file not found: {file_path}")

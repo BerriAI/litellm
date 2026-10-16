@@ -21,9 +21,17 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
-from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY, NON_INFERENCE_CALL_TYPES
+from litellm.constants import (
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    MANAGED_BACKGROUND_RESPONSE_METADATA_KEY,
+    NON_INFERENCE_CALL_TYPES,
+)
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import initialize_standard_callback_dynamic_params
-from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN, InternalCallOrigin
+from litellm.types.utils import (
+    BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
+    BACKGROUND_RESPONSE_STATUS_POLL_CALL_ORIGIN,
+    InternalCallOrigin,
+)
 
 BUDGET_RESERVATION_METADATA_KEYS: Final = frozenset({"user_api_key_budget_reservation"})
 
@@ -62,8 +70,30 @@ def is_background_response(response: object) -> bool:
     because the callers hold it in both shapes.
     """
     if isinstance(response, Mapping):
-        return response.get("background") is True
+        return "background" in response and response["background"] is True
     return getattr(response, "background", None) is True
+
+
+def requests_background(request_body: Mapping[str, object]) -> bool:
+    return bool(request_body.get("background")) or is_background_response(request_body.get("extra_body"))
+
+
+_RESPONSE_CREATE_CALL_TYPES: Final = frozenset({"responses", "aresponses"})
+
+
+def _finished_response(response: object) -> object:
+    wrapped: Final = response.get("response") if isinstance(response, Mapping) else getattr(response, "response", None)
+    return response if wrapped is None else wrapped
+
+
+def _may_be_unbilled(call_type: str | None, response: object) -> bool:
+    if call_type in _RESPONSE_CREATE_CALL_TYPES:
+        return is_background_response(_finished_response(response))
+    return call_type in NON_INFERENCE_CALL_TYPES
+
+
+def _is_managed_background_call(metadata: Mapping[str, object] | None) -> bool:
+    return metadata is not None and metadata.get(MANAGED_BACKGROUND_RESPONSE_METADATA_KEY) is True
 
 
 def is_unbilled_non_inference_call(
@@ -74,18 +104,25 @@ def is_unbilled_non_inference_call(
     """A read/management route priced at zero, because the usage it reports belongs to the
     call that created the object it just read.
 
-    Retrieving a background response is the exception, and the enterprise cost poller's read
-    is the same exception seen from the other side: that job's create billed nothing, so its
-    retrieval is the only place the spend is ever visible. Pricing those at zero would lose
-    the spend rather than deduplicate it.
+    A background response is the exception, since its create billed nothing. When the proxy
+    tracks it as a managed object, the read is marked with
+    ``MANAGED_BACKGROUND_RESPONSE_METADATA_KEY`` and stays free, because the one billing event
+    the proxy logs from the finished response, stamped with
+    ``BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN``, bills the job. A streamed background create
+    the proxy tracks carries the same marker and is free for the same reason. Any other
+    read of a background response (the SDK, a proxy without a database) is the only place its
+    spend is ever visible, so it prices normally.
     """
-    if call_type not in NON_INFERENCE_CALL_TYPES:
+    if not _may_be_unbilled(call_type, response):
         return False
-    if is_background_response(response):
+    if call_type in _RESPONSE_CREATE_CALL_TYPES:
+        return _is_managed_background_call(metadata)
+    origin: Final = metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) if metadata is not None else None
+    if origin == BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN:
         return False
-    if metadata is None:
+    if not is_background_response(response):
         return True
-    return metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) != BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
+    return origin == BACKGROUND_RESPONSE_STATUS_POLL_CALL_ORIGIN or _is_managed_background_call(metadata)
 
 
 def is_unbilled_non_inference_call_from_params(
@@ -95,10 +132,10 @@ def is_unbilled_non_inference_call_from_params(
 ) -> bool:
     """:func:`is_unbilled_non_inference_call` for callers holding raw ``litellm_params``.
 
-    The call-type membership test runs first so that inference traffic, which is every
+    The call-type and background tests run first so that inference traffic, which is every
     request in a normal workload, never pays for the metadata merge behind it.
     """
-    if call_type not in NON_INFERENCE_CALL_TYPES:
+    if not _may_be_unbilled(call_type, response):
         return False
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 
@@ -112,16 +149,19 @@ def sanitize_user_api_key_auth(auth: object) -> object:
     """Copy of the auth object with its budget reservation removed; the cost callback
     falls back to reading the reservation from inside the auth object."""
     if isinstance(auth, dict):
-        return {k: v for k, v in auth.items() if k != "budget_reservation"}  # mutable-ok: SDK metadata value
+        return {k: v for k, v in auth.items() if k != "budget_reservation"}
     reservation: Final[object] = getattr(auth, "budget_reservation", None)
     model_copy: Final[object] = getattr(auth, "model_copy", None)
     if reservation is not None and callable(model_copy):
-        return model_copy(update={"budget_reservation": None})  # mutable-ok: pydantic update payload
+        return model_copy(update={"budget_reservation": None})
     return auth
 
 
-def _sanitized(parent_metadata: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: SDK metadata kwarg
-    return {  # mutable-ok: SDK metadata kwarg
+def without_budget_reservation(
+    parent_metadata: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: SDK metadata kwarg
+    """Parent metadata minus the admission reservation, also inside ``user_api_key_auth``."""
+    return {
         k: sanitize_user_api_key_auth(v) if k == _USER_API_KEY_AUTH_KEY else v
         for k, v in parent_metadata.items()
         if k not in BUDGET_RESERVATION_METADATA_KEYS
@@ -138,10 +178,8 @@ def forwarded_internal_call_metadata(
     parent's full context still describes the call being made.
     """
     if not parent_metadata:
-        return {}  # mutable-ok: SDK metadata kwarg
-    return _sanitized(parent_metadata) | {  # mutable-ok: SDK metadata kwarg
-        INTERNAL_CALL_ORIGIN_METADATA_KEY: call_origin
-    }
+        return {}
+    return without_budget_reservation(parent_metadata) | {INTERNAL_CALL_ORIGIN_METADATA_KEY: call_origin}
 
 
 def parent_session_kwargs(request_kwargs: Mapping[str, object] | None) -> Mapping[str, str]:
@@ -167,4 +205,4 @@ def sanitized_forwardable_call_metadata(
     must not inherit per-request state such as its routing decision or logging payload.
     """
     identity: Final = {k: v for k, v in parent_metadata.items() if k in FORWARDABLE_IDENTITY_METADATA_KEYS}
-    return _sanitized(identity) | {INTERNAL_CALL_ORIGIN_METADATA_KEY: call_origin}  # mutable-ok: SDK metadata kwarg
+    return without_budget_reservation(identity) | {INTERNAL_CALL_ORIGIN_METADATA_KEY: call_origin}

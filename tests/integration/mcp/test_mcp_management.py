@@ -1,22 +1,38 @@
+import itertools
 import uuid
+from functools import partial
 from pathlib import Path
 from typing import Final
 
+import pytest
 import yaml
-from integration._support.client import Gateway, eventually
+from integration._support.client import JSON_OBJECT, Gateway, eventually
+from integration._support.database import read_rows
 from integration._support.mcp import (
     McpCaller,
+    McpPeer,
     call_tool,
     delete_mcp,
     forget_mcp,
+    listed_tools,
     mcp_peer,
+    openapi_peer,
     register_mcp,
     tool_calls,
     tool_names,
 )
 from integration._support.process import owned_proxy
+from pydantic import BaseModel, JsonValue
+
+from litellm.models.user import LiteLLM_UserTable
+from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
 
 ADD: Final = {"a": 4, "b": 5}
+
+
+def _dashboard_ui_session_token(user_id: str) -> str:
+    user: Final = LiteLLM_UserTable(user_id=user_id, user_role="internal_user", models=[])
+    return ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(user)
 
 
 def _servers(gateway: Gateway, key: str | None = None) -> dict[str, dict[str, object]]:
@@ -180,6 +196,54 @@ def test_duplicate_alias_is_rejected_so_tool_prefixes_cannot_collide(gateway: Ga
         scenario.cleanups.callback(forget_mcp, gateway, winner)
 
 
+def _openapi_server_lists_and_calls_only_its_own_tools(
+    gateway: Gateway, key: str, peer: McpPeer, identity: str
+) -> None:
+    listed: Final = set(listed_tools(gateway, key, identity))
+    assert listed == {"getpet", "createpet"}, (identity, listed)
+    peer.drain()
+    called: Final = call_tool(gateway, key, identity, "getpet", {"petId": "7"})
+    assert called.status_code == 200, called.text
+    assert [(item["method"], item["path"]) for item in peer.drain()] == [("GET", "/pets/7")], identity
+
+
+def test_openapi_listing_is_scoped_to_the_exact_alias_when_aliases_overlap(gateway: Gateway) -> None:
+    with openapi_peer() as short, openapi_peer() as long, gateway.scenario() as scenario:
+        stem: Final = "pet" + uuid.uuid4().hex[:8]
+        servers: Final = tuple(
+            (peer, alias, register_mcp(scenario, peer, alias))
+            for peer, alias in ((short, stem), (long, stem + "store"))
+        )
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity for _, _, identity in servers]})
+        for peer, _, identity in servers:
+            _openapi_server_lists_and_calls_only_its_own_tools(gateway, key, peer, identity)
+        aggregate: Final = McpCaller(gateway, key, "mcp").list_tools()
+        assert aggregate.ok, aggregate.raw
+        assert sorted(aggregate.tools) == sorted(
+            f"{prefix}-{tool}" for prefix, tool in itertools.product((stem, stem + "store"), ("getpet", "createpet"))
+        ), aggregate.tools
+        assert all(peer.drain() == () for peer, _, _ in servers), "listing must not reach any OpenAPI upstream"
+
+
+def test_config_declared_openapi_server_with_a_space_in_its_name_lists_its_tools(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with openapi_peer() as peer:
+        config: Final = yaml.safe_load((Path(__file__).resolve().parents[1] / "proxy_config.yaml").read_text())
+        name: Final = "pet store " + uuid.uuid4().hex[:8]
+        config["mcp_servers"] = {name: peer.registration()}
+        path: Final = tmp_path / "openapi-space.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
+            identity: Final = next(i for i, s in _servers(candidate).items() if s["server_name"] == name)
+            key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+            _openapi_server_lists_and_calls_only_its_own_tools(candidate, key, peer, identity)
+            aggregate: Final = McpCaller(candidate, key, "mcp").list_tools()
+            assert aggregate.ok, aggregate.raw
+            prefix: Final = name.replace(" ", "_")
+            assert sorted(aggregate.tools) == [f"{prefix}-createpet", f"{prefix}-getpet"], aggregate.tools
+
+
 def test_invalid_registrations_are_rejected(gateway: Gateway) -> None:
     with mcp_peer() as peer, gateway.scenario() as scenario:
         alias: Final = "mgmt" + uuid.uuid4().hex[:8]
@@ -222,38 +286,40 @@ def test_access_group_membership_follows_edits(gateway: Gateway) -> None:
         assert tool_calls(peer.drain()) == ()
 
 
-def test_peer_worker_observes_create_edit_and_delete_without_restart(gateway: Gateway, peer: Gateway) -> None:
-    with mcp_peer() as first, mcp_peer() as second, gateway.scenario() as scenario:
+def test_peer_worker_observes_create_edit_and_delete_without_restart(gateway: Gateway, tmp_path: Path) -> None:
+    config: Final = tmp_path / "peer.yaml"
+    config.write_text(yaml.safe_dump({
+        "model_list": [],
+        "general_settings": {"master_key": gateway.key, "store_model_in_db": True, "proxy_config_reload_interval_seconds": 3600},
+    }))
+    with (
+        owned_proxy(gateway, tmp_path, {}, config=config, database_setup=()) as peer,
+        mcp_peer() as first,
+        mcp_peer() as second,
+        gateway.scenario() as scenario,
+    ):
         alias: Final = "mgmt" + uuid.uuid4().hex[:8]
         identity: Final = register_mcp(scenario, first, alias)
         key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
-        eventually(
-            lambda: peer.client.get(
-                "/mcp-rest/tools/list", headers={"x-litellm-api-key": key}, params={"server_id": identity}
-            ),
-            lambda value: value.status_code == 200 and value.json() != [],
-            seconds=40,
+        listing: Final = peer.client.get(
+            "/mcp-rest/tools/list", headers={"x-litellm-api-key": key}, params={"server_id": identity}
         )
+        assert listing.status_code == 200 and listing.json() != [], listing.text
         names: Final = tool_names(peer, key, identity)
         assert call_tool(peer, key, identity, names["add"], ADD).status_code == 200
         assert len(tool_calls(first.drain())) == 1
         moved: Final = gateway.request("PUT", "/v1/mcp/server", {"server_id": identity, "url": second.url})
         assert moved.status_code == 202, moved.text
-        eventually(
-            lambda: call_tool(peer, key, identity, names["add"], ADD),
-            lambda value: value.status_code == 200 and len(tool_calls(second.drain())) == 1,
-            seconds=40,
-        )
+        called: Final = call_tool(peer, key, identity, names["add"], ADD)
+        assert called.status_code == 200, called.text
+        assert tool_calls(first.drain()) == ()
+        assert len(tool_calls(second.drain())) == 1
         delete_mcp(gateway, identity)
-        eventually(
-            lambda: peer.client.get(
-                "/mcp-rest/tools/list", headers={"x-litellm-api-key": key}, params={"server_id": identity}
-            ),
-            lambda value: value.status_code >= 400 or value.json() == [],
-            seconds=40,
+        deleted: Final = peer.client.get(
+            "/mcp-rest/tools/list", headers={"x-litellm-api-key": key}, params={"server_id": identity}
         )
-        second.drain()
-        assert call_tool(peer, key, identity, names["add"], ADD).status_code >= 400
+        assert deleted.status_code in (403, 404) or (deleted.status_code == 200 and deleted.json() == []), deleted.text
+        assert call_tool(peer, key, identity, names["add"], ADD).status_code in (403, 404)
         assert tool_calls(second.drain()) == ()
 
 
@@ -285,3 +351,387 @@ def test_config_declared_server_behaves_like_database_server_but_is_read_only(ga
             assert declared_id in _servers(candidate)
             assert call_tool(candidate, key, declared_id, declared_names["add"], ADD).status_code == 200
             assert len(tool_calls(declared_peer.drain())) == 1 and tool_calls(database_peer.drain()) == ()
+
+
+def test_team_granted_database_server_detail_is_available_to_team_key(gateway: Gateway) -> None:
+    with mcp_peer() as peer, gateway.scenario() as scenario:
+        alias: Final = "lit3974_team_" + uuid.uuid4().hex[:8]
+        server_id: Final = register_mcp(scenario, peer, alias)
+        team_id: Final = scenario.team(object_permission={"mcp_servers": [server_id]})
+        key: Final = scenario.key(team_id=team_id)
+
+        response: Final = gateway.request("GET", f"/v1/mcp/server/{server_id}", key=key)
+
+        assert response.status_code == 200, f"Team-granted server detail access should succeed: {response.text}"
+        assert response.json()["server_id"] == server_id, response.text
+        assert response.json()["alias"] == alias, response.text
+
+
+def test_ui_session_lists_and_fetches_team_granted_config_server(
+    gateway: Gateway,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-integration-salt")
+    with mcp_peer() as peer, gateway.scenario() as scenario:
+        alias: Final = "lit3974_config_" + uuid.uuid4().hex[:8]
+        server_id: Final = "lit3974-" + uuid.uuid4().hex[:12]
+        team_id: Final = scenario.team(object_permission={"mcp_servers": [server_id]})
+        user_id: Final = scenario.user(user_role="internal_user", teams=[team_id])
+        config: Final = yaml.safe_load((Path(__file__).resolve().parents[1] / "proxy_config.yaml").read_text())
+        config["mcp_servers"] = {alias: {**peer.registration(), "alias": alias, "server_id": server_id}}
+        config_path: Final = tmp_path / "lit3974-mcp.yaml"
+        config_path.write_text(yaml.safe_dump(config))
+
+        with owned_proxy(gateway, tmp_path, {}, config=config_path) as candidate:
+            token: Final = _dashboard_ui_session_token(user_id)
+            headers: Final = {"Authorization": f"Bearer {token}"}
+            listed: Final = candidate.client.get("/v1/mcp/server", headers=headers)
+            assert listed.status_code == 200, listed.text
+            assert [server["server_id"] for server in listed.json()] == [server_id], listed.text
+
+            detail: Final = candidate.client.get(f"/v1/mcp/server/{server_id}", headers=headers)
+
+        assert detail.status_code == 200, f"Team-granted server detail access should succeed: {detail.text}"
+        assert detail.json()["server_id"] == server_id, detail.text
+        assert detail.json()["alias"] == alias, detail.text
+
+
+@pytest.mark.parametrize("explicit_transport", [False, True])
+def test_modern_sse_registration_rejected_without_saving(gateway: Gateway, explicit_transport: bool) -> None:
+    identity: Final = str(uuid.uuid4())
+    with mcp_peer() as peer:
+        response: Final = gateway.request(
+            "POST",
+            "/v1/mcp/server",
+            {
+                "server_id": identity,
+                "server_name": "invalid" + uuid.uuid4().hex[:8],
+                "url": peer.url,
+                "mcp_info": {"protocol_version": "2026-07-28"},
+                **({"transport": "sse"} if explicit_transport else {}),
+            },
+        )
+        try:
+            assert response.status_code == 422, response.text
+            assert "Modern MCP requires HTTP or stdio" in response.text
+            assert identity not in _servers(gateway)
+            assert peer.drain() == (), "Rejected configuration reached upstream"
+        finally:
+            if response.status_code == 201:
+                delete_mcp(gateway, identity)
+
+
+def test_protocol_transport_updates_validate_effective_configuration(gateway: Gateway) -> None:
+    from integration._support.database import read_rows
+
+    with mcp_peer() as peer, gateway.scenario() as scenario:
+        identity: Final = register_mcp(scenario, peer, "protocol" + uuid.uuid4().hex[:8])
+        modern: Final = gateway.request(
+            "PUT",
+            "/v1/mcp/server",
+            {
+                "server_id": identity,
+                "mcp_info": {"protocol_version": "2026-07-28"},
+            },
+        )
+        assert modern.status_code == 202, modern.text
+        assert modern.json()["transport"] == "http"
+        changed: Final = gateway.request("PUT", "/v1/mcp/server", {"server_id": identity, "description": "renamed"})
+        assert changed.status_code == 202, changed.text
+        assert changed.json()["mcp_info"]["protocol_version"] == "2026-07-28"
+        snapshot: Final = read_rows(
+            'SELECT transport, mcp_info, updated_at::text FROM "LiteLLM_MCPServerTable" WHERE server_id=%s', (identity,)
+        )
+        peer.drain()
+        rejected: Final = gateway.request(
+            "PUT", "/v1/mcp/server", {"server_id": identity, "transport": "sse", "url": peer.url}
+        )
+        assert rejected.status_code == 400, rejected.text
+        assert "Modern MCP requires HTTP or stdio" in rejected.text
+        assert (
+            read_rows(
+                'SELECT transport, mcp_info, updated_at::text FROM "LiteLLM_MCPServerTable" WHERE server_id=%s',
+                (identity,),
+            )
+            == snapshot
+        )
+        assert tool_calls(peer.drain()) == ()
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        assert call_tool(gateway, key, identity, "add", ADD).status_code == 200
+
+        legacy: Final = gateway.request(
+            "PUT", "/v1/mcp/server", {"server_id": identity, "transport": "sse", "url": peer.url, "mcp_info": {}}
+        )
+        assert legacy.status_code == 202, legacy.text
+        legacy_snapshot: Final = read_rows(
+            'SELECT transport, mcp_info, updated_at::text FROM "LiteLLM_MCPServerTable" WHERE server_id=%s', (identity,)
+        )
+        rejected_protocol: Final = gateway.request(
+            "PUT", "/v1/mcp/server", {"server_id": identity, "mcp_info": {"protocol_version": "2026-07-28"}}
+        )
+        assert rejected_protocol.status_code == 400, rejected_protocol.text
+        assert (
+            read_rows(
+                'SELECT transport, mcp_info, updated_at::text FROM "LiteLLM_MCPServerTable" WHERE server_id=%s',
+                (identity,),
+            )
+            == legacy_snapshot
+        )
+        repaired: Final = gateway.request(
+            "PUT",
+            "/v1/mcp/server",
+            {
+                "server_id": identity,
+                "transport": "http",
+                "url": peer.url,
+                "mcp_info": {"protocol_version": "2026-07-28"},
+            },
+        )
+        assert repaired.status_code == 202, repaired.text
+        assert call_tool(gateway, key, identity, "add", ADD).status_code == 200
+
+
+@pytest.mark.parametrize("rename", [False, True])
+def test_concurrent_protocol_transport_edits_cannot_save_incompatible_configuration(
+    gateway: Gateway, peer: Gateway, rename: bool
+) -> None:
+    import os
+    from concurrent.futures import ThreadPoolExecutor
+
+    import psycopg
+    from integration._support.database import read_rows
+
+    with mcp_peer() as upstream, gateway.scenario() as scenario:
+        identity: Final = register_mcp(scenario, upstream, "race" + uuid.uuid4().hex[:8])
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            # Hold the row so both workers read the old configuration before either can write.
+            with psycopg.connect(os.environ["DATABASE_URL"]) as blocker:
+                blocker.execute(
+                    'SELECT server_id FROM "LiteLLM_MCPServerTable" WHERE server_id=%s FOR UPDATE', (identity,)
+                )
+                protocol = pool.submit(
+                    gateway.request,
+                    "PUT",
+                    "/v1/mcp/server",
+                    {
+                        "server_id": identity,
+                        "mcp_info": {"protocol_version": "2026-07-28"},
+                        **({"alias": "renamed" + uuid.uuid4().hex[:8]} if rename else {}),
+                    },
+                )
+                transport = pool.submit(
+                    peer.request,
+                    "PUT",
+                    "/v1/mcp/server",
+                    {
+                        "server_id": identity,
+                        "transport": "sse",
+                        "url": upstream.url,
+                    },
+                )
+                eventually(
+                    lambda: read_rows(
+                        "SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE %s",
+                        ("%LiteLLM_MCPServerTable%",),
+                    ),
+                    lambda rows: len(rows) >= 2,
+                    seconds=3,
+                )
+            responses: Final = [protocol.result(), transport.result()]
+        assert sorted(response.status_code for response in responses) == [202, 400], [r.text for r in responses]
+        saved: Final = read_rows(
+            'SELECT transport, mcp_info FROM "LiteLLM_MCPServerTable" WHERE server_id=%s', (identity,)
+        )[0]
+        assert saved["transport"] == "http" or saved["mcp_info"] != {"protocol_version": "2026-07-28"}
+        repaired: Final = gateway.request(
+            "PUT",
+            "/v1/mcp/server",
+            {
+                "server_id": identity,
+                "transport": "http",
+                "url": upstream.url,
+                "mcp_info": {"protocol_version": "2026-07-28"},
+            },
+        )
+        assert repaired.status_code == 202, repaired.text
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        assert call_tool(gateway, key, identity, "add", ADD).status_code == 200
+
+
+class Submission(BaseModel):
+    server_id: str
+    approval_status: str
+    submitted_by: str | None = None
+    review_notes: str | None = None
+
+
+class Submissions(BaseModel):
+    items: list[Submission]
+
+
+class ListedServerInfo(BaseModel):
+    server_id: str
+
+
+class ListedTool(BaseModel):
+    name: str
+    mcp_info: ListedServerInfo
+
+
+class ToolListing(BaseModel):
+    tools: list[ListedTool]
+
+
+def _submission_row(identity: str) -> list[dict[str, JsonValue]]:
+    return read_rows(
+        'SELECT approval_status, submitted_by, review_notes FROM "LiteLLM_MCPServerTable" WHERE server_id = %s',
+        (identity,),
+    )
+
+
+def _submission(gateway: Gateway, identity: str) -> Submission:
+    response: Final = gateway.client.get("/v1/mcp/server/submissions", headers={"x-litellm-api-key": gateway.key})
+    assert response.status_code == 200, response.text
+    matches: Final = [
+        item for item in Submissions.model_validate_json(response.content).items if item.server_id == identity
+    ]
+    assert len(matches) == 1, response.text
+    return matches[0]
+
+
+def _served(gateway: Gateway, key: str, identity: str) -> bool:
+    response: Final = gateway.client.post(
+        "/mcp-rest/tools/call",
+        headers={"x-litellm-api-key": key},
+        json={"server_id": identity, "name": "add", "arguments": ADD},
+    )
+    return response.status_code == 200 and JSON_OBJECT.validate_json(response.content)["content"] == [
+        {"type": "text", "text": "9", "annotations": None, "_meta": None}
+    ]
+
+
+def _not_found(gateway: Gateway, key: str, identity: str) -> bool:
+    response: Final = gateway.client.post(
+        "/mcp-rest/tools/call",
+        headers={"x-litellm-api-key": key},
+        json={"server_id": identity, "name": "add", "arguments": ADD},
+    )
+    return response.status_code == 404 and JSON_OBJECT.validate_json(response.content) == {
+        "detail": {"error": "server_not_found", "message": f"MCP server '{identity}' was not found"}
+    }
+
+
+def _refusal(gateway: Gateway, key: str, identity: str) -> tuple[int, dict[str, JsonValue]]:
+    response: Final = gateway.client.post(
+        "/mcp-rest/tools/call",
+        headers={"x-litellm-api-key": key},
+        json={"server_id": identity, "name": "add", "arguments": ADD},
+    )
+    return response.status_code, JSON_OBJECT.validate_json(response.content)
+
+
+def _called_tools(upstream: McpPeer) -> list[tuple[object, object]]:
+    return [
+        (call["body"]["params"]["name"], call["body"]["params"]["arguments"])
+        for call in tool_calls(upstream.drain())
+        if isinstance(call["body"], dict) and isinstance(call["body"]["params"], dict)
+    ]
+
+
+def test_team_submission_is_inert_until_approved_serves_both_workers_and_stops_after_reject(
+    gateway: Gateway, peer: Gateway
+) -> None:
+    with mcp_peer() as upstream, mcp_peer() as throwaway_upstream, gateway.scenario() as scenario:
+        alias: Final = "submitted" + uuid.uuid4().hex[:8]
+        user: Final = scenario.user()
+        team: Final = scenario.team()
+        member: Final = scenario.key(team_id=team, user_id=user)
+        outsider: Final = scenario.key(team_id=scenario.team())
+        registered: Final = gateway.client.post(
+            "/v1/mcp/server/register",
+            headers={"x-litellm-api-key": member},
+            json={"server_name": alias, "alias": alias, **upstream.registration()},
+        )
+        assert registered.status_code == 201, registered.text
+        submitted: Final = Submission.model_validate_json(registered.content)
+        identity: Final = submitted.server_id
+        scenario.cleanups.callback(forget_mcp, gateway, identity)
+        assert (submitted.approval_status, submitted.submitted_by) == ("pending_review", user), registered.text
+        assert _submission_row(identity) == [
+            {"approval_status": "pending_review", "submitted_by": user, "review_notes": None}
+        ]
+        assert _submission(gateway, identity).approval_status == "pending_review"
+        throwaway_alias: Final = "reload" + uuid.uuid4().hex[:8]
+        throwaway_registered: Final = gateway.client.post(
+            "/v1/mcp/server/register",
+            headers={"x-litellm-api-key": member},
+            json={"server_name": throwaway_alias, "alias": throwaway_alias, **throwaway_upstream.registration()},
+        )
+        assert throwaway_registered.status_code == 201, throwaway_registered.text
+        throwaway_submission: Final = Submission.model_validate_json(throwaway_registered.content)
+        throwaway_identity: Final = throwaway_submission.server_id
+        scenario.cleanups.callback(forget_mcp, gateway, throwaway_identity)
+        assert (throwaway_submission.approval_status, throwaway_submission.submitted_by) == ("pending_review", user), (
+            throwaway_registered.text
+        )
+        granted: Final = gateway.request(
+            "POST",
+            "/team/update",
+            {"team_id": team, "object_permission": {"mcp_servers": [identity, throwaway_identity]}},
+        )
+        assert granted.status_code == 200, granted.text
+        throwaway_approved: Final = gateway.request("PUT", f"/v1/mcp/server/{throwaway_identity}/approve")
+        assert throwaway_approved.status_code == 200, throwaway_approved.text
+        assert Submission.model_validate_json(throwaway_approved.content).approval_status == "active", (
+            throwaway_approved.text
+        )
+        assert _served(gateway, member, throwaway_identity), "the approving worker did not serve the throwaway"
+        assert eventually(partial(_served, peer, member, throwaway_identity), bool, seconds=70)
+        throwaway_upstream.drain()
+        upstream.drain()
+        not_found: Final = (
+            404,
+            {"detail": {"error": "server_not_found", "message": f"MCP server '{identity}' was not found"}},
+        )
+        for worker, key in itertools.product((gateway, peer), (member, outsider)):
+            pending_list = worker.client.get("/mcp-rest/tools/list", headers={"x-litellm-api-key": key})
+            assert pending_list.status_code == 200, pending_list.text
+            listed = ToolListing.model_validate_json(pending_list.content).tools
+            assert [tool.name for tool in listed if tool.mcp_info.server_id == identity] == [], pending_list.text
+            assert _refusal(worker, key, identity) == not_found, worker.client.base_url
+        assert _called_tools(upstream) == [], "a pending submission reached the peer"
+
+        approved: Final = gateway.request("PUT", f"/v1/mcp/server/{identity}/approve")
+        assert approved.status_code == 200, approved.text
+        assert Submission.model_validate_json(approved.content).approval_status == "active", approved.text
+        assert _submission_row(identity)[0]["approval_status"] == "active"
+        assert _submission(gateway, identity).approval_status == "active"
+        assert _served(gateway, member, identity), "the approving worker did not serve the approved submission"
+        assert eventually(partial(_served, peer, member, identity), bool, seconds=70)
+        denied: Final = (
+            403,
+            {"detail": {"error": "access_denied", "message": f"The key is not allowed to access server {identity}"}},
+        )
+        for worker in (gateway, peer):
+            assert _refusal(worker, outsider, identity) == denied, worker.client.base_url
+        assert _called_tools(upstream) == [("add", ADD), ("add", ADD)], "expected one served call per worker"
+
+        notes: Final = "rejected by integration review " + uuid.uuid4().hex[:8]
+        rejected: Final = gateway.request("PUT", f"/v1/mcp/server/{identity}/reject", {"review_notes": notes})
+        assert rejected.status_code == 200, rejected.text
+        rejection: Final = Submission.model_validate_json(rejected.content)
+        assert (rejection.approval_status, rejection.review_notes) == ("rejected", notes), rejected.text
+        assert _submission_row(identity) == [
+            {"approval_status": "rejected", "submitted_by": user, "review_notes": notes}
+        ]
+        submission: Final = _submission(gateway, identity)
+        assert (submission.approval_status, submission.review_notes) == ("rejected", notes)
+        assert _refusal(gateway, member, identity) == not_found, "the rejecting worker still served the submission"
+        assert _called_tools(upstream) == [], "the rejecting worker forwarded a call for the rejected submission"
+        assert eventually(partial(_not_found, peer, member, identity), bool, seconds=70)
+        upstream.drain()
+        for worker in (gateway, peer):
+            assert _refusal(worker, member, identity) == not_found, worker.client.base_url
+            assert _refusal(worker, outsider, identity) == not_found, worker.client.base_url
+        assert _called_tools(upstream) == [], "a rejected submission reached the peer"

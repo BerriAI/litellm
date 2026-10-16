@@ -380,7 +380,7 @@ def _synthesize_responses_api_response(
             if first_cost is not None:
                 current_cost: Final = hidden.get("response_cost") if isinstance(hidden, dict) else 0
                 hidden["response_cost"] = (current_cost or 0) + first_cost
-        synthesized._hidden_params = hidden
+        synthesized.hidden_params = hidden
     return synthesized
 
 

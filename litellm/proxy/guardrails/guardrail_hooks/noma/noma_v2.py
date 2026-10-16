@@ -26,6 +26,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy.guardrails.guardrail_hooks.noma.noma import NomaBlockedMessage
 from litellm.types.guardrail_base_init import GuardrailBaseInitKwargs
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.proxy.guardrails.guardrail_hooks.noma import NomaV2StreamingParams
 from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailStatus
 
 if TYPE_CHECKING:
@@ -62,6 +63,11 @@ class NomaV2Guardrail(CustomGuardrail):
         application_id: str | None = None,
         monitor_mode: bool | None = None,
         block_failures: bool | None = None,
+        gateway_name: str | None = None,
+        streaming_buffer_until_moderated: bool | None = None,
+        streaming_end_of_stream_only: bool | None = None,
+        streaming_sampling_rate: int | None = None,
+        streaming_buffer_release_on_scan: bool | None = None,
         **kwargs: Any,
     ) -> None:
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
@@ -69,6 +75,9 @@ class NomaV2Guardrail(CustomGuardrail):
         self.api_key = api_key or os.environ.get("NOMA_API_KEY")
         self.api_base = (api_base or os.environ.get("NOMA_API_BASE") or _DEFAULT_API_BASE).rstrip("/")
         self.application_id = application_id or os.environ.get("NOMA_APPLICATION_ID")
+        self.gateway_name = self._get_non_empty_str(gateway_name) or self._get_non_empty_str(
+            os.environ.get("NOMA_GATEWAY_NAME")
+        )
         if monitor_mode is None:
             self.monitor_mode = os.environ.get("NOMA_MONITOR_MODE", "false").lower() == "true"
         else:
@@ -81,6 +90,24 @@ class NomaV2Guardrail(CustomGuardrail):
 
         if self._requires_api_key(api_base=self.api_base) and not self.api_key:
             raise ValueError("Noma v2 guardrail requires api_key when using Noma SaaS endpoint")
+
+        streaming: Final = NomaV2StreamingParams.model_validate(
+            {
+                "streaming_buffer_until_moderated": streaming_buffer_until_moderated,
+                "streaming_end_of_stream_only": streaming_end_of_stream_only,
+                "streaming_sampling_rate": streaming_sampling_rate,
+                "streaming_buffer_release_on_scan": streaming_buffer_release_on_scan,
+            },
+            context={"guardrail_name": kwargs.get("guardrail_name")},
+        )
+        if streaming.streaming_buffer_until_moderated is not None:
+            self.streaming_buffer_until_moderated: bool = streaming.streaming_buffer_until_moderated
+        if streaming.streaming_end_of_stream_only is not None:
+            self.streaming_end_of_stream_only: bool = streaming.streaming_end_of_stream_only
+        if streaming.streaming_sampling_rate is not None:
+            self.streaming_sampling_rate: int = streaming.streaming_sampling_rate
+        if streaming.streaming_buffer_release_on_scan is not None:
+            self.streaming_buffer_release_on_scan: bool = streaming.streaming_buffer_release_on_scan
 
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
 
@@ -166,6 +193,8 @@ class NomaV2Guardrail(CustomGuardrail):
         }
         if application_id:
             payload["application_id"] = application_id
+        if self.gateway_name:
+            payload["gateway_name"] = self.gateway_name
         return payload
 
     @staticmethod
@@ -214,6 +243,7 @@ class NomaV2Guardrail(CustomGuardrail):
             url=endpoint,
             headers=headers,
             json=sanitized_payload,
+            timeout=self.timeout,
         )
         verbose_proxy_logger.debug(
             "Noma v2 AIDR response: status_code=%s body=%s",

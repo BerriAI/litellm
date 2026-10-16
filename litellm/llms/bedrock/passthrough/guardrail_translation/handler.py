@@ -17,8 +17,8 @@ if TYPE_CHECKING:
     from litellm.llms.pass_through.guardrail_translation.handler import (
         PassThroughEndpointHandler,
     )
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.utils import ProxyLogging
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 _CONVERSE_ACTIONS: Final = frozenset({"converse", "converse-stream"})
 _EVENT_STREAM_CONTENT_TYPE: Final = "vnd.amazon.eventstream"
@@ -206,12 +206,14 @@ class _TextContainer(Protocol):
 
 _DeltaHolder = tuple[_GroupKey, _TextContainer, str]
 
+_StreamGroupKey: TypeAlias = tuple[int | None, _GroupKey]
+
 
 class _StreamFrame(TypedDict):
     """One raw event-stream frame plus the guardrailable texts it carries."""
 
     raw: ReadOnly[bytes]
-    texts: ReadOnly[Sequence[tuple[_GroupKey, str]]]
+    texts: ReadOnly[Sequence[tuple[_StreamGroupKey, str]]]
 
 
 def _unpack_uint32(buffer: bytes) -> int:
@@ -302,12 +304,14 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
                 frames.append({"raw": frame_raw, "texts": []})
                 continue
 
-            texts: list[tuple[_GroupKey, str]] = []
+            texts: list[tuple[_StreamGroupKey, str]] = []
             if event_type == "contentBlockDelta":
                 try:
                     payload_dict: dict[str, object] = _json.loads(payload_bytes)
+                    block_index = payload_dict.get("contentBlockIndex")
+                    # Group per content block: a guardrail edit that changes length must not move text between blocks.
                     texts = [
-                        (group_key, container[key])
+                        ((block_index if isinstance(block_index, int) else None, group_key), container[key])
                         for group_key, container, key in _collect_stream_delta_text_holders(payload_dict.get("delta"))
                     ]
                 except Exception as e:
@@ -321,9 +325,9 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
 
         trailing_bytes: Final = body_bytes[offset:]
 
-        group_order: Final[list[_GroupKey]] = []
-        group_members: Final[dict[_GroupKey, list[tuple[int, int]]]] = {}
-        group_texts: Final[dict[_GroupKey, list[str]]] = {}
+        group_order: Final[list[_StreamGroupKey]] = []
+        group_members: Final[dict[_StreamGroupKey, list[tuple[int, int]]]] = {}
+        group_texts: Final[dict[_StreamGroupKey, list[str]]] = {}
         for frame_idx, frame in enumerate(frames):
             for local_idx, (group_key, text) in enumerate(frame["texts"]):
                 if group_key not in group_members:
