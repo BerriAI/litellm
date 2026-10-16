@@ -35,9 +35,10 @@ exactly once through the store, and a delete on any replica rebuilds the
 billing context from the store when the poll task is not local. Every row
 still unsettled when a process starts is resumed there, including one whose
 settler died between its claim and its outcome: the database-backed store
-treats a claim as a lease, so such a row is claimable again once the lease
-runs out. The default store is in-memory, which keeps the SDK and
-single-process behavior unchanged; the proxy installs a database-backed one.
+treats a claim as a lease that its settler renews until it records the
+outcome, so such a row is claimable again once the lease runs out. The
+default store is in-memory, which keeps the SDK and single-process behavior
+unchanged; the proxy installs a database-backed one.
 """
 
 import asyncio
@@ -119,6 +120,8 @@ class BackgroundSettlementStore(Protocol):
 
     async def claim(self, interaction_id: str) -> bool: ...
 
+    async def renew_claim(self, interaction_id: str) -> None: ...
+
     async def record_outcome(self, interaction_id: str, outcome: SettlementOutcome) -> None: ...
 
     async def unsettled(self) -> Sequence[PendingBackgroundInteraction]: ...
@@ -152,6 +155,9 @@ class InMemoryBackgroundSettlementStore:
         self._rows[interaction_id] = None
         return True
 
+    async def renew_claim(self, interaction_id: str) -> None:
+        return None
+
     async def record_outcome(self, interaction_id: str, outcome: SettlementOutcome) -> None:
         return None
 
@@ -184,6 +190,7 @@ class BackgroundInteractionPollContext:
     timeout_seconds: float = BACKGROUND_INTERACTION_COST_POLL_TIMEOUT_SECONDS
     start_delay_seconds: float = 0.0
     outcome_write_timeout_seconds: float = BACKGROUND_INTERACTION_SETTLEMENT_CLAIM_LEASE_SECONDS / 2
+    claim_renewal_interval_seconds: float = BACKGROUND_INTERACTION_SETTLEMENT_CLAIM_LEASE_SECONDS / 3
     store: BackgroundSettlementStore = field(default_factory=InMemoryBackgroundSettlementStore)
     resumed: bool = False
 
@@ -454,12 +461,33 @@ async def _release(
     return outcome
 
 
+async def _renew_claim_until_cancelled(context: BackgroundInteractionPollContext) -> None:
+    while True:
+        await asyncio.sleep(context.claim_renewal_interval_seconds)
+        try:
+            await context.store.renew_claim(context.interaction_id)
+        except Exception as e:  # noqa: BLE001  # a missed renewal is retried next interval, well inside the lease
+            verbose_logger.warning(
+                "Could not renew the settlement claim of background interaction %s: %s", context.interaction_id, e
+            )
+
+
 async def _settle(
     context: BackgroundInteractionPollContext, response: InteractionsAPIResponse | None
 ) -> SettlementOutcome:
-    if response is not None and response.status in _TERMINAL_STATUSES and response.usage is not None:
-        return await _bill(context, response)
-    return await _release(context, "released")
+    """
+    Billing runs every success callback in turn, and a slow one can outlast
+    the claim lease, so the claim is renewed until the outcome is recorded.
+    A settler that stops renewing has died, and only then can another take
+    the row over.
+    """
+    renewal: Final = asyncio.create_task(_renew_claim_until_cancelled(context))
+    try:
+        if response is not None and response.status in _TERMINAL_STATUSES and response.usage is not None:
+            return await _bill(context, response)
+        return await _release(context, "released")
+    finally:
+        renewal.cancel()
 
 
 async def poll_and_log_background_interaction_cost(
@@ -649,6 +677,11 @@ class _UnverifiedRegistrationStore:
         if await self.durable.is_claimed(interaction_id):
             return False
         return await self.local.claim(interaction_id)
+
+    async def renew_claim(self, interaction_id: str) -> None:
+        if await self.local.is_claimed(interaction_id):
+            return
+        await self.durable.renew_claim(interaction_id)
 
     async def record_outcome(self, interaction_id: str, outcome: SettlementOutcome) -> None:
         if await self.local.is_claimed(interaction_id):

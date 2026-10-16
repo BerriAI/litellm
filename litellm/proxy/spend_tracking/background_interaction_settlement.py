@@ -6,7 +6,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Protocol, TypeVar
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeVar
 
 from pydantic import ValidationError
 from typing_extensions import ReadOnly, TypedDict
@@ -78,6 +78,12 @@ class _ExpiredClaimRowKey(TypedDict):
     claimed_at: ReadOnly[_Before]
 
 
+class _OwnClaimRowKey(TypedDict):
+    interaction_id: ReadOnly[str]
+    claimed_by: ReadOnly[str]
+    settled_at: ReadOnly[None]
+
+
 class _UnsettledRows(TypedDict):
     settled_at: ReadOnly[None]
 
@@ -101,7 +107,7 @@ class _SettlementTableActions(Protocol):
     def find_many(self, *, where: _UnsettledRows) -> Awaitable[Sequence[_SettlementRow]]: ...
 
     def update_many(
-        self, *, data: _Claim | _Outcome, where: _RowKey | _UnclaimedRowKey | _ExpiredClaimRowKey
+        self, *, data: _Claim | _Outcome, where: _RowKey | _UnclaimedRowKey | _ExpiredClaimRowKey | _OwnClaimRowKey
     ) -> Awaitable[int]: ...
 
 
@@ -158,12 +164,13 @@ class PrismaBackgroundSettlementStore:
     A claim is a lease, not a settlement: the settler that claims a row bills
     or releases it and then records the outcome, so a row claimed longer ago
     than the lease with no outcome belongs to a settler that died in between,
-    and any settler may claim it again. The lease is far longer than settling
-    takes, so a live settler is never overtaken. The settler before may have
-    billed and then died or failed to record it, so a takeover bills only when
-    the interaction has no spend row yet, and otherwise records it as billed.
-    With spend logs off there is no row to tell, so a takeover bills nothing
-    rather than risk billing twice.
+    and any settler may claim it again. A live settler renews its claim while
+    it settles, so it is never overtaken. The settler before may have billed
+    and then died or failed to record it, so a takeover bills only when the
+    interaction has no spend row yet, and otherwise records it as billed. The
+    spend row is read before the claim is taken, so a failed read takes
+    nothing and the claim is retried. With spend logs off there is no row to
+    tell, so a takeover bills nothing rather than risk billing twice.
     """
 
     table: _SettlementTableActions
@@ -195,6 +202,7 @@ class PrismaBackgroundSettlementStore:
     async def claim(self, interaction_id: str) -> bool:
         if await self._claim_where(_UnclaimedRowKey(interaction_id=interaction_id, claimed_at=None)):
             return True
+        settled_before: Final = await self._outcome_a_dead_settler_left(interaction_id)
         took_over: Final = await self._claim_where(
             _ExpiredClaimRowKey(
                 interaction_id=interaction_id,
@@ -202,7 +210,22 @@ class PrismaBackgroundSettlementStore:
                 claimed_at=_Before(lt=datetime.now(timezone.utc) - self._lease),
             )
         )
-        return took_over and await self._left_unbilled(interaction_id)
+        if not took_over or settled_before is None:
+            return took_over
+        if settled_before == "unsettled":
+            verbose_proxy_logger.warning(
+                "Background interaction %s lost its settler mid-settle, and with spend logs off nothing shows "
+                "whether it was billed, so it is left unbilled rather than risk billing it twice",
+                interaction_id,
+            )
+        await self.record_outcome(interaction_id, settled_before)
+        return False
+
+    async def renew_claim(self, interaction_id: str) -> None:
+        await self.table.update_many(
+            data=_Claim(claimed_at=datetime.now(timezone.utc), claimed_by=self.claimed_by),
+            where=_OwnClaimRowKey(interaction_id=interaction_id, claimed_by=self.claimed_by, settled_at=None),
+        )
 
     async def _claim_where(self, where: _UnclaimedRowKey | _ExpiredClaimRowKey) -> bool:
         claimed_rows: Final = await _read_from_a_table_that_may_not_exist(
@@ -213,19 +236,12 @@ class PrismaBackgroundSettlementStore:
         )
         return claimed_rows == 1
 
-    async def _left_unbilled(self, interaction_id: str) -> bool:
+    async def _outcome_a_dead_settler_left(self, interaction_id: str) -> Literal["billed", "unsettled"] | None:
         if not self.spend_logs_kept():
-            verbose_proxy_logger.warning(
-                "Background interaction %s lost its settler mid-settle, and with spend logs off nothing shows "
-                "whether it was billed, so it is left unbilled rather than risk billing it twice",
-                interaction_id,
-            )
-            await self.record_outcome(interaction_id, "unsettled")
-            return False
+            return "unsettled"
         if await self.spend_logs.find_unique(where=_SpendLogKey(request_id=interaction_id)) is None:
-            return True
-        await self.record_outcome(interaction_id, "billed")
-        return False
+            return None
+        return "billed"
 
     @property
     def _lease(self) -> timedelta:

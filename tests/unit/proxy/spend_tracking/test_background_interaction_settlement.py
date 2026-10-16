@@ -15,6 +15,7 @@ from litellm.interactions.background_cost_polling import (
     configure_background_settlement_store,
     maybe_settle_background_interaction_before_delete,
     PendingBackgroundInteraction,
+    poll_and_log_background_interaction_cost,
     PollSchedule,
     resume_unsettled_background_interactions,
 )
@@ -399,6 +400,99 @@ async def test_with_spend_logs_off_a_takeover_leaves_the_interaction_unbilled_in
         ]
     finally:
         configure_background_settlement_store(previous_store)
+
+
+class _SpendLogsWhoseFirstReadFails(_FakeSpendLogs):
+    def __init__(self):
+        super().__init__()
+        self.reads = 0
+
+    async def find_unique(self, *, where):
+        self.reads += 1
+        if self.reads == 1:
+            raise RuntimeError("read replica unavailable")
+        return await super().find_unique(where=where)
+
+
+@pytest.mark.asyncio
+async def test_a_takeover_whose_spend_log_read_failed_retries_and_bills_instead_of_stranding_the_row():
+    """
+    The regression: a takeover wrote its claim before reading the spend log,
+    so a failed read left the row under a fresh claim of its own, which the
+    poll then took for another settler's and left unbilled until a reboot.
+    """
+    table = _FakeSettlementTable(
+        rows=(_stored_row("interactions/bg-dead-settler", claimed_at=_past_the_default_lease()),)
+    )
+    fetch, _ = _capturing_fetch()
+    previous_store = bg._STORE.store
+    try:
+        (resumed,) = await configure_background_interaction_settlement(
+            table=table,
+            spend_logs=_SpendLogsWhoseFirstReadFails(),
+            spend_logs_kept=lambda: True,
+            claimed_by="replica-b:1",
+            fetch_interaction=fetch,
+            schedule=FAST_SCHEDULE,
+        )
+
+        assert await asyncio.wait_for(resumed, timeout=5) == "billed"
+        assert table.rows["interactions/bg-dead-settler"].outcome == "billed"
+    finally:
+        configure_background_settlement_store(previous_store)
+
+
+def _logging_obj_whose_bill_takes(seconds: float, bills: list) -> LitellmLogging:
+    logging_obj = _logging_obj()
+
+    async def bill(result):
+        bills.append(result.id)
+        await asyncio.sleep(seconds)
+
+    logging_obj.async_log_background_interaction_completion = bill
+    return logging_obj
+
+
+@pytest.mark.asyncio
+async def test_a_settle_that_outlasts_the_lease_is_not_taken_over_and_billed_twice():
+    """
+    The regression: a success callback that held the settle past the claim
+    lease let a booting replica take the live claim over and bill the same
+    interaction a second time.
+    """
+    lease_seconds = 0.6
+    table = _FakeSettlementTable()
+    creator = _store(table, claimed_by="replica-a:1", claim_lease_seconds=lease_seconds)
+    resumer = _store(table, claimed_by="replica-b:1", claim_lease_seconds=lease_seconds)
+    await creator.register(_pending("interactions/bg-slow-settle"))
+    fetch, _ = _capturing_fetch()
+    bills = []
+
+    def poll(store, resumed: bool, start_delay_seconds: float):
+        return poll_and_log_background_interaction_cost(
+            BackgroundInteractionPollContext(
+                interaction_id="interactions/bg-slow-settle",
+                custom_llm_provider="gemini",
+                logging_obj=_logging_obj_whose_bill_takes(lease_seconds * 2.5, bills),
+                initial_interval_seconds=0.001,
+                max_interval_seconds=0.002,
+                timeout_seconds=lease_seconds * 3,
+                start_delay_seconds=start_delay_seconds,
+                claim_renewal_interval_seconds=lease_seconds / 10,
+                store=store,
+                resumed=resumed,
+            ),
+            fetch,
+        )
+
+    outcomes = await asyncio.gather(
+        poll(creator, resumed=False, start_delay_seconds=0.0),
+        poll(resumer, resumed=True, start_delay_seconds=lease_seconds * 1.5),
+    )
+
+    assert outcomes == ["billed", None]
+    assert bills == ["interactions/bg-slow-settle"]
+    assert table.rows["interactions/bg-slow-settle"].claimed_by == "replica-a:1"
 
 
 @pytest.mark.asyncio
