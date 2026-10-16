@@ -1,4 +1,5 @@
 import asyncio
+import itertools
 import json
 import re
 import threading
@@ -468,6 +469,130 @@ async def test_a_mantle_chat_pin_sends_what_chat_cannot_serve_to_responses(
 
 def _placed(placement: str, params: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
     return params if placement == "top-level" else {"extra_body": dict(params)}
+
+
+async def _messages_with_thinking(
+    gateway: Gateway, model: str, marker: str, thinking: Mapping[str, JsonValue]
+) -> _Answer:
+    async with httpx.AsyncClient(base_url=_proxy_url(gateway), timeout=60, trust_env=False) as client:
+        response: Final = await client.post(
+            "/v1/messages",
+            json={"model": model, "max_tokens": 2048, "thinking": dict(thinking), "messages": _messages(marker)},
+            headers={"Authorization": f"Bearer {gateway.key}", "anthropic-version": "2023-06-01"},
+        )
+    identity: Final = _identity("messages", False, response.text) if response.status_code == 200 else ""
+    return _Answer(response.status_code, identity, response.headers.get("x-litellm-call-id", ""), response.text)
+
+
+@pytest.mark.parametrize(("summary", "route"), ((None, "chat"), ("auto", "responses")), ids=("plain", "summary"))
+async def test_a_mantle_chat_pin_moves_messages_thinking_to_responses_only_when_it_asks_for_a_summary(
+    gateway: Gateway, summary: str | None, route: Api
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    thinking: Final[Mapping[str, JsonValue]] = {"type": "enabled", "budget_tokens": 1024} | (
+        {} if summary is None else {"summary": summary}
+    )
+    with wire_server(_upstream()) as wire, gateway.scenario() as scenario:
+        pinned: Final = _deployment(scenario, wire, _MANTLE_GPT, "chat")
+        answer: Final = _assert_answered(await _messages_with_thinking(gateway, pinned, marker, thinking), marker)
+        (attempt,) = _attempts(wire)
+        assert attempt.api == route, attempt
+        match route:
+            case "chat":
+                assert "summary" not in json.dumps(attempt.body), attempt.body
+            case "responses":
+                assert object_value(attempt.body["reasoning"])["summary"] == summary, attempt.body
+        _assert_logged(answer, pinned, "success")
+
+
+def _sent_effort(attempt: _Attempt) -> JsonValue:
+    match attempt.api:
+        case "chat":
+            return attempt.body.get("reasoning_effort")
+        case "responses":
+            return object_value(attempt.body["reasoning"]).get("effort")
+
+
+@pytest.mark.parametrize(
+    ("backend", "mode", "effort", "route"),
+    ((_OPENAI_GPT, None, "low", "responses"), (_MANTLE_GPT, "chat", "none", "chat")),
+    ids=("openai-low", "mantle-chat-pin-none"),
+)
+@pytest.mark.parametrize("placement", ("top-level", "extra-body"))
+async def test_an_effort_inside_extra_body_routes_function_tools_like_a_top_level_one(
+    gateway: Gateway, backend: str, mode: str | None, effort: str, route: Api, placement: str
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    extra: Final[Mapping[str, JsonValue]] = {
+        **_NO_RETRIES,
+        "tools": [dict(_FUNCTION_TOOL)],
+        **_placed(placement, {"reasoning_effort": effort}),
+    }
+    with wire_server(_upstream()) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire, backend, mode)
+        answer: Final = _assert_answered(await _http(gateway, _Call(model, "chat", False, marker), extra), marker)
+        (attempt,) = _attempts(wire)
+        assert (attempt.api, _sent_effort(attempt)) == (route, effort), attempt
+        _assert_logged(answer, model, "success")
+
+
+_AUTO_SUMMARY_LEVELS: Final[Mapping[str, str]] = MappingProxyType(
+    {"auto-summary-mantle": "auto", "auto-summary-openai": "detailed"}
+)
+_PLAIN_THINKING: Final[Mapping[str, JsonValue]] = MappingProxyType({"type": "enabled", "budget_tokens": 1024})
+
+
+def _auto_summary_config(wire: Wire, tmp_path: Path) -> Path:
+    base: Final = _JSON_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
+    mantle: Final[dict[str, JsonValue]] = {
+        "model": _MANTLE_GPT,
+        "custom_llm_provider": "bedrock_mantle",
+        "api_base": wire.url + "/openai/v1",
+        "api_key": _API_KEY,
+    }
+    openai_codex: Final[dict[str, JsonValue]] = {
+        "model": "openai/gpt-5.3-codex",
+        "api_base": wire.url + "/v1",
+        "api_key": _API_KEY,
+    }
+    config: Final = {
+        **base,
+        "model_list": [
+            {"model_name": "auto-summary-mantle", "litellm_params": mantle},
+            {"model_name": "auto-summary-openai", "litellm_params": openai_codex},
+        ],
+        "router_settings": {**object_value(base["router_settings"]), "num_retries": 0},
+    }
+    path: Final = tmp_path / "deployment-mode-routing-auto-summary.yaml"
+    path.write_text(yaml.safe_dump(config))
+    return path
+
+
+async def _ask_for_reasoning(gateway: Gateway, call: _Call) -> _Answer:
+    if call.endpoint == "messages":
+        return await _messages_with_thinking(gateway, call.model, call.marker, _PLAIN_THINKING)
+    return await _http(gateway, call, {**_NO_RETRIES, "reasoning_effort": "low"})
+
+
+@pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+async def test_the_auto_summary_asks_each_target_for_a_level_it_accepts_on_every_endpoint(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    endpoints: Final[tuple[Endpoint, ...]] = ("chat", "messages", "responses")
+    calls: Final = tuple(
+        _Call(model, endpoint, False, uuid.uuid4().hex)
+        for model, endpoint in itertools.product(_AUTO_SUMMARY_LEVELS, endpoints)
+    )
+    with wire_server(_upstream()) as wire:
+        config: Final = _auto_summary_config(wire, tmp_path)
+        with owned_proxy_process(gateway, tmp_path, {"LITELLM_REASONING_AUTO_SUMMARY": "true"}, config=config) as owned:
+            for call in calls:
+                _assert_answered(await _ask_for_reasoning(owned.gateway, call), call.marker)
+        sent: Final = {
+            attempt.marker: (attempt.api, object_value(attempt.body["reasoning"]).get("summary"))
+            for attempt in _attempts(wire)
+        }
+    assert sent == {call.marker: ("responses", _AUTO_SUMMARY_LEVELS[call.model]) for call in calls}
 
 
 @pytest.mark.parametrize("placement", ("top-level", "extra-body"))

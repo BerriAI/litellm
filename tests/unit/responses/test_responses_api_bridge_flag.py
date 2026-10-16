@@ -24,6 +24,7 @@ from litellm import Router
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.responses.bridge_check import (
     backend_serves_chat_completions,
+    bridge_reasoning_effort,
     deployment_routing_mode,
     responses_api_bridge_check,
 )
@@ -832,3 +833,22 @@ def test_backend_serves_chat_completions_reads_the_shared_row(
     shared_model_info: Mapping[str, JsonValue], expected: bool
 ) -> None:
     assert backend_serves_chat_completions(shared_model_info) is expected
+
+
+@pytest.mark.parametrize(
+    "extra_body, expected",
+    [
+        ({"reasoning_effort": {"effort": "low", "summary": "auto"}}, {"effort": "low", "summary": "auto"}),
+        ({"reasoning_effort": "low"}, "low"),
+        ({"reasoning_effort": 5}, None),
+        ({"reasoning_effort": ["low"]}, None),
+        ({}, None),
+        ("reasoning_effort=low", None),
+        (None, None),
+    ],
+    ids=["dict", "string", "int", "list", "absent", "not-a-mapping", "no-extra-body"],
+)
+def test_bridge_reasoning_effort_reads_only_a_string_or_mapping_effort_nested_in_extra_body(
+    extra_body: JsonValue, expected: JsonValue
+) -> None:
+    assert bridge_reasoning_effort(None, extra_body) == expected
