@@ -46,6 +46,8 @@ def optional_sequence(value: object) -> Sequence[object] | None:
 
 def known_params(names: Collection[str], request: Mapping[str, object]) -> Mapping[str, object]:
     return {name: value for name, value in request.items() if name in names and value is not None}
+
+
 _BAGS: Final = frozenset({inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD})
 
 

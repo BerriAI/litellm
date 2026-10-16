@@ -186,7 +186,7 @@ _PARAMS: Final = TypeAdapter(dict[str, object])
 
 def model_param_gating(request: NativeCall) -> bool:
     from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
-    from litellm.rust_bridge.responses.route_host import PARAMETERS
+    from litellm.rust_bridge.host.routes.responses import PARAMETERS
 
     params: Final = {name: request.resolved[name] for name in PARAMETERS if request.resolved.get(name) is not None}
     mapped: Final = _PARAMS.validate_python(
