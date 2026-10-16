@@ -3711,10 +3711,20 @@ async def test_mid_stream_continuation_declines_while_an_output_guardrail_is_reg
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "fallback_entry,continues",
-    [({"model": "backup", "messages": [{"role": "user", "content": "Say hi"}]}, False), ({"model": "backup"}, True)],
-    ids=["entry_with_its_own_messages", "entry_with_model_only"],
+    [
+        ({"model": "backup", "messages": [{"role": "user", "content": "Say hi"}]}, False),
+        ({"model": "backup", "stream": False}, False),
+        ({"model": "backup", "max_tokens": 300}, False),
+        ({"model": "backup"}, True),
+    ],
+    ids=[
+        "entry_with_its_own_messages",
+        "entry_turning_off_streaming",
+        "entry_with_its_own_max_tokens",
+        "entry_with_model_only",
+    ],
 )
-async def test_mid_stream_continuation_declines_a_request_fallback_that_brings_its_own_messages(
+async def test_mid_stream_continuation_declines_a_request_fallback_that_overrides_request_params(
     fallback_entry: dict[str, object], continues: bool
 ) -> None:
     assert await _continues_after_content({"fallbacks": [fallback_entry]}) is continues

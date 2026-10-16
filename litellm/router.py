@@ -3580,7 +3580,7 @@ class Router:
             return False
         fallbacks: Final = request_kwargs.get("fallbacks", self.fallbacks)
         if isinstance(fallbacks, list) and any(
-            isinstance(entry, Mapping) and "messages" in entry for entry in fallbacks
+            isinstance(entry, Mapping) and "model" in entry and len(entry) > 1 for entry in fallbacks
         ):
             return False
         return not any(
