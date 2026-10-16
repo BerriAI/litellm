@@ -364,10 +364,10 @@ def filter_web_search_deployments(
     if isinstance(healthy_deployments, dict):
         return healthy_deployments
 
-    tools_value: Final[object] = request_kwargs.get("tools") or []
-    tools: Final = _OBJECT_TUPLE_ADAPTER.validate_python(tools_value)
-    is_web_search_request: Final = any(_is_web_search_tool(tool) for tool in tools)
-
+    tools: Final[object] = request_kwargs.get("tools")
+    is_web_search_request: Final = isinstance(tools, (list, tuple)) and any(
+        _is_web_search_tool(tool) for tool in _OBJECT_TUPLE_ADAPTER.validate_python(tools)
+    )
     if not is_web_search_request:
         return healthy_deployments
 
