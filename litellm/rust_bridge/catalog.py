@@ -43,6 +43,9 @@ class RouteContext:
     target: Target | None = None
     features: frozenset[Feature] = frozenset()
 
+    def axes(self) -> tuple[frozenset[object], ...]:
+        return (frozenset({self.provider}), frozenset({self.model}), frozenset({self.target}), self.features)
+
 
 @dataclass(frozen=True, slots=True)
 class RouteRule:
@@ -53,17 +56,13 @@ class RouteRule:
     targets: frozenset[Target] | None = None
     features: frozenset[Feature] | None = None
 
-    @property
-    def constrained(self) -> bool:
-        return any(constraint is not None for constraint in (self.providers, self.models, self.targets, self.features))
+    def constraints(self) -> tuple[frozenset[object] | None, ...]:
+        return (self.providers, self.models, self.targets, self.features)
 
     def matches(self, context: RouteContext) -> bool:
-        return (
-            context.route is self.route
-            and (self.providers is None or context.provider in self.providers)
-            and (self.models is None or context.model in self.models)
-            and (self.targets is None or context.target in self.targets)
-            and (self.features is None or not self.features.isdisjoint(context.features))
+        return context.route is self.route and all(
+            allowed is None or not allowed.isdisjoint(values)
+            for allowed, values in zip(self.constraints(), context.axes(), strict=True)
         )
 
 
@@ -91,3 +90,9 @@ def rollout(context: RouteContext, rules: Rules | None = None) -> Rollout:
 
 def decision(context: RouteContext, rules: Rules | None = None) -> Decision:
     return _decision(rollout(context, rules))
+
+
+def may_leave_python(route: Route, rules: Rules) -> bool:
+    own: Final = tuple(rule for rule in rules if rule.route is route)
+    last: Final = next((i for i, rule in enumerate(own) if all(c is None for c in rule.constraints())), len(own))
+    return any(_decision(rule.rollout) is not Decision.PYTHON for rule in own[: last + 1])

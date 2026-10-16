@@ -7,8 +7,6 @@ from typing import Final, Generic, TypeAlias, TypeVar
 from litellm.rust_bridge import catalog, runtime
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Route, RouteContext, Rules
-from litellm.rust_bridge.configuration import Decision
-from litellm.rust_bridge.configuration import decision as rollout_decision
 
 RequestT: Final = TypeVar("RequestT")
 NativeT: Final = TypeVar("NativeT")
@@ -31,17 +29,6 @@ class PublicDispatch(Generic[RequestT]):
     route: Route
     request: Callable[[tuple[object, ...], Mapping[str, object]], RequestT | None]
     context: Callable[[RequestT], RouteContext]
-
-    def _requires_projection(self, rules: Rules) -> bool:
-        for rule in rules:
-            if rule.route is not self.route:
-                continue
-            if rule.constrained:
-                if rollout_decision(rule.rollout) is not Decision.PYTHON:
-                    return True
-                continue
-            return rollout_decision(rule.rollout) is not Decision.PYTHON
-        return False
 
     def _native_request(self, args: tuple[object, ...], kwargs: Mapping[str, object]) -> RequestT:
         request: Final = self.request(args, kwargs)
@@ -71,7 +58,7 @@ class PublicDispatch(Generic[RequestT]):
                 python=python,
                 rules=selected_rules,
             )
-        if not self._requires_projection(selected_rules):
+        if not catalog.may_leave_python(self.route, selected_rules):
             return python(*args, **kwargs)
         request: Final = self.request(args, kwargs)
         if request is None:
@@ -104,7 +91,7 @@ class PublicDispatch(Generic[RequestT]):
                 python=python,
                 rules=selected_rules,
             )
-        if not self._requires_projection(selected_rules):
+        if not catalog.may_leave_python(self.route, selected_rules):
             return await python(*args, **kwargs)
         request: Final = self.request(args, kwargs)
         if request is None:

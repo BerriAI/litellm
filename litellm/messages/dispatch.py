@@ -77,10 +77,12 @@ def _resolved(request: NativeCall) -> tuple[str, str | None]:
     return resolved_model, resolved_provider
 
 
-def _target(requested_model: str, model: str, provider: str | None, kwargs: Mapping[str, object]) -> Target:
-    if main._native_messages_config(model, provider, kwargs.get("model_info")) is not None:  # pyright: ignore[reportPrivateUsage]  # the handler's own passthrough lookup
+def _target(request: NativeCall, model: str, provider: str | None) -> Target:
+    requested_model: Final = str(request.resolved["model"])
+    if main._native_messages_config(model, provider, request.resolved.get("model_info")) is not None:  # pyright: ignore[reportPrivateUsage]  # the handler's own passthrough lookup
         return Target.MESSAGES
-    if kwargs.get("compaction") is None and main._should_route_to_responses_api(provider, requested_model, model):  # pyright: ignore[reportPrivateUsage]  # the handler's own translation choice
+    compacting: Final = request.resolved.get("compaction") is not None
+    if not compacting and main._should_route_to_responses_api(provider, requested_model, model):  # pyright: ignore[reportPrivateUsage]  # the handler's own translation choice
         return Target.RESPONSES
     return Target.CHAT_COMPLETIONS
 
@@ -101,7 +103,7 @@ def _context(request: NativeCall) -> RouteContext:
         Route.MESSAGES,
         provider=provider,
         model=requested_model,
-        target=_target(requested_model, model, provider, request.kwargs),
+        target=_target(request, model, provider),
         features=frozenset(feature for feature, detected in _FEATURES.items() if detected(request)),
     )
 

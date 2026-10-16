@@ -16,4 +16,6 @@ Verify cross-language behavior using a fresh installed extension, including unst
 
 A route with no Python implementation passes `runtime.NO_PYTHON` from both public entries, and every catalog rule for it must be `RUST_REQUIRED`. Dispatch raises `NoPythonImplementationError` for any other rollout instead of falling back. `tests/test_litellm_rust/test_public_entries.py` marks such a route with `python=None`, so dropping a route's Python changes the entries, its rules and that one table field together
 
+A route's context, its target as well as its features, is built from `NativeCall.resolved`, so an argument counts the same whether it came by position, by keyword or as a signature default
+
 Every public route serves `a<entry>(...)`, `<entry>(..., a<entry>=True)` and `a<entry>(..., a<entry>=True)` the same way. Each hands native one identical `NativeCall` with no async flag, on the async binding. `test_public_entries.py` holds this for every route in its table, so a new public route gets a row there
