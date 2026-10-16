@@ -70902,7 +70902,7 @@
         "max_input_tokens": 32768,
         "mode": "evaluation",
         "output_cost_per_token": 0.0,
-        "source": "https://jev.bevel.software/docs",
+        "source": "https://eu-jev.com/docs",
         "supported_endpoints": [
             "/v1/systemone"
         ]
@@ -70913,7 +70913,7 @@
         "max_input_tokens": 32768,
         "mode": "evaluation",
         "output_cost_per_token": 0.0,
-        "source": "https://jev.bevel.software/docs",
+        "source": "https://eu-jev.com/docs",
         "supported_endpoints": [
             "/v1/systemone"
         ]
