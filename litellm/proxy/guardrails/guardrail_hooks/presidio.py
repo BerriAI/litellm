@@ -1266,15 +1266,15 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             if token in text:
                 text = text.replace(token, original_text)
 
-        start = text.rfind("<")
+        start: Final = text.rfind("<")
         if start == -1:
             return text
-        suffix = text[start:]
-        matches = [token for token in pii_tokens if token.startswith(suffix)]
+        suffix: Final = text[start:]
+        matches: Final = [token for token in pii_tokens if token.startswith(suffix)]
         if len(matches) == 1:
-            token = matches[0]
-            if len(suffix) >= min(20, len(token) // 2):
-                return text[:start] + pii_tokens[token]
+            unique_token: Final = matches[0]
+            if len(suffix) >= min(20, len(unique_token) // 2):
+                return text[:start] + pii_tokens[unique_token]
         return text
 
     @staticmethod
@@ -1574,20 +1574,21 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         return "data: " + json.dumps(event, ensure_ascii=False)
 
     @staticmethod
-    def _flush_pending_sse(pending_text: str, pending_bytes: bytes, pii_tokens: Mapping[str, str]) -> list[bytes]:
+    def _flush_pending_sse(pending_text: str, pending_bytes: bytes, pii_tokens: Mapping[str, str]) -> tuple[bytes, ...]:
         """
         Whatever ``_unmask_sse_bytes_chunk`` was still holding when the stream
         ended or the upstream iterator raised: a token held back in case it
         kept growing, and/or a ``data: ...`` line whose trailing bytes never
         arrived. Flushing both here means neither is silently dropped.
         """
-        flushed: list[bytes] = []
-        if pending_text:
-            line = OPTIONAL_PresidioPIIMasking._flush_pending_as_sse_text_delta(pending_text, pii_tokens, 0)
-            flushed.append((line + "\n\n").encode("utf-8"))
-        if pending_bytes:
-            flushed.append(pending_bytes)
-        return flushed
+        text_chunk: Final = (
+            (OPTIONAL_PresidioPIIMasking._flush_pending_as_sse_text_delta(pending_text, pii_tokens, 0) + "\n\n").encode(
+                "utf-8"
+            )
+            if pending_text
+            else b""
+        )
+        return tuple(chunk for chunk in (text_chunk, pending_bytes) if chunk)
 
     @staticmethod
     def _unmask_sse_bytes_chunk(
@@ -1612,7 +1613,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             # No complete line yet in this chunk; wait for the rest of it.
             return b"", carried_in, data
 
-        lines = text.split("\n")
+        lines: Final = text.split("\n")
         incomplete_tail = lines.pop()  # rebind-ok: the segment after the last "\n", not a full line yet
 
         pending = carried_in  # rebind-ok: grows/flushes per delta as the chunk's lines are scanned
@@ -1719,8 +1720,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     async def _handle_non_chat_stream_chunk(
         self,
         chunk: object,
-        pii_tokens: dict[str, str],
-        remaining_chunks: list[ModelResponseStream],
+        pii_tokens: dict[str, str],  # mutable-ok: passed straight through to _unmask_responses_api_completed_chunk
+        remaining_chunks: list[ModelResponseStream],  # mutable-ok: cleared in place once flushed below
     ) -> AsyncGenerator[object, None]:
         """
         A chunk that is neither a ``ModelResponseStream`` nor raw SSE bytes
@@ -1733,7 +1734,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         for buffered_chunk in remaining_chunks:
             yield buffered_chunk
         remaining_chunks.clear()
-        chunk_type = getattr(chunk, "type", None)
+        chunk_type: Final = getattr(chunk, "type", None)
         if pii_tokens and chunk_type in ("response.completed", "response.incomplete"):
             self._unmask_responses_api_completed_chunk(chunk, pii_tokens)
         yield chunk
@@ -1773,10 +1774,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         yield out
                     saw_non_chat_chunk = True
 
-            had_error = False
+            had_error = False  # rebind-ok: set in the except branch below when the upstream iterator raises
         except Exception as e:
             verbose_proxy_logger.error("Error in PII streaming processing: %s", e)
-            had_error = True
+            had_error = True  # rebind-ok: distinguishes the except path for the branch below
         finally:
             for flushed in self._flush_pending_sse(
                 pending_sse_text,
