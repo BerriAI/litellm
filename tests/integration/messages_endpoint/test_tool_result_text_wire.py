@@ -519,7 +519,7 @@ def test_mistral_receives_the_tool_reply_whose_only_text_drop_params_dropped(gat
         assert _tool_message_text({"messages": list(turns)}) == "", turns
 
 
-def test_mistral_chat_completions_drops_only_empty_assistant_messages(gateway: Gateway) -> None:
+def test_mistral_chat_completions_keeps_an_empty_tool_reply(gateway: Gateway) -> None:
     ask: Final = f"What is the weather in {_CITY}? {uuid.uuid4().hex}"
     call: Final[dict[str, JsonValue]] = {
         "id": "call_weather",
@@ -540,10 +540,8 @@ def test_mistral_chat_completions_drops_only_empty_assistant_messages(gateway: G
         assert response.status_code == 200, response.text
         turns: Final = _forwarded_chat_turns(wire)
         assert [(turn["role"], turn.get("content")) for turn in turns] == [
-            ("system", ""),
             ("user", ask),
             ("assistant", None),
             ("tool", ""),
-            ("user", ""),
         ], turns
-        assert turns[3]["tool_call_id"] == "call_weather", turns
+        assert turns[2]["tool_call_id"] == "call_weather", turns
