@@ -47,15 +47,18 @@ const NON_TEXT_FLAGS = ["isImage", "isAudio", "isError", "mcpToolCall"] as const
 
 const isText = (message: MessageType): boolean => NON_TEXT_FLAGS.every((flag) => !message[flag]);
 
-const isReply = (message: MessageType | undefined): boolean => message?.role === "assistant" && !message.isError;
+const isFilled = (content: MessageType["content"]): boolean => typeof content !== "string" || content.trim() !== "";
 
-const unanswered = (history: readonly MessageType[], index: number): boolean =>
-  history[index]?.role === "user" && !isReply(history[index + 1]);
+const isTurn = (message: MessageType | undefined, role: "user" | "assistant"): boolean =>
+  message?.role === role && isText(message) && isFilled(message.content);
+
+const inExchange = (history: readonly MessageType[], index: number): boolean =>
+  isTurn(history[index], "user")
+    ? isTurn(history[index + 1], "assistant")
+    : isTurn(history[index], "assistant") && isTurn(history[index - 1], "user");
 
 export const textHistory = (history: readonly MessageType[]): ApiMessage[] =>
-  history
-    .filter((message, index) => isText(message) && !unanswered(history, index))
-    .map(({ role, content }) => ({ role, content }));
+  history.filter((_, index) => inExchange(history, index)).map(({ role, content }) => ({ role, content }));
 
 const toolResultText = (result: { content?: { type: string; text?: string }[] } | null): string => {
   if (result?.content && result.content.length > 0) {

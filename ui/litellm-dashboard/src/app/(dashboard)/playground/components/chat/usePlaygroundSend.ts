@@ -84,6 +84,16 @@ const withTrace = (history: MessageType[], from: number, trace: ReplyTrace): Mes
   return history.map((message, index) => (index === replyIndex ? { ...message, trace } : message));
 };
 
+const untilAborted = <T extends object>(target: T, signal: AbortSignal): T =>
+  new Proxy(target, {
+    get: (object, key, receiver) => {
+      const value: unknown = Reflect.get(object, key, receiver);
+      return typeof value === "function"
+        ? (...args: unknown[]) => (signal.aborted ? undefined : value(...args))
+        : value;
+    },
+  });
+
 export function usePlaygroundSend(deps: SendDeps) {
   const [text, setText] = useState("");
   const [files, setFiles] = useState<readonly DraftFile[]>([]);
@@ -193,8 +203,8 @@ export function usePlaygroundSend(deps: SendDeps) {
         mcpServers: deps.mcpServers,
         mcpToolsets: deps.mcpToolsets,
         directCall: direct ? { ...direct, arguments: toolArguments ?? {} } : null,
-        chat,
-        codeInterpreter: deps.codeInterpreter,
+        chat: untilAborted(chat, controller.signal),
+        codeInterpreter: untilAborted(deps.codeInterpreter, controller.signal),
         onHeaders: (headers) => {
           captured.headers = headers;
         },
@@ -204,6 +214,7 @@ export function usePlaygroundSend(deps: SendDeps) {
         },
       };
       await dispatchRequest(context);
+      if (controller.signal.aborted) return;
       chat.setChatHistory((current) => withTrace(current, history.length, trace()));
     } catch (error) {
       if (controller.signal.aborted) return;
@@ -212,8 +223,10 @@ export function usePlaygroundSend(deps: SendDeps) {
         { role: "assistant", content: errorText(error), isError: true, model: requestedModel, trace: trace() },
       ]);
     } finally {
-      if (abortRef.current === controller) abortRef.current = null;
-      setIsLoading(false);
+      if (abortRef.current === controller) {
+        abortRef.current = null;
+        setIsLoading(false);
+      }
     }
   };
 

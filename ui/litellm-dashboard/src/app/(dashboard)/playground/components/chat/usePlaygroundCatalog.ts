@@ -42,7 +42,7 @@ export function useMcpCatalog(requestKey: string | null) {
   const toolsets = useQuery<readonly MCPToolset[]>({
     queryKey: ["playground", "mcpToolsets", requestKey],
     queryFn: async () => {
-      const response: unknown = await fetchMCPToolsets(requestKey ?? "").catch(() => []);
+      const response: unknown = await fetchMCPToolsets(requestKey ?? "");
       return Array.isArray(response) ? (response as MCPToolset[]) : [];
     },
     enabled: Boolean(requestKey),
@@ -51,6 +51,7 @@ export function useMcpCatalog(requestKey: string | null) {
     servers: servers.data ?? EMPTY,
     toolsets: toolsets.data ?? EMPTY,
     isLoading: servers.isLoading || toolsets.isLoading,
+    isReady: servers.isSuccess && toolsets.isSuccess,
     refetchServers: servers.refetch,
   };
 }

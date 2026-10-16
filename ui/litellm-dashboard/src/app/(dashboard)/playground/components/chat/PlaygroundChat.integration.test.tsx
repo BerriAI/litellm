@@ -1,9 +1,11 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders as render, testQueryClient } from "@/../tests/test-utils";
 import { makeOpenAIChatCompletionRequest } from "@/components/llm_calls/chat_completion";
 import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
+import { callMCPTool, fetchMCPServers, fetchMCPToolsets, listMCPTools } from "@/components/networking";
+import { setSecureItem } from "@/utils/secureStorage";
 import { PlaygroundChat } from "./PlaygroundChat";
 
 vi.mock("@/app/(dashboard)/hooks/useCan", () => ({ default: () => true }));
@@ -37,6 +39,17 @@ const replyWith =
     args[1](text, args[2]);
   };
 
+const preload = (values: Readonly<Record<string, string>>) =>
+  Object.entries(values).forEach(([key, value]) => sessionStorage.setItem(key, value));
+
+const deferred = () => {
+  const control: { release: () => void } = { release: () => undefined };
+  const promise = new Promise<void>((resolve) => {
+    control.release = resolve;
+  });
+  return { promise, release: () => control.release() };
+};
+
 const renderChat = () =>
   render(<PlaygroundChat accessToken="session-token" disabledPersonalKeyCreation={false} proxySettings={undefined} />);
 
@@ -54,6 +67,10 @@ describe("PlaygroundChat", () => {
     vi.mocked(fetchAvailableModels).mockResolvedValue([
       { model_group: "gpt-fast", mode: "chat", providers: ["openai"] },
     ]);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("sends the chosen model and guardrails with the session key", async () => {
@@ -98,5 +115,147 @@ describe("PlaygroundChat", () => {
       { role: "assistant", content: "Hi there" },
       { role: "user", content: "try again" },
     ]);
+  });
+
+  it("sends every saved request setting with the chat request", async () => {
+    const user = userEvent.setup();
+    chatRequest.mockImplementation(replyWith("Hi there"));
+    vi.mocked(fetchMCPServers).mockResolvedValue([{ server_id: "srv-1", alias: "docs" }]);
+    preload({
+      selectedModel: "gpt-fast",
+      selectedTags: JSON.stringify(["team-a"]),
+      selectedVectorStores: JSON.stringify(["vs-1"]),
+      selectedPolicies: JSON.stringify(["strict"]),
+      selectedMCPServers: JSON.stringify(["srv-1"]),
+      streamingEnabled: "false",
+    });
+    setSecureItem("customHeaders", JSON.stringify([["x-team", "blue"]]));
+    renderChat();
+
+    await waitFor(() => expect(fetchMCPServers).toHaveBeenCalled());
+    await send(user, "hello");
+
+    await waitFor(() => expect(chatRequest).toHaveBeenCalledTimes(1));
+    const args = chatRequest.mock.calls[0] as ChatArgs;
+    expect(args[2]).toBe("gpt-fast");
+    expect(args[4]).toEqual(["team-a"]);
+    expect(args[10]).toEqual(["vs-1"]);
+    expect(args[12]).toEqual(["strict"]);
+    expect(args[13]).toEqual(["srv-1"]);
+    expect(args[25]).toBe(false);
+    expect(args[26]).toMatchObject({ "x-team": "blue" });
+  });
+
+  it("keeps the saved MCP selection when the server list cannot be fetched", async () => {
+    const user = userEvent.setup();
+    chatRequest.mockImplementation(replyWith("Hi there"));
+    vi.mocked(fetchMCPServers).mockRejectedValue(new Error("forbidden"));
+    preload({ selectedModel: "gpt-fast", selectedMCPServers: JSON.stringify(["srv-1"]) });
+    renderChat();
+
+    await waitFor(() => expect(fetchMCPServers).toHaveBeenCalled());
+    await send(user, "hello");
+
+    await waitFor(() => expect(chatRequest).toHaveBeenCalledTimes(1));
+    expect((chatRequest.mock.calls[0] as ChatArgs)[13]).toEqual(["srv-1"]);
+  });
+
+  it("drops a saved model that the current key cannot use", async () => {
+    const user = userEvent.setup();
+    chatRequest.mockImplementation(replyWith("Hi there"));
+    preload({ selectedModel: "retired-model" });
+    renderChat();
+
+    await waitFor(() => expect(fetchAvailableModels).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Model" })).toHaveTextContent("Select a model"));
+    await user.click(screen.getByRole("combobox", { name: "Model" }));
+    await user.click(await screen.findByRole("option", { name: "gpt-fast" }));
+    await send(user, "hello");
+
+    await waitFor(() => expect(chatRequest).toHaveBeenCalledTimes(1));
+    expect((chatRequest.mock.calls[0] as ChatArgs)[2]).toBe("gpt-fast");
+  });
+
+  it("calls a toolset tool on the server that backs it", async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchMCPToolsets).mockResolvedValue([
+      { toolset_id: "ts-1", toolset_name: "Research", tools: [{ server_id: "srv-2", tool_name: "search" }] },
+    ]);
+    vi.mocked(listMCPTools).mockResolvedValue({
+      tools: [{ name: "search", inputSchema: { type: "object", properties: {} } }],
+    });
+    vi.mocked(callMCPTool).mockResolvedValue({ content: [{ type: "text", text: "found it" }] });
+    preload({ endpointType: "mcp", selectedMCPServers: JSON.stringify(["toolset:ts-1"]) });
+    renderChat();
+
+    await user.click(await screen.findByRole("combobox", { name: "Tool" }));
+    await user.click(await screen.findByRole("option", { name: /search/ }));
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+
+    await waitFor(() => expect(callMCPTool).toHaveBeenCalledTimes(1));
+    expect(listMCPTools).toHaveBeenCalledWith("session-token", "srv-2");
+    expect(vi.mocked(callMCPTool).mock.calls[0]?.slice(1, 3)).toEqual(["srv-2", "search"]);
+  });
+
+  it("ignores a stopped request that finishes after a newer one started", async () => {
+    const user = userEvent.setup();
+    const first = deferred();
+    const second = deferred();
+    chatRequest
+      .mockImplementationOnce(async (...args: ChatArgs) => {
+        await first.promise;
+        args[1]("late reply", args[2]);
+      })
+      .mockImplementationOnce(async (...args: ChatArgs) => {
+        await second.promise;
+        args[1]("fresh reply", args[2]);
+      });
+    preload({ selectedModel: "gpt-fast" });
+    renderChat();
+
+    await send(user, "first");
+    await user.click(await screen.findByRole("button", { name: "Stop" }));
+    await send(user, "second");
+    first.release();
+
+    await waitFor(() => expect(chatRequest).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+    expect(screen.queryByText("late reply")).not.toBeInTheDocument();
+    second.release();
+    expect(await screen.findByText("fresh reply")).toBeInTheDocument();
+    expect(screen.queryByText("late reply")).not.toBeInTheDocument();
+  });
+
+  it("keeps a stopped request's gateway details off the newer reply", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: true,
+      media: query,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }));
+    const first = deferred();
+    chatRequest
+      .mockImplementationOnce(async (...args: ChatArgs) => {
+        args[27]?.(new Headers({ "x-litellm-call-id": "call-stopped" }));
+        await first.promise;
+      })
+      .mockImplementationOnce(async (...args: ChatArgs) => {
+        args[27]?.(new Headers({ "x-litellm-call-id": "call-fresh" }));
+        args[1]("fresh reply", args[2]);
+      });
+    preload({ selectedModel: "gpt-fast" });
+    renderChat();
+
+    await send(user, "first");
+    await user.click(await screen.findByRole("button", { name: "Stop" }));
+    await send(user, "second");
+    expect(await screen.findByText("call-fresh")).toBeInTheDocument();
+    first.release();
+
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.getByText("call-fresh")).toBeInTheDocument();
+    expect(screen.queryByText("call-stopped")).not.toBeInTheDocument();
   });
 });

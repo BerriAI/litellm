@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { ChevronDown, PanelRight, RotateCcw, SquarePen } from "lucide-react";
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import { generateCodeSnippet } from "@/components/chat_ui/CodeSnippets";
@@ -74,6 +74,14 @@ const reachableMcp = (servers: readonly MCPServer[], toolsets: readonly MCPTools
     ...toolsets.map((toolset) => `${TOOLSET_PREFIX}${toolset.toolset_id}`),
   ]);
 
+const toolsetFor = (selection: string | null, toolsets: readonly MCPToolset[]): MCPToolset | null =>
+  toolsets.find((toolset) => `${TOOLSET_PREFIX}${toolset.toolset_id}` === selection) ?? null;
+
+const backingServers = (selection: string | null, toolset: MCPToolset | null): readonly string[] => {
+  if (toolset) return [...new Set(toolset.tools.map((tool) => tool.server_id))];
+  return selection ? [selection] : [];
+};
+
 const prefixed = (options: readonly PickerOption[]): readonly PickerOption[] =>
   options.map((option) => ({ ...option, value: `${POLICY_PREFIX}${option.value}` }));
 
@@ -104,7 +112,7 @@ export function PlaygroundChat({
   const canViewPolicies = useCan("viewPolicies");
   const apiKey = (stored.keySource === "session" ? accessToken : stored.virtualKey.trim()) || null;
   const mcp = useMcpCatalog(apiKey);
-  const settings = withReachableMcp(stored, mcp.isLoading ? null : reachableMcp(mcp.servers, mcp.toolsets));
+  const settings = withReachableMcp(stored, mcp.isReady ? reachableMcp(mcp.servers, mcp.toolsets) : null);
   const capabilities = capabilitiesFor(settings.endpoint);
   const chat = useChatHistory({ simplified: false });
   const codeInterpreter = useCodeInterpreter();
@@ -114,17 +122,35 @@ export function PlaygroundChat({
   const isWide = useIsWide();
 
   const models = usePlaygroundModels(apiKey);
+  const [checkedModels, setCheckedModels] = useState(models.data);
+  if (models.data && models.data !== checkedModels) {
+    setCheckedModels(models.data);
+    const loaded = models.data;
+    update((current) =>
+      current.model && !loaded.some((option) => option.model_group === current.model)
+        ? { ...current, model: null }
+        : current,
+    );
+  }
   const agents = usePlaygroundAgents(apiKey, settings.proxyBaseUrl, settings.endpoint === EndpointType.A2A_AGENTS);
   const guardrails = useGuardrailOptions(accessToken);
   const policies = usePolicyOptions(accessToken, canViewPolicies);
   const vectorStores = useVectorStoreOptions(accessToken);
   const tags = useTagOptions(accessToken);
 
-  const directServer = settings.endpoint === EndpointType.MCP ? settings.mcpSelection[0] ?? null : null;
-  const directServerTools = useServerTools(apiKey, directServer ? [directServer] : []);
-  const directToolList = directServer ? directServerTools[directServer]?.tools ?? [] : [];
+  const directSelection = settings.endpoint === EndpointType.MCP ? settings.mcpSelection[0] ?? null : null;
+  const directToolset = toolsetFor(directSelection, mcp.toolsets);
+  const directServers = backingServers(directSelection, directToolset);
+  const directServerTools = useServerTools(apiKey, directServers);
+  const backingTools = directServers.flatMap((server) => directServerTools[server]?.tools ?? []);
+  const directToolList = directToolset
+    ? backingTools.filter((tool) => directToolset.tools.some((entry) => entry.tool_name === tool.name))
+    : backingTools;
   const directTool = directToolList.find((tool) => tool.name === settings.directTool) ?? null;
-  const customHeaders = useMemo(() => customHeadersFromPairs(settings.headerPairs), [settings.headerPairs]);
+  const directServer = directToolset
+    ? directToolset.tools.find((entry) => entry.tool_name === settings.directTool)?.server_id ?? null
+    : directSelection;
+  const customHeaders = customHeadersFromPairs(settings.headerPairs);
 
   const sendDeps: SendDeps = {
     settings,
@@ -247,13 +273,21 @@ export function PlaygroundChat({
                 label: "MCP servers",
                 options: mcp.servers.map((server) => ({ value: server.server_id, label: serverName(server) })),
               },
+              {
+                label: "Toolsets",
+                options: mcp.toolsets.map((toolset) => ({
+                  value: `${TOOLSET_PREFIX}${toolset.toolset_id}`,
+                  label: toolset.toolset_name,
+                  description: toolset.description,
+                })),
+              },
             ]}
-            value={directServer}
+            value={directSelection}
             onValueChange={(server) => update({ mcpSelection: [server], directTool: null })}
             isLoading={mcp.isLoading}
             emptyText="No MCP servers available for this key"
           />
-          {directServer && (
+          {directSelection && (
             <TargetPicker
               label="Tool"
               placeholder="Select a tool"
@@ -269,7 +303,7 @@ export function PlaygroundChat({
               ]}
               value={settings.directTool}
               onValueChange={(tool) => update({ directTool: tool })}
-              isLoading={directServerTools[directServer]?.isLoading ?? false}
+              isLoading={directServers.some((server) => directServerTools[server]?.isLoading)}
               emptyText="This server has no tools"
             />
           )}

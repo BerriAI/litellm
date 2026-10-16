@@ -19,6 +19,10 @@ describe("textHistory", () => {
       user("question that was cancelled"),
       user("draw a cat"),
       assistant("data:image/png;base64,AAA", { isImage: true }),
+      { role: "user", content: "", mcpToolCall: { tool: "search", arguments: {} } },
+      assistant("tool output"),
+      user("think hard"),
+      assistant(""),
       user("second question"),
       assistant("second answer"),
     ];
@@ -26,9 +30,15 @@ describe("textHistory", () => {
     expect(textHistory(history)).toEqual([
       { role: "user", content: "first question" },
       { role: "assistant", content: "first answer" },
-      { role: "user", content: "draw a cat" },
       { role: "user", content: "second question" },
       { role: "assistant", content: "second answer" },
+    ]);
+  });
+
+  it("drops a transcription turn that has no typed text", () => {
+    expect(textHistory([user(""), assistant("transcribed words"), user("hi"), assistant("hello")])).toEqual([
+      { role: "user", content: "hi" },
+      { role: "assistant", content: "hello" },
     ]);
   });
 
