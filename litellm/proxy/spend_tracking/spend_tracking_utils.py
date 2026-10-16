@@ -318,14 +318,18 @@ def _cost_row_request_id_suffix(call_type: str, metadata: Mapping[str, object]) 
         return BATCH_COST_REQUEST_ID_SUFFIX
     if (
         call_type in NON_INFERENCE_CALL_TYPES
-        and metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
+        and metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY)
+        == BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
     ):
         return BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX
     return ""
 
 
 def get_spend_logs_id(
-    call_type: str, response_obj: dict, kwargs: dict, metadata: Mapping[str, object] = EMPTY_MAPPING
+    call_type: str,
+    response_obj: dict,
+    kwargs: dict,
+    metadata: Mapping[str, object] = EMPTY_MAPPING,
 ) -> str | None:
     standard_logging_payload = kwargs.get("standard_logging_object")
     candidate_ids: Final = (
@@ -590,7 +594,9 @@ def get_logging_payload(
     # standardize this function to be used across, s3, dynamoDB, langfuse logging
     litellm_params_value: Final[object] = kwargs.get("litellm_params", {})
     litellm_params: Final[dict[str, object]] = (
-        cast(dict[str, object], litellm_params_value) if isinstance(litellm_params_value, Mapping) else {}
+        cast(dict[str, object], litellm_params_value)
+        if isinstance(litellm_params_value, Mapping)
+        else {}
     )
     metadata: Final = get_litellm_metadata_from_kwargs(kwargs)
     completion_start_time: Final = kwargs.get("completion_start_time", end_time)
@@ -624,7 +630,9 @@ def get_logging_payload(
     if not usage and isinstance(_combined_usage, litellm.Usage):
         usage = _combined_usage.model_dump()
 
-    id = get_spend_logs_id(call_type or "acompletion", response_obj_dict, kwargs, metadata)
+    id = get_spend_logs_id(
+        call_type or "acompletion", response_obj_dict, kwargs, metadata
+    )
     standard_logging_payload: Final = cast(
         StandardLoggingPayload | None, kwargs.get("standard_logging_object", None)
     )
@@ -674,7 +682,7 @@ def get_logging_payload(
         )
         if not litellm.disable_end_user_cost_tracking:
             end_user_id = end_user_id or standard_logging_payload["metadata"].get(
-            "user_api_key_end_user_id"
+                "user_api_key_end_user_id"
             )
     request_tags = (
         safe_dumps(metadata.get("tags", []))
@@ -849,7 +857,9 @@ def get_logging_payload(
             metadata=metadata,
             requested_model=persisted_model_group,
             selected_model=model_name,
-            selected_provider=(custom_llm_provider if isinstance(custom_llm_provider, str) else None),
+            selected_provider=(
+                custom_llm_provider if isinstance(custom_llm_provider, str) else None
+            ),
             router_correlation_id=litellm_call_id,
         ),
         used_client_oauth_token=resolve_used_client_oauth_token(
@@ -902,9 +912,13 @@ def get_logging_payload(
     if drop_requester_ip_address:
         clean_metadata["requester_ip_address"] = None
     if drop_requester_ip_address and isinstance(error_information, Mapping):
-        clean_metadata["error_information"] = cast(  # cast-ok: same keys, only the str values are masked
-            StandardLoggingPayloadErrorInformation,
-            _error_information_without_ip_addresses(_OBJECT_MAPPING.validate_python(error_information)),
+        clean_metadata["error_information"] = (
+            cast(  # cast-ok: same keys, only the str values are masked
+                StandardLoggingPayloadErrorInformation,
+                _error_information_without_ip_addresses(
+                    _OBJECT_MAPPING.validate_python(error_information)
+                ),
+            )
         )
 
     if litellm.cache is None:
@@ -1659,7 +1673,9 @@ def sanitize_error_information_for_spend_logs(
     sanitized = _sanitize_request_body_for_spend_logs_payload(sanitized)
     return cast(
         StandardLoggingPayloadErrorInformation,
-        _error_information_without_ip_addresses(_OBJECT_MAPPING.validate_python(sanitized))
+        _error_information_without_ip_addresses(
+            _OBJECT_MAPPING.validate_python(sanitized)
+        )
         if requester_ip_address_logging_disabled()
         else sanitized,
     )
@@ -1834,7 +1850,9 @@ _IP_ADDRESS_CHARACTERS: Final = "0123456789abcdefABCDEF.:"
 _MAX_IP_ADDRESS_LENGTH: Final = len("ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255")
 _LONG_HEX_GROUP: Final = re.compile(r"[0-9A-Fa-f]{5,}")
 _TRUNCATION_MARKER_GROUP: Final = re.compile(f"({_TRUNCATION_MARKER.pattern})")
-_IPV4_ADDRESS: Final = re.compile(r"(?<![0-9A-Za-z])(?:\d{1,3}\.){3}\d{1,3}(?![0-9A-Za-z])")
+_IPV4_ADDRESS: Final = re.compile(
+    r"(?<![0-9A-Za-z])(?:\d{1,3}\.){3}\d{1,3}(?![0-9A-Za-z])"
+)
 _IPV6_ADDRESS_CANDIDATE: Final = re.compile(
     r"(?:(?<![0-9A-Za-z:])|(?<=\w:))(?:[0-9A-Fa-f]{0,4}:){2,9}[0-9A-Fa-f]{0,4}(?![0-9A-Za-z:])"
 )
@@ -1844,7 +1862,12 @@ def _masked_ipv6_address(candidate: re.Match[str]) -> str:
     """Masks the candidate when it, or it without a leading label or a trailing port group, is an IPv6 address."""
     text: Final = candidate.group(0)
     unlabelled: Final = text.partition(":")[2]
-    for address in (text, text.rpartition(":")[0], unlabelled, unlabelled.rpartition(":")[0]):
+    for address in (
+        text,
+        text.rpartition(":")[0],
+        unlabelled,
+        unlabelled.rpartition(":")[0],
+    ):
         try:
             ipaddress.IPv6Address(address)
         except ValueError:
@@ -1854,7 +1877,9 @@ def _masked_ipv6_address(candidate: re.Match[str]) -> str:
 
 
 def _without_ip_addresses(text: str) -> str:
-    return _IPV6_ADDRESS_CANDIDATE.sub(_masked_ipv6_address, _IPV4_ADDRESS.sub(REDACTED_BY_LITELM_STRING, text))
+    return _IPV6_ADDRESS_CANDIDATE.sub(
+        _masked_ipv6_address, _IPV4_ADDRESS.sub(REDACTED_BY_LITELM_STRING, text)
+    )
 
 
 def _is_ip_address_piece(piece: str) -> bool:
@@ -1864,18 +1889,32 @@ def _is_ip_address_piece(piece: str) -> bool:
 def _without_ip_piece_before_cut(text: str) -> str:
     run: Final = text[len(text.rstrip(_IP_ADDRESS_CHARACTERS)) :]
     long_groups: Final = list(_LONG_HEX_GROUP.finditer(run))
-    piece: Final = run[long_groups[-1].end() if long_groups else 0 :][-_MAX_IP_ADDRESS_LENGTH:].lstrip(".:")
-    return text[: len(text) - len(piece)] + REDACTED_BY_LITELM_STRING if _is_ip_address_piece(piece) else text
+    piece: Final = run[long_groups[-1].end() if long_groups else 0 :][
+        -_MAX_IP_ADDRESS_LENGTH:
+    ].lstrip(".:")
+    return (
+        text[: len(text) - len(piece)] + REDACTED_BY_LITELM_STRING
+        if _is_ip_address_piece(piece)
+        else text
+    )
 
 
 def _without_ip_piece_after_cut(text: str) -> str:
     run: Final = text[: len(text) - len(text.lstrip(_IP_ADDRESS_CHARACTERS))]
     long_group: Final = _LONG_HEX_GROUP.search(run)
-    piece: Final = run[: long_group.start() if long_group else len(run)][:_MAX_IP_ADDRESS_LENGTH].rstrip(".:")
-    return REDACTED_BY_LITELM_STRING + text[len(piece) :] if _is_ip_address_piece(piece) else text
+    piece: Final = run[: long_group.start() if long_group else len(run)][
+        :_MAX_IP_ADDRESS_LENGTH
+    ].rstrip(".:")
+    return (
+        REDACTED_BY_LITELM_STRING + text[len(piece) :]
+        if _is_ip_address_piece(piece)
+        else text
+    )
 
 
-def _without_ip_pieces_beside_cuts(text: str, *, after_cut: bool, before_cut: bool) -> str:
+def _without_ip_pieces_beside_cuts(
+    text: str, *, after_cut: bool, before_cut: bool
+) -> str:
     after: Final = _without_ip_piece_after_cut(text) if after_cut else text
     return _without_ip_piece_before_cut(after) if before_cut else after
 
@@ -1886,15 +1925,23 @@ def _masked_ip_text(text: str) -> str:
     parts: Final = _TRUNCATION_MARKER_GROUP.split(_without_ip_addresses(text))
     last: Final = len(parts) - 1
     return "".join(
-        part if index % 2 else _without_ip_pieces_beside_cuts(part, after_cut=index > 0, before_cut=index < last)
+        part
+        if index % 2
+        else _without_ip_pieces_beside_cuts(
+            part, after_cut=index > 0, before_cut=index < last
+        )
         for index, part in enumerate(parts)
     )
 
 
-def _error_information_without_ip_addresses(error_information: Mapping[object, object]) -> Mapping[object, object]:
+def _error_information_without_ip_addresses(
+    error_information: Mapping[object, object],
+) -> Mapping[object, object]:
     """The error information with every IP address in its error message and traceback masked."""
     return {
-        key: _masked_ip_text(value) if key in _SCRUBBED_ERROR_TEXT_FIELDS and isinstance(value, str) else value
+        key: _masked_ip_text(value)
+        if key in _SCRUBBED_ERROR_TEXT_FIELDS and isinstance(value, str)
+        else value
         for key, value in error_information.items()
     }
 
@@ -1903,7 +1950,9 @@ def _stored_value_without_requester_ip_address(key: object, value: object) -> ob
     if key == "requester_ip_address":
         return None
     if key == "error_information" and isinstance(value, Mapping):
-        return _error_information_without_ip_addresses(_OBJECT_MAPPING.validate_python(value))
+        return _error_information_without_ip_addresses(
+            _OBJECT_MAPPING.validate_python(value)
+        )
     return _without_requester_ip_address(value, headers=key == "headers")
 
 
@@ -1914,29 +1963,44 @@ def _without_requester_ip_address(value: object, *, headers: bool = False) -> ob
             if headers and isinstance(item, str)
             else _stored_value_without_requester_ip_address(key, item)
             for key, item in _OBJECT_MAPPING.validate_python(value).items()
-            if not (headers and isinstance(key, str) and key.lower() in _CLIENT_IP_HEADERS)
+            if not (
+                headers and isinstance(key, str) and key.lower() in _CLIENT_IP_HEADERS
+            )
         }
     if isinstance(value, list):
-        return [_without_requester_ip_address(item) for item in _OBJECT_LIST.validate_python(value)]
+        return [
+            _without_requester_ip_address(item)
+            for item in _OBJECT_LIST.validate_python(value)
+        ]
     return value
 
 
-def _request_metadata_without_requester_ip_address(request_body: Mapping[object, object]) -> Mapping[object, object]:
+def _request_metadata_without_requester_ip_address(
+    request_body: Mapping[object, object],
+) -> Mapping[object, object]:
     return {
-        key: _without_requester_ip_address(value) if key in _REQUEST_METADATA_KEYS else value
+        key: _without_requester_ip_address(value)
+        if key in _REQUEST_METADATA_KEYS
+        else value
         for key, value in request_body.items()
     }
 
 
-def _stored_request_without_requester_ip_address(request_body: Mapping[object, object]) -> Mapping[object, object]:
+def _stored_request_without_requester_ip_address(
+    request_body: Mapping[object, object],
+) -> Mapping[object, object]:
     """The request body, and the classifier input and originating request a classifier row stores in it, with
     `requester_ip_address` set to null, client-IP forwarding headers dropped and every IP address in the other header
     values and in the error text masked inside their metadata."""
     return {
-        key: _request_metadata_without_requester_ip_address(_OBJECT_MAPPING.validate_python(value))
+        key: _request_metadata_without_requester_ip_address(
+            _OBJECT_MAPPING.validate_python(value)
+        )
         if key in CLASSIFIER_AUDIT_FIELDS and isinstance(value, Mapping)
         else value
-        for key, value in _request_metadata_without_requester_ip_address(request_body).items()
+        for key, value in _request_metadata_without_requester_ip_address(
+            request_body
+        ).items()
     }
 
 
@@ -2145,7 +2209,9 @@ def requester_ip_address_logging_disabled() -> bool:
 
     try:
         return (
-            _OPTIONAL_BOOL_ADAPTER.validate_python(general_settings_view().get("disable_requester_ip_address_logging"))
+            _OPTIONAL_BOOL_ADAPTER.validate_python(
+                general_settings_view().get("disable_requester_ip_address_logging")
+            )
             is True
         )
     except ValidationError:
