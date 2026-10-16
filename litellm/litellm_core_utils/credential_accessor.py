@@ -8,7 +8,7 @@ from litellm.types.router import holds_api_key_secret_reference
 from litellm.types.utils import (
     API_KEY_SECRET_REFERENCE_REJECTION,
     CredentialItem,
-    admin_api_key_secret_reference,
+    credential_api_key_secret_reference,
 )
 
 
@@ -27,7 +27,7 @@ class CredentialAccessor:
         """Safe accessor for credentials."""
 
         credential: Final = CredentialAccessor.find_credential(credential_name)
-        return {} if credential is None else dict(admin_api_key_secret_reference(credential.credential_values))
+        return {} if credential is None else dict(credential_api_key_secret_reference(credential.credential_values))
 
     @staticmethod
     def upsert_credentials(credentials: list[CredentialItem]):

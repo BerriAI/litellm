@@ -11,6 +11,7 @@ from typing import (
     Literal,
     get_args,
 )
+from urllib.parse import urlsplit
 
 import httpx
 from openai._models import BaseModel as OpenAIObject
@@ -4178,15 +4179,59 @@ class AdminApiKeySecretReference(str):
         return core_schema.is_instance_schema(cls, serialization=core_schema.to_string_ser_schema())
 
 
-def admin_api_key_secret_reference(params: Mapping[str, object]) -> Mapping[str, object]:
+CREDENTIAL_UPSTREAM_PARAMS: Final = ("api_base", "base_url")
+
+
+def _origin(url: str) -> str:
+    parts: Final = urlsplit(url.strip())
+    return f"{parts.scheme.lower()}://{parts.netloc.lower()}" if parts.netloc else url.strip().rstrip("/").lower()
+
+
+def upstream_origins(params: Mapping[str, object]) -> frozenset[str]:
+    values: Final = (params.get(key) for key in CREDENTIAL_UPSTREAM_PARAMS)
+    return frozenset(_origin(value) for value in values if isinstance(value, str) and value)
+
+
+class CredentialApiKeySecretReference(AdminApiKeySecretReference):
+    """An admin ``oidc/`` api_key reference stored in a named credential. Rows and requests that name the credential
+    can set their own api_base, so the secret may only go to the origins of the credential's own api_base/base_url."""
+
+    def __new__(cls, reference: str, credential_origins: frozenset[str]) -> "CredentialApiKeySecretReference":
+        return super().__new__(cls, reference)
+
+    def __init__(self, reference: str, credential_origins: frozenset[str]) -> None:
+        super().__init__()
+        self.credential_origins: Final = credential_origins
+
+    def __reduce__(self) -> tuple[type["CredentialApiKeySecretReference"], tuple[str, frozenset[str]]]:
+        return type(self), (str(self), self.credential_origins)
+
+    def may_reach(self, upstream: Mapping[str, object]) -> bool:
+        return upstream_origins(upstream) <= self.credential_origins
+
+
+def _unmarked_api_key_secret_reference(params: Mapping[str, object]) -> str | None:
     api_key: Final = params.get("api_key")
     if (
         not isinstance(api_key, str)
         or isinstance(api_key, AdminApiKeySecretReference)
         or not api_key.startswith(OIDC_SECRET_REFERENCE_PREFIX)
     ):
-        return params
-    return {**params, "api_key": AdminApiKeySecretReference(api_key)}
+        return None
+    return api_key
+
+
+def admin_api_key_secret_reference(params: Mapping[str, object]) -> Mapping[str, object]:
+    api_key: Final = _unmarked_api_key_secret_reference(params)
+    return params if api_key is None else {**params, "api_key": AdminApiKeySecretReference(api_key)}
+
+
+def credential_api_key_secret_reference(credential_values: Mapping[str, object]) -> Mapping[str, object]:
+    api_key: Final = _unmarked_api_key_secret_reference(credential_values)
+    if api_key is None:
+        return credential_values
+    reference: Final = CredentialApiKeySecretReference(api_key, upstream_origins(credential_values))
+    return {**credential_values, "api_key": reference}
 
 
 server_owned_wif_litellm_params: Final = (

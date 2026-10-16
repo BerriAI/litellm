@@ -157,6 +157,7 @@ from litellm.types.router import (
 )
 from litellm.types.utils import (
     COST_MAP_LOOKUP_KEY,
+    OIDC_SECRET_REFERENCE_PREFIX,
     echoed_cost_map_fields,
     echoed_cost_map_pricing_fields,
     without_server_derived_pricing,
@@ -2233,6 +2234,33 @@ class ModelManagementAuthChecks:
             )
 
     @staticmethod
+    def _reject_team_inline_api_key_secret_reference(
+        *,
+        model_params: Deployment,
+        incoming_params: Mapping[str, object] | None,
+        incoming_model_params: updateDeployment | None,
+    ) -> None:
+        api_key: Final = None if incoming_params is None else incoming_params.get("api_key")
+        incoming_model_info: Final = None if incoming_model_params is None else incoming_model_params.model_info
+        team_id: Final = (
+            incoming_model_info.team_id
+            if incoming_model_info is not None and incoming_model_info.team_id is not None
+            else model_params.model_info.team_id
+        )
+        if team_id is None or not isinstance(api_key, str) or not api_key.startswith(OIDC_SECRET_REFERENCE_PREFIX):
+            return
+        raise ProxyException(
+            message=(
+                "A team model cannot hold an oidc/ api_key secret reference, because LiteLLM resolves one only on a "
+                "proxy-level model or in a stored credential. Store the reference in a credential and set "
+                "litellm_credential_name on this model."
+            ),
+            type=ProxyErrorTypes.bad_request_error.value,
+            code=status.HTTP_400_BAD_REQUEST,
+            param="api_key",
+        )
+
+    @staticmethod
     async def can_user_make_model_call(
         model_params: Deployment,
         user_api_key_dict: UserAPIKeyAuth,
@@ -2249,6 +2277,9 @@ class ModelManagementAuthChecks:
             LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
         ):
             raise HTTPException(status_code=403, detail="View-only users cannot manage models.")
+        ModelManagementAuthChecks._reject_team_inline_api_key_secret_reference(
+            model_params=model_params, incoming_params=incoming_params, incoming_model_params=incoming_model_params
+        )
         # Federation fields choose which server-side secret is read and where the org-scoped token
         # it buys is sent, so only a proxy admin may point a federated deployment somewhere else.
         # Evaluated on the RESULTING deployment: a patch attaching a credential by name inherits

@@ -312,6 +312,43 @@ class TestModelManagementAuthChecks:
         assert result is True
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("model_info", "api_key", "refused"),
+        [
+            ({"team_id": "test_team"}, "oidc/env/MISTRAL_SA_TOKEN", True),
+            ({}, "oidc/env/MISTRAL_SA_TOKEN", False),
+            ({"team_id": "test_team"}, "sk-static", False),
+        ],
+        ids=["team model with a reference", "proxy-level model with a reference", "team model with a plain key"],
+    )
+    async def test_an_admin_cannot_save_an_oidc_api_key_reference_on_a_team_model(
+        self, model_info: dict, api_key: str, refused: bool
+    ):
+        """A team model's inline api_key is never resolved, so saving an oidc/ reference there would only ever send
+        the reference text upstream."""
+        model_params = Deployment(
+            model_name="test_model",
+            litellm_params=LiteLLM_Params(model="mistral/devstral-latest", api_key=api_key),
+            model_info=model_info,
+        )
+
+        async def save() -> object:
+            return await ModelManagementAuthChecks.can_user_make_model_call(
+                model_params=model_params,
+                user_api_key_dict=self.admin_user,
+                prisma_client=MockPrismaClient(team_exists=True),
+                premium_user=True,
+                incoming_params={"model": "mistral/devstral-latest", "api_key": api_key},
+            )
+
+        if not refused:
+            assert await save() is True
+            return
+        with pytest.raises(Exception, match="team model cannot hold an oidc/ api_key secret reference") as exc_info:
+            await save()
+        assert (getattr(exc_info.value, "param", None), getattr(exc_info.value, "code", None)) == ("api_key", "400")
+
+    @pytest.mark.asyncio
     async def test_can_user_make_model_call_normal_user_fails(self):
         """Test that normal users cannot make model calls"""
         model_params = Deployment(

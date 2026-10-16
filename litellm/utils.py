@@ -225,6 +225,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import (
     ABOVE_THRESHOLD_COST_KEY_PATTERN,
+    CREDENTIAL_UPSTREAM_PARAMS,
     OPENAI_RESPONSE_HEADERS,
     AdminApiKeySecretReference,
     CallTypes,
@@ -232,6 +233,7 @@ from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Choices,
     CostPerToken,
+    CredentialApiKeySecretReference,
     CredentialItem,
     CustomHuggingfaceTokenizer,
     Delta,
@@ -259,7 +261,7 @@ from litellm.types.utils import (
     TextCompletionResponse,
     TranscriptionResponse,
     Usage,
-    admin_api_key_secret_reference,
+    credential_api_key_secret_reference,
     is_litellm_owned_kwarg,
 )
 
@@ -742,19 +744,33 @@ def _named_credential_values(kwargs: Mapping[str, object]) -> Mapping[str, objec
     return MappingProxyType(
         {
             key: value
-            for key, value in admin_api_key_secret_reference(credential.credential_values).items()
+            for key, value in credential_api_key_secret_reference(credential.credential_values).items()
             if key not in kwargs
         }
     )
 
 
-def resolve_api_key_secret_reference(api_key: str | None, model: object, llm_provider: object) -> str | None:
+def resolve_api_key_secret_reference(
+    api_key: str | None, model: object, llm_provider: object, upstream: Mapping[str, object]
+) -> str | None:
     if not isinstance(api_key, AdminApiKeySecretReference):
         return api_key
-    return _secret_behind_api_key_reference(api_key, model=model, llm_provider=llm_provider)
+    return _secret_behind_api_key_reference(api_key, model=model, llm_provider=llm_provider, upstream=upstream)
 
 
-def _secret_behind_api_key_reference(reference: AdminApiKeySecretReference, model: object, llm_provider: object) -> str:
+def _secret_behind_api_key_reference(
+    reference: AdminApiKeySecretReference, model: object, llm_provider: object, upstream: Mapping[str, object]
+) -> str:
+    if isinstance(reference, CredentialApiKeySecretReference) and not reference.may_reach(upstream):
+        raise AuthenticationError(
+            message=(
+                f"api_key secret reference {reference} comes from a stored credential, so LiteLLM sends it only to "
+                "that credential's own api_base. Set this api_base on the credential, or give this model its own "
+                "credential."
+            ),
+            llm_provider=llm_provider,
+            model=model,
+        )
     if not reference.startswith(LOCAL_OIDC_SECRET_PREFIXES):
         raise AuthenticationError(
             message=(
@@ -789,7 +805,12 @@ def _credential_updates(kwargs: Mapping[str, object]) -> Mapping[str, object]:
     if not isinstance(api_key, AdminApiKeySecretReference):
         return credential_values
     secret: Final = _secret_behind_api_key_reference(
-        api_key, model=kwargs.get("model"), llm_provider=kwargs.get("custom_llm_provider")
+        api_key,
+        model=kwargs.get("model"),
+        llm_provider=kwargs.get("custom_llm_provider"),
+        upstream=MappingProxyType(
+            {key: kwargs.get(key, credential_values.get(key)) for key in CREDENTIAL_UPSTREAM_PARAMS}
+        ),
     )
     return MappingProxyType({**credential_values, "api_key": secret})
 
@@ -8021,7 +8042,7 @@ def _provider_listing_params(
     return {
         **params,
         "api_key": _secret_behind_api_key_reference(
-            api_key, model=litellm_params.model, llm_provider=custom_llm_provider
+            api_key, model=litellm_params.model, llm_provider=custom_llm_provider, upstream=params
         ),
     }
 

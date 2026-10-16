@@ -7039,6 +7039,97 @@ async def test_router_resolves_an_oidc_api_key_only_on_a_proxy_level_deployment(
     assert sent == expected
 
 
+_CALLER_HOST_REFERENCE_REFUSAL: Final = "sends it only to that credential's own api_base"
+
+
+@pytest.mark.parametrize(
+    ("credential_api_base", "call_api_base"),
+    [
+        ("https://api.mistral.ai/v1", "https://caller.example/v1"),
+        (None, "https://caller.example/v1"),
+        ("https://api.mistral.ai/v1", "http://api.mistral.ai/v1"),
+        ("https://api.mistral.ai/v1", "https://api.mistral.ai@caller.example/v1"),
+        ("https://api.mistral.ai/v1", "https://api.mistral.ai:8443/v1"),
+    ],
+    ids=["another host", "credential without api_base", "another scheme", "userinfo trick", "another port"],
+)
+def test_a_named_credentials_oidc_api_key_never_goes_to_an_api_base_the_credential_does_not_set(
+    monkeypatch: pytest.MonkeyPatch, credential_api_base: str | None, call_api_base: str
+) -> None:
+    monkeypatch.setenv("MISTRAL_SA_TOKEN", "env-token")
+    credential_values: Final = {"api_key": "oidc/env/MISTRAL_SA_TOKEN", "api_base": credential_api_base}
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [CredentialItem(credential_name="mistral-sa", credential_values=credential_values, credential_info={})],
+    )
+
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.route().respond(200, json=_MISTRAL_REPLY)
+        with pytest.raises(litellm.AuthenticationError, match=_CALLER_HOST_REFERENCE_REFUSAL):
+            litellm.completion(
+                model="mistral/devstral-latest",
+                messages=_PING,
+                litellm_credential_name="mistral-sa",
+                api_base=call_api_base,
+            )
+
+    assert upstream.calls.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("row_api_base", "refused"),
+    [(None, False), ("https://API.mistral.ai/v1/", False), ("https://team-admin-host.example/v1", True)],
+    ids=["row without api_base", "row on the credential's host", "row on another host"],
+)
+async def test_a_team_row_naming_an_oidc_credential_reaches_only_the_credentials_host(
+    monkeypatch: pytest.MonkeyPatch, row_api_base: str | None, refused: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("MISTRAL_SA_TOKEN", "env-token")
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="mistral-sa",
+                credential_values={"api_key": "oidc/env/MISTRAL_SA_TOKEN", "api_base": "https://api.mistral.ai"},
+                credential_info={},
+            )
+        ],
+    )
+    row_params: Final = {"model": "mistral/devstral-latest", "litellm_credential_name": "mistral-sa"}
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "devstral",
+                "litellm_params": {**row_params, "api_base": row_api_base} if row_api_base else row_params,
+                "model_info": {"team_id": "team-1"},
+            }
+        ],
+        num_retries=0,
+    )
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.route().respond(200, json=_MISTRAL_REPLY)
+            if refused:
+                with pytest.raises(litellm.AuthenticationError, match=_CALLER_HOST_REFERENCE_REFUSAL):
+                    await router.acompletion(
+                        model="devstral", messages=_PING, metadata={"user_api_key_team_id": "team-1"}
+                    )
+            else:
+                await router.acompletion(model="devstral", messages=_PING, metadata={"user_api_key_team_id": "team-1"})
+            sent: Final = tuple(
+                (call.request.url.host, call.request.headers["Authorization"]) for call in upstream.calls
+            )
+    finally:
+        router.discard()
+
+    assert sent == (() if refused else (("api.mistral.ai", "Bearer env-token"),))
+
+
 @pytest.mark.parametrize(
     ("listing_params", "expected"),
     [

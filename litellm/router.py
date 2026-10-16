@@ -10987,7 +10987,10 @@ class Router:
         if api_base is None or "*" in model or params.get("use_clientside_credentials"):
             return
         api_key: Final = resolve_api_key_secret_reference(
-            params.api_key or dynamic_api_key, model=model, llm_provider=provider
+            params.api_key or dynamic_api_key,
+            model=model,
+            llm_provider=provider,
+            upstream=MappingProxyType({"api_base": params.api_base}),
         )
         headers: Final = TypeAdapter(Mapping[str, str]).validate_python(
             params.get("extra_headers") or params.get("headers") or MappingProxyType({})

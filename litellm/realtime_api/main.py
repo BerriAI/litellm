@@ -759,15 +759,16 @@ async def realtime_health_check(
     import websockets
 
     resolved_params: Final = _model_params_with_stored_credentials(model_params or _EMPTY_MODEL_PARAMS)
+    resolved_api_base: Final = cast(  # cast-ok: provider parameters expose optional string endpoints
+        str | None, api_base or resolved_params.get("api_base")
+    )
     resolved_api_key: Final = resolve_api_key_secret_reference(
         cast(  # cast-ok: provider parameters expose optional string credentials
             str | None, api_key or resolved_params.get("api_key")
         ),
         model=model,
         llm_provider=custom_llm_provider,
-    )
-    resolved_api_base: Final = cast(  # cast-ok: provider parameters expose optional string endpoints
-        str | None, api_base or resolved_params.get("api_base")
+        upstream=MappingProxyType({**resolved_params, "api_base": resolved_api_base}),
     )
     resolved_api_version: Final = cast(  # cast-ok: provider parameters expose optional string versions
         str | None, api_version or resolved_params.get("api_version")

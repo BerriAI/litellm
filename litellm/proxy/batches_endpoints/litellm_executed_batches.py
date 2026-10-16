@@ -244,7 +244,9 @@ def _upstream_of(credentials: Mapping[str, object], provider: str) -> tuple[str,
         return None
     if resolved_api_base is None:
         return None
-    return resolved_api_base, resolve_api_key_secret_reference(resolved_api_key, model=model, llm_provider=provider)
+    return resolved_api_base, resolve_api_key_secret_reference(
+        resolved_api_key, model=model, llm_provider=provider, upstream=credentials
+    )
 
 
 async def litellm_executed_provider_for(
