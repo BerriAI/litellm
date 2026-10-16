@@ -7,7 +7,7 @@ Reference: https://cloud.google.com/text-to-speech/docs/reference/rest/v1/text/s
 
 import base64
 import math
-from collections.abc import Coroutine, Mapping
+from collections.abc import Coroutine, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, TypeAlias, Union
 
@@ -21,6 +21,7 @@ from litellm.litellm_core_utils.audio_utils.utils import (
     calculate_request_duration,
     speech_media_type_from_audio_bytes,
 )
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
@@ -221,17 +222,17 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
     def _get_dict_value(
         source: Mapping[str, object],
         *keys: str,
-    ) -> dict[str, object] | None:  # mutable-ok: nested provider payloads remain concrete dictionaries
+    ) -> Mapping[str, object] | None:
         for key in keys:
             value = source.get(key)
-            if isinstance(value, dict):
-                return value
+            if (mapping := as_str_mapping(value)) is not None:
+                return mapping
         return None
 
     def _extract_gemini_tts_speaker_configs(
         self,
         voice: Mapping[str, object],
-    ) -> list[VertexTextToSpeechSpeakerVoiceConfig]:
+    ) -> Sequence[VertexTextToSpeechSpeakerVoiceConfig]:
         speech_config: Final = self._get_dict_value(voice, "speechConfig", "speech_config") or voice
         multi_speaker_config: Final = self._get_dict_value(
             speech_config,
@@ -252,8 +253,8 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         speaker_configs: Final[  # mutable-ok: validated payloads are accumulated for serialization
             list[VertexTextToSpeechSpeakerVoiceConfig]
         ] = []
-        for raw_config in raw_speaker_configs:
-            if not isinstance(raw_config, dict):
+        for raw_item in iter_items(raw_speaker_configs):
+            if (raw_config := as_str_mapping(raw_item)) is None:
                 continue
             speaker_alias = self._get_str_value(
                 raw_config,

@@ -2,6 +2,7 @@
 Transformation for Calling Google models in their native format.
 """
 
+from collections.abc import Mapping
 from typing import Final, Literal
 
 from litellm.llms.gemini.google_genai.transformation import GoogleGenAIConfig
@@ -40,9 +41,9 @@ class VertexAIGoogleGenAIConfig(GoogleGenAIConfig):
 
     def map_generate_content_optional_params(
         self,
-        generate_content_config_dict: dict[str, Any],  # mutable-ok: inherited provider interface accepts a request dict
+        generate_content_config_dict: Mapping[str, object],
         model: str,
-    ) -> dict[str, Any]:  # mutable-ok: inherited provider interface returns a request dict
+    ) -> dict[str, object]:  # mutable-ok: inherited provider interface returns a request dictionary
         return super().map_generate_content_optional_params(
             generate_content_config_dict=generate_content_config_dict,
             model=model,
