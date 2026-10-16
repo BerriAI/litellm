@@ -10,7 +10,7 @@ from litellm._logging import verbose_logger
 from litellm.exceptions import AuthenticationError
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
-from litellm.types.utils import LlmProviders, TokenCountMessagesFormat, TokenCountResponse
+from litellm.types.utils import CountContextManagement, LlmProviders, TokenCountMessagesFormat, TokenCountResponse
 
 # Global handler instance - reuse across all token counting requests
 anthropic_count_tokens_handler: Final = AnthropicCountTokensHandler()
@@ -36,7 +36,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
         system: JsonValue = None,
         messages_format: TokenCountMessagesFormat = "anthropic",
         output_format: JsonValue = None,
-        context_management: JsonValue = None,
+        context_management: CountContextManagement | None = None,
     ) -> TokenCountResponse | None:
         """
         Count tokens using Anthropic's CountTokens API.

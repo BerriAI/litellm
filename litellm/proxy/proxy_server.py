@@ -169,6 +169,7 @@ from litellm.router_utils.routing_groups import parse_routing_groups
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import (
     PRICING_OVERRIDES_KEY,
+    CountContextManagement,
     ModelResponse,
     ModelResponseStream,
     StreamingChoices,
@@ -14425,7 +14426,7 @@ async def _try_provider_token_count(
     system: str | None = None,
     messages_format: TokenCountMessagesFormat = "openai",
     output_format: JsonValue = None,
-    context_management: JsonValue = None,
+    context_management: CountContextManagement | None = None,
 ) -> Optional["TokenCountResponse"]:
     """Attempt provider-specific token counting. Returns result on success, None to fall through to local counting."""
     if not provider_counter.should_use_token_counting_api(custom_llm_provider=custom_llm_provider):
@@ -14462,19 +14463,6 @@ async def _try_provider_token_count(
     return result
 
 
-def _routed_litellm_params(router: Router, model: str) -> tuple[Mapping[str, object], ...]:
-    by_id: Final = None if model in router.model_names else router.get_deployment(model_id=model)
-    if by_id is not None:
-        return (by_id.litellm_params.model_dump(),)
-    by_name: Final = tuple(deployment["litellm_params"] for deployment in router.get_model_list(model_name=model) or ())
-    if by_name:
-        return by_name
-    every_deployment: Final[tuple[Mapping[str, object], ...]] = tuple(
-        deployment["litellm_params"] for deployment in router.get_model_list() or ()
-    )
-    return tuple(params for params in every_deployment if "model" in params and params["model"] == model)
-
-
 def _router_default_litellm_params(router: Router) -> Mapping[str, object]:
     defaults: Final[Mapping[str, object] | None] = getattr(router, "default_litellm_params", None)
     if defaults is None:
@@ -14484,20 +14472,28 @@ def _router_default_litellm_params(router: Router) -> Mapping[str, object]:
 
 def _count_context_management(
     context_management: JsonValue, model: str, request_litellm_params: Mapping[str, JsonValue]
-) -> JsonValue:
+) -> CountContextManagement | None:
     from litellm.llms.anthropic.pass_through.adapters.handler import context_management_explicitly_dropped
 
-    group: Final = () if llm_router is None else _routed_litellm_params(llm_router, model)
-    router_defaults: Final[Mapping[str, object]] = (
-        {} if llm_router is None else _router_default_litellm_params(llm_router)
+    if context_management is None or llm_router is None:
+        return None
+    inference_model: Final = resolve_inference_model(
+        model, general_settings_view(), user_model if isinstance(user_model, str) else None
     )
-    dropped_by_a_deployment: Final = any(
-        context_management_explicitly_dropped(
-            {**params, **router_defaults, **request_litellm_params}.get("additional_drop_params")
+    router_defaults: Final = _router_default_litellm_params(llm_router)
+    sent_params: Final = tuple(
+        {**deployment["litellm_params"], **router_defaults, **request_litellm_params}
+        for deployment in llm_router.get_routable_deployments(
+            inference_model if isinstance(inference_model, str) else model
         )
-        for params in group
     )
-    return None if dropped_by_a_deployment else context_management
+    if any(context_management_explicitly_dropped(params.get("additional_drop_params")) for params in sent_params):
+        return None
+    return CountContextManagement(
+        spec=context_management,
+        drop_invalid_edits=litellm.drop_params is True
+        or any(params.get("drop_params") is True for params in sent_params),
+    )
 
 
 def _system_message(system: object) -> ChatCompletionSystemMessage | None:

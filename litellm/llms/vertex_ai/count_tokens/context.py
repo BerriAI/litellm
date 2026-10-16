@@ -10,7 +10,7 @@ from typing_extensions import assert_never
 from litellm.types.llms.anthropic import AnthropicMessagesTextParam
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import ContentType
-from litellm.types.utils import TokenCountMessagesFormat, TokenCountResponse
+from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat, TokenCountResponse
 
 if TYPE_CHECKING:
     from litellm.exceptions import APIError
@@ -189,6 +189,7 @@ class CountContextEdits:
     spec: JsonValue
     model: str
     tools: tuple[Mapping[str, object], ...] | None
+    drop_invalid_edits: bool = False
 
 
 _CONTEXT_MANAGEMENT_SPEC: Final[TypeAdapter[Mapping[str, object] | tuple[Mapping[str, object], ...]]] = TypeAdapter(
@@ -197,16 +198,17 @@ _CONTEXT_MANAGEMENT_SPEC: Final[TypeAdapter[Mapping[str, object] | tuple[Mapping
 
 
 def count_context_edits(
-    context_management: JsonValue,
+    context_management: CountContextManagement | None,
     tools: Sequence[Mapping[str, object]] | None,
     litellm_params: Mapping[str, object],
     fallback_model: str,
 ) -> CountContextEdits:
     model: Final = litellm_params.get("model")
     return CountContextEdits(
-        spec=context_management,
+        spec=None if context_management is None else context_management.spec,
         model=model if isinstance(model, str) else fallback_model,
         tools=None if tools is None else tuple(tools),
+        drop_invalid_edits=context_management is not None and context_management.drop_invalid_edits,
     )
 
 
@@ -275,7 +277,7 @@ async def _anthropic_inference_view(
             count_only=True,
         )
     except AnthropicContextManagementError as error:
-        if error.status_code >= 500:
+        if error.status_code >= 500 or edits.drop_invalid_edits:
             return _view_without_edits(normalized, system, typed_system)
         return VertexGeminiCountContextError(error_message=error.message, status_code=error.status_code)
     if prepared is None:

@@ -26,7 +26,7 @@ from litellm.llms.vertex_ai.common_utils import (
     vertex_request_labels_from_litellm_params,
 )
 from litellm.llms.vertex_ai.count_tokens import handler as vertex_count_tokens_handler
-from litellm.types.utils import TokenCountMessagesFormat
+from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat
 
 
 @pytest.mark.asyncio
@@ -60,7 +60,9 @@ class _VertexCountTokensPeer:
             return httpx.Response(200, json={"totalTokens": 37}, request=request)
         return httpx.Response(
             self.status_code,
-            json={"error": {"code": self.status_code, "message": "Invalid function name", "status": "INVALID_ARGUMENT"}},
+            json={
+                "error": {"code": self.status_code, "message": "Invalid function name", "status": "INVALID_ARGUMENT"}
+            },
             request=request,
         )
 
@@ -139,7 +141,9 @@ def _tool_round(index: int) -> tuple[dict[str, object], ...]:
         {"role": "user", "content": f"Read file {index}."},
         {
             "role": "assistant",
-            "content": [{"type": "tool_use", "id": f"toolu_{index}", "name": "read_file", "input": {"path": f"{index}"}}],
+            "content": [
+                {"type": "tool_use", "id": f"toolu_{index}", "name": "read_file", "input": {"path": f"{index}"}}
+            ],
         },
         {
             "role": "user",
@@ -155,19 +159,26 @@ async def test_vertex_gemini_count_applies_the_context_edits_inference_applies()
             model_to_use="gemini-2.5-flash",
             messages=[*_tool_round(0), *_tool_round(1), *_tool_round(2), {"role": "user", "content": "Summarize."}],
             contents=None,
-            deployment={"litellm_params": {**_VERTEX_DEPLOYMENT["litellm_params"], "model": "vertex_ai/gemini-2.5-flash"}},
-            request_model="vertex_ai/gemini-2.5-flash",
-            tools=[{"name": "read_file", "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}}}],
-            messages_format="anthropic",
-            context_management={
-                "edits": [
-                    {
-                        "type": "clear_tool_uses_20250919",
-                        "trigger": {"type": "input_tokens", "value": 500},
-                        "keep": {"type": "tool_uses", "value": 1},
-                    }
-                ]
+            deployment={
+                "litellm_params": {**_VERTEX_DEPLOYMENT["litellm_params"], "model": "vertex_ai/gemini-2.5-flash"}
             },
+            request_model="vertex_ai/gemini-2.5-flash",
+            tools=[
+                {"name": "read_file", "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}}}
+            ],
+            messages_format="anthropic",
+            context_management=CountContextManagement(
+                spec={
+                    "edits": [
+                        {
+                            "type": "clear_tool_uses_20250919",
+                            "trigger": {"type": "input_tokens", "value": 500},
+                            "keep": {"type": "tool_uses", "value": 1},
+                        }
+                    ]
+                },
+                drop_invalid_edits=False,
+            ),
         )
 
     assert result is not None

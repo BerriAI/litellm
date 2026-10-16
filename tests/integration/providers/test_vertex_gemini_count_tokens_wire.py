@@ -498,6 +498,41 @@ def test_count_tokens_reads_the_opt_out_of_a_deployment_id_beside_a_wildcard_rou
         assert counted == generated
 
 
+@pytest.mark.parametrize(
+    ("requested", "wildcards", "files_kept"),
+    (
+        ("dropping", (), (True, True, True)),
+        ("editing", (), (False, False, True)),
+        ("dropping", ("*",), (False, False, True)),
+    ),
+    ids=("deployment-drops", "sibling-deployment-drops", "wildcard-route-matches-first"),
+)
+def test_count_tokens_reads_the_opt_out_of_the_deployment_its_litellm_model_name_routes_to(
+    gateway: Gateway, requested: str, wildcards: tuple[str, ...], files_kept: tuple[bool, ...]
+) -> None:
+    peer: Final = _GeminiPeer()
+    with wire_server(peer) as wire, gateway.scenario() as scenario:
+        prefix: Final = f"gemini/{_MODEL}-{uuid4().hex}"
+        scenario.model(
+            model=f"{prefix}-dropping",
+            api_base=wire.url,
+            api_key="scripted-gemini-key",
+            additional_drop_params=["context_management"],
+        )
+        scenario.model(model=f"{prefix}-editing", api_base=wire.url, api_key="scripted-gemini-key")
+        for wildcard in wildcards:
+            _named_deployment(
+                scenario,
+                f"{prefix}-{wildcard}",
+                {"model": f"{prefix}-{wildcard}", "api_base": wire.url, "api_key": "scripted-gemini-key"},
+                {},
+            )
+        marker: Final = uuid4().hex
+        generated, counted = _contents_sent_upstream(gateway, peer, _agent_body(f"{prefix}-{requested}", marker, {}))
+        assert _files_kept(generated, marker) == files_kept
+        assert counted == generated
+
+
 def _error_type(response: httpx.Response) -> JsonValue:
     return object_value(_JSON_OBJECT.validate_json(response.content)["error"])["type"]
 

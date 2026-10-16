@@ -13375,6 +13375,15 @@ class Router:
         """
         return [m for m in self.model_list if m["litellm_params"]["model"] == model]
 
+    def get_routable_deployments(self, model: str) -> tuple[DeploymentTypedDict, ...]:
+        try:
+            _, candidates = self._common_checks_available_deployment(model=model, request_kwargs={})  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # its signature leaves input and the result untyped
+        except (litellm.BadRequestError, ValueError):
+            return ()
+        if isinstance(candidates, dict):
+            return (cast(DeploymentTypedDict, candidates),)  # cast-ok: the router returns one deployment as a dict
+        return tuple(cast(list[DeploymentTypedDict], candidates))  # cast-ok: the router returns deployments as a list
+
     def _try_early_resolve_deployments_for_model_not_in_names(
         self,
         model: str,

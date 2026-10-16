@@ -300,6 +300,9 @@ def _requested_output_format(data: Mapping[str, JsonValue]) -> JsonValue:
     return output_config.get("format")
 
 
+_COUNTED_LITELLM_PARAMS: Final = ("additional_drop_params", "drop_params")
+
+
 class _CountTokensBodyOptions(TypedDict):
     output_format: ReadOnly[JsonValue]
     context_management: ReadOnly[JsonValue]
@@ -310,9 +313,7 @@ def _count_tokens_body_options(data: Mapping[str, JsonValue]) -> _CountTokensBod
     return {
         "output_format": _requested_output_format(data),
         "context_management": data.get("context_management"),
-        "request_litellm_params": MappingProxyType(
-            {"additional_drop_params": data["additional_drop_params"]} if "additional_drop_params" in data else {}
-        ),
+        "request_litellm_params": MappingProxyType({key: data[key] for key in _COUNTED_LITELLM_PARAMS if key in data}),
     }
 
 
