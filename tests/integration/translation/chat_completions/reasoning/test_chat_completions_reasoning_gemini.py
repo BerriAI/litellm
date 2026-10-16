@@ -5,12 +5,14 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Final
 from unittest.mock import ANY
+from uuid import uuid4
 
 import pytest
-from integration._support.client import Gateway, list_value, object_value
+from integration._support.client import Gateway, eventually, list_value, object_value, string_value
 from integration._support.process import graceful_stop_seconds
 from integration._support.provider import SharedProvider
 from integration._support.wire import Reply
+from integration.caching.response_cache_case import CACHE_KEY, redis_store
 from integration.translation.case import SSEFrame, TranslationTestCase
 from integration.translation.chat_completions.bases.gemini import GEMINI_3_8_FLASH_TEST_CASE
 from integration.translation.chat_completions.bases.vertex_ai import (
@@ -809,6 +811,12 @@ SUMMARY_ASKS: Final = (
     with_summary(GEMINI_3_8_FLASH_THOUGHTS_OFF_TEST_CASE, "summary_null", None),
     with_request(GEMINI_3_8_FLASH_TEST_CASE, "summary_alias", reasoning_summary="auto"),
     with_request(GEMINI_3_8_FLASH_TEST_CASE, "summary_alias_camel", reasoningSummary="detailed"),
+    with_request(
+        GEMINI_3_8_FLASH_TEST_CASE,
+        "summary_alias_effort_dict",
+        reasoning_effort={"effort": "high"},
+        reasoning_summary="auto",
+    ),
     with_request(GEMINI_3_8_FLASH_THOUGHTS_OFF_TEST_CASE, "summary_alias_null", reasoning_summary=None),
     with_request(
         GEMINI_3_8_FLASH_THINKING_SHOWN_TEST_CASE,
@@ -823,6 +831,72 @@ def test_only_a_string_reasoning_summary_brings_thought_text_back_over_the_gatew
     case: TranslationTestCase, thoughts_off: Gateway, provider: SharedProvider
 ) -> None:
     assert_translation(case, thoughts_off, provider)
+
+
+def without_closed_schema(tool: JsonValue) -> JsonValue:
+    function: Final = object_value(object_value(tool)["function"])
+    parameters: Final = object_value(function["parameters"])
+    open_parameters: Final = {name: value for name, value in parameters.items() if name != "additionalProperties"}
+    return {**object_value(tool), "function": {**function, "parameters": open_parameters}}
+
+
+def cacheable_run(case: TranslationTestCase, marker: str) -> TranslationTestCase:
+    messages: Final = list_value(case.litellm_request["messages"])
+    system: Final = object_value(messages[0])
+    instruction: Final = object_value(case.expected_provider_request["system_instruction"])
+    (part,) = list_value(instruction["parts"])
+    text: Final = f"{string_value(system['content'])} Review run {marker}."
+    return replace(
+        case,
+        litellm_request={
+            **{name: value for name, value in case.litellm_request.items() if name != "cache"},
+            "messages": [{**system, "content": text}, messages[1]],
+            "tools": [without_closed_schema(tool) for tool in list_value(case.litellm_request["tools"])],
+        },
+        expected_provider_request={
+            **case.expected_provider_request,
+            "contents": [list_value(case.expected_provider_request["contents"])[0]],
+            "system_instruction": {**instruction, "parts": [{**object_value(part), "text": text}]},
+        },
+    )
+
+
+def response_cache_keys() -> frozenset[str]:
+    keys: Final = (raw.decode() for raw in redis_store().scan_iter())
+    return frozenset(key for key in keys if CACHE_KEY.match(key))
+
+
+def stored_reply_key(before: frozenset[str]) -> str:
+    (key,) = eventually(lambda: response_cache_keys() - before, lambda added: len(added) == 1)
+    return key
+
+
+GEMINI_3_8_FLASH_SUMMARY_ALIAS_TEST_CASE: Final = with_request(
+    GEMINI_3_8_FLASH_TEST_CASE, "summary_alias", reasoning_summary="auto"
+)
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    (
+        (GEMINI_3_8_FLASH_THOUGHTS_OFF_TEST_CASE, GEMINI_3_8_FLASH_SUMMARY_ALIAS_TEST_CASE),
+        (GEMINI_3_8_FLASH_SUMMARY_ALIAS_TEST_CASE, GEMINI_3_8_FLASH_THOUGHTS_OFF_TEST_CASE),
+    ),
+    ids=("plain_then_summary_alias", "summary_alias_then_plain"),
+)
+def test_a_summary_alias_ask_and_a_plain_request_never_share_a_cached_reply(
+    first: TranslationTestCase, second: TranslationTestCase, thoughts_off: Gateway, provider: SharedProvider
+) -> None:
+    marker: Final = uuid4().hex
+    before: Final = response_cache_keys()
+    assert_translation(cacheable_run(first, marker), thoughts_off, provider)
+    first_key: Final = stored_reply_key(before)
+    assert_translation(cacheable_run(second, marker), thoughts_off, provider)
+    second_key: Final = stored_reply_key(before | {first_key})
+    repeat: Final = thoughts_off.request("POST", second.litellm_endpoint, cacheable_run(second, marker).litellm_request)
+    assert repeat.status_code == 200, repeat.text
+    assert repeat.headers.get("x-litellm-cache-key") == second_key, sorted(repeat.headers)
+    assert provider.received() == ()
 
 
 DISPLAY_ASKS: Final = (

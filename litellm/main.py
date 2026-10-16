@@ -5665,12 +5665,7 @@ def completion(
             "api_version": api_version,
             "parallel_tool_calls": parallel_tool_calls,
             "messages": messages,
-            "reasoning_effort": reasoning_effort_with_summary_alias(
-                reasoning_effort,
-                non_default_params,
-                accepts_summary=provider_config is not None
-                and provider_config.accepts_reasoning_summary_in_reasoning_effort,
-            ),
+            "reasoning_effort": reasoning_effort,
             "verbosity": verbosity,
             "thinking": thinking,
             "web_search_options": web_search_options,
@@ -5686,7 +5681,15 @@ def completion(
             "allowed_openai_params": allowed_openai_params,
             "base_model": base_model,
         }
-        optional_params = get_optional_params(**optional_param_args, **non_default_params)
+        provider_reasoning_effort: Final = reasoning_effort_with_summary_alias(
+            reasoning_effort,
+            non_default_params,
+            accepts_summary=provider_config is not None
+            and provider_config.accepts_reasoning_summary_in_reasoning_effort,
+        )
+        optional_params = get_optional_params(
+            **{**optional_param_args, "reasoning_effort": provider_reasoning_effort}, **non_default_params
+        )
         processed_non_default_params: Final = pre_process_non_default_params(
             model=model,
             passed_params=optional_param_args,

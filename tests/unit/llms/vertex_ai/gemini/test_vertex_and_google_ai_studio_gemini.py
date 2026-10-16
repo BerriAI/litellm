@@ -25,6 +25,7 @@ from litellm.types.llms.vertex_ai import GeminiFinishReason, UsageMetadata
 from litellm.types.utils import ChoiceLogprobs, Usage
 from litellm.utils import _invalidate_model_cost_lowercase_map, CustomStreamWrapper
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.vertex_ai.gemini.transformation import (
     gemini_convert_messages_with_history,
 )
@@ -9837,6 +9838,13 @@ PER_REQUEST_THOUGHT_SUMMARY_ASKS: Final = (
     ),
     pytest.param(
         "gemini-3.8-flash",
+        {"reasoning_effort": {"effort": "medium"}, "reasoning_summary": "auto"},
+        False,
+        True,
+        id="effort-dict-takes-the-summary-alias",
+    ),
+    pytest.param(
+        "gemini-3.8-flash",
         {"reasoning_effort": {"effort": "none", "summary": "auto"}},
         True,
         False,
@@ -9860,6 +9868,86 @@ async def test_gemini_per_request_thought_summary_ask_beats_gateway_default(
     sent: Final = await _sent_thinking_config(model, thinking_params)
 
     assert sent["includeThoughts"] is expected
+
+
+def _includes_thoughts_client(sent: list[bool]) -> AsyncHTTPHandler:
+    def upstream(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content)["generationConfig"]["thinkingConfig"]["includeThoughts"])
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [{"content": {"parts": [{"text": "hi"}], "role": "model"}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+            },
+            request=request,
+        )
+
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+    return client
+
+
+async def _chat_summary_ask(client: AsyncHTTPHandler, asks: bool) -> None:
+    await litellm.acompletion(
+        model="gemini/gemini-3.8-flash",
+        messages=[{"role": "user", "content": "hi"}],
+        api_key="fake-gemini-key",
+        client=client,
+        reasoning_effort="medium",
+        **({"reasoning_summary": "auto"} if asks else {}),
+    )
+
+
+async def _messages_summary_ask(client: AsyncHTTPHandler, asks: bool) -> None:
+    await litellm.anthropic.messages.acreate(
+        model="gemini/gemini-3.8-flash",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=64,
+        api_key="fake-gemini-key",
+        client=client,
+        thinking={"type": "enabled", "budget_tokens": 2048, **({"display": "summarized"} if asks else {})},
+    )
+
+
+async def _responses_summary_ask(client: AsyncHTTPHandler, asks: bool) -> None:
+    await litellm.aresponses(
+        model="gemini/gemini-3.8-flash",
+        input="hi",
+        api_key="fake-gemini-key",
+        client=client,
+        reasoning={"effort": "medium", **({"summary": "auto"} if asks else {})},
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "send",
+    (_chat_summary_ask, _messages_summary_ask, _responses_summary_ask),
+    ids=("chat-reasoning-summary-alias", "messages-display-summarized", "responses-reasoning-summary"),
+)
+async def test_gemini_summary_ask_turns_thoughts_on_and_logs_the_same_reasoning_effort(
+    send, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    logged: Final[list[object]] = []
+
+    class ReasoningEffortLogger(CustomLogger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            logged.append(kwargs["standard_logging_object"]["model_parameters"].get("reasoning_effort"))
+
+    monkeypatch.setattr(litellm, "gemini_include_thoughts_default", False)
+    monkeypatch.setattr(litellm, "callbacks", [ReasoningEffortLogger()])
+    sent: Final[list[bool]] = []
+    client: Final = _includes_thoughts_client(sent)
+
+    await send(client, False)
+    await send(client, True)
+    await asyncio.sleep(0)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
+
+    assert sent == [False, True]
+    assert len(logged) == 2
+    assert isinstance(logged[0], str)
+    assert logged[1] == logged[0]
 
 
 @pytest.mark.asyncio

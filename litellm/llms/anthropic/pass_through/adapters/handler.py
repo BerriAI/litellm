@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Final,
@@ -7,7 +8,7 @@ from typing import (
 )
 
 from pydantic import TypeAdapter
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -62,9 +63,10 @@ class _CompletionKwargs(TypedDict, total=False, extra_items=object):
     custom_llm_provider: str
 
 
-class _ReasoningSummaryAsk(TypedDict):
-    effort: ReadOnly[str]
-    summary: ReadOnly[str]
+@dataclass(frozen=True, slots=True)
+class _ChatTargetReasoning:
+    effort: str
+    summary: str | None = None
 
 
 def _messages_have_compaction_block(messages: _AnthropicMessages) -> bool:
@@ -456,11 +458,11 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         return "auto" if display is not None and display != "omitted" else None
 
     @staticmethod
-    def _chat_target_reasoning_effort(
+    def _chat_target_reasoning(
         completion_kwargs: _CompletionKwargs,
         *,
         thinking: Mapping[str, object] | None,
-    ) -> str | _ReasoningSummaryAsk | None:
+    ) -> _ChatTargetReasoning | None:
         if not thinking:
             return None
         reasoning_effort: Final = completion_kwargs.get("reasoning_effort")
@@ -493,7 +495,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         from litellm.responses.bridge_check import chat_target_accepts_reasoning_summary, responses_api_bridge_check
 
         if requested_summary is not None and chat_target_accepts_reasoning_summary(local_model, resolved_provider):
-            return _ReasoningSummaryAsk(effort=effort, summary=requested_summary)
+            return _ChatTargetReasoning(effort=effort, summary=requested_summary)
         if not wraps_summary or not isinstance(reasoning_effort, dict):
             return None
 
@@ -509,7 +511,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             reasoning_effort=reasoning_effort,
             api_base=resolved_api_base,
         )
-        return None if model_info.get("mode") == "responses" else effort
+        return None if model_info.get("mode") == "responses" else _ChatTargetReasoning(effort=effort)
 
     @staticmethod
     def _normalize_reasoning_effort(
@@ -675,12 +677,14 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             thinking=thinking,
         )
 
-        chat_reasoning_effort: Final = LiteLLMMessagesToCompletionTransformationHandler._chat_target_reasoning_effort(
+        chat_reasoning: Final = LiteLLMMessagesToCompletionTransformationHandler._chat_target_reasoning(
             completion_kwargs,
             thinking=thinking,
         )
-        if chat_reasoning_effort is not None:
-            completion_kwargs["reasoning_effort"] = chat_reasoning_effort
+        if chat_reasoning is not None:
+            completion_kwargs["reasoning_effort"] = chat_reasoning.effort
+        if chat_reasoning is not None and chat_reasoning.summary is not None:
+            completion_kwargs["reasoning_summary"] = chat_reasoning.summary
 
         return completion_kwargs, tool_name_mapping
 

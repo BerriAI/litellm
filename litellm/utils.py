@@ -10466,10 +10466,18 @@ def peek_reasoning_summary_aliases(optional_params: Mapping[str, object]) -> obj
 def reasoning_effort_with_summary_alias(
     reasoning_effort: object, params: Mapping[str, object], accepts_summary: bool
 ) -> object:
-    if not accepts_summary or not isinstance(reasoning_effort, str):
-        return reasoning_effort
     summary: Final = peek_reasoning_summary_aliases(params)
-    return {"effort": reasoning_effort, "summary": summary} if isinstance(summary, str) else reasoning_effort
+    if not accepts_summary or not isinstance(summary, str):
+        return reasoning_effort
+    match reasoning_effort:
+        case str():
+            return {"effort": reasoning_effort, "summary": summary}
+        case {"summary": _}:
+            return reasoning_effort
+        case {"effort": str() as effort}:
+            return {"effort": effort, "summary": summary}
+        case _:
+            return reasoning_effort
 
 
 def strip_reasoning_summary_aliases_from_optional_params(

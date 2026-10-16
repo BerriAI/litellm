@@ -6,6 +6,7 @@ regression they guard is the one a caller sees: a tier the proxy advertises has 
 leaves the adapter, in the shape the target expects.
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 import pytest
@@ -15,6 +16,7 @@ from litellm.llms.anthropic.pass_through.adapters.handler import (
     LiteLLMMessagesToCompletionTransformationHandler,
 )
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+from litellm.utils import reasoning_effort_with_summary_alias
 
 MESSAGES = [{"role": "user", "content": "hello"}]
 
@@ -40,14 +42,14 @@ def _reasoning_effort_sent(model: str, provider: str, reasoning_effort: object) 
     return completion_kwargs.get("reasoning_effort")
 
 
-def _reasoning_effort_sent_for_thinking(
+def _completion_kwargs_for_thinking(
     model: str,
     provider: str | None,
     thinking: dict[str, object],
     *,
     tools: list[dict[str, object]] | None = None,
     api_base: str | None = None,
-) -> object:
+) -> Mapping[str, object]:
     extra_kwargs: Final = {
         key: value for key, value in (("custom_llm_provider", provider), ("api_base", api_base)) if value is not None
     }
@@ -68,7 +70,20 @@ def _reasoning_effort_sent_for_thinking(
         output_format=None,
         extra_kwargs=extra_kwargs,
     )
-    return completion_kwargs.get("reasoning_effort")
+    return completion_kwargs
+
+
+def _reasoning_effort_sent_for_thinking(
+    model: str,
+    provider: str | None,
+    thinking: dict[str, object],
+    *,
+    tools: list[dict[str, object]] | None = None,
+    api_base: str | None = None,
+) -> object:
+    return _completion_kwargs_for_thinking(model, provider, thinking, tools=tools, api_base=api_base).get(
+        "reasoning_effort"
+    )
 
 
 SUMMARIZED_THINKING = {"type": "enabled", "budget_tokens": 4096, "summary": "auto"}
@@ -110,10 +125,15 @@ class TestAThinkingSummaryAskReachesGemini:
     ) -> None:
         monkeypatch.setattr(litellm, "gemini_include_thoughts_default", False)
 
-        sent = _reasoning_effort_sent_for_thinking(model, provider, thinking)
-        mapped = VertexGeminiConfig().map_openai_params({"reasoning_effort": sent}, {}, model.split("/", 1)[1], True)
+        sent = _completion_kwargs_for_thinking(model, provider, thinking)
+        gemini = VertexGeminiConfig()
+        reasoning_effort = reasoning_effort_with_summary_alias(
+            sent.get("reasoning_effort"), sent, accepts_summary=gemini.accepts_reasoning_summary_in_reasoning_effort
+        )
+        mapped = gemini.map_openai_params({"reasoning_effort": reasoning_effort}, {}, model.split("/", 1)[1], True)
 
         assert mapped["thinkingConfig"]["includeThoughts"] is sends_thoughts
+        assert not isinstance(sent.get("reasoning_effort"), dict)
 
     def test_auto_summary_leaves_the_gateway_default_in_charge(
         self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch

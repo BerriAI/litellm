@@ -21,6 +21,8 @@ from litellm._logging import verbose_logger
 from litellm.types.llms.anthropic import AnthropicMessagesRequest
 from litellm.types.rerank import RerankRequest
 
+_REASONING_SUMMARY_ALIASES: Final = frozenset(("reasoning_summary", "reasoningSummary"))
+
 
 class ModelParamHelper:
     # Cached at class level — deterministic set built from static OpenAI type annotations
@@ -91,6 +93,11 @@ class ModelParamHelper:
         return combined_kwargs
 
     _get_all_llm_api_params = get_all_llm_api_params
+
+    @staticmethod
+    @lru_cache(maxsize=1)
+    def get_cache_key_params() -> frozenset[str]:
+        return frozenset(ModelParamHelper.get_all_llm_api_params() | _REASONING_SUMMARY_ALIASES)
 
     @staticmethod
     def get_litellm_provider_specific_params_for_chat_params() -> set[str]:

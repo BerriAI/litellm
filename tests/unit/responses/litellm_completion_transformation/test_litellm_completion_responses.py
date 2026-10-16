@@ -3142,6 +3142,7 @@ class TestToolTransformation:
         self, monkeypatch, model, custom_llm_provider, reasoning, sends_thoughts
     ):
         from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+        from litellm.utils import reasoning_effort_with_summary_alias
 
         monkeypatch.setattr(litellm, "gemini_include_thoughts_default", False)
         bridged = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
@@ -3151,12 +3152,14 @@ class TestToolTransformation:
             custom_llm_provider=custom_llm_provider,
         )
 
-        mapped = VertexGeminiConfig().map_openai_params(
-            {"reasoning_effort": bridged["reasoning_effort"]}, {}, model, True
+        gemini = VertexGeminiConfig()
+        reasoning_effort = reasoning_effort_with_summary_alias(
+            bridged["reasoning_effort"], bridged, accepts_summary=gemini.accepts_reasoning_summary_in_reasoning_effort
         )
+        mapped = gemini.map_openai_params({"reasoning_effort": reasoning_effort}, {}, model, True)
 
         assert mapped["thinkingConfig"]["includeThoughts"] is sends_thoughts
-        assert "reasoning_summary" not in bridged
+        assert bridged["reasoning_effort"] == "medium"
 
     @pytest.mark.parametrize(
         "model, custom_llm_provider",

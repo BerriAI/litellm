@@ -392,7 +392,7 @@ class Cache:
             verbose_logger.debug("\nReturning preset cache key: %s", preset_cache_key)
             return preset_cache_key
 
-        combined_kwargs: Final = ModelParamHelper.get_all_llm_api_params()
+        combined_kwargs: Final = ModelParamHelper.get_cache_key_params()
         is_semantic_cache: Final = self._is_semantic_cache()
         scope_excluded_params: Final = self._SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS if is_semantic_cache else frozenset()
         for param in kwargs:

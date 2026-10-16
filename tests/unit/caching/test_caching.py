@@ -291,6 +291,22 @@ def test_exact_cache_key_includes_anthropic_messages_params(anthropic_param):
     assert baseline != cache.get_cache_key(model="claude-sonnet-4-5", messages=messages, **anthropic_param)
 
 
+@pytest.mark.parametrize("alias", ["reasoning_summary", "reasoningSummary"])
+def test_exact_cache_key_includes_the_reasoning_summary_alias(alias):
+    """The AI SDK summary alias decides whether thought summaries come back, so a reply cached
+    without it must not answer a request that asks for one, or the other way around."""
+    cache = Cache(type=LiteLLMCacheType.LOCAL)
+    messages = [{"role": "user", "content": "how much is the ball?"}]
+    no_ask = cache.get_cache_key(model="gemini/gemini-3.8-flash", messages=messages, reasoning_effort="medium")
+    ask = cache.get_cache_key(
+        model="gemini/gemini-3.8-flash", messages=messages, reasoning_effort="medium", **{alias: "auto"}
+    )
+    assert no_ask != ask
+    assert ask == cache.get_cache_key(
+        model="gemini/gemini-3.8-flash", messages=messages, reasoning_effort="medium", **{alias: "auto"}
+    )
+
+
 @pytest.mark.asyncio
 async def test_embedding_cache_skips_write_when_one_input_yields_many_embeddings(monkeypatch):
     """A cross-encoder behind /embeddings returns one score per document for a single
