@@ -49,6 +49,40 @@ describe("bulk customer edits", () => {
     });
   });
 
+  it("keeps a tool-only server grant when an unrelated MCP field is opted in", () => {
+    const toolOnlyServer: MCPServer = {
+      server_id: "server-a",
+      created_at: "",
+      created_by: "",
+      updated_at: "",
+      updated_by: "",
+    };
+    const restricted: EndUser[] = [
+      { ...customers[0], object_permission: { mcp_tool_permissions: { "server-a": ["read"] } } },
+    ] as EndUser[];
+    const edits = { ...emptyBulkCustomerEdits(), mcpToolsets: { enabled: true, value: [] } };
+    const expected = {
+      ok: true,
+      payload: {
+        customers: [
+          {
+            user_id: "customer-a",
+            object_permission: { mcp_toolsets: [], mcp_tool_permissions: { "server-a": ["read"] } },
+          },
+        ],
+      },
+    };
+
+    expect(
+      buildBulkCustomerPayload(
+        restricted,
+        edits,
+        { servers: [toolOnlyServer], toolsets: [] },
+        getCustomerBudgetCounts(restricted),
+      ),
+    ).toEqual(expected);
+  });
+
   it.each([
     ["models", "models"],
     ["mcpServers", "mcp_servers"],

@@ -4,7 +4,7 @@ import type { EndUser } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import type { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
 import { extractMcpEntitlement } from "@/components/mcp_server_management/mcpEntitlement";
 
-import { hasSharedCustomerBudget } from "./customerPayload";
+import { extractEditedMcpGrant, hasSharedCustomerBudget, storedMcpGrant } from "./customerPayload";
 
 export const MAX_BULK_CUSTOMERS = 500;
 
@@ -71,20 +71,19 @@ const retainedToolPermissions = (
   servers: MCPServer[],
   toolsets: MCPToolset[],
 ): Record<string, string[]> => {
-  const permission = customer.object_permission;
-  const entitlement = extractMcpEntitlement(
-    {
-      mcp_servers_and_groups: {
-        servers: edits.mcpServers.enabled ? edits.mcpServers.value : permission?.mcp_servers,
-        accessGroups: edits.mcpAccessGroups.enabled ? edits.mcpAccessGroups.value : permission?.mcp_access_groups,
-        toolsets: edits.mcpToolsets.enabled ? edits.mcpToolsets.value : permission?.mcp_toolsets,
-      },
-      mcp_tool_permissions: permission?.mcp_tool_permissions,
+  const stored = storedMcpGrant(customer);
+  const values = {
+    mcp_servers_and_groups: {
+      servers: edits.mcpServers.enabled ? edits.mcpServers.value : stored.mcp_servers,
+      accessGroups: edits.mcpAccessGroups.enabled ? edits.mcpAccessGroups.value : stored.mcp_access_groups,
+      toolsets: edits.mcpToolsets.enabled ? edits.mcpToolsets.value : stored.mcp_toolsets,
     },
-    servers,
-    toolsets,
-  );
-  return entitlement?.mcp_tool_permissions ?? {};
+    mcp_tool_permissions: stored.mcp_tool_permissions,
+  };
+  const grant = edits.mcpServers.enabled
+    ? extractMcpEntitlement(values, servers, toolsets)
+    : extractEditedMcpGrant(values, stored, servers, toolsets);
+  return grant?.mcp_tool_permissions ?? {};
 };
 
 export const buildBulkCustomerPayload = (

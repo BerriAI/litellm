@@ -27,7 +27,7 @@ export type CustomerFormValues = {
   mcp_tool_permissions: Record<string, string[]>;
 };
 
-const storedMcpGrant = (customer: EndUser | null): McpEntitlementUpdate => ({
+export const storedMcpGrant = (customer: EndUser | null): McpEntitlementUpdate => ({
   mcp_servers: customer?.object_permission?.mcp_servers ?? [],
   mcp_access_groups: customer?.object_permission?.mcp_access_groups ?? [],
   mcp_toolsets: customer?.object_permission?.mcp_toolsets ?? [],
@@ -70,8 +70,8 @@ const grantIdentity = (grant: McpEntitlementUpdate): string => {
   return JSON.stringify(normalized);
 };
 
-const extractEditedMcpGrant = (
-  values: CustomerFormValues,
+export const extractEditedMcpGrant = (
+  values: Pick<CustomerFormValues, "mcp_servers_and_groups" | "mcp_tool_permissions">,
   storedGrant: McpEntitlementUpdate,
   servers: MCPServer[],
   toolsets: MCPToolset[],
