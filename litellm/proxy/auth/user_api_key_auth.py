@@ -1182,7 +1182,7 @@ async def user_api_key_auth_websocket(websocket: WebSocket) -> UserAPIKeyAuth:
 
 
 async def user_api_key_auth_live_websocket(websocket: WebSocket) -> UserAPIKeyAuth:
-    return await user_api_key_auth_websocket_for_model(websocket, model=None)
+    return await user_api_key_auth_websocket_for_model(websocket, model="")
 
 
 async def user_api_key_auth_websocket_for_model(
