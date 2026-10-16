@@ -20,6 +20,21 @@ from litellm.types.mcp import MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
+def allow_one_request(monkeypatch: pytest.MonkeyPatch, user_id: str, server_id: str) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+
+    windows: Final = {(user_id, server_id): asyncio.Semaphore(1)}
+
+    async def enforce(user: UserAPIKeyAuth | None, server: MCPServer) -> None:
+        window: Final = windows[(user.user_id if user is not None else None, server.server_id)]
+        if window.locked():
+            raise ProxyRateLimitError(detail=f"{server_id} RPM exceeded")
+        await window.acquire()
+
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", SimpleNamespace(enforce_mcp_server_rate_limits=enforce))
+
+
 def context(session: ServerSession, revision: str = "2026-07-28") -> ServerRequestContext:
     return ServerRequestContext(
         session=session,
@@ -365,17 +380,11 @@ async def test_proxy_route_rejects_legacy_resource_subscription_before_setup(met
     [((), True), (("subscriptions/listen",), False), (("resources/subscribe",), False)],
 )
 async def test_only_client_initiated_listeners_consume_server_rate_limit(
-    client_requests: tuple[str, ...], tools_list_admitted: bool
+    monkeypatch: pytest.MonkeyPatch, client_requests: tuple[str, ...], tools_list_admitted: bool
 ) -> None:
-    windows: Final = {("alice", "upstream"): asyncio.Semaphore(1)}
+    from litellm.proxy._experimental.mcp_server import operations
 
-    async def admit(context: OperationContext, server: MCPServer) -> None:
-        caller: Final = context.user_api_key_auth
-        window: Final = windows[(caller.user_id if caller is not None else None, server.server_id)]
-        if window.locked():
-            raise MCPError(code=-32600, message="Rate limit exceeded for mcp_server")
-        await window.acquire()
-
+    allow_one_request(monkeypatch, "alice", "upstream")
     opened: Final = asyncio.Queue[None]()
 
     async def hold_upstream(*_: object, **__: object) -> None:
@@ -390,7 +399,7 @@ async def test_only_client_initiated_listeners_consume_server_rate_limit(
     async def resolve(_: OperationContext) -> tuple[subscriptions.SubscriptionTarget, ...]:
         return (target,)
 
-    service: Final = subscriptions.GatewaySubscriptions(resolve_targets=resolve, admit=admit)
+    service: Final = subscriptions.GatewaySubscriptions(resolve_targets=resolve)
     caller: Final = OperationContext(_caller=UserAPIKeyAuth(user_id="alice"))
     authorize: Final = AsyncMock(return_value=caller)
     session: Final = Mock(spec=ServerSession)
@@ -411,11 +420,8 @@ async def test_only_client_initiated_listeners_consume_server_rate_limit(
     try:
         for _ in tasks:
             await asyncio.wait_for(opened.get(), 1)
-        if tools_list_admitted:
-            await admit(caller, server)
-        else:
-            with pytest.raises(MCPError, match="Rate limit exceeded"):
-                await admit(caller, server)
+        rejection: Final = await operations._mcp_server_rate_limit_rejection(server, caller.user_api_key_auth)
+        assert (rejection is None) is tools_list_admitted
     finally:
         for task in tasks:
             task.cancel()
@@ -431,18 +437,10 @@ async def test_legacy_listener_catalog_refreshes_do_not_consume_server_rate_limi
     from litellm.proxy import proxy_server
     from litellm.proxy._experimental.mcp_server import catalog, operations
     from litellm.proxy._experimental.mcp_server.faults.list_outcomes import ServerListOk
-    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
     server: Final = MCPServer(server_id="list-changed", name="list-changed", transport=MCPTransport.http)
     caller: Final = UserAPIKeyAuth(api_key="list-changed-key", user_id="alice")
-    windows: Final = {("alice", "list-changed"): asyncio.Semaphore(1)}
-
-    async def enforce(user: UserAPIKeyAuth | None, limited: MCPServer) -> None:
-        window: Final = windows[(user.user_id if user is not None else None, limited.server_id)]
-        if window.locked():
-            raise ProxyRateLimitError(detail="list-changed RPM exceeded")
-        await window.acquire()
-
+    allow_one_request(monkeypatch, "alice", "list-changed")
     listed: Final = asyncio.Queue[None]()
 
     async def fetch_tools(_: MCPServer, **__: object) -> tuple[ListToolsResult, ServerListOk]:
@@ -450,7 +448,6 @@ async def test_legacy_listener_catalog_refreshes_do_not_consume_server_rate_limi
         return ListToolsResult(tools=[Tool(name="add", inputSchema={"type": "object"})]), ServerListOk(tool_count=1)
 
     monkeypatch.setenv("LITELLM_SALT_KEY", "list-changed-test-key")
-    monkeypatch.setattr(proxy_server, "proxy_logging_obj", SimpleNamespace(enforce_mcp_server_rate_limits=enforce))
     monkeypatch.setattr(proxy_server, "prisma_client", None)
     monkeypatch.setattr(operations.global_mcp_server_manager, "registry", {server.server_id: server})
     monkeypatch.setattr(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server]))

@@ -365,10 +365,8 @@ class GatewaySubscriptions:
         max_listeners: int = 128,
         max_per_caller: int = 8,
         resolve_targets: Callable[[OperationContext], Awaitable[tuple[SubscriptionTarget, ...]]] = _targets,
-        admit: Callable[[OperationContext, MCPServer], Awaitable[None]] = _enforce_rate_limit,
     ) -> None:
         self._resolve_targets = resolve_targets
-        self._admit = admit
         self._slots = anyio.CapacityLimiter(max_listeners)
         self._upstream_slots = anyio.CapacityLimiter(max_listeners)
         self._max_per_caller = max_per_caller
@@ -387,7 +385,7 @@ class GatewaySubscriptions:
         if ctx.protocol_version != "2026-07-28":
             raise MCPError(code=-32601, message="Subscriptions require the modern MCP protocol")
         async with self._capacity(owner):
-            return await self._listen(ctx, params, authorize, self._admit)
+            return await self._listen(ctx, params, authorize, _enforce_rate_limit)
 
     @asynccontextmanager
     async def _capacity(self, owner: str) -> AsyncGenerator[None]:
@@ -492,7 +490,7 @@ class GatewaySubscriptions:
                     ctx,
                     SubscriptionFilter(resource_subscriptions=[uri]),
                     state.authorization,
-                    self._admit,
+                    _enforce_rate_limit,
                     scope,
                 )
                 state.resources = {**state.resources, uri: scope}
