@@ -63,6 +63,7 @@ _PROVIDERS_VALIDATING_TOOL_CALL_ITEM_IDS: Final = frozenset({LlmProviders.AZURE,
 _PROVIDERS_REPLAYING_ONLY_THEIR_OWN_REASONING: Final = _PROVIDERS_VALIDATING_TOOL_CALL_ITEM_IDS
 _ROLES_READING_PROMPT_CACHE_BREAKPOINTS: Final = frozenset({"system", "developer", "user"})
 _PART_TYPES_READING_PROMPT_CACHE_BREAKPOINTS: Final = frozenset({"input_text", "input_image", "input_file"})
+_COMPACT_UNSUPPORTED_PARAMS: Final = frozenset({"metadata"})
 _INPUT_ITEM: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _CONTENT_PARTS: Final[TypeAdapter[Sequence[Mapping[str, object]]]] = TypeAdapter(Sequence[Mapping[str, object]])
 
@@ -1163,7 +1164,14 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         if sanitized_tools is not None:
             response_api_optional_request_params["tools"] = sanitized_tools
         data: Final = dict(
-            ResponsesAPIRequestParams(model=model, input=replay_safe_input, **response_api_optional_request_params)
+            ResponsesAPIRequestParams(
+                model=model,
+                input=replay_safe_input,
+                **cast(  # cast-ok: the inherited base signature leaves caller parameters untyped
+                    "ResponsesAPIOptionalRequestParams",
+                    {key: value for key, value in request_params.items() if key not in _COMPACT_UNSUPPORTED_PARAMS},
+                ),
+            )
         )
 
         return url, data
