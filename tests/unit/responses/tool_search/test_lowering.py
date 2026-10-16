@@ -218,3 +218,17 @@ def test_a_replayed_search_output_loads_only_tools_the_client_runs():
     assert [tool["type"] for tool in lowered.tools if isinstance(tool, dict)] == ["function", "namespace"]
     assert [member["type"] for member in _tool_named(lowered.tools, "calendar")["tools"]] == ["function"]
     assert "vs_other_team" not in json.dumps(lowered.input)
+
+
+def test_a_repeated_tool_keeps_its_first_position_and_its_last_definition():
+    first: Final = {"type": "function", "name": "lookup", "description": "old", "parameters": {"type": "object"}}
+    last: Final = {**first, "description": "new"}
+
+    lowered: Final = _lowered("hi", [first, SHELL_TOOL, CLIENT_TOOL_SEARCH, last])
+
+    assert [tool["name"] for tool in lowered.tools if isinstance(tool, dict)] == [
+        "lookup",
+        "exec_command",
+        "tool_search",
+    ]
+    assert _tool_named(lowered.tools, "lookup")["description"] == "new"

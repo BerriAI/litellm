@@ -1,7 +1,7 @@
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from itertools import chain
+from itertools import chain, groupby
 from typing import Final, Literal, TypeAlias, TypeVar
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -203,11 +203,11 @@ def _merged_group(kind: str, group: Sequence[object]) -> object:
 
 
 def _merged_tools(tools: Sequence[object]) -> tuple[object, ...]:
-    keys: Final = tuple(_merge_key(index, tool) for index, tool in enumerate(tools))
-    keyed: Final = tuple(zip(keys, tools, strict=True))
-    return tuple(
-        _merged_group(key[0], tuple(tool for tool_key, tool in keyed if tool_key == key)) for key in dict.fromkeys(keys)
-    )
+    keyed: Final = tuple((_merge_key(index, tool), index, tool) for index, tool in enumerate(tools))
+    first_index: Final = {key: index for key, index, _ in reversed(keyed)}
+    in_key_order: Final = sorted(keyed, key=lambda entry: (first_index[entry[0]], entry[1]))
+    groups: Final = groupby(in_key_order, key=lambda entry: entry[0])
+    return tuple(_merged_group(key[0], tuple(tool for _, _, tool in group)) for key, group in groups)
 
 
 def _lowered_tool_choice(tool_choice: ToolChoice | None) -> ToolChoice | None:
