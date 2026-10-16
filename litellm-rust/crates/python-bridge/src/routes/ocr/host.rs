@@ -77,7 +77,7 @@ impl OcrPythonHost {
             _ => "",
         };
         let mapped = py
-            .import("litellm.rust_bridge.ocr.route_host")
+            .import("litellm.rust_bridge.host.routes.ocr")
             .and_then(|module| module.getattr("map_failure"))
             .and_then(|map| map.call1((error.value(py), self.view.request(py)?, provider)))
             .and_then(|mapped| mapped.extract::<Py<PyBaseException>>().map_err(PyErr::from));
@@ -115,7 +115,7 @@ impl PythonBinding for OcrPythonHost {
         py: Python<'_>,
         response: LiteLLMOcrResponse,
     ) -> PyResult<Py<PyAny>> {
-        public_response(py, "litellm.rust_bridge.ocr.route_host", &response)
+        public_response(py, "litellm.rust_bridge.host.routes.ocr", &response)
     }
 
     fn encode_stream_head(
