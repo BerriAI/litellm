@@ -48,15 +48,15 @@ def _never_called(request: Request) -> Reply:
 
 
 @pytest.mark.parametrize(
-    ("deployment", "setting"),
+    ("deployment", "missing"),
     (
-        ({"model": "anthropic/claude-sonnet-4-6"}, "Anthropic API key"),
-        ({"model": "azure_ai/claude-sonnet-4-6"}, "Azure AI API key"),
+        ({"model": "anthropic/claude-sonnet-4-6"}, "No Anthropic API key is set for model "),
+        ({"model": "azure_ai/claude-sonnet-4-6"}, "No Azure AI API key or Entra ID credential is set for model "),
     ),
     ids=("anthropic", "azure_ai_anthropic"),
 )
-def test_anthropic_count_without_a_provider_key_is_an_anthropic_401(
-    keyless_proxy: OwnedProxy, deployment: dict[str, JsonValue], setting: str
+def test_anthropic_count_without_a_provider_credential_is_an_anthropic_401(
+    keyless_proxy: OwnedProxy, deployment: dict[str, JsonValue], missing: str
 ) -> None:
     gateway: Final = keyless_proxy.gateway
     with wire_server(_never_called) as wire, gateway.scenario() as scenario:
@@ -67,8 +67,29 @@ def test_anthropic_count_without_a_provider_key_is_an_anthropic_401(
             "type": "error",
             "error": {"type": "authentication_error", "message": raised.value.body["error"]["message"]},
         }
-        assert f"No {setting} is set for model {model}" in raised.value.message
+        assert missing in raised.value.message, raised.value.message
         assert wire.drain() == ()
+
+
+def test_azure_ai_anthropic_count_authenticates_with_an_entra_token(keyless_proxy: OwnedProxy) -> None:
+    gateway: Final = keyless_proxy.gateway
+
+    def count(request: Request) -> Reply:
+        assert request.headers.get("authorization") == "Bearer synthetic-entra-token", request.headers
+        assert "x-api-key" not in request.headers, request.headers
+        return Reply(body=json.dumps({"input_tokens": 61}).encode())
+
+    with wire_server(count) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="azure_ai/claude-sonnet-4-6",
+            api_base=wire.url,
+            api_key=None,
+            azure_ad_token="synthetic-entra-token",
+            num_retries=0,
+        )
+        result: Final = _anthropic(gateway).messages.count_tokens(model=model, messages=_MESSAGES)
+        assert result.input_tokens == 61
+        assert len(wire.drain()) == 1
 
 
 def test_anthropic_count_request_errors_use_the_anthropic_envelope(keyless_proxy: OwnedProxy) -> None:

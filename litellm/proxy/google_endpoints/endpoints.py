@@ -11,7 +11,7 @@ from litellm.litellm_core_utils.json_validation_rule import normalize_json_schem
 from litellm.proxy._types import *
 from litellm.proxy._types import ProxyException, TokenCountRequest
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
-from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing, proxy_exception_from_route_error
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     read_request_body,
@@ -80,11 +80,18 @@ _GOOGLE_RPC_STATUS: Final = MappingProxyType(
 )
 
 
-def _google_error_response(status_code: int, message: str) -> JSONResponse:
+def _google_error_response(request: Request, error: ProxyException) -> JSONResponse:
+    from litellm.proxy.proxy_server import (
+        _close_dangling_otel_server_span,  # pyright: ignore[reportPrivateUsage]  # proxy_server keeps the span-close helper private; error JSONResponses returned by the route must stamp the OTel server span like the global ProxyException handler does
+    )
+
+    status_code: Final = int(error.code) if error.code is not None and error.code.isdigit() else 500
+    _close_dangling_otel_server_span(request, status_code, exc=error)
     status: Final = _GOOGLE_RPC_STATUS.get(status_code, "INTERNAL" if status_code >= 500 else "FAILED_PRECONDITION")
     return JSONResponse(
         status_code=status_code,
-        content={"error": {"code": status_code, "message": message, "status": status}},
+        content={"error": {"code": status_code, "message": error.message, "status": status}},
+        headers=error.headers,
     )
 
 
@@ -277,13 +284,17 @@ async def google_count_tokens(request: Request, model_name: str):
     try:
         token_request: Final = _google_count_tokens_request(model_name, data)
     except ValidationError:
-        return _google_error_response(400, "Invalid Google countTokens request body")
+        return _google_error_response(
+            request,
+            ProxyException(
+                message="Invalid Google countTokens request body", type="invalid_request_error", param=None, code=400
+            ),
+        )
 
     try:
         token_response: Final = await internal_token_counter(request=token_request, call_endpoint=True)
-    except ProxyException as error:
-        status_code: Final = int(error.code) if error.code is not None and error.code.isdigit() else 500
-        return _google_error_response(status_code, error.message)
+    except Exception as error:
+        return _google_error_response(request, proxy_exception_from_route_error(error))
     original_response: Final[dict] = token_response.original_response or {}
     return TokenCountDetailsResponse(
         totalTokens=original_response.get("totalTokens") or token_response.total_tokens or 0,
