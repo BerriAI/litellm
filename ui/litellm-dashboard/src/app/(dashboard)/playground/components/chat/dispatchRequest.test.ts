@@ -23,6 +23,10 @@ describe("textHistory", () => {
       assistant("tool output"),
       user("think hard"),
       assistant(""),
+      user("think again"),
+      assistant("  \n"),
+      user("embed this"),
+      assistant("[0.1, 0.2]", { isEmbeddings: true }),
       user("second question"),
       assistant("second answer"),
     ];

@@ -113,7 +113,14 @@ export function usePlaygroundSend(deps: SendDeps) {
     setFiles(files.filter((_, i) => i !== index));
   };
 
+  const stop = () => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setIsLoading(false);
+  };
+
   const clearDraft = () => {
+    stop();
     files.forEach((file) => file.previewUrl && URL.revokeObjectURL(file.previewUrl));
     setFiles([]);
     setText("");
@@ -121,9 +128,7 @@ export function usePlaygroundSend(deps: SendDeps) {
 
   const cancel = () => {
     if (!abortRef.current) return;
-    abortRef.current.abort();
-    abortRef.current = null;
-    setIsLoading(false);
+    stop();
     toast.info("Request cancelled");
   };
 
@@ -181,6 +186,7 @@ export function usePlaygroundSend(deps: SendDeps) {
 
     const controller = new AbortController();
     abortRef.current = controller;
+    const live = untilAborted(chat, controller.signal);
     const captured: { headers?: Headers; responseId?: string } = {};
     const trace = (): ReplyTrace => ({
       ...gatewayTraceFromHeaders(captured.headers ?? new Headers()),
@@ -203,14 +209,14 @@ export function usePlaygroundSend(deps: SendDeps) {
         mcpServers: deps.mcpServers,
         mcpToolsets: deps.mcpToolsets,
         directCall: direct ? { ...direct, arguments: toolArguments ?? {} } : null,
-        chat: untilAborted(chat, controller.signal),
-        codeInterpreter: untilAborted(deps.codeInterpreter, controller.signal),
+        chat: live,
+        codeInterpreter: deps.codeInterpreter,
         onHeaders: (headers) => {
           captured.headers = headers;
         },
         onResponseId: (responseId) => {
           captured.responseId = responseId;
-          chat.handleResponseId(responseId);
+          live.handleResponseId(responseId);
         },
       };
       await dispatchRequest(context);

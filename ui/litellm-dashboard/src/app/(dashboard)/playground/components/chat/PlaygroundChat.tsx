@@ -9,7 +9,7 @@ import type { MessageType } from "@/components/chat_ui/types";
 import type { ModelGroup } from "@/components/llm_calls/fetch_models";
 import { customHeadersFromPairs } from "@/components/llm_calls/request_headers";
 import type { MCPToolArgumentsFormRef } from "@/components/mcp_tools/MCPToolArgumentsForm";
-import type { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
+import type { MCPServer, MCPTool, MCPToolset } from "@/components/mcp_tools/types";
 import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
 import {
@@ -43,6 +43,7 @@ import {
   useTagOptions,
   useVectorStoreOptions,
   type PickerOption,
+  type ServerTools,
 } from "./usePlaygroundCatalog";
 import { usePlaygroundSend, type SendDeps } from "./usePlaygroundSend";
 import { usePlaygroundSettings } from "./usePlaygroundSettings";
@@ -79,7 +80,26 @@ const toolsetFor = (selection: string | null, toolsets: readonly MCPToolset[]): 
 
 const backingServers = (selection: string | null, toolset: MCPToolset | null): readonly string[] => {
   if (toolset) return [...new Set(toolset.tools.map((tool) => tool.server_id))];
-  return selection ? [selection] : [];
+  return selection && !selection.startsWith(TOOLSET_PREFIX) ? [selection] : [];
+};
+
+type DirectTarget = Readonly<{ server: string; tool: MCPTool }>;
+
+const toolsetTargets = (toolset: MCPToolset, loaded: Readonly<Record<string, ServerTools>>): DirectTarget[] =>
+  toolset.tools
+    .flatMap((entry) => {
+      const tool = loaded[entry.server_id]?.tools.find((candidate) => candidate.name === entry.tool_name);
+      return tool ? [{ server: entry.server_id, tool }] : [];
+    })
+    .filter((target, index, targets) => targets.findIndex((other) => other.tool.name === target.tool.name) === index);
+
+const directTargets = (
+  servers: readonly string[],
+  toolset: MCPToolset | null,
+  loaded: Readonly<Record<string, ServerTools>>,
+): readonly DirectTarget[] => {
+  if (toolset) return toolsetTargets(toolset, loaded);
+  return servers.flatMap((server) => (loaded[server]?.tools ?? []).map((tool) => ({ server, tool })));
 };
 
 const prefixed = (options: readonly PickerOption[]): readonly PickerOption[] =>
@@ -122,7 +142,7 @@ export function PlaygroundChat({
   const isWide = useIsWide();
 
   const models = usePlaygroundModels(apiKey);
-  const [checkedModels, setCheckedModels] = useState(models.data);
+  const [checkedModels, setCheckedModels] = useState<readonly ModelGroup[] | undefined>(undefined);
   if (models.data && models.data !== checkedModels) {
     setCheckedModels(models.data);
     const loaded = models.data;
@@ -142,14 +162,10 @@ export function PlaygroundChat({
   const directToolset = toolsetFor(directSelection, mcp.toolsets);
   const directServers = backingServers(directSelection, directToolset);
   const directServerTools = useServerTools(apiKey, directServers);
-  const backingTools = directServers.flatMap((server) => directServerTools[server]?.tools ?? []);
-  const directToolList = directToolset
-    ? backingTools.filter((tool) => directToolset.tools.some((entry) => entry.tool_name === tool.name))
-    : backingTools;
-  const directTool = directToolList.find((tool) => tool.name === settings.directTool) ?? null;
-  const directServer = directToolset
-    ? directToolset.tools.find((entry) => entry.tool_name === settings.directTool)?.server_id ?? null
-    : directSelection;
+  const targets = directTargets(directServers, directToolset, directServerTools);
+  const directTarget = targets.find((target) => target.tool.name === settings.directTool) ?? null;
+  const directTool = directTarget?.tool ?? null;
+  const toolsFailed = directServers.some((server) => directServerTools[server]?.failed);
   const customHeaders = customHeadersFromPairs(settings.headerPairs);
 
   const sendDeps: SendDeps = {
@@ -160,8 +176,7 @@ export function PlaygroundChat({
     customHeaders,
     mcpServers: mcp.servers,
     mcpToolsets: mcp.toolsets,
-    directCall: () =>
-      directServer && settings.directTool ? { serverId: directServer, tool: settings.directTool } : null,
+    directCall: () => (directTarget ? { serverId: directTarget.server, tool: directTarget.tool.name } : null),
     toolArgsForm,
     chat,
     codeInterpreter,
@@ -294,7 +309,7 @@ export function PlaygroundChat({
               groups={[
                 {
                   label: "Tools",
-                  options: directToolList.map((tool) => ({
+                  options: targets.map(({ tool }) => ({
                     value: tool.name,
                     label: tool.name,
                     description: tool.description,
@@ -304,7 +319,7 @@ export function PlaygroundChat({
               value={settings.directTool}
               onValueChange={(tool) => update({ directTool: tool })}
               isLoading={directServers.some((server) => directServerTools[server]?.isLoading)}
-              emptyText="This server has no tools"
+              emptyText={toolsFailed ? "Unable to load tools for this server" : "This server has no tools"}
             />
           )}
         </>

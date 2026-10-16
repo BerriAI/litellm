@@ -43,7 +43,7 @@ export type DispatchContext = Readonly<{
 
 const optional = (values: readonly string[]): string[] | undefined => (values.length > 0 ? [...values] : undefined);
 
-const NON_TEXT_FLAGS = ["isImage", "isAudio", "isError", "mcpToolCall"] as const;
+const NON_TEXT_FLAGS = ["isImage", "isAudio", "isEmbeddings", "isError", "mcpToolCall"] as const;
 
 const isText = (message: MessageType): boolean => NON_TEXT_FLAGS.every((flag) => !message[flag]);
 

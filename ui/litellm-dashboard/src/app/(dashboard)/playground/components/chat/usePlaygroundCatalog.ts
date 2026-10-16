@@ -39,10 +39,11 @@ export function useMcpCatalog(requestKey: string | null) {
     queryFn: async () => serverList(await fetchMCPServers(requestKey ?? "")),
     enabled: Boolean(requestKey),
   });
-  const toolsets = useQuery<readonly MCPToolset[]>({
+  const toolsets = useQuery<readonly MCPToolset[] | null>({
     queryKey: ["playground", "mcpToolsets", requestKey],
     queryFn: async () => {
-      const response: unknown = await fetchMCPToolsets(requestKey ?? "");
+      const response: unknown = await fetchMCPToolsets(requestKey ?? "").catch(() => null);
+      if (response === null) return null;
       return Array.isArray(response) ? (response as MCPToolset[]) : [];
     },
     enabled: Boolean(requestKey),
@@ -51,7 +52,7 @@ export function useMcpCatalog(requestKey: string | null) {
     servers: servers.data ?? EMPTY,
     toolsets: toolsets.data ?? EMPTY,
     isLoading: servers.isLoading || toolsets.isLoading,
-    isReady: servers.isSuccess && toolsets.isSuccess,
+    isReady: servers.isSuccess && Boolean(toolsets.data),
     refetchServers: servers.refetch,
   };
 }
