@@ -3704,3 +3704,26 @@ def test_responses_routes_document_response_models_in_openapi_schema():
     assert "output" in ok_200_properties("/v1/responses/{response_id}", "get")
     assert "deleted" in ok_200_properties("/v1/responses/{response_id}", "delete")
     assert "data" in ok_200_properties("/v1/responses/{response_id}/input_items", "get")
+
+
+_COMPACTION_SUMMARY: Final = "The user planned a Tokyo trip."
+_NEXT_TURN: Final = {"type": "message", "role": "user", "content": "And Osaka?"}
+_COMPACTED_INPUT: Final = [
+    {"type": "message", "role": "user", "content": "Plan a Tokyo trip. " * 200},
+    {"type": "message", "role": "assistant", "content": "Day one, Asakusa. " * 200},
+    {
+        "type": "compaction",
+        "id": "cmp_1",
+        "encrypted_content": json.dumps({"type": "compaction", "content": _COMPACTION_SUMMARY}),
+    },
+    _NEXT_TURN,
+]
+_SUMMARY_INPUT: Final = [{"type": "message", "role": "user", "content": _COMPACTION_SUMMARY}, _NEXT_TURN]
+
+
+def test_input_token_count_reads_a_compaction_item_as_its_summary():
+    from litellm.proxy.response_api_endpoints.endpoints import _responses_input_as_token_count_messages
+
+    assert _responses_input_as_token_count_messages(_COMPACTED_INPUT, None) == (
+        _responses_input_as_token_count_messages(_SUMMARY_INPUT, None)
+    )

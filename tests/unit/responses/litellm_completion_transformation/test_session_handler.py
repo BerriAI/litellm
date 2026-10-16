@@ -787,3 +787,58 @@ async def test_message_history_replays_real_key_named_tool_payloads() -> None:
     tool_message: Final = result["messages"][2]
     assert json.loads(assistant_message["tool_calls"][0]["function"]["arguments"]) == function_arguments
     assert json.loads(tool_message["content"]) == function_output
+
+
+def _turn_spend_log(turn_input: list[dict[str, str]], answer: str) -> dict[str, object]:
+    return {
+        "request_id": f"resp_{len(turn_input)}",
+        "session_id": "session-compacted",
+        "proxy_server_request": json.dumps({"input": turn_input}),
+        "response": {
+            "id": f"chatcmpl-{len(turn_input)}",
+            "object": "chat.completion",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": answer}}],
+        },
+    }
+
+
+def _role_and_content(message: object) -> tuple[object, object]:
+    if isinstance(message, dict):
+        return message.get("role"), message.get("content")
+    return getattr(message, "role", None), getattr(message, "content", None)
+
+
+@pytest.mark.asyncio
+async def test_previous_response_history_starts_at_the_newest_turn_that_sent_a_compaction_item():
+    first_turn: Final = [{"role": "user", "content": "Plan a Tokyo trip."}]
+    compaction_item: Final = {
+        "type": "compaction",
+        "id": "cmp_1",
+        "encrypted_content": json.dumps({"type": "compaction", "content": "Turn one planned Tokyo."}),
+    }
+    second_turn: Final = [
+        *first_turn,
+        {"role": "assistant", "content": "Day one, Asakusa."},
+        compaction_item,
+        {"role": "user", "content": "And Osaka?"},
+    ]
+    spend_logs: Final = [
+        _turn_spend_log(first_turn, "Day one, Asakusa."),
+        _turn_spend_log(second_turn, "Dotonbori."),
+    ]
+
+    with patch.object(
+        ResponsesSessionHandler,
+        "get_all_spend_logs_for_previous_response_id",
+        new_callable=AsyncMock,
+        return_value=spend_logs,
+    ):
+        session: Final = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            "resp_4"
+        )
+
+    assert [_role_and_content(message) for message in session["messages"]] == [
+        ("user", "Turn one planned Tokyo."),
+        ("user", "And Osaka?"),
+        ("assistant", "Dotonbori."),
+    ]

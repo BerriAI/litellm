@@ -1035,3 +1035,51 @@ async def test_a_native_responses_provider_places_every_point_itself():
 
     assert user_only == [0, 2, 4, 6]
     assert with_unmatchable_system == user_only
+
+
+_CLAUDE_COMPACTION_ITEM: Final = {
+    "type": "compaction",
+    "id": "cmp_claude",
+    "encrypted_content": json.dumps({"type": "compaction", "content": "The user's cat is named Biscuit."}),
+}
+_OPENAI_COMPACTION_ITEM: Final = {"type": "compaction", "id": "cmp_openai", "encrypted_content": "gAAAAABopaque"}
+_HISTORY: Final = (
+    {"role": "system", "content": "Answer briefly."},
+    {"role": "user", "content": "My cat is named Biscuit."},
+    {"role": "assistant", "content": "Noted."},
+)
+_NEXT_TURN: Final = {"role": "user", "content": "What is my cat's name?"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("compaction_item", "sent_input"),
+    [
+        (
+            _CLAUDE_COMPACTION_ITEM,
+            [
+                _HISTORY[0],
+                {"role": "user", "content": "The user's cat is named Biscuit.", "type": "message"},
+                _NEXT_TURN,
+            ],
+        ),
+        (_OPENAI_COMPACTION_ITEM, [*_HISTORY, _OPENAI_COMPACTION_ITEM, _NEXT_TURN]),
+    ],
+)
+async def test_aresponses_sends_a_claude_compaction_item_to_openai_as_its_summary(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    compaction_item: dict[str, str],
+    sent_input: list[dict[str, str]],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_compacted", "gpt-5.6"))
+    )
+
+    await litellm.aresponses(
+        model="openai/gpt-5.6", api_key="fake-api-key", input=[*_HISTORY, compaction_item, _NEXT_TURN]
+    )
+
+    assert json.loads(upstream.calls[0].request.read())["input"] == sent_input

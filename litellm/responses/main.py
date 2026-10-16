@@ -37,8 +37,14 @@ from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_h
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
+from litellm.responses.litellm_completion_transformation.compaction_items import (
+    with_compaction_items_as_summaries,
+)
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
+)
+from litellm.responses.litellm_completion_transformation.transformation import (
+    with_compaction_items_as_params,
 )
 from litellm.responses.mcp.request_context import MCPRequestContext
 from litellm.responses.utils import ResponsesAPIRequestUtils
@@ -1526,7 +1532,9 @@ def responses(
         )
 
         # Decode any litellm-encoded encrypted-content item IDs back to their original IDs
-        input = ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(input)
+        input = with_compaction_items_as_summaries(
+            with_compaction_items_as_params(ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(input))
+        )
 
         # Call the handler with _is_async flag instead of directly calling the async handler
         if custom_llm_provider is None:
@@ -2364,7 +2372,9 @@ def compact_responses(
 
         # Decode any litellm-encoded encrypted-content item IDs back to their original IDs
         # before forwarding to the upstream provider.
-        input = ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(input)
+        input = with_compaction_items_as_summaries(
+            with_compaction_items_as_params(ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(input))
+        )
 
         # Call the handler with _is_async flag instead of directly calling the async handler
         response = base_llm_http_handler.compact_response_api_handler(

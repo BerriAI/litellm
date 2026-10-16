@@ -281,7 +281,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if streamed_item is None:
             return
         self._compaction_output_index = self._allocate_output_index()
-        self._pending_response_events.append(self._next_output_item_added(self._compaction_output_index, streamed_item))
+        unfinished_item: Final = streamed_item.model_copy(update={"encrypted_content": ""})
+        self._pending_response_events.append(
+            self._next_output_item_added(self._compaction_output_index, unfinished_item)
+        )
 
     def _queue_compaction_item_done(self) -> None:
         if self._compaction_output_index is None or self._sent_compaction_item_done:

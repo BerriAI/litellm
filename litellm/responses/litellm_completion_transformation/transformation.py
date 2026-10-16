@@ -118,8 +118,9 @@ from litellm.types.utils import (
 
 from .compaction_items import (
     compaction_output_item,
-    compaction_summary,
     decode_compaction_item,
+    holds_compaction_summary,
+    provider_takes_compaction_blocks,
     requests_compaction,
     without_items_before_compaction,
 )
@@ -360,11 +361,7 @@ def with_compaction_items_as_params(input: str | ResponseInputParam) -> str | Re
 
 
 def _replays_compaction_block(input: str | ResponseInputParam, context_management: object) -> bool:
-    return (
-        requests_compaction(context_management)
-        and isinstance(input, list)
-        and any(compaction_summary(item) is not None for item in input)
-    )
+    return requests_compaction(context_management) and holds_compaction_summary(input)
 
 
 _PROVIDERS_KEEPING_MESSAGE_CACHE_CONTROL: Final = frozenset(("anthropic", "dashscope", "minimax", "sap", "zai"))
@@ -893,13 +890,14 @@ class LiteLLMCompletionResponsesConfig:
         request_input: Final = with_compaction_items_as_params(input)
         native_compaction: Final = _replays_compaction_block(
             request_input, context_management
-        ) and provider_builds_anthropic_request(model, custom_llm_provider)
+        ) and provider_takes_compaction_blocks(model, custom_llm_provider)
         bridged_messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-            input=request_input if native_compaction else without_items_before_compaction(request_input),
+            input=request_input,
             responses_api_request=responses_api_request,
             replay_reasoning=True,
             item_cache_control=keeps_item_marks,
             native_compaction=native_compaction,
+            only_since_compaction=not native_compaction,
         )
 
         litellm_completion_request: dict = {
@@ -962,6 +960,7 @@ class LiteLLMCompletionResponsesConfig:
         replay_reasoning: bool = False,
         item_cache_control: bool = False,
         native_compaction: bool = False,
+        only_since_compaction: bool = False,
     ) -> list[
         AllMessageValues
         | GenericChatCompletionMessage
@@ -988,7 +987,14 @@ class LiteLLMCompletionResponsesConfig:
         Anthropic request that also asks for compaction in
         ``context_management``: a ``compaction`` item then goes back as the
         provider's own compaction block, which Anthropic rejects without that
-        compaction strategy. Everyone else reads its summary as assistant text.
+        compaction strategy. Everyone else reads its summary as a user message.
+
+        ``only_since_compaction`` belongs to callers that send, count, or
+        rebuild what the model reads: the items before the newest
+        ``compaction`` item are dropped, keeping system and developer
+        messages, the way Anthropic ignores content before a compaction block.
+        Guardrail scans leave it off because they write rewrites back by input
+        item position.
         """
         messages: list[
             AllMessageValues
@@ -1004,9 +1010,11 @@ class LiteLLMCompletionResponsesConfig:
                 )
             )
 
+        dumped_input: Final = with_compaction_items_as_params(input)
+        read_input: Final = without_items_before_compaction(dumped_input) if only_since_compaction else dumped_input
         messages.extend(
             LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
-                input=input if item_cache_control else without_item_cache_control(input),
+                input=read_input if item_cache_control else without_item_cache_control(read_input),
                 replay_reasoning=replay_reasoning,
                 native_compaction=native_compaction,
             )

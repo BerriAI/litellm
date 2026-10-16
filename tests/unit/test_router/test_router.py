@@ -6539,6 +6539,29 @@ def test_count_pre_call_check_tokens_across_api_surfaces():
         router._count_pre_call_check_tokens(messages=None, input=None)
 
 
+def test_count_pre_call_check_tokens_skips_the_history_a_compaction_item_replaces():
+    router = litellm.Router(model_list=[{"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}}])
+    summary: Final = "The user planned a Tokyo trip."
+    compaction_item: Final = {
+        "type": "compaction",
+        "id": "cmp_1",
+        "encrypted_content": json.dumps({"type": "compaction", "content": summary}),
+    }
+    history: Final = [
+        {"role": "user", "content": "Plan a Tokyo trip. " * 200},
+        {"role": "assistant", "content": "Day one, Asakusa. " * 200},
+    ]
+    next_turn: Final = {"role": "user", "content": "And Osaka?"}
+
+    compacted_tokens: Final = router._count_pre_call_check_tokens(
+        messages=None, input=[*history, compaction_item, next_turn]
+    )
+
+    assert compacted_tokens == router._count_pre_call_check_tokens(
+        messages=None, input=[{"role": "user", "content": summary}, next_turn]
+    )
+
+
 def test_pre_call_checks_no_messages_or_input_does_not_crash(monkeypatch):
     """
     When neither messages nor input is provided (e.g. endpoints without prompt text),

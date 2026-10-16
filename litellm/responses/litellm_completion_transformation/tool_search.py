@@ -1,5 +1,5 @@
 from collections.abc import Iterable, Iterator, Mapping, Sequence, Set
-from typing import Final, Literal, TypeAlias
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
@@ -11,6 +11,9 @@ from litellm.types.responses.main import OutputToolSearchCall
 from litellm.types.utils import LlmProviders, Message
 
 from .custom_tools import openai_shaped_tool_call_item_id
+
+if TYPE_CHECKING:
+    from litellm.llms.base_llm.chat.transformation import BaseConfig
 
 __all__ = [
     "ANTHROPIC_TOOL_SEARCH_TOOL_NAME",
@@ -31,6 +34,7 @@ __all__ = [
     "is_openai_tool_search_tool",
     "is_server_tool_search_tool",
     "provider_builds_anthropic_request",
+    "provider_chat_config",
     "runs_tool_search_on_the_server",
     "tool_search_call_ids",
     "tools_with_anthropic_tool_search_mapped",
@@ -159,7 +163,7 @@ def input_without_unanswered_anthropic_tool_search_calls(
     return input if len(kept) == len(input) else kept
 
 
-def provider_builds_anthropic_request(model: str, custom_llm_provider: str | None) -> bool:
+def provider_chat_config(model: str, custom_llm_provider: str | None) -> "BaseConfig | None":
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
     from litellm.utils import ProviderConfigManager
 
@@ -167,10 +171,12 @@ def provider_builds_anthropic_request(model: str, custom_llm_provider: str | Non
     try:
         llm_provider: Final = LlmProviders(provider)
     except ValueError:
-        return False
-    return chat_config_builds_anthropic_request(
-        ProviderConfigManager.get_provider_chat_config(model=model, provider=llm_provider)
-    )
+        return None
+    return ProviderConfigManager.get_provider_chat_config(model=model, provider=llm_provider)
+
+
+def provider_builds_anthropic_request(model: str, custom_llm_provider: str | None) -> bool:
+    return chat_config_builds_anthropic_request(provider_chat_config(model, custom_llm_provider))
 
 
 def chat_config_builds_anthropic_request(chat_config: object) -> bool:

@@ -1566,6 +1566,7 @@ def _estimate_usage_from_text(
     messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(  # pyright: ignore[reportUnknownMemberType]  # the transformer's signature is partially untyped
         input=request_input,  # pyright: ignore[reportArgumentType]  # the raw Responses API input is a str or ResponseInputParam list, matching the helper's declared union
         responses_api_request=dict(responses_api_request),
+        only_since_compaction=True,
     )
     input_tokens: Final = litellm.token_counter(  # pyright: ignore[reportUnknownMemberType]  # token_counter's public signature is untyped
         model=model, messages=messages

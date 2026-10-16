@@ -1,17 +1,22 @@
 import json
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, TypeVar
 
+from openai.types.responses.easy_input_message_param import EasyInputMessageParam
 from openai.types.responses.response_compaction_item import ResponseCompactionItem
 from openai.types.responses.response_create_params import ResponseInputParam
+from openai.types.responses.response_input_param import ResponseInputItemParam
 from pydantic import TypeAdapter, ValidationError
 
 from litellm.responses.utils import ResponsesAPIRequestUtils
 
+from .tool_search import chat_config_builds_anthropic_request, provider_chat_config
+
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _OBJECT_LIST: Final = TypeAdapter(list[object])
+_Item: Final = TypeVar("_Item")
 _INSTRUCTION_ROLES: Final = frozenset(("system", "developer"))
 
 
@@ -80,6 +85,15 @@ def requests_compaction(context_management: object) -> bool:
     return anthropic_form is not None and _has_entry_of_type(anthropic_form.get("edits"), "compact_20260112")
 
 
+def provider_takes_compaction_blocks(model: str, custom_llm_provider: str | None) -> bool:
+    from litellm.llms.bedrock.claude_platform.transformation import BedrockClaudePlatformConfig
+
+    chat_config: Final = provider_chat_config(model, custom_llm_provider)
+    return chat_config_builds_anthropic_request(chat_config) and not isinstance(
+        chat_config, BedrockClaudePlatformConfig
+    )
+
+
 def _without_affinity_wrap(encrypted_content: str) -> str:
     _, original = ResponsesAPIRequestUtils.unwrap_encrypted_content_with_model_id(encrypted_content)
     return original
@@ -112,15 +126,44 @@ def with_compaction_summary(encrypted_content: str, summary: str) -> str:
     return encrypted_content.removesuffix(original) + rewritten
 
 
+def holds_compaction_summary(input: object) -> bool:
+    try:
+        items: Final = _OBJECT_LIST.validate_python(input)
+    except ValidationError:
+        return False
+    return any(compaction_summary(item) is not None for item in items)
+
+
 def _is_instruction_item(item: object) -> bool:
     fields: Final = _json_object(item)
     return fields is not None and fields.get("role") in _INSTRUCTION_ROLES
 
 
-def without_items_before_compaction(input: str | ResponseInputParam) -> str | ResponseInputParam:
-    if not isinstance(input, list):
-        return input
+def _items_from_newest_compaction(input: Sequence[_Item]) -> tuple[_Item, ...]:
     newest: Final = next(
         (index for index in range(len(input) - 1, 0, -1) if compaction_summary(input[index]) is not None), 0
     )
-    return [*(item for item in input[:newest] if _is_instruction_item(item)), *input[newest:]]
+    return (*(item for item in input[:newest] if _is_instruction_item(item)), *input[newest:])
+
+
+def without_items_before_compaction(input: str | ResponseInputParam) -> str | ResponseInputParam:
+    return list(_items_from_newest_compaction(input)) if isinstance(input, list) else input
+
+
+def input_since_newest_compaction(input: object) -> object:
+    try:
+        items: Final = _OBJECT_LIST.validate_python(input)
+    except ValidationError:
+        return input
+    return list(_items_from_newest_compaction(items))
+
+
+def _as_summary_message(item: ResponseInputItemParam) -> ResponseInputItemParam:
+    summary: Final = compaction_summary(item)
+    return item if summary is None else EasyInputMessageParam(role="user", content=summary, type="message")
+
+
+def with_compaction_items_as_summaries(input: str | ResponseInputParam) -> str | ResponseInputParam:
+    if not isinstance(input, list) or not holds_compaction_summary(input):
+        return input
+    return [_as_summary_message(item) for item in _items_from_newest_compaction(input)]

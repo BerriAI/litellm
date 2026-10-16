@@ -4200,3 +4200,104 @@ class TestOpenAIResponsesHandlerStreamingScanKey:
         assert [inputs.get("texts") for inputs in guardrail.seen_inputs] == [["hi"]], guardrail.seen_inputs
         tool_calls = guardrail.seen_inputs[0].get("tool_calls") or []
         assert [call["function"]["arguments"] for call in tool_calls] == ['{"city": "Paris"}'], tool_calls
+
+
+class TestCompactionOutputSummaryReachesOutputGuardrails:
+    SUMMARY: Final = "The user lives at 1 Secret Lane."
+
+    @classmethod
+    def _compaction_item(cls, summary: str | None = None) -> dict[str, str]:
+        return {
+            "type": "compaction",
+            "id": "cmp_1",
+            "encrypted_content": json.dumps({"type": "compaction", "content": summary or cls.SUMMARY}),
+        }
+
+    @staticmethod
+    def _summary(item: object) -> str:
+        encrypted_content: Final = item["encrypted_content"] if isinstance(item, dict) else item.encrypted_content
+        return json.loads(encrypted_content)["content"]
+
+    @staticmethod
+    def _lane_masking_guardrail() -> CustomGuardrail:
+        class MaskLane(CustomGuardrail):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict,
+                input_type: Literal["request", "response"],
+                logging_obj: LiteLLMLoggingObj | None = None,
+            ) -> GenericGuardrailAPIInputs:
+                return {
+                    **inputs,
+                    "texts": [text.replace("Secret Lane", "[MASKED]") for text in inputs.get("texts", [])],
+                }
+
+        return MaskLane(guardrail_name="mask-lane")
+
+    @pytest.mark.asyncio
+    async def test_non_streaming_summary_is_masked_inside_its_item(self) -> None:
+        response: Final = ResponsesAPIResponse(
+            id="resp_1",
+            created_at=1,
+            model="claude-sonnet-5-5",
+            object="response",
+            status="completed",
+            output=[self._compaction_item()],
+        )
+
+        result: Final = await OpenAIResponsesHandler().process_output_response(response, self._lane_masking_guardrail())
+
+        assert self._summary(result.output[0]) == "The user lives at 1 [MASKED]."
+
+    @pytest.mark.asyncio
+    async def test_ended_stream_summary_is_masked_in_the_done_item_and_the_envelope(self) -> None:
+        events: Final = [
+            {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {**self._compaction_item(), "encrypted_content": ""},
+            },
+            {"type": "response.output_item.done", "output_index": 0, "item": self._compaction_item()},
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_1",
+                    "created_at": 1,
+                    "model": "claude-sonnet-5-5",
+                    "output": [self._compaction_item()],
+                    "status": "completed",
+                },
+            },
+        ]
+
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=self._lane_masking_guardrail(),
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert self._summary(events[1]["item"]) == "The user lives at 1 [MASKED]."
+        assert self._summary(events[2]["response"]["output"][0]) == "The user lives at 1 [MASKED]."
+
+    @pytest.mark.asyncio
+    async def test_a_blocking_guardrail_rejects_a_finished_compaction_item_mid_stream(self) -> None:
+        with pytest.raises(HTTPException) as exc_info:
+            await OpenAIResponsesHandler().process_output_streaming_response(
+                responses_so_far=[
+                    {"type": "response.output_item.done", "output_index": 0, "item": self._compaction_item()}
+                ],
+                guardrail_to_apply=MockGuardrail(guardrail_name="block"),
+            )
+
+        assert exc_info.value.detail["texts"] == [self.SUMMARY]
+
+    def test_a_changed_summary_changes_the_ended_stream_scan_key(self) -> None:
+        handler: Final = OpenAIResponsesHandler()
+
+        def ended_key(summary: str) -> object:
+            return handler.get_streaming_scan_key(
+                [{"type": "response.completed", "response": {"output": [self._compaction_item(summary)]}}]
+            )
+
+        assert ended_key(self.SUMMARY) != ended_key("The user lives elsewhere.")

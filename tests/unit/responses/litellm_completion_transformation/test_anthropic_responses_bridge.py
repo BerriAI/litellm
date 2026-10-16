@@ -662,6 +662,8 @@ def test_streamed_responses_over_anthropic_emit_the_compaction_item_and_send_it_
         (ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, 0, "compaction"),
         (ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, 1, "message"),
     ]
+    assert item_events[0].item.encrypted_content == ""
+    assert item_events[0].item.id == item_events[2].item.id
     assert [(item.type, getattr(item, "encrypted_content", None)) for item in completed.output[:1]] == [
         ("compaction", item_events[2].item.encrypted_content)
     ]

@@ -6509,6 +6509,7 @@ def _anthropic_form_context_management(edit: Mapping[str, object]) -> ResponsesA
             _SUMMARY_AS_TEXT,
         ),
         ("gemini/gemini-3.8-flash", _COMPACTION_REQUESTED, _SUMMARY_AS_TEXT),
+        ("bedrock/claude_platform/claude-sonnet-5-5", _COMPACTION_REQUESTED, _SUMMARY_AS_TEXT),
     ],
 )
 def test_compaction_input_item_replays_as_a_compaction_block_only_when_anthropic_compacts(

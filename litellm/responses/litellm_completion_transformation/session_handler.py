@@ -1,12 +1,13 @@
 import asyncio
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 from litellm.litellm_core_utils.cold_storage_handler import ColdStorageHandler
+from litellm.responses.litellm_completion_transformation.compaction_items import holds_compaction_summary
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -40,6 +41,17 @@ def _normalize_redacted_tool_call_arguments(message: Message) -> None:
     function_call: Final = message.function_call
     if function_call is not None and function_call.arguments == REDACTED_BY_LITELLM:
         function_call.arguments = REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
+
+
+def _first_replayed_request(proxy_server_requests: Sequence[Mapping[str, object] | None]) -> int:
+    return next(
+        (
+            index
+            for index in range(len(proxy_server_requests) - 1, -1, -1)
+            if (request := proxy_server_requests[index]) is not None and holds_compaction_summary(request.get("input"))
+        ),
+        0,
+    )
 
 
 def _stored_instructions(proxy_server_request: Mapping[str, object] | None) -> str | None:
@@ -81,7 +93,10 @@ class ResponsesSessionHandler:
             await ResponsesSessionHandler.get_proxy_server_request_from_spend_log(spend_log=spend_log)
             for spend_log in all_spend_logs
         ]
-        for spend_log, proxy_server_request_dict in zip(all_spend_logs, proxy_server_requests):
+        first_replayed: Final = _first_replayed_request(proxy_server_requests)
+        for spend_log, proxy_server_request_dict in zip(
+            all_spend_logs[first_replayed:], proxy_server_requests[first_replayed:]
+        ):
             chat_completion_message_history = (
                 ResponsesSessionHandler.extend_chat_completion_message_with_spend_log_payload(
                     spend_log=spend_log,
@@ -152,6 +167,7 @@ class ResponsesSessionHandler:
                     responses_api_request={},
                     replay_reasoning=True,
                     item_cache_control=item_cache_control,
+                    only_since_compaction=True,
                 )
             )
 
