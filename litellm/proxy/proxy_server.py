@@ -14465,9 +14465,9 @@ async def _local_count_on_provider_error(
 ) -> "TokenCountResponse | None":
     try:
         return await provider_count
-    except Exception:  # noqa: BLE001  # counters also raise bare Exception; prompt-only always got a local count
-        verbose_proxy_logger.exception(
-            "Provider token counting failed for a prompt-only request, using local token counting"
+    except Exception as e:  # noqa: BLE001  # counters also raise bare Exception; prompt-only always got a local count
+        verbose_proxy_logger.warning(
+            "Provider token counting failed for a prompt-only request, using local token counting: %s", e
         )
         return None
 
