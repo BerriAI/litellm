@@ -1681,15 +1681,16 @@ _NAME_SCHEMA: Final = {"type": "object", "properties": {"name": {"type": "string
 
 
 @pytest.mark.parametrize(
-    "structured_output_params",
+    "request_params",
     [
+        {},
         {"output_config": {"format": {"type": "json_schema", "schema": _NAME_SCHEMA}}},
         {"tools": [{"name": "get_name", "strict": True, "input_schema": _NAME_SCHEMA}]},
     ],
-    ids=["output_config_format", "strict_tool"],
+    ids=["plain", "output_config_format", "strict_tool"],
 )
-def test_bedrock_messages_drops_client_dangerous_tool_use_beta_with_structured_outputs_and_no_safeguards(
-    local_model_cost_map, local_beta_headers_config, structured_output_params
+def test_bedrock_messages_drops_client_dangerous_tool_use_beta_without_safeguards(
+    local_model_cost_map, local_beta_headers_config, request_params
 ):
     from litellm.types.router import GenericLiteLLMParams
 
@@ -1698,34 +1699,39 @@ def test_bedrock_messages_drops_client_dangerous_tool_use_beta_with_structured_o
     result = cfg.transform_anthropic_messages_request(
         model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=[{"role": "user", "content": [{"type": "text", "text": "Name a color."}]}],
-        anthropic_messages_optional_request_params={"max_tokens": 64, **structured_output_params},
+        anthropic_messages_optional_request_params={"max_tokens": 64, **request_params},
         litellm_params=GenericLiteLLMParams(),
         headers={"anthropic-beta": "dangerous-tool-use-2026-09-03"},
     )
 
-    assert all(result.get(key) == value for key, value in structured_output_params.items())
+    assert all(result.get(key) == value for key, value in request_params.items())
     assert "dangerous-tool-use-2026-09-03" not in result.get("anthropic_beta", [])
 
 
-def test_bedrock_messages_keeps_client_dangerous_tool_use_beta_without_structured_outputs(
+def test_bedrock_messages_keeps_client_dangerous_tool_use_beta_with_safeguards_and_structured_outputs(
     local_model_cost_map, local_beta_headers_config
 ):
     from litellm.types.router import GenericLiteLLMParams
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
+    safeguards = [{"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}]
+    strict_tool = {"name": "get_name", "strict": True, "input_schema": _NAME_SCHEMA}
 
     result = cfg.transform_anthropic_messages_request(
-        model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        model="us.anthropic.claude-sonnet-5",
         messages=[{"role": "user", "content": [{"type": "text", "text": "Name a color."}]}],
         anthropic_messages_optional_request_params={
             "max_tokens": 64,
-            "tools": [{"name": "get_name", "input_schema": _NAME_SCHEMA}],
+            "safeguards": safeguards,
+            "tools": [strict_tool],
         },
         litellm_params=GenericLiteLLMParams(),
         headers={"anthropic-beta": "dangerous-tool-use-2026-09-03"},
     )
 
-    assert result["anthropic_beta"] == ["dangerous-tool-use-2026-09-03"]
+    assert result["safeguards"] == safeguards
+    assert result["tools"] == [strict_tool]
+    assert result["anthropic_beta"].count("dangerous-tool-use-2026-09-03") == 1
 
 
 def test_bedrock_messages_stream_decoder_keeps_safeguard_results():
