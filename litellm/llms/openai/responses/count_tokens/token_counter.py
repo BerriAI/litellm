@@ -5,6 +5,7 @@ OpenAI Token Counter implementation using the Responses API /input_tokens endpoi
 from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
+import openai
 from pydantic import JsonValue
 from typing_extensions import assert_never
 
@@ -192,6 +193,17 @@ class OpenAITokenCounter(BaseTokenCounter):
                 error=True,
                 error_message=e.message,
                 status_code=e.status_code,
+            )
+        except openai.AuthenticationError as e:
+            verbose_logger.warning("OpenAI workload identity token exchange failed: %s", e.message)
+            return TokenCountResponse(
+                total_tokens=0,
+                request_model=request_model,
+                model_used=model_to_use,
+                tokenizer_type="openai_api",
+                error=True,
+                error_message=e.message,
+                status_code=401,
             )
         except Exception as e:
             verbose_logger.warning("Error calling OpenAI CountTokens API: %s", e)

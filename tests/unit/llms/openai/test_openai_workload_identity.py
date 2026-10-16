@@ -698,5 +698,6 @@ class TestCountTokens:
         )
         assert result is not None
         assert result.error is True
+        assert result.status_code == 401
         assert result.total_tokens == 0
         assert not count_route.called
