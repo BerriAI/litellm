@@ -38,6 +38,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.plumbing.context import set_request_root_span
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.llms.anthropic.pass_through.messages.streaming_iterator import closing_superseded_attempt
 from litellm.llms.anthropic.pass_through.messages.agentic_streaming_iterator import (
     SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES,
 )
@@ -16004,6 +16005,7 @@ class _AnthropicMessagesFakeByteStream:
         self._chunks = list(chunks)
         self._hidden_params = {"additional_headers": {"x-amzn-requestid": "req-1"}}
         self.closed = False
+        self.closed_as_superseded = False
 
     def __aiter__(self):
         return self
@@ -16014,6 +16016,7 @@ class _AnthropicMessagesFakeByteStream:
         return self._chunks.pop(0)
 
     async def aclose(self) -> None:
+        self.closed_as_superseded = self.closed_as_superseded or closing_superseded_attempt()
         self.closed = True
 
 
@@ -17257,6 +17260,30 @@ async def test_anthropic_messages_stream_dropped_before_content_is_retried_withi
 
 
 @pytest.mark.asyncio
+async def test_anthropic_messages_superseded_stream_is_closed_before_the_retry_opens():
+    """Both attempts log through the request's one logging object, so the superseded attempt's end-of-stream
+    logging must be queued before the retry starts producing its own: the router closes the dropped stream
+    before it asks the group for another."""
+    router = _anthropic_messages_retry_router(num_retries=1)
+    superseded = _AnthropicMessagesFakeByteStream(
+        [_anthropic_messages_message_start_chunk(), _anthropic_messages_overloaded_error_chunk()]
+    )
+    superseded_closed_when_retry_opened: list[bool] = []
+
+    def retry_stream():
+        superseded_closed_when_retry_opened.append(superseded.closed_as_superseded)
+        return _anthropic_messages_retried_stream()
+
+    provider = _AnthropicMessagesScriptedProvider(lambda: superseded, retry_stream)
+
+    stream = await _anthropic_messages_stream_through_router(router, provider)
+    body = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
+    assert superseded_closed_when_retry_opened == [True]
+
+
+@pytest.mark.asyncio
 async def test_a_ptu_share_holders_messages_stream_dropped_before_content_is_retried_on_its_shared_group(monkeypatch):
     """The same-group retry has to look the group's health up as the calling team; looked up with no
     team a shared PTU group looks empty, so the share holder's dropped stream is never retried."""
@@ -18387,7 +18414,7 @@ async def test_aanthropic_messages_recover_stream_error_flushes_buffered_frames_
 
     with patch.object(router, "_aanthropic_messages_fallback_attempt") as mock_attempt:
         recovery = router._aanthropic_messages_recover_stream_error(
-            declined, True, buffered, "primary", {"model": "primary"}, _anthropic_messages_make_wrapper()
+            declined, True, buffered, "primary", {"model": "primary"}, _anthropic_messages_make_wrapper(), AsyncMock()
         )
         with pytest.raises(BedrockError) as exc_info:
             await drain(recovery)
@@ -18408,7 +18435,7 @@ async def test_aanthropic_messages_recover_stream_error_hands_converted_raise_to
 
     with patch.object(router, "_aanthropic_messages_fallback_attempt", new=fake_attempt):
         recovery = router._aanthropic_messages_recover_stream_error(
-            raised, False, (), "primary", {"model": "primary"}, _anthropic_messages_make_wrapper()
+            raised, False, (), "primary", {"model": "primary"}, _anthropic_messages_make_wrapper(), AsyncMock()
         )
         collected = [chunk async for chunk in recovery]
     assert collected == [b"fallback"]
@@ -18464,6 +18491,25 @@ async def test_anthropic_messages_post_first_chunk_error_skips_fallback():
 
     assert collected == [content, error_chunk]
     mock_fallback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_stream_the_client_closes_at_a_forwarded_error_is_not_closed_as_superseded():
+    """An error frame forwarded to the client ends that request, and the SDK hangs up on it. No retry took the
+    request over, so the source must not be closed as a superseded attempt, which would log it as a failure and
+    drop the usage the provider billed for it."""
+    router = _anthropic_messages_make_router()
+    error_chunk = _anthropic_messages_overloaded_error_chunk()
+    source = _AnthropicMessagesFakeByteStream([_anthropic_messages_content_chunk("partial answer"), error_chunk])
+
+    wrapped = await router._aanthropic_messages_streaming_iterator(response=source, initial_kwargs={"model": "primary"})
+    async for chunk in wrapped:
+        if chunk == error_chunk:
+            break
+    await wrapped.aclose()
+
+    assert source.closed is True
+    assert source.closed_as_superseded is False
 
 
 @pytest.mark.asyncio
