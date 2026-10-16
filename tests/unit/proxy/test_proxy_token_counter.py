@@ -35,7 +35,12 @@ from litellm.proxy.anthropic_endpoints.endpoints import (
 )
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.proxy.common_utils.token_count_settings import UNAVAILABLE_FALLBACK_TTL_SECONDS, TokenCountSettings
-from litellm.proxy.proxy_server import _provider_or_fallback_token_count, _try_provider_token_count, token_counter
+from litellm.proxy.proxy_server import (
+    _provider_or_fallback_token_count,
+    _try_provider_token_count,
+    count_request_tokens,
+    token_counter,
+)
 from litellm.types.utils import TokenCountResponse
 
 
@@ -1209,7 +1214,9 @@ class _ScriptedCounter(BaseTokenCounter):
         return self._replies[model_to_use]
 
 
-def _provider_reply(model: str, total_tokens: int = 0, status_code: int | None = None) -> TokenCountResponse:
+def _provider_reply(
+    model: str, total_tokens: int = 0, status_code: int | None = None, rejected_before_provider_call: bool = False
+) -> TokenCountResponse:
     return TokenCountResponse(
         total_tokens=total_tokens,
         request_model="sonnet-5-5",
@@ -1218,6 +1225,7 @@ def _provider_reply(model: str, total_tokens: int = 0, status_code: int | None =
         error=status_code is not None,
         error_message=None if status_code is None else f"scripted {status_code} for {model}",
         status_code=status_code,
+        rejected_before_provider_call=rejected_before_provider_call,
     )
 
 
@@ -1410,7 +1418,90 @@ async def test_uncountable_model_without_fallback_or_framing_raises():
 async def test_uncountable_model_with_framing_falls_through_to_the_local_estimate():
     counter = _ScriptedCounter({"us.anthropic.claude-sonnet-5-5": _provider_reply("sonnet", status_code=400)})
 
-    assert await _ladder(counter, TokenCountSettings(framing=0, fallback_model=None)) is None
+    assert not isinstance(await _ladder(counter, TokenCountSettings(framing=0, fallback_model=None)), TokenCountResponse)
+
+
+@pytest.mark.asyncio
+async def test_request_the_counter_rejects_before_calling_the_provider_answers_400_without_fallback_or_framing():
+    counter: Final = _ScriptedCounter(
+        {
+            "us.anthropic.claude-sonnet-5-5": _provider_reply("sonnet", status_code=400, rejected_before_provider_call=True),
+            "us.anthropic.claude-opus-5-5": _provider_reply("opus", total_tokens=42),
+        }
+    )
+
+    with pytest.raises(ProxyException) as raised:
+        await _ladder(counter, TokenCountSettings(framing=100, fallback_model="us.anthropic.claude-opus-5-5"))
+
+    assert (raised.value.code, raised.value.message) == ("400", "scripted 400 for sonnet")
+    assert [call[0] for call in counter.calls] == ["us.anthropic.claude-sonnet-5-5"]
+
+
+@pytest.mark.parametrize("model", ["openai/gpt-5.4-mini", "gemini/gemini-3.8-flash"])
+@pytest.mark.asyncio
+async def test_framing_keeps_the_400_for_blocks_the_provider_counter_cannot_convert(
+    monkeypatch: pytest.MonkeyPatch, model: str
+):
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "framed",
+                    "litellm_params": {"model": model, "api_key": "sk-unused-framed"},
+                    "model_info": {"token_count_framing": 100},
+                }
+            ]
+        ),
+    )
+    search_result: Final = {"type": "search_result", "source": "https://example.com", "title": "Notes", "content": []}
+
+    with pytest.raises(ProxyException) as raised:
+        await count_request_tokens(
+            request=TokenCountRequest(
+                model="framed",
+                messages=[{"role": "user", "content": [{"type": "text", "text": "Summarize."}, search_result]}],
+            ),
+            call_endpoint=True,
+            messages_format="anthropic",
+        )
+
+    assert raised.value.code == "400"
+    assert "search_result" in raised.value.message
+
+
+@pytest.mark.asyncio
+async def test_framed_estimate_that_cannot_read_the_body_answers_the_provider_error(monkeypatch: pytest.MonkeyPatch):
+    counter: Final = _ScriptedCounter({"us.moonshotai.kimi-k3": _provider_reply("kimi", status_code=400)})
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(model_list=[{"model_name": "kimi", "litellm_params": {"model": "bedrock/us.moonshotai.kimi-k3"}}]),
+    )
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "_get_provider_token_counter", lambda deployment, model: (counter, model, "bedrock")
+    )
+    web_search_turn: Final = [
+        {"role": "user", "content": "What is new?"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "server_tool_use", "id": "srvtoolu_01", "name": "web_search", "input": {"query": "new"}},
+                {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_01", "content": []},
+            ],
+        },
+    ]
+
+    with pytest.raises(ProxyException) as raised:
+        await token_counter(request=TokenCountRequest(model="kimi", messages=web_search_turn), call_endpoint=True)
+    readable: Final = await token_counter(
+        request=TokenCountRequest(model="kimi", messages=[{"role": "user", "content": "What is new?"}]),
+        call_endpoint=True,
+    )
+
+    assert (raised.value.code, raised.value.message) == ("400", "scripted 400 for kimi")
+    assert readable.count_source == "local_estimate"
 
 
 @pytest.mark.asyncio

@@ -14458,6 +14458,7 @@ async def _try_provider_token_count(
         return ProviderCountFailure(
             status_code=result.status_code or 500,
             message=result.error_message or "Token counting failed",
+            rejected_before_provider_call=result.rejected_before_provider_call,
         )
     return result
 
@@ -14469,10 +14470,11 @@ async def _provider_or_fallback_token_count(
     local_estimate_allowed: bool,
     deployment_id: str,
     unavailable_fallbacks: UnavailableFallbacks,
-) -> Optional["TokenCountResponse"]:
+) -> Union["TokenCountResponse", ProviderCountFailure, None]:
     """Count with the provider, then the configured fallback model when the provider cannot count this one.
 
-    Returns None when the count should be estimated locally."""
+    Returns None when the count should be estimated locally, or the provider's failure when the framed local
+    estimate stands in for it and that failure is the answer if the estimate cannot read the request."""
     primary: Final = await count_with(model_to_use)
     if not isinstance(primary, ProviderCountFailure):
         return None if primary is None else primary.model_copy(update={"count_source": "provider"})
@@ -14498,8 +14500,17 @@ async def _provider_or_fallback_token_count(
             raise fallback.to_proxy_exception()
         raise primary.to_proxy_exception()
     if settings.framing is not None and local_estimate_allowed:
-        return None
+        return primary
     raise primary.to_proxy_exception()
+
+
+async def _estimate_or_provider_error(estimate: Awaitable[int], provider_failure: ProviderCountFailure | None) -> int:
+    try:
+        return await estimate
+    except ValueError as e:
+        if provider_failure is None:
+            raise
+        raise provider_failure.to_proxy_exception() from e
 
 
 class _TokenCountDeployment(TypedDict, total=False):
@@ -14607,9 +14618,11 @@ async def count_request_tokens(
         if _model is not None:
             model_to_use = _model
 
-    if provider_counter is not None:
-        deployment_id: Final = deployment_view.get("model_info", {}).get("id")
-        result: Final = await _provider_or_fallback_token_count(
+    deployment_id: Final = deployment_view.get("model_info", {}).get("id")
+    ladder: Final = (
+        None
+        if provider_counter is None
+        else await _provider_or_fallback_token_count(
             count_with=partial(
                 _try_provider_token_count,
                 provider_counter,
@@ -14629,8 +14642,9 @@ async def count_request_tokens(
             deployment_id=deployment_id if isinstance(deployment_id, str) else model_to_use,
             unavailable_fallbacks=UNAVAILABLE_TOKEN_COUNT_FALLBACKS,
         )
-        if result is not None:
-            return result
+    )
+    if isinstance(ladder, TokenCountResponse):
+        return ladder
 
     # Check if token counter is disabled before fallback
     if litellm.disable_token_counter is True:
@@ -14663,12 +14677,15 @@ async def count_request_tokens(
     counted_tools: Final = cast(  # cast-ok: raw OpenAI or Anthropic tool dicts, both of which token_counter formats
         list[ChatCompletionToolParam] | None, tools if counted_messages is not None else None
     )
-    total_tokens: Final = await offload_token_count(litellm.token_counter)(
-        model=model_to_use,
-        text=prompt,
-        messages=counted_messages,
-        tools=counted_tools,
-        custom_tokenizer=_tokenizer_used,
+    total_tokens: Final = await _estimate_or_provider_error(
+        offload_token_count(litellm.token_counter)(
+            model=model_to_use,
+            text=prompt,
+            messages=counted_messages,
+            tools=counted_tools,
+            custom_tokenizer=_tokenizer_used,
+        ),
+        provider_failure=ladder,
     )
     framing: Final = settings.framing if counted_messages is not None and settings.framing is not None else 0
     return TokenCountResponse(

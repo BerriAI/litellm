@@ -158,6 +158,7 @@ def count_context_error_response(
         error=True,
         error_message=error.error_message,
         status_code=400,
+        rejected_before_provider_call=True,
     )
 
 

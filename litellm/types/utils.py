@@ -4499,6 +4499,7 @@ class TokenCountResponse(LiteLLMPydanticObjectBase):
     HTTP status code from the token counting API (e.g., 200 for success, 429 for rate limit, 400 for bad request)
     """
     status_code: int | None = None
+    rejected_before_provider_call: bool = Field(default=False, exclude=True)
 
 
 class CustomHuggingfaceTokenizer(TypedDict):

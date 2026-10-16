@@ -102,6 +102,7 @@ class OpenAITokenCounter(BaseTokenCounter):
                 error=True,
                 error_message=request_error,
                 status_code=400,
+                rejected_before_provider_call=True,
             )
 
         deployment = deployment or {}

@@ -58,6 +58,24 @@ _SDK_TOOLS: Final[list[MessageCountTokensToolParam]] = [
     }
 ]
 _FALLBACK_SOURCE: Final = {"litellm_count_source": "fallback_model", "litellm_count_fallback_model": _OPUS}
+_OPENAI_PRIMARY: Final = "gpt-count-primary"
+_OPENAI_FALLBACK: Final = "gpt-count-fallback"
+_OPENAI_COUNT_TARGET: Final = "/v1/responses/input_tokens"
+_COUNTED_FIELDS: Final = ("input", "instructions", "tools", "text")
+_ANSWER_SCHEMA: Final[dict[str, JsonValue]] = {"type": "object", "properties": {"answer": {"type": "string"}}}
+_ANTHROPIC_TOOL: Final[dict[str, JsonValue]] = {
+    "name": "get_weather",
+    "description": "Look up the current weather for a city",
+    "input_schema": _WEATHER_SCHEMA,
+}
+_TOOL_TURNS: Final[list[JsonValue]] = [
+    {"role": "user", "content": "What is the weather in Paris?"},
+    {
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "Paris"}}],
+    },
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "Sunny"}]},
+]
 _LOCAL_SOURCE: Final = {"litellm_count_source": "local_estimate"}
 
 
@@ -374,4 +392,203 @@ def test_shipped_framing_is_added_to_the_estimate_and_a_configured_zero_turns_it
         assert isinstance(framing, int) and framing > 0, framing
         assert shipped[0] - unframed[0] == framing, (shipped, unframed)
         assert _runtime_models(runtime) == runtime_calls
+        assert _mantle_models(mantle) == ()
+
+
+def _openai_count(request: Request) -> Reply:
+    model: Final = _JSON_OBJECT.validate_json(request.body).get("model")
+    if request.target == _OPENAI_COUNT_TARGET and model == _OPENAI_FALLBACK:
+        return _json_reply(200, {"object": "response.input_tokens", "input_tokens": _FALLBACK_COUNT})
+    return _json_reply(
+        404,
+        {"error": {"message": f"scripted openai 404 for {model}", "type": "invalid_request_error", "code": None}},
+    )
+
+
+def _counted_fields(body: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    return {key: body[key] for key in _COUNTED_FIELDS if key in body}
+
+
+def _openai_counts(wire: Wire) -> tuple[tuple[str, JsonValue, dict[str, JsonValue]], ...]:
+    bodies: Final = tuple((request.target, _JSON_OBJECT.validate_json(request.body)) for request in wire.drain())
+    return tuple((target, body.get("model"), _counted_fields(body)) for target, body in bodies)
+
+
+def _openai_deployment(scenario: Scenario, wire: Wire, model_info: Mapping[str, JsonValue]) -> str:
+    return scenario.model(model=f"openai/{_OPENAI_PRIMARY}", api_base=f"{wire.url}/v1", model_info=model_info)
+
+
+def test_fallback_model_counts_the_anthropic_body_converted_like_the_provider_count(
+    counting_proxy: OwnedProxy,
+) -> None:
+    gateway: Final = counting_proxy.gateway
+    with wire_server(_openai_count) as openai, gateway.scenario() as scenario:
+        model: Final = _openai_deployment(scenario, openai, {"token_count_fallback_model": _OPENAI_FALLBACK})
+        response: Final = gateway.request(
+            "POST",
+            "/v1/messages/count_tokens",
+            {
+                "model": model,
+                "system": _SYSTEM,
+                "tools": [_ANTHROPIC_TOOL],
+                "output_config": {"format": {"type": "json_schema", "schema": _ANSWER_SCHEMA}},
+                "messages": _TOOL_TURNS,
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert _JSON_OBJECT.validate_json(response.content) == {
+            "input_tokens": _FALLBACK_COUNT,
+            "litellm_count_source": "fallback_model",
+            "litellm_count_fallback_model": _OPENAI_FALLBACK,
+        }
+        counts: Final = _openai_counts(openai)
+        assert tuple((target, counted) for target, counted, _ in counts) == (
+            (_OPENAI_COUNT_TARGET, _OPENAI_PRIMARY),
+            (_OPENAI_COUNT_TARGET, _OPENAI_FALLBACK),
+        ), counts
+        primary: Final = counts[0][2]
+        assert counts[1][2] == primary
+        assert primary["instructions"] == _SYSTEM, primary
+        text: Final = primary.get("text")
+        assert isinstance(text, dict) and isinstance(text.get("format"), dict), primary
+        input_items: Final = primary["input"]
+        assert isinstance(input_items, list), primary
+        item_types: Final = {item.get("type") for item in input_items if isinstance(item, dict)}
+        assert {"function_call", "function_call_output"} <= item_types, input_items
+
+
+@pytest.mark.parametrize(
+    ("body", "named"),
+    [
+        (
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Summarize the notes."},
+                            {
+                                "type": "search_result",
+                                "source": "https://example.com/notes",
+                                "title": "Notes",
+                                "content": [],
+                            },
+                        ],
+                    }
+                ]
+            },
+            "search_result",
+        ),
+        (
+            {"messages": [{"role": "user", "content": "hello"}, {"content": "no role"}]},
+            "messages.1.role: Field required",
+        ),
+    ],
+    ids=["unconvertible_block", "missing_role"],
+)
+def test_framing_keeps_the_400_for_a_body_the_openai_count_rejects_before_calling_openai(
+    counting_proxy: OwnedProxy, body: Mapping[str, JsonValue], named: str
+) -> None:
+    gateway: Final = counting_proxy.gateway
+    with wire_server(_openai_count) as openai, gateway.scenario() as scenario:
+        model: Final = _openai_deployment(scenario, openai, {"token_count_framing": _FRAMING})
+        rejected: Final = gateway.request("POST", "/v1/messages/count_tokens", {"model": model, **body})
+        assert rejected.status_code == 400, rejected.text
+        error: Final = _JSON_OBJECT.validate_json(rejected.content)["error"]
+        assert isinstance(error, dict) and named in str(error.get("message")), error
+        assert openai.drain() == ()
+        estimated: Final = gateway.request(
+            "POST", "/v1/messages/count_tokens", {"model": model, "messages": [{"role": "user", "content": "hello"}]}
+        )
+        assert estimated.status_code == 200, estimated.text
+        assert _JSON_OBJECT.validate_json(estimated.content).get("litellm_count_source") == "local_estimate"
+        assert tuple(counted for _, counted, _ in _openai_counts(openai)) == (_OPENAI_PRIMARY,)
+
+
+@pytest.mark.parametrize(
+    ("fallback_status", "status", "error_type", "message"),
+    [
+        (404, 404, "not_found_error", f"scripted mantle 404 for {_SONNET_BASE}"),
+        (429, 429, "rate_limit_error", f"scripted runtime 429 for {_OPUS_BASE}"),
+    ],
+    ids=["fallback_404_answers_the_requested_models_error", "fallback_429_answers_its_own_error"],
+)
+def test_fallback_failure_reaches_the_client_in_the_anthropic_error_envelope(
+    counting_proxy: OwnedProxy,
+    runtime_port: int,
+    mantle_port: int,
+    fallback_status: int,
+    status: int,
+    error_type: str,
+    message: str,
+) -> None:
+    gateway: Final = counting_proxy.gateway
+    with (
+        wire_server(_runtime, port=runtime_port) as runtime,
+        wire_server(_mantle, port=mantle_port),
+        gateway.scenario() as scenario,
+    ):
+        response: Final = gateway.request(
+            "POST",
+            "/v1/messages/count_tokens",
+            {
+                "model": _deployment(scenario, runtime_port),
+                "system": _SYSTEM,
+                "tools": [_ANTHROPIC_TOOL],
+                "messages": [{"role": "user", "content": _prompt(404, fallback_status)}],
+            },
+        )
+        assert response.status_code == status, response.text
+        body: Final = _JSON_OBJECT.validate_json(response.content)
+        error: Final = body["error"]
+        assert body["type"] == "error" and isinstance(error, dict), body
+        assert (error.get("type"), error.get("message")) == (error_type, message), body
+        assert _runtime_models(runtime) == (_SONNET_BASE, _OPUS_BASE)
+
+
+def _runtime_cannot_count(_request: Request) -> Reply:
+    return _json_reply(400, {"message": _UNSUPPORTED})
+
+
+def test_shipped_framing_never_answers_a_500_for_a_body_the_local_count_cannot_read(
+    counting_proxy: OwnedProxy, runtime_port: int, mantle_port: int
+) -> None:
+    gateway: Final = counting_proxy.gateway
+    replayed_web_search: Final[list[JsonValue]] = [
+        {"role": "user", "content": "What is the newest LiteLLM release?"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "server_tool_use", "id": "srvtoolu_01", "name": "web_search", "input": {"query": "LiteLLM"}},
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srvtoolu_01",
+                    "content": [
+                        {
+                            "type": "web_search_result",
+                            "url": "https://docs.litellm.ai/release_notes",
+                            "title": "Release notes",
+                            "encrypted_content": "",
+                        }
+                    ],
+                },
+                {"type": "text", "text": "The newest release is in the release notes."},
+            ],
+        },
+        {"role": "user", "content": "Thanks."},
+    ]
+    with (
+        wire_server(_runtime_cannot_count, port=runtime_port) as runtime,
+        wire_server(_mantle, port=mantle_port) as mantle,
+        gateway.scenario() as scenario,
+    ):
+        response: Final = gateway.request(
+            "POST",
+            "/v1/messages/count_tokens",
+            {"model": _deployment(scenario, runtime_port, _KIMI), "messages": replayed_web_search},
+        )
+        body: Final = _JSON_OBJECT.validate_json(response.content)
+        answer: Final = body.get("litellm_count_source") if response.status_code == 200 else body.get("type")
+        assert (response.status_code, answer) in ((200, "local_estimate"), (400, "error")), response.text
+        assert _runtime_models(runtime) == (_KIMI_BASE,)
         assert _mantle_models(mantle) == ()

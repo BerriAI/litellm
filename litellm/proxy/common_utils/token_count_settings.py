@@ -35,10 +35,11 @@ class TokenCountSettings:
 class ProviderCountFailure:
     status_code: int
     message: str
+    rejected_before_provider_call: bool = False
 
     @property
     def cannot_count_model(self) -> bool:
-        return self.status_code in CANNOT_COUNT_MODEL_STATUSES
+        return not self.rejected_before_provider_call and self.status_code in CANNOT_COUNT_MODEL_STATUSES
 
     @property
     def model_unavailable(self) -> bool:
