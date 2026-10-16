@@ -48,6 +48,21 @@ def test_a_proxy_exception_answers_its_503_as_529_and_keeps_every_other_code(cod
             id="fallback-over-an-anthropic-overload",
         ),
         pytest.param(
+            MidStreamFallbackError(
+                message="fallbacks failed",
+                model="m",
+                llm_provider="anthropic",
+                original_exception=MidStreamFallbackError(
+                    message="retry failed before content",
+                    model="m",
+                    llm_provider="anthropic",
+                    original_exception=_anthropic_internal_server_error(529),
+                ),
+            ),
+            529,
+            id="nested-fallback-over-an-anthropic-overload",
+        ),
+        pytest.param(
             litellm.RateLimitError(message="slow down", llm_provider="anthropic", model="m"), 429, id="rate-limit"
         ),
     ],

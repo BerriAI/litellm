@@ -4348,6 +4348,34 @@ class TestStreamCloseOnDisconnect:
 
         assert upstream.aclosed
 
+    async def test_async_streaming_data_generator_reraises_an_unchanged_http_exception_without_chaining_it_to_itself(
+        self,
+    ):
+        blocked = HTTPException(status_code=400, detail="Content blocked by guardrail")
+
+        class FailingUpstream:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise blocked
+
+        ProxyLogging._callback_capabilities_cache.clear()
+        gen = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+            response=FailingUpstream(),
+            user_api_key_dict=ProxyUserAPIKeyAuth(),
+            request_data={"model": "mock-model"},
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=MagicMock()),
+            serialize_chunk=lambda c: "data: x\n\n",
+            serialize_error=lambda e: "data: error\n\n",
+        )
+
+        with pytest.raises(HTTPException) as raised:
+            await gen.__anext__()
+
+        assert raised.value is blocked
+        assert raised.value.__cause__ is not blocked
+
     async def test_async_streaming_data_generator_closes_the_guardrail_chain_on_client_disconnect(
         self,
     ):

@@ -13,10 +13,11 @@ class _CarriesStatusCode(Protocol):
 
 
 def _provider_status_code(exc: Exception) -> int | None:
-    unwrapped: Final = exc.original_exception if isinstance(exc, MidStreamFallbackError) else exc
-    match unwrapped:
+    match exc:
         case InternalServerError(provider_status_code=int() as provider_status):
             return provider_status
+        case MidStreamFallbackError(original_exception=Exception() as original):
+            return _provider_status_code(original)
         case _:
             return None
 

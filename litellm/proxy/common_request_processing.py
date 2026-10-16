@@ -4180,6 +4180,8 @@ class ProxyBaseLLMRequestProcessing:
             )
 
             if isinstance(failure, HTTPException):
+                if failure is e:
+                    raise
                 raise failure from e
             stream_error_status: Final = error_status_code(failure, status.HTTP_500_INTERNAL_SERVER_ERROR)
             proxy_exception: Final = ProxyException(
