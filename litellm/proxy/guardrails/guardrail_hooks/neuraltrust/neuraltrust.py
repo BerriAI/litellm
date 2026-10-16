@@ -69,12 +69,18 @@ _DECORATOR_ADAPTER: Final[TypeAdapter[_LoggingDecorator]] = TypeAdapter(
     _LoggingDecorator, config=ConfigDict(arbitrary_types_allowed=True)
 )
 log_guardrail_information: Final = _DECORATOR_ADAPTER.validate_python(
-    getattr(custom_guardrail, "log_guardrail_information")
+    vars(custom_guardrail)["log_guardrail_information"]
 )
 
 
 _GuardrailInitializer: TypeAlias = Callable[
-    [str | None, list[GuardrailEventHooks], GuardrailEventHooks | Mode | str | Sequence[str] | None, bool],
+    [
+        CustomGuardrail,
+        str | None,
+        list[GuardrailEventHooks],
+        GuardrailEventHooks | Mode | str | Sequence[str] | None,
+        bool,
+    ],
     None,
 ]
 
@@ -252,7 +258,7 @@ class NeuralTrustGuardrail(CustomGuardrail):
         factory_adapter: Final[TypeAdapter[Callable[[httpxSpecialProvider], _TrustGuardClient]]] = TypeAdapter(
             Callable[[httpxSpecialProvider], _TrustGuardClient]
         )
-        client_factory: Final = factory_adapter.validate_python(getattr(http_handler, "get_async_httpx_client"))
+        client_factory: Final = factory_adapter.validate_python(vars(http_handler)["get_async_httpx_client"])
         self.async_handler = client_factory(httpxSpecialProvider.GuardrailCallback)
         self.api_base = (api_base or os.environ.get("TRUSTGUARD_API_BASE") or DEFAULT_API_BASE).rstrip("/")
         self.api_key = api_key or os.environ.get("TRUSTGUARD_API_KEY") or ""
@@ -271,8 +277,8 @@ class NeuralTrustGuardrail(CustomGuardrail):
             streaming_transform_mode or "block_only"
         )
         initializer_adapter: Final[TypeAdapter[_GuardrailInitializer]] = TypeAdapter(_GuardrailInitializer)
-        initialize: Final = initializer_adapter.validate_python(getattr(super(), "__init__"))
-        initialize(guardrail_name, self.get_supported_event_hooks(), event_hook, bool(default_on))
+        initialize: Final = initializer_adapter.validate_python(vars(CustomGuardrail)["__init__"])
+        initialize(self, guardrail_name, self.get_supported_event_hooks(), event_hook, bool(default_on))
 
     @log_guardrail_information
     async def apply_guardrail(
