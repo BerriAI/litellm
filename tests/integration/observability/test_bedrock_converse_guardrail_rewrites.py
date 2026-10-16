@@ -546,6 +546,15 @@ def test_tool_the_guardrail_added_reaches_bedrock_after_the_others(rig: _Rig) ->
     }
 
 
+def test_tool_the_guardrail_added_to_a_request_without_tools_reaches_bedrock(rig: _Rig) -> None:
+    body: Final = {"messages": [_user({"text": f"Card {_CARD} please."})]}
+    sent: Final = _forwarded(rig, _converse(rig, _generic(_Vendor.ADDS_A_TOOL), body))
+    assert sent == {
+        "messages": [_user({"text": f"Card {_MASK} please."})],
+        "toolConfig": {"tools": [_converted_tool("retrieve", "retrieve", {})]},
+    }
+
+
 def test_tool_the_guardrail_renamed_reaches_bedrock_without_the_old_cache_point(rig: _Rig) -> None:
     body: Final = {"messages": [_user({"text": "Which cards are on file?"})], "toolConfig": _TOOL_CONFIG}
     sent: Final = _forwarded(rig, _converse(rig, _generic(_Vendor.RENAMES_A_TOOL), body))

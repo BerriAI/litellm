@@ -314,10 +314,11 @@ def _replaced_tools_write(body: Mapping[str, object], edit: ReplacedTools) -> _W
     """
     Rebuild ``toolConfig.tools`` in the order the guardrail returned. Entries it was never sent (cache points, system
     tools) stay right after the tool they followed, and a cache point goes away with its tool. Refuses when
-    ``toolChoice`` names a tool that is no longer there, and drops ``toolConfig`` when nothing is left.
+    ``toolChoice`` names a tool that is no longer there, drops ``toolConfig`` when nothing is left, and creates it
+    when the request had none.
     """
     tool_config: Final = _child(body, "toolConfig")
-    tools: Final = as_json_array(_child(tool_config, "tools"))
+    tools: Final = () if tool_config is None else as_json_array(_child(tool_config, "tools"))
     if tools is None:
         return None
     anchors: Final = tuple(accumulate(range(len(tools)), partial(_sent_anchor, edit.sent), initial=-1))[1:]
@@ -336,6 +337,8 @@ def _replaced_tools_write(body: Mapping[str, object], edit: ReplacedTools) -> _W
     chosen: Final = _child(_child(_child(tool_config, "toolChoice"), "tool"), "name")
     if isinstance(chosen, str) and all(_tool_name(tool) != chosen for tool in rebuilt):
         return None
+    if tool_config is None:
+        return None if all(map(_is_cache_point, rebuilt)) else _Assign((body, "toolConfig"), {"tools": rebuilt})
     return _DropToolConfig() if all(map(_is_cache_point, rebuilt)) else _Assign((tool_config, "tools"), rebuilt)
 
 
@@ -880,7 +883,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         returned_tools: Final = guardrailed_inputs.get("tools")
         tool_changes: Final = (
             ()
-            if returned_tools is None
+            if returned_tools is None or not reads_rows
             else tool_edits(tools, returned_tools, model if isinstance(model, str) else None)
         )
         holder_edits: Final = (

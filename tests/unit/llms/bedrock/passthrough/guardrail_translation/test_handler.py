@@ -2188,3 +2188,23 @@ class TestConverseGuardrailsThatReadFlatTextsOnly:
         assert ("structured_messages" in guardrail.received[-1]) is gets_rows
         assert ("tools" in guardrail.received[-1]) is gets_rows
         assert "4111" not in json.dumps({key: value for key, value in result["data"].items() if key != "toolConfig"})
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("guardrail_class", "expected_tool_config"),
+        [
+            (_ScriptedGuardrail, {"tools": [_converted("retrieve", "retrieve", {})]}),
+            (_FlatTextsOnlyGuardrail, None),
+        ],
+        ids=["supports-structured-messages", "flat-texts-only"],
+    )
+    async def test_tool_added_to_a_request_without_tools_reaches_bedrock_only_from_guardrails_that_get_tools(
+        self, guardrail_class, expected_tool_config
+    ):
+        guardrail = guardrail_class(lambda inputs: {"texts": _masked_texts(inputs), "tools": [_RETRIEVE]})
+        data = _converse_request({"messages": [{"role": "user", "content": [{"text": "Card 4111 please"}]}]})
+
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guardrail)
+
+        assert result["data"].get("toolConfig") == expected_tool_config
+        assert result["data"]["messages"] == [{"role": "user", "content": [{"text": "Card [CARD] please"}]}]
