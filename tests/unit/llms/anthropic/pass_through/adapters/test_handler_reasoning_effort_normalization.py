@@ -177,7 +177,7 @@ class TestTheSummaryWrappingOnlyRidesTheResponsesBridge:
     ) -> None:
         monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
 
-        sent = _reasoning_effort_sent_for_thinking(
+        sent: Final = _reasoning_effort_sent_for_thinking(
             "databricks/databricks-qwen35-122b-a10b", "databricks", PLAIN_THINKING
         )
 
@@ -192,7 +192,7 @@ class TestTheSummaryWrappingOnlyRidesTheResponsesBridge:
         ],
     )
     def test_a_bridged_target_keeps_the_summary(self, local_model_cost_map: None, model: str, provider: str) -> None:
-        sent = _reasoning_effort_sent_for_thinking(model, provider, SUMMARIZED_THINKING)
+        sent: Final = _reasoning_effort_sent_for_thinking(model, provider, SUMMARIZED_THINKING)
 
         assert sent == {"effort": "high", "summary": "auto"}
 
@@ -201,7 +201,7 @@ class TestTheSummaryWrappingOnlyRidesTheResponsesBridge:
     ) -> None:
         monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
 
-        sent = _reasoning_effort_sent_for_thinking("azure/responses/gpt-5-mini", "azure", PLAIN_THINKING)
+        sent: Final = _reasoning_effort_sent_for_thinking("azure/responses/gpt-5-mini", "azure", PLAIN_THINKING)
 
         assert sent == {"effort": "high", "summary": "detailed"}
 
@@ -218,21 +218,21 @@ class TestTheSummaryWrappingOnlyRidesTheResponsesBridge:
         """``completion()`` keeps a gpt-5.5 deployment with function tools on Foundry's chat route when
         its ``api_base`` is a Foundry OpenAI host, and bridges it to Responses when the base makes it an
         Azure OpenAI deployment. The adapter has to read the same ``api_base`` to land on the same call."""
-        sent = _reasoning_effort_sent_for_thinking(
+        sent: Final = _reasoning_effort_sent_for_thinking(
             "azure_ai/gpt-5.5", "azure_ai", SUMMARIZED_THINKING, tools=[MULTIPLY_TOOL], api_base=api_base
         )
 
         assert sent == expected
 
     def test_a_provider_resolved_from_the_api_base_gets_the_plain_tier(self, local_model_cost_map: None) -> None:
-        sent = _reasoning_effort_sent_for_thinking(
+        sent: Final = _reasoning_effort_sent_for_thinking(
             "kimi-k3", None, SUMMARIZED_THINKING, api_base="https://api.together.xyz/v1"
         )
 
         assert sent == "high"
 
     def test_a_chained_gateway_keeps_the_dict_for_its_own_bridge(self, local_model_cost_map: None) -> None:
-        sent = _reasoning_effort_sent_for_thinking("litellm_proxy/gpt-5.4", "litellm_proxy", SUMMARIZED_THINKING)
+        sent: Final = _reasoning_effort_sent_for_thinking("litellm_proxy/gpt-5.4", "litellm_proxy", SUMMARIZED_THINKING)
 
         assert sent == {"effort": "high", "summary": "auto"}
 
@@ -271,7 +271,7 @@ class TestTheNormalizedTierIsTheTierSent:
     def test_the_dict_form_normalizes_effort_and_keeps_its_siblings(
         self, local_model_cost_map, model, provider, expected
     ):
-        sent = _reasoning_effort_sent(model, provider, {"effort": "max", "summary": "detailed"})
+        sent: Final = _reasoning_effort_sent(model, provider, {"effort": "max", "summary": "detailed"})
 
         assert sent == {"effort": expected, "summary": "detailed"}
 
@@ -293,7 +293,9 @@ class TestTheNormalizedTierIsTheTierSent:
             ("us/gpt-6-astra", "azure"),
         ],
     )
-    def test_an_azure_hosted_astra_deployment_drops_to_the_tier_it_accepts(self, local_model_cost_map, model, provider):
+    def test_an_azure_hosted_astra_deployment_drops_to_the_tier_it_accepts(
+        self, local_model_cost_map: None, model: str, provider: str
+    ) -> None:
         """The deployment answers ``max`` with a 400 naming ``none`` through ``xhigh``, so the rows
         say so and the adapter sends the tier below instead of the rejected one."""
         assert _reasoning_effort_sent(model, provider, "max") == "xhigh"
