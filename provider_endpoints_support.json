@@ -2625,6 +2625,13 @@
         "image_variations": true
       }
     },
+    "decisionmodels": {
+      "display_name": "Decision Models (`decisionmodels`)",
+      "url": "https://decisionmodels.io",
+      "endpoints": {
+        "systemone": true
+      }
+    },
     "typesafe": {
       "display_name": "TypeSafe (`typesafe`)",
       "url": "https://docs.typesafe.ai/models",
