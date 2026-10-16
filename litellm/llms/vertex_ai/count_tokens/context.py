@@ -275,9 +275,10 @@ async def _anthropic_inference_view(
             additional_drop_params=None,
             llm_router=None,
             count_only=True,
+            drop_invalid_edits=edits.drop_invalid_edits,
         )
     except AnthropicContextManagementError as error:
-        if error.status_code >= 500 or edits.drop_invalid_edits:
+        if error.status_code >= 500:
             return _view_without_edits(normalized, system, typed_system)
         return VertexGeminiCountContextError(error_message=error.message, status_code=error.status_code)
     if prepared is None:
