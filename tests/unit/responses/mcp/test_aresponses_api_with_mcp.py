@@ -2,8 +2,8 @@ import asyncio
 import json
 import logging
 import sys
-from collections.abc import Callable, Mapping, Sequence
-from contextlib import nullcontext
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager, nullcontext
 from datetime import datetime
 from types import MappingProxyType, SimpleNamespace
 from typing import Any, Final, List, cast
@@ -1536,9 +1536,8 @@ def _serve_rounds(
     )
 
 
-async def _auto_execute(
-    logging_obj: Logging, mcp_tool: Mapping[str, object], tool_result: str
-) -> ResponsesAPIResponse:
+@contextmanager
+def _echo_tool_served(tool_result: str) -> Iterator[None]:
     echo_tool: Final = MCPTool.model_validate(
         {"name": "echo", "inputSchema": {"type": "object", "properties": {"value": {"type": "string"}}}},
         by_name=False,
@@ -1555,6 +1554,13 @@ async def _auto_execute(
             AsyncMock(return_value=[{"tool_call_id": "call_echo", "result": tool_result, "name": "echo"}]),
         ),
     ):
+        yield
+
+
+async def _auto_execute(
+    logging_obj: Logging, mcp_tool: Mapping[str, object], tool_result: str
+) -> ResponsesAPIResponse:
+    with _echo_tool_served(tool_result):
         response: Final = await litellm.aresponses(
             model="openai/gpt-5.6",
             input="Call echo with PING",
@@ -1737,6 +1743,72 @@ async def test_non_stream_auto_execute_bills_the_paid_first_round_when_the_follo
     tool_logging_obj: Final = call_tool.await_args.kwargs["litellm_logging_obj"]
     assert tool_logging_obj.litellm_call_id == f"{recorder.failed[0]['id']}_call_echo"
     assert tool_logging_obj.litellm_trace_id == recorder.failed[0]["trace_id"]
+
+
+@pytest.mark.asyncio
+async def test_non_stream_auto_execute_retried_after_a_failed_follow_up_bills_each_attempt_its_own_rounds(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    retried_round_one: Final = MappingProxyType(
+        {
+            **_ROUND_ONE_BODY,
+            "id": "resp_retried_round_one",
+            "usage": {
+                "input_tokens": 500,
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens": 40,
+                "output_tokens_details": {"reasoning_tokens": 0},
+                "total_tokens": 540,
+            },
+        }
+    )
+    server_error: Final = {"error": {"message": "upstream overloaded", "type": "server_error", "code": "server_error"}}
+    _serve_responses(
+        respx_mock,
+        monkeypatch,
+        (
+            httpx.Response(200, content=json.dumps(_ROUND_ONE_BODY, default=dict)),
+            httpx.Response(500, json=server_error),
+            httpx.Response(200, content=json.dumps(retried_round_one, default=dict)),
+            httpx.Response(200, content=json.dumps(_ROUND_TWO_BODY, default=dict)),
+        ),
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.6",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6",
+                    "api_key": "sk-mcp-rounds",
+                    "api_base": "https://mcp-rounds.example.com/v1",
+                },
+            }
+        ],
+        num_retries=1,
+        retry_after=0,
+    )
+    recorder: Final = _RoundRecorder()
+
+    with _echo_tool_served("PING"):
+        response: Final = await router.aresponses(
+            model="gpt-5.6",
+            input="Call echo with PING",
+            tools=[dict(_ECHO_MCP_TOOL)],
+            litellm_logging_obj=_rounds_logging_obj(recorder, "mcp-rounds-retried"),
+        )
+    await _settle(lambda: len(recorder.logged) > 0)
+
+    assert isinstance(response, ResponsesAPIResponse)
+    assert response.usage is not None
+    assert len(recorder.failed) == 1
+    assert (recorder.failed[0]["prompt_tokens"], recorder.failed[0]["completion_tokens"]) == (71, 19)
+    assert recorder.failed[0]["response_cost"] == pytest.approx(_round_cost(_ROUND_ONE_BODY))
+    assert len(recorder.logged) == 1
+    row: Final = recorder.logged[0]
+    assert row["id"] == response.id
+    assert (row["prompt_tokens"], row["completion_tokens"]) == (500 + 149, 40 + 5)
+    assert (row["prompt_tokens"], row["completion_tokens"]) == (response.usage.input_tokens, response.usage.output_tokens)
+    assert row["response_cost"] == pytest.approx(_round_cost(retried_round_one) + _round_cost(_ROUND_TWO_BODY))
 
 
 @pytest.mark.asyncio

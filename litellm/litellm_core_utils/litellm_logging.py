@@ -2300,6 +2300,11 @@ class Logging(LiteLLMLoggingBaseClass):
         self.model_call_details["combined_usage_object"] = usage
         self.model_call_details["response_cost"] = response_cost
 
+    def discard_partial_usage_for_failure(self) -> None:
+        """Drop what a failed earlier attempt stashed, so a retry sharing this logging object bills its own usage."""
+        self.model_call_details.pop("combined_usage_object", None)
+        self.model_call_details.pop("response_cost", None)
+
     def record_assembled_response_for_failure(self, assembled: ModelResponse) -> None:
         """Bill a fully streamed response on the failure log when a post-call hook rejects it."""
         usage: Final = getattr(assembled, "usage", None)
