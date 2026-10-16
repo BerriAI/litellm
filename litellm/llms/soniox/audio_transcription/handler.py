@@ -31,8 +31,8 @@ from litellm.litellm_core_utils.audio_utils.utils import (
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.llms.soniox.audio_transcription.transformation import (
     SonioxAudioTranscriptionConfig,
@@ -384,7 +384,7 @@ class SonioxAudioTranscriptionHandler:
             client
             if isinstance(client, HTTPHandler)
             else (
-                _get_httpx_client(
+                get_httpx_client(
                     params={"ssl_verify": litellm_params.get("ssl_verify", None)},
                 )
             )
@@ -449,7 +449,7 @@ class SonioxAudioTranscriptionHandler:
             fetched: Final[_SonioxJsonView] = {"transcript": transcript_resp.json()}
 
             payload: Final = {"transcription": transcription_meta, "transcript": fetched["transcript"]}
-            response: Final = provider_config._build_response_from_payload(
+            response: Final = provider_config.build_response_from_payload(
                 payload,
                 model_response=model_response,
                 response_format=handler_opts.get("response_format"),
@@ -683,7 +683,7 @@ class SonioxAudioTranscriptionHandler:
             fetched: Final[_SonioxJsonView] = {"transcript": transcript_resp.json()}
 
             payload: Final = {"transcription": transcription_meta, "transcript": fetched["transcript"]}
-            response: Final = provider_config._build_response_from_payload(
+            response: Final = provider_config.build_response_from_payload(
                 payload,
                 model_response=model_response,
                 response_format=handler_opts.get("response_format"),

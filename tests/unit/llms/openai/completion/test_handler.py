@@ -65,7 +65,7 @@ def test_convert_dict_to_text_completion_response():
 @pytest.mark.asyncio
 async def test_acompletion_uses_optimized_http_client():
     """
-    Test that OpenAITextCompletion.acompletion uses BaseOpenAILLM._get_async_http_client()
+    Test that OpenAITextCompletion.acompletion uses BaseOpenAILLM.get_async_http_client()
     instead of litellm.aclient_session directly.
 
     Related issue: https://github.com/BerriAI/litellm/issues/17676

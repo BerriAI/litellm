@@ -9,7 +9,7 @@ import contextvars
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Coroutine, Generator, Iterator
 from functools import partial
 from types import TracebackType
-from typing import Any, Final, cast
+from typing import Final, cast
 
 import httpx
 from httpx._types import CookieTypes, QueryParamTypes, RequestContent, RequestFiles
@@ -104,7 +104,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
     def headers(self, value: httpx.Headers) -> None:
         self._headers = value
 
-    def __await__(self) -> Iterator[Any]:
+    def __await__(self) -> Generator[object, None, AsyncPassthroughStreamingResponse]:
         async def _init():
             if not self._initialized:
                 self._response = await self._response_coro
@@ -383,7 +383,7 @@ async def allm_passthrough_route(
             # If no provider config available, raise the original exception
             raise e
 
-        raise base_llm_http_handler._handle_error(
+        raise base_llm_http_handler.handle_error(
             e=e,
             provider_config=provider_config,
         )
@@ -441,8 +441,8 @@ def llm_passthrough_route(
 
     if client is None:
         from litellm.llms.custom_httpx.http_handler import (
-            _get_httpx_client,
             get_async_httpx_client,
+            get_httpx_client,
         )
         from litellm.passthrough.timeout_utils import resolve_llm_passthrough_timeout
         from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -457,7 +457,7 @@ def llm_passthrough_route(
                 params={"timeout": resolved_timeout},
             )
         else:
-            client = _get_httpx_client(params={"timeout": resolved_timeout})
+            client = get_httpx_client(params={"timeout": resolved_timeout})
 
     # Add model_id to litellm_params if present in kwargs (for Bedrock Application Inference Profiles)
     if "model_id" in kwargs:
@@ -595,7 +595,7 @@ def llm_passthrough_route(
                 return response
     except Exception as e:
         assert provider_config is not None
-        raise base_llm_http_handler._handle_error(
+        raise base_llm_http_handler.handle_error(
             e=e,
             provider_config=provider_config,
         )

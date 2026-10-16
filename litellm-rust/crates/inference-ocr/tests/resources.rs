@@ -105,10 +105,7 @@ async fn auth_survives_per_call_clients_without_freezing_settings_or_secrets(
             owner,
             &http,
             Default::default(),
-            OcrSettings {
-                vertex_location: Some(location.into()),
-                ..OcrSettings::default()
-            },
+            OcrSettings::default(),
             Arc::new(RecordingSecrets::new([("VERTEXAI_CREDENTIALS", identity)])),
         );
         let request = decode_request(OcrWireRequest {
@@ -118,7 +115,7 @@ async fn auth_survives_per_call_clients_without_freezing_settings_or_secrets(
             api_base: Some(upstream.uri()),
             custom_llm_provider: None,
             extra_headers: None,
-            optional_params: Default::default(),
+            optional_params: json!({"vertex_location": location}).as_object().cloned().unwrap(),
             input_sources: Default::default(),
             timeout_seconds: Some(5.0),
         }).unwrap();

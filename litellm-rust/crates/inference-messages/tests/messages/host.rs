@@ -380,12 +380,14 @@ async fn the_request_context_carries_the_shaped_params_without_model_or_messages
     let host = RecordingHost::passthrough(authenticated(
         MessagesCall {
             shaping: MessagesShaping {
+                settings: MessagesSettings {
+                    drop_params: true,
+                    ..MessagesSettings::default()
+                },
                 capabilities: AnthropicModelCapabilities {
                     supports_sampling_params: false,
                     ..AnthropicModelCapabilities::default()
                 },
-                drop_params: true,
-                ..MessagesShaping::default()
             },
             ..with_fields(call, json!({"temperature": 0.2}))
         },

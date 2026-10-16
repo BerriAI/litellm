@@ -1,5 +1,6 @@
 import json
-from typing import Any, Final
+from collections.abc import Iterator
+from typing import Final
 
 import httpx
 
@@ -12,14 +13,14 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 
 from ..base_aws_llm import BaseAWSLLM, Credentials, bedrock_bearer_token, pop_aws_auth_params, run_aws_signing
-from ..common_utils import BedrockError, _get_all_bedrock_regions, error_response_text
+from ..common_utils import BedrockError, error_response_text, get_all_bedrock_regions
 from .invoke_handler import AWSEventStreamDecoder, MockResponseIterator, make_call
 
 
@@ -35,9 +36,9 @@ def make_sync_call(
     fake_stream: bool = False,
     stream_chunk_size: int | None = None,
     timeout: float | httpx.Timeout | None = None,
-) -> tuple[Any, httpx.Headers]:
+) -> tuple[MockResponseIterator | Iterator[object], httpx.Headers]:
     if client is None:
-        client = _get_httpx_client()  # Create a new client if none provided
+        client = get_httpx_client()  # Create a new client if none provided
 
     response: Final = client.post(
         api_base,
@@ -69,7 +70,9 @@ def make_sync_call(
             messages=messages,
             encoding=litellm.encoding,
         )
-        completion_stream: Any = MockResponseIterator(model_response=model_response, json_mode=json_mode)
+        completion_stream: MockResponseIterator | Iterator[object] = MockResponseIterator(
+            model_response=model_response, json_mode=json_mode
+        )
     else:
         decoder: Final = AWSEventStreamDecoder(model=model, json_mode=json_mode)
         completion_stream = decoder.iter_bytes(
@@ -302,7 +305,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             # and capture it so it can be used as aws_region_name below.
             _region_from_model: str | None = None
             _potential_region: Final = _stripped.split("/", 1)[0]
-            if _potential_region in _get_all_bedrock_regions() and "/" in _stripped:
+            if _potential_region in get_all_bedrock_regions() and "/" in _stripped:
                 _region_from_model = _potential_region
                 _stripped = _stripped.split("/", 1)[1]
                 _model_for_id = _stripped
@@ -443,7 +446,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     timeout = httpx.Timeout(timeout)
                 _params["timeout"] = timeout
-            client = _get_httpx_client(_params)
+            client = get_httpx_client(_params)
         else:
             client = client
 

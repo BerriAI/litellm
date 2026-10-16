@@ -1,7 +1,7 @@
 import asyncio
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Final
 
 from pydantic import ConfigDict, TypeAdapter
@@ -12,8 +12,8 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import CustomStreamWrapper, ModelResponse
@@ -23,6 +23,8 @@ from .transformation import ReplicateConfig
 
 replicate_config: Final = ReplicateConfig()
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
+_POLLED_PREDICTION: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
+_TEXTS: Final = TypeAdapter(Iterable[str], config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 # Function to handle prediction response (streaming)
@@ -38,11 +40,11 @@ def handle_prediction_response_streaming(
         print_verbose(f"replicate: polling endpoint: {prediction_url}")
         response = http_client.get(prediction_url, headers=headers)
         if response.status_code == 200:
-            response_data = response.json()
+            response_data = _POLLED_PREDICTION.validate_python(response.json())
             status = response_data["status"]
             if "output" in response_data:
                 try:
-                    output_string = "".join(response_data["output"])
+                    output_string = "".join(_TEXTS.validate_python(response_data["output"]))
                 except Exception:
                     raise ReplicateError(
                         status_code=422,
@@ -186,7 +188,7 @@ def completion(
     )
 
     ## COMPLETION CALL
-    httpx_client: Final = _get_httpx_client(
+    httpx_client: Final = get_httpx_client(
         params={"timeout": 600.0},
     )
     response = httpx_client.post(

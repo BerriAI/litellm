@@ -3,7 +3,10 @@
 
 import asyncio
 import importlib
+import json
 import os
+from collections.abc import Sequence
+from typing import Final
 
 import pytest
 
@@ -26,8 +29,8 @@ async def test_scheduler_diff_model_names():
     await scheduler.add_request(item1)
     await scheduler.add_request(item2)
 
-    assert await scheduler.poll(id="10", model_name="gpt-3.5-turbo", health_deployments=[{"key": "value"}]) == True
-    assert await scheduler.poll(id="11", model_name="gpt-4", health_deployments=[{"key": "value"}]) == True
+    assert await scheduler.poll(request=item1, health_deployments=[{"key": "value"}]) == True
+    assert await scheduler.poll(request=item2, health_deployments=[{"key": "value"}]) == True
 
 
 @pytest.mark.asyncio
@@ -50,7 +53,7 @@ async def test_scheduler_poll_persists_queue_to_cache():
     await scheduler.add_request(item1)
     await scheduler.add_request(item2)
 
-    await scheduler.poll(id="10", model_name="gpt-3.5-turbo", health_deployments=[])
+    await scheduler.poll(request=item1, health_deployments=[])
 
     queue_key = f"{SchedulerCacheKeys.queue.value}:{item1.model_name}"
     updated_queue = redis_cache.store[queue_key]
@@ -143,6 +146,190 @@ async def test_scheduler_queue_cleanup_on_timeout():
 
     # Verify remaining items are in correct priority order (0 should be first)
     assert queue_after[0][1] == "req-0", "Expected req-0 (priority 0) to be at front"
+
+
+@pytest.mark.asyncio
+async def test_poll_admits_request_missing_from_queue_while_a_deployment_is_healthy():
+    scheduler: Final = Scheduler()
+
+    assert await scheduler.poll(
+        request=FlowItem(priority=1, request_id="erased-by-concurrent-write", model_name="sched-model"),
+        health_deployments=[{"model_info": {"id": "a"}}],
+    )
+
+
+@pytest.mark.asyncio
+async def test_poll_during_cooldown_admits_only_the_head_of_the_queue():
+    scheduler: Final = Scheduler()
+    later: Final = FlowItem(priority=2, request_id="later", model_name="sched-model")
+    head: Final = FlowItem(priority=1, request_id="head", model_name="sched-model")
+    await scheduler.add_request(later)
+    await scheduler.add_request(head)
+
+    assert not await scheduler.poll(request=later, health_deployments=[])
+    assert await scheduler.poll(request=head, health_deployments=[])
+    assert await scheduler.get_queue("sched-model") == [(2, "later")]
+
+
+@pytest.mark.asyncio
+async def test_poll_during_cooldown_re_enqueues_a_request_a_concurrent_writer_erased_behind_the_head():
+    scheduler: Final = Scheduler()
+    still_queued: Final = FlowItem(priority=0, request_id="still-queued", model_name="sched-model")
+    erased: Final = FlowItem(priority=1, request_id="erased-by-concurrent-write", model_name="sched-model")
+    await scheduler.add_request(still_queued)
+
+    assert not await scheduler.poll(request=erased, health_deployments=[])
+    assert await scheduler.get_queue("sched-model") == [(0, "still-queued"), (1, "erased-by-concurrent-write")]
+    assert await scheduler.poll(request=still_queued, health_deployments=[])
+    assert await scheduler.poll(request=erased, health_deployments=[])
+    assert await scheduler.get_queue("sched-model") == []
+
+
+@pytest.mark.asyncio
+async def test_poll_during_cooldown_admits_an_erased_request_that_outranks_the_queue():
+    scheduler: Final = Scheduler()
+    await scheduler.add_request(FlowItem(priority=2, request_id="still-queued", model_name="sched-model"))
+
+    assert await scheduler.poll(
+        request=FlowItem(priority=0, request_id="erased-urgent", model_name="sched-model"), health_deployments=[]
+    )
+    assert await scheduler.get_queue("sched-model") == [(2, "still-queued")]
+
+
+class _ExpiringCache:
+    def __init__(self) -> None:
+        self.store: dict[str, object] = {}
+
+    async def async_get_cache(self, key: str, **kwargs: object) -> object:
+        return self.store.get(key)
+
+    async def async_set_cache(self, key: str, value: object, **kwargs: object) -> None:
+        self.store[key] = value
+
+
+@pytest.mark.asyncio
+async def test_wait_for_turn_during_cooldown_survives_the_queue_key_expiring():
+    cache: Final = _ExpiringCache()
+    scheduler: Final = Scheduler(redis_cache=cache)
+    scheduler.cache.in_memory_cache.cache_dict.clear()
+
+    async def no_healthy_deployments_after_the_key_expired() -> Sequence[object]:
+        cache.store.clear()
+        scheduler.cache.in_memory_cache.cache_dict.clear()
+        return ()
+
+    await scheduler.wait_for_turn(
+        request=FlowItem(priority=1, request_id="sole-waiter", model_name="sched-model"),
+        timeout=5,
+        get_healthy_deployments=no_healthy_deployments_after_the_key_expired,
+    )
+
+    assert await scheduler.get_queue("sched-model") == []
+
+
+
+class _JsonRoundTripRedisCache:
+    def __init__(self) -> None:
+        self.store: dict[str, str] = {}
+
+    async def async_get_cache(self, key: str, **kwargs: object) -> object:
+        raw: Final = self.store.get(key)
+        return None if raw is None else json.loads(raw)
+
+    async def async_set_cache(self, key: str, value: object, **kwargs: object) -> None:
+        self.store[key] = json.dumps(value)
+
+
+@pytest.mark.asyncio
+async def test_second_replica_enqueues_behind_a_queue_decoded_from_redis():
+    redis_cache: Final = _JsonRoundTripRedisCache()
+    replica_a: Final = Scheduler(redis_cache=redis_cache)
+    replica_b: Final = Scheduler(redis_cache=redis_cache)
+    waiting_on_a: Final = FlowItem(priority=1, request_id="waiting-on-a", model_name="sched-model")
+    urgent_on_b: Final = FlowItem(priority=0, request_id="urgent-on-b", model_name="sched-model")
+    await replica_a.add_request(waiting_on_a)
+
+    await replica_b.add_request(urgent_on_b)
+
+    assert await replica_b.get_queue("sched-model") == [(0, "urgent-on-b"), (1, "waiting-on-a")]
+    assert await replica_b.poll(request=urgent_on_b, health_deployments=[])
+    assert await replica_b.poll(request=waiting_on_a, health_deployments=[])
+    await replica_b.remove_request(request_id="waiting-on-a", model_name="sched-model")
+    assert await replica_b.get_queue("sched-model") == []
+
+class _PausesAfterEnqueueScheduler(Scheduler):
+    def __init__(self) -> None:
+        super().__init__()
+        self.enqueued: Final = asyncio.Event()
+
+    async def add_request(self, request: FlowItem) -> None:
+        await super().add_request(request)
+        self.enqueued.set()
+        await asyncio.Event().wait()
+
+
+async def _no_healthy_deployments() -> Sequence[object]:
+    return ()
+
+
+@pytest.mark.asyncio
+async def test_wait_for_turn_removes_entry_when_cancelled_mid_enqueue():
+    scheduler: Final = _PausesAfterEnqueueScheduler()
+    waiting: Final = asyncio.create_task(
+        scheduler.wait_for_turn(
+            request=FlowItem(priority=1, request_id="cancelled", model_name="sched-model"),
+            timeout=5,
+            get_healthy_deployments=_no_healthy_deployments,
+        )
+    )
+    await scheduler.enqueued.wait()
+    assert await scheduler.get_queue("sched-model") == [(1, "cancelled")]
+
+    waiting.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiting
+
+    assert await scheduler.get_queue("sched-model") == []
+
+
+class _HeldRemovalScheduler(Scheduler):
+    def __init__(self) -> None:
+        super().__init__()
+        self.removing: Final = asyncio.Event()
+        self.finish_removal: Final = asyncio.Event()
+
+    async def remove_request(self, request_id: str, model_name: str) -> None:
+        self.removing.set()
+        await self.finish_removal.wait()
+        await super().remove_request(request_id=request_id, model_name=model_name)
+
+
+@pytest.mark.asyncio
+async def test_wait_for_turn_finishes_removal_when_cancelled_again_during_cleanup():
+    scheduler: Final = _HeldRemovalScheduler()
+    await scheduler.add_request(FlowItem(priority=0, request_id="head", model_name="sched-model"))
+    polling: Final = asyncio.Event()
+
+    async def no_healthy_deployments() -> Sequence[object]:
+        polling.set()
+        return ()
+
+    waiting: Final = asyncio.create_task(
+        scheduler.wait_for_turn(
+            request=FlowItem(priority=1, request_id="cancelled", model_name="sched-model"),
+            timeout=5,
+            get_healthy_deployments=no_healthy_deployments,
+        )
+    )
+    await polling.wait()
+    waiting.cancel()
+    await scheduler.removing.wait()
+    waiting.cancel()
+    scheduler.finish_removal.set()
+    with pytest.raises(asyncio.CancelledError):
+        await waiting
+
+    assert await scheduler.get_queue("sched-model") == [(0, "head")]
 
 
 @pytest.fixture(autouse=True)

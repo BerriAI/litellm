@@ -239,7 +239,7 @@ class TestTransformAudioTranscriptionResponse:
                 ],
             }
         }
-        resp = cfg._build_response_from_payload(payload)
+        resp = cfg.build_response_from_payload(payload)
         assert "Speaker 1:" in resp.text
         assert "Speaker 2:" in resp.text
 
@@ -253,7 +253,7 @@ class TestTransformAudioTranscriptionResponse:
                 ]
             }
         }
-        resp = cfg._build_response_from_payload(payload)
+        resp = cfg.build_response_from_payload(payload)
         assert resp["language"] == "en"
 
     def test_should_populate_provided_model_response(self):
@@ -262,7 +262,7 @@ class TestTransformAudioTranscriptionResponse:
         model_response._hidden_params = {"pre": "existing"}
         payload = {"text": "populated"}
 
-        resp = cfg._build_response_from_payload(payload, model_response=model_response)
+        resp = cfg.build_response_from_payload(payload, model_response=model_response)
         assert resp is model_response
         assert resp.text == "populated"
         assert resp._hidden_params["pre"] == "existing"
@@ -274,7 +274,7 @@ class TestTransformAudioTranscriptionResponse:
             "transcription": {"id": "tx_1"},
             "transcript": {"text": "hi", "tokens": []},
         }
-        resp = cfg._build_response_from_payload(payload)
+        resp = cfg.build_response_from_payload(payload)
         raw = resp._hidden_params["soniox_raw"]
         assert raw["transcription"]["id"] == "tx_1"
         assert raw["transcript"]["text"] == "hi"
@@ -295,12 +295,12 @@ class TestTransformAudioTranscriptionResponse:
                 ],
             }
         }
-        resp = cfg._build_response_from_payload(payload)
+        resp = cfg.build_response_from_payload(payload)
         assert resp.text == "hello world"
 
     def test_should_return_empty_text_for_empty_payload(self):
         cfg = SonioxAudioTranscriptionConfig()
-        resp = cfg._build_response_from_payload({})
+        resp = cfg.build_response_from_payload({})
         assert resp.text == ""
 
     def test_should_skip_duration_when_audio_duration_ms_is_invalid(self):
@@ -309,7 +309,7 @@ class TestTransformAudioTranscriptionResponse:
             "transcription": {"audio_duration_ms": "not-a-number"},
             "transcript": {"text": "hi", "tokens": []},
         }
-        resp = cfg._build_response_from_payload(payload)
+        resp = cfg.build_response_from_payload(payload)
         assert "duration" not in resp.model_dump()
 
 
@@ -597,7 +597,7 @@ class TestBuildResponseWithResponseFormat:
                 ]
             }
         }
-        resp = cfg._build_response_from_payload(payload, response_format="srt")
+        resp = cfg.build_response_from_payload(payload, response_format="srt")
         assert "00:00:00,000 --> " in resp.text
         assert "Hello world." in resp.text
 
@@ -611,7 +611,7 @@ class TestBuildResponseWithResponseFormat:
                 ]
             }
         }
-        resp = cfg._build_response_from_payload(payload, response_format="vtt")
+        resp = cfg.build_response_from_payload(payload, response_format="vtt")
         assert resp.text.startswith("WEBVTT\n")
         assert "Hello world." in resp.text
 
@@ -626,7 +626,7 @@ class TestBuildResponseWithResponseFormat:
                 ],
             }
         }
-        resp = cfg._build_response_from_payload(payload, response_format="verbose_json")
+        resp = cfg.build_response_from_payload(payload, response_format="verbose_json")
         # text should be plain (not SRT/VTT)
         assert resp.text == "Hello world."
         # words should be populated
@@ -650,7 +650,7 @@ class TestBuildResponseWithResponseFormat:
                 ],
             }
         }
-        resp = cfg._build_response_from_payload(payload, response_format=None)
+        resp = cfg.build_response_from_payload(payload, response_format=None)
         assert resp.text == "Hello world."
 
     def test_should_fallback_to_plain_text_for_srt_with_no_timestamps(self):
@@ -663,7 +663,7 @@ class TestBuildResponseWithResponseFormat:
         }
         # SRT requested but tokens have no start_ms/end_ms -> empty SRT
         # falls back gracefully since group_subtitle_tokens_into_cues skips them
-        resp = cfg._build_response_from_payload(payload, response_format="srt")
+        resp = cfg.build_response_from_payload(payload, response_format="srt")
         # With no timestamp data, SRT rendering produces empty string,
         # but we still get output because the code checks `tokens` truthiness
         # before choosing SRT path. Actually the tokens list is truthy but

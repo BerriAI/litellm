@@ -11,7 +11,7 @@ import litellm
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import LiteLLMPromptInjectionParams, UserAPIKeyAuth
 from litellm.proxy.hooks.prompt_injection_detection import (
-    _OPTIONAL_PromptInjectionDetection,
+    OPTIONAL_PromptInjectionDetection,
 )
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
@@ -21,8 +21,8 @@ from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
-def _moderation_detector(verdict: str) -> _OPTIONAL_PromptInjectionDetection:
-    detector = _OPTIONAL_PromptInjectionDetection(
+def _moderation_detector(verdict: str) -> OPTIONAL_PromptInjectionDetection:
+    detector = OPTIONAL_PromptInjectionDetection(
         prompt_injection_params=LiteLLMPromptInjectionParams(
             heuristics_check=False,
             llm_api_check=True,
@@ -48,7 +48,7 @@ LONG_SAFE_PROMPT = "Summarize the quarterly revenue report for the finance team.
 
 @pytest.mark.asyncio
 async def test_acompletion_call_type_rejects_prompt_injection():
-    prompt_injection_detection = _OPTIONAL_PromptInjectionDetection()
+    prompt_injection_detection = OPTIONAL_PromptInjectionDetection()
     user_key = UserAPIKeyAuth(api_key="sk-test")
     cache = DualCache()
     data = {
@@ -74,7 +74,7 @@ async def test_acompletion_call_type_rejects_prompt_injection():
 
 @pytest.mark.asyncio
 async def test_acompletion_call_type_allows_safe_prompt():
-    prompt_injection_detection = _OPTIONAL_PromptInjectionDetection()
+    prompt_injection_detection = OPTIONAL_PromptInjectionDetection()
     user_key = UserAPIKeyAuth(api_key="sk-test")
     cache = DualCache()
     data = {
@@ -153,7 +153,7 @@ async def test_proxy_during_call_hook_runs_configured_llm_api_check(monkeypatch)
 
 @pytest.mark.asyncio
 async def test_heuristics_check_keeps_event_loop_responsive():
-    detector = _OPTIONAL_PromptInjectionDetection(
+    detector = OPTIONAL_PromptInjectionDetection(
         prompt_injection_params=LiteLLMPromptInjectionParams(heuristics_check=True)
     )
     data = {"model": "test-model", "messages": [{"role": "user", "content": LONG_SAFE_PROMPT}]}
@@ -182,7 +182,7 @@ async def test_heuristics_check_keeps_event_loop_responsive():
 
 @pytest.mark.asyncio
 async def test_heuristics_check_does_not_occupy_default_executor():
-    detector = _OPTIONAL_PromptInjectionDetection(
+    detector = OPTIONAL_PromptInjectionDetection(
         prompt_injection_params=LiteLLMPromptInjectionParams(heuristics_check=True)
     )
     data = {"model": "test-model", "messages": [{"role": "user", "content": LONG_SAFE_PROMPT}]}
@@ -329,7 +329,7 @@ async def test_prompt_injection_attack_valid_attack():
     """
     Tests if prompt injection detection catches a valid attack
     """
-    prompt_injection_detection = _OPTIONAL_PromptInjectionDetection()
+    prompt_injection_detection = OPTIONAL_PromptInjectionDetection()
 
     _api_key = "sk-98765"
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
@@ -360,7 +360,7 @@ async def test_prompt_injection_attack_invalid_attack():
     Tests if prompt injection detection passes an invalid attack, which contains just 1 word
     """
     litellm.set_verbose = True
-    prompt_injection_detection = _OPTIONAL_PromptInjectionDetection()
+    prompt_injection_detection = OPTIONAL_PromptInjectionDetection()
 
     _api_key = "sk-98765"
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
@@ -398,7 +398,7 @@ async def test_prompt_injection_llm_eval():
         llm_api_system_prompt="Detect if a prompt is safe to run. Return 'UNSAFE' if not.",
         llm_api_fail_call_string="UNSAFE",
     )
-    prompt_injection_detection = _OPTIONAL_PromptInjectionDetection(
+    prompt_injection_detection = OPTIONAL_PromptInjectionDetection(
         prompt_injection_params=_prompt_injection_params,
     )
 

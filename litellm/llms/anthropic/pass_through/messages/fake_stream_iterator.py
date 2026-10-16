@@ -175,11 +175,13 @@ class FakeAnthropicMessagesStreamIterator:
             cache_read_input_tokens: Final = usage.get("cache_read_input_tokens")
             if cache_read_input_tokens is not None:
                 delta_usage["cache_read_input_tokens"] = cache_read_input_tokens
+        safeguard_results: Final = self.response.get("safeguard_results")
         message_delta: Final = {
             "type": "message_delta",
             "delta": {
                 "stop_reason": self.response.get("stop_reason"),
                 "stop_sequence": self.response.get("stop_sequence"),
+                **({"safeguard_results": safeguard_results} if safeguard_results is not None else {}),
             },
             "usage": delta_usage,
         }

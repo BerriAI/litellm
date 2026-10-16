@@ -11,9 +11,11 @@ import subprocess
 import time
 import urllib
 import urllib.parse
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from typing import TYPE_CHECKING, Final, Protocol, TypeVar
+
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.db.db_span import db_span
@@ -33,6 +35,7 @@ from litellm.secret_managers.main import str_to_bool
 
 if TYPE_CHECKING:
     from prisma import Prisma
+    from prisma.types import HttpConfig
 
 __all__ = (
     "IAMEndpoint",
@@ -40,6 +43,9 @@ __all__ = (
     "PrismaWrapper",
     "parse_iam_endpoint_from_url",
 )
+
+
+_ENGINE_ATTRIBUTE: Final = TypeAdapter(object)
 
 
 class _PrismaProcess(Protocol):
@@ -96,20 +102,83 @@ class _PrismaDrainTracker:
         await self._drained.wait()
 
 
+_EngineResponseT: Final = TypeVar("_EngineResponseT")
+
+
 class _TrackedPrismaEngine:
+    """Engine wrapper that counts in-flight work and never lets a cancelled caller drop an engine request.
+
+    A dropped request leaves the engine holding a busy pool connection and can crash it once that statement
+    finishes, so every request runs to completion in its own task and only the caller is cancelled.
+    """
+
     def __init__(self, engine: _PrismaEngine, tracker: _PrismaDrainTracker) -> None:
         self._engine = engine
         self.tracker = tracker
+        self._detached: frozenset[asyncio.Task[object]] = frozenset()
 
     @property
     def process(self) -> _PrismaProcess:
         return self._engine.process
 
     def __getattr__(self, name: str) -> object:
-        return getattr(self._engine, name)
+        return _ENGINE_ATTRIBUTE.validate_python(getattr(self._engine, name))
 
     async def query(self, content: str, *, tx_id: str | None) -> object:
+        return await self._finish_even_if_cancelled(self._tracked_query(content, tx_id))
+
+    async def start_transaction(self, *, content: str) -> str:
+        return await self._finish_even_if_cancelled(
+            self._tracked_start_transaction(content), abandoned=self.rollback_transaction
+        )
+
+    async def commit_transaction(self, tx_id: str) -> None:
+        await self._finish_even_if_cancelled(self._tracked_commit_transaction(tx_id))
+
+    async def rollback_transaction(self, tx_id: str) -> None:
+        await self._finish_even_if_cancelled(self._tracked_rollback_transaction(tx_id))
+
+    async def _finish_even_if_cancelled(
+        self,
+        request: Coroutine[object, object, _EngineResponseT],
+        abandoned: Callable[[_EngineResponseT], Awaitable[None]] | None = None,
+    ) -> _EngineResponseT:
         self.tracker.begin_operation()
+        task: Final = asyncio.ensure_future(request)
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            self._detached = self._detached.union((task,))
+            task.add_done_callback(lambda done: self._detached_request_finished(done, abandoned))
+            raise
+
+    def _detached_request_finished(
+        self,
+        done: "asyncio.Task[_EngineResponseT]",
+        abandoned: Callable[[_EngineResponseT], Awaitable[None]] | None,
+    ) -> None:
+        self._detached = self._detached.difference((done,))
+        if done.cancelled():
+            return
+        failure: Final = done.exception()
+        if failure is not None:
+            verbose_proxy_logger.debug("Prisma request abandoned by a cancelled caller failed: %s", failure)
+            return
+        if abandoned is None:
+            return
+        settle: Final = asyncio.ensure_future(abandoned(done.result()))
+        self._detached = self._detached.union((settle,))
+        settle.add_done_callback(self._abandoned_transaction_settled)
+
+    def _abandoned_transaction_settled(self, settle: "asyncio.Task[object]") -> None:
+        self._detached = self._detached.difference((settle,))
+        if settle.cancelled() or settle.exception() is None:
+            return
+        verbose_proxy_logger.debug(
+            "Rolling back a transaction abandoned by a cancelled caller failed: %s", settle.exception()
+        )
+
+    async def _tracked_query(self, content: str, tx_id: str | None) -> object:
         try:
             if db_io_claimed():
                 record_db_io()
@@ -121,9 +190,8 @@ class _TrackedPrismaEngine:
         finally:
             self.tracker.end_operation()
 
-    async def start_transaction(self, *, content: str) -> str:
+    async def _tracked_start_transaction(self, content: str) -> str:
         record_db_io()
-        self.tracker.begin_operation()
         try:
             transaction_id: Final = await self._engine.start_transaction(content=content)
         except (Exception, asyncio.CancelledError):
@@ -132,18 +200,16 @@ class _TrackedPrismaEngine:
         self.tracker.transaction_started(transaction_id)
         return transaction_id
 
-    async def commit_transaction(self, tx_id: str) -> None:
+    async def _tracked_commit_transaction(self, tx_id: str) -> None:
         record_db_io()
-        self.tracker.begin_operation()
         try:
             await self._engine.commit_transaction(tx_id)
         finally:
             self.tracker.end_operation()
             self.tracker.transaction_finished(tx_id)
 
-    async def rollback_transaction(self, tx_id: str) -> None:
+    async def _tracked_rollback_transaction(self, tx_id: str) -> None:
         record_db_io()
-        self.tracker.begin_operation()
         try:
             await self._engine.rollback_transaction(tx_id)
         finally:
@@ -180,7 +246,7 @@ class PrismaWrapper:
 
     def __init__(
         self,
-        original_prisma: Any,
+        original_prisma: "Prisma",
         iam_token_db_auth: bool = False,
         *,
         token_auth: DatabaseTokenAuth | None = None,
@@ -191,7 +257,15 @@ class PrismaWrapper:
     ):
         # Set before `_original_prisma` so the `iam_token_db_auth` property below can
         # never send `__getattr__` looking for a half-built strategy on the raw client.
-        self._token_auth = token_auth if token_auth is not None else (RdsIamTokenAuth() if iam_token_db_auth else None)
+        self._token_auth = (
+            token_auth
+            if token_auth is not None
+            else (
+                RdsIamTokenAuth.from_env(read_replica=db_url_env_var == "DATABASE_URL_READ_REPLICA")
+                if iam_token_db_auth
+                else None
+            )
+        )
         self._original_prisma = original_prisma
 
         # Per-connection knobs so the same wrapper can be used for the writer
@@ -522,7 +596,7 @@ class PrismaWrapper:
     async def recreate_prisma_client(
         self,
         new_db_url: str,
-        http_client: object | None = None,
+        http_client: "HttpConfig | None" = None,
         *,
         expected_generation: int | None = None,
     ) -> bool:
@@ -560,7 +634,7 @@ class PrismaWrapper:
     async def _recreate_prisma_client_locked(
         self,
         new_db_url: str,
-        http_client: object | None = None,
+        http_client: "HttpConfig | None" = None,
         *,
         expected_generation: int | None = None,
     ) -> bool:
@@ -571,6 +645,7 @@ class PrismaWrapper:
         lock) don't re-acquire it — `asyncio.Lock` is not reentrant.
         """
         from prisma import Prisma
+        from prisma.types import DatasourceOverride
 
         if expected_generation is not None and expected_generation != self._engine_generation:
             verbose_proxy_logger.info(
@@ -597,12 +672,15 @@ class PrismaWrapper:
             self._expected_engine_deaths.add(old_engine_pid)
             await self._kill_engine_process(old_engine_pid)
 
-        kwargs: Final[dict[str, Any]] = {}
-        if http_client is not None:
-            kwargs["http"] = http_client
-        if self._recreate_uses_datasource:
-            kwargs["datasource"] = {"url": new_db_url}
-        self._original_prisma = Prisma(**kwargs)
+        datasource: Final = DatasourceOverride(url=new_db_url) if self._recreate_uses_datasource else None
+        if http_client is not None and datasource is not None:
+            self._original_prisma = Prisma(http=http_client, datasource=datasource)
+        elif http_client is not None:
+            self._original_prisma = Prisma(http=http_client)
+        elif datasource is not None:
+            self._original_prisma = Prisma(datasource=datasource)
+        else:
+            self._original_prisma = Prisma()
 
         await self._original_prisma.connect()
         self._active_drain_tracker = self._instrument_prisma_client(self._original_prisma)
@@ -816,6 +894,12 @@ class PrismaWrapper:
             return False
         seconds_left: Final = (expiration_time - datetime.utcnow()).total_seconds()
         return seconds_left > self.TOKEN_REFRESH_BUFFER_SECONDS
+
+    if TYPE_CHECKING:
+
+        def is_connected(self) -> bool: ...
+
+        async def disconnect(self, timeout: float | timedelta | None = None) -> None: ...
 
     def __getattr__(self, name: str):
         """

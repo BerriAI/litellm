@@ -21,7 +21,7 @@ for _mod in ("orjson",):
 
 from litellm.proxy._experimental.mcp_server.oauth2_token_cache import (  # noqa: E402
     MCPPerUserTokenCache,
-    _compute_per_user_token_ttl,
+    compute_per_user_token_ttl,
     mcp_per_user_token_cache,
 )
 from litellm.types.mcp import MCPAuth, MCPTransport  # noqa: E402
@@ -215,25 +215,25 @@ class TestValidateTokenResponse:
 class TestComputePerUserTokenTtl:
     def test_uses_server_override_when_set(self):
         server = _make_server(token_storage_ttl_seconds=7200)
-        assert _compute_per_user_token_ttl(server, expires_in=99999) == 7200
+        assert compute_per_user_token_ttl(server, expires_in=99999) == 7200
 
     def test_uses_expires_in_minus_buffer(self):
         server = _make_server()
         # Default buffer is 60s
-        ttl = _compute_per_user_token_ttl(server, expires_in=3600)
+        ttl = compute_per_user_token_ttl(server, expires_in=3600)
         assert ttl == 3600 - 60
 
     def test_minimum_ttl_is_1(self):
         server = _make_server()
         # expires_in smaller than buffer → clamp to 1
-        ttl = _compute_per_user_token_ttl(server, expires_in=30)
+        ttl = compute_per_user_token_ttl(server, expires_in=30)
         assert ttl == 1
 
     def test_default_ttl_when_expires_in_none(self):
         from litellm.constants import MCP_PER_USER_TOKEN_DEFAULT_TTL
 
         server = _make_server()
-        ttl = _compute_per_user_token_ttl(server, expires_in=None)
+        ttl = compute_per_user_token_ttl(server, expires_in=None)
         assert ttl == MCP_PER_USER_TOKEN_DEFAULT_TTL
 
 

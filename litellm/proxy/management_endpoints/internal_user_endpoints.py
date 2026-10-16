@@ -33,6 +33,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     delete_cache_key_objects,
+    forget_missing_user,
     get_jwt_key_mapping_cache_keys_for_tokens,
     get_team_object,
     get_user_object,
@@ -61,29 +62,31 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity,
     raise_public,
 )
-from litellm.proxy.management_endpoints.common_utils import (
-    _user_has_admin_view,
+from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
+    _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     require_caller_user_id_for_non_admin,
+    user_api_key_has_admin_view,
     validate_budget_duration,
     validate_finite_spend,
 )
-from litellm.proxy.management_endpoints.key_management_endpoints import (
-    _check_permissions_caller_permission,
+from litellm.proxy.management_endpoints.key_management_endpoints import (  # noqa: F401  # legacy module exports
+    _check_permissions_caller_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    check_permissions_caller_permission,
     generate_key_helper_fn,
     prepare_metadata_fields,
 )
-from litellm.proxy.management_helpers.object_permission_utils import (
-    _set_object_permission,
+from litellm.proxy.management_helpers.bulk_user_deletion import delete_users_from_current_teams
+from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
+    _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     handle_update_object_permission_common,
+    set_object_permission,
 )
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import handle_exception_on_proxy, hash_password
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
-    InvitationLinkRepository,
     OrganizationMembershipRepository,
-    TeamMembershipRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
@@ -117,8 +120,7 @@ if TYPE_CHECKING:
 
 router: Final = APIRouter()
 _USER_MODEL_BUDGET_ADAPTER: Final = TypeAdapter(dict[str, float | BudgetConfig])
-_USER_BUDGET_CACHE_INVALIDATION_BATCH_SIZE: Final = 50
-_USER_BUDGET_CACHE_FIELDS: Final = frozenset({"max_budget", "model_max_budget"})
+_USER_CACHE_INVALIDATION_BATCH_SIZE: Final = 50
 
 
 def _user_table(
@@ -157,15 +159,6 @@ def _organization_membership_table(
     return membership_table
 
 
-def _invitation_link_table(
-    prisma_client: "PrismaClient | None",
-) -> "TableActions[prisma_models.LiteLLM_InvitationLink]":
-    invitation_table: Final[TableActions[prisma_models.LiteLLM_InvitationLink]] = InvitationLinkRepository(
-        prisma_client
-    ).table
-    return invitation_table
-
-
 def _organization_table(
     prisma_client: "PrismaClient | None",
 ) -> "TableActions[prisma_models.LiteLLM_OrganizationTable]":
@@ -173,15 +166,6 @@ def _organization_table(
         prisma_client
     ).table
     return organization_table
-
-
-def _team_membership_table(
-    prisma_client: "PrismaClient | None",
-) -> "TableActions[prisma_models.LiteLLM_TeamMembership]":
-    team_membership_table: Final[TableActions[prisma_models.LiteLLM_TeamMembership]] = TeamMembershipRepository(
-        prisma_client
-    ).table
-    return team_membership_table
 
 
 async def _hash_password_in_dict(
@@ -591,7 +575,7 @@ async def new_user(
         if data.auto_create_key and isinstance(user_api_key_dict, UserAPIKeyAuth):
             enforce_batch_limits_are_admin_only(data, None, user_api_key_dict, "key")
 
-        _check_permissions_caller_permission(
+        check_permissions_caller_permission(
             data=data,
             user_api_key_dict=user_api_key_dict,
         )
@@ -601,7 +585,9 @@ async def new_user(
         # Persist the requested grants as their own row and link it, mirroring key/team creation.
         # generate_key_helper_fn only forwards object_permission_id, so without this the entitlement
         # the caller sent would be dropped on the floor.
-        data_json = await _set_object_permission(data_json=data_json, prisma_client=prisma_client)
+        data_json = await set_object_permission(  # rebind-ok: pre-existing rebinding on a rename-only line
+            data_json=data_json, prisma_client=prisma_client
+        )
         data_json.pop("password", None)
         teams = data.teams
         if teams is None:
@@ -609,6 +595,9 @@ async def new_user(
         organization_ids: Final = cast(list[str] | None, data_json.pop("organizations", None))
 
         response: Final = await generate_key_helper_fn(request_type="user", **data_json, llm_router=None)
+        created_user_id: Final = cast(str | None, response.get("user_id", None))
+        if created_user_id is not None:
+            forget_missing_user(created_user_id)
         # Admin UI Logic
         # Add User to Team and Organization
         # if team_id passed add this user to the team
@@ -784,7 +773,7 @@ def _enforce_user_info_access(user_id: str | None, user_api_key_dict: UserAPIKey
     # Admin-view roles (PROXY_ADMIN and PROXY_ADMIN_VIEW_ONLY) bypass
     # ownership, mirroring the `/user/info` carve-out that
     # `RouteChecks.non_proxy_admin_allowed_routes_check` applies upstream.
-    if _user_has_admin_view(user_api_key_dict):
+    if user_api_key_has_admin_view(user_api_key_dict):
         return
     if user_id == user_api_key_dict.user_id:
         return
@@ -965,7 +954,7 @@ async def user_info(
             raise Exception(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
-        if user_id is None and _user_has_admin_view(user_api_key_dict):
+        if user_id is None and user_api_key_has_admin_view(user_api_key_dict):
             return await _get_user_info_for_proxy_admin(user_api_key_dict=user_api_key_dict)
         elif user_id is None:
             user_id = user_api_key_dict.user_id
@@ -1041,7 +1030,7 @@ async def _check_user_info_v2_access(
         )
 
     # Rule 1: Proxy admins — fetch and return the target row directly
-    if _user_has_admin_view(user_api_key_dict):
+    if user_api_key_has_admin_view(user_api_key_dict):
         return await _fetch_target_user()
 
     # Rule 2: Self-lookup
@@ -1154,6 +1143,8 @@ async def user_info_v2(
             user_role=user_data.get("user_role"),
             spend=user_data.get("spend", 0.0),
             max_budget=user_data.get("max_budget"),
+            tpm_limit=user_data.get("tpm_limit"),
+            rpm_limit=user_data.get("rpm_limit"),
             models=user_data.get("models") or [],
             budget_duration=user_data.get("budget_duration"),
             budget_reset_at=user_data.get("budget_reset_at"),
@@ -1294,7 +1285,7 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
     fields_set: Final = data.fields_set() if hasattr(data, "fields_set") else set()
 
     for k, v in data_json.items():
-        if k in ("max_budget", "budget_duration"):
+        if k in ("max_budget", "budget_duration", "tpm_limit", "rpm_limit"):
             if k in fields_set:
                 non_default_values[k] = v
         elif k == "model_max_budget":
@@ -1417,9 +1408,9 @@ async def _invalidate_user_spend_counter_if_changed(
     and not safely subscriptable).
     """
     if non_default_values.get("spend") is not None:
-        from litellm.proxy.proxy_server import _invalidate_spend_counter
+        from litellm.proxy.proxy_server import invalidate_spend_counter
 
-        await _invalidate_spend_counter(counter_key=f"spend:user:{non_default_values['user_id']}")
+        await invalidate_spend_counter(counter_key=f"spend:user:{non_default_values['user_id']}")
 
 
 def _clears_object_permission(user_request: UpdateUserRequest) -> bool:
@@ -1482,7 +1473,7 @@ async def _update_single_user_helper(
     if not user_request.user_id and not user_request.user_email:
         raise ValueError("Either user_id or user_email must be provided")
 
-    _check_permissions_caller_permission(
+    check_permissions_caller_permission(
         data=user_request,
         user_api_key_dict=user_api_key_dict,
     )
@@ -1623,11 +1614,10 @@ async def _update_single_user_helper(
 
         await _invalidate_user_spend_counter_if_changed(non_default_values)
 
-        if not _USER_BUDGET_CACHE_FIELDS.isdisjoint(non_default_values) or "metadata" in data_json:
-            await evict_and_broadcast(
-                cache_keys=(non_default_values["user_id"],),
-                user_api_key_cache=user_api_key_cache,
-            )
+        await evict_and_broadcast(
+            cache_keys=(non_default_values["user_id"],),
+            user_api_key_cache=user_api_key_cache,
+        )
 
         if "object_permission_id" in non_default_values:
             await _invalidate_cached_user_entitlement(
@@ -1981,14 +1971,13 @@ async def bulk_user_update(
                 ),
             )
 
-            if not _USER_BUDGET_CACHE_FIELDS.isdisjoint(non_default_values):
-                for start in range(0, len(all_users_in_db), _USER_BUDGET_CACHE_INVALIDATION_BATCH_SIZE):
-                    await asyncio.gather(
-                        *(
-                            evict_and_broadcast(cache_keys=(user.user_id,), user_api_key_cache=user_api_key_cache)
-                            for user in all_users_in_db[start : start + _USER_BUDGET_CACHE_INVALIDATION_BATCH_SIZE]
-                        )
+            for start in range(0, len(all_users_in_db), _USER_CACHE_INVALIDATION_BATCH_SIZE):
+                await asyncio.gather(
+                    *(
+                        evict_and_broadcast(cache_keys=(user.user_id,), user_api_key_cache=user_api_key_cache)
+                        for user in all_users_in_db[start : start + _USER_CACHE_INVALIDATION_BATCH_SIZE]
                     )
+                )
 
             # Create individual success results
             for user in all_users_in_db:
@@ -2150,7 +2139,7 @@ async def _authorize_user_list_request(
     - Org admins: returns comma-separated org IDs scoped to their allowed orgs.
     - Others: raises 403.
     """
-    if _user_has_admin_view(user_api_key_dict):
+    if user_api_key_has_admin_view(user_api_key_dict):
         return organization_ids
 
     if user_api_key_dict.user_id is None:
@@ -2423,9 +2412,6 @@ async def delete_user(
     Parameters:
     - user_ids: List[str] - The list of user id's to be deleted.
     """
-    from litellm.proxy.management_endpoints.team_endpoints import (
-        _cleanup_members_with_roles,
-    )
     from litellm.proxy.management_helpers.audit_logs import (
         get_audit_log_changed_by,
         is_audit_logging_enabled,
@@ -2534,31 +2520,6 @@ async def delete_user(
                 )
             )
 
-        ## CLEANUP MEMBERS_WITH_ROLES
-        fetch_all_teams: Sequence[prisma_models.LiteLLM_TeamTable] = await TeamRepository(
-            prisma_client
-        ).table.find_many(where={"team_id": {"in": user_row.teams}})
-        teams_to_update: list[tuple[str, str]] = []
-        for team in fetch_all_teams:
-            removed_team_members, new_team_members = _cleanup_members_with_roles(
-                existing_team_row=LiteLLM_TeamTable.model_validate(team.model_dump()),
-                data=TeamMemberDeleteRequest(
-                    team_id=team.team_id,
-                    user_id=user_row.user_id,
-                    user_email=user_row.user_email,
-                ),
-            )
-            if removed_team_members:
-                _db_new_team_members: list[dict] = [m.model_dump() for m in new_team_members]
-                teams_to_update.append((team.team_id, json.dumps(_db_new_team_members)))
-
-        ## update teams
-
-        for team_id, members_with_roles in teams_to_update:
-            await TeamRepository(prisma_client).table.update(
-                where={"team_id": team_id},
-                data={"members_with_roles": members_with_roles},
-            )
     # End of Audit logging
 
     ## DELETE ASSOCIATED KEYS
@@ -2583,27 +2544,16 @@ async def delete_user(
     )
     await evict_and_broadcast(cache_keys=jwt_mapping_cache_keys, user_api_key_cache=user_api_key_cache)
 
-    ## DELETE ASSOCIATED INVITATION LINKS
-    await _invitation_link_table(prisma_client).delete_many(
-        where={
-            "OR": [
-                {"user_id": {"in": data.user_ids}},
-                {"created_by": {"in": data.user_ids}},
-                {"updated_by": {"in": data.user_ids}},
-            ]
-        }
+    deleted_users: Final = await delete_users_from_current_teams(
+        prisma_client=prisma_client,
+        user_ids=data.user_ids,
+        user_api_key_dict=user_api_key_dict,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+        litellm_changed_by=litellm_changed_by,
     )
-
-    ## DELETE ASSOCIATED ORGANIZATION MEMBERSHIPS
-    await _organization_membership_table(prisma_client).delete_many(where={"user_id": {"in": data.user_ids}})
-
-    ## DELETE ASSOCIATED TEAM MEMBERSHIPS
-    await _team_membership_table(prisma_client).delete_many(where={"user_id": {"in": data.user_ids}})
-
-    ## DELETE USERS
-    deleted_users: Final = await _user_table(prisma_client).delete_many(where={"user_id": {"in": data.user_ids}})
-    await evict_and_broadcast(cache_keys=tuple(data.user_ids), user_api_key_cache=user_api_key_cache)
-
+    if isinstance(deleted_users, str):
+        raise HTTPException(status_code=500, detail={"error": deleted_users})
     return deleted_users
 
 
@@ -2674,7 +2624,7 @@ async def _resolve_org_filter_for_user_search(
     if not ui_settings.get("scope_user_search_to_org", False):
         return None  # flag OFF — no filtering
 
-    if _user_has_admin_view(user_api_key_dict):
+    if user_api_key_has_admin_view(user_api_key_dict):
         return None  # proxy admin — see everything
 
     # Try to resolve org admin memberships
@@ -2869,7 +2819,7 @@ async def ui_view_users(
 def resolve_user_daily_activity_entity_ids(
     *, user_id: str | None, user_api_key_dict: UserAPIKeyAuth
 ) -> tuple[str, ...] | None | ScopeDenied:
-    if _user_has_admin_view(user_api_key_dict):
+    if user_api_key_has_admin_view(user_api_key_dict):
         return (user_id,) if user_id is not None else None
 
     caller_user_id: Final = require_caller_user_id_for_non_admin(user_api_key_dict)

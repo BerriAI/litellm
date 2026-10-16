@@ -1,7 +1,5 @@
 import asyncio
 import json
-import os
-import signal
 import threading
 import time
 import uuid
@@ -16,18 +14,20 @@ from typing import Final
 import anthropic
 import httpx
 import openai
-import psutil
 import pytest
 from integration._support.client import Gateway, eventually, object_value, string_value
 from integration._support.database import read_rows
-from integration._support.process import OwnedProxy, owned_proxy_process
+from integration._support.process import owned_proxy_process
+from integration._support.timing import assert_not_delayed_by, assert_within_factor_of_control, timed
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
 
 CRAFTED_MODEL: Final = ("exceeded " * 32_000)[:288_000]
 HOSTILE_5KB_MODEL: Final = ("exceeded budget " * 400)[:5_000]
+BENIGN_288KB_MODEL: Final = "x" * len(CRAFTED_MODEL)
+CRAFTED_SLOWDOWN_FACTOR: Final = 10
 FAST_SECONDS: Final = 10.0
-LIVELINESS_MAX_SECONDS: Final = 5.0
+LIVELINESS_STALL_BUDGET_SECONDS: Final = 5.0
 ROW_SECONDS: Final = 70
 CHAT: Final = "/v1/chat/completions"
 MESSAGES: Final = "/v1/messages"
@@ -129,15 +129,19 @@ def test_crafted_288kb_model_through_async_openai_sdk_fails_fast(gateway: Gatewa
 def test_crafted_288kb_model_through_anthropic_sdk_fails_fast(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         client: Final = anthropic.Anthropic(base_url=str(gateway.client.base_url), api_key=scenario.key(), timeout=120)
-        started: Final = time.perf_counter()
-        with pytest.raises(anthropic.BadRequestError) as raised:
-            client.messages.create(
-                model=CRAFTED_MODEL, max_tokens=8, messages=[{"role": "user", "content": f"audit {uuid.uuid4().hex}"}]
-            )
-        seconds: Final = time.perf_counter() - started
-        assert seconds < FAST_SECONDS, f"crafted 288 KB model took {seconds:.2f}s"
-        assert "Invalid model name passed in" in str(raised.value), str(raised.value)[:300]
-        info: Final = _error_information(raised.value.response.headers["x-litellm-call-id"])
+
+        def refused(model: str) -> anthropic.BadRequestError:
+            with pytest.raises(anthropic.BadRequestError) as raised:
+                client.messages.create(
+                    model=model, max_tokens=8, messages=[{"role": "user", "content": f"audit {uuid.uuid4().hex}"}]
+                )
+            return raised.value
+
+        control: Final = timed(lambda: refused(BENIGN_288KB_MODEL))
+        crafted: Final = timed(lambda: refused(CRAFTED_MODEL))
+        assert_within_factor_of_control(crafted.seconds, control=control.seconds, factor=CRAFTED_SLOWDOWN_FACTOR)
+        assert "Invalid model name passed in" in str(crafted.value), str(crafted.value)[:300]
+        info: Final = _error_information(crafted.value.response.headers["x-litellm-call-id"])
         assert info["normalized_error"] == "400_INVALID_REQUEST", info
 
 
@@ -151,35 +155,31 @@ def _poll_liveliness(client: httpx.Client, stop: threading.Event) -> list[float]
     return latencies
 
 
-def _cmdline(process: psutil.Process) -> str:
-    try:
-        return " ".join(process.cmdline())
-    except psutil.Error:
-        return ""
-
-
-def _worker_pids(owned: OwnedProxy) -> tuple[int, ...]:
-    return tuple(child.pid for child in psutil.Process(owned.process.pid).children() if "spawn_main" in _cmdline(child))
+def _liveliness_while_posting(
+    client: httpx.Client, model: str, key: str
+) -> tuple[tuple[_Timed, ...], tuple[float, ...]]:
+    stop: Final = threading.Event()
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        liveliness: Final = pool.submit(_poll_liveliness, client, stop)
+        posts: Final = tuple(
+            pool.submit(_timed_post, client, CHAT, _body(CHAT, model, uuid.uuid4().hex), key) for _ in range(2)
+        )
+        results: Final = tuple(future.result() for future in posts)
+        stop.set()
+        return results, tuple(liveliness.result())
 
 
 def test_two_concurrent_crafted_requests_do_not_stall_liveliness_on_a_two_worker_proxy(
     gateway: Gateway, tmp_path: Path
 ) -> None:
     with owned_proxy_process(gateway, tmp_path, {}, workers=2) as owned, _patient_client(owned.gateway) as client:
-        assert len(_worker_pids(owned)) == 2, _worker_pids(owned)
-        stop: Final = threading.Event()
-        with ThreadPoolExecutor(max_workers=3) as pool:
-            liveliness: Final = pool.submit(_poll_liveliness, client, stop)
-            crafted: Final = tuple(
-                pool.submit(_timed_post, client, CHAT, _body(CHAT, CRAFTED_MODEL, uuid.uuid4().hex), gateway.key)
-                for _ in range(2)
-            )
-            results: Final = tuple(future.result() for future in crafted)
-            stop.set()
-            latencies: Final = liveliness.result()
-        for timed in results:
-            _assert_crafted_failure(timed)
-        assert latencies and max(latencies) < LIVELINESS_MAX_SECONDS, f"liveliness max {max(latencies):.2f}s"
+        assert len(owned.worker_pids()) == 2, owned.worker_pids()
+        _benign, control = _liveliness_while_posting(client, BENIGN_288KB_MODEL, gateway.key)
+        results, latencies = _liveliness_while_posting(client, CRAFTED_MODEL, gateway.key)
+        for posted in results:
+            _assert_crafted_failure(posted)
+        assert latencies and control, (latencies, control)
+        assert_not_delayed_by(latencies, control=control, injected_delay=LIVELINESS_STALL_BUDGET_SECONDS)
 
 
 def _completion(request: Request) -> Reply:
@@ -403,25 +403,28 @@ def test_killing_one_worker_mid_burst_leaves_the_other_serving_crafted_and_happy
     ):
         model: Final = scenario.model(api_base=wire.url + "/v1", num_retries=0)
         key: Final = scenario.key(models=[model])
-        workers: Final = _worker_pids(owned)
+        workers: Final = owned.worker_pids()
         assert len(workers) == 2, workers
+        victim: Final = min(workers)
 
-        def kill_one_worker() -> None:
-            os.kill(workers[0], signal.SIGKILL)
-
-        results: Final = _burst(client, model, key, scenario.key(), kill_one_worker)
-        dropped: Final = tuple(result for result in results if result.status is None)
-        assert len(dropped) < len(results), results
-        crafted: Final = tuple(result for result in results if result.label.startswith("crafted") and result.status)
-        assert crafted and all(result.status == 400 and result.seconds < FAST_SECONDS for result in crafted), crafted
-        late: Final = tuple(result for result in results if result.label.startswith("late"))
-        assert all(result.status == 200 for result in late), late
-        _assert_rows_land_exactly_once(results, "late")
-        survivor: Final = tuple(pid for pid in _worker_pids(owned) if pid != workers[0])
-        assert survivor, "no worker left serving"
-        after: Final = owned.gateway.chat(model, key=key, text=f"after kill {uuid.uuid4().hex}")
-        assert isinstance(after["id"], str) and after["id"].startswith("chatcmpl-"), after
-        assert client.get("/health/liveliness").status_code == 200
+        with owned.replacing_worker(victim) as kill:
+            results: Final = _burst(client, model, key, scenario.key(), kill)
+            dropped: Final = tuple(result for result in results if result.status is None)
+            assert len(dropped) < len(results), results
+            crafted: Final = tuple(
+                result for result in results if result.label.startswith("crafted") and result.status
+            )
+            assert crafted and all(
+                result.status == 400 and result.seconds < FAST_SECONDS for result in crafted
+            ), crafted
+            late: Final = tuple(result for result in results if result.label.startswith("late"))
+            assert all(result.status == 200 for result in late), late
+            _assert_rows_land_exactly_once(results, "late")
+            survivor: Final = tuple(pid for pid in owned.worker_pids() if pid != victim)
+            assert survivor, "no worker left serving"
+            after: Final = owned.gateway.chat(model, key=key, text=f"after kill {uuid.uuid4().hex}")
+            assert isinstance(after["id"], str) and after["id"].startswith("chatcmpl-"), after
+            assert client.get("/health/liveliness").status_code == 200
 
 
 def test_upstream_returning_503_mid_burst_logs_every_failure_with_its_own_cluster_key(
