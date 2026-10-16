@@ -3957,7 +3957,7 @@ async def _reserve_budget_after_common_checks(
             end_user_object=end_user_object,
             apply_user_budget_to_team_keys=general_settings.get("apply_user_budget_to_team_keys") is True,
             fail_closed_budget_enforcement=_resolve_budget_fail_closed_for_auth(
-                general_settings=general_settings,
+                general_settings=general_settings,  # pyright: ignore[reportUnknownArgumentType]
                 has_billing_agent_policy=user_api_key_auth_obj.billing_agent_policy is not None,
             ),
             raw_body=await read_raw_json_body(request=request),

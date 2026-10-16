@@ -465,7 +465,7 @@ def io_token_pre_call_check(
             )
             raise RateLimitUnverifiableError() from e
         verbose_router_logger.debug("io_token_pre_call_check: Redis failure, fail-open — allowing request. err=%s", e)
-        return deployment
+        return deployment  # pyright: ignore[reportUnknownVariableType]
 
     _stash_reservation_in_metadata(
         request_kwargs,
@@ -550,7 +550,7 @@ async def async_io_token_pre_call_check(
         verbose_router_logger.debug(
             "async_io_token_pre_call_check: Redis failure, fail-open — allowing request. err=%s", e
         )
-        return deployment
+        return deployment  # pyright: ignore[reportUnknownVariableType]
 
     _stash_reservation_in_metadata(
         request_kwargs,
