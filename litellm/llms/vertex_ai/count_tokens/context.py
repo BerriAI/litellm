@@ -14,7 +14,6 @@ from litellm.types.utils import TokenCountMessagesFormat, TokenCountResponse
 
 if TYPE_CHECKING:
     from litellm.exceptions import APIError
-    from litellm.llms.anthropic.pass_through.context_management import AnthropicContextManagementError
 
 
 @dataclass(frozen=True, slots=True)
@@ -229,24 +228,24 @@ def _typed_system(
         return _INVALID_SYSTEM
 
 
-def _failed_edit_error(
-    error: "AnthropicContextManagementError",
+def _view_without_edits(
     messages: Sequence[Mapping[str, object]],
-    system: str | Sequence[Mapping[str, object]] | None,
-) -> VertexGeminiCountContextError:
+    system: object | None,
+    typed_system: str | Sequence[Mapping[str, object]] | None,
+) -> InferenceRequestView:
     from litellm.llms.anthropic.pass_through.context_management.editors.compact import (
         apply_client_compaction_block_history,
     )
 
-    edit_error: Final = VertexGeminiCountContextError(error_message=error.message, status_code=error.status_code)
-    if error.status_code < 500:
-        return edit_error
     history: Final = apply_client_compaction_block_history(
         messages=[dict(message) for message in messages],
-        system=system if system is None or isinstance(system, str) else [dict(block) for block in system],
+        system=typed_system
+        if typed_system is None or isinstance(typed_system, str)
+        else [dict(block) for block in typed_system],
     )
-    blocks_error: Final = unconvertible_messages_error(messages if history is None else history.messages, "anthropic")
-    return edit_error if blocks_error is None else blocks_error
+    if history is None:
+        return InferenceRequestView(messages=messages, system=system)
+    return InferenceRequestView(messages=history.messages, system=history.system)
 
 
 async def _anthropic_inference_view(
@@ -276,7 +275,9 @@ async def _anthropic_inference_view(
             allow_summary_call=False,
         )
     except AnthropicContextManagementError as error:
-        return _failed_edit_error(error, normalized, typed_system)
+        if error.status_code >= 500:
+            return _view_without_edits(normalized, system, typed_system)
+        return VertexGeminiCountContextError(error_message=error.message, status_code=error.status_code)
     if prepared is None:
         return InferenceRequestView(messages=normalized, system=system)
     return InferenceRequestView(messages=prepared.messages, system=prepared.system)

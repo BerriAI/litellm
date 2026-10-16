@@ -14462,17 +14462,23 @@ async def _try_provider_token_count(
     return result
 
 
+def _routed_litellm_params(router: Router, model: str) -> tuple[Mapping[str, object], ...]:
+    named: Final = router.get_model_list(model_name=model) or ()
+    if named:
+        return tuple(deployment["litellm_params"] for deployment in named)
+    by_id: Final = router.get_deployment(model_id=model)
+    return () if by_id is None else (by_id.litellm_params.model_dump(),)
+
+
 def _count_context_management(
     context_management: JsonValue, model: str, request_litellm_params: Mapping[str, JsonValue]
 ) -> JsonValue:
     from litellm.llms.anthropic.pass_through.adapters.handler import context_management_explicitly_dropped
 
-    group: Final = () if llm_router is None else llm_router.get_model_list(model_name=model) or ()
+    group: Final = () if llm_router is None else _routed_litellm_params(llm_router, model)
     dropped_by_a_deployment: Final = any(
-        context_management_explicitly_dropped(
-            {**deployment["litellm_params"], **request_litellm_params}.get("additional_drop_params")
-        )
-        for deployment in group
+        context_management_explicitly_dropped({**params, **request_litellm_params}.get("additional_drop_params"))
+        for params in group
     )
     return None if dropped_by_a_deployment else context_management
 

@@ -24,6 +24,7 @@ from litellm.llms.vertex_ai.count_tokens.context import (
     VertexGeminiCountContextError,
     gemini_count_contents,
     inference_request_view,
+    unconvertible_messages_error,
     vertex_gemini_count_context,
 )
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
@@ -593,15 +594,15 @@ async def test_anthropic_view_applies_clear_edits_without_calling_the_compaction
     assert _tool_outputs_kept(view) == (False, False, True)
 
 
-async def test_anthropic_view_returns_the_error_inference_answers_for_a_failed_edit() -> None:
+async def test_anthropic_view_counts_the_unedited_body_when_an_edit_fails() -> None:
     with patch.object(litellm, "token_counter", side_effect=RuntimeError("tokenizer unavailable")):
         view: Final = await inference_request_view(_agent_turns(3), None, "anthropic", _edits(_CLEAR_OLD_TOOL_RESULTS))
 
-    assert isinstance(view, VertexGeminiCountContextError)
-    assert view.status_code == 500
+    assert isinstance(view, InferenceRequestView)
+    assert _tool_outputs_kept(view) == (True, True, True)
 
 
-async def test_anthropic_view_fails_like_inference_when_an_edit_before_compact_meets_a_compaction_block() -> None:
+async def test_anthropic_view_counts_the_turns_after_a_compaction_block_when_an_edit_before_compact_fails() -> None:
     clear_before_compact: Final[JsonValue] = {
         "edits": [
             {
@@ -620,8 +621,9 @@ async def test_anthropic_view_fails_like_inference_when_an_edit_before_compact_m
 
     view: Final = await inference_request_view(turns, None, "anthropic", _edits(clear_before_compact))
 
-    assert isinstance(view, VertexGeminiCountContextError)
-    assert view.status_code == 500
+    assert isinstance(view, InferenceRequestView)
+    assert _tool_outputs_kept(view) == (True, True)
+    assert "Read files 0 to 2." in str(view.system)
 
 
 async def test_anthropic_view_rejects_a_compact_trigger_inference_rejects() -> None:
@@ -653,6 +655,8 @@ async def test_anthropic_view_names_the_block_gemini_cannot_count_when_an_edit_t
 
     view: Final = await inference_request_view(turns, None, "anthropic", _edits(_CLEAR_OLD_TOOL_RESULTS))
 
-    assert isinstance(view, VertexGeminiCountContextError)
-    assert view.status_code == 400
-    assert "search_result" in view.error_message
+    assert isinstance(view, InferenceRequestView)
+    blocks_error: Final = unconvertible_messages_error(view.messages, "anthropic")
+    assert blocks_error is not None
+    assert blocks_error.status_code == 400
+    assert "search_result" in blocks_error.error_message

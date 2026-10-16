@@ -1289,31 +1289,55 @@ async def test_gemini_messages_count_tokens_applies_the_context_edits_inference_
 
 
 @pytest.mark.asyncio
-async def test_gemini_messages_count_tokens_keeps_tool_results_when_any_deployment_in_the_group_drops_context_management() -> None:
+@pytest.mark.parametrize(
+    ("requested_model", "model_list"),
+    (
+        (
+            "gemini-agent",
+            [
+                {
+                    "model_name": "gemini-agent",
+                    "litellm_params": {"model": "gemini/gemini-2.5-flash", "api_key": "test-key", "order": 1},
+                },
+                {
+                    "model_name": "gemini-agent",
+                    "litellm_params": {
+                        "model": "gemini/gemini-2.5-flash",
+                        "api_key": "test-key",
+                        "order": 2,
+                        "additional_drop_params": ["context_management"],
+                    },
+                },
+            ],
+        ),
+        (
+            "gemini-agent-deployment-id",
+            [
+                {
+                    "model_name": "gemini-agent",
+                    "litellm_params": {
+                        "model": "gemini/gemini-2.5-flash",
+                        "api_key": "test-key",
+                        "additional_drop_params": ["context_management"],
+                    },
+                    "model_info": {"id": "gemini-agent-deployment-id"},
+                },
+            ],
+        ),
+    ),
+    ids=("group-member-drops", "deployment-id-drops"),
+)
+async def test_gemini_messages_count_tokens_keeps_tool_results_when_a_routable_deployment_drops_context_management(
+    requested_model: str, model_list: list[dict[str, JsonValue]]
+) -> None:
     import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
     import litellm.proxy.proxy_server as proxy_server
     from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
 
     peer: Final = _GeminiCountTokensPeer()
-    router: Final = Router(
-        model_list=[
-            {
-                "model_name": "gemini-agent",
-                "litellm_params": {"model": "gemini/gemini-2.5-flash", "api_key": "test-key", "order": 1},
-            },
-            {
-                "model_name": "gemini-agent",
-                "litellm_params": {
-                    "model": "gemini/gemini-2.5-flash",
-                    "api_key": "test-key",
-                    "order": 2,
-                    "additional_drop_params": ["context_management"],
-                },
-            },
-        ]
-    )
+    router: Final = Router(model_list=model_list)
     request_body: Final[dict[str, JsonValue]] = {
-        "model": "gemini-agent",
+        "model": requested_model,
         "messages": _agent_turns_with_tool_results(3),
         "tools": [{"name": "read_file", "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}}}],
         "context_management": {
