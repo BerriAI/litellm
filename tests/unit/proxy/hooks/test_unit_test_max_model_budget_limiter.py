@@ -555,6 +555,71 @@ async def test_over_budget_key_is_blocked_on_its_first_check_after_redis_attache
         await limiter.is_key_within_model_budget(UserAPIKeyAuth(token="vk-hash", model_max_budget=key_budget), "gpt-4")
 
 
+class _SlowFirstPushRedis(_LateRedis):
+    def __init__(self) -> None:
+        super().__init__()
+        self.push_started = asyncio.Event()
+        self.release_push = asyncio.Event()
+
+    async def async_increment_pipeline(self, increment_list, **kwargs) -> None:
+        self.push_started.set()
+        await self.release_push.wait()
+        await super().async_increment_pipeline(increment_list, **kwargs)
+
+
+class _FirstPushFailsRedis(_LateRedis):
+    def __init__(self) -> None:
+        super().__init__()
+        self.pushes = 0
+
+    async def async_increment_pipeline(self, increment_list, **kwargs) -> None:
+        self.pushes += 1
+        if self.pushes == 1:
+            raise ConnectionError("redis unavailable")
+        await super().async_increment_pipeline(increment_list, **kwargs)
+
+
+async def _over_budget_key_without_redis() -> tuple[PROXY_VirtualKeyModelMaxBudgetLimiter, DualCache, UserAPIKeyAuth]:
+    dual_cache = DualCache()
+    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    key_budget = {"gpt-4": {"budget_limit": 1.0, "time_period": "1d"}}
+    await limiter.async_log_success_event(
+        _success_kwargs(model_group="gpt-4", response_cost=1.5, key_hash="vk-hash", key_model_max_budget=key_budget),
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+    return limiter, dual_cache, UserAPIKeyAuth(token="vk-hash", model_max_budget=key_budget)
+
+
+@pytest.mark.asyncio
+async def test_a_budget_check_during_the_first_push_after_redis_attaches_still_blocks_the_key():
+    limiter, dual_cache, key = await _over_budget_key_without_redis()
+    redis = _SlowFirstPushRedis()
+    dual_cache.redis_cache = redis
+
+    first_check = asyncio.create_task(limiter.is_key_within_model_budget(key, "gpt-4"))
+    await redis.push_started.wait()
+    second_check = asyncio.create_task(limiter.is_key_within_model_budget(key, "gpt-4"))
+    await asyncio.sleep(0)
+    redis.release_push.set()
+
+    for check in (first_check, second_check):
+        with pytest.raises(litellm.BudgetExceededError):
+            await check
+
+
+@pytest.mark.asyncio
+async def test_the_budget_check_after_a_failed_first_push_still_blocks_the_key():
+    limiter, dual_cache, key = await _over_budget_key_without_redis()
+    dual_cache.redis_cache = _FirstPushFailsRedis()
+
+    await limiter.is_key_within_model_budget(key, "gpt-4")
+
+    with pytest.raises(litellm.BudgetExceededError):
+        await limiter.is_key_within_model_budget(key, "gpt-4")
+
+
 @pytest.mark.asyncio
 async def test_get_fallback_model_within_budget_returns_none_without_fallbacks(
     budget_limiter,

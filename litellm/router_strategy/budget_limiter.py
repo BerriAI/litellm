@@ -138,6 +138,7 @@ class RouterBudgetLimiting(CustomLogger):
         self.redis_increment_operation_queue: list[RedisPipelineIncrementOperation] = []
         self._spend_awaiting_redis: dict[str, _SpendAwaitingRedis] = {}  # mutable-ok: O(1) merges
         self._prune_spend_awaiting_redis_at: int = 0
+        self._held_spend_unconfirmed_in_redis: bool = False
         self._redis_increment_queue_lock = asyncio.Lock()
         self._redis_increment_flush_lock = asyncio.Lock()
         self._detached_increment_operations: tuple[RedisPipelineIncrementOperation, ...] | None = None
@@ -466,17 +467,16 @@ class RouterBudgetLimiting(CustomLogger):
             if self._detached_increment_operations is not None:
                 return self._detached_increment_operations
             now: Final = self._clock()
-            increment_operations_to_flush: Final = (
-                *(
-                    RedisPipelineIncrementOperation(
-                        key=key, increment_value=held.spend, ttl=math.ceil(held.expires_at - now)
-                    )
-                    for key, held in self._spend_awaiting_redis.items()
-                    if held.expires_at > now
-                ),
-                *self.redis_increment_operation_queue,
+            held_operations: Final = tuple(
+                RedisPipelineIncrementOperation(
+                    key=key, increment_value=held.spend, ttl=math.ceil(held.expires_at - now)
+                )
+                for key, held in self._spend_awaiting_redis.items()
+                if held.expires_at > now
             )
+            increment_operations_to_flush: Final = (*held_operations, *self.redis_increment_operation_queue)
             self._spend_awaiting_redis = {}
+            self._held_spend_unconfirmed_in_redis = self._held_spend_unconfirmed_in_redis or bool(held_operations)
             if not increment_operations_to_flush:
                 return increment_operations_to_flush
             self.redis_increment_operation_queue = []
@@ -486,6 +486,7 @@ class RouterBudgetLimiting(CustomLogger):
     async def _clear_detached_increment_operations(self) -> None:
         async with self._get_redis_increment_queue_lock():
             self._detached_increment_operations = None
+            self._held_spend_unconfirmed_in_redis = False
 
     async def _requeue_detached_increment_operations(self) -> None:
         async with self._get_redis_increment_queue_lock():
