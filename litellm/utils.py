@@ -3346,7 +3346,13 @@ def _without_overridden_price_variants(
     )
 
 
-def _resolve_builtin_model_cost_entry(key: str, provider: str) -> dict[str, object] | None:
+def _inherited_builtin_entry(
+    key: str, matched_key: str, entry: Mapping[str, object], value: Mapping[str, object]
+) -> Mapping[str, object]:
+    return entry if matched_key == key else _without_overridden_price_variants(entry, value)
+
+
+def _resolve_builtin_model_cost_entry(key: str, provider: str) -> tuple[str, dict[str, object]] | None:
     """Best-effort lookup of a built-in ``model_cost`` entry for a custom key
     whose shape ``get_model_info`` cannot resolve (repeated provider prefixes
     like ``bedrock/bedrock/bedrock/us.anthropic.claude-sonnet-4-6`` or region
@@ -3354,10 +3360,10 @@ def _resolve_builtin_model_cost_entry(key: str, provider: str) -> dict[str, obje
 
     The key itself is tried first, so a catalog row whose lookup tripped
     inherits from itself rather than from a region-stripped sibling priced at
-    the base rate. Returns a copy of the matching entry so the caller can
-    inherit its defaults without mutating the shared built-in. Returns ``None``
-    when no candidate exists under a provider ``get_model_info`` would accept
-    for ``provider``, or, when the value names none, for the provider prefix
+    the base rate. Returns the matched candidate key and a copy of its entry so
+    the caller can inherit its defaults without mutating the shared built-in.
+    Returns ``None`` when no candidate exists under a provider ``get_model_info``
+    would accept for ``provider``, or, when the value names none, for the provider prefix
     the key itself carries, which is what ``get_model_info`` derives when it
     reads the key back.
     """
@@ -3382,7 +3388,7 @@ def _resolve_builtin_model_cost_entry(key: str, provider: str) -> dict[str, obje
             and entry.get("litellm_provider") is not None
             and _check_provider_match(entry, match_provider)
         ):
-            return dict(entry)
+            return candidate, dict(entry)
     return None
 
 
@@ -3550,13 +3556,13 @@ def register_model(
                 # consulted, so seed from them: otherwise registering an unmapped model
                 # shadows the very defaults it would have resolved to unregistered.
                 model_cost_key = key
-                builtin_entry = _resolve_builtin_model_cost_entry(key=_key_str, provider=provider)
+                builtin_match = _resolve_builtin_model_cost_entry(key=_key_str, provider=provider)
                 existing_model = (
-                    dict(_without_overridden_price_variants(builtin_entry, value))
-                    if builtin_entry is not None
+                    dict(_inherited_builtin_entry(_key_str, *builtin_match, value))
+                    if builtin_match is not None
                     else dict(match_capability_generalizations(_key_str) or {})
                 )
-                if builtin_entry is None and (
+                if builtin_match is None and (
                     value.get("cache_creation_input_token_cost") is None
                     and value.get("cache_read_input_token_cost") is None
                     and value.get("tiered_pricing") is None
@@ -5828,7 +5834,7 @@ def _handle_new_key_with_scan(
         The matched key if found, None otherwise.
     """
     global _model_cost_lowercase_map
-    for key in litellm.model_cost:
+    for key in tuple(_builtin_cost_map()):
         if key.lower() == potential_key_lower:
             _model_cost_lowercase_map = _rebuild_model_cost_lowercase_map()
             return key

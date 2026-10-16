@@ -11,6 +11,7 @@ calculations for DB-sourced models with prompt caching pricing.
 
 import copy
 import os
+from collections.abc import Callable
 from typing import Final, NoReturn
 
 import pytest
@@ -890,6 +891,61 @@ def test_register_model_keeps_a_catalog_rows_own_prices_when_the_lookup_fails(mo
         _invalidate_model_cost_lowercase_map()
 
 
+def test_register_model_bills_a_catalog_rows_tier_rates_the_same_when_the_lookup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A custom flat price registered on a catalog row bills a long prompt the same whether or not
+    ``get_model_info`` trips during the registration, so a reload storm never flips the bill."""
+    from litellm.types.utils import ModelResponse, Usage
+
+    catalog_key: Final = "au.anthropic.lit-5853-tiered-geo-model"
+    registered_key: Final = catalog_key
+    catalog_row: Final = {
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "input_cost_per_token": 3.3e-06,
+        "output_cost_per_token": 1.65e-05,
+        "input_cost_per_token_above_200k_tokens": 6.6e-06,
+        "output_cost_per_token_above_200k_tokens": 2.475e-05,
+    }
+    builtin_cost_map: Final = litellm.get_model_cost_map(url="")
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
+    def lookup_tripped_by_a_concurrent_registration(model: str, custom_llm_provider: str | None = None) -> NoReturn:
+        raise RuntimeError("dictionary changed size during iteration")
+
+    def long_prompt_cost_after_registering_with(lookup: Callable[..., object]) -> float:
+        monkeypatch.setattr(litellm, "model_cost", {**builtin_cost_map, catalog_key: dict(catalog_row)})
+        _invalidate_model_cost_lowercase_map()
+        with pytest.MonkeyPatch.context() as lookup_patch:
+            lookup_patch.setattr(litellm.utils, "get_model_info", lookup)
+            litellm.register_model(
+                {
+                    registered_key: {
+                        "litellm_provider": "bedrock",
+                        "input_cost_per_token": 1e-06,
+                        "output_cost_per_token": 2e-06,
+                    }
+                },
+                persist_across_reloads=False,
+            )
+        return litellm.completion_cost(
+            completion_response=ModelResponse(
+                model=registered_key,
+                usage=Usage(prompt_tokens=250_000, completion_tokens=1_000, total_tokens=251_000),
+            ),
+            model=registered_key,
+            custom_llm_provider="bedrock",
+        )
+
+    try:
+        assert long_prompt_cost_after_registering_with(lookup_tripped_by_a_concurrent_registration) == pytest.approx(
+            long_prompt_cost_after_registering_with(litellm.utils.get_model_info)
+        )
+    finally:
+        _invalidate_model_cost_lowercase_map()
+
+
 def test_register_model_inherits_builtin_token_pricing_for_unmapped_key(monkeypatch: pytest.MonkeyPatch) -> None:
     """A key shape ``get_model_info`` cannot resolve inherits the whole built-in
     entry, not just its cache pricing, so ``get_model_info`` on the raw key
@@ -1015,12 +1071,24 @@ def test_register_model_never_inherits_pricing_across_providers(monkeypatch: pyt
     ``get_model_info`` would accept for the registered one, exactly as a direct
     lookup would, so a bedrock key that happens to share a name with an OpenAI
     model registers without OpenAI's prices."""
+    openai_key: Final = "lit-5853-openai-only-model"
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.get_model_cost_map(url=""),
+            openai_key: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 2.5e-06,
+                "output_cost_per_token": 1e-05,
+                "cache_read_input_token_cost": 1.25e-06,
+            },
+        },
+    )
     _invalidate_model_cost_lowercase_map()
-    registered_key: Final = "bedrock/gpt-4o"
-    assert litellm.model_cost["gpt-4o"]["litellm_provider"] == "openai"
-    assert litellm.model_cost["gpt-4o"]["cache_read_input_token_cost"] > 0
+    registered_key: Final = f"bedrock/{openai_key}"
 
     try:
         litellm.register_model(
