@@ -14543,7 +14543,9 @@ async def count_request_tokens(
             provider_counter=provider_counter,
             custom_llm_provider=custom_llm_provider,
             model_to_use=model_to_use,
-            messages=messages,
+            messages=[{"role": "user", "content": prompt}]
+            if prompt and messages is None and contents is None
+            else messages,
             contents=contents,
             deployment=deployment,
             request_model=request.model,

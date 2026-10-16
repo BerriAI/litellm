@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from dotenv import load_dotenv
-from pydantic import JsonValue
+from pydantic import BaseModel, ConfigDict, JsonValue
 
 load_dotenv()
 
@@ -25,6 +25,7 @@ from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
 from litellm.proxy._types import ProxyException, TokenCountRequest
 from litellm.proxy.anthropic_endpoints.endpoints import (
     count_tokens as anthropic_count_tokens,
@@ -1177,3 +1178,63 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
     finally:
         anthropic_endpoints.read_request_body = original_read_request_body
         proxy_server.count_request_tokens = original_token_counter
+
+
+class _GeminiPart(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    text: str = ""
+
+
+class _GeminiContent(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    parts: tuple[_GeminiPart, ...] = ()
+
+
+class _GeminiCountTokensBody(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    contents: tuple[_GeminiContent, ...] = ()
+
+
+def _word_count(content: _GeminiContent) -> int:
+    return sum(len(part.text.split()) for part in content.parts)
+
+
+def _gemini_word_counting_peer(request: httpx.Request) -> httpx.Response:
+    body: Final = _GeminiCountTokensBody.model_validate_json(request.content)
+    total: Final = sum(_word_count(content) for content in body.contents)
+    return httpx.Response(200, json={"totalTokens": total}, request=request)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "text", ["hello there", "The quick brown fox jumps over the lazy dog. " * 50], ids=["short", "long"]
+)
+async def test_call_endpoint_counts_a_prompt_like_the_same_text_sent_as_a_user_message(
+    text: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gemini-counted",
+                "litellm_params": {
+                    "model": "gemini/gemini-2.5-flash",
+                    "api_key": "test-key",
+                    "api_base": "https://count-tokens.test",
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_gemini_word_counting_peer))
+
+    with patch.object(gemini_count_tokens_handler, "get_async_httpx_client", return_value=client):
+        from_prompt: Final = await token_counter(
+            request=TokenCountRequest(model="gemini-counted", prompt=text), call_endpoint=True
+        )
+        from_message: Final = await token_counter(
+            request=TokenCountRequest(model="gemini-counted", messages=[{"role": "user", "content": text}]),
+            call_endpoint=True,
+        )
+
+    assert from_prompt.error is False
+    assert from_prompt.total_tokens == from_message.total_tokens == len(text.split())
