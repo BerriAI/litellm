@@ -316,15 +316,19 @@ class GenericGuardrailAPI(CustomGuardrail):
         http_status_code: int | None = None,
     ) -> GenericGuardrailAPIInputs:
         status_suffix: Final = f" http_status_code={http_status_code}" if http_status_code else ""
+        error_type: Final = (
+            httpx.HTTPStatusError.__name__ if isinstance(error, httpx.HTTPStatusError) else type(error).__name__
+        )
         verbose_proxy_logger.critical(
             "Generic Guardrail API error (fail-open). Proceeding without guardrail.%s "
-            "guardrail_name=%s api_base=%s input_type=%s litellm_call_id=%s litellm_trace_id=%s",
+            "guardrail_name=%s api_base=%s input_type=%s litellm_call_id=%s litellm_trace_id=%s error_type=%s",
             status_suffix,
             getattr(self, "guardrail_name", None),
             getattr(self, "api_base", None),
             input_type,
             getattr(logging_obj, "litellm_call_id", None) if logging_obj else None,
             getattr(logging_obj, "litellm_trace_id", None) if logging_obj else None,
+            error_type,
             exc_info=error,
         )
         # Keep flow going - treat as action=NONE (no modifications)

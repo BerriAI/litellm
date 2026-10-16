@@ -5,6 +5,8 @@ This test file tests the Generic Guardrail API implementation,
 specifically focusing on metadata extraction and passing.
 """
 
+import logging
+import logging.handlers
 import os
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -14,8 +16,10 @@ import pytest
 
 import litellm
 from litellm import ModelResponse
+from litellm._logging import verbose_proxy_logger
 from litellm._version import version as litellm_version
 from litellm.exceptions import GuardrailRaisedException, Timeout
+from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     GenericGuardrailAPI,
@@ -2049,3 +2053,47 @@ class TestFailOnError:
                     request_data={},
                     input_type="response",
                 )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("error", "status_suffix", "error_type"),
+        [
+            (Timeout(message="guardrail took too long", model="gpt-5", llm_provider="openai"), "", "Timeout"),
+            (httpx.ConnectError("connection refused", request=MagicMock()), "", "ConnectError"),
+            (
+                MaskedHTTPStatusError(
+                    httpx.HTTPStatusError(
+                        "internal server error",
+                        request=httpx.Request("POST", "http://guardrail.invalid/scan"),
+                        response=httpx.Response(500, request=httpx.Request("POST", "http://guardrail.invalid/scan")),
+                    )
+                ),
+                " http_status_code=500",
+                "HTTPStatusError",
+            ),
+        ],
+        ids=["timeout", "connect_error", "masked_http_status"],
+    )
+    async def test_fail_open_log_line_appends_the_error_type(
+        self, fail_open_guardrail, error, status_suffix, error_type
+    ):
+        """The pre-existing text stays intact and contiguous, so alerts that matched it still
+        match, and error_type tells a timeout from a refused connection from an upstream status."""
+        handler: Final = logging.handlers.MemoryHandler(capacity=100, flushLevel=logging.CRITICAL + 1)
+        handler.setLevel(logging.CRITICAL)
+        verbose_proxy_logger.addHandler(handler)
+        try:
+            with patch.object(fail_open_guardrail.async_handler, "post", side_effect=error):
+                await fail_open_guardrail.apply_guardrail(
+                    inputs={"texts": ["hi"]},
+                    request_data={},
+                    input_type="request",
+                )
+        finally:
+            verbose_proxy_logger.removeHandler(handler)
+
+        assert [record.getMessage() for record in handler.buffer] == [
+            f"Generic Guardrail API error (fail-open). Proceeding without guardrail.{status_suffix} "
+            f"guardrail_name=test-fail-open-guardrail api_base={fail_open_guardrail.api_base} input_type=request "
+            f"litellm_call_id=None litellm_trace_id=None error_type={error_type}"
+        ]
