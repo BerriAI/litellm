@@ -519,12 +519,16 @@ async def check_usage_ai_chat_model_access(user_api_key_dict: "UserAPIKeyAuth", 
         can_object_call_model,
         key_model_aliases_for_auth_check,
     )
-    from litellm.proxy.proxy_server import llm_model_list, llm_router, prisma_client
+    from litellm.proxy.proxy_server import (
+        llm_model_list,  # pyright: ignore[reportUnknownVariableType]  # proxy_server.llm_model_list is an untyped module global
+        llm_router,
+        prisma_client,
+    )
 
     resolved_model: Final = _resolve_model(model)
     await can_key_call_model(
         model=resolved_model,
-        llm_model_list=llm_model_list,
+        llm_model_list=llm_model_list,  # pyright: ignore[reportUnknownArgumentType]  # proxy_server.llm_model_list is an untyped module global
         valid_token=user_api_key_dict,
         llm_router=llm_router,
         prisma_client=prisma_client,
