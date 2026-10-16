@@ -7,6 +7,7 @@ gets the answer.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Final
 
 import httpx
@@ -20,16 +21,19 @@ UPSTREAM_FIRST_BYTE_SECONDS: Final = 2.0
 _TIMEOUT_EXTENSION: Final = TypeAdapter(dict[str, float | None])
 
 
-def _answer_once_the_first_byte_is_due(request: httpx.Request) -> httpx.Response:
-    read_timeout: Final = _TIMEOUT_EXTENSION.validate_python(request.extensions["timeout"])["read"]
-    if read_timeout is not None and read_timeout < UPSTREAM_FIRST_BYTE_SECONDS:
-        raise httpx.ReadTimeout(f"no byte arrived within {read_timeout}s", request=request)
-    return httpx.Response(200, content=b"", request=request)
+def _answer_once_the_first_byte_is_due(body: bytes) -> Callable[[httpx.Request], httpx.Response]:
+    def answer(request: httpx.Request) -> httpx.Response:
+        read_timeout: Final = _TIMEOUT_EXTENSION.validate_python(request.extensions["timeout"])["read"]
+        if read_timeout is not None and read_timeout < UPSTREAM_FIRST_BYTE_SECONDS:
+            raise httpx.ReadTimeout(f"no byte arrived within {read_timeout}s", request=request)
+        return httpx.Response(200, content=body, request=request)
+
+    return answer
 
 
-def slow_upstream_async_client() -> AsyncHTTPHandler:
-    return AsyncHTTPHandler(transport=httpx.MockTransport(_answer_once_the_first_byte_is_due))
+def slow_upstream_async_client(body: bytes = b"") -> AsyncHTTPHandler:
+    return AsyncHTTPHandler(transport=httpx.MockTransport(_answer_once_the_first_byte_is_due(body)))
 
 
-def slow_upstream_sync_client() -> HTTPHandler:
-    return HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_answer_once_the_first_byte_is_due)))
+def slow_upstream_sync_client(body: bytes = b"") -> HTTPHandler:
+    return HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_answer_once_the_first_byte_is_due(body))))

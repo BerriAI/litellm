@@ -6,6 +6,8 @@ AWS credential resolution is stubbed so nothing reaches STS.
 from __future__ import annotations
 
 import asyncio
+import json
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Final
 from unittest.mock import MagicMock, patch
@@ -24,6 +26,7 @@ from litellm.types.utils import ModelResponse
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 from tests.unit.llms.bedrock.slow_upstream import (
     STREAM_TIMEOUT_SECONDS,
+    UPSTREAM_FIRST_BYTE_SECONDS,
     slow_upstream_async_client,
     slow_upstream_sync_client,
 )
@@ -302,3 +305,98 @@ async def test_async_converse_streaming_fails_at_the_request_timeout_not_the_ups
 def test_sync_converse_streaming_fails_at_the_request_timeout_not_the_upstreams_pace() -> None:
     with pytest.raises(litellm.Timeout):
         litellm.completion(client=slow_upstream_sync_client(), **_converse_streaming_kwargs())
+
+
+_CONVERSE_ANSWER: Final = json.dumps(
+    {
+        "output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}},
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+        "metrics": {"latencyMs": 1},
+    }
+).encode()
+
+_FAKE_STREAMED_REQUESTS: Final = pytest.mark.parametrize(
+    ("model", "request_params"),
+    [
+        ("bedrock/converse/ai21.jamba-1-5-large-v1:0", {}),
+        (
+            "bedrock/converse/meta.llama3-3-70b-instruct-v1:0",
+            {"tools": [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}]},
+        ),
+    ],
+    ids=["model_without_streaming", "request_shape_without_streaming"],
+)
+
+
+def _router_with_a_stream_timeout_shorter_than_the_upstreams_first_byte(model: str) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock",
+                "litellm_params": {
+                    "model": model,
+                    "aws_access_key_id": "fake",
+                    "aws_secret_access_key": "fake",
+                    "aws_region_name": "us-east-1",
+                },
+            }
+        ],
+        timeout=UPSTREAM_FIRST_BYTE_SECONDS * 2,
+        stream_timeout=STREAM_TIMEOUT_SECONDS,
+        num_retries=0,
+    )
+
+
+@_FAKE_STREAMED_REQUESTS
+def test_sync_fake_stream_is_bounded_by_the_request_timeout_not_the_stream_timeout(
+    model: str, request_params: Mapping[str, object]
+) -> None:
+    router: Final = _router_with_a_stream_timeout_shorter_than_the_upstreams_first_byte(model)
+    response: Final = router.completion(
+        model="bedrock",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        client=slow_upstream_sync_client(_CONVERSE_ANSWER),
+        **request_params,
+    )
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in response) == "hi"
+
+
+@pytest.mark.asyncio
+@_FAKE_STREAMED_REQUESTS
+async def test_async_fake_stream_is_bounded_by_the_request_timeout_not_the_stream_timeout(
+    model: str, request_params: Mapping[str, object]
+) -> None:
+    router: Final = _router_with_a_stream_timeout_shorter_than_the_upstreams_first_byte(model)
+    response: Final = await router.acompletion(
+        model="bedrock",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        client=slow_upstream_async_client(_CONVERSE_ANSWER),
+        **request_params,
+    )
+
+    assert "".join([chunk.choices[0].delta.content or "" async for chunk in response]) == "hi"
+
+
+def test_sync_live_stream_through_the_router_fails_at_the_stream_timeout() -> None:
+    router: Final = _router_with_a_stream_timeout_shorter_than_the_upstreams_first_byte(
+        "bedrock/anthropic.claude-sonnet-4-5-v1:0"
+    )
+    with pytest.raises(litellm.Timeout):
+        router.completion(
+            model="bedrock", messages=[{"role": "user", "content": "hi"}], stream=True, client=slow_upstream_sync_client()
+        )
+
+
+@pytest.mark.asyncio
+async def test_async_live_stream_through_the_router_fails_at_the_stream_timeout() -> None:
+    router: Final = _router_with_a_stream_timeout_shorter_than_the_upstreams_first_byte(
+        "bedrock/anthropic.claude-sonnet-4-5-v1:0"
+    )
+    with pytest.raises(litellm.Timeout):
+        await router.acompletion(
+            model="bedrock", messages=[{"role": "user", "content": "hi"}], stream=True, client=slow_upstream_async_client()
+        )

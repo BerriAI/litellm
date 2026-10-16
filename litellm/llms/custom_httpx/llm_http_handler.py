@@ -2185,17 +2185,18 @@ class BaseLLMHTTPHandler:
         from litellm.utils import supports_httpx_timeout
 
         stream_timeout: Final = litellm_params.get("stream_timeout") if stream else None
-        model_timeout: Final = stream_timeout if stream_timeout is not None else litellm_params.get("timeout")
+        model_timeout: Final = litellm_params.get("timeout")
         request_timeout: Final = litellm_params.get("request_timeout")
         global_timeout: Final = get_configured_request_timeout()
-        if model_timeout is None and request_timeout is None and global_timeout is None:
+        if stream_timeout is None and model_timeout is None and request_timeout is None and global_timeout is None:
             return None
         return CompletionTimeout.resolve(
             model_timeout,
-            {"request_timeout": request_timeout},
+            {"stream_timeout": stream_timeout, "request_timeout": request_timeout},
             custom_llm_provider,
             global_timeout=global_timeout,
             supports_httpx_timeout=supports_httpx_timeout,
+            reads_live_stream=stream,
         )
 
     async def async_anthropic_messages_handler(

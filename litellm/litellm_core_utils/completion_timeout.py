@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Final
 
 import httpx
@@ -39,32 +39,37 @@ class CompletionTimeout:
     @staticmethod
     def resolve(
         model_timeout: float | str | httpx.Timeout | SDKTimeout | None,
-        kwargs: dict,
+        kwargs: Mapping[str, object],
         custom_llm_provider: str,
         *,
         global_timeout: float | str | None,
         supports_httpx_timeout: Callable[[str], bool],
+        reads_live_stream: bool,
     ) -> float | httpx.Timeout:
         """
         Resolution order (first non-None wins):
 
-        1. ``model_timeout`` (call argument / merged ``litellm_params``)
-        2. ``kwargs["timeout"]``
-        3. ``kwargs["request_timeout"]``
-        4. ``global_timeout`` (the explicitly-configured ``litellm.request_timeout``),
+        1. ``kwargs["stream_timeout"]``, only when ``reads_live_stream``. It bounds each read of a live
+           stream, and a fake stream is one non-streaming request whose first byte arrives when
+           generation ends, so a fake stream skips it
+        2. ``model_timeout`` (call argument / merged ``litellm_params``)
+        3. ``kwargs["timeout"]``
+        4. ``kwargs["request_timeout"]``
+        5. ``global_timeout`` (the explicitly-configured ``litellm.request_timeout``),
            or 600 when nothing was configured.
 
         Coerce :class:`httpx.Timeout` when the provider does not support it.
         """
-        resolved: float | str | httpx.Timeout | SDKTimeout
-        if model_timeout is not None:
-            resolved = model_timeout
-        elif kwargs.get("timeout") is not None:
-            resolved = kwargs["timeout"]
-        elif kwargs.get("request_timeout") is not None:
-            resolved = kwargs["request_timeout"]
-        else:
-            resolved = CompletionTimeout._fallback_when_no_explicit_timeout(global_timeout)
+        candidates: Final = (
+            kwargs.get("stream_timeout") if reads_live_stream else None,
+            model_timeout,
+            kwargs.get("timeout"),
+            kwargs.get("request_timeout"),
+        )
+        explicit: Final = next((candidate for candidate in candidates if candidate is not None), None)
+        resolved: Final = (
+            explicit if explicit is not None else CompletionTimeout._fallback_when_no_explicit_timeout(global_timeout)
+        )
 
         if isinstance(resolved, (httpx.Timeout, SDKTimeout)):
             normalized: Final = CompletionTimeout.normalize(resolved)
@@ -74,4 +79,6 @@ class CompletionTimeout:
             return (
                 float(read_timeout) if read_timeout is not None else COMPLETION_HTTP_FALLBACK_SECONDS
             )  # default 10 min timeout
-        return float(resolved)
+        if isinstance(resolved, (float, int, str)):
+            return float(resolved)
+        raise TypeError(f"timeout must be a number or an httpx.Timeout, got {type(resolved).__name__}")

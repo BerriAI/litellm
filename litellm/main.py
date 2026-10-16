@@ -5554,15 +5554,6 @@ def completion(
                 "aws_region_name", None
             )  # support region-based pricing for bedrock
 
-        ### TIMEOUT LOGIC ###
-        timeout = CompletionTimeout.resolve(
-            timeout,
-            kwargs,
-            custom_llm_provider,
-            global_timeout=get_configured_request_timeout(),
-            supports_httpx_timeout=supports_httpx_timeout,
-        )
-
         ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
         if (
             (input_cost_per_token is not None and output_cost_per_token is not None)
@@ -5690,6 +5681,26 @@ def completion(
         )
         optional_params = get_optional_params(
             **{**optional_param_args, "reasoning_effort": provider_reasoning_effort}, **non_default_params
+        )
+        reads_live_stream: Final = (
+            stream is True
+            and optional_params.get("fake_stream") is not True
+            and not (
+                provider_config is not None
+                and provider_config.should_fake_stream(
+                    model=model, stream=stream, custom_llm_provider=custom_llm_provider
+                )
+            )
+        )
+
+        ### TIMEOUT LOGIC ###
+        timeout = CompletionTimeout.resolve(
+            timeout,
+            kwargs,
+            custom_llm_provider,
+            global_timeout=get_configured_request_timeout(),
+            supports_httpx_timeout=supports_httpx_timeout,
+            reads_live_stream=reads_live_stream,
         )
         processed_non_default_params: Final = pre_process_non_default_params(
             model=model,
