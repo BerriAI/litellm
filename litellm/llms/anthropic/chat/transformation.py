@@ -2324,7 +2324,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             or []
         )
         tools: Final = self.add_code_execution_tool(messages=anthropic_messages, tools=_tools)
-        if len(tools) > 1:
+        if len(tools) > 0:
             optional_params["tools"] = tools
 
         ## Load Config
