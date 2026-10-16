@@ -459,7 +459,14 @@ async def test_drain_audit_tasks_captures_tasks_queued_during_drain():
 
 
 @pytest.mark.asyncio
-async def test_create_audit_log_for_update_does_not_track_when_logging_disabled():
+@pytest.mark.parametrize(
+    ("store_audit_logs", "premium_user"),
+    [(False, True), (True, False)],
+    ids=["logging_disabled", "not_premium"],
+)
+async def test_create_audit_log_for_update_does_not_track_when_no_row_is_written(
+    store_audit_logs: bool, premium_user: bool
+):
     release_caller: Final = asyncio.Event()
 
     async def _caller_that_outlives_the_audit_call() -> None:
@@ -477,7 +484,10 @@ async def test_create_audit_log_for_update_does_not_track_when_logging_disabled(
         )
         await release_caller.wait()
 
-    with patch("litellm.store_audit_logs", False):
+    with (
+        patch("litellm.store_audit_logs", store_audit_logs),
+        patch("litellm.proxy.proxy_server.premium_user", premium_user),
+    ):
         caller: Final = asyncio.create_task(_caller_that_outlives_the_audit_call())
         await asyncio.sleep(0)
         drain: Final = asyncio.create_task(drain_audit_tasks(timeout=60))
@@ -530,3 +540,31 @@ async def test_hook_spawn_with_io_delay_drained_before_shutdown():
         assert hook_task.done()
         assert len(writes) == 1
         assert writes[0]["object_id"] == "token-hook"
+
+
+@pytest.mark.asyncio
+async def test_key_deleted_audit_write_is_drained_before_it_starts_running():
+    from litellm.proxy._types import LiteLLM_VerificationToken
+    from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
+
+    mock_prisma: Final = MagicMock()
+    writes: Final[list[dict[str, Any]]] = []
+
+    async def _mock_create(data: dict[str, Any]) -> None:
+        await asyncio.sleep(0)
+        writes.append(data)
+
+    mock_prisma.db.litellm_auditlog.create = AsyncMock(side_effect=_mock_create)
+
+    with (
+        patch("litellm.store_audit_logs", True),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+    ):
+        KeyManagementEventHooks.create_key_deleted_audit_logs(
+            keys_being_deleted=[LiteLLM_VerificationToken(token="hashed-token-1")],
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-admin", user_id="admin"),
+        )
+        await drain_audit_tasks(timeout=2.0)
+
+    assert [(write["object_id"], write["action"]) for write in writes] == [("hashed-token-1", "deleted")]

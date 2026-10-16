@@ -125,13 +125,13 @@ def _build_audit_log_payload(
 
 
 def _audit_log_task_done_callback(task: asyncio.Task) -> None:
-    """Log exceptions from audit log callback tasks so they don't slip through silently."""
+    """Log exceptions from audit log tasks so they don't slip through silently."""
     try:
         exc: Final = task.exception()
     except asyncio.CancelledError:
         return
     if exc is not None:
-        verbose_proxy_logger.error("Audit log callback task failed: %s", exc, exc_info=exc)
+        verbose_proxy_logger.error("Audit log task failed: %s", exc, exc_info=exc)
 
 
 _T: Final = TypeVar("_T")
@@ -249,14 +249,14 @@ async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
     if not is_audit_logging_enabled():
         return
 
-    current_task: Final = asyncio.current_task()
-    if current_task is not None:
-        track_audit_task(current_task)
-
     from litellm.proxy.proxy_server import premium_user, prisma_client
 
     if premium_user is not True:
         return
+
+    current_task: Final = asyncio.current_task()
+    if current_task is not None:
+        track_audit_task(current_task)
 
     verbose_proxy_logger.debug("creating audit log for %s", request_data)
 

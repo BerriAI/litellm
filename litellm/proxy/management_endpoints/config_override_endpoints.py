@@ -81,14 +81,6 @@ def _redact_config(config: Mapping[str, object] | None) -> dict[str, str]:
     return {k: _AUDIT_REDACTED for k in config}
 
 
-def _log_audit_task_exception(task: "asyncio.Task[None]") -> None:
-    if task.cancelled():
-        return
-    exc: Final = task.exception()
-    if exc is not None:
-        verbose_proxy_logger.warning("Failed to write config override audit log: %s", exc)
-
-
 async def _emit_config_override_audit_log(
     *,
     object_id: str,
@@ -115,7 +107,7 @@ async def _emit_config_override_audit_log(
     if not is_audit_logging_enabled():
         return
 
-    task: Final = track_audit_task(
+    track_audit_task(
         asyncio.create_task(
             create_audit_log_for_update(
                 request_data=LiteLLM_AuditLogs(
@@ -132,7 +124,6 @@ async def _emit_config_override_audit_log(
             )
         )
     )
-    task.add_done_callback(_log_audit_task_exception)
 
 
 # --- Hashicorp Vault constants ---

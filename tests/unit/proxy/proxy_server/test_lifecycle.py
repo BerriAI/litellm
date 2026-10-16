@@ -17,12 +17,14 @@ Pins covered:
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import logging
 import os
 import subprocess
 from collections.abc import Awaitable, Callable
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -47,6 +49,8 @@ from litellm.proxy.proxy_server import (
     run_ollama_serve,
     save_worker_config,
 )
+
+from litellm.proxy.management_helpers.audit_logs import track_audit_task
 
 from .conftest import normalize
 
@@ -221,6 +225,46 @@ async def test_proxy_shutdown_drains_gateway_requests_before_disconnecting(monke
     await proxy_shutdown_event()
 
     assert calls == ["flush", "disconnect"]
+
+
+@pytest.mark.asyncio
+async def test_proxy_shutdown_drains_audit_writes_beside_the_gateway_flush_before_disconnecting(monkeypatch):
+    """
+    A management call returns before its audit row is written, so shutdown waits
+    for that write while prisma is still connected. It waits beside the gateway
+    flush rather than before it, so the two waits overlap inside the teardown budget.
+    """
+    calls: list[str] = []  # mutable-ok: records call order, which is the assertion
+    gateway_flush_started: Final = asyncio.Event()
+
+    fake_prisma = MagicMock()
+    fake_prisma.disconnect = AsyncMock(side_effect=lambda: calls.append("disconnect"))
+    monkeypatch.setattr(ps, "prisma_client", fake_prisma, raising=False)
+
+    async def _record_flush(client, accumulator):
+        gateway_flush_started.set()
+        calls.append("flush")
+
+    async def _audit_write_that_finishes_after_the_flush_starts() -> None:
+        await gateway_flush_started.wait()
+        calls.append("audit")
+
+    monkeypatch.setattr(ps, "flush_gateway_requests", _record_flush, raising=False)
+
+    fake_jwt = MagicMock()
+    fake_jwt.close = AsyncMock()
+    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "cache", None, raising=False)
+    monkeypatch.setattr(litellm, "success_callback", [], raising=False)
+
+    track_audit_task(asyncio.create_task(_audit_write_that_finishes_after_the_flush_starts()))
+    await asyncio.wait_for(proxy_shutdown_event(), timeout=2.0)
+
+    assert calls == ["flush", "audit", "disconnect"]
 
 
 @pytest.mark.asyncio

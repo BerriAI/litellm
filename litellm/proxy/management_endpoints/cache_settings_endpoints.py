@@ -273,19 +273,6 @@ def _redact_settings(settings: Mapping[str, object] | None) -> dict[str, object]
     return {k: _REDACTED_VALUE for k in settings}
 
 
-def _log_audit_task_exception(task: "asyncio.Task[None]") -> None:
-    """Surface a fire-and-forget audit-log task failure as a warning.
-
-    ``asyncio.create_task`` swallows exceptions silently — if the audit
-    write fails we'd otherwise lose the row without any signal.
-    """
-    if task.cancelled():
-        return
-    exc: Final = task.exception()
-    if exc is not None:
-        verbose_proxy_logger.warning("Failed to write cache-settings audit log: %s", exc)
-
-
 async def _emit_cache_settings_audit_log(
     *,
     action: AUDIT_ACTIONS,
@@ -312,7 +299,7 @@ async def _emit_cache_settings_audit_log(
     if not is_audit_logging_enabled():
         return
 
-    task: Final = track_audit_task(
+    track_audit_task(
         asyncio.create_task(
             create_audit_log_for_update(
                 request_data=LiteLLM_AuditLogs(
@@ -329,7 +316,6 @@ async def _emit_cache_settings_audit_log(
             )
         )
     )
-    task.add_done_callback(_log_audit_task_exception)
 
 
 class CacheSettingsManager:

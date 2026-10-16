@@ -177,21 +177,6 @@ def _resolve_team_callbacks(team_metadata: object) -> TeamCallbackMetadata:
     return resolved
 
 
-def _log_audit_task_exception(task: "asyncio.Task[None]") -> None:
-    """Surface a fire-and-forget audit-log task failure.
-
-    ``asyncio.create_task`` swallows exceptions silently — if the audit
-    write fails (transient DB error etc.) we'd otherwise lose the row
-    without any signal.  Log at warning level so the operator sees there's
-    a gap in the audit trail.
-    """
-    if task.cancelled():
-        return
-    exc: Final = task.exception()
-    if exc is not None:
-        verbose_proxy_logger.warning("Failed to write team-callback audit log: %s", exc)
-
-
 async def _emit_team_callback_audit_log(
     *,
     team_id: str,
@@ -224,7 +209,7 @@ async def _emit_team_callback_audit_log(
     redacted_before: Final = _redact_callback_secrets(before_metadata)
     redacted_after: Final = _redact_callback_secrets(after_metadata)
 
-    task: Final = track_audit_task(
+    track_audit_task(
         asyncio.create_task(
             create_audit_log_for_update(
                 request_data=LiteLLM_AuditLogs(
@@ -241,7 +226,6 @@ async def _emit_team_callback_audit_log(
             )
         )
     )
-    task.add_done_callback(_log_audit_task_exception)
 
 
 def _callback_error(status_code: int, message: str) -> HTTPException:
