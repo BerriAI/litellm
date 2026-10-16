@@ -1,15 +1,18 @@
 import asyncio
-import threading
+import base64
 import time
-from collections.abc import Iterator
+import uuid
+from collections.abc import Generator
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
 from typing import Final, Literal
+from unittest.mock import patch
 
 import pytest
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 
 import litellm
-
 from litellm.llms.anthropic.pass_through.adapters.transformation import (
     LiteLLMAnthropicMessagesAdapter,
     truncate_tool_name,
@@ -18,10 +21,10 @@ from litellm.llms.vertex_ai.count_tokens.context import (
     VertexGeminiCountContext,
     VertexGeminiCountContextError,
     gemini_count_contents,
+    inference_request_view,
     vertex_gemini_count_context,
 )
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
-from litellm.types.llms.vertex_ai import ContentType
 
 _SCHEMA: Final[JsonValue] = {
     "type": "object",
@@ -222,11 +225,11 @@ _ANTHROPIC_CONVERSATION: Final = (
 
 
 @pytest.mark.parametrize("custom_llm_provider", ("vertex_ai", "gemini"))
-def test_anthropic_documents_images_and_tool_turns_become_gemini_parts(
+async def test_anthropic_documents_images_and_tool_turns_become_gemini_parts(
     custom_llm_provider: Literal["vertex_ai", "gemini"],
 ) -> None:
-    contents: Final = asyncio.run(
-        gemini_count_contents(_ANTHROPIC_CONVERSATION, "anthropic", "gemini-2.5-flash", custom_llm_provider)
+    contents: Final = await gemini_count_contents(
+        _ANTHROPIC_CONVERSATION, "anthropic", "gemini-2.5-flash", custom_llm_provider, {}
     )
 
     assert contents == [
@@ -244,14 +247,13 @@ def test_anthropic_documents_images_and_tool_turns_become_gemini_parts(
 
 
 @pytest.mark.parametrize("custom_llm_provider", ("vertex_ai", "gemini"))
-def test_openai_messages_keep_their_chat_conversion(custom_llm_provider: Literal["vertex_ai", "gemini"]) -> None:
-    contents: Final = asyncio.run(
-        gemini_count_contents(
-            ({"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"}),
-            "openai",
-            "gemini-2.5-flash",
-            custom_llm_provider,
-        )
+async def test_openai_messages_keep_their_chat_conversion(custom_llm_provider: Literal["vertex_ai", "gemini"]) -> None:
+    contents: Final = await gemini_count_contents(
+        ({"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"}),
+        "openai",
+        "gemini-2.5-flash",
+        custom_llm_provider,
+        {},
     )
 
     assert contents == [
@@ -260,62 +262,208 @@ def test_openai_messages_keep_their_chat_conversion(custom_llm_provider: Literal
     ]
 
 
-_SLOW_IMAGE_SECONDS: Final = 0.5
+_PNG_BYTES: Final = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+)
+_DOWNLOAD_SECONDS: Final = 0.5
 
 
-class _SlowImageHandler(BaseHTTPRequestHandler):
+class _SlowPngHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
-        time.sleep(_SLOW_IMAGE_SECONDS)
+        time.sleep(_DOWNLOAD_SECONDS)
         self.send_response(200)
         self.send_header("Content-Type", "image/png")
-        self.send_header("Content-Length", "5")
+        self.send_header("Content-Length", str(len(_PNG_BYTES)))
         self.end_headers()
-        _ = self.wfile.write(b"image")
+        self.wfile.write(_PNG_BYTES)
 
     def log_message(self, format: str, *args: object) -> None:
         return None
 
 
-@pytest.fixture
-def slow_image_url(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["127.0.0.1"])
-    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), _SlowImageHandler)
-    thread: Final = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    yield f"http://127.0.0.1:{server.server_port}/a.png"
-    server.shutdown()
-    server.server_close()
+@contextmanager
+def _slow_png_server() -> Generator[str, None, None]:
+    with ThreadingHTTPServer(("127.0.0.1", 0), _SlowPngHandler) as server:
+        thread: Final = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            yield f"http://127.0.0.1:{server.server_address[1]}"
+        finally:
+            server.shutdown()
 
 
-async def _count_while_ticking(url: str, custom_llm_provider: Literal["vertex_ai", "gemini"]) -> tuple[list[ContentType], int]:
-    stop: Final = asyncio.Event()
-
-    async def ticks() -> int:
-        count = 0
-        while not stop.is_set():
-            await asyncio.sleep(0.02)
-            count += 1  # rebind-ok: loop counter
-        return count
-
-    ticker: Final = asyncio.create_task(ticks())
-    contents: Final = await gemini_count_contents(
-        ({"role": "user", "content": [{"type": "image", "source": {"type": "url", "url": url}}]},),
-        "anthropic",
-        "gemini-2.5-flash",
-        custom_llm_provider,
-    )
-    stop.set()
-    return contents, await ticker
+async def _event_loop_wake_delay(nap_seconds: float) -> float:
+    started: Final = time.monotonic()
+    await asyncio.sleep(nap_seconds)
+    return time.monotonic() - started
 
 
 @pytest.mark.parametrize("custom_llm_provider", ("vertex_ai", "gemini"))
-def test_remote_media_is_fetched_without_blocking_the_event_loop(
-    slow_image_url: str, custom_llm_provider: Literal["vertex_ai", "gemini"]
+async def test_remote_image_downloads_without_blocking_the_event_loop(
+    custom_llm_provider: Literal["vertex_ai", "gemini"], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    contents, ticks = asyncio.run(_count_while_ticking(slow_image_url, custom_llm_provider))
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    with _slow_png_server() as base_url:
+        image_url: Final = f"{base_url}/{uuid.uuid4().hex}.png"
+        wake_delay, contents = await asyncio.gather(
+            _event_loop_wake_delay(0.05),
+            gemini_count_contents(
+                (
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Describe it"},
+                            {"type": "image", "source": {"type": "url", "url": image_url}},
+                        ],
+                    },
+                ),
+                "anthropic",
+                "gemini-2.5-flash",
+                custom_llm_provider,
+                {},
+            ),
+        )
 
-    assert {"inline_data": {"data": "aW1hZ2U=", "mime_type": "image/png"}} in contents[0]["parts"]
-    assert ticks >= 10
+    assert contents == [
+        {
+            "role": "user",
+            "parts": [
+                {"text": "Describe it"},
+                {"inline_data": {"data": base64.b64encode(_PNG_BYTES).decode(), "mime_type": "image/png"}},
+            ],
+        }
+    ]
+    assert wake_delay < _DOWNLOAD_SECONDS / 2
+
+
+class _MissingImageHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        self.send_response(404)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, format: str, *args: object) -> None:
+        return None
+
+
+@pytest.mark.parametrize("custom_llm_provider", ("vertex_ai", "gemini"))
+async def test_image_that_cannot_be_fetched_returns_an_error_value(
+    custom_llm_provider: Literal["vertex_ai", "gemini"], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    with ThreadingHTTPServer(("127.0.0.1", 0), _MissingImageHandler) as server:
+        Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            contents = await gemini_count_contents(
+                (
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "url",
+                                    "url": f"http://127.0.0.1:{server.server_address[1]}/{uuid.uuid4().hex}.png",
+                                },
+                            }
+                        ],
+                    },
+                ),
+                "anthropic",
+                "gemini-2.5-flash",
+                custom_llm_provider,
+                {},
+            )
+        finally:
+            server.shutdown()
+
+    assert isinstance(contents, VertexGeminiCountContextError)
+
+
+def test_anthropic_view_keeps_only_the_turns_after_a_client_compaction_block() -> None:
+    view: Final = inference_request_view(
+        (
+            {"role": "user", "content": "first question " * 50},
+            {"role": "assistant", "content": [{"type": "compaction", "content": "Summary of the earlier turns."}]},
+            {"role": "user", "content": "latest question"},
+        ),
+        "Be brief.",
+        "anthropic",
+    )
+
+    assert view.messages == [{"role": "user", "content": "latest question"}]
+    assert "Summary of the earlier turns." in str(view.system)
+    assert "Be brief." in str(view.system)
+
+
+def test_anthropic_view_flattens_a_replayed_web_search_result_into_text() -> None:
+    snippet: Final = "LiteLLM ships a weekly release candidate and a stable line."
+    view: Final = inference_request_view(
+        (
+            {"role": "user", "content": "What is new?"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "server_tool_use", "id": "srvtoolu_01", "name": "web_search", "input": {"query": "news"}},
+                    {
+                        "type": "web_search_tool_result",
+                        "tool_use_id": "srvtoolu_01",
+                        "content": [
+                            {
+                                "type": "web_search_result",
+                                "url": "https://docs.litellm.ai/release_notes",
+                                "title": "Release notes",
+                                "encrypted_content": "",
+                                "snippet": snippet,
+                            }
+                        ],
+                    },
+                ],
+            },
+        ),
+        None,
+        "anthropic",
+    )
+
+    assistant_blocks: Final = TypeAdapter(list[dict[str, str]]).validate_python(view.messages[1]["content"])
+    assert [block["type"] for block in assistant_blocks] == ["text"]
+    assert snippet in assistant_blocks[0]["text"]
+
+
+def test_openai_view_is_the_request_unchanged() -> None:
+    messages: Final = ({"role": "user", "content": [{"type": "compaction", "content": "kept"}]},)
+
+    view: Final = inference_request_view(messages, "Be brief.", "openai")
+
+    assert view.messages == messages
+    assert view.system == "Be brief."
+
+
+async def test_gcs_media_type_lookup_uses_the_deployment_vertex_project() -> None:
+    with patch(
+        "litellm.llms.vertex_ai.gemini.transformation._get_gcs_object_content_type",
+        return_value="image/png",
+    ) as lookup:
+        contents: Final = await gemini_count_contents(
+            (
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "source": {"type": "url", "url": "gs://bucket/image-without-extension"}}
+                    ],
+                },
+            ),
+            "anthropic",
+            "gemini-2.5-flash",
+            "vertex_ai",
+            {"vertex_project": "deployment-project"},
+        )
+
+    assert lookup.call_args.kwargs.get("vertex_project") == "deployment-project"
+    assert not isinstance(contents, VertexGeminiCountContextError)
+    assert contents[0]["parts"][0] == {
+        "file_data": {"mime_type": "image/png", "file_uri": "gs://bucket/image-without-extension"}
+    }
 
 
 @pytest.mark.parametrize("custom_llm_provider", ("vertex_ai", "gemini"))
@@ -347,6 +495,9 @@ def test_anthropic_replayed_web_search_result_is_counted_as_its_text(
         {"role": "user", "content": "Thanks."},
     )
 
-    contents: Final = asyncio.run(gemini_count_contents(messages, "anthropic", "gemini-2.5-flash", custom_llm_provider))
+    view: Final = inference_request_view(messages, None, "anthropic")
+    contents: Final = asyncio.run(
+        gemini_count_contents(view.messages, "anthropic", "gemini-2.5-flash", custom_llm_provider, {})
+    )
 
     assert snippet in str(contents)

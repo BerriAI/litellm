@@ -1,3 +1,5 @@
+import asyncio
+import json
 from collections.abc import Mapping
 from typing import Final
 
@@ -5,10 +7,14 @@ import pytest
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
-from litellm.llms.anthropic.pass_through.convertible_blocks import unconvertible_anthropic_blocks
+from litellm.llms.anthropic.pass_through.convertible_blocks import (
+    unconvertible_anthropic_blocks,
+    unconvertible_blocks_error,
+)
 from litellm.llms.anthropic.pass_through.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
+from litellm.llms.vertex_ai.count_tokens.context import gemini_count_contents
 from litellm.types.llms.anthropic import AllAnthropicPassThroughMessageValues
 
 _JSON_OBJECTS: Final = TypeAdapter(list[dict[str, JsonValue]])
@@ -91,49 +97,68 @@ def test_messages_that_are_not_json_are_left_to_the_count() -> None:
     assert unconvertible_anthropic_blocks(messages) == ()
 
 
-def _tool_result(*inner: Mapping[str, object]) -> Mapping[str, object]:
-    return {"type": "tool_result", "tool_use_id": "toolu_01", "content": list(inner)}
+def _tool_turn(inner: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    return (
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_01", "name": "lookup", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": [dict(inner)]}]},
+    )
 
 
-_KEPT_INSIDE_TOOL_RESULT: Final[tuple[Mapping[str, object], ...]] = (
-    {"type": "text", "text": "42"},
-    {"type": "image", "source": _PNG},
-    {"type": "document", "source": _PDF},
-    {"type": "tool_reference", "tool_name": "lookup"},
+def _sent_by_each_counter(inner: Mapping[str, object]) -> tuple[str, str]:
+    messages: Final = _tool_turn(inner)
+    gemini: Final = asyncio.run(gemini_count_contents(messages, "anthropic", "gemini-2.5-flash", "gemini", {}))
+    openai: Final = LiteLLMAnthropicToResponsesAPIAdapter().translate_messages_to_responses_input(
+        [dict(message) for message in messages]  # pyright: ignore[reportArgumentType]  # sends block shapes the TypedDicts leave out on purpose
+    )
+    return json.dumps(gemini, default=str), json.dumps(openai, default=str)
+
+
+_KEPT_INSIDE_TOOL_RESULT: Final[tuple[tuple[Mapping[str, object], str], ...]] = (
+    ({"type": "text", "text": "forty-two"}, "forty-two"),
+    ({"type": "image", "source": _PNG}, _PNG["data"]),
+    ({"type": "document", "source": _PDF}, _PDF["data"]),
 )
 
-_DROPPED_INSIDE_TOOL_RESULT: Final[tuple[tuple[Mapping[str, object], str], ...]] = (
+_DROPPED_INSIDE_TOOL_RESULT: Final[tuple[tuple[Mapping[str, object], str, str], ...]] = (
     (
-        {"type": "search_result", "source": "https://example.com", "title": "t", "content": [{"type": "text", "text": "x"}]},
+        {
+            "type": "search_result",
+            "source": "https://example.com",
+            "title": "t",
+            "content": [{"type": "text", "text": "search-snippet"}],
+        },
+        "search-snippet",
         "search_result inside a tool_result",
     ),
-    ({"type": "document", "source": {"type": "text", "data": "notes"}}, "document with a text source inside a tool_result"),
+    (
+        {"type": "document", "source": {"type": "text", "data": "text-notes"}},
+        "text-notes",
+        "document with a text source inside a tool_result",
+    ),
+    ({"type": "tool_reference", "tool_name": "find_docs"}, "find_docs", "tool_reference inside a tool_result"),
 )
 
 
-@pytest.mark.parametrize("inner", _KEPT_INSIDE_TOOL_RESULT)
-def test_tool_result_content_the_conversions_keep_is_accepted(inner: Mapping[str, object]) -> None:
-    assert unconvertible_anthropic_blocks([{"role": "user", "content": [_tool_result(inner)]}]) == ()
+@pytest.mark.parametrize(("inner", "marker"), _KEPT_INSIDE_TOOL_RESULT)
+def test_tool_result_content_both_counters_send_is_accepted(inner: Mapping[str, object], marker: str) -> None:
+    gemini, openai = _sent_by_each_counter(inner)
+
+    assert marker in gemini
+    assert marker in openai
+    assert unconvertible_anthropic_blocks(_tool_turn(inner)) == ()
 
 
-@pytest.mark.parametrize(("inner", "label"), _DROPPED_INSIDE_TOOL_RESULT)
-def test_tool_result_content_both_conversions_drop_is_named(inner: Mapping[str, object], label: str) -> None:
-    block: Final = _tool_result(inner)
-    chat: Final = _JSON_OBJECTS.validate_python(
-        LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
-            messages=_adapter_messages("user", block)
-        )
-    )
-    responses: Final = _JSON_OBJECTS.validate_python(
-        LiteLLMAnthropicToResponsesAPIAdapter().translate_messages_to_responses_input(_adapter_messages("user", block))
-    )
-    assert [message.get("content") for message in chat] == [""]
-    assert [item.get("output") for item in responses] == [""]
-    assert unconvertible_anthropic_blocks([{"role": "user", "content": [block]}]) == (label,)
+@pytest.mark.parametrize(("inner", "marker", "label"), _DROPPED_INSIDE_TOOL_RESULT)
+def test_tool_result_content_both_counters_drop_is_named(inner: Mapping[str, object], marker: str, label: str) -> None:
+    gemini, openai = _sent_by_each_counter(inner)
+
+    assert marker not in gemini
+    assert marker not in openai
+    assert unconvertible_anthropic_blocks(_tool_turn(inner)) == (label,)
 
 
-def test_replayed_web_search_turn_is_accepted_because_inference_flattens_it_to_text() -> None:
-    messages: Final = [
+def _replayed_web_search(encrypted_content: str) -> tuple[Mapping[str, object], ...]:
+    return (
         {"role": "user", "content": "What is new?"},
         {
             "role": "assistant",
@@ -147,12 +172,21 @@ def test_replayed_web_search_turn_is_accepted_because_inference_flattens_it_to_t
                             "type": "web_search_result",
                             "url": "https://docs.litellm.ai/release_notes",
                             "title": "Release notes",
-                            "encrypted_content": "",
-                            "snippet": "weekly release candidate",
+                            "encrypted_content": encrypted_content,
+                            "snippet": "LiteLLM ships a weekly release candidate.",
                         }
                     ],
                 },
             ],
         },
-    ]
-    assert unconvertible_anthropic_blocks(messages) == ()
+    )
+
+
+def test_a_replayed_web_search_inference_sends_as_text_is_accepted() -> None:
+    assert unconvertible_blocks_error(_replayed_web_search(""), "anthropic") is None
+
+
+def test_an_encrypted_web_search_inference_cannot_send_is_named() -> None:
+    error: Final = unconvertible_blocks_error(_replayed_web_search("opaque"), "anthropic")
+    assert error is not None
+    assert error.endswith("server_tool_use, web_search_tool_result")

@@ -1360,23 +1360,30 @@ class VertexAITokenCounter(BaseTokenCounter):
                 VertexGeminiCountContextError,
                 count_context_error_response,
                 gemini_count_contents,
+                inference_request_view,
+                provider_error_response,
                 unconvertible_messages_error,
                 vertex_gemini_count_context,
             )
             from litellm.llms.vertex_ai.count_tokens.handler import VertexAITokenCounter
 
-            count_context: Final = vertex_gemini_count_context(system=system, tools=tools)
+            request_view: Final = inference_request_view(messages or [], system, messages_format)
+            count_context: Final = vertex_gemini_count_context(system=request_view.system, tools=tools)
             if isinstance(count_context, VertexGeminiCountContextError):
                 return count_context_error_response(count_context, request_model, model_to_use)
-            blocks_error: Final = unconvertible_messages_error(messages, messages_format)
+            blocks_error: Final = unconvertible_messages_error(request_view.messages, messages_format)
             if blocks_error is not None:
                 return count_context_error_response(blocks_error, request_model, model_to_use)
 
             resolved_contents: Final = (
                 contents
                 if contents is not None
-                else await gemini_count_contents(messages or [], messages_format, model_to_use, "vertex_ai")
+                else await gemini_count_contents(
+                    request_view.messages, messages_format, model_to_use, "vertex_ai", count_tokens_params_request
+                )
             )
+            if isinstance(resolved_contents, VertexGeminiCountContextError):
+                return count_context_error_response(resolved_contents, request_model, model_to_use)
 
             count_tokens_params: Final = {
                 "model": model_to_use,
@@ -1390,15 +1397,7 @@ class VertexAITokenCounter(BaseTokenCounter):
                     **count_tokens_params_request,
                 )
             except litellm.APIError as error:
-                return TokenCountResponse(
-                    total_tokens=0,
-                    request_model=request_model,
-                    model_used=model_to_use,
-                    tokenizer_type="gemini",
-                    error=True,
-                    error_message=error.message,
-                    status_code=error.status_code,
-                )
+                return provider_error_response(error, request_model, model_to_use)
 
             if "totalTokens" in result:
                 return TokenCountResponse(
