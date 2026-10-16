@@ -61,9 +61,19 @@ def search_provider_cost_per_query(
         )
         return (input_cost, 0.0)
 
+    if custom_llm_provider == "exa_ai":
+        from litellm.llms.exa_ai.search.cost_calculator import exa_ai_search_cost
+
+        return (
+            exa_ai_search_cost(
+                optional_params=optional_params if optional_params is not None else EMPTY_OPTIONAL_PARAMS
+            ),
+            0.0,
+        )
+
     model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
 
-    # Check for tiered pricing (e.g., Exa AI based on max_results)
+    # Check for tiered pricing based on max_results
     tiered_pricing: Final = model_info.get("tiered_pricing")
     if tiered_pricing and isinstance(tiered_pricing, list):
         max_results: Final = (optional_params or {}).get("max_results", 10)  # default 10 results

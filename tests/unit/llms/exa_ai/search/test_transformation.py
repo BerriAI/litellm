@@ -1,3 +1,4 @@
+import datetime
 import json
 from typing import Final
 from unittest.mock import Mock
@@ -8,8 +9,11 @@ import respx
 from pydantic import ValidationError
 
 import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.search.transformation import SearchResponse, SearchResult
+from litellm.llms.exa_ai.search.cost_calculator import EXA_AI_ADDITIONAL_RESULT_COST, EXA_AI_COST_DOLLARS_PARAM
 from litellm.llms.exa_ai.search.transformation import ExaAISearchConfig
+from litellm.search.cost_calculator import search_provider_cost_per_query
 
 EXA_SEARCH_URL: Final = "https://api.exa.ai/search"
 
@@ -41,7 +45,7 @@ def test_transform_search_response_snippet_falls_back_through_content_modes(
         json={"results": [{"title": "Title", "url": "https://example.com", **content_fields}]},
     )
 
-    response: Final = ExaAISearchConfig().transform_search_response(raw_response, logging_obj=Mock())
+    response: Final = ExaAISearchConfig().transform_search_response(raw_response, logging_obj=Mock(optional_params={}))
 
     assert response.results[0].snippet == expected_snippet
 
@@ -86,14 +90,16 @@ def test_search_sends_max_results_as_num_results(respx_mock: respx.MockRouter) -
     assert json.loads(route.calls.last.request.content) == {
         "query": "machine learning",
         "numResults": 5,
-        "contents": {"text": True},
+        "contents": {"highlights": True},
     }
     assert route.calls.last.request.headers["x-api-key"] == "test-exa-key"
     assert [result.url for result in response.results] == ["https://example.com/ml"]
 
 
 def _transform(payload: object) -> SearchResponse:
-    return ExaAISearchConfig().transform_search_response(httpx.Response(200, json=payload), logging_obj=Mock())
+    return ExaAISearchConfig().transform_search_response(
+        httpx.Response(200, json=payload), logging_obj=Mock(optional_params={})
+    )
 
 
 def test_transform_search_response_maps_every_exa_result_in_provider_order():
@@ -212,3 +218,88 @@ def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str) ->
         ExaAISearchConfig().get_complete_url(api_base=api_base, optional_params={})
         == "https://gateway.example.com/exa/search"
     )
+
+
+@pytest.fixture
+def _local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+
+    monkeypatch.setattr(litellm, "model_cost", GetModelCostMap.load_local_model_cost_map())
+
+
+def _logging_obj() -> Logging:
+    return Logging(
+        model="exa_ai/search",
+        messages=[],
+        stream=False,
+        call_type="search",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="exa-search",
+        function_id="f",
+    )
+
+
+def _priced_search(**kwargs: object) -> float:
+    response: Final = litellm.search(
+        query="litellm release notes",
+        search_provider="exa_ai",
+        api_key="test-exa-key",
+        litellm_logging_obj=_logging_obj(),
+        **kwargs,
+    )
+    cost: Final[object] = response._hidden_params["response_cost"]
+    assert isinstance(cost, float)
+    return cost
+
+
+@pytest.mark.usefixtures("exa_api_key", "_local_model_cost_map")
+def test_search_cost_is_the_cost_exa_reports(respx_mock: respx.MockRouter) -> None:
+    reported_cost: Final = 0.0123
+    respx_mock.post(EXA_SEARCH_URL).respond(json={"results": [], "costDollars": {"total": reported_cost}})
+
+    assert _priced_search() == pytest.approx(reported_cost)
+
+
+@pytest.mark.usefixtures("exa_api_key", "_local_model_cost_map")
+def test_search_cost_cannot_be_set_by_the_caller(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(EXA_SEARCH_URL).respond(json={"results": []})
+    map_price, _ = search_provider_cost_per_query(model="exa_ai/search", custom_llm_provider="exa_ai")
+
+    cost: Final = _priced_search(**{EXA_AI_COST_DOLLARS_PARAM: 0.0})
+
+    assert cost == pytest.approx(map_price)
+    assert map_price > 0.0
+    assert EXA_AI_COST_DOLLARS_PARAM.encode() not in route.calls.last.request.content
+
+
+@pytest.mark.usefixtures("exa_api_key", "_local_model_cost_map")
+def test_search_cost_without_a_reported_cost_adds_each_result_above_the_included_ten(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(EXA_SEARCH_URL).respond(json={"results": []})
+
+    base: Final = _priced_search()
+
+    assert _priced_search(max_results=5) == pytest.approx(base)
+    assert _priced_search(max_results=25) == pytest.approx(base + 15 * EXA_AI_ADDITIONAL_RESULT_COST)
+    assert _priced_search(numResults=12) == pytest.approx(base + 2 * EXA_AI_ADDITIONAL_RESULT_COST)
+
+
+@pytest.mark.usefixtures("exa_api_key", "_local_model_cost_map")
+@pytest.mark.parametrize(
+    ("search_type", "pricing_model"),
+    [
+        ("auto", "exa_ai/search"),
+        ("fast", "exa_ai/search"),
+        ("deep-lite", "exa_ai/search-deep"),
+        ("deep", "exa_ai/search-deep"),
+        ("deep-reasoning", "exa_ai/search-deep-reasoning"),
+    ],
+)
+def test_search_cost_without_a_reported_cost_uses_the_price_of_its_search_type(
+    respx_mock: respx.MockRouter, search_type: str, pricing_model: str
+) -> None:
+    respx_mock.post(EXA_SEARCH_URL).respond(json={"results": []})
+    model_info: Final = litellm.get_model_info(model=pricing_model, custom_llm_provider="exa_ai")
+
+    assert _priced_search(type=search_type) == pytest.approx(model_info["input_cost_per_query"])

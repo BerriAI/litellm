@@ -1,7 +1,7 @@
 """
 Calls Exa AI's /search endpoint to search the web.
 
-Exa AI API Reference: https://docs.exa.ai/reference/search
+Exa AI API Reference: https://exa.ai/docs/reference/search
 """
 
 from collections.abc import Iterable, Mapping
@@ -16,6 +16,7 @@ from litellm.llms.base_llm.search.transformation import (
     SearchResponse,
     SearchResult,
 )
+from litellm.llms.exa_ai.search.cost_calculator import EXA_AI_COST_DOLLARS_PARAM
 from litellm.secret_managers.main import get_secret_str
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
@@ -32,11 +33,11 @@ class _ExaAISearchRequestRequired(TypedDict):
 class ExaAISearchRequest(_ExaAISearchRequestRequired, total=False):
     """
     Exa AI Search API request format.
-    Based on: https://docs.exa.ai/reference/search
+    Based on: https://exa.ai/docs/reference/search
     """
 
-    type: str  # Optional - search type ('keyword', 'neural', 'fast', 'auto'), default 'auto'
-    category: str  # Optional - data category ('company', 'research paper', 'news', 'pdf', 'github', 'tweet', 'personal site', 'linkedin profile', 'financial report')
+    type: str  # Optional - 'auto' (default), 'fast', 'instant', 'deep-lite', 'deep', 'deep-reasoning'
+    category: str  # Optional - 'company', 'people', 'publication', 'news', 'personal site', 'financial report'
     userLocation: str  # Optional - two-letter ISO country code
     numResults: int  # Optional - number of results (max 100), default 10
     includeDomains: list[str]  # Optional - list of domains to include
@@ -146,13 +147,17 @@ class ExaAISearchConfig(BaseSearchConfig):
 
         # pass through all other parameters as-is
         for param, value in optional_params.items():
-            if param not in self.get_supported_perplexity_optional_params() and param not in result_data:
+            if (
+                param not in self.get_supported_perplexity_optional_params()
+                and param not in result_data
+                and param != EXA_AI_COST_DOLLARS_PARAM
+            ):
                 result_data[param] = value
 
-        # By default, request text content if not explicitly specified
-        # Exa AI doesn't return content/text unless explicitly requested
+        # Exa returns no page content unless asked. Highlights are the query-relevant
+        # excerpts of each page, a fraction of the size of full text
         if "contents" not in result_data:
-            result_data["contents"] = {"text": True}
+            result_data["contents"] = {"highlights": True}
 
         return result_data
 
@@ -183,25 +188,38 @@ class ExaAISearchConfig(BaseSearchConfig):
         """
         response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
-        # Transform results to SearchResult objects
-        results: Final = []
-        for raw_result in _JSON_VALUES.validate_python(response_json.get("results", [])):
-            result = _JSON_OBJECT.validate_python(raw_result)
-            search_result = SearchResult.model_validate(
-                {
-                    "title": result.get("title", ""),
-                    "url": result.get("url", ""),
-                    "snippet": result.get("text")
-                    or "\n\n".join(_STRS.validate_python(result.get("highlights") or []))
-                    or result.get("summary")
-                    or "",
-                    "date": result.get("publishedDate"),  # ISO 8601 datetime string
-                    "last_updated": None,  # Exa AI doesn't provide last_updated in response
-                }
-            )
-            results.append(search_result)
+        # written unconditionally so a caller-supplied value can never price the request
+        logging_obj.optional_params = {  # rebind-ok: the logging object carries optional_params to cost tracking
+            **logging_obj.optional_params,
+            EXA_AI_COST_DOLLARS_PARAM: _reported_cost_dollars(response_json),
+        }
+
+        results: Final = [
+            _search_result(raw_result) for raw_result in _JSON_VALUES.validate_python(response_json.get("results", []))
+        ]
 
         return SearchResponse(
             results=results,
             object="search",
         )
+
+
+def _search_result(raw_result: object) -> SearchResult:
+    result: Final = _JSON_OBJECT.validate_python(raw_result)
+    return SearchResult.model_validate(
+        {
+            "title": result.get("title", ""),
+            "url": result.get("url", ""),
+            "snippet": result.get("text")
+            or "\n\n".join(_STRS.validate_python(result.get("highlights") or []))
+            or result.get("summary")
+            or "",
+            "date": result.get("publishedDate"),  # ISO 8601 datetime string
+            "last_updated": None,  # Exa AI doesn't provide last_updated in response
+        }
+    )
+
+
+def _reported_cost_dollars(response_json: Mapping[str, object]) -> object:
+    cost_dollars: Final = response_json.get("costDollars")
+    return _JSON_OBJECT.validate_python(cost_dollars).get("total") if isinstance(cost_dollars, Mapping) else None
