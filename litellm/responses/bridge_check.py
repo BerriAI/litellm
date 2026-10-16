@@ -55,14 +55,8 @@ def keep_registered_mode(backend_key: str, shared_model_info: Mapping[str, objec
         return shared_model_info
     if registered_mode is None and deployment_mode == "chat":
         return without_mode
-    if registered_mode is None or registered_mode == deployment_mode:
+    if registered_mode is None:
         return shared_model_info
-    verbose_logger.debug(
-        "Keeping mode=%s on shared backend key %s; the deployment's mode=%s routes only that deployment.",
-        registered_mode,
-        registration_key,
-        deployment_mode,
-    )
     return {**shared_model_info, "mode": registered_mode}
 
 
