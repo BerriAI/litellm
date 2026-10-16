@@ -1056,7 +1056,7 @@ class CustomGuardrail(CustomLogger):
         if eval_information is not None:
             # scratch_metadata started from litellm_params["metadata"], so its
             # eval_information already carries verdicts recorded by earlier judges
-            _setdefault_eval_information(
+            _set_eval_information(
                 cast(dict[str, object], litellm_params),  # cast-ok: kwargs litellm_params is a heterogeneous dict
                 eval_information,
             )
@@ -1069,12 +1069,12 @@ class CustomGuardrail(CustomLogger):
             if isinstance(mcd, dict):
                 mcd_litellm_params: Final = mcd.get("litellm_params")
                 if isinstance(mcd_litellm_params, dict):
-                    _setdefault_eval_information(
+                    _set_eval_information(
                         cast(dict[str, object], mcd_litellm_params),  # cast-ok: narrowed to dict by isinstance
                         eval_information,
                     )
             if isinstance(standard_logging_object, dict):
-                _setdefault_eval_information(
+                _set_eval_information(
                     cast(dict[str, object], standard_logging_object),  # cast-ok: narrowed to dict by isinstance
                     eval_information,
                 )
@@ -1675,12 +1675,14 @@ def _append_slg_to_litellm_params(lp: object, entries: list) -> None:
             existing.append(entry)
 
 
-def _setdefault_eval_information(
+def _set_eval_information(
     lp: dict[str, object],  # mutable-ok: merges eval info into the caller's shared metadata dict
     eval_info: object,
 ) -> None:
+    if not isinstance(lp.get("metadata"), dict):
+        lp["metadata"] = {}  # rebind-ok: callers share this litellm_params dict, so the metadata bucket must be created in place
     metadata_bucket: Final = cast(  # cast-ok: litellm_params["metadata"] is a heterogeneous dict
-        dict[str, object], lp.setdefault("metadata", {})
+        dict[str, object], lp["metadata"]
     )
     metadata_bucket["eval_information"] = eval_info
 
@@ -1714,7 +1716,7 @@ def _sync_guardrail_info_to_logging_obj(request_data: dict, logging_obj: object)
         return
     for lp in (getattr(logging_obj, "litellm_params", None), mcd.get("litellm_params")):
         if isinstance(lp, dict):
-            _setdefault_eval_information(
+            _set_eval_information(
                 cast(dict[str, object], lp),  # cast-ok: narrowed to dict by isinstance
                 eval_info,
             )

@@ -3818,3 +3818,18 @@ async def test_logging_only_eval_information_reaches_logging_metadata():
         for entry in slo_eval
     )
     assert out_kwargs["litellm_params"]["metadata"]["eval_information"] == slo_eval
+
+
+@pytest.mark.asyncio
+async def test_logging_only_eval_information_tolerates_none_metadata():
+    guardrail = _EvalInfoObserver()
+    kwargs, response = _logged_call([{"role": "user", "content": "hello there"}])
+    kwargs["litellm_params"]["metadata"] = None
+    kwargs["standard_logging_object"]["metadata"] = None
+
+    out_kwargs, _ = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
+
+    slo_eval = out_kwargs["standard_logging_object"]["metadata"]["eval_information"]
+    verdict: Final = {"eval_name": "eval-observer", "passed": True, "overall_score": 90.0}
+    assert slo_eval == [verdict, verdict]
+    assert out_kwargs["litellm_params"]["metadata"]["eval_information"] == slo_eval
