@@ -13,6 +13,7 @@ warnings.filterwarnings("ignore", message=".*`ReadOnly` qualifier.*")
 ### INIT VARIABLES #########################
 import threading
 import os
+import datetime
 
 # Load .env before any other litellm imports so env vars (e.g. LITELLM_UI_SESSION_DURATION) are available
 import dotenv as _dotenv
@@ -761,6 +762,16 @@ def is_openai_finetune_model(key: str) -> bool:
     return key.startswith("ft:") and not key.count(":") > 1
 
 
+def _is_past_deprecation_date(value: Mapping[str, object]) -> bool:
+    deprecation_date: Final = value.get("deprecation_date")
+    if not isinstance(deprecation_date, str):
+        return False
+    try:
+        return datetime.date.fromisoformat(deprecation_date) <= datetime.date.today()
+    except ValueError:
+        return False
+
+
 def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, object]]) -> None:
     for key, value in model_cost_map.items():
         if value.get("litellm_provider") == "openai" and not is_openai_finetune_model(key):
@@ -862,7 +873,9 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             if "-to-" not in key and "fireworks-ai-default" not in key:
                 fireworks_ai_models.add(key)
         elif value.get("litellm_provider") == "baseten":
-            baseten_models.add(key)
+            # retired Model APIs stay in the cost map for spend tracking but are no longer servable
+            if not _is_past_deprecation_date(value):
+                baseten_models.add(key)
         elif value.get("litellm_provider") == "fireworks_ai-embedding-models":
             # ignore the 'up-to', '-to-' model names -> not real models. just for cost tracking based on model params.
             if "-to-" not in key:

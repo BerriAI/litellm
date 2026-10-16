@@ -59,14 +59,33 @@ class TestBasetenModelDiscovery:
     def test_models_by_provider_comes_from_registry(self):
         """Static listing uses the model cost map, not the retired 2023 deployment IDs."""
         baseten_models = litellm.models_by_provider["baseten"]
-        registry_models = {
-            key for key, value in litellm.model_cost.items() if value.get("litellm_provider") == "baseten"
+        servable_registry_models = {
+            key
+            for key, value in litellm.model_cost.items()
+            if value.get("litellm_provider") == "baseten" and not litellm._is_past_deprecation_date(value)
         }
 
-        assert registry_models
-        assert registry_models <= set(baseten_models)
+        assert servable_registry_models
+        assert servable_registry_models <= set(baseten_models)
         for retired_id in ("qvv0xeq", "q841o8w", "31dxrj3"):
             assert retired_id not in baseten_models
+
+    def test_models_by_provider_skips_deprecated_models(self):
+        """Retired Model APIs stay in the cost map for spend tracking but are not listed."""
+        assert litellm.model_cost["baseten/zai-org/GLM-5"]["deprecation_date"]
+        assert "baseten/zai-org/GLM-5" not in litellm.models_by_provider["baseten"]
+
+    @pytest.mark.parametrize(
+        "value, expected",
+        [
+            ({}, False),
+            ({"deprecation_date": "2000-01-01"}, True),
+            ({"deprecation_date": "2999-01-01"}, False),
+            ({"deprecation_date": "not-a-date"}, False),
+        ],
+    )
+    def test_is_past_deprecation_date(self, value, expected):
+        assert litellm._is_past_deprecation_date(value) is expected
 
     def test_provider_model_info_registered(self):
         provider_config = ProviderConfigManager.get_provider_model_info(model=None, provider=LlmProviders.BASETEN)
