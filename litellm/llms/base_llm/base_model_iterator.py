@@ -81,6 +81,10 @@ class BaseModelResponseIterator:
         if self.http_response is not None:
             await self.http_response.aclose()
 
+    def close(self) -> None:
+        if self.http_response is not None:
+            self.http_response.close()
+
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk | ModelResponseStream:
         return GenericStreamingChunk(
             text="",

@@ -23,7 +23,7 @@ When adding new features, add meaningful tests. Don't add tests that don't check
 
 Same thing for bug fixes. The tests should make it so that this specific bug can never happen again without failing tests (i.e., regression)
 
-Never test structure of code only function of it
+Never test structure or implementation details of code, only function of it. A test should catch a change that breaks behavior by accident. If the only way it can fail is someone deliberately undoing the change, don't write it
 
 A test must only fail when litellm code changes. Never pin facts we don't own (a vendor's price, a third party's field, an upstream default, today's date) as literals or as "X must be absent". Assert the invariant our code guarantees instead, e.g. two rows agree, a value is within range, a field is derived from another. If an outside fact is truly load-bearing, cite its source and date next to the assertion so a reader can tell stale from broken
 
@@ -130,4 +130,4 @@ Before implementing:
 
 Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify
 
-Before requesting maintainer review, verify the current PR tip passes required CI and code coverage, meets Greptile confidence of at least 4/5, and has acceptable Veria and Bugbot reviews. Inspect warnings and findings, fix actionable issues, and rerun the affected checks and reviewers after changes. Record evidence for any false positive or unavailable review. Never treat a pending or missing bot result as a pass. Do not lower coverage thresholds or raise `ANY_CAPS` to satisfy a check
+Before requesting maintainer review, verify the current PR tip passes required CI and code coverage and has acceptable reviews from the review bots on the PR, such as Veria and Bugbot. Inspect warnings and findings, fix actionable issues, and rerun the affected checks and reviewers after changes. Record evidence for any false positive or unavailable review. Never treat a pending or missing bot result as a pass. Do not lower coverage thresholds or raise `ANY_CAPS` to satisfy a check

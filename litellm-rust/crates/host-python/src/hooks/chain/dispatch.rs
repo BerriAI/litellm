@@ -10,9 +10,7 @@ use pyo3::{
     types::PyDict,
 };
 
-use crate::{
-    HookStep, PythonCallEvent, PythonCallHooks, PythonOwned, PythonRuntime, missing_state,
-};
+use crate::{Error, HookStep, PythonCallEvent, PythonCallHooks, PythonOwned, PythonRuntime};
 
 use super::adapter::{ChainHooks, ChainStep, HookAdapter};
 
@@ -72,7 +70,7 @@ impl HookChain {
         py: Python<'_>,
         result: PyResult<Py<PyAny>>,
     ) -> PyResult<HookStep<Self, Py<PyDict>>> {
-        let (index, context) = self.arguments.take().ok_or_else(missing_state)?;
+        let (index, context) = self.arguments.take().ok_or(Error::MissingState)?;
         let result = resume_unless_cancelled(py, result)?;
         let step = self.hooks[index].resume_arguments(py, result)?;
         self.arguments_step(py, index, step, context)
@@ -113,7 +111,7 @@ impl HookChain {
         py: Python<'_>,
         result: PyResult<Py<PyAny>>,
     ) -> PyResult<HookStep<Self, Box<WireRequest>>> {
-        let (index, context) = self.wire.take().ok_or_else(missing_state)?;
+        let (index, context) = self.wire.take().ok_or(Error::MissingState)?;
         let result = resume_unless_cancelled(py, result)?;
         let step = self.hooks[index].resume_wire(py, result)?;
         self.wire_step(py, index, step, &context)
@@ -154,7 +152,7 @@ impl HookChain {
         py: Python<'_>,
         result: PyResult<Py<PyAny>>,
     ) -> PyResult<HookStep<Self, Py<PyAny>>> {
-        let (index, context) = self.response.take().ok_or_else(missing_state)?;
+        let (index, context) = self.response.take().ok_or(Error::MissingState)?;
         let result = resume_unless_cancelled(py, result)?;
         let step = self.hooks[index].resume_response(py, result)?;
         self.response_step(py, index, step, context)
@@ -195,7 +193,7 @@ impl HookChain {
         py: Python<'_>,
         result: PyResult<Py<PyAny>>,
     ) -> PyResult<HookStep<Self, ()>> {
-        let (index, event) = self.event.take().ok_or_else(missing_state)?;
+        let (index, event) = self.event.take().ok_or(Error::MissingState)?;
         let result = resume_unless_cancelled(py, result)?;
         let result = self.hooks[index].resume_event(py, result);
         let step = notification_result(py, is_terminal(&event), result)?;

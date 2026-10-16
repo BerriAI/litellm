@@ -2034,7 +2034,7 @@ async def test_priority_group_ignores_cached_backup_affinity() -> None:
         "role": "user",
         "content": [{"type": "text", "text": "word " * 5000, "cache_control": {"type": "ephemeral"}}],
     }]
-    cache: Final = PromptCachingCache(cache=router.cache)
+    cache: Final = PromptCachingCache(cache=router.prompt_caching_pin_cache)
     await cache.async_add_model_id(model_id="deploy-3", messages=messages, tools=None)
     assert await cache.async_get_model_id(messages=messages, tools=None) == {"model_id": "deploy-3"}
     response: Final = await router.acompletion(model="priority-group", messages=messages)
