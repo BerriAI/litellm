@@ -403,9 +403,9 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
     @staticmethod
     def get_endpoint_type(url: str, custom_llm_provider: str | None = None) -> EndpointType:
         parsed_url: Final = urlparse(url)
-        if custom_llm_provider in ("typesafe", "laya", "bespoke") and parsed_url.path.removesuffix("/").endswith(
-            "/v1/systemone"
-        ):
+        if custom_llm_provider in ("typesafe", "eu_jev", "laya", "bespoke") and parsed_url.path.removesuffix(
+            "/"
+        ).endswith("/v1/systemone"):
             return EndpointType.DECISIONS
         if (
             ("generateContent") in url
