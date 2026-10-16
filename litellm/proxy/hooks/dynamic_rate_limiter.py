@@ -197,9 +197,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
         cache: DualCache,
         data: dict,
         call_type: CallTypesLiteral,
-    ) -> (
-        Exception | str | dict | None
-    ):
+    ) -> Exception | str | dict | None:
         """
         - For a model group
         - Check if tpm/rpm available
