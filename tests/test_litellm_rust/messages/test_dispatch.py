@@ -179,6 +179,7 @@ def test_native_receives_normalized_request_and_original_call_shape() -> None:
         ("gemini-2.5-pro", {"custom_llm_provider": "vertex_ai"}, False),
         ("openai/gpt-5", {}, False),
         ("groq/llama-3.3-70b-versatile", {}, False),
+        ("unknown-provider/unknown-model", {}, False),
     ),
 )
 def test_only_requests_that_pass_through_to_a_messages_api_reach_a_messages_target_rule(
