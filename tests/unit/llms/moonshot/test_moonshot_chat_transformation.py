@@ -7,7 +7,6 @@ Moonshot AI is an OpenAI-compatible provider with minor customizations.
 
 from unittest.mock import patch
 
-
 import pytest
 
 import litellm
@@ -432,6 +431,48 @@ class TestMoonshotConfig:
         # Content should be flattened to a plain string
         assert isinstance(result["messages"][0]["content"], str)
         assert result["messages"][0]["content"] == "Hello, how are you?"
+
+    def test_transform_messages_flattens_empty_text_for_tool_call(self):
+        """Moonshot accepts an empty string, but rejects an empty text part."""
+        config = MoonshotChatConfig()
+        messages = [
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": ""}],
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "foo", "arguments": "{}"},
+                    }
+                ],
+            }
+        ]
+
+        result = config.transform_request(
+            model="moonshot-v1-8k",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert result["messages"][0]["content"] == ""
+
+    def test_transform_messages_preserves_empty_content_list(self):
+        """An empty list has no text parts to flatten."""
+        config = MoonshotChatConfig()
+        messages = [{"role": "assistant", "content": [], "tool_calls": []}]
+
+        result = config.transform_request(
+            model="moonshot-v1-8k",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert result["messages"][0]["content"] == []
 
     # ------------------------------------------------------------------ #
     # Tests for fill_reasoning_content                                     #
