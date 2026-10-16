@@ -17,6 +17,7 @@ import React, { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import TeamDropdown from "./common_components/team_dropdown";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
+import { ModelMaxBudget, ModelMaxBudgetField } from "./key_team_helpers/ModelMaxBudgetEditor";
 import { toast } from "@/lib/toast";
 import {
   getProxyBaseUrl,
@@ -46,6 +47,7 @@ interface CreateuserProps {
   possibleUIRoles: null | Record<string, Record<string, string>>;
   onUserCreated?: (userId: string) => void;
   isEmbedded?: boolean;
+  premiumUser?: boolean;
 }
 
 // Define an interface for the UI settings
@@ -64,6 +66,7 @@ interface CreateUserFormValues {
   metadata?: string;
   send_invite_email: boolean;
   models?: string[];
+  model_max_budget?: ModelMaxBudget;
 }
 
 const EMBEDDED_DEFAULTS: CreateUserFormValues = {
@@ -153,6 +156,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
   possibleUIRoles,
   onUserCreated,
   isEmbedded = false,
+  premiumUser = false,
 }) => {
   const queryClient = useQueryClient();
   const [uiSettings, setUISettings] = useState<UISettings | null>(null);
@@ -161,6 +165,8 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [apiuser, setApiuser] = useState<boolean>(false);
   const [userModels, setUserModels] = useState<string[]>([]);
+  const [modelMaxBudget, setModelMaxBudget] = useState<ModelMaxBudget>({});
+  const [modelMaxBudgetKey, setModelMaxBudgetKey] = useState(0);
   const [isPersonalKeyOpen, setIsPersonalKeyOpen] = useState(false);
   const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] = useState(false);
   const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null);
@@ -193,10 +199,16 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
     fetchData();
   }, []);
 
+  const resetModelMaxBudget = () => {
+    setModelMaxBudget({});
+    setModelMaxBudgetKey((prev) => prev + 1);
+  };
+
   const handleCancel = () => {
     setIsModalVisible(false);
     setApiuser(false);
     form.reset(defaultValues);
+    resetModelMaxBudget();
   };
 
   const handleCreate = async (formValues: CreateUserFormValues) => {
@@ -205,7 +217,10 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
       if (!isEmbedded) {
         setIsModalVisible(true);
       }
-      const payload = buildCreatePayload(withoutCollapsedModels(formValues, isPersonalKeyOpen));
+      const payload = {
+        ...buildCreatePayload(withoutCollapsedModels(formValues, isPersonalKeyOpen)),
+        ...(Object.keys(modelMaxBudget).length > 0 && { model_max_budget: modelMaxBudget }),
+      };
       const response = await userCreateCall(accessToken, null, payload);
       await queryClient.invalidateQueries({ queryKey: ["userList"] });
       setApiuser(true);
@@ -214,6 +229,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
       if (onUserCreated && isEmbedded) {
         onUserCreated(user_id);
         form.reset(defaultValues);
+        resetModelMaxBudget();
         return;
       }
 
@@ -230,6 +246,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
 
       toast.success("API user Created");
       form.reset(defaultValues);
+      resetModelMaxBudget();
       localStorage.removeItem("userData" + userID);
     } catch (error: any) {
       const errorMessage = error.response?.data?.detail || error?.message || "Error creating the user";
@@ -277,6 +294,17 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
     </FormField>
   );
 
+  const modelMaxBudgetField = (
+    <ModelMaxBudgetField
+      key={`model-max-budget-${modelMaxBudgetKey}`}
+      premiumUser={premiumUser}
+      value={modelMaxBudget}
+      onChange={setModelMaxBudget}
+      availableModels={userModels}
+      hint="Cap this user's spend on individual models, each with its own reset window."
+    />
+  );
+
   const roleField = (label: React.ReactNode) => (
     <FormField control={form.control} name="user_role" label={label}>
       {({ id, value, onChange }) => (
@@ -312,6 +340,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
             {roleField("User Role")}
             {teamField}
             {metadataField}
+            {modelMaxBudgetField}
             {sendInviteEmailField}
           </FieldGroup>
           <div className="mt-4 text-right">
@@ -386,6 +415,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
                 </FormField>
 
                 {metadataField}
+                {modelMaxBudgetField}
                 {sendInviteEmailField}
 
                 <Collapsible open={isPersonalKeyOpen} onOpenChange={setIsPersonalKeyOpen}>

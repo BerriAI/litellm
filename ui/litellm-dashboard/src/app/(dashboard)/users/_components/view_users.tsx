@@ -41,6 +41,7 @@ interface ViewUserDashboardProps {
   userRole: string | null;
   userID: string | null;
   teams: any[] | null;
+  premiumUser?: boolean;
   orgAdminOrgIds?: Array<{ organization_id: string; organization_alias: string }> | null;
 }
 
@@ -56,6 +57,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   userRole,
   userID,
   teams,
+  premiumUser = false,
   orgAdminOrgIds,
 }) => {
   const isProxyAdmin = userRole ? isProxyAdminRole(userRole) : false;
@@ -329,7 +331,12 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           {!userListQuery.isLoading && userID && accessToken && (
             <>
               {isProxyAdmin && (
-                <CreateUserButton userID={userID} accessToken={accessToken} possibleUIRoles={possibleUIRoles} />
+                <CreateUserButton
+                  userID={userID}
+                  accessToken={accessToken}
+                  possibleUIRoles={possibleUIRoles}
+                  premiumUser={premiumUser}
+                />
               )}
 
               {isProxyAdmin && (
