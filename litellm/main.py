@@ -5322,7 +5322,7 @@ def completion(
     top_p: float | None = None,
     n: int | None = None,
     stream: bool | None = None,
-    stream_options: dict | None = None,
+    stream_options: dict[str, object] | None = None,
     stop=None,
     max_completion_tokens: int | None = None,
     max_tokens: int | None = None,
@@ -5331,12 +5331,12 @@ def completion(
     audio: ChatCompletionAudioParam | None = None,
     presence_penalty: float | None = None,
     frequency_penalty: float | None = None,
-    logit_bias: dict | None = None,
+    logit_bias: dict[str, float] | None = None,
     user: str | None = None,
     # openai v1.0+ new params
     reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh", "max", "default"] | None = None,
     verbosity: Literal["low", "medium", "high"] | None = None,
-    response_format: dict | type[BaseModel] | None = None,
+    response_format: dict[str, object] | type[BaseModel] | None = None,
     seed: int | None = None,
     tools: list | None = None,
     tool_choice: str | dict | None = None,
@@ -5345,14 +5345,14 @@ def completion(
     parallel_tool_calls: bool | None = None,
     web_search_options: OpenAIWebSearchOptions | None = None,
     include_server_side_tool_invocations: bool | None = None,
-    deployment_id=None,
-    extra_headers: dict | None = None,
+    deployment_id: str | None = None,
+    extra_headers: dict[str, str] | None = None,
     safety_identifier: str | None = None,
     service_tier: str | None = None,
     store: bool | None = None,
     prompt_cache_key: str | None = None,
     # soon to be deprecated params by OpenAI
-    functions: list | None = None,
+    functions: list[Mapping[str, object]] | None = None,
     function_call: str | None = None,
     # set api_base, api_version, api_key
     base_url: str | None = None,
@@ -5492,76 +5492,12 @@ def completion(
                 enable_json_schema_validation=enable_json_schema_validation,
                 **kwargs,
             )
-    api_base = kwargs.get("api_base", None)
-    mock_response: Final[MOCK_RESPONSE_TYPE | None] = kwargs.get("mock_response", None)
-    mock_tool_calls: Final = kwargs.get("mock_tool_calls", None)
-    mock_timeout: Final = cast(bool | None, kwargs.get("mock_timeout", None))
-    force_timeout: Final = kwargs.get("force_timeout", 600)  ## deprecated
-    logger_fn: Final = kwargs.get("logger_fn", None)
-    verbose: Final = kwargs.get("verbose", False)
-    custom_llm_provider = kwargs.get("custom_llm_provider", None)
+    custom_llm_provider: Final = kwargs.get("custom_llm_provider", None)
     litellm_logging_obj: Final = kwargs.get("litellm_logging_obj", None)
-    id: Final = kwargs.get("id", None)
-    metadata: Final = kwargs.get("metadata", None)
-    model_info: Final = kwargs.get("model_info", None)
-    proxy_server_request: Final = kwargs.get("proxy_server_request", None)
     fallbacks = kwargs.get("fallbacks", None)
-    provider_specific_header: Final = cast(
-        ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None,
-        kwargs.get("provider_specific_header", None),
-    )
-    headers = kwargs.get("headers", None) or extra_headers
-
     ensure_alternating_roles: Final[bool | None] = kwargs.get("ensure_alternating_roles", None)
     user_continue_message: Final[ChatCompletionUserMessage | None] = kwargs.get("user_continue_message", None)
     assistant_continue_message: ChatCompletionAssistantMessage | None = kwargs.get("assistant_continue_message", None)
-    headers = {} if headers is None else dict(headers)
-    if extra_headers is not None:
-        headers.update(extra_headers)
-    # Inject proxy auth headers if configured
-    if litellm.proxy_auth is not None:
-        try:
-            proxy_headers: Final = _proxy_auth_headers(litellm.proxy_auth)
-            headers.update(proxy_headers)
-        except Exception as e:
-            verbose_logger.warning("Failed to get proxy auth headers: %s", e)
-    num_retries: Final = kwargs.get(
-        "num_retries", None
-    )  ## alt. param for 'max_retries'. Use this to pass retries w/ instructor.
-    max_retries = kwargs.get("max_retries", None)
-    cooldown_time: Final = kwargs.get("cooldown_time", None)
-    context_window_fallback_dict: Final = kwargs.get("context_window_fallback_dict", None)
-    organization: Final = kwargs.get("organization", None)
-    ### VERIFY SSL ###
-    ssl_verify: Final = kwargs.get("ssl_verify", None)
-    ### CUSTOM MODEL COST ###
-    input_cost_per_token: Final = kwargs.get("input_cost_per_token", None)
-    output_cost_per_token: Final = kwargs.get("output_cost_per_token", None)
-    cost_per_second: Final = kwargs.get("cost_per_second", None)
-    input_cost_per_second: Final = kwargs.get("input_cost_per_second", None)
-    output_cost_per_second: Final = kwargs.get("output_cost_per_second", None)
-    ### CUSTOM PROMPT TEMPLATE ###
-    initial_prompt_value: Final = kwargs.get("initial_prompt_value", None)
-    roles: Final = kwargs.get("roles", None)
-    final_prompt_value: Final = kwargs.get("final_prompt_value", None)
-    bos_token: Final = kwargs.get("bos_token", None)
-    eos_token: Final = kwargs.get("eos_token", None)
-    preset_cache_key: Final = kwargs.get("preset_cache_key", None)
-    hf_model_name: Final = kwargs.get("hf_model_name", None)
-    supports_system_message: Final = kwargs.get("supports_system_message", None)
-    base_model: Final = kwargs.get("base_model", None) or (
-        model_info.get("base_model") if isinstance(model_info, dict) else None
-    )
-    ### DISABLE FLAGS ###
-    disable_add_transform_inline_image_block: Final = kwargs.get("disable_add_transform_inline_image_block", None)
-    ### TEXT COMPLETION CALLS ###
-    text_completion: Final = kwargs.get("text_completion", False)
-    atext_completion: Final = kwargs.get("atext_completion", False)
-    ### ASYNC CALLS ###
-    acompletion: Final = kwargs.get("acompletion", False)
-    client: Final = kwargs.get("client", None)
-    ### Admin Controls ###
-    no_log: Final = kwargs.get("no-log", False)
     ### PROMPT MANAGEMENT ###
     prompt_id: Final = cast(str | None, kwargs.get("prompt_id", None))
     prompt_variables: Final = cast(dict | None, kwargs.get("prompt_variables", None))
@@ -5600,7 +5536,7 @@ def completion(
         (
             model,
             messages,
-            optional_params,
+            _,
         ) = litellm_logging_obj.get_chat_completion_prompt(
             model=model,
             messages=messages,
@@ -5621,14 +5557,6 @@ def completion(
         )
 
     try:
-        if base_url is not None:
-            api_base = base_url
-        is_router_call: Final = any("model_group" in (kwargs.get(k) or ()) for k in ("metadata", "litellm_metadata"))
-        if is_router_call:
-            max_retries = 0
-        elif num_retries is not None:
-            max_retries = num_retries
-        logging: Final[LiteLLMLoggingObj] = cast(LiteLLMLoggingObj, litellm_logging_obj)
         fallbacks = fallbacks or litellm.model_fallbacks
         if fallbacks is not None:
             return completion_with_fallbacks(  # pyright: ignore[reportReturnType]  # fallback runner is untyped; resolves to ModelResponse|CustomStreamWrapper at runtime
@@ -5639,6 +5567,192 @@ def completion(
             return litellm.batch_completion_models(  # pyright: ignore[reportReturnType]  # batch path returns a list of responses, outside completion()'s single-response return type
                 deployments=deployments, **args
             )
+        return execute_chat(
+            model=model,
+            messages=messages,
+            timeout=timeout,
+            temperature=temperature,
+            top_p=top_p,
+            n=n,
+            stream=stream,
+            stream_options=stream_options,
+            stop=stop,
+            max_completion_tokens=max_completion_tokens,
+            max_tokens=max_tokens,
+            modalities=modalities,
+            prediction=prediction,
+            audio=audio,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            logit_bias=logit_bias,
+            user=user,
+            reasoning_effort=reasoning_effort,
+            verbosity=verbosity,
+            response_format=response_format,
+            seed=seed,
+            tools=tools,
+            tool_choice=tool_choice,
+            logprobs=logprobs,
+            top_logprobs=top_logprobs,
+            parallel_tool_calls=parallel_tool_calls,
+            web_search_options=web_search_options,
+            include_server_side_tool_invocations=include_server_side_tool_invocations,
+            deployment_id=deployment_id,
+            extra_headers=extra_headers,
+            safety_identifier=safety_identifier,
+            service_tier=service_tier,
+            store=store,
+            prompt_cache_key=prompt_cache_key,
+            functions=functions,
+            function_call=function_call,
+            base_url=base_url,
+            api_version=api_version,
+            api_key=api_key,
+            thinking=thinking,
+            shared_session=shared_session,
+            kwargs=kwargs,
+            non_default_params=non_default_params,
+            control_options=control_options,
+            skip_responses_api_bridge=skip_responses_api_bridge,
+            prompt_id=prompt_id,
+            prompt_variables=prompt_variables,
+        )
+    except Exception as e:
+        ## Map to OpenAI Exception
+        raise exception_type(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=args,
+            extra_kwargs=kwargs,
+        )
+
+
+def execute_chat(
+    *,
+    model: str,
+    messages: list,  # mutable-ok: provider steps rebuild the message list, as in completion()
+    kwargs: dict,  # mutable-ok: provider steps pop request-scoped keys, as in completion()
+    non_default_params: dict[str, object],  # mutable-ok: seeded in place before the provider call
+    control_options: ControlOptions,
+    skip_responses_api_bridge: bool,
+    prompt_id: str | None,
+    prompt_variables: dict | None,  # mutable-ok: forwarded to get_litellm_params as is
+    timeout: float | str | httpx.Timeout | openai.Timeout | None = None,
+    temperature: float | None = None,
+    top_p: float | None = None,
+    n: int | None = None,
+    stream: bool | None = None,
+    stream_options: Mapping[str, object] | None = None,
+    stop: str | Sequence[str] | None = None,
+    max_completion_tokens: int | None = None,
+    max_tokens: int | None = None,
+    modalities: Sequence[ChatCompletionModality] | None = None,
+    prediction: ChatCompletionPredictionContentParam | None = None,
+    audio: ChatCompletionAudioParam | None = None,
+    presence_penalty: float | None = None,
+    frequency_penalty: float | None = None,
+    logit_bias: Mapping[str, float] | None = None,
+    user: str | None = None,
+    reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh", "max", "default"] | None = None,
+    verbosity: Literal["low", "medium", "high"] | None = None,
+    response_format: Mapping[str, object] | type[BaseModel] | None = None,
+    seed: int | None = None,
+    tools: list[dict[str, object]] | None = None,  # mutable-ok: provider steps rebuild tools, as in completion()
+    tool_choice: str | Mapping[str, object] | None = None,
+    logprobs: bool | None = None,
+    top_logprobs: int | None = None,
+    parallel_tool_calls: bool | None = None,
+    web_search_options: OpenAIWebSearchOptions | None = None,
+    include_server_side_tool_invocations: bool | None = None,
+    deployment_id: str | None = None,
+    extra_headers: dict[str, str] | None = None,  # mutable-ok: forwarded to CompletionDispatchContext as is
+    safety_identifier: str | None = None,
+    service_tier: str | None = None,
+    store: bool | None = None,
+    prompt_cache_key: str | None = None,
+    functions: Sequence[Mapping[str, object]] | None = None,
+    function_call: str | None = None,
+    base_url: str | None = None,
+    api_version: str | None = None,
+    api_key: str | None = None,
+    thinking: AnthropicThinkingParam | None = None,
+    shared_session: Optional["ClientSession"] = None,
+) -> ModelResponse | CustomStreamWrapper:
+    api_base = kwargs.get("api_base", None)
+    mock_response: Final[MOCK_RESPONSE_TYPE | None] = kwargs.get("mock_response", None)
+    mock_tool_calls: Final = kwargs.get("mock_tool_calls", None)
+    mock_timeout: Final = cast(bool | None, kwargs.get("mock_timeout", None))
+    force_timeout: Final = kwargs.get("force_timeout", 600)  ## deprecated
+    logger_fn: Final = kwargs.get("logger_fn", None)
+    verbose: Final = kwargs.get("verbose", False)
+    custom_llm_provider = kwargs.get("custom_llm_provider", None)
+    litellm_logging_obj: Final = kwargs.get("litellm_logging_obj", None)
+    id: Final = kwargs.get("id", None)
+    metadata: Final = kwargs.get("metadata", None)
+    model_info: Final = kwargs.get("model_info", None)
+    proxy_server_request: Final = kwargs.get("proxy_server_request", None)
+    provider_specific_header: Final = cast(
+        ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None,
+        kwargs.get("provider_specific_header", None),
+    )
+    headers = kwargs.get("headers", None) or extra_headers
+
+    headers = {} if headers is None else dict(headers)
+    if extra_headers is not None:
+        headers.update(extra_headers)
+    # Inject proxy auth headers if configured
+    if litellm.proxy_auth is not None:
+        try:
+            proxy_headers: Final = _proxy_auth_headers(litellm.proxy_auth)
+            headers.update(proxy_headers)
+        except Exception as e:
+            verbose_logger.warning("Failed to get proxy auth headers: %s", e)
+    num_retries: Final = kwargs.get(
+        "num_retries", None
+    )  ## alt. param for 'max_retries'. Use this to pass retries w/ instructor.
+    max_retries = kwargs.get("max_retries", None)
+    cooldown_time: Final = kwargs.get("cooldown_time", None)
+    organization: Final = kwargs.get("organization", None)
+    ### VERIFY SSL ###
+    ssl_verify: Final = kwargs.get("ssl_verify", None)
+    ### CUSTOM MODEL COST ###
+    input_cost_per_token: Final = kwargs.get("input_cost_per_token", None)
+    output_cost_per_token: Final = kwargs.get("output_cost_per_token", None)
+    cost_per_second: Final = kwargs.get("cost_per_second", None)
+    input_cost_per_second: Final = kwargs.get("input_cost_per_second", None)
+    output_cost_per_second: Final = kwargs.get("output_cost_per_second", None)
+    ### CUSTOM PROMPT TEMPLATE ###
+    initial_prompt_value: Final = kwargs.get("initial_prompt_value", None)
+    roles: Final = kwargs.get("roles", None)
+    final_prompt_value: Final = kwargs.get("final_prompt_value", None)
+    bos_token: Final = kwargs.get("bos_token", None)
+    eos_token: Final = kwargs.get("eos_token", None)
+    preset_cache_key: Final = kwargs.get("preset_cache_key", None)
+    hf_model_name: Final = kwargs.get("hf_model_name", None)
+    supports_system_message: Final = kwargs.get("supports_system_message", None)
+    base_model: Final = kwargs.get("base_model", None) or (
+        model_info.get("base_model") if isinstance(model_info, dict) else None
+    )
+    ### DISABLE FLAGS ###
+    disable_add_transform_inline_image_block: Final = kwargs.get("disable_add_transform_inline_image_block", None)
+    ### TEXT COMPLETION CALLS ###
+    text_completion: Final = kwargs.get("text_completion", False)
+    ### ASYNC CALLS ###
+    acompletion: Final = kwargs.get("acompletion", False)
+    client: Final = kwargs.get("client", None)
+    ### Admin Controls ###
+    no_log: Final = kwargs.get("no-log", False)
+
+    try:
+        if base_url is not None:
+            api_base = base_url
+        is_router_call: Final = any("model_group" in (kwargs.get(k) or ()) for k in ("metadata", "litellm_metadata"))
+        if is_router_call:
+            max_retries = 0
+        elif num_retries is not None:
+            max_retries = num_retries
+        logging: Final[LiteLLMLoggingObj] = cast(LiteLLMLoggingObj, litellm_logging_obj)
         if litellm.model_alias_map and model in litellm.model_alias_map:
             model = litellm.model_alias_map[
                 model
@@ -6327,13 +6441,13 @@ def completion(
         else:
             raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
         return response
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001  # every provider failure maps to the litellm exception completion() raised
         ## Map to OpenAI Exception
         raise exception_type(
             model=model,
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
-            completion_kwargs=args,
+            completion_kwargs={"messages": messages},
             extra_kwargs=kwargs,
         )
 
