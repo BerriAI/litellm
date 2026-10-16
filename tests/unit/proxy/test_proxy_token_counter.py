@@ -327,22 +327,16 @@ async def test_internal_token_counter_anthropic_provider_detection():
 
     setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
 
-    # Test with is_direct_request=False but non-Anthropic provider
-    response = await token_counter(
-        request=TokenCountRequest(
-            model="gpt-test",
-            messages=[{"role": "user", "content": "hello"}],
-        ),
-        call_endpoint=True,
-    )
-
-    print("Non-Anthropic provider test response:", response)
-
-    # Verify response structure
-    assert response.request_model == "gpt-test"
-    assert response.model_used == "gpt-4"
-    assert response.total_tokens > 0
-    assert response.tokenizer_type == "openai_tokenizer"  # Should use LiteLLM tokenizer
+    with pytest.raises(ProxyException) as missing_key:
+        await token_counter(
+            request=TokenCountRequest(
+                model="gpt-test",
+                messages=[{"role": "user", "content": "hello"}],
+            ),
+            call_endpoint=True,
+        )
+    assert missing_key.value.code == "401"
+    assert "No OpenAI API key is set for model gpt-test" in missing_key.value.message
 
 
 @pytest.mark.asyncio
@@ -352,12 +346,14 @@ async def test_anthropic_endpoint_error_handling():
     """
     from unittest.mock import MagicMock
 
-    from fastapi import HTTPException, Request
+    from fastapi import Request
 
     from litellm.proxy.anthropic_endpoints.endpoints import count_tokens
 
     # Mock request object
     mock_request = MagicMock(spec=Request)
+    mock_request.headers = {}
+    mock_request.scope = {}
     mock_user_api_key_dict = MagicMock()
 
     # Test missing model parameter
@@ -375,12 +371,13 @@ async def test_anthropic_endpoint_error_handling():
     anthropic_endpoints.read_request_body = mock_read_request_body
 
     try:
-        # Should raise HTTPException for missing model
-        with pytest.raises(HTTPException) as exc_info:
-            await count_tokens(mock_request, mock_user_api_key_dict)
+        response = await count_tokens(mock_request, mock_user_api_key_dict)
 
-        assert exc_info.value.status_code == 400
-        assert "model parameter is required" in str(exc_info.value.detail)
+        assert response.status_code == 400
+        assert json.loads(response.body) == {
+            "type": "error",
+            "error": {"type": "invalid_request_error", "message": "model parameter is required"},
+        }
 
         print("✅ Error handling test passed!")
 
@@ -471,7 +468,7 @@ async def test_factory_gpt4_endpoint_does_not_call_anthropic_counter():
                 mock_router.model_list = [
                     {
                         "model_name": "gpt-4",
-                        "litellm_params": {"model": "openai/gpt-4"},
+                        "litellm_params": {"model": "databricks/gpt-4"},
                         "model_info": {},
                     }
                 ]
@@ -480,7 +477,7 @@ async def test_factory_gpt4_endpoint_does_not_call_anthropic_counter():
                 mock_router.async_get_available_deployment = AsyncMock(
                     return_value={
                         "model_name": "gpt-4",
-                        "litellm_params": {"model": "openai/gpt-4"},
+                        "litellm_params": {"model": "databricks/gpt-4"},
                         "model_info": {},
                     }
                 )
