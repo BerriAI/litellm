@@ -21,6 +21,7 @@ from litellm.constants import (
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
 )
 from litellm.litellm_core_utils.audio_utils.utils import normalized_audio_duration_seconds
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeBackend
 from litellm.types.llms.openai import (
@@ -197,7 +198,9 @@ def _gate_session_update(
     return {**client_session, "turn_detection": gate(None)}
 
 
-_TRANSLATION_AUDIO_FORMAT: Final = TypeAdapter(str | RealtimeAudioFormats | None)
+_TRANSLATION_AUDIO_FORMAT: Final[TypeAdapter[str | RealtimeAudioFormats | None]] = TypeAdapter(
+    str | RealtimeAudioFormats | None
+)
 
 
 def _translation_audio_bytes_per_second(audio_format: str | RealtimeAudioFormats | None) -> float | None:
@@ -373,12 +376,12 @@ class RealTimeStreaming:
 
     def _should_store_message(
         self,
-        message_obj: dict | OpenAIRealtimeEvents,
+        message_obj: Mapping[str, object],
     ) -> bool:
         _msg_type: Final = message_obj["type"] if "type" in message_obj else None
         if self.logged_real_time_event_types == "*":
             return True
-        if _msg_type and _msg_type in self.logged_real_time_event_types:
+        if isinstance(_msg_type, str) and _msg_type in self.logged_real_time_event_types:
             return True
         return False
 
@@ -479,7 +482,7 @@ class RealTimeStreaming:
         input_messages, so it is not duplicated into the response log here.
         """
         try:
-            usage: Final = event_obj.get("usage")
+            usage: Final = as_str_mapping(event_obj.get("usage"))
             if usage is None:
                 return
             # If this event type is already captured by store_message (e.g. the user
@@ -568,12 +571,12 @@ class RealTimeStreaming:
         if not self._is_translation_session:
             return
         if event_obj.get("type") == "session.closed":
-            usage: Final = event_obj.get("usage")
+            usage: Final = as_str_mapping(event_obj.get("usage"))
             output_seconds: Final = (
-                normalized_audio_duration_seconds(usage.get("output_seconds")) if isinstance(usage, dict) else None
+                normalized_audio_duration_seconds(usage.get("output_seconds")) if usage is not None else None
             )
             reported_input_seconds: Final = (
-                normalized_audio_duration_seconds(usage.get("input_seconds")) if isinstance(usage, dict) else None
+                normalized_audio_duration_seconds(usage.get("input_seconds")) if usage is not None else None
             )
             input_seconds: Final = (
                 reported_input_seconds
@@ -650,14 +653,14 @@ class RealTimeStreaming:
     def _capture_translation_audio_formats(self, event_obj: Mapping[str, object]) -> None:
         if event_obj.get("type") not in ("session.created", "session.updated"):
             return
-        session: Final = event_obj.get("session")
-        if not isinstance(session, dict):
+        session: Final = as_str_mapping(event_obj.get("session"))
+        if session is None:
             return
-        audio: Final = session.get("audio")
-        if not isinstance(audio, dict):
+        audio: Final = as_str_mapping(session.get("audio"))
+        if audio is None:
             return
-        for direction, configuration in (("input", audio.get("input")), ("output", audio.get("output"))):
-            if not isinstance(configuration, dict):
+        for direction, raw_configuration in (("input", audio.get("input")), ("output", audio.get("output"))):
+            if (configuration := as_str_mapping(raw_configuration)) is None:
                 continue
             try:
                 if (
@@ -785,17 +788,17 @@ class RealTimeStreaming:
         self,
         session: Mapping[str, object],
     ) -> tuple[str, ...]:
-        audio: Final = session.get("audio")
-        audio_input: Final = audio.get("input") if isinstance(audio, dict) else None
-        nested_transcription: Final = audio_input.get("transcription") if isinstance(audio_input, dict) else None
+        audio: Final = as_str_mapping(session.get("audio"))
+        audio_input: Final = as_str_mapping(audio.get("input")) if audio is not None else None
+        nested_transcription: Final = audio_input.get("transcription") if audio_input is not None else None
         nested_model: Final = self._transcription_model_value(nested_transcription)
         flat_model: Final = self._transcription_model_value(session.get("input_audio_transcription"))
         return tuple(dict.fromkeys(model for model in (nested_model, flat_model) if model is not None))
 
     def _transcription_model_value(self, transcription_config: object) -> str | None:
-        if not isinstance(transcription_config, dict):
+        if (fields := as_str_mapping(transcription_config)) is None:
             return None
-        model: Final = transcription_config.get("model")
+        model: Final = fields.get("model")
         if isinstance(model, str) and model:
             return model
         return None
@@ -804,47 +807,40 @@ class RealTimeStreaming:
         message_obj: Final = self._session_update_message_obj(message)
         if message_obj is None:
             return message
-        session: Final = message_obj.get("session")
-        if not isinstance(session, dict):
+        session: Final = as_str_mapping(message_obj.get("session"))
+        if session is None:
             return message
-
-        transcription: Final = session.get("input_audio_transcription")
-        rewrite_flat: Final = isinstance(transcription, dict) and transcription.get("model") != authorized_model
-        if isinstance(transcription, dict) and rewrite_flat:
-            session["input_audio_transcription"] = {
-                **transcription,
-                "model": authorized_model,
-            }
-
-        audio: Final = session.get("audio")
-        audio_input: Final = audio.get("input") if isinstance(audio, dict) else None
-        nested_transcription: Final = audio_input.get("transcription") if isinstance(audio_input, dict) else None
-        rewrite_nested: Final = (
-            isinstance(audio, dict)
-            and isinstance(audio_input, dict)
-            and isinstance(nested_transcription, dict)
-            and nested_transcription.get("model") != authorized_model
+        transcription: Final = as_str_mapping(session.get("input_audio_transcription"))
+        rewrite_flat: Final = transcription is not None and transcription.get("model") != authorized_model
+        audio: Final = as_str_mapping(session.get("audio"))
+        audio_input: Final = as_str_mapping(audio.get("input")) if audio is not None else None
+        nested_transcription: Final = (
+            as_str_mapping(audio_input.get("transcription")) if audio_input is not None else None
         )
-        if (
-            isinstance(audio, dict)
-            and isinstance(audio_input, dict)
-            and isinstance(nested_transcription, dict)
-            and rewrite_nested
-        ):
-            session["audio"] = {
-                **audio,
-                "input": {
-                    **audio_input,
-                    "transcription": {
-                        **nested_transcription,
-                        "model": authorized_model,
-                    },
-                },
-            }
-
+        rewrite_nested: Final = (
+            nested_transcription is not None and nested_transcription.get("model") != authorized_model
+        )
         if not rewrite_flat and not rewrite_nested:
             return message
-        return json.dumps(message_obj)
+        updated_session: Final = {
+            **session,
+            **(
+                {"input_audio_transcription": {**transcription, "model": authorized_model}}
+                if transcription is not None and rewrite_flat
+                else {}
+            ),
+            **(
+                {
+                    "audio": {
+                        **audio,
+                        "input": {**audio_input, "transcription": {**nested_transcription, "model": authorized_model}},
+                    }
+                }
+                if audio is not None and audio_input is not None and nested_transcription is not None and rewrite_nested
+                else {}
+            ),
+        }
+        return json.dumps({**message_obj, "session": updated_session})
 
     def _enforce_transcription_session_model(self, message: str) -> str:
         """Force client transcription session updates to the authorized model.
@@ -866,8 +862,8 @@ class RealTimeStreaming:
         message_obj: Final = self._session_update_message_obj(message)
         if message_obj is None:
             return message
-        session: Final = message_obj.get("session")
-        if isinstance(session, dict) and session.get("type") == "transcription":
+        session: Final = as_str_mapping(message_obj.get("session"))
+        if session is not None and session.get("type") == "transcription":
             self._is_transcription_session = True
         return self._rewrite_session_update_transcription_model(message, self._force_transcription_model)
 
@@ -878,8 +874,8 @@ class RealTimeStreaming:
         message_obj: Final = self._session_update_message_obj(message)
         if message_obj is None:
             return message
-        session: Final = message_obj.get("session")
-        if not isinstance(session, dict):
+        session: Final = as_str_mapping(message_obj.get("session"))
+        if session is None:
             return message
         nested_models: Final = self._nested_transcription_models_from_session(session)
         if not nested_models:

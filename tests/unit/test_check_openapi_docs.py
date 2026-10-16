@@ -2,6 +2,8 @@
 
 from typing import Final
 
+import pytest
+
 import check_openapi_docs as checker
 
 _BODY: Final = {"content": {"application/json": {"schema": {"type": "object"}}}}
@@ -9,8 +11,17 @@ _RESPONSES: Final = {"200": {"content": {"application/json": {"schema": {"$ref":
 _DOCUMENTED: Final = {"description": "Does a thing", "requestBody": _BODY, "responses": _RESPONSES}
 
 
-def test_a_fully_documented_post_has_no_findings() -> None:
-    assert checker.violations({"paths": {"/v1/thing": {"post": _DOCUMENTED}}}) == ()
+@pytest.mark.parametrize(
+    ("request_media_type", "response_media_type"),
+    (("application/json", "application/json"), ("application/sdp", "application/sdp"), ("multipart/form-data", "audio/wav")),
+)
+def test_a_fully_documented_post_has_no_findings(request_media_type: str, response_media_type: str) -> None:
+    operation: Final = {
+        **_DOCUMENTED,
+        "requestBody": {"content": {request_media_type: {"schema": {"type": "string"}}}},
+        "responses": {"200": {"content": {response_media_type: {"schema": {"type": "string"}}}}},
+    }
+    assert checker.violations({"paths": {"/v1/thing": {"post": operation}}}) == ()
 
 
 def test_each_missing_piece_is_its_own_rule() -> None:

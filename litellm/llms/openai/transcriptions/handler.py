@@ -34,11 +34,15 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         try:
             sdk_data: Final = sdk_compatible_transcription_request_data(data)
             if data.get("stream") is True:
-                stream_response: Final = await openai_aclient.audio.transcriptions.create(**sdk_data, timeout=timeout)
+                stream_response: Final = await openai_aclient.audio.transcriptions.create(  # pyright: ignore[reportCallIssue]  # SDK overloads cannot model dynamic transcription options
+                    **sdk_data,  # pyright: ignore[reportArgumentType]  # SDK TypedDict lags accepted transcription options
+                    timeout=timeout,
+                )
                 return {}, stream_response
-            raw_response: Final = await openai_aclient.audio.transcriptions.with_raw_response.create(
-                **sdk_data, timeout=timeout
-            )  # pyright: ignore[reportArgumentType]  # SDK TypedDict lags accepted transcription options
+            raw_response: Final = await openai_aclient.audio.transcriptions.with_raw_response.create(  # pyright: ignore[reportCallIssue]  # SDK overloads cannot model dynamic transcription options
+                **sdk_data,  # pyright: ignore[reportArgumentType]  # SDK TypedDict lags accepted transcription options
+                timeout=timeout,
+            )
             headers: Final = dict(raw_response.headers)
             parsed_response: Final = raw_response.parse()
 
@@ -55,10 +59,14 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         try:
             sdk_data: Final = sdk_compatible_transcription_request_data(data)
             if data.get("stream") is True:
-                stream_response: Final = openai_client.audio.transcriptions.create(**sdk_data, timeout=timeout)
+                stream_response: Final = openai_client.audio.transcriptions.create(  # pyright: ignore[reportCallIssue]  # SDK overloads cannot model dynamic transcription options
+                    **sdk_data,  # pyright: ignore[reportArgumentType]  # SDK TypedDict lags accepted transcription options
+                    timeout=timeout,
+                )
                 return None, stream_response
-            raw_response: Final = openai_client.audio.transcriptions.with_raw_response.create(
-                **sdk_data, timeout=timeout
+            raw_response: Final = openai_client.audio.transcriptions.with_raw_response.create(  # pyright: ignore[reportCallIssue]  # SDK overloads cannot model dynamic transcription options
+                **sdk_data,  # pyright: ignore[reportArgumentType]  # SDK TypedDict lags accepted transcription options
+                timeout=timeout,
             )
             headers: Final = dict(raw_response.headers)
             response: Final = raw_response.parse()

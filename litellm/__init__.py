@@ -1506,9 +1506,9 @@ from .realtime_api.main import (
     _arealtime,
     acreate_realtime_client_secret,
     acreate_realtime_transcription_session,
-    acreate_realtime_translation_client_secret,
+    acreate_realtime_translation_client_secret as acreate_realtime_translation_client_secret,
     arealtime_calls,
-    arealtime_translation_calls,
+    arealtime_translation_calls as arealtime_translation_calls,
 )
 from .responses.main import _aresponses_websocket
 

@@ -1,4 +1,4 @@
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
@@ -7,6 +7,7 @@ from pydantic import BaseModel
 import litellm
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.audio_utils.utils import get_audio_file_name
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.base_llm.audio_transcription.transformation import sdk_compatible_transcription_request_data
 from litellm.types.utils import FileTypes
 from litellm.utils import (
@@ -43,8 +44,10 @@ class AzureAudioTranscription(AzureChatCompletion):
     ) -> TranscriptionResponse | Coroutine[Any, Any, TranscriptionResponse]:
         data: Final = {"model": model, "file": audio_file, **optional_params}
         sdk_data: Final = sdk_compatible_transcription_request_data(data)
-        model_info: Final = litellm.model_cost.get(f"azure/{model}")
-        provider_specific_entry: Final = model_info.get("provider_specific_entry") if model_info is not None else None
+        model_info: Final = as_str_mapping(litellm.model_cost.get(f"azure/{model}"))
+        provider_specific_entry: Final = (
+            as_str_mapping(model_info.get("provider_specific_entry")) if model_info is not None else None
+        )
         requires_deployment_api: Final = model_info is None or (
             provider_specific_entry is not None and provider_specific_entry.get("transcription_deployment_api") == 1
         )
@@ -98,7 +101,7 @@ class AzureAudioTranscription(AzureChatCompletion):
             },
         )
 
-        response: Final = azure_client.audio.transcriptions.create(
+        response: Final = azure_client.audio.transcriptions.create(  # pyright: ignore[reportCallIssue]  # SDK overloads cannot model dynamic transcription options
             **sdk_data,  # pyright: ignore[reportArgumentType]  # SDK TypedDict lags accepted transcription options
             timeout=timeout,
         )
@@ -131,7 +134,7 @@ class AzureAudioTranscription(AzureChatCompletion):
         self,
         audio_file: FileTypes,
         model: str,
-        data: dict,
+        data: Mapping[str, object],
         model_response: TranscriptionResponse,
         timeout: float,
         logging_obj: "LiteLLMLoggingObj",
@@ -173,12 +176,12 @@ class AzureAudioTranscription(AzureChatCompletion):
             )
 
             if data.get("stream") is True:
-                return await async_azure_client.audio.transcriptions.create(
+                return await async_azure_client.audio.transcriptions.create(  # pyright: ignore[reportCallIssue]  # SDK overloads cannot model dynamic transcription options
                     **data,  # pyright: ignore[reportArgumentType]  # SDK TypedDict lags accepted transcription options
                     timeout=timeout,
                 )
 
-            raw_response: Final = await async_azure_client.audio.transcriptions.with_raw_response.create(
+            raw_response: Final = await async_azure_client.audio.transcriptions.with_raw_response.create(  # pyright: ignore[reportCallIssue]  # SDK overloads cannot model dynamic transcription options
                 **data,  # pyright: ignore[reportArgumentType]  # SDK TypedDict lags accepted transcription options
                 timeout=timeout,
             )

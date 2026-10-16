@@ -2841,7 +2841,9 @@ class TranscriptionUsageTokensObject(LiteLLMBaseModel):
     input_token_details: TranscriptionUsageInputTokenDetailsObject | None = None
 
 
-class TranscriptionDetectedLanguage(BaseModel):
+class TranscriptionDetectedLanguage(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
     code: str
 
 
@@ -2861,7 +2863,13 @@ class TranscriptionResponse(OpenAIObject):
     def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
         self._hidden_params = hidden_params
 
-    def __init__(self, text=None, usage=None, languages=None, **kwargs) -> None:  # noqa: ANN003  # OpenAI-compatible response accepts provider extension fields
+    def __init__(
+        self,
+        text: str | None = None,
+        usage: TranscriptionUsageDurationObject | TranscriptionUsageTokensObject | None = None,
+        languages: Sequence[TranscriptionDetectedLanguage] | None = None,
+        **kwargs: object,
+    ) -> None:
         super().__init__(text=text, usage=usage, languages=languages, **kwargs)
 
     def set_audio_transcription_duration(self, duration: float) -> None:

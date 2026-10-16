@@ -30,18 +30,18 @@ def _as_mapping(node: object) -> Mapping[str, object]:
     return node if isinstance(node, Mapping) else {}
 
 
-def _json_schema(container: object) -> object:
+def _content_schema(container: object) -> object:
     content: Final = _as_mapping(_as_mapping(container).get("content"))
-    return _as_mapping(content.get("application/json")).get("schema")
+    return next((schema for media in content.values() if (schema := _as_mapping(media).get("schema"))), None)
 
 
 def _operation_codes(operation: Mapping[str, object]) -> Iterator[str]:
-    if not _json_schema(operation.get("requestBody")):
+    if not _content_schema(operation.get("requestBody")):
         yield "OA001"
     description: Final = operation.get("description")
     if not isinstance(description, str) or not description.strip():
         yield "OA002"
-    if not _json_schema(_as_mapping(operation.get("responses")).get("200")):
+    if not _content_schema(_as_mapping(operation.get("responses")).get("200")):
         yield "OA003"
 
 

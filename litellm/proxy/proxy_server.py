@@ -13528,6 +13528,7 @@ async def realtime_websocket_endpoint(
         model=model,
         intent=intent,
         guardrails=guardrails,
+        is_translation=is_translation,
     )
 
 
@@ -13541,6 +13542,7 @@ async def _route_realtime_websocket_session(
     guardrails: str | None,
     request_path: str | None = None,
     live_session_start: Mapping[str, object] | None = None,
+    is_translation: bool = False,
 ) -> None:
     # Only use explicit parameters, not all query params
     query_model: Final = _resolve_realtime_upstream_query_model(

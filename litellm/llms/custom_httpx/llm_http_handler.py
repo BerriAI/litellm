@@ -28,10 +28,9 @@ from httpx import USE_CLIENT_DEFAULT
 from httpx._types import FileContent
 from openai import AsyncOpenAI
 from openai.types.file_deleted import FileDeleted
+from openai.types.realtime import RealtimeSessionCreateRequestParam
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly
-
-from openai.types.realtime import RealtimeSessionCreateRequestParam
 
 import litellm
 import litellm.litellm_core_utils
@@ -6863,6 +6862,12 @@ class BaseLLMHTTPHandler:
         normalized_api_base: Final = trimmed_api_base if trimmed_api_base.endswith("/v1") else f"{trimmed_api_base}/v1"
         if isinstance(client, AsyncOpenAI):
             return client, False, normalized_api_base
+        if isinstance(client, AsyncHTTPHandler):
+            return (
+                AsyncOpenAI(api_key=api_key, base_url=normalized_api_base, max_retries=0, http_client=client.client),
+                False,
+                normalized_api_base,
+            )
         return AsyncOpenAI(api_key=api_key, base_url=normalized_api_base, max_retries=0), True, normalized_api_base
 
     @staticmethod

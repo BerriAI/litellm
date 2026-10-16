@@ -3039,7 +3039,7 @@ def test_translation_audio_duration_is_finalized_once(event_type: str):
     streaming = RealTimeStreaming(
         websocket=MagicMock(),
         backend_ws=MagicMock(),
-        logging_obj=MagicMock(),
+        logging_obj=_mock_logging(),
         model="gpt-realtime-translate",
         translation_session=True,
     )
@@ -3079,7 +3079,7 @@ async def test_translation_disconnect_bills_sent_input_audio(
     streaming: Final = RealTimeStreaming(
         websocket=_ga_client_ws(),
         backend_ws=backend,
-        logging_obj=MagicMock(),
+        logging_obj=_mock_logging(),
         model="gpt-realtime-translate",
         translation_session=True,
     )
@@ -3116,7 +3116,7 @@ async def test_translation_client_format_updates_do_not_change_billed_duration(r
     backend: Final = MagicMock()
     backend.send = AsyncMock()
     streaming: Final = RealTimeStreaming(
-        websocket=_ga_client_ws(), backend_ws=backend, logging_obj=MagicMock(), translation_session=True
+        websocket=_ga_client_ws(), backend_ws=backend, logging_obj=_mock_logging(), translation_session=True
     )
     streaming._capture_translation_output_audio(
         {
@@ -3157,7 +3157,7 @@ async def test_translation_confirmed_format_changes_preserve_previous_audio_dura
     backend: Final = MagicMock()
     backend.send = AsyncMock()
     streaming: Final = RealTimeStreaming(
-        websocket=_ga_client_ws(), backend_ws=backend, logging_obj=MagicMock(), translation_session=True
+        websocket=_ga_client_ws(), backend_ws=backend, logging_obj=_mock_logging(), translation_session=True
     )
     await streaming._send_to_backend(
         json.dumps({"type": "session.input_audio_buffer.append", "audio": base64.b64encode(bytes(48000)).decode()})
@@ -3187,7 +3187,7 @@ async def test_translation_confirmed_format_changes_preserve_previous_audio_dura
 @pytest.mark.parametrize("rate", (1, 0, -1, float("nan"), float("inf"), 10**400))
 def test_translation_invalid_provider_format_preserves_audio_duration(rate: int | float) -> None:
     streaming: Final = RealTimeStreaming(
-        websocket=_ga_client_ws(), backend_ws=MagicMock(), logging_obj=MagicMock(), translation_session=True
+        websocket=_ga_client_ws(), backend_ws=MagicMock(), logging_obj=_mock_logging(), translation_session=True
     )
     output_event: Final = {"type": "session.output_audio.delta", "delta": base64.b64encode(bytes(48000)).decode()}
     streaming._capture_translation_output_audio(output_event)
@@ -3205,7 +3205,7 @@ async def test_translation_failed_audio_send_is_not_billed() -> None:
     backend: Final = MagicMock()
     backend.send = AsyncMock(side_effect=RuntimeError("send failed"))
     streaming: Final = RealTimeStreaming(
-        websocket=_ga_client_ws(), backend_ws=backend, logging_obj=MagicMock(), translation_session=True
+        websocket=_ga_client_ws(), backend_ws=backend, logging_obj=_mock_logging(), translation_session=True
     )
 
     with pytest.raises(RuntimeError, match="send failed"):
@@ -3240,7 +3240,7 @@ async def test_translation_rejects_applicable_guardrails_before_forwarding_audio
     streaming: Final = RealTimeStreaming(
         websocket=client,
         backend_ws=backend,
-        logging_obj=MagicMock(),
+        logging_obj=_mock_logging(),
         translation_session=True,
         request_data={"litellm_metadata": {"guardrails": ["speech-policy"] if requested else []}},
     )
@@ -3344,7 +3344,7 @@ async def test_translation_terminal_usage_fills_only_missing_input_duration(
     backend: Final = MagicMock()
     backend.send = AsyncMock()
     streaming: Final = RealTimeStreaming(
-        websocket=_ga_client_ws(), backend_ws=backend, logging_obj=MagicMock(), translation_session=True
+        websocket=_ga_client_ws(), backend_ws=backend, logging_obj=_mock_logging(), translation_session=True
     )
     await streaming._send_to_backend(
         json.dumps({"type": "session.input_audio_buffer.append", "audio": base64.b64encode(bytes(96000)).decode()})
@@ -3372,7 +3372,7 @@ def test_translation_audio_duration_uses_session_output_format():
     streaming = RealTimeStreaming(
         websocket=MagicMock(),
         backend_ws=MagicMock(),
-        logging_obj=MagicMock(),
+        logging_obj=_mock_logging(),
         model="gpt-realtime-translate",
         translation_session=True,
     )
@@ -3397,7 +3397,7 @@ def test_translation_does_not_duplicate_provider_duration_usage():
     streaming = RealTimeStreaming(
         websocket=MagicMock(),
         backend_ws=MagicMock(),
-        logging_obj=MagicMock(),
+        logging_obj=_mock_logging(),
         model="gpt-realtime-translate",
         translation_session=True,
     )
@@ -3417,7 +3417,7 @@ def test_translation_prefers_provider_duration_over_audio_byte_estimate():
     streaming = RealTimeStreaming(
         websocket=MagicMock(),
         backend_ws=MagicMock(),
-        logging_obj=MagicMock(),
+        logging_obj=_mock_logging(),
         model="gpt-realtime-translate",
         translation_session=True,
     )
@@ -3447,7 +3447,7 @@ def test_translation_preserves_input_only_provider_usage(
     streaming = RealTimeStreaming(
         websocket=MagicMock(),
         backend_ws=MagicMock(),
-        logging_obj=MagicMock(),
+        logging_obj=_mock_logging(),
         model="gpt-realtime-translate",
         translation_session=True,
     )
@@ -3469,7 +3469,7 @@ def test_translation_retained_input_only_close_event_bills_captured_output(monke
     streaming = RealTimeStreaming(
         websocket=MagicMock(),
         backend_ws=MagicMock(),
-        logging_obj=MagicMock(),
+        logging_obj=_mock_logging(),
         model="gpt-realtime-translate",
         translation_session=True,
     )
@@ -3493,7 +3493,7 @@ def test_translation_malformed_provider_duration_uses_captured_audio(malformed_o
     streaming = RealTimeStreaming(
         websocket=MagicMock(),
         backend_ws=MagicMock(),
-        logging_obj=MagicMock(),
+        logging_obj=_mock_logging(),
         model="gpt-realtime-translate",
         translation_session=True,
     )

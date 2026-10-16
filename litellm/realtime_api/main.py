@@ -7,10 +7,9 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, cast
 
-from typing_extensions import ReadOnly, TypedDict, assert_never
-
 import httpx
 from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
 from litellm.constants import (
@@ -19,6 +18,7 @@ from litellm.constants import (
     REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
     request_timeout,
 )
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.base_llm.realtime.http_transformation import BaseRealtimeHTTPConfig
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
@@ -80,12 +80,9 @@ def _model_params_with_stored_credentials(model_params: Mapping[str, object]) ->
 
 def _with_resolved_session_model(session: dict[str, object], model_name: str) -> dict[str, object]:
     if session.get("type") == "transcription":
-        audio = session.get("audio")
-        audio = audio if isinstance(audio, dict) else {}
-        audio_input = audio.get("input")
-        audio_input = audio_input if isinstance(audio_input, dict) else {}
-        transcription = audio_input.get("transcription")
-        transcription = transcription if isinstance(transcription, dict) else {}
+        audio: Final = as_str_mapping(session.get("audio")) or {}
+        audio_input: Final = as_str_mapping(audio.get("input")) or {}
+        transcription: Final = as_str_mapping(audio_input.get("transcription")) or {}
         return {
             **session,
             "audio": {
@@ -642,7 +639,6 @@ async def _arealtime(
     timeout: float | None = None,
     query_params: RealtimeQueryParams | None = None,
     live_session_start: Mapping[str, object] | None = None,
-
     realtime_mode: str = "realtime",
     **kwargs,
 ) -> None:
