@@ -41,7 +41,6 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
 from litellm.proxy.management_endpoints.common_utils import validate_budget_duration
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
-    ObjectPermissionUpsert,
     _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     prepare_object_permission_upsert,
     set_object_permission,
@@ -65,7 +64,7 @@ from litellm.types.proxy.management_endpoints.customer_endpoints import (
 
 
 @dataclass(frozen=True, slots=True)
-class TransactionClient:
+class _TransactionClient:
     db: "Prisma"
 
 
@@ -318,22 +317,8 @@ def new_budget_request(data: NewCustomerRequest) -> BudgetNewRequest | None:
     return None
 
 
-async def _prepare_customer_object_permission_update(
-    data: UpdateCustomerRequest,
-    existing_object_permission_id: str | None,
-    prisma_client: TransactionClient,
-) -> ObjectPermissionUpsert | None:
-    if data.object_permission is None:
-        return None
-    return await prepare_object_permission_upsert(
-        new_object_permission=_STR_OBJECT_DICT.validate_python(data.object_permission.model_dump()),
-        existing_object_permission_id=existing_object_permission_id,
-        prisma_client=prisma_client,
-    )
-
-
 async def _customer_budget_update_error(
-    tx: TransactionClient,
+    tx: _TransactionClient,
     budget_id: str,
     user_id: str,
 ) -> ProxyException | None:
@@ -356,7 +341,7 @@ async def _customer_budget_update_error(
 
 
 async def _write_customer_budget_update(
-    tx: TransactionClient,
+    tx: _TransactionClient,
     budget_data: Mapping[str, object],
     existing_budget: LiteLLM_BudgetTable | None,
     updated_by: str,
@@ -682,7 +667,7 @@ async def _update_single_customer(
             )
         }
         async with prisma_client.tx() as transaction:
-            tx: Final = TransactionClient(db=transaction)
+            tx: Final = _TransactionClient(db=transaction)
             customer_locked: Final = bool(await transaction.query_raw(_CUSTOMER_UPDATE_LOCK_SQL, data.user_id))
             end_user_table_data: Final = (
                 await _typed_table(EndUserRepository(tx)).find_first(
@@ -706,10 +691,14 @@ async def _update_single_customer(
             )
             if budget_error is not None:
                 return budget_error
-            permission_upsert: Final = await _prepare_customer_object_permission_update(
-                data=data,
-                existing_object_permission_id=end_user_table_data_typed.object_permission_id,
-                prisma_client=tx,
+            permission_upsert: Final = (
+                await prepare_object_permission_upsert(
+                    new_object_permission=_STR_OBJECT_DICT.validate_python(data.object_permission.model_dump()),
+                    existing_object_permission_id=end_user_table_data_typed.object_permission_id,
+                    prisma_client=tx,
+                )
+                if data.object_permission is not None
+                else None
             )
             permission: Final = (
                 await ObjectPermissionRepository(tx).table.upsert(
@@ -852,21 +841,18 @@ async def bulk_customer_update(
     data: BulkUpdateCustomerRequest,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ) -> BulkUpdateCustomerResponse:
-    """Update up to 500 customers independently using the same fields as `/customer/update`.
+    """Update up to 500 customers with the same fields as `/customer/update`. Only proxy admins can call it.
 
-    Supply a `customers` array of customer updates. Each result contains the `user_id`,
-    `success`, and either `updated_customer` or `error`, in request order. A failed update
-    does not prevent the remaining customers from being updated. Object permission fields
-    omitted from an update retain their existing values, and supplied permission lists
-    replace that field. Null permission fields retain their stored values and explicit empty
-    lists or objects clear that field. Each item is a locked transaction, so failed items
-    roll back their permission, budget, and customer writes. Only proxy admins can update customers.
+    Each item runs in its own locked transaction, so a failed item rolls back only its own writes and
+    the rest still apply. Results come back in request order with `user_id`, `success`, and either
+    `updated_customer` or `error`.
 
-    `max_budget` can update a budget used only by that customer. Shared budgets and default
-    budgets must be edited through the budget endpoints. Sending both `budget_id` and
-    `max_budget`, even with a null value, fails request validation with HTTP 422 before
-    any item is processed. A valid item rejected for sharing a budget does not prevent
-    the other items from succeeding.
+    Omitted or null permission fields keep their stored values, supplied lists replace that field,
+    and empty lists or objects clear it.
+
+    `max_budget` only updates a budget used by that customer alone. Shared and default budgets must be
+    edited through the budget endpoints. Sending both `budget_id` and `max_budget` in any item, even
+    as null, fails the whole request with HTTP 422.
 
     Example request body:
     ```json
