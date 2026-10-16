@@ -302,3 +302,139 @@ async def test_async_converse_streaming_fails_at_the_request_timeout_not_the_ups
 def test_sync_converse_streaming_fails_at_the_request_timeout_not_the_upstreams_pace() -> None:
     with pytest.raises(litellm.Timeout):
         litellm.completion(client=slow_upstream_sync_client(), **_converse_streaming_kwargs())
+
+
+RECORDED_REASONING: Final = "Tokyo proper has about 14 million people."
+RECORDED_THINKING_TOKENS: Final = 309
+JSON_MODE_THINKING_CONVERSE_RESPONSE: Final = {
+    "output": {
+        "message": {
+            "role": "assistant",
+            "content": [
+                {
+                    "reasoningContent": {
+                        "reasoningText": {
+                            "text": RECORDED_REASONING,
+                            "signature": "EqoBCkgIBxABGAIiQL1",
+                        }
+                    }
+                },
+                {
+                    "toolUse": {
+                        "toolUseId": "tooluse_kZJMlvQmRJ6eAyJE5GIl7Q",
+                        "name": "json_tool_call",
+                        "input": {"city": "Tokyo", "population_millions": 14.0},
+                    }
+                },
+            ],
+        }
+    },
+    "stopReason": "tool_use",
+    "usage": {"inputTokens": 473, "outputTokens": 390, "totalTokens": 863},
+    "additionalModelResponseFields": {
+        "usage": {"output_tokens_details": {"thinking_tokens": RECORDED_THINKING_TOKENS}}
+    },
+}
+
+
+def _answer_with_json_mode_thinking_response(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(200, json=JSON_MODE_THINKING_CONVERSE_RESPONSE, request=request)
+
+
+def _bedrock_claude_without_native_structured_output() -> str:
+    return next(
+        f"bedrock/{model}"
+        for model, info in litellm.model_cost.items()
+        if info.get("litellm_provider") == "bedrock_converse"
+        and model.startswith("us.anthropic.claude")
+        and info.get("supports_native_structured_output") is False
+        and info.get("supports_reasoning") is True
+    )
+
+
+def _json_mode_thinking_kwargs() -> dict[str, object]:
+    return {
+        "model": _bedrock_claude_without_native_structured_output(),
+        "messages": [{"role": "user", "content": "How many people live in Tokyo, in millions?"}],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "city_fact",
+                "schema": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}, "population_millions": {"type": "number"}},
+                    "required": ["city", "population_millions"],
+                },
+            },
+        },
+        "thinking": {"type": "enabled", "budget_tokens": 1024},
+        "aws_access_key_id": "fake",
+        "aws_secret_access_key": "fake",
+        "aws_region_name": "us-east-1",
+    }
+
+
+def _answer_fields(response: ModelResponse) -> tuple[object, ...]:
+    choice: Final = response.choices[0]
+    return (
+        choice.finish_reason,
+        choice.message.content,
+        choice.message.tool_calls,
+        getattr(choice.message, "reasoning_content", None),
+        getattr(choice.message, "thinking_blocks", None),
+        getattr(response.usage.completion_tokens_details, "reasoning_tokens", None),
+    )
+
+
+def _streamed_thinking_blocks(chunks: list[litellm.ModelResponseStream]) -> list[object]:
+    deltas: Final = [choice.delta for chunk in chunks for choice in chunk.choices]
+    return [block for delta in deltas for block in (getattr(delta, "thinking_blocks", None) or [])]
+
+
+def test_fake_streamed_json_mode_answer_keeps_the_reasoning_of_the_non_streamed_answer() -> None:
+    """Without native structured output, json_schema plus streaming fakes the stream from one Converse call. That fake
+    stream dropped the reasoning, the signed thinking blocks and the reasoning tokens, and ended on tool_calls"""
+    transport: Final = httpx.MockTransport(_answer_with_json_mode_thinking_response)
+    client: Final = HTTPHandler(client=httpx.Client(transport=transport))
+    kwargs: Final = _json_mode_thinking_kwargs()
+
+    answer: Final = litellm.completion(client=client, **kwargs)
+    chunks: Final = list(
+        litellm.completion(client=client, stream=True, stream_options={"include_usage": True}, **kwargs)
+    )
+    rebuilt: Final = litellm.stream_chunk_builder(chunks, messages=kwargs["messages"])
+
+    finish_reason, _, _, reasoning_content, _, reasoning_tokens = _answer_fields(answer)
+    assert (finish_reason, reasoning_content, reasoning_tokens) == (
+        "stop",
+        RECORDED_REASONING,
+        RECORDED_THINKING_TOKENS,
+    )
+    assert _answer_fields(rebuilt) == _answer_fields(answer)
+    assert _streamed_thinking_blocks(chunks) == [
+        {**block, "index": index} for index, block in enumerate(answer.choices[0].message.thinking_blocks)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_async_fake_streamed_json_mode_answer_keeps_the_reasoning_of_the_non_streamed_answer() -> None:
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_answer_with_json_mode_thinking_response))
+    kwargs: Final = _json_mode_thinking_kwargs()
+
+    answer: Final = await litellm.acompletion(client=client, **kwargs)
+    stream: Final = await litellm.acompletion(
+        client=client, stream=True, stream_options={"include_usage": True}, **kwargs
+    )
+    chunks: Final = [chunk async for chunk in stream]
+    rebuilt: Final = litellm.stream_chunk_builder(chunks, messages=kwargs["messages"])
+
+    finish_reason, _, _, reasoning_content, _, reasoning_tokens = _answer_fields(answer)
+    assert (finish_reason, reasoning_content, reasoning_tokens) == (
+        "stop",
+        RECORDED_REASONING,
+        RECORDED_THINKING_TOKENS,
+    )
+    assert _answer_fields(rebuilt) == _answer_fields(answer)
+    assert _streamed_thinking_blocks(chunks) == [
+        {**block, "index": index} for index, block in enumerate(answer.choices[0].message.thinking_blocks)
+    ]

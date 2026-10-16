@@ -10,6 +10,7 @@ from litellm.anthropic_beta_headers_manager import (
 )
 from litellm.litellm_core_utils.get_litellm_params import stored_control_options
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
+from litellm.llms.base_llm import base_model_iterator
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -21,7 +22,7 @@ from litellm.utils import CustomStreamWrapper
 
 from ..base_aws_llm import BaseAWSLLM, Credentials, bedrock_bearer_token, pop_aws_auth_params, run_aws_signing
 from ..common_utils import BedrockError, error_response_text, get_all_bedrock_regions
-from .invoke_handler import AWSEventStreamDecoder, MockResponseIterator, make_call
+from .invoke_handler import AWSEventStreamDecoder, make_call
 
 
 def make_sync_call(
@@ -36,7 +37,7 @@ def make_sync_call(
     fake_stream: bool = False,
     stream_chunk_size: int | None = None,
     timeout: float | httpx.Timeout | None = None,
-) -> tuple[MockResponseIterator | Iterator[object], httpx.Headers]:
+) -> tuple[base_model_iterator.MockResponseIterator | Iterator[object], httpx.Headers]:
     if client is None:
         client = get_httpx_client()  # Create a new client if none provided
 
@@ -69,9 +70,10 @@ def make_sync_call(
             data=data,
             messages=messages,
             encoding=litellm.encoding,
+            json_mode=json_mode,
         )
-        completion_stream: MockResponseIterator | Iterator[object] = MockResponseIterator(
-            model_response=model_response, json_mode=json_mode
+        completion_stream: base_model_iterator.MockResponseIterator | Iterator[object] = (
+            base_model_iterator.MockResponseIterator(model_response=model_response)
         )
     else:
         decoder: Final = AWSEventStreamDecoder(model=model, json_mode=json_mode)

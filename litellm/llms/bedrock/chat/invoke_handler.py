@@ -19,6 +19,7 @@ from litellm.llms.anthropic.chat.handler import (
     ModelResponseIterator as AnthropicModelResponseIterator,
 )
 from litellm.llms.anthropic.chat.transformation import JsonModeRequest
+from litellm.llms.base_llm import base_model_iterator
 from litellm.llms.base_llm.base_utils import ResponseFormatSchema
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -227,7 +228,9 @@ async def make_call(
     bedrock_invoke_provider: litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL | None = None,
     stream_chunk_size: int | None = None,
     timeout: float | httpx.Timeout | None = None,
-) -> "tuple[MockResponseIterator | AsyncIterator[GChunk | ModelResponseStream | dict], httpx.Headers]":
+) -> tuple[
+    base_model_iterator.MockResponseIterator | AsyncIterator[GChunk | ModelResponseStream | dict], httpx.Headers
+]:
     try:
         if client is None:
             client = get_async_httpx_client(
@@ -268,10 +271,11 @@ async def make_call(
                 data=data,
                 messages=messages,
                 encoding=litellm.encoding,
+                json_mode=json_mode,
             )
-            completion_stream: MockResponseIterator | AsyncIterator[GChunk | ModelResponseStream | dict] = (
-                MockResponseIterator(model_response=model_response, json_mode=json_mode)
-            )
+            completion_stream: (
+                base_model_iterator.MockResponseIterator | AsyncIterator[GChunk | ModelResponseStream | dict]
+            ) = base_model_iterator.MockResponseIterator(model_response=model_response)
         else:
             decoder: Final = _stream_decoder(
                 bedrock_invoke_provider,
@@ -323,7 +327,7 @@ def make_sync_call(
     bedrock_invoke_provider: litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL | None = None,
     stream_chunk_size: int | None = None,
     timeout: float | httpx.Timeout | None = None,
-) -> "tuple[MockResponseIterator | Iterator[GChunk | ModelResponseStream | dict], httpx.Headers]":
+) -> tuple[base_model_iterator.MockResponseIterator | Iterator[GChunk | ModelResponseStream | dict], httpx.Headers]:
     try:
         if client is None:
             client = get_httpx_client(
@@ -363,10 +367,11 @@ def make_sync_call(
                 data=data,
                 messages=messages,
                 encoding=litellm.encoding,
+                json_mode=json_mode,
             )
-            completion_stream: MockResponseIterator | Iterator[GChunk | ModelResponseStream | dict] = (
-                MockResponseIterator(model_response=model_response, json_mode=json_mode)
-            )
+            completion_stream: (
+                base_model_iterator.MockResponseIterator | Iterator[GChunk | ModelResponseStream | dict]
+            ) = base_model_iterator.MockResponseIterator(model_response=model_response)
         else:
             decoder: Final = _stream_decoder(
                 bedrock_invoke_provider,
