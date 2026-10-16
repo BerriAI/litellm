@@ -9,14 +9,15 @@ import os
 from collections.abc import Callable, Mapping, Sequence
 from itertools import chain, product
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, Protocol
+from typing import TYPE_CHECKING, Final, Literal, ParamSpec, Protocol, TypeAlias, TypeVar, runtime_checkable
 
 import httpx
 from fastapi import HTTPException
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import Timeout
+from litellm.integrations import custom_guardrail
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     get_session_id_from_request_data,
@@ -53,6 +54,29 @@ BLOCKING_STATUSES: Final = frozenset({STATUS_BLOCK, STATUS_ASK})
 KNOWN_STATUSES: Final = frozenset({STATUS_ALLOW, STATUS_TRANSFORM, STATUS_REPORT, *BLOCKING_STATUSES})
 UNREACHABLE_HTTP_STATUSES: Final = frozenset({502, 504})
 TRANSFORM_MISSING: Final = "TrustGuard transform missing payload"
+
+
+_Parameters = ParamSpec("_Parameters")
+_Result = TypeVar("_Result")
+
+
+@runtime_checkable
+class _LoggingDecorator(Protocol):
+    def __call__(self, function: Callable[_Parameters, _Result]) -> Callable[_Parameters, _Result]: ...
+
+
+_DECORATOR_ADAPTER: Final[TypeAdapter[_LoggingDecorator]] = TypeAdapter(
+    _LoggingDecorator, config=ConfigDict(arbitrary_types_allowed=True)
+)
+log_guardrail_information: Final = _DECORATOR_ADAPTER.validate_python(
+    getattr(custom_guardrail, "log_guardrail_information")
+)
+
+
+_GuardrailInitializer: TypeAlias = Callable[
+    [str | None, list[GuardrailEventHooks], GuardrailEventHooks | Mode | str | Sequence[str] | None, bool],
+    None,
+]
 
 
 class _TrustGuardClient(Protocol):
@@ -203,7 +227,7 @@ class NeuralTrustGuardrail(CustomGuardrail):
     """LiteLLM hook that evaluates prompts and completions with TrustGuard."""
 
     @staticmethod
-    def get_config_model() -> type[NeuralTrustGuardrailConfigModel]:
+    def get_config_model() -> type[NeuralTrustGuardrailConfigModel[BaseModel]]:
         return NeuralTrustGuardrailConfigModel
 
     @classmethod
@@ -246,14 +270,11 @@ class NeuralTrustGuardrail(CustomGuardrail):
         self.streaming_transform_mode: Literal["block_only", "incremental_diff"] = (
             streaming_transform_mode or "block_only"
         )
-        super().__init__(
-            guardrail_name=guardrail_name,
-            supported_event_hooks=self.get_supported_event_hooks(),
-            # LitellmParams.mode is str | list[str] | Mode, which CustomGuardrail narrows to the enum
-            event_hook=event_hook,  # pyright: ignore[reportArgumentType]  # config supplies the raw mode string
-            default_on=bool(default_on),
-        )
+        initializer_adapter: Final[TypeAdapter[_GuardrailInitializer]] = TypeAdapter(_GuardrailInitializer)
+        initialize: Final = initializer_adapter.validate_python(getattr(super(), "__init__"))
+        initialize(guardrail_name, self.get_supported_event_hooks(), event_hook, bool(default_on))
 
+    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,

@@ -4,7 +4,7 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Final, Literal, cast
 
-from pydantic import ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm._logging import verbose_logger
@@ -1362,7 +1362,7 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
     QualifireGuardrailConfigModel,
     BlockCodeExecutionGuardrailConfigModel,
     HiddenlayerGuardrailConfigModel,
-    NeuralTrustGuardrailConfigModel,
+    NeuralTrustGuardrailConfigModel[BaseModel],
     QostodianNexusConfigModel,
     VigilGuardGuardrailConfigModel,
     SingulrGuardrailConfigModel,
