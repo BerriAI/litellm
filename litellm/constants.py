@@ -1629,6 +1629,7 @@ INTERNAL_CALL_ORIGIN_METADATA_KEY: Final = "internal_call_origin"
 MANAGED_BACKGROUND_RESPONSE_METADATA_KEY: Final = "_managed_background_response"
 SESSION_ID_GENERATED_METADATA_KEY: Final = "litellm_session_id_generated"
 SESSION_ID_OMITTED_METADATA_KEY: Final = "litellm_session_id_omitted"
+CALLER_SESSION_ID_METADATA_KEY: Final = "litellm_caller_session_id"
 LITELLM_TRUNCATED_PAYLOAD_FIELD: Final = "litellm_truncated"
 LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE: Final = (
     "Truncation is a DB storage safeguard. "
@@ -1705,6 +1706,7 @@ AZURE_SPEECH_FAST_TRANSCRIPTION_PATH: Final = "/speechtotext/transcriptions:tran
 AZURE_SPEECH_STT_DOMAIN: Final = "stt.speech.microsoft.com"
 AZURE_SPEECH_COGNITIVE_SERVICES_DOMAIN: Final = "api.cognitive.microsoft.com"
 AZURE_SPEECH_SUBSCRIPTION_KEY_HEADER: Final = "Ocp-Apim-Subscription-Key"
+AWS_ERROR_TYPE_HEADER: Final = "x-amzn-errortype"
 AZURE_SPEECH_SHORT_AUDIO_MODEL: Final = "short-audio"
 AZURE_SPEECH_BATCH_MODEL: Final = "batch-transcription"
 AZURE_SPEECH_FAST_TRANSCRIPTION_MODEL: Final = "fast-transcription"
@@ -1894,6 +1896,7 @@ _background_interaction_cost_polling_env: Final = os.getenv(
     "BACKGROUND_INTERACTION_COST_POLLING_ENABLED", "true"
 ).lower()
 BACKGROUND_INTERACTION_COST_POLLING_ENABLED: Final = _background_interaction_cost_polling_env == "true"
+BACKGROUND_INTERACTION_SETTLEMENT_CLAIM_LEASE_SECONDS: Final = 300.0
 PROXY_BUDGET_RESCHEDULER_MAX_TIME: Final = get_env_int("PROXY_BUDGET_RESCHEDULER_MAX_TIME", 605)
 PROXY_BATCH_WRITE_AT: Final = get_env_int("PROXY_BATCH_WRITE_AT", 10)  # in seconds, increased from 10
 PROXY_CONFIG_RELOAD_INTERVAL_SECONDS: Final = get_env_int("PROXY_CONFIG_RELOAD_INTERVAL_SECONDS", 30)
