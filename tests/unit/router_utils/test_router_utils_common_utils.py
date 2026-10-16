@@ -292,8 +292,12 @@ class TestFilterWebSearchDeployments:
         assert [d["model_info"]["id"] for d in result] == ["deployment-1", "deployment-2"]
 
     @pytest.mark.parametrize("tool_type", [{}, [], None, 5], ids=["object", "list", "null", "int"])
-    def test_a_non_string_tool_type_is_no_web_search_request(self, sample_deployments: List[Dict], tool_type: object) -> None:
-        result = filter_web_search_deployments(sample_deployments, {"tools": [{"type": tool_type}, {"type": "function"}]})
+    def test_a_non_string_tool_type_is_no_web_search_request(
+        self, sample_deployments: list[dict[str, object]], tool_type: object
+    ) -> None:
+        result: Final = filter_web_search_deployments(
+            sample_deployments, {"tools": [{"type": tool_type}, {"type": "function"}]}
+        )
         assert result == sample_deployments
 
     def test_web_search_preview_filters_unsupported(self, sample_deployments):
