@@ -20,12 +20,12 @@ describe("TeamMemberSpendBudgetCell", () => {
     expect(screen.getByText("Team")).toBeInTheDocument();
     expect(screen.getByText("$600.00")).toBeInTheDocument();
     expect(screen.getByText("/ $1,000.00")).toBeInTheDocument();
-    expect(screen.getByText("Member")).toBeInTheDocument();
+    expect(screen.getByText("My Spend")).toBeInTheDocument();
     expect(screen.getByText("$50.00")).toBeInTheDocument();
     expect(screen.getByText("/ $100.00")).toBeInTheDocument();
     expect(screen.getByText("Resets Oct 20, 2026 UTC")).toBeInTheDocument();
     expect(screen.getAllByRole("meter")[0]).toHaveAttribute("aria-valuetext", "Team $600.00 of $1,000.00");
-    expect(screen.getAllByRole("meter")[1]).toHaveAttribute("aria-valuetext", "Member $50.00 of $100.00");
+    expect(screen.getAllByRole("meter")[1]).toHaveAttribute("aria-valuetext", "My Spend $50.00 of $100.00");
   });
 
   it("shows the team budget and Unlimited for a member without a budget", () => {
@@ -39,7 +39,7 @@ describe("TeamMemberSpendBudgetCell", () => {
 
     expect(screen.getByText("Team")).toBeInTheDocument();
     expect(screen.getByText("$600.00")).toBeInTheDocument();
-    expect(screen.getByText("Member")).toBeInTheDocument();
+    expect(screen.getByText("My Spend")).toBeInTheDocument();
     expect(screen.getByText("/ Unlimited")).toBeInTheDocument();
     expect(screen.getAllByRole("meter")).toHaveLength(1);
   });
@@ -60,7 +60,7 @@ describe("TeamMemberSpendBudgetCell", () => {
     render(<TeamMemberSpendBudgetCell teamSpend={600} teamMaxBudget={1000} callerMembership={null} />);
 
     expect(screen.getByText("Team")).toBeInTheDocument();
-    expect(screen.queryByText("Member")).not.toBeInTheDocument();
+    expect(screen.queryByText("My Spend")).not.toBeInTheDocument();
     expect(screen.getAllByRole("meter")).toHaveLength(1);
   });
 
@@ -73,7 +73,7 @@ describe("TeamMemberSpendBudgetCell", () => {
       />,
     );
 
-    expect(screen.getAllByRole("meter")[1]).toHaveAttribute("aria-valuetext", "Member $150.00 of $100.00");
+    expect(screen.getAllByRole("meter")[1]).toHaveAttribute("aria-valuetext", "My Spend $150.00 of $100.00");
   });
 
   it("does not render meters for zero or unlimited budgets", () => {

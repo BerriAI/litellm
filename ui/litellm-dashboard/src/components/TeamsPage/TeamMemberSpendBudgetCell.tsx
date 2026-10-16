@@ -15,7 +15,7 @@ interface TeamMemberSpendBudgetCellProps {
 }
 
 interface BudgetLineProps {
-  label: "Team" | "Member";
+  label: "Team" | "My Spend";
   spend: number | null | undefined;
   maxBudget: number | null | undefined;
   resetAt?: string | null;
@@ -59,7 +59,7 @@ export function TeamMemberSpendBudgetCell({
       <BudgetLine label="Team" spend={teamSpend} maxBudget={teamMaxBudget} />
       {callerMembership && (
         <BudgetLine
-          label="Member"
+          label="My Spend"
           spend={callerMembership.spend}
           maxBudget={callerMembership.max_budget}
           resetAt={callerMembership.budget_reset_at}
