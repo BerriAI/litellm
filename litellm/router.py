@@ -13264,6 +13264,7 @@ class Router:
         request_kwargs: dict | None = None,
         input_token_count: int | None = None,
         skip_inline_token_count: bool = False,
+        request_deployments: Sequence[DeploymentTypedDict] | None = None,
     ):
         """
         Filter out model in model group, if:
@@ -13398,7 +13399,9 @@ class Router:
             - First check for rate limit errors (if this is true, it means the model passed the context window check but failed the rate limit check)
             """
 
-            group_deployments: Final = tuple(self.get_all_deployments(model_name=model)) or typed_deployments
+            group_deployments: Final = tuple(
+                self.get_all_deployments(model_name=model) if request_deployments is None else request_deployments
+            )
             if (
                 not _context_window_error
                 and group_deployments
@@ -13847,6 +13850,10 @@ class Router:
                 )
             return healthy_deployments
 
+        request_deployments: Final = cast(  # cast-ok: router deployments are plain dicts
+            Sequence[DeploymentTypedDict], healthy_deployments
+        )
+
         # Health-check-based filtering (before cooldown)
         healthy_deployments = await self._async_filter_health_check_unhealthy_deployments(
             healthy_deployments=healthy_deployments,
@@ -13906,6 +13913,7 @@ class Router:
                     request_kwargs=request_kwargs,
                 ),
                 skip_inline_token_count=True,
+                request_deployments=request_deployments,
             )
         # check if user wants to do tag based routing
         healthy_deployments = await get_deployments_for_tag(
@@ -15072,6 +15080,9 @@ class Router:
             return healthy_deployments
 
         parent_otel_span: Final[Span | None] = get_parent_otel_span_from_kwargs(request_kwargs)
+        request_deployments: Final = cast(  # cast-ok: router deployments are plain dicts
+            Sequence[DeploymentTypedDict], healthy_deployments
+        )
 
         # Health-check-based filtering (before cooldown)
         healthy_deployments = self._filter_health_check_unhealthy_deployments(
@@ -15103,6 +15114,7 @@ class Router:
                 messages=messages,
                 input=input,
                 request_kwargs=request_kwargs,
+                request_deployments=request_deployments,
             )
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
@@ -15266,6 +15278,9 @@ class Router:
 
         # 4. Apply health-check and cooldown filtering
         parent_otel_span: Final[Span | None] = get_parent_otel_span_from_kwargs(request_kwargs)
+        request_deployments: Final = cast(  # cast-ok: router deployments are plain dicts
+            Sequence[DeploymentTypedDict], pass_through_deployments
+        )
         pass_through_deployments = self._filter_health_check_unhealthy_deployments(
             healthy_deployments=pass_through_deployments,
             parent_otel_span=parent_otel_span,
@@ -15287,6 +15302,7 @@ class Router:
                 messages=messages,
                 input=input,
                 request_kwargs=request_kwargs,
+                request_deployments=request_deployments,
             )
 
         if self._is_priority_routing_group(model):

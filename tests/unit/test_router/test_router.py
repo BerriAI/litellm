@@ -82,6 +82,7 @@ from litellm.types.router import (
     ModelInfo,
     PreRoutingHookResponse,
     RetryPolicy,
+    RouterRateLimitError,
     RoutingContext,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -27099,24 +27100,60 @@ def test_pre_call_checks_filters_an_authenticating_provider_deployment_that_lack
     assert [d["model_info"]["id"] for d in filtered] == ["gpt-4o"]
 
 
-def test_pre_call_checks_answers_400_when_the_group_name_lists_no_deployments(monkeypatch):
-    monkeypatch.setattr(litellm, "drop_params", False)
-    model_list: Final = [
-        {
-            "model_name": "no-json-mode",
-            "litellm_params": {"model": "openai/gpt-3.5-turbo-16k", "api_key": "my-fake-key"},
-            "model_info": {"id": "only", "max_input_tokens": 100},
-        }
-    ]
-    router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
+async def _select_team_json_deployment(router: Router, entrypoint: str, selection: Mapping[str, object]) -> object:
+    if entrypoint == "async":
+        return await router.async_get_available_deployment(**selection)
+    if entrypoint == "sync":
+        return router.get_available_deployment(**selection)
+    return router.get_available_deployment_for_pass_through(**selection)
 
-    with pytest.raises(litellm.UnsupportedParamsError):
-        router._pre_call_checks(
-            model="team-public-name",
-            healthy_deployments=model_list,
-            messages=[{"role": "user", "content": "hi"}],
-            request_kwargs={"response_format": {"type": "json_object"}},
-        )
+
+@pytest.mark.parametrize("entrypoint", ["sync", "async", "pass-through"])
+@pytest.mark.parametrize(
+    ("deployment_models", "cooled_down", "expected_error"),
+    [
+        pytest.param(("gpt-3.5-turbo-16k", "gpt-4"), (), litellm.UnsupportedParamsError, id="none-takes-it"),
+        pytest.param(("gpt-3.5-turbo-16k", "gpt-4o"), ("gpt-4o",), RouterRateLimitError, id="capable-cooling-down"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_team_public_model_name_answers_400_only_when_no_team_deployment_takes_the_param(
+    monkeypatch, entrypoint, deployment_models, cooled_down, expected_error
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": f"team-json-{deployment_model}",
+                "litellm_params": {
+                    "model": f"openai/{deployment_model}",
+                    "api_key": "my-fake-key",
+                    "use_in_pass_through": True,
+                },
+                "model_info": {
+                    "id": deployment_model,
+                    "max_input_tokens": 100,
+                    "team_id": "json-team",
+                    "team_public_model_name": "team-json",
+                },
+            }
+            for deployment_model in deployment_models
+        ],
+        enable_pre_call_checks=True,
+        num_retries=0,
+    )
+    _cool_down(router, *cooled_down)
+    selection: Final = {
+        "model": "team-json",
+        "messages": [{"role": "user", "content": "hi"}],
+        "request_kwargs": {
+            "metadata": {"user_api_key_team_id": "json-team"},
+            "response_format": {"type": "json_object"},
+        },
+    }
+
+    with pytest.raises(expected_error):
+        await _select_team_json_deployment(router, entrypoint, selection)
 
 
 def test_pre_call_checks_ignores_an_image_response_format_string(monkeypatch):
