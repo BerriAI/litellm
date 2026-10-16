@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from prisma.models import LiteLLM_EndUserTable as PrismaEndUserRow
+from pydantic import BaseModel
 
 import litellm
 from litellm.proxy._types import (
@@ -1568,7 +1569,9 @@ def test_customer_block_without_enterprise_package_rejects_before_writing(
 @pytest.mark.usefixtures("configured_block_hook")
 def test_customer_block_without_database_fails_without_evicting_caches(mock_user_api_key_auth: object) -> None:
     with patch("litellm.proxy.proxy_server.prisma_client", None), _end_user_cache_doubles() as (cache, publish):
-        response: Final = client.post("/customer/block", json={"user_ids": ["c1"]}, headers={"Authorization": "Bearer k"})
+        response: Final = client.post(
+            "/customer/block", json={"user_ids": ["c1"]}, headers={"Authorization": "Bearer k"}
+        )
     assert response.status_code == 500
     assert "Postgres DB Not connected" in response.text
     assert cache.deleted == []
@@ -1622,6 +1625,31 @@ async def test_concurrent_customer_unblocks_keep_both_ids_unblocked(mock_prisma_
         assert first_response.blocked_users == ["still-blocked"]
         assert hook.blocked_user_list == ["still-blocked"]
         assert litellm.blocked_user_list == ["still-blocked"]
+
+
+def test_customer_block_success_serializes_db_model_instance(
+    mock_prisma_client, mock_user_api_key_auth, configured_block_hook: None
+):
+    class MockPrismaEndUser(BaseModel):
+        user_id: str
+        blocked: bool
+        spend: float | None = None
+
+    mock_prisma_client.db.litellm_endusertable.upsert = AsyncMock(
+        return_value=MockPrismaEndUser(user_id="c1", blocked=True, spend=None)
+    )
+
+    response = client.post(
+        "/customer/block",
+        json={"user_ids": ["c1"]},
+        headers={"Authorization": "Bearer k"},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["blocked_users"][0]["user_id"] == "c1"
+    assert body["blocked_users"][0]["blocked"] is True
+    assert body["blocked_users"][0]["spend"] == 0.0
 
 
 def test_customer_delete_invalidates_end_user_and_registry_caches(mock_prisma_client, mock_user_api_key_auth):

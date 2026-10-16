@@ -33,6 +33,7 @@ from ..common_utils import CohereError
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _EMBEDDINGS_BY_TYPE: Final = TypeAdapter(Mapping[str, Iterable[object]], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _SupportsEncode(Protocol):
@@ -183,7 +184,7 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
         encoding: _SupportsEncode,
         input: list,
     ) -> EmbeddingResponse:
-        response_json: Final = response.json()
+        response_json: Final = _DECODED_JSON.validate_python(response.json())
         ## LOGGING
         logging_obj.post_call(
             input=input,

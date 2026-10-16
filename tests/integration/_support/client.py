@@ -57,6 +57,17 @@ def eventually(
         time.sleep(0.1)
 
 
+def until_asserted(check: Callable[[], T], *, seconds: float = 10) -> T:
+    deadline: Final = time.monotonic() + seconds
+    while True:
+        try:
+            return check()
+        except AssertionError:
+            if time.monotonic() >= deadline:
+                raise
+        time.sleep(0.1)
+
+
 def held(read: Callable[[], T], satisfied: Callable[[T], bool], *, holding: float, seconds: float = 10) -> T:
     """`eventually`, and then `satisfied` must hold on every read for `holding` more seconds; a miss restarts the hold."""
     deadline: Final = time.monotonic() + seconds

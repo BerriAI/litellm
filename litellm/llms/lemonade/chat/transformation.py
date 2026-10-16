@@ -3,7 +3,7 @@ Translate from OpenAI's `/v1/chat/completions` to Lemonade's `/v1/chat/completio
 """
 
 from collections.abc import Iterable, Mapping
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol
 from urllib.parse import quote
 
 import httpx
@@ -26,6 +26,14 @@ if TYPE_CHECKING:
 _JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 _STR: Final = TypeAdapter(str)
+
+
+class _JsonResponse(Protocol):
+    def json(self) -> object: ...
+
+
+def _json_body(response: _JsonResponse) -> object:
+    return response.json()
 
 
 class LemonadeChatConfig(OpenAILikeChatConfig):
@@ -189,7 +197,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
                 headers=self._get_auth_headers(api_key),
             )
             response.raise_for_status()
-            model_info: Final = response.json()
+            model_info: Final = _json_body(response)
         except Exception:
             verbose_logger.debug("LemonadeError: Could not get model info.")
             return self._get_default_model_info(model)

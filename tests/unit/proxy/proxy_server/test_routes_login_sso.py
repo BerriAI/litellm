@@ -670,6 +670,12 @@ def test_the_master_key_as_a_bearer_token_still_works_while_the_ui_password_is_b
 def test_a_database_users_correct_password_is_refused_while_blocked(client, monkeypatch, reset_login_throttle):
     """The block is hard: while it lasts, nothing from that source signs in as that user, right password or not,
     and the block is not extended by the refused attempts."""
+    from types import SimpleNamespace
+
+    from litellm.proxy.auth import login_throttle
+
+    frozen_now = login_throttle.time.time()
+    monkeypatch.setattr(login_throttle, "time", SimpleNamespace(time=lambda: frozen_now))
     _install_real_auth(monkeypatch, max_failed_login_attempts_per_source=2, failed_login_block_seconds=64)
     _db_user(monkeypatch, "user@corp.com")
 
