@@ -10,6 +10,7 @@ makes a test fail.
 import base64
 import datetime
 import time
+from http.cookies import SimpleCookie
 
 import pytest
 from fastapi import HTTPException, Request
@@ -635,6 +636,35 @@ async def test_idp_initiated_replay_rejected_across_workers(saml_env_idp_initiat
     with pytest.raises(HTTPException) as exc:
         await _acs(_b64(resp), worker_two)
     assert exc.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_sp_initiated_login_endpoint_ticket_is_accepted_by_another_worker(saml_env, monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.management_endpoints.ui_sso import saml_login
+
+    key_pem, cert_pem = saml_env
+    shared_store = InMemoryCache()
+    monkeypatch.setattr(proxy_server, "saml_sso_cache", _shared_cache(shared_store))
+
+    redirect = await saml_login(_fake_request())
+    assert redirect.headers["location"].startswith(SSO_URL)
+    ticket = SimpleCookie(redirect.headers["set-cookie"])[_SAML_AUTHN_STATE_COOKIE].value
+
+    resp = _build_signed_response(key_pem, cert_pem, in_response_to=ticket, email="carol@example.com")
+    result = await _acs(_b64(resp), _shared_cache(shared_store), cookies={_SAML_AUTHN_STATE_COOKIE: ticket})
+    assert result.email == "carol@example.com"
+
+
+@pytest.mark.asyncio
+async def test_sp_metadata_endpoint_serves_acs_and_entity_id(saml_env):
+    from litellm.proxy.management_endpoints.ui_sso import saml_metadata
+
+    response = await saml_metadata(_fake_request())
+    body = bytes(response.body).decode()
+    assert response.media_type == "application/xml"
+    assert ACS in body
+    assert SP_ENTITY in body
 
 
 class _FakeChunkedRequest:
