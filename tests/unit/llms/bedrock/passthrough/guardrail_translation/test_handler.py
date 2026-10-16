@@ -1922,7 +1922,7 @@ class TestConverseStreamGuardrailRelay:
         frames = [
             frame
             async for frame in BedrockPassthroughGuardrailHandler.event_stream_items(
-                _chunks(*_tool_without_input_stream())
+                _chunks(*_tool_without_input_stream()), _CONVERSE_STREAM
             )
         ]
 
