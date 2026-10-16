@@ -16,6 +16,7 @@ from litellm.types.router import (
     holds_secret_pointer,
     reject_server_owned_wif_params,
     server_owned_wif_fields_named,
+    server_owned_wif_fields_written,
     server_owned_wif_fields_present,
 )
 from litellm.types.utils import (
@@ -309,6 +310,23 @@ def test_server_owned_wif_fields_named_is_derived_from_the_shared_list():
     assert set(server_owned_wif_fields_named(frozenset(server_owned_wif_litellm_params))) == set(
         server_owned_wif_litellm_params
     )
+
+
+@pytest.mark.parametrize(
+    "api_key", ["oidc/file//var/run/secrets/kubernetes.io/serviceaccount/token", "oidc/env/SA_TOKEN", "oidc/google/aud"]
+)
+def test_an_oidc_reference_api_key_is_server_owned(api_key: str):
+    assert server_owned_wif_fields_present({"api_key": api_key}) == ("api_key",)
+    assert server_owned_wif_fields_written({"api_key": api_key}) == ("api_key",)
+    with pytest.raises(ValueError, match="api_key holds an oidc/ secret reference"):
+        reject_server_owned_wif_params({"api_key": api_key})
+
+
+@pytest.mark.parametrize("api_key", ["sk-static", "os.environ/MISTRAL_API_KEY", None])
+def test_a_plain_api_key_stays_client_settable(api_key: str | None):
+    assert server_owned_wif_fields_present({"api_key": api_key}) == ()
+    assert server_owned_wif_fields_written({"api_key": api_key}) == ()
+    reject_server_owned_wif_params({"api_key": api_key})
 
 
 @pytest.mark.parametrize("param_name", ["anthropic_issuer_signing_key_ref", "anthropic_keycloak_client_secret_ref"])

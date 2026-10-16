@@ -7094,6 +7094,76 @@ async def test_add_litellm_data_to_request_keeps_every_forwarded_credential_out_
         assert value not in logged
 
 
+_SERVICE_ACCOUNT_TOKEN_REFERENCE: Final = "oidc/file//var/run/secrets/kubernetes.io/serviceaccount/token"
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_refuses_a_forwarded_x_api_key_holding_an_oidc_reference():
+    """A forwarded provider key lands in api_key after auth, so the body check cannot see it and a client could get
+    the proxy to read its own service account token for the call."""
+    from fastapi import HTTPException
+
+    request_mock = _make_request_mock(
+        "/v1/messages",
+        {
+            "Content-Type": "application/json",
+            "x-litellm-api-key": "Bearer sk-virtual-key",
+            "x-api-key": _SERVICE_ACCOUNT_TOKEN_REFERENCE,
+        },
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await add_litellm_data_to_request(
+            data={"model": "claude-sonnet-5", "messages": [{"role": "user", "content": "hello"}]},
+            request=request_mock,
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+            proxy_config=MagicMock(),
+            general_settings={"forward_llm_provider_auth_headers": True},
+            version="test-version",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "api_key holds an oidc/ secret reference" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_refuses_a_model_config_credential_holding_an_oidc_reference(monkeypatch):
+    """Team and project metadata are written by non-admins, so a model_config naming a credential whose api_key is an
+    oidc/ reference must not get that reference resolved for a deployment the team controls."""
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(litellm, "enable_model_config_credential_overrides", True)
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="admin-oidc",
+                credential_info={},
+                credential_values={"api_key": _SERVICE_ACCOUNT_TOKEN_REFERENCE},
+            )
+        ],
+    )
+    team_key: Final = UserAPIKeyAuth(
+        api_key="hashed-key",
+        team_id="team-1",
+        team_metadata={"model_config": {"azure/gpt-4o": {"azure": {"litellm_credentials": "admin-oidc"}}}},
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await add_litellm_data_to_request(
+            data={"model": "azure/gpt-4o", "messages": [{"role": "user", "content": "hello"}]},
+            request=_make_request_mock("/v1/chat/completions", {"Content-Type": "application/json"}),
+            user_api_key_dict=team_key,
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "api_key holds an oidc/ secret reference" in str(exc_info.value.detail)
+
+
 @pytest.mark.parametrize(
     "header, expected_redacted",
     [

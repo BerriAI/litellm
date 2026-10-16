@@ -20,6 +20,7 @@ from litellm.types.vector_stores import (
     LiteLLM_ManagedVectorStore,
     LiteLLM_ManagedVectorStoreIndex,
 )
+from litellm.types.utils import CredentialItem
 from litellm.vector_stores.main import search
 from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry, VectorStoreRegistry
 
@@ -190,6 +191,93 @@ def test_search_uses_registry_credentials():
             assert getattr(called_params, "aws_region_name") == "us-east-1"
     finally:
         litellm.vector_store_registry = original_registry
+
+
+@pytest.fixture
+def registry_with_an_oidc_env_credential(monkeypatch):
+    monkeypatch.setenv("VS_PROJECTED_TOKEN", "projected-token-1")
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="openai-sa",
+                credential_values={"api_key": "oidc/env/VS_PROJECTED_TOKEN"},
+                credential_info={"custom_llm_provider": "openai"},
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        litellm,
+        "vector_store_registry",
+        VectorStoreRegistry(
+            [
+                LiteLLM_ManagedVectorStore(
+                    vector_store_id="vs1",
+                    custom_llm_provider="openai",
+                    litellm_credential_name="openai-sa",
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            ]
+        ),
+    )
+
+
+def _search_vs1() -> MagicMock:
+    import litellm.vector_stores.main as vector_stores_main
+
+    logger = MagicMock()
+    logger.response_cost_calculator.return_value = 0
+    with (
+        patch(
+            "litellm.vector_stores.main.ProviderConfigManager.get_provider_vector_stores_config",
+            return_value=MagicMock(),
+        ),
+        patch.object(
+            vector_stores_main.base_llm_http_handler, "vector_store_search_handler", return_value={"data": []}
+        ) as handler,
+    ):
+        search(vector_store_id="vs1", query="test", custom_llm_provider="openai", litellm_logging_obj=logger)
+    return handler
+
+
+def _create_vs1_file() -> MagicMock:
+    import litellm.vector_store_files.main as vector_store_files_main
+
+    with (
+        patch(
+            "litellm.vector_store_files.main.ProviderConfigManager.get_provider_vector_store_files_config",
+            return_value=MagicMock(),
+        ),
+        patch.object(
+            vector_store_files_main.base_llm_http_handler, "vector_store_file_create_handler", return_value={}
+        ) as handler,
+    ):
+        vector_store_files_main.create(vector_store_id="vs1", file_id="file-1", litellm_logging_obj=MagicMock())
+    return handler
+
+
+@pytest.mark.parametrize("call", [_search_vs1, _create_vs1_file], ids=["search", "file_create"])
+def test_a_registry_credentials_oidc_api_key_reaches_the_provider_as_the_token_it_names(
+    registry_with_an_oidc_env_credential, monkeypatch, call
+):
+    first = call().call_args.kwargs["litellm_params"]
+    monkeypatch.setenv("VS_PROJECTED_TOKEN", "projected-token-2")
+    second = call().call_args.kwargs["litellm_params"]
+
+    assert (first.api_key, second.api_key) == ("projected-token-1", "projected-token-2")
+    assert litellm.credential_list[0].credential_values["api_key"] == "oidc/env/VS_PROJECTED_TOKEN"
+
+
+@pytest.mark.parametrize("call", [_search_vs1, _create_vs1_file], ids=["search", "file_create"])
+def test_an_unresolvable_registry_credential_reference_never_reaches_the_provider(
+    registry_with_an_oidc_env_credential, monkeypatch, call
+):
+    monkeypatch.delenv("VS_PROJECTED_TOKEN")
+
+    with pytest.raises(litellm.AuthenticationError, match="oidc/env/VS_PROJECTED_TOKEN"):
+        call()
 
 
 def _config_registry(vector_store_id: str = "vs_from_config") -> VectorStoreRegistry:

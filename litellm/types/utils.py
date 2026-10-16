@@ -4157,6 +4157,11 @@ oauth_token_exchange_litellm_params: Final = (
     "token_exchange_scope",
 )
 github_copilot_oauth_litellm_params: Final = ("github_copilot_auth_type",)
+OIDC_SECRET_REFERENCE_PREFIX: Final = "oidc/"
+API_KEY_SECRET_REFERENCE_REJECTION: Final = (
+    "Rejected Request: api_key holds an oidc/ secret reference, which only a deployment or credential a proxy "
+    "admin configures can carry."
+)
 server_owned_wif_litellm_params: Final = (
     anthropic_wif_litellm_params
     + openai_wif_litellm_params

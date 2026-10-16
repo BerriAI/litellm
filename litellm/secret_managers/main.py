@@ -3,6 +3,7 @@ import base64
 import os
 import time
 import traceback
+from dataclasses import dataclass
 from typing import Final
 
 import httpx
@@ -155,6 +156,31 @@ def get_secret_str(
         return None
 
     return value
+
+
+LOCAL_OIDC_SECRET_PREFIXES: Final = ("oidc/file/", "oidc/env/")
+
+
+@dataclass(frozen=True, slots=True)
+class UnresolvableSecretReference:
+    reference: str
+    reason: str
+
+
+def resolve_local_oidc_reference(value: str) -> str | UnresolvableSecretReference:
+    """Only local kinds resolve, since request paths must not do network I/O, and ``oidc/env_path/`` is
+    excluded because it bypasses the ``oidc/file/`` credential-directory allowlist."""
+    if not value.startswith(LOCAL_OIDC_SECRET_PREFIXES):
+        return value
+    try:
+        secret: Final = get_secret_str(value)
+    except UnicodeDecodeError:
+        return UnresolvableSecretReference(reference=value, reason="the file is not UTF-8 text")
+    except (OSError, ValueError) as exc:
+        return UnresolvableSecretReference(reference=value, reason=str(exc))
+    if not secret:
+        return UnresolvableSecretReference(reference=value, reason="it resolved to an empty value")
+    return secret
 
 
 def normalize_nonempty_secret_str(val: str | None) -> str | None:

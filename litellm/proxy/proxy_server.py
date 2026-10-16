@@ -1272,6 +1272,7 @@ class _WebsearchInterceptionLitellmSettings(TypedDict, total=False):
 _LOGIN_REQUEST_BODY: Final = TypeAdapter(_LoginRequestBody)
 _LOGIN_EXCHANGE_REQUEST_BODY: Final = TypeAdapter(_LoginExchangeRequestBody)
 _ANTHROPIC_BETA_HEADERS_RELOAD_CONFIG: Final = TypeAdapter(_AnthropicBetaHeadersReloadConfig)
+_LITELLM_PARAMS_COPY: Final = TypeAdapter(dict[str, object])
 _WEBSEARCH_INTERCEPTION_LITELLM_SETTINGS: Final = TypeAdapter(_WebsearchInterceptionLitellmSettings)
 _UNTYPED_VALUE: Final = TypeAdapter(object)
 
@@ -14487,7 +14488,9 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
     if deployment is not None:
         litellm_model_name = deployment.get("litellm_params", {}).get("model")
         model_info = deployment.get("model_info", {})
-        load_credentials_from_list(deployment.get("litellm_params", {}))
+        call_params: Final = _LITELLM_PARAMS_COPY.validate_python(deployment.get("litellm_params", {}))
+        load_credentials_from_list(call_params)
+        deployment = {**deployment, "litellm_params": call_params}  # rebind-ok: load credentials into a copy
         # remove the custom_llm_provider_prefix in the litellm_model_name
         if "/" in litellm_model_name:
             litellm_model_name = litellm_model_name.split("/", 1)[1]

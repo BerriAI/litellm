@@ -225,6 +225,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import (
     ABOVE_THRESHOLD_COST_KEY_PATTERN,
+    OIDC_SECRET_REFERENCE_PREFIX,
     OPENAI_RESPONSE_HEADERS,
     CallTypes,
     ChatCompletionDeltaToolCall,
@@ -454,7 +455,12 @@ from litellm.llms.base_llm.completion.transformation import BaseTextCompletionCo
 from litellm.llms.base_llm.evals.transformation import BaseEvalsAPIConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
-from litellm.secret_managers.main import get_secret
+from litellm.secret_managers.main import (
+    LOCAL_OIDC_SECRET_PREFIXES,
+    UnresolvableSecretReference,
+    get_secret,
+    resolve_local_oidc_reference,
+)
 
 from ._logging import is_debugging_on, verbose_logger
 from .caching.caching import (
@@ -717,16 +723,13 @@ def get_applied_guardrails(kwargs: dict[str, object]) -> list[str]:
     return applied_guardrails
 
 
-def load_credentials_from_list(kwargs: dict):
-    """
-    Updates kwargs with the credentials if credential_name in kwarg
-    """
+def _named_credential_values(kwargs: Mapping[str, object]) -> Mapping[str, object]:
     # Access CredentialAccessor via module to trigger lazy loading if needed
     credential_accessor: Final[type[CredentialAccessor]] = litellm_utils.CredentialAccessor
 
     credential_name: Final = kwargs.get("litellm_credential_name")
-    if not credential_name:
-        return
+    if not isinstance(credential_name, str) or not credential_name:
+        return MappingProxyType({})
     credential: Final = credential_accessor.find_credential(credential_name)
     if credential is None:
         verbose_logger.warning(
@@ -734,10 +737,48 @@ def load_credentials_from_list(kwargs: dict):
             credential_name,
             len(litellm.credential_list),
         )
-        return
-    for key, value in credential.credential_values.items():
-        if key not in kwargs:
-            kwargs[key] = value
+        return MappingProxyType({})
+    return MappingProxyType({key: value for key, value in credential.credential_values.items() if key not in kwargs})
+
+
+def _secret_behind_api_key_reference(reference: str, model: object, llm_provider: object) -> str:
+    if not reference.startswith(LOCAL_OIDC_SECRET_PREFIXES):
+        raise BadRequestError(
+            message=(
+                f"api_key {reference} is an oidc/ secret reference of a kind api_key does not support. "
+                "Use oidc/file/<absolute path> or oidc/env/<VARIABLE_NAME>."
+            ),
+            model=model,
+            llm_provider=llm_provider,
+        )
+    match resolve_local_oidc_reference(reference):
+        case UnresolvableSecretReference(reason=reason):
+            raise AuthenticationError(
+                message=f"api_key secret reference {reference} could not be resolved: {reason}",
+                llm_provider=llm_provider,
+                model=model,
+            )
+        case str() as secret:
+            return secret
+
+
+def load_credentials_from_list(kwargs: dict[str, object]) -> None:
+    """
+    Updates kwargs with the credentials if credential_name in kwarg, then swaps an oidc/ api_key reference for
+    the secret it points to, read now so a rotated token is used on the next call
+    """
+    kwargs.update(_credential_updates(kwargs))
+
+
+def _credential_updates(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    credential_values: Final = _named_credential_values(kwargs)
+    api_key: Final = kwargs.get("api_key", credential_values.get("api_key"))
+    if not (isinstance(api_key, str) and api_key.startswith(OIDC_SECRET_REFERENCE_PREFIX)):
+        return credential_values
+    secret: Final = _secret_behind_api_key_reference(
+        api_key, model=kwargs.get("model"), llm_provider=kwargs.get("custom_llm_provider")
+    )
+    return MappingProxyType({**credential_values, "api_key": secret})
 
 
 def get_dynamic_callbacks(
