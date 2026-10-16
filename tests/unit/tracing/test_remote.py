@@ -120,6 +120,32 @@ async def test_remote_reads_preserve_scope_and_pagination(operation: str) -> Non
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("agent", "expected"), (("research-agent", "research-agent"), ("", None), (None, None)))
+async def test_remote_list_includes_only_a_non_empty_agent_filter(agent: str | None, expected: str | None) -> None:
+    requests: Final = asyncio.Queue[httpx.Request]()
+
+    def accept(request: httpx.Request) -> httpx.Response:
+        requests.put_nowait(request)
+        return httpx.Response(200, json={"data": [], "next_cursor": None})
+
+    async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(accept)) as client:
+        await RemoteTraceStore(client).list_traces(
+            TraceScope(all_teams=1, user_id="", team_ids=()), 10, 20, None, 17, agent
+        )
+    request: Final = requests.get_nowait()
+    body: Final = json.loads(request.content)
+    assert body == {
+        "operation": "list",
+        "scope": {"all_teams": 1, "user_id": "", "team_ids": []},
+        "start_ms": 10,
+        "end_ms": 20,
+        "cursor": None,
+        "limit": 17,
+        **({"agent": expected} if expected else {}),
+    }
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "status,error",
     ((400, ValueError), (409, TraceChanged), (413, OverflowError), (503, RuntimeError), (302, RuntimeError)),
