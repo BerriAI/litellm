@@ -1899,6 +1899,12 @@ async def _admit_frame_turn(turn_admission: Callable[[], Awaitable[None]] | None
     await turn_admission()
 
 
+def _turn_refusal_frame(refusal: RateLimitError) -> str:
+    return json.dumps(
+        {"type": "error", "status": 429, "error": {"type": "rate_limit_exceeded", "message": str(refusal)}}
+    )
+
+
 RESPONSES_WS_LOGGED_EVENT_TYPES: Final = [
     "response.created",
     "response.completed",
@@ -2547,17 +2553,7 @@ class ResponsesWebSocketStreaming:
             await _admit_frame_turn(turn_admission, message)
         except RateLimitError as e:
             try:
-                await self.websocket.send_text(
-                    json.dumps(
-                        {
-                            "type": "error",
-                            "error": {
-                                "type": "rate_limit_exceeded",
-                                "message": str(e),
-                            },
-                        }
-                    )
-                )
+                await self.websocket.send_text(_turn_refusal_frame(e))
             except Exception:  # noqa: BLE001, S110  # client may already be gone
                 pass
             return False
@@ -2702,10 +2698,11 @@ class ManagedResponsesWebSocketHandler:
             return None
 
     async def _send_error(self, message: str, error_type: str = "server_error") -> None:
+        await self._send_frame(json.dumps({"type": "error", "error": {"type": error_type, "message": message}}))
+
+    async def _send_frame(self, frame: str) -> None:
         try:
-            await self.websocket.send_text(
-                json.dumps({"type": "error", "error": {"type": error_type, "message": message}})
-            )
+            await self.websocket.send_text(frame)
         except Exception:
             pass
 
@@ -3085,7 +3082,7 @@ class ManagedResponsesWebSocketHandler:
             )
             await _admit_frame_turn(turn_admission, raw_message)
         except RateLimitError as e:
-            await self._send_error(str(e), error_type="rate_limit_exceeded")
+            await self._send_frame(_turn_refusal_frame(e))
             return
 
         call_kwargs: Final = self._build_base_call_kwargs(msg_obj)

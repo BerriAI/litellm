@@ -1388,6 +1388,7 @@ class TestWebSocketTurnAdmission:
         ]
         assert turn_admission.await_count == 2
         refusal: Final = json.loads(websocket.send_text.await_args.args[0])
+        assert refusal["status"] == 429
         assert refusal["error"]["type"] == "rate_limit_exceeded"
         assert "crossed budget" in refusal["error"]["message"]
 
@@ -1442,7 +1443,7 @@ class TestWebSocketTurnAdmission:
             for call in websocket.send_text.await_args_list
             if json.loads(call.args[0]).get("type") == "error"
         ]
-        assert [refusal["error"]["type"] for refusal in refusals] == ["rate_limit_exceeded"]
+        assert [(refusal["status"], refusal["error"]["type"]) for refusal in refusals] == [(429, "rate_limit_exceeded")]
 
 
 def _deployment_defaults():
