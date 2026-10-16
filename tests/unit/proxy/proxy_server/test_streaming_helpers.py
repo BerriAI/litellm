@@ -905,6 +905,41 @@ async def test_async_data_generator_mid_stream_exception_yields_error_payload(
     assert any(isinstance(item, str) and item.startswith('data: {"error":') for item in out)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "detail",
+    [
+        {"error": "Content blocked: keyword 'keeper' detected", "guardrail": "block-keeper-word"},
+        {"error": "Content blocked: keyword 'keeper' detected", "matched_span": object()},
+    ],
+    ids=["json_detail", "non_json_detail"],
+)
+async def test_async_data_generator_mid_stream_guardrail_block_ends_with_error_event(monkeypatch, detail):
+    _patch_logging_flags(monkeypatch)
+
+    async def _noop_failure(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(ps.proxy_logging_obj, "post_call_failure_hook", _noop_failure)
+
+    out: Final = [
+        line
+        async for line in async_data_generator(
+            response=_async_iter_raises(HTTPException(status_code=400, detail=detail)),
+            user_api_key_dict=_user_auth(),
+            request_data={},
+        )
+    ]
+
+    assert len(out) == 2
+    assert out[-1].startswith("data: ") and out[-1].endswith("\n\n")
+    error: Final = json.loads(out[-1].removeprefix("data: "))["error"]
+    assert error["message"] == detail["error"]
+    assert error["type"] == "invalid_request_error"
+    assert error["code"] == "400"
+    assert error["provider_specific_fields"].keys() == detail.keys()
+
+
 _UPSTREAM_BODY: Final = {
     "code": "cyber_policy",
     "message": "Upstream rejected request: flagged for possible cybersecurity risk",
