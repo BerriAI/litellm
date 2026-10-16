@@ -1,9 +1,16 @@
+import asyncio
+import json
+import math
+from collections.abc import Mapping, Sequence
 from datetime import datetime
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 import respx
+from openai.types.chat import ChatCompletion
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.caching.caching import Cache
@@ -428,3 +435,120 @@ def test_completion_keeps_responses_surface_for_what_only_it_serves(bridge_model
     assert result is cached
     assert responses_call.call_count == 1
     assert executor_call.call_count == 0
+
+
+_LOGGED_ROW: Final = TypeAdapter(dict[str, object])
+_LOGGED_CHAT: Final = TypeAdapter(ChatCompletion)
+
+
+class _SuccessRowRecorder(CustomLogger):
+    rows: tuple[dict[str, object], ...] = ()
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.rows = (*self.rows, _LOGGED_ROW.validate_python(kwargs["standard_logging_object"]))
+
+
+def _responses_sse(events: Sequence[Mapping[str, object]]) -> bytes:
+    return "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events).encode()
+
+
+@pytest.mark.asyncio
+async def test_bridged_chat_stream_logs_one_chat_row_billed_from_provider_usage(monkeypatch: pytest.MonkeyPatch):
+    recorder: Final = _SuccessRowRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    prices: Final = {"input_cost_per_token": 1e-6, "output_cost_per_token": 4e-6, "cache_read_input_token_cost": 1e-7}
+    litellm.register_model(
+        {
+            "openai/bridge-stream-model": {
+                "litellm_provider": "openai",
+                "mode": "responses",
+                "max_tokens": 100,
+                **prices,
+            }
+        }
+    )
+    usage: Final[dict[str, object]] = {
+        "input_tokens": 100,
+        "input_tokens_details": {"cached_tokens": 40},
+        "output_tokens": 20,
+        "output_tokens_details": {"reasoning_tokens": 5},
+        "total_tokens": 120,
+    }
+    message: Final[dict[str, object]] = {
+        "type": "message",
+        "id": "msg_stream",
+        "status": "completed",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": "streamed", "annotations": []}],
+    }
+    response: Final[dict[str, object]] = {
+        "id": "resp_stream",
+        "object": "response",
+        "created_at": 1,
+        "model": "bridge-stream-model",
+        "output": [],
+        "parallel_tool_calls": True,
+        "tool_choice": "auto",
+        "tools": [],
+    }
+    sse: Final = _responses_sse(
+        [
+            {"type": "response.created", "sequence_number": 0, "response": {**response, "status": "in_progress"}},
+            {"type": "response.output_item.added", "sequence_number": 1, "output_index": 0, "item": message},
+            {
+                "type": "response.output_text.delta",
+                "sequence_number": 2,
+                "item_id": "msg_stream",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "streamed",
+            },
+            {"type": "response.output_item.done", "sequence_number": 3, "output_index": 0, "item": message},
+            {
+                "type": "response.completed",
+                "sequence_number": 4,
+                "response": {**response, "status": "completed", "output": [message], "usage": usage},
+            },
+        ]
+    )
+
+    with respx.mock(assert_all_called=False) as upstream:
+        responses_route = upstream.post("https://example.invalid/v1/responses").mock(
+            return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, content=sse)
+        )
+        stream = await litellm.acompletion(
+            model="openai/bridge-stream-model",
+            api_base="https://example.invalid/v1",
+            api_key="x",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+        )
+        assert isinstance(stream, CustomStreamWrapper)
+        text = "".join([chunk.choices[0].delta.content or "" async for chunk in stream if chunk.choices])
+        for _ in range(100):
+            if recorder.rows:
+                break
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.1)
+
+    assert text == "streamed"
+    assert responses_route.call_count == 1
+    assert len(recorder.rows) == 1
+    row: Final = recorder.rows[0]
+    logged: Final = _LOGGED_CHAT.validate_python(row["response"])
+    assert logged.object == "chat.completion"
+    assert logged.choices[0].message.content == "streamed"
+    assert row["prompt_tokens"] == 100
+    assert row["completion_tokens"] == 20
+    cost: Final = row["response_cost"]
+    assert isinstance(cost, float)
+    assert math.isclose(
+        cost,
+        60 * prices["input_cost_per_token"]
+        + 40 * prices["cache_read_input_token_cost"]
+        + 20 * prices["output_cost_per_token"],
+    )

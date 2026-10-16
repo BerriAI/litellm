@@ -70,6 +70,18 @@ def _executor_logging_obj(
     return native_logging_obj(logging_obj, request_data, request_data)
 
 
+def _logged_by_client_stream(_completed: object) -> None:
+    return None
+
+
+def _hand_completion_to_client_stream(result: object, executor_logging: "LiteLLMLoggingObj | None") -> None:
+    """The chat stream wrapping the executor's Responses stream logs the request once, in the shape the client got."""
+    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+
+    if executor_logging is not None and isinstance(result, BaseResponsesAPIStreamingIterator):
+        result.hand_completion_to(_logged_by_client_stream)
+
+
 def _retagged_as_responses(
     request_data: Mapping[str, object], logging_obj: "LiteLLMLoggingObj"
 ) -> Mapping[str, object]:
@@ -303,6 +315,7 @@ class ResponsesToCompletionBridgeHandler:
                 return self._apply_post_stream_processing(result, model, custom_llm_provider)
             from .transformation import is_structured_output_request
 
+            _hand_completion_to_client_stream(result, executor_logging)
             completion_stream: Final = self.transformation_handler.get_model_response_iterator(
                 streaming_response=result,
                 sync_stream=True,
@@ -411,6 +424,7 @@ class ResponsesToCompletionBridgeHandler:
                 return self._apply_post_stream_processing(result, model, custom_llm_provider)
             from .transformation import is_structured_output_request
 
+            _hand_completion_to_client_stream(result, executor_logging)
             completion_stream: Final = self.transformation_handler.get_model_response_iterator(
                 streaming_response=result,
                 sync_stream=False,
