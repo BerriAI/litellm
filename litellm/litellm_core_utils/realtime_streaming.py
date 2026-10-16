@@ -12,6 +12,7 @@ from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import redact_internal_details_from_client_message, verbose_logger
+from litellm._uuid import uuid
 from litellm.constants import (
     REALTIME_METERED_USAGE_KEY,
     REALTIME_SESSION_FAILURE_LOGGED_KEY,
@@ -122,6 +123,7 @@ _GUARDRAIL_TURN_DETECTION_GATE: Final[Mapping[str, object]] = MappingProxyType(
 )
 _EMPTY_SESSION: Final[Mapping[str, object]] = MappingProxyType({})
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
+_GUARDRAIL_EVENT_ID_PREFIX: Final = "litellm_guardrail_"
 
 
 def _json_object(value: object) -> Mapping[str, object] | None:
@@ -130,6 +132,27 @@ def _json_object(value: object) -> Mapping[str, object] | None:
 
 def _mapping_field(container: Mapping[str, object], key: str) -> Mapping[str, object] | None:
     return _json_object(container.get(key))
+
+
+def _guardrail_event_id() -> str:
+    return f"{_GUARDRAIL_EVENT_ID_PREFIX}{uuid.uuid4().hex}"
+
+
+def _is_error_for_guardrail_event(event: Mapping[str, object]) -> bool:
+    error: Final = _mapping_field(event, "error")
+    caused_by: Final = None if error is None else error.get("event_id")
+    return isinstance(caused_by, str) and caused_by.startswith(_GUARDRAIL_EVENT_ID_PREFIX)
+
+
+def _forwarded_turn_detection(session: object, beta_protocol: bool) -> Mapping[str, object] | None:
+    forwarded_session: Final = _json_object(session)
+    if forwarded_session is None:
+        return None
+    if beta_protocol:
+        return _mapping_field(forwarded_session, "turn_detection")
+    audio: Final = _mapping_field(forwarded_session, "audio")
+    audio_input: Final = None if audio is None else _mapping_field(audio, "input")
+    return None if audio_input is None else _mapping_field(audio_input, "turn_detection")
 
 
 _TurnDetectionGate: TypeAlias = Callable[[object], Mapping[str, object]]
@@ -262,6 +285,7 @@ class RealTimeStreaming:
         # Track whether we have already sent the guardrail turn-detection update
         # that disables provider auto-response for transcription guardrails.
         self._guardrail_turn_detection_update_sent: bool = False
+        self._client_turn_detection: Mapping[str, object] | None = None
         # Deferred Gemini Live setup: Pipecat may stream audio before session.update.
         # Buffer client audio until the backend acknowledges setup (setupComplete).
         self._backend_setup_complete: bool = provider_config is None or provider_config.requires_session_configuration()
@@ -802,17 +826,26 @@ class RealTimeStreaming:
         except (json.JSONDecodeError, TypeError):
             return
 
+    def _make_turn_detection_update(self, turn_detection: Mapping[str, object]) -> dict[str, object]:
+        session: Final[dict[str, object]] = (
+            {"turn_detection": turn_detection}
+            if self._backend_uses_beta_protocol
+            else {"type": "realtime", "audio": {"input": {"turn_detection": turn_detection}}}
+        )
+        return {"type": "session.update", "session": session}
+
     def _make_disable_auto_response_message(self) -> str:
         """Return a session.update that disables VAD auto-response."""
-        turn_detection: Final = self._gate_turn_detection(None)
-        if self._backend_uses_beta_protocol:
-            session: dict[str, object] = {"turn_detection": turn_detection}
-        else:
-            session = {
-                "type": "realtime",
-                "audio": {"input": {"turn_detection": turn_detection}},
-            }
-        return json.dumps({"type": "session.update", "session": session})
+        return json.dumps(self._make_turn_detection_update(self._gate_turn_detection(None)))
+
+    def _make_client_turn_detection_message(self) -> str | None:
+        """The client's gated turn_detection again, when the session.created gate replaced a different one."""
+        client_turn_detection: Final = self._client_turn_detection
+        if client_turn_detection is None or client_turn_detection == self._gate_turn_detection(None):
+            return None
+        return json.dumps(
+            {**self._make_turn_detection_update(client_turn_detection), "event_id": _guardrail_event_id()}
+        )
 
     async def _maybe_send_guardrail_turn_detection_update(self) -> None:
         """Disable provider auto-response once when transcription guardrails are enabled."""
@@ -986,7 +1019,9 @@ class RealTimeStreaming:
                 if pre_block_backend_message is not None:
                     await self._send_to_backend(pre_block_backend_message)
                 if not self._is_transcription_session:
-                    await self._send_to_backend(json.dumps({"type": "response.cancel"}))
+                    await self._send_to_backend(
+                        json.dumps({"type": "response.cancel", "event_id": _guardrail_event_id()})
+                    )
                 # Send the policy violation hint (shows as small gray status text in UI).
                 await self.websocket.send_text(
                     json.dumps(
@@ -1152,6 +1187,9 @@ class RealTimeStreaming:
             self.store_message(event_obj)
             await self.websocket.send_text(self._event_to_client_json(event_obj))
             await self._send_to_backend(self._make_disable_auto_response_message())
+            client_turn_detection_message: Final = self._make_client_turn_detection_message()
+            if client_turn_detection_message is not None:
+                await self._send_to_backend(client_turn_detection_message)
             return True
 
         if event_type == "conversation.item.input_audio_transcription.completed":
@@ -1204,6 +1242,10 @@ class RealTimeStreaming:
 
                 if self._usage_meter is not None:
                     self._usage_meter.observe_backend_event(event)
+
+                if event.get("type") == "error" and _is_error_for_guardrail_event(event):
+                    verbose_logger.debug("Realtime: not forwarding an error caused by a guardrail event: %s", event)
+                    continue
 
                 if await self._handle_raw_backend_message(event, raw_response):
                     continue
@@ -1429,6 +1471,7 @@ class RealTimeStreaming:
 
                 ## GUARDRAIL: intercept conversation.item.create for text-based injection.
                 guardrail_turn_detection_injected = False
+                forwarded_turn_detection: Mapping[str, object] | None = None
                 msg_type: str | None = None
                 try:
                     from litellm.types.guardrails import GuardrailEventHooks
@@ -1595,6 +1638,11 @@ class RealTimeStreaming:
                             msg_obj["session"] = self._event_normalizer.patch_outgoing_session(session)
                             message = json.dumps(msg_obj)
 
+                    if msg_type == "session.update" and self._should_disable_vad_auto_response():
+                        forwarded_turn_detection = _forwarded_turn_detection(
+                            msg_obj.get("session"), self._backend_uses_beta_protocol
+                        )
+
                 except (json.JSONDecodeError, AttributeError):
                     pass
 
@@ -1633,6 +1681,8 @@ class RealTimeStreaming:
                 sent = await self._send_to_backend(message)
                 if guardrail_turn_detection_injected and sent:
                     self._guardrail_turn_detection_update_sent = True
+                if forwarded_turn_detection is not None and sent:
+                    self._client_turn_detection = forwarded_turn_detection
 
         except websockets.exceptions.ConnectionClosed as e:
             verbose_logger.debug("Backend closed while forwarding a client message: %s", e)

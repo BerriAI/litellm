@@ -4066,3 +4066,112 @@ async def test_xai_session_created_gate_leaves_out_the_vad_type(monkeypatch: pyt
             "session": {"type": "realtime", "audio": {"input": {"turn_detection": {"create_response": False}}}},
         }
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "client_turn_detection",
+    [
+        pytest.param({"type": "semantic_vad", "eagerness": "low"}, id="semantic-vad"),
+        pytest.param({"type": "server_vad", "silence_duration_ms": 700}, id="tuned-server-vad"),
+    ],
+)
+async def test_turn_detection_sent_before_session_created_outlasts_the_guardrail_gate(
+    monkeypatch: pytest.MonkeyPatch, client_turn_detection: dict[str, object]
+):
+    """A client updating on connect reaches OpenAI before the proxy's session.created gate,
+    so that gate must not be the last turn_detection the session applies."""
+    monkeypatch.setattr(litellm, "callbacks", [_transcription_guardrail()])
+    client_ws: Final = AsyncMock()
+    client_ws.scope = {"headers": []}
+    client_ws.receive_text = AsyncMock(
+        side_effect=[
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {"type": "realtime", "audio": {"input": {"turn_detection": client_turn_detection}}},
+                }
+            ),
+            ConnectionClosed(None, None),
+        ]
+    )
+    backend_ws: Final = MagicMock()
+    backend_ws.send = AsyncMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[json.dumps({"type": "session.created", "session": {}}).encode(), ConnectionClosed(None, None)]
+    )
+    logging_obj: Final = _mock_logging()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    streaming: Final = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+
+    await streaming.client_ack_messages()
+    await streaming.backend_to_client_send_messages()
+
+    applied_last: Final = json.loads(backend_ws.send.await_args_list[-1].args[0])
+    assert applied_last["session"]["audio"]["input"]["turn_detection"] == {
+        **client_turn_detection,
+        "create_response": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_client_never_sees_the_error_caused_by_the_guardrail_cancel(monkeypatch: pytest.MonkeyPatch):
+    """OpenAI answers the guardrail's response.cancel with response_cancel_not_active when nothing
+    is answering yet, an error about an event the client never sent."""
+
+    class _BlockingGuardrail(CustomGuardrail):
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            raise ValueError("blocked")
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+            _BlockingGuardrail(
+                guardrail_name="blocking", event_hook=GuardrailEventHooks.realtime_input_transcription, default_on=True
+            )
+        ],
+    )
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock()
+    backend_ws: Final = MagicMock()
+    backend_ws.send = AsyncMock()
+
+    def cancel_not_active(event_id: str) -> bytes:
+        return json.dumps(
+            {"type": "error", "error": {"code": "response_cancel_not_active", "event_id": event_id}}
+        ).encode()
+
+    def proxy_cancel_event_id() -> str:
+        sent = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+        return next(event["event_id"] for event in sent if event["type"] == "response.cancel")
+
+    backend_frames: Final = iter(
+        (
+            lambda: _make_transcript_event("blocked words"),
+            lambda: cancel_not_active(proxy_cancel_event_id()),
+            lambda: cancel_not_active("evt_from_client"),
+        )
+    )
+
+    async def recv(**_kwargs: object) -> bytes:
+        frame = next(backend_frames, None)
+        if frame is None:
+            raise ConnectionClosed(None, None)
+        return frame()
+
+    backend_ws.recv = recv
+    logging_obj: Final = _mock_logging()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+
+    await RealTimeStreaming(client_ws, backend_ws, logging_obj).backend_to_client_send_messages()
+
+    client_errors: Final = [
+        event["error"] for call in client_ws.send_text.await_args_list if (event := json.loads(call.args[0]))["type"] == "error"
+    ]
+    assert [(error["code"], error.get("event_id")) for error in client_errors] == [
+        ("content_policy_violation", None),
+        ("response_cancel_not_active", "evt_from_client"),
+    ]
