@@ -1402,7 +1402,6 @@ class UnifiedLLMGuardrails(CustomLogger):
                 chunks_yielded
                 and not verdict_settled
                 and translation_class is not None
-                and isinstance(resolved_guardrail, CustomGuardrail)
             ):
                 await self._scan_released_stream_after_disconnect(
                     endpoint_translation=translation_class(),
