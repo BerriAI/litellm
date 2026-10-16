@@ -3857,7 +3857,8 @@ def test_traceparent_keeps_trace_id_while_session_affinity_fills_session_id():
     assert data["metadata"]["trace_id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
     assert data["litellm_session_id"] == PI_AI_SESSION_ID
     assert data["metadata"]["session_id"] == PI_AI_SESSION_ID
-    assert get_chain_id_from_headers(headers) == "4bf92f3577b34da6a3ce929d0e0e4736"
+    assert get_chain_id_from_headers(headers) == PI_AI_SESSION_ID
+    assert get_chain_id_from_headers({"traceparent": headers["traceparent"]}) is None
 
 
 def test_parent_otel_span_trace_beats_session_affinity():

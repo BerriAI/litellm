@@ -933,9 +933,9 @@ def get_chain_id_from_headers(headers: dict[str, str] | None) -> str | None:
     5. A vendor-less ``x-session-id`` header (e.g. opencode), same value rules.
     6. ``x-session-affinity`` (pi-ai, opencode), which also allows ``:`` and ``.``.
 
-    Same order as request setup (``resolve_session_context``). A W3C ``traceparent``
-    beside a session header is the chain id, so callers that only need an id to be
-    present (trace-required agents, pass-through logging) keep working.
+    Same order as request setup (``resolve_session_context``). W3C ``traceparent`` and
+    ``baggage`` are never a chain id, so a bare traceparent cannot satisfy a team's or
+    agent's ``require_trace_id`` check on pass-through, MCP and agent routes.
 
     Header keys are matched case-insensitively so this works with raw header
     dicts from any transport.
@@ -945,7 +945,7 @@ def get_chain_id_from_headers(headers: dict[str, str] | None) -> str | None:
     """
     if not headers:
         return None
-    return resolve_session_context(headers).trace_id or _session_header_id(_normalize_header_keys(headers))
+    return _session_header_id(_normalize_header_keys(headers))
 
 
 def _get_anthropic_session_id_from_metadata(metadata: object) -> str | None:
