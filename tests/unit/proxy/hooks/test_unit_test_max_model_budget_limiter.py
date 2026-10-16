@@ -9,6 +9,7 @@ import pytest
 
 import litellm
 from litellm.caching.caching import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
@@ -508,6 +509,61 @@ async def test_model_budget_limiter_without_redis_tracks_spend_locally_and_queue
 
     assert await dual_cache.async_get_cache(spend_key) == 0.01
     assert limiter.redis_increment_operation_queue == []
+
+
+class _LateRedis:
+    def __init__(self) -> None:
+        self.values: dict[str, float] = {}
+
+    async def async_increment_pipeline(self, increment_list, **kwargs) -> None:
+        for operation in increment_list:
+            self.values[operation["key"]] = self.values.get(operation["key"], 0.0) + operation["increment_value"]
+
+    async def async_get_cache(self, key: str, **kwargs) -> float | None:
+        return self.values.get(key)
+
+
+@pytest.mark.asyncio
+async def test_over_budget_key_stays_blocked_when_redis_attaches_behind_more_budgets_than_the_cache_holds():
+    dual_cache = DualCache(in_memory_cache=InMemoryCache(max_size_in_memory=2))
+    limiter = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    end_user_budget = {"gpt-4": {"budget_limit": 100.0, "time_period": "1d"}}
+    key_budget = {"gpt-4": {"budget_limit": 1.0, "time_period": "1d"}}
+
+    for end_user in ("end-user-1", "end-user-2", "end-user-3"):
+        await limiter.async_log_success_event(
+            _success_kwargs(
+                model_group="gpt-4",
+                response_cost=0.1,
+                end_user_id=end_user,
+                end_user_model_max_budget=end_user_budget,
+            ),
+            response_obj=None,
+            start_time=None,
+            end_time=None,
+        )
+    await limiter.async_log_success_event(
+        _success_kwargs(model_group="gpt-4", response_cost=1.5, key_hash="vk-hash", key_model_max_budget=key_budget),
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    dual_cache.redis_cache = _LateRedis()
+    await limiter.async_log_success_event(
+        _success_kwargs(
+            model_group="gpt-4",
+            response_cost=0.1,
+            end_user_id="end-user-1",
+            end_user_model_max_budget=end_user_budget,
+        ),
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    with pytest.raises(litellm.BudgetExceededError):
+        await limiter.is_key_within_model_budget(UserAPIKeyAuth(token="vk-hash", model_max_budget=key_budget), "gpt-4")
 
 
 @pytest.mark.asyncio

@@ -137,6 +137,7 @@ class RouterBudgetLimiting(CustomLogger):
         self._clock = clock
         self.redis_increment_operation_queue: list[RedisPipelineIncrementOperation] = []
         self._spend_awaiting_redis: dict[str, _SpendAwaitingRedis] = {}  # mutable-ok: O(1) merges
+        self._prune_spend_awaiting_redis_at: int = 0
         self._redis_increment_queue_lock = asyncio.Lock()
         self._redis_increment_flush_lock = asyncio.Lock()
         self._detached_increment_operations: tuple[RedisPipelineIncrementOperation, ...] | None = None
@@ -423,8 +424,7 @@ class RouterBudgetLimiting(CustomLogger):
 
         - Increments the spend in memory cache (so spend instantly updated in memory)
         - Queues the increment for the batched Redis pipeline. With no Redis attached yet, it holds one merged
-          spend per key until its budget window ends, capped at the in-memory cache's size, so a Redis attached
-          later still receives that spend
+          spend per key until its budget window ends, so a Redis attached later still receives that spend
         """
         increment_op: Final = RedisPipelineIncrementOperation(
             key=spend_key,
@@ -444,13 +444,14 @@ class RouterBudgetLimiting(CustomLogger):
 
     def _hold_spend_until_redis_attaches(self, spend_key: str, response_cost: float, ttl: int) -> None:
         now: Final = self._clock()
-        max_keys: Final = self.dual_cache.in_memory_cache.max_size_in_memory
-        if spend_key not in self._spend_awaiting_redis and len(self._spend_awaiting_redis) >= max_keys:
+        is_new_key: Final = spend_key not in self._spend_awaiting_redis
+        if is_new_key and len(self._spend_awaiting_redis) >= self._prune_spend_awaiting_redis_at:
             self._spend_awaiting_redis = {
                 key: held for key, held in self._spend_awaiting_redis.items() if held.expires_at > now
             }
-        if spend_key not in self._spend_awaiting_redis and len(self._spend_awaiting_redis) >= max_keys:
-            return
+            self._prune_spend_awaiting_redis_at = max(
+                self.dual_cache.in_memory_cache.max_size_in_memory, 2 * len(self._spend_awaiting_redis)
+            )
         self._spend_awaiting_redis[spend_key] = _add_spend_awaiting_redis(
             self._spend_awaiting_redis.get(spend_key), spend=response_cost, ttl=ttl, now=now
         )
