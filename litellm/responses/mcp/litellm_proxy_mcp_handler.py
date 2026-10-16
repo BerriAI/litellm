@@ -258,7 +258,7 @@ class LiteLLM_Proxy_MCP_Handler:
         request_tags: list[str] | None = None,
         raw_headers: dict[str, str] | None = None,
         granted_toolsets: "GrantedToolsetIds | None" = None,
-        joins_request_trace: bool = False,
+        request_trace_id: str | None = None,
     ) -> tuple[list[MCPTool], list[str]]:
         """
         Get available tools from the MCP server manager.
@@ -344,7 +344,7 @@ class LiteLLM_Proxy_MCP_Handler:
             log_list_tools_to_spendlogs=True,
             list_tools_log_source="responses",
             litellm_trace_id=litellm_trace_id,
-            joins_request_trace=joins_request_trace,
+            request_trace_id=request_trace_id,
             request_tags=request_tags,
             raw_headers=raw_headers,
         )
@@ -476,7 +476,7 @@ class LiteLLM_Proxy_MCP_Handler:
         mcp_server_auth_headers: dict[str, dict[str, str]] | None = None,
         request_tags: list[str] | None = None,
         raw_headers: dict[str, str] | None = None,
-        joins_request_trace: bool = False,
+        request_trace_id: str | None = None,
     ) -> tuple[list[MCPTool], dict[str, str]]:
         """
         Process MCP tools through filtering and deduplication pipeline without OpenAI transformation.
@@ -508,7 +508,7 @@ class LiteLLM_Proxy_MCP_Handler:
             mcp_server_auth_headers=mcp_server_auth_headers,
             request_tags=request_tags,
             raw_headers=raw_headers,
-            joins_request_trace=joins_request_trace,
+            request_trace_id=request_trace_id,
         )
 
         # Step 2: Filter tools based on allowed_tools parameter
@@ -733,7 +733,7 @@ class LiteLLM_Proxy_MCP_Handler:
         request_tags: list[str] | None = None,
         guardrail_context: Mapping[str, object] | None = None,
         served_tools: Sequence[MCPTool] | None = None,
-        joins_request_trace: bool = False,
+        request_trace_id: str | None = None,
     ) -> list[MCPToolResult]:
         """Execute tool calls and return results."""
         from fastapi import HTTPException
@@ -794,7 +794,7 @@ class LiteLLM_Proxy_MCP_Handler:
                 ]
                 tool_logging_call_id = (
                     f"{litellm_call_id}_{tool_call_id or uuid.uuid4()}"
-                    if joins_request_trace and litellm_call_id
+                    if request_trace_id and litellm_call_id
                     else litellm_call_id or str(uuid.uuid4())
                 )
                 logging_metadata: dict[str, object] = {
@@ -822,8 +822,8 @@ class LiteLLM_Proxy_MCP_Handler:
                 }
                 if litellm_trace_id:
                     logging_request_data["litellm_trace_id"] = litellm_trace_id
-                if litellm_trace_id and joins_request_trace:
-                    logging_metadata["existing_trace_id"] = litellm_trace_id
+                if request_trace_id:
+                    logging_metadata["existing_trace_id"] = request_trace_id
                 if request_tags:
                     logging_metadata["tags"] = request_tags
                 if typed_user_api_key_auth is not None:

@@ -29,6 +29,9 @@ _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(dict[str, object])
 class LiteLLMCompletionTransformationHandler:
     def response_api_handler(
         self,
+        previous_response_client_ids: tuple[str, ...] = (),
+        /,
+        *,
         model: str,
         input: str | ResponseInputParam,
         responses_api_request: ResponsesAPIOptionalRequestParams,
@@ -36,7 +39,6 @@ class LiteLLMCompletionTransformationHandler:
         _is_async: bool = False,
         stream: bool | None = None,
         extra_headers: Mapping[str, object] | None = None,
-        previous_response_client_ids: tuple[str, ...] = (),
         **kwargs,
     ) -> (
         ResponsesAPIResponse
@@ -62,10 +64,10 @@ class LiteLLMCompletionTransformationHandler:
 
         if _is_async:
             return self.async_response_api_handler(
+                previous_response_client_ids,
                 litellm_completion_request=litellm_completion_request,
                 request_input=bridged_input,
                 responses_api_request=bridged_request,
-                previous_response_client_ids=previous_response_client_ids,
                 **kwargs,
             )
 
@@ -102,10 +104,12 @@ class LiteLLMCompletionTransformationHandler:
 
     async def async_response_api_handler(
         self,
+        previous_response_client_ids: tuple[str, ...] = (),
+        /,
+        *,
         litellm_completion_request: dict,
         request_input: str | ResponseInputParam,
         responses_api_request: ResponsesAPIOptionalRequestParams,
-        previous_response_client_ids: tuple[str, ...] = (),
         **kwargs,
     ) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
         previous_response_id: Final[str | None] = responses_api_request.get("previous_response_id")

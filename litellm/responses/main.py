@@ -168,7 +168,7 @@ def mock_responses_api_response(
     )
 
 
-_REQUEST_KWARGS: Final = TypeAdapter(Mapping[str, object])
+_STR_MAPPING: Final = TypeAdapter(Mapping[str, object])
 
 
 def _client_trace_id(request_kwargs: Mapping[str, object]) -> str | None:
@@ -181,18 +181,42 @@ def _request_call_id(request_kwargs: Mapping[str, object]) -> str | None:
     return call_id if isinstance(call_id, str) else None
 
 
+def _logging_params(logging_obj: LiteLLMLoggingObj) -> Mapping[str, object]:
+    return _STR_MAPPING.validate_python(logging_obj.litellm_params)
+
+
 def _request_trace_id(request_kwargs: Mapping[str, object]) -> str | None:
     logging_obj: Final = request_kwargs.get("litellm_logging_obj")
     if isinstance(logging_obj, LiteLLMLoggingObj):
         return StandardLoggingPayloadSetup.get_standard_logging_payload_trace_id(
-            logging_obj=logging_obj, litellm_params=logging_obj.litellm_params
+            logging_obj=logging_obj, litellm_params=_logging_params(logging_obj)
         )
     return _client_trace_id(request_kwargs)
 
 
+def _langfuse_request_trace_id(request_kwargs: Mapping[str, object], standard_trace_id: str | None) -> str | None:
+    from litellm.integrations.langfuse.langfuse import langfuse_trace_id, langfuse_trace_metadata
+
+    logging_obj: Final = request_kwargs.get("litellm_logging_obj")
+    if not isinstance(logging_obj, LiteLLMLoggingObj):
+        return None
+    litellm_params: Final = {**_logging_params(logging_obj), **request_kwargs}
+    trace_id: Final = langfuse_trace_id(
+        metadata=langfuse_trace_metadata(litellm_params.get("metadata"), litellm_params.get("proxy_server_request")),
+        standard_trace_id=standard_trace_id,
+        litellm_trace_id=logging_obj.litellm_trace_id,
+        litellm_call_id=logging_obj.litellm_call_id,
+        proxy_server_request=litellm_params.get("proxy_server_request"),
+    )
+    return trace_id if isinstance(trace_id, str) else None
+
+
 def _listing_trace_id(request_kwargs: Mapping[str, object], *, bridged_first_turn: bool) -> str | None:
-    if bridged_first_turn:
-        return _client_trace_id(request_kwargs) or _request_trace_id(request_kwargs)
+    logging_obj: Final = request_kwargs.get("litellm_logging_obj")
+    if bridged_first_turn and isinstance(logging_obj, LiteLLMLoggingObj):
+        return StandardLoggingPayloadSetup.get_standard_logging_payload_trace_id(
+            logging_obj=logging_obj, litellm_params={**_logging_params(logging_obj), **request_kwargs}
+        )
     return _request_trace_id(request_kwargs)
 
 
@@ -258,7 +282,7 @@ async def aresponses_api_with_mcp(
         else (None, None, None, None)
     )
 
-    request_kwargs: Final = _REQUEST_KWARGS.validate_python(kwargs)
+    request_kwargs: Final = _STR_MAPPING.validate_python(kwargs)
     logging_obj: Final = request_kwargs.get("litellm_logging_obj")
     joins_request_trace: Final = isinstance(logging_obj, LiteLLMLoggingObj)
     bridged_first_turn: Final = (
@@ -268,6 +292,12 @@ async def aresponses_api_with_mcp(
         and not _provider_stores_the_first_round(model, custom_llm_provider, kwargs)
     )
 
+    listing_trace_id: Final = (
+        _client_trace_id(request_kwargs)
+        if stream
+        else _listing_trace_id(request_kwargs, bridged_first_turn=bridged_first_turn)
+    )
+
     # Get original MCP tools (for events) and OpenAI tools (for LLM) by reusing existing methods
     (
         original_mcp_tools,
@@ -275,10 +305,8 @@ async def aresponses_api_with_mcp(
     ) = await LiteLLM_Proxy_MCP_Handler.process_mcp_tools_without_openai_transform(
         user_api_key_auth=user_api_key_auth,
         mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
-        litellm_trace_id=_client_trace_id(request_kwargs)
-        if stream
-        else _listing_trace_id(request_kwargs, bridged_first_turn=bridged_first_turn),
-        joins_request_trace=joins_request_trace and not stream,
+        litellm_trace_id=listing_trace_id,
+        request_trace_id=None if stream else _langfuse_request_trace_id(request_kwargs, listing_trace_id),
         mcp_auth_header=mcp_auth_header,
         mcp_server_auth_headers=mcp_server_auth_headers,
         request_tags=LiteLLM_Proxy_MCP_Handler.get_parent_request_tags(kwargs),
@@ -396,6 +424,7 @@ async def aresponses_api_with_mcp(
                     tools=tools,
                 )
 
+                tool_trace_id: Final = _request_trace_id(request_kwargs)
                 tool_results: Final = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
                     tool_server_map=tool_server_map,
                     served_tools=original_mcp_tools,
@@ -406,12 +435,12 @@ async def aresponses_api_with_mcp(
                     oauth2_headers=oauth2_headers,
                     raw_headers=raw_headers_from_request,
                     litellm_call_id=_request_call_id(request_kwargs),
-                    litellm_trace_id=_request_trace_id(request_kwargs),
+                    litellm_trace_id=tool_trace_id,
                     request_tags=LiteLLM_Proxy_MCP_Handler.get_parent_request_tags(kwargs),
                     guardrail_context=MCPRequestContext.resolve_guardrail_context(
                         MappingProxyType({**kwargs, "metadata": metadata, "model": model})
                     ),
-                    joins_request_trace=joins_request_trace,
+                    request_trace_id=_langfuse_request_trace_id(request_kwargs, tool_trace_id),
                 )
 
                 if tool_results:
@@ -1567,6 +1596,7 @@ def responses(
         if _bridges_to_chat_completions(responses_api_provider_config, use_chat_completions_api):
             bridge_kwargs: Final = _bridge_kwargs(kwargs, responses_api_provider_config, allowed_openai_params)
             return litellm_completion_transformation_handler.response_api_handler(
+                _previous_response_client_ids(previous_response_id, kwargs),
                 model=model,
                 input=input,
                 responses_api_request=response_api_optional_params,
@@ -1577,7 +1607,6 @@ def responses(
                 extra_body=extra_body,
                 timeout=timeout if timeout is not None else request_timeout,
                 allowed_openai_params=allowed_openai_params,
-                previous_response_client_ids=_previous_response_client_ids(previous_response_id, kwargs),
                 **bridge_kwargs,
             )
 

@@ -19,7 +19,9 @@ from mcp.types import Tool as MCPTool
 # Import required modules
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.langfuse.langfuse import langfuse_trace_id, langfuse_trace_metadata
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.proxy._experimental.mcp_server import mcp_server_manager
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import ServerListOk
 from litellm.proxy.utils import _failure_fields_to_lift
 from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
@@ -1994,6 +1996,71 @@ async def test_bridged_auto_execute_tool_listing_log_continues_the_request_trace
     )
 
     await _assert_the_listing_logs_in_the_request_trace(listing_recorder, request_recorder)
+
+
+class _CallRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: tuple[Mapping[str, object], ...] = ()
+
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.logged = (*self.logged, kwargs)
+
+    def of(self, call_type: str) -> tuple[Mapping[str, object], ...]:
+        return tuple(kwargs for kwargs in self.logged if kwargs.get("call_type") == call_type)
+
+
+def _langfuse_trace_of(logged: Mapping[str, object]) -> object:
+    litellm_params: Final = cast(Mapping[str, object], logged["litellm_params"])
+    return langfuse_trace_id(
+        metadata=langfuse_trace_metadata(litellm_params["metadata"], litellm_params.get("proxy_server_request")),
+        standard_trace_id=cast(StandardLoggingPayload, logged["standard_logging_object"])["trace_id"],
+        litellm_trace_id=logged.get("litellm_trace_id"),
+        litellm_call_id=logged.get("litellm_call_id"),
+        proxy_server_request=litellm_params.get("proxy_server_request"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_auto_execute_mcp_logs_join_the_langfuse_trace_of_a_session_header_request(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    _serve_rounds(respx_mock, monkeypatch, (_ROUND_ONE_BODY, _ROUND_TWO_BODY))
+    listing_recorder: Final = _serve_the_demo_mcp_listing(monkeypatch)
+    call_recorder: Final = _CallRecorder()
+    monkeypatch.setattr(litellm, "_async_success_callback", [listing_recorder, call_recorder])
+    session_id: Final = "sess-abc12345"
+
+    await litellm.aresponses(
+        model="openai/gpt-5.6",
+        input="Call echo with PING",
+        tools=[dict(_ECHO_MCP_TOOL)],
+        api_key="sk-mcp-rounds",
+        api_base="https://mcp-rounds.example.com/v1",
+        litellm_call_id="mcp-session-trace",
+        litellm_trace_id=session_id,
+        litellm_session_id=session_id,
+        litellm_metadata={"trace_id": session_id, "session_id": session_id},
+        proxy_server_request={"headers": {"x-litellm-session-id": session_id}},
+    )
+    await _settle(lambda: len(call_recorder.of("aresponses")) > 0 and len(listing_recorder.listings) > 0)
+
+    parent_trace_id: Final = _langfuse_trace_of(call_recorder.of("aresponses")[0])
+    call_tool: Final = cast(AsyncMock, mcp_server_manager.global_mcp_server_manager.call_tool)
+    assert call_tool.await_args is not None
+    tool_logging_obj: Final = cast(Logging, call_tool.await_args.kwargs["litellm_logging_obj"])
+    mcp_log_traces: Final = (
+        cast(Mapping[str, Mapping[str, object]], listing_recorder.listings[0]["litellm_params"])["metadata"][
+            "existing_trace_id"
+        ],
+        cast(Mapping[str, Mapping[str, object]], tool_logging_obj.model_call_details["litellm_params"])["metadata"][
+            "existing_trace_id"
+        ],
+    )
+    assert parent_trace_id == "mcp-session-trace"
+    assert mcp_log_traces == (parent_trace_id, parent_trace_id)
 
 
 @pytest.mark.asyncio
