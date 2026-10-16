@@ -4,6 +4,7 @@ import re
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import chain
 from pathlib import Path
 from typing import Final, Literal, TypeAlias
 from urllib.parse import urlsplit
@@ -59,6 +60,14 @@ def _ask(marker: str, *, compact: bool = False) -> str:
     return f"ask-{marker} compact-now-{marker}" if compact else f"ask-{marker}"
 
 
+def _think(marker: str) -> str:
+    return f"think-now-{marker}"
+
+
+def _thinking(marker: str) -> dict[str, JsonValue]:
+    return {"type": "thinking", "thinking": f"thought-{marker}", "signature": f"signature-{marker}"}
+
+
 def _answer(marker: str) -> str:
     return f"answer-{marker}"
 
@@ -101,16 +110,25 @@ def _anthropic_block_frames(index: int, block: Mapping[str, JsonValue]) -> tuple
         )
 
     stop: Final = cc.sse_frame("content_block_stop", {"type": "content_block_stop", "index": index})
-    if block["type"] == "compaction":
-        summary: Final = string_value(block["content"])
-        half: Final = len(summary) // 2
-        return (
-            start({"type": "compaction", "content": ""}),
-            delta({"type": "compaction_delta", "content": summary[:half]}),
-            delta({"type": "compaction_delta", "content": summary[half:]}),
-            stop,
-        )
-    return (start({"type": "text", "text": ""}), delta({"type": "text_delta", "text": block["text"]}), stop)
+    match block["type"]:
+        case "compaction":
+            summary: Final = string_value(block["content"])
+            half: Final = len(summary) // 2
+            return (
+                start({"type": "compaction", "content": ""}),
+                delta({"type": "compaction_delta", "content": summary[:half]}),
+                delta({"type": "compaction_delta", "content": summary[half:]}),
+                stop,
+            )
+        case "thinking":
+            return (
+                start({"type": "thinking", "thinking": ""}),
+                delta({"type": "thinking_delta", "thinking": block["thinking"]}),
+                delta({"type": "signature_delta", "signature": block["signature"]}),
+                stop,
+            )
+        case _:
+            return (start({"type": "text", "text": ""}), delta({"type": "text_delta", "text": block["text"]}), stop)
 
 
 def _anthropic_stream(identity: str, content: Sequence[Mapping[str, JsonValue]]) -> tuple[bytes, ...]:
@@ -147,7 +165,8 @@ def _anthropic_stream(identity: str, content: Sequence[Mapping[str, JsonValue]])
 def _claude_reply(body: Mapping[str, JsonValue], raw: bytes) -> Reply:
     marker: Final = _newest_marker(raw)
     compaction: Final = (_block(_summary(marker)),) if f"compact-now-{marker}".encode() in raw else ()
-    content: Final = (*compaction, {"type": "text", "text": _answer(marker)})
+    thinking: Final = (_thinking(marker),) if _think(marker).encode() in raw else ()
+    content: Final = (*compaction, *thinking, {"type": "text", "text": _answer(marker)})
     identity: Final = f"msg_{uuid.uuid4().hex}"
     if body.get("stream") is True:
         return Reply(content_type="text/event-stream", chunks=_anthropic_stream(identity, content))
@@ -321,12 +340,29 @@ def _sse_events(text: str) -> tuple[dict[str, JsonValue], ...]:
     return tuple(_JSON_OBJECT.validate_json(payload) for payload in payloads if payload != "[DONE]")
 
 
-def _stream(gateway: Gateway, path: str, body: Mapping[str, JsonValue]) -> tuple[dict[str, JsonValue], ...]:
-    headers: Final = {"Authorization": f"Bearer {gateway.key}"}
-    with gateway.client.stream("POST", path, json={**body, **_CACHE_BUST, "stream": True}, headers=headers) as response:
+def _stream(
+    gateway: Gateway, path: str, body: Mapping[str, JsonValue], headers: Mapping[str, str] | None = None
+) -> tuple[dict[str, JsonValue], ...]:
+    sent_headers: Final = {"Authorization": f"Bearer {gateway.key}", **(headers or {})}
+    with gateway.client.stream(
+        "POST", path, json={**body, **_CACHE_BUST, "stream": True}, headers=sent_headers
+    ) as response:
         text: Final = response.read().decode()
     assert response.status_code == 200, text
     return _sse_events(text)
+
+
+def _delta_provider_fields(chunk: Mapping[str, JsonValue]) -> tuple[dict[str, JsonValue], ...]:
+    return tuple(
+        fields
+        for choice in _objects(chunk.get("choices", []))
+        if isinstance(fields := object_value(choice.get("delta", {})).get("provider_specific_fields"), dict)
+    )
+
+
+def _streamed_compaction_blocks(chunks: Sequence[Mapping[str, JsonValue]]) -> tuple[JsonValue, ...]:
+    fields: Final = chain.from_iterable(_delta_provider_fields(chunk) for chunk in chunks)
+    return tuple(field["compaction_blocks"] for field in fields if "compaction_blocks" in field)
 
 
 def _output_items(response: Mapping[str, JsonValue], item_type: str) -> tuple[dict[str, JsonValue], ...]:
@@ -518,6 +554,41 @@ def test_input_tokens_count_from_the_newest_compaction(gateway: Gateway) -> None
     assert all(b"history-" not in body for body in counted), counted[0][:2000]
 
 
+def test_streamed_compaction_item_is_done_before_the_reasoning_after_it(gateway: Gateway) -> None:
+    marker: Final = _new_marker()
+    with wire_server(_vendor) as wire, gateway.scenario() as scenario:
+        model: Final = _register(scenario, wire, "claude")
+        events: Final = _stream(
+            gateway,
+            "/v1/responses",
+            {
+                "model": model,
+                "input": f"{_ask(marker, compact=True)} {_think(marker)}",
+                "context_management": _COMPACTING,
+            },
+        )
+        done: Final = tuple(
+            (position, event["output_index"], object_value(event["item"])["type"])
+            for position, event in enumerate(events)
+            if event["type"] == "response.output_item.done"
+        )
+        completed: Final = _only([event for event in events if event["type"] == "response.completed"])
+        assert [(index, kind) for _, index, kind in done] == [(0, "compaction"), (1, "reasoning"), (2, "message")], [
+            event["type"] for event in events
+        ]
+        assert [item["type"] for item in _objects(object_value(completed["response"])["output"])] == [
+            "compaction",
+            "reasoning",
+            "message",
+        ]
+        reasoning_done: Final = done[1][0]
+        sequence_numbers: Final = [
+            number for event in events[: reasoning_done + 1] if isinstance(number := event.get("sequence_number"), int)
+        ]
+        assert sequence_numbers == sorted(set(sequence_numbers)), sequence_numbers
+        _only_call(wire, marker)
+
+
 def test_chat_stream_reports_the_whole_compaction_block(gateway: Gateway) -> None:
     marker: Final = _new_marker()
     with wire_server(_vendor) as wire, gateway.scenario() as scenario:
@@ -531,13 +602,7 @@ def test_chat_stream_reports_the_whole_compaction_block(gateway: Gateway) -> Non
                 "context_management": {"edits": [{"type": "compact_20260112"}]},
             },
         )
-        reported: Final = tuple(
-            fields["compaction_blocks"]
-            for chunk in chunks
-            for choice in _objects(chunk.get("choices", []))
-            if isinstance(fields := object_value(choice.get("delta", {})).get("provider_specific_fields"), dict)
-            and "compaction_blocks" in fields
-        )
+        reported: Final = _streamed_compaction_blocks(chunks)
         assert reported, chunks
         assert _objects(reported[-1])[-1] == _block(_summary(marker)), reported[-1]
         assert len(_provider_calls(wire, marker)) == 1
@@ -636,7 +701,8 @@ def _spend_row(response_id: str) -> dict[str, JsonValue]:
     request_id: Final = decoded if isinstance(decoded, str) else response_id
     rows: Final = eventually(
         lambda: read_rows(
-            'SELECT request_id, proxy_server_request, response, status FROM "LiteLLM_SpendLogs" WHERE request_id=%s',
+            'SELECT request_id, proxy_server_request, response, metadata, status FROM "LiteLLM_SpendLogs"'
+            " WHERE request_id=%s",
             (request_id,),
         ),
         lambda values: len(values) == 1,
@@ -819,4 +885,62 @@ def test_redacted_spend_row_holds_no_compaction_summary(stored: _StoredRig) -> N
     )
     row: Final = _spend_row(string_value(returned["id"]))
     assert f"kept-{marker}" not in json.dumps(row["response"]), json.dumps(row["response"])[:2000]
+    _only_call(stored.provider, marker)
+
+
+def test_stored_compaction_input_item_keeps_its_whole_summary_and_nothing_else(stored: _StoredRig) -> None:
+    first: Final = _new_marker()
+    second: Final = _new_marker()
+    summary: Final = _summary(first)
+    padded_item: Final = {
+        **_compaction_item(summary),
+        "encrypted_content": json.dumps({**_block(summary), "padding": f"pad-{first} {'p' * 3000}"}),
+    }
+    opened: Final = _responses(
+        stored.gateway,
+        {
+            "model": _STORED_CLAUDE,
+            "input": [padded_item, {"role": "user", "content": _ask(first)}],
+            "context_management": _COMPACTING,
+        },
+    )
+    stored_input: Final = _objects(
+        object_value(_spend_row(string_value(opened["id"]))["proxy_server_request"])["input"]
+    )
+    assert _decoded(string_value(stored_input[0]["encrypted_content"])) == _block(summary), stored_input[0]
+    _only_call(stored.provider, first)
+
+    _responses(
+        stored.gateway,
+        {
+            "model": _STORED_CLAUDE,
+            "input": _ask(second),
+            "previous_response_id": opened["id"],
+            "context_management": _COMPACTING,
+        },
+    )
+    _, body = _only_call(stored.provider, second)
+    assert summary in _anthropic_texts(body, "user"), body["messages"]
+    assert f"pad-{first}" not in json.dumps(body), body["messages"]
+
+
+def test_redacted_chat_stream_spend_row_holds_no_compaction_delta(stored: _StoredRig) -> None:
+    marker: Final = _new_marker()
+    summary: Final = _summary(marker)
+    chunks: Final = _stream(
+        stored.gateway,
+        "/v1/chat/completions",
+        {
+            "model": _STORED_CLAUDE,
+            "messages": [{"role": "user", "content": _ask(marker, compact=True)}],
+            "context_management": {"edits": [{"type": "compact_20260112"}]},
+        },
+        headers=_REDACT_HEADER,
+    )
+    streamed_blocks: Final = _streamed_compaction_blocks(chunks)
+    assert streamed_blocks and _objects(streamed_blocks[-1])[-1] == _block(summary), chunks
+    secrets: Final = (f"kept-{marker}", summary[len(summary) // 2 :])
+    logged: Final = {column: json.dumps(value) for column, value in _spend_row(string_value(chunks[0]["id"])).items()}
+    leaked: Final = {column: text for column, text in logged.items() if any(secret in text for secret in secrets)}
+    assert not leaked, {column: text[max(0, text.find(secrets[0]) - 600) :][:1500] for column, text in leaked.items()}
     _only_call(stored.provider, marker)
