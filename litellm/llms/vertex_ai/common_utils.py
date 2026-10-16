@@ -1362,6 +1362,7 @@ class VertexAITokenCounter(BaseTokenCounter):
                 gemini_count_contents,
                 inference_request_view,
                 provider_error_response,
+                unconvertible_messages_error,
                 vertex_gemini_count_context,
             )
             from litellm.llms.vertex_ai.count_tokens.handler import VertexAITokenCounter
@@ -1370,6 +1371,9 @@ class VertexAITokenCounter(BaseTokenCounter):
             count_context: Final = vertex_gemini_count_context(system=request_view.system, tools=tools)
             if isinstance(count_context, VertexGeminiCountContextError):
                 return count_context_error_response(count_context, request_model, model_to_use)
+            blocks_error: Final = unconvertible_messages_error(request_view.messages, messages_format)
+            if blocks_error is not None:
+                return count_context_error_response(blocks_error, request_model, model_to_use)
 
             resolved_contents: Final = (
                 contents
