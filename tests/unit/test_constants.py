@@ -82,6 +82,45 @@ def _build_constant_env_var_map() -> dict[str, str]:
     return env_var_map
 
 
+def _cipher_suites(cipher_string: str) -> list[str]:
+    return [suite for suite in cipher_string.split(":") if suite]
+
+
+def test_default_ssl_ciphers_excludes_chacha20():
+    assert all("CHACHA" not in suite for suite in _cipher_suites(constants.DEFAULT_SSL_CIPHERS))
+
+
+def test_default_ssl_ciphers_tls12_suites_all_offer_forward_secrecy():
+    tls12_suites = [suite for suite in _cipher_suites(constants.DEFAULT_SSL_CIPHERS) if not suite.startswith("TLS_")]
+    assert tls12_suites
+    assert all(suite.startswith("ECDHE-") for suite in tls12_suites)
+
+
+def test_fips_ssl_ciphers_is_a_subset_of_default():
+    assert set(_cipher_suites(constants.FIPS_SSL_CIPHERS)) <= set(_cipher_suites(constants.DEFAULT_SSL_CIPHERS))
+
+
+def test_fips_ssl_ciphers_tls12_suites_are_all_gcm():
+    tls12_suites = [suite for suite in _cipher_suites(constants.FIPS_SSL_CIPHERS) if not suite.startswith("TLS_")]
+    assert tls12_suites
+    assert all("-GCM-" in suite for suite in tls12_suites)
+
+
+def test_ssl_ciphers_env_override_applies_to_default_list_only(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("LITELLM_SSL_CIPHERS", "ECDHE-RSA-AES128-GCM-SHA256")
+    importlib.reload(constants)
+    try:
+        assert constants.DEFAULT_SSL_CIPHERS == "ECDHE-RSA-AES128-GCM-SHA256"
+        # The FIPS list must stay certified regardless of the override so FIPS mode
+        # cannot be silently weakened by LITELLM_SSL_CIPHERS.
+        assert constants.FIPS_SSL_CIPHERS != "ECDHE-RSA-AES128-GCM-SHA256"
+        assert all("-GCM-" in suite for suite in _cipher_suites(constants.FIPS_SSL_CIPHERS) if not suite.startswith("TLS_"))
+    finally:
+        monkeypatch.delenv("LITELLM_SSL_CIPHERS")
+        importlib.reload(constants)
+    assert constants.DEFAULT_SSL_CIPHERS != "ECDHE-RSA-AES128-GCM-SHA256"
+
+
 @pytest.mark.parametrize(
     ("cli_value", "litellm_cli_value", "expected"),
     [
