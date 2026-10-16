@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
@@ -787,3 +788,80 @@ async def test_message_history_replays_real_key_named_tool_payloads() -> None:
     tool_message: Final = result["messages"][2]
     assert json.loads(assistant_message["tool_calls"][0]["function"]["arguments"]) == function_arguments
     assert json.loads(tool_message["content"]) == function_output
+
+
+class _SqliteBackedPrismaDB:
+    def __init__(self, rows: list[tuple[str, str, str, str, str | None, str | None]]) -> None:
+        self._connection = sqlite3.connect(":memory:")
+        self._connection.row_factory = sqlite3.Row
+        self._connection.execute(
+            'CREATE TABLE "LiteLLM_SpendLogs" '
+            '(request_id TEXT, api_key TEXT, session_id TEXT, "endTime" TEXT, "user" TEXT, team_id TEXT)'
+        )
+        self._connection.executemany('INSERT INTO "LiteLLM_SpendLogs" VALUES (?, ?, ?, ?, ?, ?)', rows)
+
+    async def query_raw(self, query: str, *args: object) -> list[dict[str, object]]:
+        return [dict(row) for row in self._connection.execute(query.replace("$1", "?"), args)]
+
+
+@pytest.mark.asyncio
+async def test_session_lookup_does_not_return_another_keys_rows_for_a_shared_session_id():
+    """A caller-supplied litellm_session_id can collide with another key's session; history must stay per key."""
+    sqlite_db: Final = _SqliteBackedPrismaDB(
+        [
+            ("victim-1", "victim-key", "shared-session", "2026-01-01T00:00:01", "", ""),
+            ("victim-2", "victim-key", "shared-session", "2026-01-01T00:00:02", "", ""),
+            ("attacker-1", "attacker-key", "shared-session", "2026-01-01T00:00:03", "", ""),
+            ("attacker-2", "attacker-key", "other-session", "2026-01-01T00:00:04", "", ""),
+        ]
+    )
+    fake_prisma_client = _FakePrismaClient(results=[])
+    fake_prisma_client.db = sqlite_db
+
+    with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client):
+        spend_logs = await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id("attacker-1")
+        victim_logs = await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id("victim-1")
+
+    assert [row["request_id"] for row in spend_logs] == ["attacker-1"]
+    assert [row["request_id"] for row in victim_logs] == ["victim-1", "victim-2"]
+
+
+async def _history_request_ids(sqlite_db: _SqliteBackedPrismaDB, response_id: str) -> list[str]:
+    fake_prisma_client: Final = _FakePrismaClient(results=[])
+    fake_prisma_client.db = sqlite_db
+    with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client):
+        spend_logs: Final = await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(response_id)
+    return [row["request_id"] for row in spend_logs]
+
+
+@pytest.mark.asyncio
+async def test_session_lookup_keeps_jwt_users_and_teams_apart_when_they_share_an_empty_api_key():
+    sqlite_db: Final = _SqliteBackedPrismaDB(
+        [
+            ("alice-1", "", "shared-session", "2026-01-01T00:00:01", "alice", "team-a"),
+            ("bob-1", "", "shared-session", "2026-01-01T00:00:02", "bob", "team-a"),
+            ("service-a-1", "", "shared-session", "2026-01-01T00:00:03", "", "team-a"),
+            ("service-b-1", "", "shared-session", "2026-01-01T00:00:04", "", "team-b"),
+            ("alice-2", "", "shared-session", "2026-01-01T00:00:05", "alice", "team-a"),
+        ]
+    )
+
+    assert await _history_request_ids(sqlite_db, "alice-1") == ["alice-1", "alice-2"]
+    assert await _history_request_ids(sqlite_db, "bob-1") == ["bob-1"]
+    assert await _history_request_ids(sqlite_db, "service-a-1") == ["service-a-1"]
+    assert await _history_request_ids(sqlite_db, "service-b-1") == ["service-b-1"]
+
+
+@pytest.mark.asyncio
+async def test_session_lookup_follows_the_owner_across_keys_and_keeps_ownerless_keys_apart():
+    sqlite_db: Final = _SqliteBackedPrismaDB(
+        [
+            ("alice-old-key", "hashed-old", "shared-session", "2026-01-01T00:00:01", "alice", "team-a"),
+            ("ownerless-1", "hashed-other", "shared-session", "2026-01-01T00:00:02", "", ""),
+            ("alice-new-key", "hashed-new", "shared-session", "2026-01-01T00:00:03", "alice", "team-a"),
+            ("ownerless-2", "hashed-another", "shared-session", "2026-01-01T00:00:04", "", ""),
+        ]
+    )
+
+    assert await _history_request_ids(sqlite_db, "alice-new-key") == ["alice-old-key", "alice-new-key"]
+    assert await _history_request_ids(sqlite_db, "ownerless-2") == ["ownerless-2"]
