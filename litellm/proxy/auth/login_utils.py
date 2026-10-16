@@ -339,17 +339,15 @@ async def _sign_in(
             response = await generate_key_helper_fn(
                 llm_router=None,
                 request_type="key",
-                **{
-                    "user_role": LitellmUserRoles.PROXY_ADMIN,
-                    "duration": LITELLM_UI_SESSION_DURATION,
-                    "key_max_budget": litellm.max_ui_session_budget,
-                    "models": [],
-                    "aliases": {},
-                    "config": {},
-                    "spend": 0,
-                    "user_id": key_user_id,
-                    "team_id": "litellm-dashboard",
-                },
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                duration=LITELLM_UI_SESSION_DURATION,
+                key_max_budget=litellm.max_ui_session_budget,
+                models=[],
+                aliases={},
+                config={},
+                spend=0,
+                user_id=key_user_id,
+                team_id="litellm-dashboard",
             )
         else:
             raise ProxyException(
