@@ -1,10 +1,9 @@
 import asyncio
 import io
-import itertools
 import json
 import sys
-import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+import threading
+from collections.abc import Awaitable, Callable
 from functools import partial
 from pathlib import Path
 from typing import Final
@@ -819,7 +818,7 @@ class TestResolveBearerToken:
         assert resolve_openai_bearer_token(api_key=None, api_base=None, litellm_params=None) is None
 
 
-HeadersFromParams = Callable[[GenericLiteLLMParams], dict]
+HeadersFromParams = Callable[[GenericLiteLLMParams], dict[str, str]]
 HTTP_HANDLER_VALIDATORS: Final[tuple[tuple[str, HeadersFromParams], ...]] = (
     (
         "image_edit",
@@ -1847,31 +1846,16 @@ class TestCountTokensFromDeployment:
         assert exchange.call_count == 0
 
 
-SLOW_EXCHANGE_SECONDS: Final = 0.4
 VECTOR_STORES_URL: Final = "https://api.openai.com/v1/vector_stores"
 LIST_PAGE_BODY: Final = {"object": "list", "data": [], "has_more": False}
 
 
-def mock_slow_token_exchange(access_token: str) -> respx.Route:
+def mock_token_exchange_naming_its_thread(event_loop_thread: int) -> respx.Route:
     def respond(request: httpx.Request) -> httpx.Response:
-        time.sleep(SLOW_EXCHANGE_SECONDS)
-        return httpx.Response(200, json={"access_token": access_token, "expires_in": 3600})
+        minted_on: Final = "event-loop" if threading.get_ident() == event_loop_thread else "worker-thread"
+        return httpx.Response(200, json={"access_token": f"minted-on-{minted_on}", "expires_in": 3600})
 
     return respx.post(TOKEN_EXCHANGE_URL).mock(side_effect=respond)
-
-
-async def _ticks_until(task: "asyncio.Future[object]") -> AsyncIterator[float]:
-    while not task.done():
-        yield time.monotonic()
-        await asyncio.sleep(0.01)
-    yield time.monotonic()
-
-
-async def _longest_loop_stall(call: Awaitable[object]) -> float:
-    task: Final = asyncio.ensure_future(call)
-    ticks: Final = tuple([tick async for tick in _ticks_until(task)])
-    await task
-    return max(later - earlier for earlier, later in itertools.pairwise(ticks))
 
 
 LOOP_BOUND_ROUTES: Final = (
@@ -1951,7 +1935,7 @@ LOOP_BOUND_ROUTES: Final = (
 class TestTokenExchangeLeavesTheEventLoopFree:
     @respx.mock
     @pytest.mark.asyncio
-    async def test_slow_exchange_does_not_stall_the_event_loop(
+    async def test_token_exchange_runs_off_the_event_loop(
         self,
         deployment_wif: dict[str, str],
         method: str,
@@ -1959,15 +1943,12 @@ class TestTokenExchangeLeavesTheEventLoopFree:
         response: httpx.Response,
         invoke: Callable[[dict[str, str]], Awaitable[object]],
     ) -> None:
-        mock_slow_token_exchange("unblocked-bearer")
+        mock_token_exchange_naming_its_thread(threading.get_ident())
         upstream: Final = respx.route(method=method, url=url).mock(return_value=response)
+
         await invoke(deployment_wif)
-        _workload_identity_auth.cache_clear()
 
-        stall: Final = await _longest_loop_stall(invoke(deployment_wif))
-
-        assert stall < SLOW_EXCHANGE_SECONDS / 2
-        assert bearer_of(upstream) == "Bearer unblocked-bearer"
+        assert bearer_of(upstream) == "Bearer minted-on-worker-thread"
 
 
 class TestCountTokens:
