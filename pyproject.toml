@@ -190,8 +190,8 @@ proxy-runtime = [
 
 [project.scripts]
 litellm = "litellm:run_server"
-lite = "litellm.proxy.client.cli:cli"
-litellm-proxy = "litellm.proxy.client.cli:litellm_proxy_cli"
+lite = "litellm_cli.main:cli"
+litellm-proxy = "litellm_cli.main:litellm_proxy_cli"
 
 [dependency-groups]
 dev = [
@@ -312,6 +312,7 @@ build-backend = "maturin"
 manifest-path = "litellm-rust/crates/python-bridge/Cargo.toml"
 module-name = "litellm.rust_bridge._native"
 python-source = "."
+python-packages = ["litellm_cli"]
 bindings = "pyo3"
 features = ["extension-module"]
 profile = "release"
