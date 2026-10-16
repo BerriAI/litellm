@@ -10,7 +10,9 @@ from fastapi import Request
 from fastapi.routing import APIRoute
 
 
+import contextlib
 import io
+import logging
 import time
 
 # this file is to test litellm/proxy
@@ -45,7 +47,10 @@ from litellm.proxy.management_helpers.audit_logs import (
     track_audit_task,
 )
 from litellm.proxy._types import LiteLLM_AuditLogs, LitellmTableNames, UserAPIKeyAuth
+from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.utils import StandardAuditLogPayload
 from unittest.mock import AsyncMock, MagicMock, patch
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
@@ -457,6 +462,93 @@ async def test_drain_audit_tasks_captures_tasks_queued_during_drain():
     await drain_audit_tasks(timeout=2.0)
 
     assert finished_tasks == ["first", "second"]
+
+
+class _AuditCallbackBlockedUntilReleased(CustomLogger):
+    def __init__(self, release: asyncio.Event) -> None:
+        super().__init__()
+        self.release: Final = release
+        self.logged_object_ids: Final[list[str]] = []
+
+    async def async_log_audit_log_event(self, audit_log: StandardAuditLogPayload) -> None:
+        await self.release.wait()
+        self.logged_object_ids.append(audit_log["object_id"])
+
+
+class _WarningRecorder(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__(level=logging.WARNING)
+        self.messages: Final[list[str]] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.messages.append(record.getMessage())
+
+
+def _deleted_key_audit_log(object_id: str) -> LiteLLM_AuditLogs:
+    return LiteLLM_AuditLogs(
+        id=str(uuid.uuid4()),
+        updated_at=datetime.now(timezone.utc),
+        changed_by="admin-user",
+        table_name=LitellmTableNames.KEY_TABLE_NAME,
+        object_id=object_id,
+        action="deleted",
+        updated_values="{}",
+        before_value="{}",
+    )
+
+
+@pytest.mark.asyncio
+async def test_drain_waits_for_a_slow_audit_log_callback():
+    release: Final = asyncio.Event()
+    callback: Final = _AuditCallbackBlockedUntilReleased(release)
+
+    with (
+        patch("litellm.store_audit_logs", True),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.audit_log_callbacks", [callback]),
+    ):
+        await create_audit_log_for_update(request_data=_deleted_key_audit_log("token-callback"))
+        drain: Final = asyncio.create_task(drain_audit_tasks(timeout=60))
+        for _ in range(3):
+            await asyncio.sleep(0)
+        drain_returned_before_the_callback_finished: Final = drain.done()
+        release.set()
+        await drain
+
+    assert not drain_returned_before_the_callback_finished
+    assert callback.logged_object_ids == ["token-callback"]
+
+
+@pytest.mark.asyncio
+async def test_drain_timeout_warning_names_each_dropped_audit_row():
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db.litellm_auditlog.create = AsyncMock(side_effect=_io_that_never_finishes)
+    recorder: Final = _WarningRecorder()
+    verbose_proxy_logger.addHandler(recorder)
+
+    with (
+        patch("litellm.store_audit_logs", True),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+    ):
+        writer: Final = asyncio.create_task(
+            create_audit_log_for_update(request_data=_deleted_key_audit_log("token-dropped"))
+        )
+        try:
+            for _ in range(3):
+                await asyncio.sleep(0)
+            await drain_audit_tasks(timeout=0.05)
+        finally:
+            verbose_proxy_logger.removeHandler(recorder)
+            writer.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await writer
+
+    assert recorder.messages == [
+        "Timed out draining 1 audit tasks on shutdown, dropping: "
+        f"deleted {LitellmTableNames.KEY_TABLE_NAME.value} token-dropped to the database"
+    ]
 
 
 @pytest.mark.asyncio

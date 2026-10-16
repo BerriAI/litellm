@@ -161,7 +161,11 @@ class AuditTaskRegistry:
             _, pending = await asyncio.wait(tuple(self._pending_tasks), timeout=max(deadline - loop.time(), 0))
             if pending:
                 self._pending_tasks.difference_update(pending)
-                verbose_proxy_logger.warning("Timed out draining %d audit tasks on shutdown", len(pending))
+                verbose_proxy_logger.warning(
+                    "Timed out draining %d audit tasks on shutdown, dropping: %s",
+                    len(pending),
+                    ", ".join(sorted(task.get_name() for task in pending)),
+                )
                 return
 
 
@@ -174,6 +178,10 @@ def track_audit_task(task: asyncio.Task[_T]) -> asyncio.Task[_T]:
 
 async def drain_audit_tasks(timeout: float = 5.0) -> None:
     await _audit_task_registry.drain(timeout=timeout)
+
+
+def _audit_task_name(request_data: LiteLLM_AuditLogs, destination: str) -> str:
+    return f"{request_data.action} {request_data.table_name.value} {request_data.object_id} to {destination}"
 
 
 async def _dispatch_audit_log_to_callbacks(
@@ -195,7 +203,12 @@ async def _dispatch_audit_log_to_callbacks(
                     continue
 
             if isinstance(resolved, CustomLogger):
-                track_audit_task(asyncio.create_task(resolved.async_log_audit_log_event(payload)))
+                track_audit_task(
+                    asyncio.create_task(
+                        resolved.async_log_audit_log_event(payload),
+                        name=_audit_task_name(request_data, type(resolved).__name__),
+                    )
+                )
         except Exception as e:
             verbose_proxy_logger.error("Failed dispatching audit log to callback: %s", e)
 
@@ -280,4 +293,9 @@ async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
         verbose_proxy_logger.error("prisma_client is None, cannot write audit log to DB")
         return
 
-    await track_audit_task(asyncio.create_task(_insert_audit_log_row(AuditLogRepository(prisma_client), request_data)))
+    await track_audit_task(
+        asyncio.create_task(
+            _insert_audit_log_row(AuditLogRepository(prisma_client), request_data),
+            name=_audit_task_name(request_data, "the database"),
+        )
+    )
