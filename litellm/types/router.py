@@ -1084,6 +1084,8 @@ class RouterRateLimitErrorBasic(ValueError):
     Raise a basic error inside helper functions.
     """
 
+    status_code: Final = 429
+
     def __init__(
         self,
         model: str,
@@ -1099,6 +1101,8 @@ class RouterErrorTypes(str, enum.Enum):
 
 
 class RouterRateLimitError(ValueError):
+    status_code: Final = 429
+
     def __init__(
         self,
         model: str,
