@@ -187,8 +187,18 @@ class TestClaudePlatformOutboundIdentityCovered:
     @pytest.mark.parametrize("action", ["sts:GetWebIdentityToken", "sts:TagGetWebIdentityToken"])
     def test_outbound_identity_action_present(self, action: str):
         assert action in _granted_actions(_captured_policy()), (
-            f"{action} missing from session policy — bedrock/claude_platform/* requests will 403 on OIDC auth"
+            f"{action} missing from session policy, so bedrock/claude_platform/* requests will 403 on OIDC auth"
         )
+
+    @pytest.mark.parametrize("action", ["sts:GetWebIdentityToken", "sts:TagGetWebIdentityToken"])
+    def test_outbound_identity_action_is_granted_only_via_claude_platform(self, action: str):
+        granting: Final = tuple(stmt for stmt in _captured_policy()["Statement"] if action in stmt["Action"])
+        assert granting, f"{action} missing from session policy"
+        assert all(
+            stmt["Condition"].get("StringEquals") == {"aws:CalledViaLast": "aws-external-anthropic.amazonaws.com"}
+            and stmt["Condition"]["Bool"] == {"aws:SecureTransport": "true"}
+            for stmt in granting
+        ), f"{action} must only be usable over TLS when Claude Platform on AWS calls STS for the session"
 
     def test_outbound_identity_statement_is_scoped(self):
         policy = _captured_policy()
@@ -200,7 +210,7 @@ class TestClaudePlatformOutboundIdentityCovered:
 
     def test_no_sts_wildcard(self):
         assert "sts:*" not in _granted_actions(_captured_policy()), (
-            "session policy must not grant sts:* — only GetWebIdentityToken is needed"
+            "session policy must not grant sts:*, only the two outbound identity actions are needed"
         )
 
 

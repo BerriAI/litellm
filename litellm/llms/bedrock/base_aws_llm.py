@@ -99,11 +99,16 @@ def _assume_role_params(
             )
 
 
-_SecureTransportBool = TypedDict("_SecureTransportBool", {"aws:SecureTransport": ReadOnly[Literal["true"]]})
+_SecureTransportBool: Final = TypedDict("_SecureTransportBool", {"aws:SecureTransport": ReadOnly[Literal["true"]]})
+
+_CalledViaLastEquals: Final = TypedDict(
+    "_CalledViaLastEquals", {"aws:CalledViaLast": ReadOnly[Literal["aws-external-anthropic.amazonaws.com"]]}
+)
 
 
-class _SecureTransportCondition(TypedDict):
+class _SessionPolicyCondition(TypedDict):
     Bool: ReadOnly[_SecureTransportBool]
+    StringEquals: NotRequired[ReadOnly[_CalledViaLastEquals]]
 
 
 class _SessionPolicyStatement(TypedDict):
@@ -111,7 +116,7 @@ class _SessionPolicyStatement(TypedDict):
     Effect: ReadOnly[Literal["Allow"]]
     Action: ReadOnly[tuple[str, ...]]
     Resource: ReadOnly[Literal["*"]]
-    Condition: ReadOnly[_SecureTransportCondition]
+    Condition: ReadOnly[_SessionPolicyCondition]
 
 
 class WebIdentitySessionPolicy(TypedDict):
@@ -147,11 +152,6 @@ _WEB_IDENTITY_SESSION_POLICY_ACTIONS: Final[Mapping[str, tuple[str, ...]]] = Map
             "aws-external-anthropic:Get*",
             "aws-external-anthropic:List*",
         ),
-        # Claude Platform on AWS calls STS GetWebIdentityToken (outbound identity
-        # federation) with the caller's session before serving inference, and tags
-        # the token it requests (TagGetWebIdentityToken), so the ceiling must grant
-        # both or every claude_platform request via OIDC auth 403s with "no session
-        # policy allows the sts:<action> action".
         "ClaudePlatformOutboundIdentityLiteLLM": (
             "sts:GetWebIdentityToken",
             "sts:TagGetWebIdentityToken",
@@ -160,7 +160,16 @@ _WEB_IDENTITY_SESSION_POLICY_ACTIONS: Final[Mapping[str, tuple[str, ...]]] = Map
     }
 )
 
-_SECURE_TRANSPORT_ONLY: Final = _SecureTransportCondition(Bool=_SecureTransportBool({"aws:SecureTransport": "true"}))
+_SECURE_TRANSPORT_ONLY: Final = _SessionPolicyCondition(Bool=_SecureTransportBool({"aws:SecureTransport": "true"}))
+
+_WEB_IDENTITY_SESSION_POLICY_CONDITIONS: Final[Mapping[str, _SessionPolicyCondition]] = MappingProxyType(
+    {
+        "ClaudePlatformOutboundIdentityLiteLLM": _SessionPolicyCondition(
+            Bool=_SecureTransportBool({"aws:SecureTransport": "true"}),
+            StringEquals=_CalledViaLastEquals({"aws:CalledViaLast": "aws-external-anthropic.amazonaws.com"}),
+        ),
+    }
+)
 
 
 def build_web_identity_session_policy() -> WebIdentitySessionPolicy:
@@ -172,7 +181,7 @@ def build_web_identity_session_policy() -> WebIdentitySessionPolicy:
                 Effect="Allow",
                 Action=actions,
                 Resource="*",
-                Condition=_SECURE_TRANSPORT_ONLY,
+                Condition=_WEB_IDENTITY_SESSION_POLICY_CONDITIONS.get(sid, _SECURE_TRANSPORT_ONLY),
             )
             for sid, actions in _WEB_IDENTITY_SESSION_POLICY_ACTIONS.items()
         ),
