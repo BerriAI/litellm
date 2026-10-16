@@ -2400,12 +2400,12 @@ class ProxyBaseLLMRequestProcessing:
         llm_router: Router | None,
         user_model: str | None,
     ) -> None:
-        """Run the pre-call hooks on self.data, with guardrails last when the requested model cannot route yet.
+        """Run the pre-call hooks on self.data, checking a model that cannot route yet before the first guardrail.
 
-        For such a model, hooks other than guardrails and content enforcers run first and may
-        rewrite the model. A model that still cannot route raises the routing error before any
-        guardrail runs, otherwise the guardrails run on the rewritten request. A request those
-        hooks or the routing check reject is redacted.
+        For such a model, the hooks that come before the first guardrail or content enforcer run
+        first and may rewrite the model. A model that still cannot route raises the routing error
+        there, before any guardrail runs, otherwise the remaining hooks and guardrails run in their
+        usual order. A request rejected before the check passed is redacted.
         """
         if model_routable:
             self.data = await proxy_logging_obj.pre_call_hook(
@@ -2415,30 +2415,30 @@ class ProxyBaseLLMRequestProcessing:
                 skip_guardrails=skip_guardrails,
             )
             return
+        passed_routing_check: Final = list[bool]()
+
+        async def raise_unless_routable(request: dict[str, object]) -> None:  # mutable-ok: request payload
+            self.data = request
+            refresh_proxy_server_request_body_snapshot(request)
+            await raise_if_model_not_routable(
+                data=request,
+                llm_router=llm_router,
+                user_model=user_model,
+                route_type=call_type,
+            )
+            passed_routing_check.append(True)
+
         try:
             self.data = await proxy_logging_obj.pre_call_hook(
                 user_api_key_dict=user_api_key_dict,
                 data=self.data,
                 call_type=call_type,
-                skip_guardrails=True,
-                skip_content_enforcers=True,
-            )
-            refresh_proxy_server_request_body_snapshot(self.data)
-            await raise_if_model_not_routable(
-                data=self.data,
-                llm_router=llm_router,
-                user_model=user_model,
-                route_type=call_type,
+                before_guardrails=raise_unless_routable,
             )
         except Exception:
-            self._redact_request_rejected_before_guardrails(proxy_logging_obj=proxy_logging_obj)
+            if not passed_routing_check:
+                self._redact_request_rejected_before_guardrails(proxy_logging_obj=proxy_logging_obj)
             raise
-        self.data = await proxy_logging_obj.pre_call_hook(
-            user_api_key_dict=user_api_key_dict,
-            data=self.data,
-            call_type=call_type,
-            guardrails_only=True,
-        )
 
     def _redact_request_rejected_before_guardrails(self, proxy_logging_obj: ProxyLogging) -> None:
         """Redact the content of a request rejected before the pre-call guardrails that apply to it ran.

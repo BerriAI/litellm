@@ -10984,6 +10984,28 @@ class _EmailMaskingHook(CustomLogger):
         return data
 
 
+class _EmailMaskingGuardrail(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(
+            guardrail_name="email-masking-guardrail", event_hook=GuardrailEventHooks.pre_call, default_on=True
+        )
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        for message in data["messages"]:
+            message["content"] = message["content"].replace("jane@example.com", "[EMAIL]")
+        return data
+
+
+class _ContentRecordingHook(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.contents_seen: list[str] = []
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        self.contents_seen.extend(message["content"] for message in data["messages"])
+        return data
+
+
 class _RejectingHook(CustomLogger):
     def __init__(self, model: str | None = None) -> None:
         super().__init__()
@@ -11069,7 +11091,7 @@ class TestPreCallHooksForUnroutableModel:
         )
 
     @pytest.mark.asyncio
-    async def test_unknown_model_runs_other_hooks_but_no_guardrail_or_content_enforcer(self, monkeypatch):
+    async def test_unknown_model_runs_only_the_hooks_before_the_first_guardrail(self, monkeypatch):
         from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 
         guardrail: Final = _CountingGuardrail()
@@ -11098,6 +11120,31 @@ class TestPreCallHooksForUnroutableModel:
         assert hook.calls == 1
         assert guardrail.models_seen == ["gpt-4o-mini"]
         assert enforcer.calls == 1
+
+    @pytest.mark.asyncio
+    async def test_unknown_model_never_reaches_a_hook_registered_after_a_guardrail(self, monkeypatch):
+        from litellm.proxy.route_llm_request import ProxyModelNotFoundError
+
+        guardrail: Final = _EmailMaskingGuardrail()
+        recorder: Final = _ContentRecordingHook()
+        rejecting_hook: Final = _RejectingHook()
+        monkeypatch.setattr(litellm, "callbacks", [guardrail, recorder, rejecting_hook])
+
+        with pytest.raises(ProxyModelNotFoundError) as exc_info:
+            await self._run(monkeypatch, model="does-not-exist", llm_router=self._router())
+
+        assert exc_info.value.status_code == 400
+        assert recorder.contents_seen == []
+
+    @pytest.mark.asyncio
+    async def test_hook_registered_after_a_guardrail_sees_the_guardrail_output_for_a_renamed_model(self, monkeypatch):
+        recorder: Final = _ContentRecordingHook()
+        monkeypatch.setattr(litellm, "callbacks", [_ModelRewritingHook(), _EmailMaskingGuardrail(), recorder])
+
+        data: Final = await self._run(monkeypatch, model="virtual-model", llm_router=self._router())
+
+        assert data["model"] == "gpt-4o-mini"
+        assert recorder.contents_seen == ["email [EMAIL]"]
 
     @pytest.mark.asyncio
     async def test_routable_model_runs_every_hook_once(self, monkeypatch):
@@ -11177,7 +11224,7 @@ class TestPreCallHooksForUnroutableModel:
     @pytest.mark.asyncio
     async def test_request_a_hook_rejects_before_guardrails_is_redacted(self, monkeypatch):
         guardrail: Final = _CountingGuardrail()
-        monkeypatch.setattr(litellm, "callbacks", [guardrail, _RejectingHook()])
+        monkeypatch.setattr(litellm, "callbacks", [_RejectingHook(), guardrail])
         processor: Final = ProxyBaseLLMRequestProcessing(data={})
 
         with pytest.raises(HTTPException) as exc_info:

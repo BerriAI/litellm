@@ -2442,7 +2442,7 @@ class ProxyLogging:
         guardrails_only: bool = False,
         skip_guardrails: bool = False,
         endpoint_type: EndpointType = EndpointType.GENERIC,
-        skip_content_enforcers: bool = False,
+        before_guardrails: Callable[[dict[str, object]], Awaitable[None]] | None = None,  # mutable-ok: request payload
     ) -> None:
         pass
 
@@ -2455,7 +2455,7 @@ class ProxyLogging:
         guardrails_only: bool = False,
         skip_guardrails: bool = False,
         endpoint_type: EndpointType = EndpointType.GENERIC,
-        skip_content_enforcers: bool = False,
+        before_guardrails: Callable[[dict[str, object]], Awaitable[None]] | None = None,  # mutable-ok: request payload
     ) -> dict:
         pass
 
@@ -2467,7 +2467,7 @@ class ProxyLogging:
         guardrails_only: bool = False,
         skip_guardrails: bool = False,
         endpoint_type: EndpointType = EndpointType.GENERIC,
-        skip_content_enforcers: bool = False,
+        before_guardrails: Callable[[dict[str, object]], Awaitable[None]] | None = None,  # mutable-ok: request payload
     ) -> dict | None:
         """
         Allows users to modify/reject the incoming request to the proxy, without having to deal with parsing Request body.
@@ -2481,8 +2481,9 @@ class ProxyLogging:
         limiting, budget accounting, prompt templates and hanging-request alerting are skipped.
         Use it to scan a payload that is not itself a request, such as one record of a batch file.
 
-        ``skip_content_enforcers`` also skips the non-guardrail callbacks that set
-        ``enforces_request_content``, the ones ``guardrails_only`` keeps.
+        ``before_guardrails`` is awaited once with the request, right before the first guardrail
+        pipeline, guardrail or content enforcer that runs on it, or after the other callbacks when
+        none does. An exception it raises ends the hook.
         """
         verbose_proxy_logger.debug("Inside Proxy Logging Pre-call hook!")
 
@@ -2533,9 +2534,16 @@ class ProxyLogging:
         raw_request_snapshot: Final[dict | None] = (  # mutable-ok: same request-payload shape as data
             independent_snapshot(data) if needs_raw_request_snapshot else None
         )
+        pending_before_guardrails: Final = [before_guardrails] if before_guardrails is not None else []
+
+        async def reach_guardrails(request: dict[str, object]) -> None:  # mutable-ok: request payload
+            while pending_before_guardrails:
+                await pending_before_guardrails.pop()(request)
 
         try:
             if not skip_guardrails:
+                if any(pipeline.mode == "pre_call" for _, pipeline in _policy_pipelines(data)):
+                    await reach_guardrails(data)
                 data, _ = await self._maybe_execute_pipelines(  # rebind-ok: pipeline edits feed the callback loop below
                     data=data,
                     user_api_key_dict=user_api_key_dict,
@@ -2561,6 +2569,7 @@ class ProxyLogging:
                 and (guardrails_only or not caps.has_pre_call_override)
             ):
                 if data is not None:
+                    await reach_guardrails(data)
                     self._process_guardrail_metadata(data)
                 return data
 
@@ -2591,6 +2600,13 @@ class ProxyLogging:
                         if getattr(_callback, "run_in_parallel", False):
                             continue
 
+                        if (
+                            pending_before_guardrails
+                            and _callback.should_run_guardrail(data=data, event_type=GuardrailEventHooks.pre_call)
+                            is True
+                        ):
+                            await reach_guardrails(data)
+
                         data = await self._run_sequential_guardrail_callback(
                             callback=_callback,
                             data=data,
@@ -2603,12 +2619,14 @@ class ProxyLogging:
                         _callback is not None
                         and isinstance(_callback, CustomLogger)
                         and (not guardrails_only or _callback.enforces_request_content)
-                        and not (skip_content_enforcers and _callback.enforces_request_content)
                         and "async_pre_call_hook" in vars(_callback.__class__)
                         and _callback.__class__.async_pre_call_hook != CustomLogger.async_pre_call_hook
                     ):
                         if call_type in MCP_GUARDRAIL_CALL_TYPES and user_api_key_dict is None:
                             continue
+
+                        if _callback.enforces_request_content and data is not None:
+                            await reach_guardrails(data)
 
                         response: Exception | str | Mapping[str, object] | None = (
                             await _callback.async_pre_call_hook(
@@ -2652,6 +2670,9 @@ class ProxyLogging:
                         start_time=start_time,
                         end_time=end_time,
                     )
+
+            if data is not None:
+                await reach_guardrails(data)
 
             if deferred_route_exc is not None and data is not None:
                 data = await self._handle_sensitive_data_route_exception(deferred_route_exc, data, user_api_key_dict)
