@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="640" viewBox="0 0 1000 640" font-family="Helvetica, Arial, sans-serif" font-size="13">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#333"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="1000" height="640" fill="#ffffff"/>
+  <text x="500" y="30" text-anchor="middle" font-size="18" font-weight="bold" fill="#111">POST /v1/messages to a bedrock/ deployment</text>
+
+  <!-- request column -->
+  <text x="250" y="62" text-anchor="middle" font-size="14" font-weight="bold" fill="#1f4e79">Request (inference-messages prepare.rs)</text>
+
+  <rect x="40" y="75" width="420" height="58" rx="6" fill="#eef4fb" stroke="#1f4e79"/>
+  <text x="56" y="97" fill="#111">Client body + headers</text>
+  <text x="56" y="117" fill="#555" font-family="monospace" font-size="12">{model, stream, speed, mcp_servers, ...} + anthropic-beta</text>
+
+  <rect x="40" y="153" width="420" height="58" rx="6" fill="#eef4fb" stroke="#1f4e79"/>
+  <text x="56" y="175" fill="#111">transform_messages_request (shared Anthropic stage)</text>
+  <text x="56" y="195" fill="#555" font-size="12">thinking translation, system-role hoisting</text>
+
+  <rect x="40" y="231" width="420" height="132" rx="6" fill="#fff4e5" stroke="#b35c00"/>
+  <text x="56" y="253" fill="#111" font-weight="bold">invoke_body (Bedrock rules, Python order)</text>
+  <text x="56" y="274" fill="#333" font-size="12">reject server-side web_search_* tools</text>
+  <text x="56" y="292" fill="#333" font-size="12">anthropic_version = bedrock-2023-05-31</text>
+  <text x="56" y="310" fill="#333" font-size="12">clear_thinking edit -&gt; thinking config, cache_control scope/ttl</text>
+  <text x="56" y="328" fill="#333" font-size="12">structured output native or inlined, output_config keys</text>
+  <text x="56" y="346" fill="#333" font-size="12">tool custom/name/schema fixes, context_management edits</text>
+
+  <rect x="40" y="383" width="420" height="58" rx="6" fill="#fff4e5" stroke="#b35c00"/>
+  <text x="56" y="405" fill="#111">request_with_headers (new trait hook)</text>
+  <text x="56" y="425" fill="#555" font-size="12">feature betas + header betas, Bedrock policy -&gt; anthropic_beta</text>
+
+  <rect x="40" y="461" width="420" height="58" rx="6" fill="#fff4e5" stroke="#b35c00"/>
+  <text x="56" y="483" fill="#111">wire_body: top-level allowlist</text>
+  <text x="56" y="503" fill="#555" font-size="12">drops model, stream and Anthropic-only fields</text>
+
+  <rect x="40" y="539" width="420" height="72" rx="6" fill="#eef4fb" stroke="#1f4e79"/>
+  <text x="56" y="561" fill="#111">SigV4 sign (static keys, env chain) or bearer token</text>
+  <text x="56" y="581" fill="#555" font-family="monospace" font-size="12">POST {api_base}/model/{id}/invoke</text>
+  <text x="56" y="599" fill="#555" font-family="monospace" font-size="12">     .../invoke-with-response-stream</text>
+
+  <line x1="250" y1="133" x2="250" y2="151" stroke="#333" marker-end="url(#arrow)"/>
+  <line x1="250" y1="211" x2="250" y2="229" stroke="#333" marker-end="url(#arrow)"/>
+  <line x1="250" y1="363" x2="250" y2="381" stroke="#333" marker-end="url(#arrow)"/>
+  <line x1="250" y1="441" x2="250" y2="459" stroke="#333" marker-end="url(#arrow)"/>
+  <line x1="250" y1="519" x2="250" y2="537" stroke="#333" marker-end="url(#arrow)"/>
+
+  <!-- upstream -->
+  <rect x="540" y="539" width="180" height="72" rx="6" fill="#f2f2f2" stroke="#555"/>
+  <text x="630" y="570" text-anchor="middle" fill="#111" font-weight="bold">Bedrock runtime</text>
+  <text x="630" y="590" text-anchor="middle" fill="#555" font-size="12">(or mockllm)</text>
+  <line x1="460" y1="575" x2="538" y2="575" stroke="#333" marker-end="url(#arrow)"/>
+
+  <!-- response column -->
+  <text x="790" y="62" text-anchor="middle" font-size="14" font-weight="bold" fill="#2e6b30">Response</text>
+
+  <rect x="600" y="75" width="380" height="80" rx="6" fill="#eef7ee" stroke="#2e6b30"/>
+  <text x="616" y="97" fill="#111">Non-streaming: Anthropic message JSON</text>
+  <text x="616" y="117" fill="#555" font-size="12">returned to the client as is</text>
+  <text x="616" y="137" fill="#555" font-size="12">(stream flag read from the typed request)</text>
+
+  <rect x="600" y="175" width="380" height="80" rx="6" fill="#eef7ee" stroke="#2e6b30"/>
+  <text x="616" y="197" fill="#111">Streaming: AWS event-stream frames</text>
+  <text x="616" y="217" fill="#555" font-family="monospace" font-size="12">prelude | :event-type=chunk | {"bytes": b64}</text>
+  <text x="616" y="237" fill="#555" font-size="12">framer AwsEventStreamCodec, base64 + JSON decode</text>
+
+  <rect x="600" y="275" width="380" height="80" rx="6" fill="#eef7ee" stroke="#2e6b30"/>
+  <text x="616" y="297" fill="#111">invocationMetrics -&gt; usage</text>
+  <text x="616" y="317" fill="#555" font-size="12">MessageStopUsagePromoter moves cache usage</text>
+  <text x="616" y="337" fill="#555" font-size="12">from message_stop/start onto message_delta</text>
+
+  <rect x="600" y="375" width="380" height="58" rx="6" fill="#eef7ee" stroke="#2e6b30"/>
+  <text x="616" y="397" fill="#111">Anthropic SSE to the client</text>
+  <text x="616" y="417" fill="#555" font-family="monospace" font-size="12">event: message_start / data: {...}</text>
+
+  <path d="M 720 595 L 990 595 L 990 215 L 983 215" fill="none" stroke="#333" marker-end="url(#arrow)"/>
+  <text x="840" y="588" fill="#555" font-size="12">stream</text>
+  <path d="M 560 539 L 560 115 L 597 115" fill="none" stroke="#333" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
+  <text x="568" y="480" fill="#555" font-size="12">non-stream</text>
+  <line x1="790" y1="255" x2="790" y2="273" stroke="#333" marker-end="url(#arrow)"/>
+  <line x1="790" y1="355" x2="790" y2="373" stroke="#333" marker-end="url(#arrow)"/>
+</svg>

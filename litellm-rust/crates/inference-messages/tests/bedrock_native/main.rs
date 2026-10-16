@@ -321,3 +321,133 @@ async fn deployment_workspace_is_required_and_sent_as_a_header(
     );
     assert_eq!(sent.json().get("workspace_id"), None);
 }
+
+const INVOKE_MODEL: &str = "bedrock/us.anthropic.claude-opus-5-5";
+
+fn signed_invoke_call(call: MessagesCall, base: String, fields: Value) -> MessagesCall {
+    MessagesCall {
+        api_base: Some(base),
+        custom_llm_provider: None,
+        litellm_params: litellm_router_types::LitellmParams {
+            aws: litellm_auth::AwsParams {
+                aws_access_key_id: Some("static-access".into()),
+                aws_secret_access_key: Some("static-secret".into()),
+                aws_region_name: Some("us-east-1".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        provider_specific_header: Some(
+            serde_json::from_value(json!({"custom_llm_provider": "bedrock", "extra_headers": {
+                "anthropic-version": "2023-06-01",
+                "anthropic-beta": "context-1m-2025-08-07,unknown-beta"
+            }}))
+            .unwrap(),
+        ),
+        ..with_fields(with_model(call, INVOKE_MODEL), fields)
+    }
+}
+
+fn aws_event(chunk: &Value) -> Vec<u8> {
+    use aws_smithy_types::event_stream::{Header, HeaderValue, Message};
+    use base64::Engine;
+    let payload =
+        json!({"bytes": base64::engine::general_purpose::STANDARD.encode(chunk.to_string())});
+    let message = Message::new(serde_json::to_vec(&payload).unwrap())
+        .add_header(Header::new(
+            ":event-type",
+            HeaderValue::String("chunk".into()),
+        ))
+        .add_header(Header::new(
+            ":message-type",
+            HeaderValue::String("event".into()),
+        ));
+    let mut wire = Vec::new();
+    aws_smithy_eventstream::frame::write_message_to(&message, &mut wire).unwrap();
+    wire
+}
+
+#[rstest]
+#[tokio::test]
+async fn invoke_sends_a_signed_bedrock_body_and_returns_the_message(call: MessagesCall) {
+    let upstream = upstream([message_response()]).await;
+    let message = run_message(signed_invoke_call(
+        call,
+        upstream.uri(),
+        json!({"metadata": {"user_id": "u1"}, "speed": "fast"}),
+    ))
+    .await;
+    assert_eq!(message.model, MODEL);
+    let request = only_request(&upstream).await;
+    assert_eq!(
+        request.url.path(),
+        "/model/us.anthropic.claude-opus-5-5/invoke"
+    );
+    assert!(
+        request
+            .header("authorization")
+            .unwrap()
+            .starts_with("AWS4-HMAC-SHA256 Credential=static-access/")
+    );
+    assert_eq!(
+        request.json(),
+        json!({
+            "anthropic_version": "bedrock-2023-05-31",
+            "anthropic_beta": ["context-1m-2025-08-07"],
+            "max_tokens": 16,
+            "metadata": {"user_id": "u1"},
+            "messages": [{"role": "user", "content": "hi"}]
+        })
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn invoke_streams_decode_aws_events_into_anthropic_sse(call: MessagesCall) {
+    let chunks = [
+        json!({"type": "message_start", "message": {"id": "msg_1", "type": "message", "role": "assistant", "model": MODEL, "content": [], "stop_reason": null, "stop_sequence": null, "usage": {"input_tokens": 3, "output_tokens": 1}}}),
+        json!({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+        json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}}),
+        json!({"type": "content_block_stop", "index": 0}),
+        json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 2}}),
+        json!({"type": "message_stop", "amazon-bedrock-invocationMetrics": {"inputTokenCount": 3, "outputTokenCount": 2}}),
+    ];
+    let body: Vec<u8> = chunks.iter().flat_map(aws_event).collect();
+    let upstream = upstream([
+        ResponseTemplate::new(200).set_body_raw(body, "application/vnd.amazon.eventstream")
+    ])
+    .await;
+    let response = run(signed_invoke_call(
+        call,
+        upstream.uri(),
+        json!({"stream": true}),
+    ))
+    .await
+    .unwrap();
+    let MessagesCallResponse::Stream { chunks, .. } = response else {
+        panic!("expected SSE");
+    };
+    let sse = String::from_utf8(chunks.try_collect::<Vec<_>>().await.unwrap().concat()).unwrap();
+    let events: Vec<&str> = sse
+        .lines()
+        .filter_map(|line| line.strip_prefix("event: "))
+        .collect();
+    assert_eq!(
+        events,
+        [
+            "message_start",
+            "content_block_start",
+            "content_block_delta",
+            "content_block_stop",
+            "message_delta",
+            "message_stop"
+        ]
+    );
+    assert!(sse.contains(r#""text":"hi""#));
+    let request = only_request(&upstream).await;
+    assert_eq!(
+        request.url.path(),
+        "/model/us.anthropic.claude-opus-5-5/invoke-with-response-stream"
+    );
+    assert_eq!(request.json().get("stream"), None);
+}

@@ -74,6 +74,17 @@ pub trait BaseMessagesConfig: Sync {
         headers
     }
 
+    /// The request once the forwarded headers are final, for a host that reads a header's
+    /// values from the body: Bedrock InvokeModel takes the caller's `anthropic-beta` as the
+    /// body's `anthropic_beta`.
+    fn request_with_headers(
+        &self,
+        request: MessagesRequest,
+        _headers: &Headers,
+    ) -> MessagesRequest {
+        request
+    }
+
     /// The JSON that goes on the wire, for a host whose body differs from the typed request:
     /// Python's configs `pop("model")` when the model is addressed by the URL.
     fn wire_body(&self, body: Value) -> Value {

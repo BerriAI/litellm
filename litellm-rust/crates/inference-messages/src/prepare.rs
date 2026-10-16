@@ -103,6 +103,7 @@ fn prepare_provider_request(
         with_default_headers(forwarded, config.default_headers()),
         &transformed,
     );
+    let transformed = config.request_with_headers(transformed, &forwarded);
     let environment = config.validate_environment(
         forwarded,
         api_key.as_deref(),

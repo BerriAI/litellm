@@ -149,6 +149,8 @@ mod tests {
                 supports_sampling_params: false,
                 supports_speed: true,
                 supports_mid_conversation_system: false,
+                supports_prompt_cache_ttl: false,
+                supports_native_structured_output: false,
                 effort_tiers: SupportedEffortTiers {
                     minimal: false,
                     low: true,

@@ -27,7 +27,7 @@ func main() {
 	chatModel := flag.String("chat-model", "gpt-6-astra", "upstream model for chat deployments; groups are named <model>-0, <model>-1, ...")
 	messagesModel := flag.String("messages-model", "claude-opus-5-5", "upstream model for messages deployments; groups are named <model>-0, ...")
 	bedrockModel := flag.String("bedrock-model", "us.anthropic.claude-opus-5-5", "Bedrock model id for the Bedrock share of messages deployments")
-	bedrockFraction := flag.Float64("bedrock-fraction", 0, "share of each messages group's deployments served through Bedrock instead of Anthropic (0.5 once the gateway shapes Bedrock invoke requests)")
+	bedrockFraction := flag.Float64("bedrock-fraction", 0.5, "share of each messages group's deployments served through Bedrock invoke (SigV4-signed, AWS event-stream responses) instead of the Anthropic API; 0 for Anthropic only")
 	chatGroups := flag.Int("chat-groups", 4, "chat model groups")
 	messagesGroups := flag.Int("messages-groups", 4, "messages model groups")
 	deployments := flag.Int("deployments", 4, "deployments per model group")
@@ -50,6 +50,14 @@ func main() {
 			group, model, apiBase)
 		n++
 	}
+	// Bedrock deployments carry static AWS keys instead of an api_key (which Bedrock reads as a
+	// bearer token), so every request goes through SigV4 signing as it does with IAM credentials.
+	bedrockDeployment := func(group, id, model, apiBase string) {
+		fmt.Fprintf(&cfg, "  - model_name: %s\n    litellm_params:\n      model: %s\n      api_base: %s\n"+
+			"      aws_access_key_id: mock-loadtest-access-key\n      aws_secret_access_key: mock-loadtest-secret\n      aws_region_name: us-east-1\n",
+			group, model, apiBase)
+		n++
+	}
 	for g := range *chatGroups {
 		for i := range *deployments {
 			base := strings.TrimRight(bases[n%len(bases)], "/")
@@ -64,7 +72,7 @@ func main() {
 			group := fmt.Sprintf("%s-%d", *messagesModel, g)
 			if i < bedrockPerGroup {
 				id := fmt.Sprintf("bedrock-%d-%d", g, i)
-				deployment(group, id, "bedrock/"+*bedrockModel, fmt.Sprintf("%s/d/%s", base, id))
+				bedrockDeployment(group, id, "bedrock/"+*bedrockModel, fmt.Sprintf("%s/d/%s", base, id))
 				continue
 			}
 			id := fmt.Sprintf("msg-%d-%d", g, i)

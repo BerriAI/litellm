@@ -87,15 +87,19 @@ gateway samples and mock hit counts, and prints the summary.
   `LITELLM_UNREADY_DELAY_SECONDS` (default 0), then open requests and streams get up to
   `LITELLM_DRAIN_SECONDS` (default 900, the NLB deregistration delay) to finish
 
+## Bedrock deployments
+
+`genconfig` serves half of each messages group through Bedrock invoke by default
+(`-bedrock-fraction 0.5`, `bedrock_fraction` in Terraform; 0 for Anthropic only). Those deployments
+carry static dummy AWS keys, so every request is SigV4-signed, and mockllm answers
+`/model/<id>/invoke` and `/invoke-with-response-stream` with AWS event-stream framing that the
+gateway re-encodes as Anthropic SSE. Bedrock hits show up as `bedrock-<g>-<i>` in the mock's `/stats`.
+
 ## Until the gateway gains these features
 
 - Virtual keys: the Rust gateway only accepts the master key today, so pass `-key sk-loadtest-master`
   (`KEY=` for `cloud-run.sh`). Once keys are read from Postgres, drop it and set `create_postgres`.
 - `/v1/messages` auth: `-messages-auth x-api-key` sends the key the way the Anthropic SDK does.
   The gateway reads only `Authorization: Bearer` today.
-- Bedrock: `/v1/messages` to a `bedrock/` deployment returns 501 ("Bedrock invoke messages request
-  shaping" is unimplemented in Rust). mockllm already serves Bedrock's `/invoke` and
-  `/invoke-with-response-stream` (AWS event-stream framing), so set `-bedrock-fraction 0.5`
-  (`bedrock_fraction` in Terraform) once that lands.
 - Routing: deployments sharing a model name overwrite each other, so all of a group's traffic goes
   to its last deployment (visible in the mock's `/stats`).

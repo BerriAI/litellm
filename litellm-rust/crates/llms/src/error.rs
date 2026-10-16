@@ -60,6 +60,15 @@ pub enum ErrorDetail {
         value: String,
         hint: String,
     },
+    #[error(
+        "{provider} does not support the server-side tool '{tool}' (model '{model}'). {guidance}"
+    )]
+    UnsupportedTool {
+        provider: &'static str,
+        tool: String,
+        model: String,
+        guidance: &'static str,
+    },
     #[error("invalid {subject} on line {line}: {source}")]
     InvalidLine {
         subject: &'static str,

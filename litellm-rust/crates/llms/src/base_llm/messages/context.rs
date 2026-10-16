@@ -41,6 +41,13 @@ pub struct MessagesModelCapabilities {
     pub supports_speed: bool,
     #[serde(default)]
     pub supports_mid_conversation_system: bool,
+    /// Bedrock accepts `cache_control.ttl` ("5m"/"1h") for the model; Python reads it from
+    /// `cache_creation_input_token_cost_above_1hr` in the model map.
+    #[serde(default)]
+    pub supports_prompt_cache_ttl: bool,
+    /// Bedrock enforces `output_config.format` for the model; otherwise the schema is inlined.
+    #[serde(default)]
+    pub supports_native_structured_output: bool,
     #[serde(default)]
     pub effort_tiers: SupportedEffortTiers,
 }
@@ -60,6 +67,8 @@ impl Default for MessagesModelCapabilities {
             supports_sampling_params: true,
             supports_speed: false,
             supports_mid_conversation_system: false,
+            supports_prompt_cache_ttl: false,
+            supports_native_structured_output: false,
             effort_tiers: SupportedEffortTiers::default(),
         }
     }

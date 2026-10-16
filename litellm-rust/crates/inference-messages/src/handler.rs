@@ -51,6 +51,9 @@ impl MessagesRoute {
             timeout,
             api_key,
         } = request;
+        // A host that addresses streaming by URL (Bedrock's invoke-with-response-stream) drops
+        // `stream` from the wire body, so the typed request decides unless the body says so.
+        let requested_stream = body.params.stream == Some(true);
         let request_context = RequestContext {
             model: body.model.clone(),
             custom_llm_provider: provider.as_str().to_string(),
@@ -78,7 +81,8 @@ impl MessagesRoute {
             )
             .await?;
         let stream = match wire.body.get("stream") {
-            None | Some(Value::Null) => false,
+            None => requested_stream,
+            Some(Value::Null) => false,
             Some(Value::Bool(stream)) => *stream,
             Some(value) => {
                 return Err(Error::InvalidRequest(

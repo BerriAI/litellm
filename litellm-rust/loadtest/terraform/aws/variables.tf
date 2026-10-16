@@ -81,9 +81,9 @@ variable "messages_model" {
 }
 
 variable "bedrock_fraction" {
-  description = "Share of each Opus group's deployments served through Bedrock. Raise to 0.5 once the Rust gateway shapes Bedrock invoke requests (it returns 501 today)."
+  description = "Share of each Opus group's deployments served through Bedrock invoke instead of the Anthropic API (0 for Anthropic only)."
   type        = number
-  default     = 0
+  default     = 0.5
 }
 
 variable "chat_groups" {
