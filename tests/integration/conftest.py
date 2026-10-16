@@ -25,6 +25,7 @@ from tests.integration._support.manifest import OWNED_DIRECTORIES
 from tests.integration._support.ordering import collected_case, fixture_groups, scheduling_groups
 from tests.integration._support.provider import SharedProvider, shared_provider
 from tests.integration._support.routing import RoutingPlugin
+from tests.integration._support.sdk_models import build_sdk_models
 from tests.integration._support.workers import gateway_profile, start_worker_stacks, worker_stack
 from tests.integration.run import GITHUB_FILES
 
@@ -70,6 +71,7 @@ def pytest_configure(config: pytest.Config) -> None:
     config.stash[REPORTS] = []
     config.stash[SHARD_FILES] = _shard_files(SHARD_PATH.validate_python(config.getoption("integration_shard_files")))
     config.pluginmanager.register(IntegrationReportPlugin(config))
+    build_sdk_models()
     if os.environ.get("INTEGRATION_ROUTING"):
         config.pluginmanager.register(RoutingPlugin(config))
 
