@@ -54,6 +54,7 @@ _CUSTOM_INPUT_RATE: Final = 2e-06
 _CUSTOM_OUTPUT_RATE: Final = 4e-05
 _ENV_KEY: Final = "integration-gemini-env-key"
 _DEPLOYMENT_KEY: Final = "integration-gemini-deployment-key"
+_DATABASE_DEPLOYMENT_KEY: Final = "integration-gemini-database-deployment-key"
 _CREATOR_POLL: Final = {"BACKGROUND_INTERACTION_COST_POLL_INITIAL_INTERVAL_SECONDS": "300"}
 _SETTLER_POLL: Final = {
     "BACKGROUND_INTERACTION_COST_POLL_INITIAL_INTERVAL_SECONDS": "1",
@@ -65,6 +66,7 @@ _RESUMER_POLL: Final = {
     "BACKGROUND_INTERACTION_COST_POLL_MAX_INTERVAL_SECONDS": "1",
     "BACKGROUND_INTERACTION_COST_POLL_TIMEOUT_SECONDS": "120",
 }
+_EAGER_RESUMER_POLL: Final = {**_RESUMER_POLL, "BACKGROUND_INTERACTION_COST_POLL_INITIAL_INTERVAL_SECONDS": "0.01"}
 _SPEND_QUERY: Final = (
     "SELECT request_id, spend, call_type, status, model, prompt_tokens, completion_tokens "
     'FROM "LiteLLM_SpendLogs" WHERE request_id = %s'
@@ -463,6 +465,21 @@ def test_a_replica_booting_later_resumes_and_bills_unclaimed_interactions(rig: R
         assert {key for _, key in _calls(rig, *created)} == {_DEPLOYMENT_KEY}
         for item in created:
             assert len(_spend_rows(item)) == 1
+
+
+def test_a_replica_booting_later_resumes_a_database_model_with_its_own_key(rig: Rig) -> None:
+    with rig.creator.scenario() as scenario:
+        model: Final = scenario.model(
+            model=_MODEL, api_key=_DATABASE_DEPLOYMENT_KEY, api_base=f"{rig.upstream.url}/{rig.models.in_progress}"
+        )
+        created: Final = _create(rig.creator, model, scenario.key())
+        _state(rig, created, _completed())
+        with owned_proxy_process(
+            rig.gateway, rig.directory, rig.environment(**_EAGER_RESUMER_POLL), config=rig.config, workers=2
+        ):
+            _await_spend_row(created, seconds=90)
+            _await_outcome(created, "billed")
+        assert {key for _, key in _calls(rig, created)} == {_DATABASE_DEPLOYMENT_KEY}
 
 
 def test_deletes_on_the_creating_proxy_bill_each_interaction_once(rig: Rig) -> None:
