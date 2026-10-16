@@ -5,7 +5,7 @@ Utils used for litellm.transcription() and litellm.atranscription()
 import hashlib
 import os
 from dataclasses import dataclass
-from typing import Final
+from typing import BinaryIO, Final
 
 from litellm.types.files import (
     AUDIO_FILE_TYPES,
@@ -244,7 +244,7 @@ def get_audio_file_content_hash(file_obj: FileTypes) -> str:
     return hash_object.hexdigest()
 
 
-def get_audio_file_for_health_check() -> FileTypes:
+def get_audio_file_for_health_check() -> BinaryIO:
     """
     Get an audio file for health check
 

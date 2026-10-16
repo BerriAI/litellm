@@ -48,6 +48,33 @@ def _distinct_rgb_colors(png: bytes) -> set[bytes]:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("raises", [False, True])
+async def test_audio_transcription_health_check_closes_file(raises: bool):
+    async def transcription(**kwargs):
+        file = kwargs["file"]
+        assert not file.closed
+        assert file.read(4) == b"RIFF"
+        if raises:
+            raise RuntimeError("transcription failed")
+        return {"text": "healthy"}
+
+    handlers = HealthCheckHelpers.get_mode_handlers(
+        model="whisper-1",
+        custom_llm_provider="openai",
+        model_params={"model": "openai/whisper-1", "api_key": "sk-test"},
+    )
+    with patch("litellm.atranscription", side_effect=transcription) as mock_transcription:
+        if raises:
+            with pytest.raises(RuntimeError, match="transcription failed"):
+                await handlers["audio_transcription"]()
+        else:
+            assert await handlers["audio_transcription"]() == {"text": "healthy"}
+
+    mock_transcription.assert_called_once()
+    assert mock_transcription.call_args.kwargs["file"].closed
+
+
+@pytest.mark.asyncio
 async def test_image_edit_health_check_handler_uses_descriptive_prompt_and_multicolor_png():
     model_params = {"model": "openai/gpt-image-1", "api_key": "sk-test"}
     mode_handlers = HealthCheckHelpers.get_mode_handlers(
