@@ -225,17 +225,21 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
                 model=model,
                 output_config=filtered_params["output_config"],
             )
-        filtered_params = self._normalize_bedrock_tool_search_tools(filtered_params)
-        if "max_tokens" not in filtered_params:
-            filtered_params["max_tokens"] = AnthropicConfig.get_config(model=BedrockModelInfo.get_base_model(model))[
-                "max_tokens"
-            ]
+        normalized_params: Final = self._normalize_bedrock_tool_search_tools(filtered_params)
+        request_params: Final = (
+            normalized_params
+            if "max_tokens" in normalized_params
+            else {
+                **normalized_params,
+                "max_tokens": AnthropicConfig.get_config(model=BedrockModelInfo.get_base_model(model))["max_tokens"],
+            }
+        )
 
         anthropic_request: Final = AnthropicConfig.transform_request(
             self,
             model=model,
             messages=messages,
-            optional_params=filtered_params,
+            optional_params=request_params,
             litellm_params=litellm_params,
             headers=headers,
         )
