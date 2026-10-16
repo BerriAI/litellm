@@ -84,7 +84,7 @@ _FAMILIES: Final = (
     _Family("pin-bedrock-converse-1h", "pin-bedrock-converse-1h", one_hour=True, wire_one_hour=True),
     _Family("pin-bedrock-converse-5m", "pin-bedrock-converse-5m", one_hour=False, wire_one_hour=False),
     _Family("pin-bedrock-invoke-1h", "pin-bedrock-invoke-1h", one_hour=True, wire_one_hour=True),
-    _Family("pin-bedrock-arn-base", "pin-bedrock-arn-base", one_hour=False, wire_one_hour=False),
+    _Family("pin-bedrock-arn-base", "pin-bedrock-arn-base", one_hour=True, wire_one_hour=True),
     _Family("pin-bedrock-arn", "pin-bedrock-arn", one_hour=False, wire_one_hour=False),
     _Family("pin-azure-ai", "pin-azure-ai", one_hour=True, wire_one_hour=True),
     _Family("pin-vertex", "pin-vertex", one_hour=True, wire_one_hour=True),
