@@ -236,6 +236,7 @@ describe("AgentBuilderView", () => {
     const snippet = await screen.findByTestId("code-block");
     expect(snippet).toHaveTextContent("https://proxy.example.com/v1/chat/completions");
     expect(snippet).toHaveTextContent('"model": "support-agent"');
+    expect(snippet).toHaveTextContent("x-litellm-api-key: Bearer <your-master-key>");
   });
 
   it("mints a key scoped to the selected agent", async () => {

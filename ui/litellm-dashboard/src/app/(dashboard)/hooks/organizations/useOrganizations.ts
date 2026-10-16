@@ -11,9 +11,10 @@ export interface OrganizationListFilters {
 }
 
 export const useOrganizations = (filters?: OrganizationListFilters): UseQueryResult<Organization[]> => {
-  const { accessToken, userId, userRole } = useAuthorized();
+  const { accessToken, userId, userRole, premiumUser } = useAuthorized();
   const orgId = filters?.org_id || null;
   const orgAlias = filters?.org_alias || null;
+  const hasSession = Boolean(accessToken && userId && userRole);
   return useQuery<Organization[]>({
     queryKey: organizationKeys.list(
       orgId || orgAlias
@@ -21,16 +22,16 @@ export const useOrganizations = (filters?: OrganizationListFilters): UseQueryRes
         : {},
     ),
     queryFn: async () => await organizationListCall(accessToken!, orgId, orgAlias),
-    enabled: Boolean(accessToken && userId && userRole),
+    enabled: hasSession && premiumUser === true,
   });
 };
 
 export const useOrganization = (organizationID?: string) => {
   const queryClient = useQueryClient();
-  const { accessToken } = useAuthorized();
+  const { accessToken, premiumUser } = useAuthorized();
   return useQuery<Organization>({
     queryKey: organizationKeys.detail(organizationID!),
-    enabled: Boolean(accessToken && organizationID),
+    enabled: Boolean(accessToken && organizationID) && premiumUser === true,
 
     queryFn: async () => {
       if (!accessToken || !organizationID) {

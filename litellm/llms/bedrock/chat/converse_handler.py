@@ -1,7 +1,6 @@
 import json
-from collections.abc import Mapping
-from types import MappingProxyType
-from typing import Any, Final
+from collections.abc import Iterator
+from typing import Final
 
 import httpx
 
@@ -9,43 +8,20 @@ import litellm
 from litellm.anthropic_beta_headers_manager import (
     update_headers_with_filtered_beta,
 )
+from litellm.litellm_core_utils.get_litellm_params import stored_control_options
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
-from litellm.rust_bridge import chat_completions as rust_chat_completions_bridge
-from litellm.rust_bridge.chat_completions import rust_chat_completions_accepts
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 
-from ..base_aws_llm import BaseAWSLLM, Credentials, bedrock_bearer_token
-from ..common_utils import BedrockError, _get_all_bedrock_regions, error_response_text
+from ..base_aws_llm import BaseAWSLLM, Credentials, bedrock_bearer_token, pop_aws_auth_params, run_aws_signing
+from ..common_utils import BedrockError, error_response_text, get_all_bedrock_regions
 from .invoke_handler import AWSEventStreamDecoder, MockResponseIterator, make_call
-
-
-def _rust_bearer_api_key(api_key: str | None, credentials: Credentials | None) -> str | None:
-    if credentials is None:
-        return api_key
-    return ""
-
-
-def _sigv4_principal(credentials: Credentials | None) -> Mapping[str, str]:
-    if credentials is None:
-        return MappingProxyType({})
-    return MappingProxyType(
-        {
-            key: value
-            for key, value in (
-                ("aws_access_key_id", credentials.access_key),
-                ("aws_secret_access_key", credentials.secret_key),
-                ("aws_session_token", credentials.token),
-            )
-            if value is not None
-        }
-    )
 
 
 def make_sync_call(
@@ -59,9 +35,10 @@ def make_sync_call(
     json_mode: bool | None = False,
     fake_stream: bool = False,
     stream_chunk_size: int | None = None,
-) -> tuple[Any, httpx.Headers]:
+    timeout: float | httpx.Timeout | None = None,
+) -> tuple[MockResponseIterator | Iterator[object], httpx.Headers]:
     if client is None:
-        client = _get_httpx_client()  # Create a new client if none provided
+        client = get_httpx_client()  # Create a new client if none provided
 
     response: Final = client.post(
         api_base,
@@ -69,6 +46,7 @@ def make_sync_call(
         data=data,
         stream=not fake_stream,
         logging_obj=logging_obj,
+        timeout=timeout,
     )
 
     if response.status_code != 200:
@@ -92,10 +70,14 @@ def make_sync_call(
             messages=messages,
             encoding=litellm.encoding,
         )
-        completion_stream: Any = MockResponseIterator(model_response=model_response, json_mode=json_mode)
+        completion_stream: MockResponseIterator | Iterator[object] = MockResponseIterator(
+            model_response=model_response, json_mode=json_mode
+        )
     else:
         decoder: Final = AWSEventStreamDecoder(model=model, json_mode=json_mode)
-        completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=stream_chunk_size))
+        completion_stream = decoder.iter_bytes(
+            response.iter_bytes(chunk_size=stream_chunk_size), response_headers=response.headers
+        )
 
     # LOGGING
     logging_obj.post_call(
@@ -142,7 +124,8 @@ class BedrockConverseLLM(BaseAWSLLM):
         )
         data: Final = json.dumps(request_data)
 
-        prepped: Final = self.get_request_headers(
+        prepped: Final = await run_aws_signing(
+            self.get_request_headers,
             credentials=credentials,
             aws_region_name=litellm_params.get("aws_region_name") or "us-west-2",
             extra_headers=headers,
@@ -174,6 +157,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             fake_stream=fake_stream,
             json_mode=json_mode,
             stream_chunk_size=stream_chunk_size,
+            timeout=timeout,
         )
         streaming_response: Final = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -212,7 +196,8 @@ class BedrockConverseLLM(BaseAWSLLM):
         )
         data: Final = json.dumps(request_data)
 
-        prepped: Final = self.get_request_headers(
+        prepped: Final = await run_aws_signing(
+            self.get_request_headers,
             credentials=credentials,
             aws_region_name=litellm_params.get("aws_region_name") or "us-west-2",
             extra_headers=headers,
@@ -302,7 +287,7 @@ class BedrockConverseLLM(BaseAWSLLM):
     ):
         ## SETUP ##
         stream: Final = optional_params.pop("stream", None)
-        stream_chunk_size: Final = optional_params.pop("stream_chunk_size", None)
+        stream_chunk_size: Final = stored_control_options(litellm_params).stream_chunk_size if stream is True else None
         unencoded_model_id: Final = optional_params.pop("model_id", None)
         fake_stream = optional_params.pop("fake_stream", False)
         json_mode: Final = optional_params.get("json_mode", False)
@@ -320,7 +305,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             # and capture it so it can be used as aws_region_name below.
             _region_from_model: str | None = None
             _potential_region: Final = _stripped.split("/", 1)[0]
-            if _potential_region in _get_all_bedrock_regions() and "/" in _stripped:
+            if _potential_region in get_all_bedrock_regions() and "/" in _stripped:
                 _region_from_model = _potential_region
                 _stripped = _stripped.split("/", 1)[1]
                 _model_for_id = _stripped
@@ -347,40 +332,15 @@ class BedrockConverseLLM(BaseAWSLLM):
             model_id=unencoded_model_id,
         )
 
-        ## CREDENTIALS ##
-        aws_bearer_token: Final = bedrock_bearer_token(api_key, optional_params)
-        # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
-        aws_secret_access_key: Final = optional_params.pop("aws_secret_access_key", None)
-        aws_access_key_id: Final = optional_params.pop("aws_access_key_id", None)
-        aws_session_token: Final = optional_params.pop("aws_session_token", None)
-        aws_role_name: Final = optional_params.pop("aws_role_name", None)
-        aws_session_name: Final = optional_params.pop("aws_session_name", None)
-        aws_profile_name: Final = optional_params.pop("aws_profile_name", None)
-        aws_bedrock_runtime_endpoint: Final = optional_params.pop(
-            "aws_bedrock_runtime_endpoint", None
-        )  # https://bedrock-runtime.{region_name}.amazonaws.com
-        aws_web_identity_token: Final = optional_params.pop("aws_web_identity_token", None)
-        aws_sts_endpoint: Final = optional_params.pop("aws_sts_endpoint", None)
-        aws_external_id: Final = optional_params.pop("aws_external_id", None)
+        auth_params: Final = pop_aws_auth_params(optional_params)
+        aws_bearer_token: Final = bedrock_bearer_token(api_key, auth_params)
+        aws_bedrock_runtime_endpoint: Final = optional_params.pop("aws_bedrock_runtime_endpoint", None)
         optional_params.pop("aws_region_name", None)
 
         litellm_params["aws_region_name"] = aws_region_name  # [DO NOT DELETE] important for async calls
 
         credentials: Final[Credentials | None] = (
-            None
-            if aws_bearer_token is not None
-            else self.get_credentials(
-                aws_access_key_id=aws_access_key_id,
-                aws_secret_access_key=aws_secret_access_key,
-                aws_session_token=aws_session_token,
-                aws_region_name=aws_region_name,
-                aws_session_name=aws_session_name,
-                aws_profile_name=aws_profile_name,
-                aws_role_name=aws_role_name,
-                aws_web_identity_token=aws_web_identity_token,
-                aws_sts_endpoint=aws_sts_endpoint,
-                aws_external_id=aws_external_id,
-            )
+            None if aws_bearer_token is not None else self.resolve_credentials(auth_params, aws_region_name)
         )
 
         ### SET RUNTIME ENDPOINT ###
@@ -403,89 +363,6 @@ class BedrockConverseLLM(BaseAWSLLM):
 
         # Filter beta headers in HTTP headers before making the request
         headers = update_headers_with_filtered_beta(headers=headers, provider="bedrock_converse")
-
-        # The Rust core owns the whole call for the subset it accepts. Ask
-        # before transforming so whichever path runs emits pre_call once, and
-        # hand down the credentials, region and endpoint this handler already
-        # resolved so both paths sign as the same principal. Bearer-token auth
-        # resolves no SigV4 principal at all, and each path reads that token
-        # itself; a resolved principal travels with an empty api_key so the
-        # core signs with it instead of reaching for the env bearer token.
-        rust_optional_params: Final = {  # mutable-ok: json.dumps in the bridge rejects a mappingproxy
-            **optional_params,
-            **_sigv4_principal(credentials),
-            "aws_region_name": aws_region_name,
-        }
-        rust_api_key: Final = _rust_bearer_api_key(api_key, credentials)
-        serves_via_rust: Final = rust_chat_completions_accepts(
-            model=model,
-            messages=messages,
-            optional_params=rust_optional_params,
-            custom_llm_provider="bedrock",
-            litellm_params=litellm_params,
-            stream=stream,
-        )
-        if serves_via_rust:
-            rust_logging_args: Final = {  # mutable-ok: logging callbacks read additional_args as a plain dict
-                "complete_input_dict": {  # mutable-ok: same, and it is serialized alongside its parent
-                    "messages": messages,
-                    **optional_params,
-                },
-                "api_base": proxy_endpoint_url,
-                "headers": headers,
-            }
-            logging_obj.pre_call(input=messages, api_key="", additional_args=rust_logging_args)
-            log_rust_post_call: Final = rust_chat_completions_bridge.response_logger(
-                logging_obj=logging_obj,
-                messages=messages,
-                api_key="",
-                additional_args=rust_logging_args,
-            )
-            if acompletion:
-                return rust_chat_completions_bridge.achat_completions_or_fallback(
-                    model=model,
-                    messages=messages,
-                    optional_params=rust_optional_params,
-                    model_response=model_response,
-                    api_key=rust_api_key,
-                    api_base=proxy_endpoint_url,
-                    custom_llm_provider="bedrock",
-                    extra_headers=headers,
-                    timeout=timeout,
-                    on_response=log_rust_post_call,
-                    python_fallback=lambda: self.async_completion(
-                        model=model,
-                        messages=messages,
-                        api_base=proxy_endpoint_url,
-                        model_response=model_response,
-                        encoding=encoding,
-                        logging_obj=logging_obj,
-                        optional_params=optional_params,
-                        stream=stream,
-                        litellm_params=litellm_params,
-                        logger_fn=logger_fn,
-                        headers=headers,
-                        timeout=timeout,
-                        client=client,
-                        credentials=credentials,
-                        api_key=api_key,
-                        skip_pre_call_logging=True,
-                    ),
-                )
-            rust_response: Final = rust_chat_completions_bridge.chat_completions(
-                model=model,
-                messages=messages,
-                optional_params=rust_optional_params,
-                model_response=model_response,
-                api_key=rust_api_key,
-                api_base=proxy_endpoint_url,
-                custom_llm_provider="bedrock",
-                extra_headers=headers,
-                timeout=timeout,
-                on_response=log_rust_post_call,
-            )
-            if rust_response is not None:
-                return rust_response
 
         ### ROUTING (ASYNC, STREAMING, SYNC)
         if acompletion:
@@ -553,28 +430,22 @@ class BedrockConverseLLM(BaseAWSLLM):
         )
 
         ## LOGGING
-        # Reaching here with `serves_via_rust` set means the synchronous Rust
-        # attempt declined at call time, before the provider was called, and
-        # already logged this request. That is the same attempt continuing.
-        # The asynchronous branch above returns before this point, and hands
-        # its own fallback `skip_pre_call_logging=True` for the same reason.
-        if not serves_via_rust:
-            logging_obj.pre_call(
-                input=messages,
-                api_key="",
-                additional_args={
-                    "complete_input_dict": data,
-                    "api_base": proxy_endpoint_url,
-                    "headers": prepped.headers,
-                },
-            )
+        logging_obj.pre_call(
+            input=messages,
+            api_key="",
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": proxy_endpoint_url,
+                "headers": prepped.headers,
+            },
+        )
         if client is None or isinstance(client, AsyncHTTPHandler):
             _params: Final = {}
             if timeout is not None:
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     timeout = httpx.Timeout(timeout)
                 _params["timeout"] = timeout
-            client = _get_httpx_client(_params)
+            client = get_httpx_client(_params)
         else:
             client = client
 
@@ -590,6 +461,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 json_mode=json_mode,
                 fake_stream=fake_stream,
                 stream_chunk_size=stream_chunk_size,
+                timeout=timeout,
             )
             streaming_response: Final = CustomStreamWrapper(
                 completion_stream=completion_stream,

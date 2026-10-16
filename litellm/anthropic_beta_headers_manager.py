@@ -29,7 +29,7 @@ from typing import Final
 
 import httpx
 
-from litellm.litellm_core_utils.litellm_logging import verbose_logger
+from litellm._logging import verbose_logger
 
 # Cache for the loaded configuration
 _BETA_HEADERS_CONFIG: dict | None = None
@@ -334,7 +334,7 @@ def update_headers_with_filtered_beta(
         Updated headers dict
     """
     existing_beta: Final = headers.get("anthropic-beta")
-    if not existing_beta:
+    if existing_beta is None:
         return headers
 
     # Parse existing beta headers

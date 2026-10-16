@@ -1,0 +1,475 @@
+# stdlib imports
+import json
+import os
+import sys
+from pathlib import Path
+from typing import Final
+from unittest.mock import Mock, patch
+
+import pytest
+from click.testing import CliRunner
+
+import litellm.proxy.client.cli
+from litellm._version import version as litellm_version
+from litellm.proxy.client.cli import cli, litellm_proxy_cli
+from litellm.proxy.client.cli.main import LITELLM_PROXY_DEPRECATION_NOTICE
+
+
+@pytest.fixture
+def cli_runner():
+    return CliRunner()
+
+
+def test_cli_version_flag(cli_runner):
+    """Test that --version prints the correct version, server URL, and server version, and exits successfully"""
+    with (
+        patch(
+            "litellm.proxy.client.health.HealthManagementClient.get_server_version",
+            return_value="1.2.3",
+        ),
+        patch.dict(os.environ, {"LITELLM_PROXY_URL": "http://localhost:4000"}),
+    ):
+        result = cli_runner.invoke(cli, ["--version"])
+    assert result.exit_code == 0
+    assert f"LiteLLM Proxy CLI Version: {litellm_version}" in result.output
+    assert "LiteLLM Proxy Server URL: http://localhost:4000" in result.output
+    assert "LiteLLM Proxy Server Version: 1.2.3" in result.output
+
+
+def test_cli_source_is_ascii_only():
+    """Non-ASCII output (emoji, box-drawing chars) raises UnicodeEncodeError on legacy Windows
+    consoles (cp1252), so the whole CLI package must stay ASCII-only."""
+    cli_root = Path(litellm.proxy.client.cli.__file__).parent
+    offenders = [
+        f"{path.relative_to(cli_root)}:{line_number}: {line.strip()}"
+        for path in sorted(cli_root.rglob("*.py"))
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1)
+        if not line.isascii()
+    ]
+    assert offenders == []
+
+
+def test_base_url_trailing_slash_normalized(cli_runner):
+    """A trailing slash on --base-url must not produce a double slash (e.g. '//sso/cli/start')."""
+    with (
+        patch("webbrowser.open"),
+        patch(
+            "requests.post",
+            return_value=Mock(
+                status_code=200,
+                json=Mock(
+                    return_value={
+                        "login_id": "cli-test-uuid",
+                        "poll_secret": "poll-secret",
+                        "user_code": "ABCD-EFGH",
+                    }
+                ),
+                raise_for_status=Mock(),
+            ),
+        ) as mock_post,
+        patch("requests.get", side_effect=ValueError("stop after start request")),
+    ):
+        cli_runner.invoke(cli, ["--base-url", "https://gateway.example.com/", "login"])
+
+    mock_post.assert_called_once_with("https://gateway.example.com/sso/cli/start", timeout=10)
+
+
+def test_cli_version_command(cli_runner):
+    """Test that 'version' command prints the correct version, server URL, and server version, and exits successfully"""
+    with (
+        patch(
+            "litellm.proxy.client.health.HealthManagementClient.get_server_version",
+            return_value="1.2.3",
+        ),
+        patch.dict(os.environ, {"LITELLM_PROXY_URL": "http://localhost:4000"}),
+    ):
+        result = cli_runner.invoke(cli, ["version"])
+    assert result.exit_code == 0
+    assert f"LiteLLM Proxy CLI Version: {litellm_version}" in result.output
+    assert "LiteLLM Proxy Server URL: http://localhost:4000" in result.output
+    assert "LiteLLM Proxy Server Version: 1.2.3" in result.output
+
+
+@pytest.fixture
+def isolated_home(monkeypatch, tmp_path):
+    """Point HOME at tmp_path so tests never touch the developer's real ~/.litellm."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.delenv("LITELLM_PROXY_URL", raising=False)
+    monkeypatch.delenv("LITELLM_PROXY_API_KEY", raising=False)
+    return tmp_path
+
+
+def _write_config_file(home: Path, config: dict[str, str]) -> None:
+    config_dir = home / ".litellm"
+    config_dir.mkdir(exist_ok=True)
+    (config_dir / "config.json").write_text(json.dumps(config))
+
+
+def _invoke_version(cli_runner: CliRunner, *args: str):
+    with patch(
+        "litellm.proxy.client.health.HealthManagementClient.get_server_version",
+        return_value="1.2.3",
+    ):
+        return cli_runner.invoke(cli, [*args, "version"])
+
+
+def test_base_url_read_from_config_file(cli_runner, isolated_home):
+    """base_url precedence: flag > env > config file > default."""
+    _write_config_file(isolated_home, {"base_url": "https://config-proxy.example.com"})
+
+    result = _invoke_version(cli_runner)
+
+    assert result.exit_code == 0
+    assert "LiteLLM Proxy Server URL: https://config-proxy.example.com" in result.output
+
+
+def test_env_var_beats_config_file_base_url(cli_runner, isolated_home, monkeypatch):
+    _write_config_file(isolated_home, {"base_url": "https://config-proxy.example.com"})
+    monkeypatch.setenv("LITELLM_PROXY_URL", "http://env-proxy.example.com:5000")
+
+    result = _invoke_version(cli_runner)
+
+    assert result.exit_code == 0
+    assert "LiteLLM Proxy Server URL: http://env-proxy.example.com:5000" in result.output
+
+
+def test_base_url_flag_beats_env_var_and_config_file(cli_runner, isolated_home, monkeypatch):
+    _write_config_file(isolated_home, {"base_url": "https://config-proxy.example.com"})
+    monkeypatch.setenv("LITELLM_PROXY_URL", "http://env-proxy.example.com:5000")
+
+    result = _invoke_version(cli_runner, "--base-url", "http://flag-proxy.example.com:9000")
+
+    assert result.exit_code == 0
+    assert "LiteLLM Proxy Server URL: http://flag-proxy.example.com:9000" in result.output
+
+
+def test_default_base_url_unchanged_without_config_file(cli_runner, isolated_home):
+    result = _invoke_version(cli_runner)
+
+    assert result.exit_code == 0
+    assert "LiteLLM Proxy Server URL: http://localhost:4000" in result.output
+
+
+def _write_login_token(home: Path, base_url: str, key: str | None) -> None:
+    token_dir = home / ".litellm"
+    token_dir.mkdir(exist_ok=True)
+    secret: Final = {} if key is None else {"key": key}
+    (token_dir / "token.json").write_text(json.dumps({"base_url": base_url, "user_id": "u-1", **secret}))
+
+
+LOGIN_SERVER: Final = "https://login-gateway.example.com"
+SHELL_VERSION_THEN_QUIT: Final = "version\nquit\n"
+
+
+def test_bare_lite_connects_to_the_server_it_logged_in_to(cli_runner, isolated_home, requests_mock, secret_vault_factory):
+    _write_login_token(isolated_home, LOGIN_SERVER, "sk-from-login")
+    requests_mock.get(f"{LOGIN_SERVER}/health/readiness", json={"litellm_version": "1.2.3"})
+    context: Final[dict[str, object]] = {"secret_vault": secret_vault_factory()}
+
+    result = cli_runner.invoke(cli, [], obj=context, input=SHELL_VERSION_THEN_QUIT)
+
+    assert f"Connected to LiteLLM server: {LOGIN_SERVER}" in result.output
+    assert f"LiteLLM Proxy Server URL: {LOGIN_SERVER}" in result.output
+    assert requests_mock.last_request.headers.get("Authorization") == "Bearer sk-from-login"
+    assert context["base_url_explicit"] is False
+
+
+def test_a_one_shot_command_never_goes_to_the_logged_in_server(
+    cli_runner, isolated_home, requests_mock, secret_vault_factory
+):
+    _write_login_token(isolated_home, LOGIN_SERVER, "sk-from-login")
+    requests_mock.get("http://localhost:4000/health/readiness", json={"litellm_version": "1.2.3"})
+
+    result = cli_runner.invoke(cli, ["version"], obj={"secret_vault": secret_vault_factory()})
+
+    assert result.exit_code == 0
+    assert "LiteLLM Proxy Server URL: http://localhost:4000" in result.output
+    assert [request.url for request in requests_mock.request_history] == ["http://localhost:4000/health/readiness"]
+
+
+@pytest.mark.parametrize(
+    ("args", "env", "config", "expected_base_url"),
+    [
+        (["--base-url", "https://flag-proxy.example.com"], {}, {}, "https://flag-proxy.example.com"),
+        ([], {"LITELLM_PROXY_URL": "https://env-proxy.example.com"}, {}, "https://env-proxy.example.com"),
+        ([], {}, {"base_url": "https://config-proxy.example.com"}, "https://config-proxy.example.com"),
+    ],
+)
+def test_a_named_server_beats_the_logged_in_one_and_never_gets_its_key(
+    cli_runner, isolated_home, monkeypatch, requests_mock, secret_vault_factory, args, env, config, expected_base_url
+):
+    _write_login_token(isolated_home, LOGIN_SERVER, "sk-from-login")
+    _write_config_file(isolated_home, config)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    requests_mock.get(f"{expected_base_url}/health/readiness", json={"litellm_version": "1.2.3"})
+
+    result = cli_runner.invoke(cli, args, obj={"secret_vault": secret_vault_factory()}, input=SHELL_VERSION_THEN_QUIT)
+
+    assert f"Connected to LiteLLM server: {expected_base_url}" in result.output
+    assert f"LiteLLM Proxy Server URL: {expected_base_url}" in result.output
+    assert requests_mock.last_request.headers.get("Authorization") is None
+
+
+@pytest.mark.parametrize(
+    ("args", "env"),
+    [
+        (["--api-key", "sk-named-key"], {}),
+        ([], {"LITELLM_PROXY_API_KEY": "sk-named-key"}),
+    ],
+)
+def test_a_key_given_without_a_server_never_goes_to_the_logged_in_one(
+    cli_runner, isolated_home, monkeypatch, requests_mock, secret_vault_factory, args, env
+):
+    _write_login_token(isolated_home, LOGIN_SERVER, "sk-from-login")
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    requests_mock.get("http://localhost:4000/health/readiness", json={"litellm_version": "1.2.3"})
+
+    result = cli_runner.invoke(cli, args, obj={"secret_vault": secret_vault_factory()}, input=SHELL_VERSION_THEN_QUIT)
+
+    assert "Connected to LiteLLM server: http://localhost:4000" in result.output
+    assert [request.url for request in requests_mock.request_history] == ["http://localhost:4000/health/readiness"]
+    assert requests_mock.last_request.headers.get("Authorization") == "Bearer sk-named-key"
+
+
+def test_bare_lite_says_why_it_stays_on_localhost_when_the_keychain_is_locked(
+    cli_runner, isolated_home, secret_vault_factory
+):
+    _write_login_token(isolated_home, LOGIN_SERVER, None)
+
+    result = cli_runner.invoke(cli, [], obj={"secret_vault": secret_vault_factory(available=False)}, input="quit\n")
+
+    assert "Connected to LiteLLM server: http://localhost:4000" in result.output
+    assert f"could not be read. Unlock it, or run 'lite --base-url {LOGIN_SERVER} login'" in result.output
+
+
+def test_lite_goes_back_to_localhost_after_logout_without_a_keychain(cli_runner, isolated_home, secret_vault_factory):
+    _write_login_token(isolated_home, LOGIN_SERVER, "sk-from-login")
+    no_keychain: Final = secret_vault_factory(available=False)
+    cli_runner.invoke(cli, ["logout"], obj={"secret_vault": no_keychain})
+
+    result = cli_runner.invoke(cli, [], obj={"secret_vault": no_keychain}, input="quit\n")
+
+    assert "Connected to LiteLLM server: http://localhost:4000" in result.output
+
+
+def test_corrupt_config_file_falls_back_to_default(cli_runner, isolated_home):
+    """A corrupt config file must never crash the CLI. Exactly one warning proves
+    the config file is read once per invocation, not once per lookup."""
+    config_dir = isolated_home / ".litellm"
+    config_dir.mkdir(exist_ok=True)
+    (config_dir / "config.json").write_text("{not json")
+
+    result = _invoke_version(cli_runner)
+
+    assert result.exit_code == 0
+    assert "LiteLLM Proxy Server URL: http://localhost:4000" in result.output
+    assert result.stderr.count("Warning: ignoring invalid config file") == 1
+
+
+def test_empty_base_url_flag_is_not_treated_as_unset(cli_runner, isolated_home):
+    """`--base-url ""` explicitly provided an (empty) value; falling back to the
+    config file or localhost would silently redirect auth-sensitive commands."""
+    _write_config_file(isolated_home, {"base_url": "https://config-proxy.example.com"})
+
+    result = _invoke_version(cli_runner, "--base-url", "")
+
+    assert result.exit_code == 0
+    assert "LiteLLM Proxy Server URL:" not in result.output
+
+
+def test_version_flag_reads_config_file_base_url(cli_runner, isolated_home):
+    """--version resolves through the same precedence chain as every other command."""
+    _write_config_file(isolated_home, {"base_url": "https://config-proxy.example.com"})
+
+    with patch(
+        "litellm.proxy.client.health.HealthManagementClient.get_server_version",
+        return_value="1.2.3",
+    ):
+        result = cli_runner.invoke(cli, ["--version"])
+
+    assert result.exit_code == 0
+    assert "LiteLLM Proxy Server URL: https://config-proxy.example.com" in result.output
+
+
+def test_version_flag_prefers_env_var_over_config_file(cli_runner, isolated_home, monkeypatch):
+    _write_config_file(isolated_home, {"base_url": "https://config-proxy.example.com"})
+    monkeypatch.setenv("LITELLM_PROXY_URL", "http://env-proxy.example.com:5000")
+
+    with patch(
+        "litellm.proxy.client.health.HealthManagementClient.get_server_version",
+        return_value="1.2.3",
+    ):
+        result = cli_runner.invoke(cli, ["--version"])
+
+    assert result.exit_code == 0
+    assert "LiteLLM Proxy Server URL: http://env-proxy.example.com:5000" in result.output
+
+
+def test_version_flag_prefers_explicit_base_url_over_config_file(cli_runner, isolated_home):
+    """An eager --version could not see the flag and silently queried the config
+    server instead of the one the user named."""
+    _write_config_file(isolated_home, {"base_url": "https://config-proxy.example.com"})
+
+    with patch(
+        "litellm.proxy.client.health.HealthManagementClient.get_server_version",
+        return_value="1.2.3",
+    ):
+        result = cli_runner.invoke(cli, ["--base-url", "https://flag-proxy.example.com", "--version"])
+
+    assert result.exit_code == 0
+    assert "LiteLLM Proxy Server URL: https://flag-proxy.example.com" in result.output
+    assert "config-proxy.example.com" not in result.output
+
+
+def test_version_flag_never_sends_api_key_to_unnamed_server(cli_runner, isolated_home, monkeypatch):
+    """The version request carries a bearer token; it must reach only the server the
+    user named, never whichever host happens to sit in the config file."""
+    _write_config_file(isolated_home, {"base_url": "https://config-proxy.example.com"})
+    monkeypatch.setenv("LITELLM_PROXY_API_KEY", "sk-intended-for-flag-proxy")
+
+    with patch("litellm.proxy.client.http_client.requests.request") as mock_request:
+        mock_request.return_value.json.return_value = {"litellm_version": "1.2.3"}
+        mock_request.return_value.raise_for_status.return_value = None
+        result = cli_runner.invoke(cli, ["--base-url", "https://flag-proxy.example.com", "--version"])
+
+    assert result.exit_code == 0
+    requested_urls = [call.kwargs["url"] for call in mock_request.call_args_list]
+    assert requested_urls
+    assert all(url.startswith("https://flag-proxy.example.com") for url in requested_urls)
+    sent_keys = [call.kwargs["headers"].get("Authorization") for call in mock_request.call_args_list]
+    assert sent_keys == ["Bearer sk-intended-for-flag-proxy"] * len(requested_urls)
+
+
+def test_litellm_proxy_entrypoint_prints_deprecation_notice_on_stderr_and_still_runs(monkeypatch, capsys, requests_mock):
+    requests_mock.get("http://localhost:4000/health/readiness", json={"litellm_version": "1.2.3"})
+    monkeypatch.setattr(sys, "argv", ["litellm-proxy", "--version"])
+    monkeypatch.setenv("LITELLM_PROXY_URL", "http://localhost:4000")
+    with pytest.raises(SystemExit) as exit_info:
+        litellm_proxy_cli()
+
+    captured: Final = capsys.readouterr()
+    assert exit_info.value.code == 0
+    assert captured.err.strip() == LITELLM_PROXY_DEPRECATION_NOTICE
+    assert f"LiteLLM Proxy CLI Version: {litellm_version}" in captured.out
+    assert "LiteLLM Proxy Server Version: 1.2.3" in captured.out
+    assert "deprecated" not in captured.out
+
+
+def test_lite_entrypoint_prints_nothing_on_stderr(monkeypatch, capsys, requests_mock):
+    requests_mock.get("http://localhost:4000/health/readiness", json={"litellm_version": "1.2.3"})
+    monkeypatch.setattr(sys, "argv", ["lite", "--version"])
+    monkeypatch.setenv("LITELLM_PROXY_URL", "http://localhost:4000")
+    with pytest.raises(SystemExit) as exit_info:
+        cli()
+
+    captured: Final = capsys.readouterr()
+    assert exit_info.value.code == 0
+    assert "LiteLLM Proxy Server Version: 1.2.3" in captured.out
+    assert f"LiteLLM Proxy CLI Version: {litellm_version}" in captured.out
+    assert captured.err == ""
+
+
+@pytest.mark.parametrize(
+    ("args", "config", "expected_context", "expected_authorization"),
+    [
+        (
+            ["--base-url", "https://flag-proxy.example.com/", "--api-key", "sk-flag"],
+            {},
+            {
+                "base_url": "https://flag-proxy.example.com",
+                "api_key": "sk-flag",
+                "api_key_from_token_file": False,
+                "base_url_explicit": True,
+            },
+            "Bearer sk-flag",
+        ),
+        (
+            [],
+            {},
+            {
+                "base_url": "http://localhost:4000",
+                "api_key": None,
+                "api_key_from_token_file": True,
+                "base_url_explicit": False,
+            },
+            None,
+        ),
+        (
+            ["--api-key", ""],
+            {"base_url": "https://config-proxy.example.com"},
+            {
+                "base_url": "https://config-proxy.example.com",
+                "api_key": "",
+                "api_key_from_token_file": False,
+                "base_url_explicit": True,
+            },
+            None,
+        ),
+    ],
+)
+def test_cli_stores_the_resolved_connection_on_the_supplied_context_object(
+    cli_runner, isolated_home, requests_mock, args, config, expected_context, expected_authorization
+):
+    _write_config_file(isolated_home, config)
+    requests_mock.get(f"{expected_context['base_url']}/health/readiness", json={"litellm_version": "1.2.3"})
+    context: Final[dict[str, object]] = {}
+
+    result = cli_runner.invoke(cli, [*args, "version"], obj=context)
+
+    assert result.exit_code == 0
+    assert json.dumps(context) == json.dumps(expected_context)
+    assert "LiteLLM Proxy Server Version: 1.2.3" in result.output
+    assert requests_mock.last_request.headers.get("Authorization") == expected_authorization
+
+
+@pytest.mark.parametrize(
+    ("context", "expected_lines", "expected_authorization"),
+    [
+        (
+            {"base_url": "http://localhost:4000", "api_key": "sk-context"},
+            ["LiteLLM Proxy Server URL: http://localhost:4000", "LiteLLM Proxy Server Version: 1.2.3"],
+            "Bearer sk-context",
+        ),
+        (
+            {"base_url": "http://localhost:4000"},
+            ["LiteLLM Proxy Server URL: http://localhost:4000", "LiteLLM Proxy Server Version: 1.2.3"],
+            None,
+        ),
+        (
+            {"base_url": "http://localhost:4000", "api_key": None, "api_key_from_token_file": True},
+            ["LiteLLM Proxy Server URL: http://localhost:4000", "LiteLLM Proxy Server Version: 1.2.3"],
+            None,
+        ),
+    ],
+)
+def test_version_command_reads_the_connection_from_the_context_object(
+    cli_runner, requests_mock, context, expected_lines, expected_authorization
+):
+    requests_mock.get("http://localhost:4000/health/readiness", json={"litellm_version": "1.2.3"})
+
+    result = cli_runner.invoke(cli.commands["version"], [], obj=context)
+
+    assert result.exit_code == 0
+    assert result.output.splitlines() == [f"LiteLLM Proxy CLI Version: {litellm_version}", *expected_lines]
+    assert requests_mock.last_request.headers.get("Authorization") == expected_authorization
+
+
+def test_version_command_without_a_base_url_reports_the_failed_lookup(cli_runner):
+    result = cli_runner.invoke(cli.commands["version"], [], obj={"api_key": "sk-context"})
+
+    lines: Final = result.output.splitlines()
+    assert result.exit_code == 0
+    assert len(lines) == 2
+    assert lines[0] == f"LiteLLM Proxy CLI Version: {litellm_version}"
+    assert lines[1].startswith("Could not retrieve server version: ")
+
+
+def test_version_command_without_a_context_object_fails_reading_it(cli_runner):
+    result = cli_runner.invoke(cli.commands["version"], [])
+
+    assert result.exit_code == 1
+    assert type(result.exception) is AttributeError
+    assert result.output == ""
