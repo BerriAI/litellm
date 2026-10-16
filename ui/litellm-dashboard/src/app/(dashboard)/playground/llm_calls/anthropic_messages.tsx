@@ -2,8 +2,9 @@ import Anthropic from "@anthropic-ai/sdk";
 import { MessageType } from "@/components/chat_ui/types";
 import { TokenUsage } from "@/components/chat_ui/ResponseMetrics";
 import { buildMcpToolBlocks } from "@/components/llm_calls/mcp_tool_blocks";
+import { buildPlaygroundHeaders, type CustomHeaders } from "@/components/llm_calls/request_headers";
 import { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
-import { getProxyBaseUrl } from "@/components/networking";
+import { getGatewayBaseUrl } from "@/components/networking";
 import { toast } from "@/lib/toast";
 import { extractPromptCacheTokens } from "@/utils/promptCacheUsage";
 
@@ -34,6 +35,7 @@ export async function makeAnthropicMessagesRequest(
   mcpServerToolRestrictions?: Record<string, string[]>,
   mcpToolsets?: MCPToolset[],
   streamingEnabled: boolean = true,
+  customHeaders?: CustomHeaders,
 ) {
   if (!accessToken) {
     throw new Error("Virtual Key is required");
@@ -44,13 +46,9 @@ export async function makeAnthropicMessagesRequest(
     console.log = function () {};
   }
 
-  const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
+  const proxyBaseUrl = customBaseUrl || getGatewayBaseUrl();
 
-  // Prepare headers with tags and trace ID
-  const headers: Record<string, string> = {};
-  if (tags && tags.length > 0) {
-    headers["x-litellm-tags"] = tags.join(",");
-  }
+  const headers = buildPlaygroundHeaders(tags, customHeaders);
 
   const client = new Anthropic({
     apiKey: accessToken,

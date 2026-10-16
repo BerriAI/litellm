@@ -28,7 +28,10 @@ const oauthHook = vi.hoisted(() => ({
   tokenResponse: null as Record<string, unknown> | null,
   reset: vi.fn(),
   onTokenReceived: null as
-    | ((token: Record<string, unknown> | null, registeredClient?: { clientId?: string; clientSecret?: string }) => void)
+    | ((
+        token: Record<string, unknown> | null,
+        registeredClient?: { client_id: string; client_secret?: string },
+      ) => void)
     | null,
   getCredentials: null as (() => Record<string, unknown> | undefined) | null,
   getTemporaryPayload: null as (() => Record<string, unknown> | null) | null,
@@ -37,7 +40,7 @@ vi.mock("@/hooks/useMcpOAuthFlow", () => ({
   useMcpOAuthFlow: (opts: {
     onTokenReceived: (
       token: Record<string, unknown> | null,
-      registeredClient?: { clientId?: string; clientSecret?: string },
+      registeredClient?: { client_id: string; client_secret?: string },
     ) => void;
     getCredentials?: () => Record<string, unknown> | undefined;
     getTemporaryPayload?: () => Record<string, unknown> | null;
@@ -628,7 +631,7 @@ describe("CreateMCPServer", () => {
       await act(async () => {
         oauthHook.onTokenReceived!(
           { access_token: "oauth2-minted-tok", refresh_token: "oauth2-minted-refresh", token_type: "Bearer" },
-          { clientId: "dcr-minted-client", clientSecret: "dcr-minted-secret" },
+          { client_id: "dcr-minted-client", client_secret: "dcr-minted-secret" },
         );
       });
 
@@ -675,7 +678,7 @@ describe("CreateMCPServer", () => {
       await act(async () => {
         oauthHook.onTokenReceived!(
           { access_token: "oauth2-tok", token_type: "Bearer" },
-          { clientId: "dcr-client", clientSecret: "dcr-secret" },
+          { client_id: "dcr-client", client_secret: "dcr-secret" },
         );
       });
 
@@ -702,7 +705,7 @@ describe("CreateMCPServer", () => {
       await act(async () => {
         oauthHook.onTokenReceived!(
           { access_token: "oauth2-tok", token_type: "Bearer" },
-          { clientId: "leak-client", clientSecret: "leak-secret" },
+          { client_id: "leak-client", client_secret: "leak-secret" },
         );
       });
       // Ref is held while the modal is open.
@@ -731,7 +734,7 @@ describe("CreateMCPServer", () => {
       await act(async () => {
         oauthHook.onTokenReceived!(
           { access_token: "oauth2-tok", token_type: "Bearer" },
-          { clientId: "dcr-client", clientSecret: "dcr-secret" },
+          { client_id: "dcr-client", client_secret: "dcr-secret" },
         );
       });
 
@@ -1041,6 +1044,8 @@ describe("CreateMCPServer", () => {
 
       const limitInput = screen.getByPlaceholderText("e.g. 10");
       fireEvent.change(limitInput, { target: { value: "5" } });
+      const rpmInput = screen.getByPlaceholderText("e.g. 60");
+      fireEvent.change(rpmInput, { target: { value: "7" } });
 
       vi.mocked(networking.createMCPServer).mockResolvedValue({
         server_id: "new-server-1",
@@ -1066,6 +1071,7 @@ describe("CreateMCPServer", () => {
 
       const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
       expect(payload.max_concurrent_requests).toBe(5);
+      expect(payload.rpm).toBe(7);
     });
 
     it("routes OAuth Token Exchange (OBO) config to the backend payload", async () => {
@@ -1943,6 +1949,29 @@ describe("CreateMCPServer", () => {
         const nameInput = getServerNameInput();
         expect(nameInput).toHaveValue("github_mcp");
       });
+    });
+
+    const sqlitePrefill = {
+      name: "sqlite",
+      title: "SQLite",
+      description: "Local database",
+      category: "Databases",
+      transport: "stdio",
+      command: "uvx",
+      args: ["mcp-server-sqlite"],
+    };
+
+    it("explains that a catalog stdio server cannot be added while the proxy has stdio off", async () => {
+      render(<CreateMCPServer {...defaultProps} prefillData={sqlitePrefill} stdioEnabled={false} />);
+
+      expect(await screen.findByText("stdio is disabled on this proxy")).toBeInTheDocument();
+    });
+
+    it("shows no stdio banner for a catalog stdio server once stdio is enabled", async () => {
+      render(<CreateMCPServer {...defaultProps} prefillData={sqlitePrefill} stdioEnabled />);
+
+      await waitFor(() => expect(getServerNameInput()).toHaveValue("sqlite"));
+      expect(screen.queryByText("stdio is disabled on this proxy")).not.toBeInTheDocument();
     });
   });
 

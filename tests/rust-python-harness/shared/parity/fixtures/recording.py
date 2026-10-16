@@ -191,6 +191,7 @@ class _RecordingHandler(LocalHttpHandler):
         self.end_headers()
         self.wfile.write(body)
 
+
 def _recording_provider(spec: UpstreamEndpoint) -> AbstractContextManager[_RecordingProvider]:
     return serve_in_thread(_RecordingProvider(spec))
 

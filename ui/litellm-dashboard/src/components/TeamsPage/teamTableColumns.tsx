@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/cva.config";
+import { orgDetailHref } from "@/utils/entityLinks";
 import { copyToClipboard, formatNumberWithCommas } from "@/utils/dataUtils";
 
 import { Team } from "../key_team_helpers/key_list";
@@ -183,8 +184,8 @@ export const getTeamTableColumns = ({
         const displayValue = org?.organization_alias || orgId;
         const width = info.cell.column.getSize();
         return (
-          <span className="block truncate text-sm" style={{ maxWidth: width }} title={displayValue}>
-            {displayValue}
+          <span className="block" style={{ maxWidth: width }} title={displayValue}>
+            <IdentityCell title={displayValue} titleClassName="text-sm font-normal" href={orgDetailHref(orgId)} />
           </span>
         );
       },
@@ -209,7 +210,7 @@ export const getTeamTableColumns = ({
     {
       id: "spend",
       accessorKey: "spend",
-      meta: { title: "Spend / Budget", skeleton: "meter" },
+      meta: { title: "Spend / Budget", skeleton: "meter", numeric: true },
       header: "Spend / Budget",
       size: 200,
       enableSorting: false,
@@ -233,7 +234,7 @@ export const getTeamTableColumns = ({
     },
     {
       id: "members",
-      meta: { title: "Members" },
+      meta: { title: "Members", numeric: true },
       header: "Members",
       size: 110,
       enableSorting: false,
@@ -241,7 +242,7 @@ export const getTeamTableColumns = ({
     },
     {
       id: "models",
-      meta: { title: "Models" },
+      meta: { title: "Models", numeric: true },
       header: "Models",
       size: 100,
       enableSorting: false,

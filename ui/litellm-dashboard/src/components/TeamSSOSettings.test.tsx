@@ -8,6 +8,19 @@ import { toast } from "@/lib/toast";
 
 vi.mock("./networking");
 
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: () => ({
+    token: "test-token",
+    accessToken: "test-token",
+    userId: "test-user",
+    userEmail: "test-user@example.com",
+    userRole: "Admin",
+    premiumUser: true,
+    disabledPersonalKeyCreation: null,
+    showSSOBanner: false,
+  }),
+}));
+
 vi.mock("./common_components/budget_duration_dropdown", () => {
   const BudgetDurationDropdown = ({ value, onChange }: { value: string | null; onChange: (value: string) => void }) => (
     <select

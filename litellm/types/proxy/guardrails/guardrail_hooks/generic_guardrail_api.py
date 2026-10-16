@@ -1,8 +1,10 @@
-from typing import Any, Final, Literal
+from collections.abc import Mapping, Sequence
+from typing import Any, Final, Literal, cast  # noqa: TID251  # JSON chat rows have no typed constructor across roles
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
 from typing_extensions import TypedDict
 
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionToolCallChunk,
@@ -11,7 +13,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigM
 from litellm.types.utils import ChatCompletionMessageToolCall
 
 
-class GuardrailToolParam(BaseModel):
+class GuardrailToolParam(LiteLLMBaseModel):
     """A tool forwarded verbatim to the guardrail for inspection.
 
     Built-in tools (code_interpreter, file_search, ...) have no ``function`` block
@@ -34,7 +36,7 @@ class GenericGuardrailAPIMetadata(TypedDict, total=False):
     user_api_key_org_id: str | None
 
 
-class GenericGuardrailAPIOptionalParams(BaseModel):
+class GenericGuardrailAPIOptionalParams(LiteLLMBaseModel):
     """Optional parameters for the Generic Guardrail API"""
 
     additional_provider_specific_params: dict[str, Any] | None = Field(
@@ -118,7 +120,7 @@ class GenericGuardrailAPIConfigModel(
         return "Generic Guardrail API"
 
 
-class GenericGuardrailAPIRequest(BaseModel):
+class GenericGuardrailAPIRequest(LiteLLMBaseModel):
     """Request model for the Generic Guardrail API"""
 
     input_type: Literal["request", "response"]
@@ -158,12 +160,21 @@ def coerce_stream_holdback_value(value: Any) -> int:
         return 0
 
 
+def structured_messages_from_response(value: object) -> Sequence[AllMessageValues] | None:
+    if not isinstance(value, list):
+        return None
+    if not all(isinstance(message, Mapping) and isinstance(message.get("role"), str) for message in value):
+        return None
+    return cast("Sequence[AllMessageValues]", value)  # cast-ok: JSON rows checked for a role, the same trust texts get
+
+
 class GenericGuardrailAPIResponse:
     """Response model for the Generic Guardrail API"""
 
     texts: list[str] | None
     images: list[str] | None
     tools: list[GuardrailToolParam] | None
+    structured_messages: Sequence[AllMessageValues] | None
     action: str
     blocked_reason: str | None
     stream_holdback_chars: list[int] | None
@@ -176,12 +187,14 @@ class GenericGuardrailAPIResponse:
         images: list[str] | None = None,
         tools: list[GuardrailToolParam] | None = None,
         stream_holdback_chars: list[int] | None = None,
+        structured_messages: Sequence[AllMessageValues] | None = None,
     ) -> None:
         self.action = action
         self.blocked_reason = blocked_reason
         self.texts = texts
         self.images = images
         self.tools = tools
+        self.structured_messages = structured_messages
         # Number of trailing chars, indexed the same as ``texts``, that the
         # framework must withhold from streaming emission until the next
         # processing round (word-boundary safety for text transformations).
@@ -200,4 +213,5 @@ class GenericGuardrailAPIResponse:
             images=data.get("images"),
             tools=data.get("tools"),
             stream_holdback_chars=stream_holdback_chars,
+            structured_messages=structured_messages_from_response(data.get("structured_messages")),
         )

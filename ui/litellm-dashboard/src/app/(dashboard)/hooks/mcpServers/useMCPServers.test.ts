@@ -74,7 +74,7 @@ describe("useMCPServers", () => {
       expect(result.current.isSuccess).toBe(true);
     });
 
-    expect(networking.fetchMCPServers).toHaveBeenCalledWith(mockAccessToken, undefined);
+    expect(networking.fetchMCPServers).toHaveBeenCalledWith(mockAccessToken, undefined, undefined, undefined);
     expect(result.current.data).toEqual(mockServers);
   });
 
@@ -118,6 +118,18 @@ describe("useMCPServers", () => {
 
     expect(result.current.error).toEqual(mockError);
     expect(result.current.data).toBeUndefined();
+  });
+
+  it("forwards the user scope to the server list call", async () => {
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue(mockServers);
+
+    const { result } = renderHook(() => useMCPServers(null, "user-7"), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true);
+    });
+
+    expect(networking.fetchMCPServers).toHaveBeenCalledWith(mockAccessToken, null, undefined, "user-7");
   });
 
   it("should return empty array when API returns empty list", async () => {

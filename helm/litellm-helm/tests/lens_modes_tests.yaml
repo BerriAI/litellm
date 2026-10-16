@@ -1,0 +1,187 @@
+---
+suite: Lens deployment modes
+templates:
+- ingress.yaml
+- configmap-litellm.yaml
+- deployment.yaml
+- lens/deployment.yaml
+- lens/service.yaml
+- lens/clickhouse.yaml
+- lens/secrets.yaml
+set:
+  lensWorker.publicUrl: https://traces.example
+tests:
+- it: retains the existing deployment before transferring its release ownership
+  template: lens/deployment.yaml
+  set:
+    lensWorker.mode: bundled
+    lensWorker.retainResources: true
+  asserts:
+  - equal:
+      path: metadata.annotations["helm.sh/resource-policy"]
+      value: keep
+- it: connects an external deployment without installing Lens resources
+  templates:
+  - lens/deployment.yaml
+  - lens/service.yaml
+  - lens/clickhouse.yaml
+  - lens/secrets.yaml
+  set:
+    lensWorker.mode: external
+    lensWorker.externalUrl: http://lens.other-namespace:4318
+    lensWorker.serviceTokenSecret.name: external-lens-signing
+    lensWorker.gateway.secretName: external-lens-signing
+  asserts:
+  - hasDocuments:
+      count: 0
+- it: sends delegated requests to the explicitly selected external Lens
+  template: deployment.yaml
+  set:
+    lensWorker.mode: external
+    lensWorker.externalUrl: http://lens.other-namespace:4318
+    lensWorker.serviceTokenSecret.name: external-lens-signing
+    lensWorker.gateway.secretName: external-lens-signing
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].env
+      content:
+        name: LITELLM_LENS_URL
+        value: http://lens.other-namespace:4318
+  - contains:
+      path: spec.template.spec.containers[0].env
+      content:
+        name: LENS_GATEWAY_SECRET
+        valueFrom:
+          secretKeyRef:
+            name: external-lens-signing
+            key: gateway-secret
+- it: disables Lens explicitly even with a retained legacy enable flag
+  template: lens/deployment.yaml
+  set:
+    lensWorker.mode: disabled
+    lensWorker.enabled: true
+  asserts:
+  - hasDocuments:
+      count: 0
+- it: bundles Lens through explicit mode selection
+  template: lens/deployment.yaml
+  set:
+    lensWorker.mode: bundled
+  asserts:
+  - hasDocuments:
+      count: 1
+  - contains:
+      path: spec.template.spec.containers[0].env
+      content:
+        name: LENS_MODE
+        value: standalone
+- it: uses separate credentials for external identity and service access
+  template: deployment.yaml
+  set:
+    lensWorker.mode: external
+    lensWorker.externalUrl: http://existing-lens:4318
+    lensWorker.serviceTokenSecret: {name: worker-service, key: token}
+    lensWorker.gateway: {secretName: delegated-identity, secretKey: signature}
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].env
+      content:
+        name: LENS_GATEWAY_SECRET
+        valueFrom:
+          secretKeyRef: {name: delegated-identity, key: signature}
+  - contains:
+      path: spec.template.spec.containers[0].env
+      content:
+        name: LITELLM_LENS_SERVICE_TOKEN
+        valueFrom:
+          secretKeyRef: {name: worker-service, key: token}
+- it: supplies the same separate signing secret to the bundled service
+  template: lens/deployment.yaml
+  set:
+    lensWorker.mode: bundled
+    lensWorker.gateway: {secretName: delegated-identity, secretKey: signature}
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].env
+      content:
+        name: LENS_GATEWAY_SECRET
+        valueFrom:
+          secretKeyRef: {name: delegated-identity, key: signature}
+- it: routes explicit bundled mode with the enable flag off
+  template: ingress.yaml
+  set:
+    fullnameOverride: gateway
+    ingress.enabled: true
+    ingress.hosts: [{host: gateway.example, paths: [{path: /, pathType: Prefix}]}]
+    lensWorker.mode: bundled
+    lensWorker.enabled: false
+    lensWorker.externalUrl: http://existing-lens:4318
+    lensWorker.externalServiceName: ""
+    lensWorker.serviceTokenSecret.name: worker-service
+    lensWorker.gateway.secretName: external-lens-signing
+  asserts:
+  - contains:
+      path: spec.rules[0].http.paths
+      content:
+        path: /lens-ingest
+        pathType: Prefix
+        backend:
+          service:
+            name: gateway-lens-worker
+            port: {number: 4318}
+- it: routes external mode to its selected service
+  template: ingress.yaml
+  set:
+    fullnameOverride: gateway
+    ingress.enabled: true
+    ingress.hosts: [{host: gateway.example, paths: [{path: /, pathType: Prefix}]}]
+    lensWorker.mode: external
+    lensWorker.enabled: true
+    lensWorker.externalUrl: http://existing-lens:4318
+    lensWorker.externalServiceName: "existing-lens"
+    lensWorker.serviceTokenSecret.name: worker-service
+    lensWorker.gateway.secretName: external-lens-signing
+  asserts:
+  - contains:
+      path: spec.rules[0].http.paths
+      content:
+        path: /lens-ingest
+        pathType: Prefix
+        backend:
+          service:
+            name: existing-lens
+            port: {number: 4318}
+- it: omits ingestion when an external service has no ingress backend
+  template: ingress.yaml
+  set:
+    fullnameOverride: gateway
+    ingress.enabled: true
+    ingress.hosts: [{host: gateway.example, paths: [{path: /, pathType: Prefix}]}]
+    lensWorker.mode: external
+    lensWorker.enabled: true
+    lensWorker.externalUrl: http://existing-lens:4318
+    lensWorker.externalServiceName: ""
+    lensWorker.serviceTokenSecret.name: worker-service
+    lensWorker.gateway.secretName: external-lens-signing
+  asserts:
+  - notContains:
+      path: spec.rules[0].http.paths
+      content: {path: /lens-ingest}
+      any: true
+- it: omits ingestion for disabled mode with the enable flag on
+  template: ingress.yaml
+  set:
+    fullnameOverride: gateway
+    ingress.enabled: true
+    ingress.hosts: [{host: gateway.example, paths: [{path: /, pathType: Prefix}]}]
+    lensWorker.mode: disabled
+    lensWorker.enabled: true
+    lensWorker.externalUrl: http://existing-lens:4318
+    lensWorker.externalServiceName: ""
+    lensWorker.serviceTokenSecret.name: worker-service
+    lensWorker.gateway.secretName: external-lens-signing
+  asserts:
+  - notContains:
+      path: spec.rules[0].http.paths
+      content: {path: /lens-ingest}
+      any: true
