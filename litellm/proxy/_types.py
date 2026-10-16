@@ -1173,10 +1173,7 @@ class ModelParams(LiteLLMPydanticObjectBase):
         return values
 
 
-from litellm.models.team import BudgetLimitEntry as BudgetLimitEntry  # noqa: E402
-from litellm.types.object_permission import (  # noqa: E402
-    ObjectPermissionDict as ObjectPermissionDict,
-)
+from litellm.models.team import BudgetLimitEntry  # noqa: E402
 from litellm.types.proxy.management_endpoints.key_requests import (  # noqa: E402  # re-export after the definitions above
     AllowedVectorStoreIndexItem as AllowedVectorStoreIndexItem,  # noqa: PLC0414  # public re-export
 )
@@ -1273,12 +1270,6 @@ class KeyRequest(LiteLLMPydanticObjectBase):
         return values
 
 
-from litellm.models.model import (  # noqa: E402
-    LiteLLM_ProxyModelTable as LiteLLM_ProxyModelTable,
-)
-from litellm.models.team import LiteLLM_ModelTable as LiteLLM_ModelTable  # noqa: E402
-
-
 # MCP Types
 class SpecialMCPServerName(str, enum.Enum):
     all_team_servers = "all-team-mcpservers"
@@ -1294,11 +1285,8 @@ class MCPApprovalStatus(str, enum.Enum):
     draft = "draft"
 
 
-from litellm.models.mcp_server import (  # noqa: E402
-    MCPEnvVar as MCPEnvVar,
-)
-from litellm.models.mcp_server import (  # noqa: E402
-    MCPEnvVarScope as MCPEnvVarScope,
+from litellm.models.mcp_server import (  # noqa: E402  # noqa: E402
+    MCPEnvVar,
 )
 
 
@@ -1563,7 +1551,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
 
 
 from litellm.models.mcp_server import (  # noqa: E402
-    LiteLLM_MCPServerTable as LiteLLM_MCPServerTable,
+    LiteLLM_MCPServerTable,
 )
 
 
@@ -1682,11 +1670,6 @@ class UpdateSkillRequest(LiteLLMPydanticObjectBase):
     file_name: str | None = None  # Original filename
     file_type: str | None = None  # MIME type
     metadata: dict[str, Any] | None = None
-
-
-from litellm.models.skills import (  # noqa: E402
-    LiteLLM_SkillsTable as LiteLLM_SkillsTable,
-)
 
 
 class ListSkillsRequest(LiteLLMPydanticObjectBase):
@@ -1853,8 +1836,10 @@ class DeleteCustomerRequest(LiteLLMPydanticObjectBase):
     user_ids: list[str]
 
 
-from litellm.models.team import Member as Member  # noqa: E402
-from litellm.models.team import MemberBase as MemberBase  # noqa: E402
+from litellm.models.team import (
+    Member,  # noqa: E402
+    MemberBase,  # noqa: E402
+)
 
 
 class OrgMember(MemberBase):
@@ -1865,7 +1850,7 @@ class OrgMember(MemberBase):
     ]
 
 
-from litellm.models.team import TeamBase as TeamBase  # noqa: E402
+from litellm.models.team import TeamBase  # noqa: E402
 
 RouterSettingsDict = Annotated[
     dict[str, object],
@@ -2133,14 +2118,10 @@ class TeamCallbackMetadata(LiteLLMPydanticObjectBase):
 
 
 from litellm.models.object_permission import (  # noqa: E402
-    LiteLLM_ObjectPermissionTable as LiteLLM_ObjectPermissionTable,
+    LiteLLM_ObjectPermissionTable,
 )
-from litellm.models.team import (  # noqa: E402
-    LiteLLM_DeletedTeamTable as LiteLLM_DeletedTeamTable,
-)
-from litellm.models.team import LiteLLM_TeamTable as LiteLLM_TeamTable  # noqa: E402
-from litellm.models.team import (  # noqa: E402
-    LiteLLM_TeamTableCachedObj as LiteLLM_TeamTableCachedObj,
+from litellm.models.team import (  # noqa: E402  # noqa: E402
+    LiteLLM_TeamTable,  # noqa: E402
 )
 
 
@@ -2148,14 +2129,9 @@ class TeamRequest(LiteLLMPydanticObjectBase):
     teams: list[str]
 
 
-from litellm.models.budget import (  # noqa: E402
-    LiteLLM_BudgetTable as LiteLLM_BudgetTable,
-)
-from litellm.models.budget import (  # noqa: E402
-    LiteLLM_BudgetTableFull as LiteLLM_BudgetTableFull,
-)
-from litellm.models.budget import (  # noqa: E402
-    LiteLLM_TeamMemberTable as LiteLLM_TeamMemberTable,
+from litellm.models.budget import (  # noqa: E402  # noqa: E402  # noqa: E402
+    LiteLLM_BudgetTable,
+    LiteLLM_BudgetTableFull,
 )
 
 
@@ -3095,11 +3071,8 @@ class ConfigYAML(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(protected_namespaces=())
 
 
-from litellm.models.verification_token import (  # noqa: E402
-    LiteLLM_DeletedVerificationToken as LiteLLM_DeletedVerificationToken,
-)
-from litellm.models.verification_token import (  # noqa: E402
-    LiteLLM_VerificationToken as LiteLLM_VerificationToken,
+from litellm.models.verification_token import (  # noqa: E402  # noqa: E402
+    LiteLLM_DeletedVerificationToken,
 )
 from litellm.types.proxy.auth.user_api_key_auth import (  # noqa: E402  # re-export after the definitions above
     LiteLLM_VerificationTokenView as LiteLLM_VerificationTokenView,  # noqa: PLC0414  # public re-export
@@ -3148,9 +3121,8 @@ class UserInfoV2Response(LiteLLMPydanticObjectBase):
     model_max_budget_usage: Mapping[str, Mapping[str, object]] | None = None
 
 
-from litellm.models.config import LiteLLM_Config as LiteLLM_Config  # noqa: E402
 from litellm.models.organization_membership import (  # noqa: E402
-    LiteLLM_OrganizationMembershipTable as LiteLLM_OrganizationMembershipTable,
+    LiteLLM_OrganizationMembershipTable,
 )
 
 
@@ -3206,9 +3178,9 @@ class OrganizationUpdateRequestV2(LiteLLMPydanticObjectBase):
 
 
 from litellm.models.organization import (  # noqa: E402
-    LiteLLM_OrganizationTable as LiteLLM_OrganizationTable,
+    LiteLLM_OrganizationTable,
 )
-from litellm.models.user import LiteLLM_UserTable as LiteLLM_UserTable  # noqa: E402
+from litellm.models.user import LiteLLM_UserTable  # noqa: E402
 
 
 class LiteLLM_OrganizationTableWithMembers(LiteLLM_OrganizationTable):
@@ -3264,9 +3236,8 @@ class NewProjectRequest(LiteLLM_BudgetTable):
     @model_validator(mode="before")
     @classmethod
     def set_model_info(cls, values):
-        if "tags" in values and values["tags"] is not None:
-            if not isinstance(values["tags"], list):
-                raise ValueError(f"tags must be a list of strings, got {type(values['tags']).__name__}")
+        if "tags" in values and values["tags"] is not None and not isinstance(values["tags"], list):
+            raise ValueError(f"tags must be a list of strings, got {type(values['tags']).__name__}")
         for field in LiteLLM_ManagementEndpoint_MetadataFields:
             if values.get(field) is not None:
                 if values.get("metadata") is None:
@@ -3299,9 +3270,8 @@ class UpdateProjectRequest(LiteLLM_BudgetTable):
     @model_validator(mode="before")
     @classmethod
     def set_model_info(cls, values):
-        if "tags" in values and values["tags"] is not None:
-            if not isinstance(values["tags"], list):
-                raise ValueError(f"tags must be a list of strings, got {type(values['tags']).__name__}")
+        if "tags" in values and values["tags"] is not None and not isinstance(values["tags"], list):
+            raise ValueError(f"tags must be a list of strings, got {type(values['tags']).__name__}")
         for field in LiteLLM_ManagementEndpoint_MetadataFields:
             if values.get(field) is not None:
                 if values.get("metadata") is None:
@@ -3318,7 +3288,7 @@ class DeleteProjectRequest(LiteLLMPydanticObjectBase):
 
 
 from litellm.models.project import (  # noqa: E402
-    LiteLLM_ProjectTable as LiteLLM_ProjectTable,
+    LiteLLM_ProjectTable,
 )
 
 
@@ -3341,19 +3311,12 @@ class LiteLLM_UserTableFiltered(LiteLLMBaseModel):  # done to avoid exposing sen
     user_email: str | None = None
 
 
-from litellm.models.access_group import (  # noqa: E402
-    LiteLLM_AccessGroupTable as LiteLLM_AccessGroupTable,
-)
 from litellm.models.end_user import (  # noqa: E402
-    LiteLLM_EndUserTable as LiteLLM_EndUserTable,
+    LiteLLM_EndUserTable,
 )
-from litellm.models.spend_logs import (  # noqa: E402
-    LiteLLM_ErrorLogs as LiteLLM_ErrorLogs,
+from litellm.models.spend_logs import (  # noqa: E402  # noqa: E402
+    LiteLLM_SpendLogs,
 )
-from litellm.models.spend_logs import (  # noqa: E402
-    LiteLLM_SpendLogs as LiteLLM_SpendLogs,
-)
-from litellm.models.tag import LiteLLM_TagTable as LiteLLM_TagTable  # noqa: E402
 from litellm.types.proxy.management_endpoints.user_requests import (  # noqa: E402  # re-export after the definitions above
     LiteLLM_UserTableWithKeyCount as LiteLLM_UserTableWithKeyCount,  # noqa: PLC0414  # public re-export
 )
@@ -4066,7 +4029,7 @@ class CreatePassThroughEndpoint(LiteLLMPydanticObjectBase):
 
 
 from litellm.models.team_membership import (  # noqa: E402
-    LiteLLM_TeamMembership as LiteLLM_TeamMembership,
+    LiteLLM_TeamMembership,
 )
 
 #### Organization / Team Member Requests ####
@@ -5205,17 +5168,8 @@ class ToolDiscoveryQueueItem(TypedDict, total=False):
     user_agent: str | None  # HTTP User-Agent of the caller
 
 
-from litellm.models.managed_files import (  # noqa: E402
-    LiteLLM_ManagedFileTable as LiteLLM_ManagedFileTable,
-)
-from litellm.models.managed_files import (  # noqa: E402
-    LiteLLM_ManagedObjectTable as LiteLLM_ManagedObjectTable,
-)
-from litellm.models.managed_files import (  # noqa: E402
-    LiteLLM_ManagedVectorStoresTable as LiteLLM_ManagedVectorStoresTable,
-)
-from litellm.models.managed_files import (  # noqa: E402
-    LiteLLM_ManagedVectorStoreTable as LiteLLM_ManagedVectorStoreTable,
+from litellm.models.managed_files import (  # noqa: E402  # noqa: E402  # noqa: E402  # noqa: E402
+    LiteLLM_ManagedVectorStoresTable,
 )
 
 
