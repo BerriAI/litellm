@@ -1678,7 +1678,12 @@ def test_bedrock_messages_does_not_add_dangerous_tool_use_beta_without_safeguard
     assert "dangerous-tool-use-2026-09-03" not in result.get("anthropic_beta", [])
 
 
-_NAME_SCHEMA: Final = {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
+_NAME_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"name": {"type": "string"}},
+    "required": ["name"],
+    "additionalProperties": False,
+}
 
 
 @pytest.mark.parametrize(
