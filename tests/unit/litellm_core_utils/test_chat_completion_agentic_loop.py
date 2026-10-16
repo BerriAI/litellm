@@ -25,13 +25,13 @@ from typing import Any, Dict, Final, List, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
+from openai._legacy_response import LegacyAPIResponse
 
 import litellm
-from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.code_interpreter_interception.handler import (
     CodeInterpreterInterceptionLogger,
 )
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.chat_completion_agentic_loop import (
     maybe_run_chat_completion_agentic_loop,
 )
@@ -45,9 +45,9 @@ from litellm.types.integrations.custom_logger import (
     AgenticLoopRequestPatch,
 )
 from litellm.types.utils import (
+    ChatCompletionMessageToolCall,
     Choices,
     Function,
-    ChatCompletionMessageToolCall,
     Message,
     ModelResponse,
 )
