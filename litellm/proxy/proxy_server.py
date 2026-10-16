@@ -14546,8 +14546,8 @@ async def count_request_tokens(
     if provider_counter is not None:
         prompt_as_message: Final = (
             bool(prompt)
-            and messages is None
-            and contents is None
+            and not messages
+            and not contents
             and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
         )
         result: Final = await _try_provider_token_count(
@@ -14555,7 +14555,7 @@ async def count_request_tokens(
             custom_llm_provider=custom_llm_provider,
             model_to_use=model_to_use,
             messages=[{"role": "user", "content": prompt}] if prompt_as_message else messages,
-            contents=contents,
+            contents=None if prompt_as_message else contents,
             deployment=deployment,
             request_model=request.model,
             tools=tools,

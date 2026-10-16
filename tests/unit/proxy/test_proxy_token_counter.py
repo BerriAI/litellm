@@ -1217,7 +1217,7 @@ def _gemini_router() -> Router:
             {
                 "model_name": "gemini-counted",
                 "litellm_params": {
-                    "model": "gemini/gemini-2.5-flash",
+                    "model": "gemini/gemini-3.8-flash",
                     "api_key": "test-key",
                     "api_base": "https://count-tokens.test",
                 },
@@ -1273,7 +1273,7 @@ async def test_call_endpoint_counts_a_prompt_on_a_vertex_ai_deployment(monkeypat
             {
                 "model_name": "vertex-counted",
                 "litellm_params": {
-                    "model": "vertex_ai/claude-sonnet-4-5",
+                    "model": "vertex_ai/claude-sonnet-5-5",
                     "vertex_project": "test-project",
                     "vertex_location": "us-east5",
                 },
@@ -1293,21 +1293,49 @@ async def test_call_endpoint_counts_a_prompt_on_a_vertex_ai_deployment(monkeypat
     assert (from_prompt.error, from_prompt.total_tokens) == (False, 9)
 
 
+_FOX: Final = "The quick brown fox jumps over the lazy dog."
+
+
 @pytest.mark.asyncio
-async def test_call_endpoint_prompt_next_to_messages_counts_the_messages(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    "conversation",
+    [
+        {"messages": [{"role": "user", "content": _FOX}]},
+        {"contents": [{"role": "user", "parts": [{"text": _FOX}]}]},
+    ],
+    ids=["messages", "contents"],
+)
+async def test_call_endpoint_prompt_next_to_a_conversation_counts_the_conversation(
+    conversation: dict[str, JsonValue], monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _gemini_router())
     client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_gemini_word_counting_peer))
-    messages: Final = [{"role": "user", "content": "The quick brown fox jumps over the lazy dog."}]
 
     with patch.object(gemini_count_tokens_handler, "get_async_httpx_client", return_value=client):
         with_prompt: Final = await token_counter(
-            request=TokenCountRequest(model="gemini-counted", prompt="hi", messages=messages), call_endpoint=True
+            request=TokenCountRequest(model="gemini-counted", prompt="hi", **conversation), call_endpoint=True
         )
-        messages_only: Final = await token_counter(
-            request=TokenCountRequest(model="gemini-counted", messages=messages), call_endpoint=True
+        conversation_only: Final = await token_counter(
+            request=TokenCountRequest(model="gemini-counted", **conversation), call_endpoint=True
         )
 
-    assert with_prompt.total_tokens == messages_only.total_tokens == 9
+    assert with_prompt.total_tokens == conversation_only.total_tokens == 9
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("empty_conversation", [{"messages": []}, {"contents": []}], ids=["messages", "contents"])
+async def test_call_endpoint_prompt_next_to_an_empty_conversation_counts_the_prompt(
+    empty_conversation: dict[str, JsonValue], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _gemini_router())
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_gemini_word_counting_peer))
+
+    with patch.object(gemini_count_tokens_handler, "get_async_httpx_client", return_value=client):
+        counted: Final = await token_counter(
+            request=TokenCountRequest(model="gemini-counted", prompt=_FOX, **empty_conversation), call_endpoint=True
+        )
+
+    assert (counted.error, counted.total_tokens) == (False, 9)
 
 
 @pytest.mark.asyncio
@@ -1319,7 +1347,7 @@ async def test_call_endpoint_prompt_keeps_the_local_count_on_a_counter_that_need
             {
                 "model_name": "anthropic-counted",
                 "litellm_params": {
-                    "model": "anthropic/claude-sonnet-4-5",
+                    "model": "anthropic/claude-sonnet-5-5",
                     "api_key": "test-key",
                     "api_base": "https://count-tokens.test",
                 },
