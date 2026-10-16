@@ -375,3 +375,22 @@ async def test_async_transform_image_edit_request_downloads_only_the_first_url_o
 
     assert fetched == ["https://cdn.example/a.png"]
     assert base64.b64decode(data["input_image"]) == b"first-bytes"
+
+
+async def test_aimage_edit_none_image_raises_bad_request(monkeypatch):
+    """aimage_edit with image=None must surface a clean 400, not an APIConnectionError.
+
+    Regression test: the sync `image_edit` normalizes ``image=None`` to ``[]`` while
+    `aimage_edit` used to build ``[None]``, which crashed the BFL handler with
+    "Unsupported image type: <class 'NoneType'>".
+    """
+    import litellm
+
+    monkeypatch.setenv("BFL_API_KEY", "test-key")
+
+    with pytest.raises(litellm.BadRequestError, match="No image provided"):
+        await litellm.aimage_edit(
+            model="black_forest_labs/flux-kontext-pro",
+            prompt="make it blue",
+            image=None,
+        )
