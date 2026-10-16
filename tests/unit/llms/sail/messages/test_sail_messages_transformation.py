@@ -1,4 +1,5 @@
 import json
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -110,24 +111,10 @@ async def test_sail_messages_reject_conflicting_window_and_tier(sail_env: None, 
 async def test_sail_streamed_messages_bill_the_reported_window(
     sail_env: None, respx_mock: respx.MockRouter, spend_capture: SpendCapture
 ) -> None:
-    body: Final = messages_body()
-    usage: Final = {
-        "input_tokens": PROMPT_TOKENS - CACHED_TOKENS,
-        "cache_read_input_tokens": CACHED_TOKENS,
-        "output_tokens": COMPLETION_TOKENS,
-        "service_tier": "balanced",
-    }
-    events: Final = (
-        {"type": "message_start", "message": {**body, "content": [], "usage": {**usage, "output_tokens": 0}}},
-        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
-        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "ok"}},
-        {"type": "content_block_stop", "index": 0},
-        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": usage},
-        {"type": "message_stop"},
-    )
-    stream: Final = "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
     respx_mock.post(f"{SAIL_API_BASE}/messages").mock(
-        return_value=httpx.Response(200, content=stream, headers={"content-type": "text/event-stream"})
+        return_value=httpx.Response(
+            200, content=_messages_stream("balanced"), headers={"content-type": "text/event-stream"}
+        )
     )
 
     response: Final = await litellm.anthropic_messages(
@@ -137,3 +124,83 @@ async def test_sail_streamed_messages_bill_the_reported_window(
 
     assert chunks
     assert await spend_capture.settled_cost() == pytest.approx(cost_at("_balanced"))
+
+
+def _messages_stream(service_tier: str | None = None) -> str:
+    body: Final = messages_body()
+    usage: Final = {
+        "input_tokens": PROMPT_TOKENS - CACHED_TOKENS,
+        "cache_read_input_tokens": CACHED_TOKENS,
+        "output_tokens": COMPLETION_TOKENS,
+        **({"service_tier": service_tier} if service_tier else {}),
+    }
+    events: Final = (
+        {"type": "message_start", "message": {**body, "content": [], "usage": {**usage, "output_tokens": 0}}},
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "ok"}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": usage},
+        {"type": "message_stop"},
+    )
+    return "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize(
+    ("params", "drop_path", "wire_metadata", "suffix"),
+    [
+        ({"service_tier": "flex"}, "service_tier", None, ""),
+        ({"service_tier": "balanced"}, "service_tier", None, ""),
+        ({"metadata": {"completion_window": "balanced"}}, "metadata", None, ""),
+        (
+            {"metadata": {"completion_window": "balanced", "trace_id": "caller"}},
+            "metadata.completion_window",
+            {"trace_id": "caller"},
+            "",
+        ),
+        (
+            {"service_tier": "flex", "metadata": {"completion_window": "balanced"}},
+            "service_tier",
+            {"completion_window": "balanced"},
+            "_balanced",
+        ),
+        (
+            {"service_tier": "balanced", "metadata": {"completion_window": "flex", "trace_id": "caller"}},
+            "metadata.completion_window",
+            {"completion_window": "balanced", "trace_id": "caller"},
+            "_balanced",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_sail_messages_bill_the_window_sent_after_parameter_drops(
+    sail_env: None,
+    respx_mock: respx.MockRouter,
+    spend_capture: SpendCapture,
+    params: Mapping[str, object],
+    drop_path: str,
+    wire_metadata: Mapping[str, str] | None,
+    suffix: str,
+    stream: bool,
+) -> None:
+    upstream: Final = (
+        httpx.Response(200, content=_messages_stream(), headers={"content-type": "text/event-stream"})
+        if stream
+        else httpx.Response(200, json=messages_body())
+    )
+    route: Final = respx_mock.post(f"{SAIL_API_BASE}/messages").mock(return_value=upstream)
+    response: Final = await litellm.anthropic_messages(
+        model=MODEL,
+        messages=MESSAGES,
+        max_tokens=16,
+        stream=stream,
+        additional_drop_params=[drop_path],
+        litellm_call_id=spend_capture.call_id,
+        **params,
+    )
+    if stream:
+        async for _ in response:
+            pass
+
+    assert sent_body(route).get("metadata") == wire_metadata
+    assert await spend_capture.settled_cost() == pytest.approx(cost_at(suffix))
