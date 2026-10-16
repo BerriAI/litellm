@@ -500,7 +500,7 @@ class TestLangfuseOtelIntegration:
             "requester_ip_address": "10.0.0.1",
             "requester_metadata": {"ticket": "LIT-8283"},
         }
-        kwargs: Final = {
+        kwargs: Final[dict[str, object]] = {
             "litellm_params": {"metadata": {}},
             "standard_logging_object": {"metadata": request_metadata},
         }
@@ -519,9 +519,8 @@ class TestLangfuseOtelIntegration:
                 "langfuse.trace.metadata.user_api_key_team_alias": "team-a",
             }
 
-    def test_request_metadata_redaction_matches_vanilla_langfuse(self) -> None:
-        previous_flag: Final = litellm.redact_user_api_key_info
-        litellm.redact_user_api_key_info = True
+    def test_request_metadata_redaction_matches_vanilla_langfuse(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm, "redact_user_api_key_info", True)
         request_metadata: Final = {
             "user_api_key_hash": "hash123",
             "user_api_key_alias": "prod-key",
@@ -533,25 +532,22 @@ class TestLangfuseOtelIntegration:
             "requester_ip_address": "10.0.0.1",
             "requester_metadata": {"ticket": "LIT-8283"},
         }
-        kwargs: Final = {
+        kwargs: Final[dict[str, object]] = {
             "litellm_params": {"metadata": {}},
             "standard_logging_object": {"metadata": request_metadata},
         }
 
-        try:
-            with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
-                LangfuseOtelLogger._set_langfuse_specific_attributes(MagicMock(), kwargs, None)
+        with patch("litellm.integrations.arize._utils.safe_set_attribute") as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(MagicMock(), kwargs, None)
 
-                actual: Final = {call.args[1]: call.args[2] for call in mock_safe_set_attribute.call_args_list}
+            actual: Final = {call.args[1]: call.args[2] for call in mock_safe_set_attribute.call_args_list}
 
-                assert json.loads(actual["langfuse.observation.metadata"]) == {
-                    "spend_logs_metadata": {"env": "prod"},
-                    "requester_ip_address": "10.0.0.1",
-                    "requester_metadata": {"ticket": "LIT-8283"},
-                }
-                assert not [key for key in actual if key.startswith("langfuse.trace.metadata.")]
-        finally:
-            litellm.redact_user_api_key_info = previous_flag
+            assert json.loads(actual["langfuse.observation.metadata"]) == {
+                "spend_logs_metadata": {"env": "prod"},
+                "requester_ip_address": "10.0.0.1",
+                "requester_metadata": {"ticket": "LIT-8283"},
+            }
+            assert not [key for key in actual if key.startswith("langfuse.trace.metadata.")]
 
     def test_request_metadata_drops_null_fields_and_skips_empty_trace_identities(self) -> None:
         request_metadata: Final = {
@@ -564,7 +560,7 @@ class TestLangfuseOtelIntegration:
             "team_alias": None,
             "spend_logs_metadata": {"env": "prod"},
         }
-        kwargs: Final = {
+        kwargs: Final[dict[str, object]] = {
             "litellm_params": {"metadata": {}},
             "standard_logging_object": {"metadata": request_metadata},
         }

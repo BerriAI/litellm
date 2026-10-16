@@ -49,11 +49,9 @@ from litellm.constants import (
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     SESSION_ID_GENERATED_METADATA_KEY,
 )
-from litellm.integrations.langfuse.langfuse import log_requester_metadata
 from litellm.integrations.otel.model.semconv import resolve_operation
 from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
 from litellm.integrations.otel.model.utils import as_str, as_str_mapping, to_seconds
-from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.types.utils import InternalCallOrigin
 
 if TYPE_CHECKING:
@@ -61,6 +59,7 @@ if TYPE_CHECKING:
 
 _INTERNAL_CALL_ORIGINS: Final[frozenset[str]] = frozenset(get_args(InternalCallOrigin))
 _AUTH_ATTRIBUTE: Final = TypeAdapter(object)
+_REQUEST_METADATA_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 REQUESTER_METADATA_KEY: Final = "requester_metadata"
 REQUESTER_METADATA_PATH: Final = f"{REQUESTER_METADATA_KEY}."
@@ -466,20 +465,25 @@ def _model_info_id(model_info: object) -> str | None:
     return None
 
 
-def exported_request_metadata(payload: StandardLoggingPayload) -> Mapping[str, object]:
+def exported_request_metadata(payload: Mapping[str, object]) -> Mapping[str, object]:
     """The request metadata as the logging callbacks export it: ``user_api_key_*``
     dropped when ``litellm.redact_user_api_key_info`` is on, header keys nested
     under ``requester_metadata``, ``None`` values dropped."""
-    raw_meta: Final = cast(  # cast-ok: StandardLoggingPayload.get returns Any | None
-        Mapping[str, object], payload.get("metadata") or MappingProxyType({})
+    from litellm.integrations.langfuse.langfuse import log_requester_metadata
+    from litellm.litellm_core_utils.redact_messages import (  # pyright: ignore[reportUnknownVariableType]  # helper uses bare dict
+        redact_user_api_key_info as _redact_user_api_key_info,
     )
-    redacted: Final = cast(  # cast-ok: redact_user_api_key_info is untyped
-        Mapping[str, object],
-        redact_user_api_key_info(metadata=dict(raw_meta)),  # mutable-ok: the redactor requires a real dict
+
+    raw_metadata: Final = payload.get("metadata")
+    metadata: Final = _REQUEST_METADATA_MAPPING_ADAPTER.validate_python(
+        raw_metadata if isinstance(raw_metadata, Mapping) else MappingProxyType({})
     )
-    exported: Final = cast(  # cast-ok: log_requester_metadata is untyped
-        Mapping[str, object], log_requester_metadata(redacted)
+    redact_metadata: Final = cast(  # cast-ok: adapter validates the helper's output below
+        Callable[[dict[str, object]], object],
+        _redact_user_api_key_info,
     )
+    redacted: Final = _REQUEST_METADATA_MAPPING_ADAPTER.validate_python(redact_metadata(dict(metadata)))
+    exported: Final = _REQUEST_METADATA_MAPPING_ADAPTER.validate_python(log_requester_metadata(redacted))
     return MappingProxyType({key: value for key, value in exported.items() if value is not None})
 
 

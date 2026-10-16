@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Final
 
 import httpx
-import psutil
 import yaml
 from anthropic import Anthropic, AsyncAnthropic
 from integration._support.client import Gateway, Scenario, eventually
@@ -928,20 +927,16 @@ def test_langfuse_otel_worker_kill_mid_burst_keeps_serving_and_exports(gateway: 
                 return 0, repr(error)
             return response.status_code, response.json()["id"] if response.status_code == 200 else response.text
 
-        workers: Final = tuple(
-            child
-            for child in psutil.Process(rig.proxy.process.pid).children(recursive=True)
-            if "spawn_main" in " ".join(child.cmdline())
-        )
-        assert len(workers) >= 2, f"expected multiple uvicorn workers, got {workers!r}"
-        victim: Final = workers[0]
+        workers: Final = rig.proxy.worker_pids()
+        assert len(workers) >= 2, f"expected multiple uvicorn workers, got {sorted(workers)!r}"
+        victim: Final = min(workers)
         with ThreadPoolExecutor(max_workers=20) as pool:
             futures: Final = tuple(pool.submit(call, index) for index in range(20))
             while sum(f.done() for f in futures) < 5:
                 wait(futures, timeout=0.05)
-            victim.kill()
+            replacement: Final = rig.proxy.kill_worker(victim)
             outcomes: Final = tuple(f.result() for f in futures)
-        assert not victim.is_running() or victim.status() == psutil.STATUS_ZOMBIE
+        assert replacement != victim
         succeeded: Final = tuple(identifier for status, identifier in outcomes if status == 200)
         assert succeeded, outcomes
         post_kill: Final = tuple(call(20 + index) for index in range(5))

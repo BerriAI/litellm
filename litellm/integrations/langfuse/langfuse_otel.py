@@ -1,9 +1,11 @@
 import base64
 import json
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Optional
+
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.integrations.arize import _utils
@@ -25,18 +27,12 @@ else:
     Span = Any
 
 
+_STANDARD_LOGGING_OBJECT_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
 LANGFUSE_CLOUD_EU_ENDPOINT: Final = "https://cloud.langfuse.com/api/public/otel"
 LANGFUSE_CLOUD_US_ENDPOINT: Final = "https://us.cloud.langfuse.com/api/public/otel"
 LANGFUSE_INGESTION_VERSION_HEADER: Final = "x-langfuse-ingestion-version"
 LANGFUSE_INGESTION_VERSION: Final = "4"
-
-_TRACE_IDENTITY_FIELDS: Final = (
-    "user_api_key_alias",
-    "user_api_key_user_id",
-    "user_api_key_end_user_id",
-    "user_api_key_team_id",
-    "user_api_key_team_alias",
-)
 
 
 class LangfuseOtelLogger(OpenTelemetry):
@@ -135,26 +131,30 @@ class LangfuseOtelLogger(OpenTelemetry):
                 safe_set_attribute(span, enum_attr.value, value)
 
     @staticmethod
-    def _set_request_metadata_attributes(span: Span, kwargs: dict[str, object]) -> None:
+    def _set_request_metadata_attributes(
+        span: Span,
+        kwargs: dict[str, object],  # mutable-ok: required callback signature accepts kwargs as a dict
+    ) -> None:
         from litellm.integrations.arize._utils import safe_set_attribute
-        from litellm.integrations.langfuse.langfuse import log_requester_metadata
-        from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
+        from litellm.integrations.otel.mappers.langfuse import TRACE_IDENTITY_FIELDS
+        from litellm.integrations.otel.model.metadata import exported_request_metadata
         from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-        standard_logging_object: Final = kwargs.get("standard_logging_object")
-        request_metadata: Final = (
-            standard_logging_object.get("metadata") if isinstance(standard_logging_object, dict) else None
-        )
-        if not isinstance(request_metadata, dict):
+        raw_standard_logging_object: Final = kwargs.get("standard_logging_object")
+        if not isinstance(raw_standard_logging_object, dict):
             return
-        observation_metadata: Final = {  # mutable-ok: stays a real dict for safe_dumps and .get reads below
-            key: value
-            for key, value in log_requester_metadata(redact_user_api_key_info(metadata=request_metadata)).items()
-            if value is not None
-        }
-        safe_set_attribute(span, LangfuseSpanAttributes.OBSERVATION_METADATA.value, safe_dumps(observation_metadata))
+        standard_logging_object: Final = _STANDARD_LOGGING_OBJECT_ADAPTER.validate_python(raw_standard_logging_object)
+        if not isinstance(standard_logging_object.get("metadata"), dict):
+            return
+        observation_metadata: Final = exported_request_metadata(standard_logging_object)
+        if observation_metadata:
+            safe_set_attribute(
+                span,
+                LangfuseSpanAttributes.OBSERVATION_METADATA.value,
+                safe_dumps(dict(observation_metadata)),
+            )
         trace_prefix: Final = LangfuseSpanAttributes.TRACE_METADATA.value
-        for field in _TRACE_IDENTITY_FIELDS:
+        for field in TRACE_IDENTITY_FIELDS:
             if value := observation_metadata.get(field):
                 safe_set_attribute(span, f"{trace_prefix}.{field}", value)
 

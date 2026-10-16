@@ -834,26 +834,22 @@ def test_langfuse_mapper_skips_empty_identity_values():
     assert attrs["langfuse.trace.metadata.user_api_key_end_user_id"] == "end-1"
 
 
-def test_langfuse_mapper_redacts_user_api_key_fields():
+def test_langfuse_mapper_redacts_user_api_key_fields(monkeypatch: pytest.MonkeyPatch) -> None:
     import litellm
 
-    saved: Final = litellm.redact_user_api_key_info
-    try:
-        litellm.redact_user_api_key_info = True
-        payload: Final[dict[str, object]] = {
-            "call_type": "acompletion",
-            "custom_llm_provider": "openai",
-            "model": "gpt-4o",
-            "metadata": {
-                "user_api_key_alias": "prod-key",
-                "user_api_key_team_id": "team-9",
-                "spend_logs_metadata": {"ticket": "LIT-8283"},
-            },
-            "response": {},
-        }
-        attrs: Final = LangfuseMapper().map(LLMCallSpanData.from_standard_logging_payload(payload))
-    finally:
-        litellm.redact_user_api_key_info = saved
+    monkeypatch.setattr(litellm, "redact_user_api_key_info", True)
+    payload: Final[dict[str, object]] = {
+        "call_type": "acompletion",
+        "custom_llm_provider": "openai",
+        "model": "gpt-4o",
+        "metadata": {
+            "user_api_key_alias": "prod-key",
+            "user_api_key_team_id": "team-9",
+            "spend_logs_metadata": {"ticket": "LIT-8283"},
+        },
+        "response": {},
+    }
+    attrs: Final = LangfuseMapper().map(LLMCallSpanData.from_standard_logging_payload(payload))
 
     exported: Final = json.loads(attrs["langfuse.observation.metadata"])
     assert not [key for key in exported if key.startswith("user_api_key")]

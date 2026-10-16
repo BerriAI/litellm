@@ -11,9 +11,11 @@ the JSON-serialized payloads. ``trace_attributes`` maps the caller's trace contr
 """
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import Final
+
+from pydantic import TypeAdapter
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
 from litellm.integrations.otel.mappers.utils import (
@@ -40,6 +42,7 @@ LANGFUSE_TRACE_SESSION_ID: Final = "session.id"
 LANGFUSE_TRACE_TAGS: Final = "langfuse.trace.tags"
 LANGFUSE_OBSERVATION_METADATA: Final = "langfuse.observation.metadata"
 LANGFUSE_TRACE_METADATA_PREFIX: Final = "langfuse.trace.metadata."
+_REQUEST_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 TRACE_IDENTITY_FIELDS: Final = (
     "user_api_key_alias",
     "user_api_key_user_id",
@@ -88,7 +91,7 @@ class LangfuseMapper:
     # JSON-payload attributes: each builder returns the serialized blob or None.
     _BLOB_ATTRS: dict[str, Callable[[LLMCallSpanData], AttrValue | None]] = {
         LANGFUSE_OBSERVATION_METADATA: lambda d: (
-            safe_dumps(dict(d.request_metadata))  # mutable-ok: safe_dumps only serializes real dicts
+            safe_dumps({**_REQUEST_METADATA_ADAPTER.validate_python(d.request_metadata)})
             if d.request_metadata
             else None
         ),
