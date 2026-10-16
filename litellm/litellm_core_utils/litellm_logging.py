@@ -2257,10 +2257,11 @@ class Logging(LiteLLMLoggingBaseClass):
         self.model_call_details["combined_usage_object"] = usage
         self.model_call_details["response_cost"] = response_cost
 
-    def record_continued_partial(self, usage: Usage, response_cost: float) -> None:
-        """Bill what a cut stream already consumed on this continuation's success log, so spend counts both calls."""
+    def record_continued_partial(self, usage: Usage, response_cost: float, response_id: str) -> None:
+        """Bill what a cut stream already consumed on this continuation's success log, under the id the caller saw."""
         self.model_call_details["continued_partial_usage"] = usage
         self.model_call_details["continued_partial_cost"] = response_cost
+        self.model_call_details["continued_response_id"] = response_id
 
     def _add_continued_partial_spend(self, response: object) -> None:
         partial_usage: Final = self.model_call_details.get("continued_partial_usage")
@@ -2587,6 +2588,15 @@ class Logging(LiteLLMLoggingBaseClass):
             return response
         return response.model_copy(update={"model": model})
 
+    def _with_continued_response_id(
+        self,
+        response: ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse,
+    ) -> ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse:
+        response_id: Final = self.model_call_details.get("continued_response_id")
+        if not isinstance(response_id, str) or getattr(response, "id", None) == response_id:
+            return response
+        return response.model_copy(update={"id": response_id})
+
     def _success_handler_helper_fn(
         self,
         result: object = None,
@@ -2907,7 +2917,9 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
                 self._add_continued_partial_spend(complete_streaming_response)
                 self._merge_hidden_params_from_response_into_metadata(complete_streaming_response)
-                logged_streaming_response: Final = self._with_client_facing_stream_model(complete_streaming_response)
+                logged_streaming_response: Final = self._with_continued_response_id(
+                    self._with_client_facing_stream_model(complete_streaming_response)
+                )
                 self.model_call_details["complete_streaming_response"] = logged_streaming_response
                 ## STANDARDIZED LOGGING PAYLOAD
                 self.model_call_details["standard_logging_object"] = self._build_standard_logging_payload(
@@ -3450,7 +3462,9 @@ class Logging(LiteLLMLoggingBaseClass):
 
             await self._prepare_baseline_cache_estimate(complete_streaming_response)
 
-            logged_streaming_response: Final = self._with_client_facing_stream_model(complete_streaming_response)
+            logged_streaming_response: Final = self._with_continued_response_id(
+                self._with_client_facing_stream_model(complete_streaming_response)
+            )
             self.model_call_details["async_complete_streaming_response"] = logged_streaming_response
 
             ## STANDARDIZED LOGGING PAYLOAD

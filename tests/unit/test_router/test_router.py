@@ -3330,31 +3330,45 @@ async def test_continued_stream_success_log_bills_every_cut_leg(
         success["prompt_tokens"],
         success["completion_tokens"],
     )
+    assert {chunk.id for chunk in chunks} == {spend_row["request_id"]}
 
 
 def test_carry_partial_spend_to_fallback_adds_the_partial_the_cut_stream_inherited():
     from litellm.types.utils import Usage
 
     cut_logging: Final = LiteLLMLogging(
-        model="deepseek-chat", messages=[], stream=True, call_type="acompletion",
+        model="deepseek/deepseek-chat", messages=[], stream=True, call_type="acompletion",
         start_time=datetime.now(), litellm_call_id="cut", function_id="cut",
     )
-    cut_logging.model_call_details["response_cost"] = 0.002
-    cut_logging.record_continued_partial(usage=Usage(prompt_tokens=40, completion_tokens=7, total_tokens=47), response_cost=0.001)
+    cut_logging.model_call_details["response_cost"] = 0.5
+    cut_logging.update_environment_variables(
+        litellm_params={"custom_llm_provider": "deepseek"}, optional_params={}, model="deepseek/deepseek-chat"
+    )
+    cut_logging.record_continued_partial(
+        usage=Usage(prompt_tokens=40, completion_tokens=7, total_tokens=47),
+        response_cost=0.001,
+        response_id="chatcmpl-primary",
+    )
     fallback_logging: Final = LiteLLMLogging(
         model="mistral-large-latest", messages=[], stream=True, call_type="acompletion",
         start_time=datetime.now(), litellm_call_id="fallback", function_id="fallback",
     )
 
     Router._carry_partial_spend_to_fallback(
-        cast(CustomStreamWrapper, SimpleNamespace(logging_obj=cut_logging)),
+        cast(CustomStreamWrapper, SimpleNamespace(logging_obj=cut_logging, model="deepseek/deepseek-chat")),
         SimpleNamespace(logging_obj=fallback_logging),
-        Usage(prompt_tokens=60, completion_tokens=3, total_tokens=63),
+        litellm.ModelResponse(id="chatcmpl-relay", usage=Usage(prompt_tokens=60, completion_tokens=3, total_tokens=63)),
     )
 
+    relay_prompt_cost, relay_completion_cost = litellm.cost_per_token(
+        model="deepseek/deepseek-chat", prompt_tokens=60, completion_tokens=3
+    )
     carried_usage: Final = fallback_logging.model_call_details["continued_partial_usage"]
     assert (carried_usage.prompt_tokens, carried_usage.completion_tokens) == (100, 10)
-    assert fallback_logging.model_call_details["continued_partial_cost"] == pytest.approx(0.003)
+    assert fallback_logging.model_call_details["continued_partial_cost"] == pytest.approx(
+        relay_prompt_cost + relay_completion_cost + 0.001
+    )
+    assert fallback_logging.model_call_details["continued_response_id"] == "chatcmpl-primary"
 
 
 @pytest.mark.asyncio

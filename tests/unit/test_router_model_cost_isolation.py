@@ -520,13 +520,14 @@ def test_should_not_pollute_shared_key_with_custom_nonzero_pricing():
     )
 
 
-def test_regex_lookaround_flag_stays_on_the_deployment_that_set_it() -> None:
-    """A deployment's ``supports_regex_lookaround`` override must not land on the shared
+@pytest.mark.parametrize("flag", ["supports_regex_lookaround", "supports_assistant_prefill"])
+def test_capability_flag_stays_on_the_deployment_that_set_it(flag: str) -> None:
+    """A deployment's capability override must not land on the shared
     ``{provider}/{model}`` key, or every sibling deployment of that model would inherit it."""
     backend_model = "bedrock/us.xai.grok-4.6"
     deploy_id = "grok-deploy-keep-regex"
 
-    builtin_flag = litellm.get_model_info(model=backend_model).get("supports_regex_lookaround")
+    builtin_flag = litellm.get_model_info(model=backend_model).get(flag)
     model_keys = {
         deploy_id: litellm.model_cost.get(deploy_id),
         backend_model: copy.deepcopy(litellm.model_cost.get(backend_model)),
@@ -537,13 +538,13 @@ def test_regex_lookaround_flag_stays_on_the_deployment_that_set_it() -> None:
                 {
                     "model_name": "grok-keep-regex",
                     "litellm_params": {"model": backend_model},
-                    "model_info": {"id": deploy_id, "supports_regex_lookaround": not builtin_flag},
+                    "model_info": {"id": deploy_id, flag: not builtin_flag},
                 }
             ],
         )
 
-        assert litellm.model_cost[deploy_id]["supports_regex_lookaround"] is (not builtin_flag)
-        assert litellm.get_model_info(model=backend_model).get("supports_regex_lookaround") is builtin_flag
+        assert litellm.model_cost[deploy_id][flag] is (not builtin_flag)
+        assert litellm.get_model_info(model=backend_model).get(flag) is builtin_flag
     finally:
         _restore_model_cost_entries(model_keys)
 

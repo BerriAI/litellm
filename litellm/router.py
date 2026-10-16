@@ -371,6 +371,7 @@ from litellm.utils import (
     EmbeddingResponse,
     ModelResponse,
     Rules,
+    TextCompletionResponse,
     function_setup,
     get_llm_provider,
     get_non_default_completion_params,
@@ -3128,26 +3129,35 @@ class Router:
 
     @staticmethod
     def _carry_partial_spend_to_fallback(
-        cut_stream: CustomStreamWrapper, fallback_response: object, partial_usage: Usage | None
+        cut_stream: CustomStreamWrapper,
+        fallback_response: object,
+        partial_response: ModelResponse | TextCompletionResponse | None,
     ) -> None:
         """Bill the cut stream's partial, and any partial it inherited, on the continuation's success log."""
         from litellm.cost_calculator import BaseTokenUsageProcessor
 
         fallback_logging: Final = getattr(fallback_response, "logging_obj", None)
+        partial_usage: Final = getattr(partial_response, "usage", None)
+        if partial_response is None or not isinstance(partial_usage, Usage):
+            return
+        if not isinstance(fallback_logging, LiteLLMLogging):
+            return
         cut_details: Final = cut_stream.logging_obj.model_call_details
-        cut_cost: Final = cut_details.get("response_cost")
         inherited_usage: Final = cut_details.get("continued_partial_usage")
         inherited_cost: Final = cut_details.get("continued_partial_cost")
-        if partial_usage is None or not isinstance(fallback_logging, LiteLLMLogging):
-            return
+        inherited_id: Final = cut_details.get("continued_response_id")
+        priced_partial: Final = (
+            partial_response.model_copy(update={"model": cut_stream.model}) if cut_stream.model else partial_response
+        )
         fallback_logging.record_continued_partial(
             usage=BaseTokenUsageProcessor.combine_usage_objects(
                 usage_objects=[partial_usage, inherited_usage]
                 if isinstance(inherited_usage, Usage)
                 else [partial_usage]
             ),
-            response_cost=(float(cut_cost) if isinstance(cut_cost, (int, float)) else 0.0)
+            response_cost=(cut_stream.logging_obj.response_cost_calculator(result=priced_partial) or 0.0)
             + (inherited_cost if isinstance(inherited_cost, float) else 0.0),
+            response_id=inherited_id if isinstance(inherited_id, str) else partial_response.id,
         )
 
     @staticmethod
@@ -3338,7 +3348,7 @@ class Router:
                     if hasattr(fallback_response, "__aiter__"):
                         if continuation_output is not None:
                             Router._carry_partial_spend_to_fallback(
-                                model_response, fallback_response, complete_response_object_usage
+                                model_response, fallback_response, complete_response_object
                             )
                         prepared_fallback_hidden_params = Router._adopt_fallback_response_headers(
                             wrapper_ref, fallback_response
