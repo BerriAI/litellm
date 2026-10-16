@@ -777,12 +777,25 @@ class TestBedrockRealtimeProviderFailurePropagation:
         dispatched["logging_obj"] = RecordingLogging()
         return dispatched
 
+    USER_TEXT = json.dumps(
+        {
+            "type": "conversation.item.create",
+            "item": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+        }
+    )
+    REJECTED_SESSION_UPDATE = json.dumps({"type": "session.update", "session": {"temperature": "0.2"}})
+
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "client_messages",
+        [[SESSION_UPDATE], [USER_TEXT], [REJECTED_SESSION_UPDATE, USER_TEXT]],
+        ids=["session-update-first", "input-first", "input-after-rejected-update"],
+    )
     async def test_mid_stream_failure_escapes_keeps_partial_spend_and_blocks_replay(
-        self, stub_aws_sdk_client, spend_dispatch
+        self, stub_aws_sdk_client, spend_dispatch, client_messages
     ):
         handler = BedrockRealtime()
-        websocket = ConnectedClientWS([self.SESSION_UPDATE])
+        websocket = ConnectedClientWS(client_messages)
         stream = ScriptedBedrockStream(self.TEXT_TURN, receiver_type=BreakingBedrockReceiver)
         stub_aws_sdk_client["streams"] = [stream]
 

@@ -123,11 +123,15 @@ def _integer_setting(value: JsonValue) -> int | None:
     return None if number is None else int(number)
 
 
-def _malformed_number_settings(session_config: Mapping[str, JsonValue]) -> tuple[str, ...]:
+def _malformed_settings(session_config: Mapping[str, JsonValue]) -> tuple[str, ...]:
+    instructions: Final = session_config.get("instructions")
+    voice: Final = session_config.get("voice")
     temperature: Final = session_config.get("temperature")
     max_output_tokens: Final = session_config.get("max_response_output_tokens")
     output_rate_hertz: Final = session_config.get("output_sample_rate_hertz")
     malformed: Final = (
+        ("instructions", instructions is not None and not isinstance(instructions, str)),
+        ("voice", voice is not None and not isinstance(voice, str)),
         ("temperature", temperature is not None and _number_setting(temperature) is None),
         (
             "max_response_output_tokens",
@@ -445,8 +449,8 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             if isinstance(requested_tools, list)
             else base.tools_json
         )
-        system_prompt: Final = base.system_prompt if instructions is None else str(instructions)
-        voice_id: Final = base.voice_id if voice is None else str(voice)
+        system_prompt: Final = instructions if isinstance(instructions, str) else base.system_prompt
+        voice_id: Final = voice if isinstance(voice, str) else base.voice_id
         format_sample_rate: Final = (
             base.output_sample_rate_hertz
             if output_audio_format is None
@@ -476,13 +480,14 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         session_config: Final = json_message.get("session")
         if not isinstance(session_config, Mapping):
             return None
-        malformed: Final = () if self.drop_params else _malformed_number_settings(session_config)
+        malformed: Final = () if self.drop_params else _malformed_settings(session_config)
         if malformed:
             return BedrockSessionUpdateRejection(
                 code="invalid_type",
                 message=(
-                    f"Invalid type for 'session.{malformed[0]}': Bedrock Nova Sonic needs a number for temperature "
-                    "and output_sample_rate_hertz, and a number or 'inf' for max_response_output_tokens. "
+                    f"Invalid type for 'session.{malformed[0]}': Bedrock Nova Sonic needs a string for instructions "
+                    "and voice, a number for temperature and output_sample_rate_hertz, and a number or 'inf' "
+                    "for max_response_output_tokens. "
                     "Set drop_params to drop it instead"
                 ),
                 param=f"session.{malformed[0]}",

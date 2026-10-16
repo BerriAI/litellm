@@ -1655,6 +1655,8 @@ class TestBedrockRealtimeUserEventsAndUsage:
             ({"max_response_output_tokens": float("inf")}, "session.max_response_output_tokens"),
             ({"max_response_output_tokens": True}, "session.max_response_output_tokens"),
             ({"output_sample_rate_hertz": "16000"}, "session.output_sample_rate_hertz"),
+            ({"instructions": {"role": "pirate"}}, "session.instructions"),
+            ({"voice": {"id": "voice_123"}}, "session.voice"),
         ],
     )
     def test_malformed_number_setting_is_rejected_without_drop_params(self, session, param):
@@ -1676,6 +1678,25 @@ class TestBedrockRealtimeUserEventsAndUsage:
         assert config.session_update_rejection({"type": "session.update", "session": session}) is None
         inference: Final = self._inference_configuration(config, session)
         assert (inference["temperature"], inference["maxTokens"]) == (0.7, 1024)
+
+    def test_non_string_instructions_and_voice_are_dropped_with_drop_params(self):
+        config: Final = BedrockRealtimeConfig(drop_params=True)
+        session: Final = {"instructions": {"role": "pirate"}, "voice": {"id": "voice_123"}}
+        assert config.session_update_rejection({"type": "session.update", "session": session}) is None
+        sent: Final = self._voice_and_system_prompt(config, session)
+        assert sent == self._voice_and_system_prompt(BedrockRealtimeConfig(), {})
+
+    @staticmethod
+    def _voice_and_system_prompt(config: BedrockRealtimeConfig, session: dict[str, object]) -> tuple[object, object]:
+        events: Final = [
+            json.loads(message)["event"]
+            for message in config.transform_session_update_event({"type": "session.update", "session": session})
+        ]
+        voice: Final = next(
+            e["promptStart"]["audioOutputConfiguration"]["voiceId"] for e in events if "promptStart" in e
+        )
+        system_prompt: Final = next(e["textInput"]["content"] for e in events if "textInput" in e)
+        return voice, system_prompt
 
     def test_null_number_settings_count_as_unset(self):
         session: Final = {"temperature": None, "max_response_output_tokens": None}

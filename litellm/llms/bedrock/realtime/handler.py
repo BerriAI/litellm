@@ -207,6 +207,10 @@ def _parse_client_message(message: str) -> Mapping[str, JsonValue]:
         return _EMPTY_JSON_OBJECT
 
 
+def _mark_session_committed(client_ws: RealtimeClientWebSocket) -> None:
+    client_ws.scope[BEDROCK_REALTIME_SESSION_COMMITTED_SCOPE_KEY] = True  # rebind-ok: scope outlives the attempt
+
+
 async def _ack_session_update(
     client_ws: RealtimeClientWebSocket,
     bedrock_stream: BedrockBidirectionalStream,
@@ -218,7 +222,7 @@ async def _ack_session_update(
     """Ack the client's session.update once Bedrock accepted the stream; False means the client is gone."""
     await bedrock_stream.await_output()
     client_ws.scope.pop(BEDROCK_REALTIME_PENDING_SESSION_UPDATE_SCOPE_KEY, None)
-    client_ws.scope[BEDROCK_REALTIME_SESSION_COMMITTED_SCOPE_KEY] = True  # rebind-ok: scope outlives the attempt
+    _mark_session_committed(client_ws)
     if logging_obj is None:
         return True
     requested_modalities: Final = _CLIENT_MODALITIES_ADAPTER.validate_python(
@@ -538,6 +542,8 @@ class BedrockRealtime(BaseAWSLLM):
                     model=model,
                     session_configuration_request=session_state.get("session_configuration_request"),
                 )
+                if transformed_messages and not is_session_update:
+                    _mark_session_committed(client_ws)
                 for bedrock_message in transformed_messages:
                     await send_to_bedrock(bedrock_message)
 
