@@ -6,7 +6,8 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.mistral.ai/api/
 """
 
-from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
+from itertools import chain
 from typing import TYPE_CHECKING, Final, Literal, cast, get_type_hints, overload
 
 import httpx
@@ -28,7 +29,7 @@ from litellm.router_utils.reasoning_effort_capability import (
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.mistral import MistralThinkingBlock, MistralToolCallMessage
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantToolCall
 from litellm.types.utils import ModelResponse, ModelResponseStream
 from litellm.utils import convert_to_model_response_object, supports_reasoning
 
@@ -273,13 +274,14 @@ class MistralConfig(OpenAIGPTConfig):
         messages = handle_messages_with_content_list_to_str_conversion(messages)
 
         ## 3. Handle name in message
+        tool_call_ids: Final = MistralConfig._tool_call_ids(messages)
         new_messages: Final[list[AllMessageValues]] = []
         for m in messages:
             m = MistralConfig._handle_name_in_message(m)
             m = MistralConfig._handle_tool_call_message(m)
-            if m.get("role") != "tool" and MistralConfig._is_empty_assistant_message(m):
+            if MistralConfig._is_empty_assistant_message(m) and not MistralConfig._answers(m, tool_call_ids):
                 continue
-            m = strip_none_values_from_message(m)  # prevents 'extra_forbidden' error
+            m = strip_none_values_from_message(MistralConfig._with_tool_reply_content(m))
             new_messages.append(m)
 
         if is_async:
@@ -468,6 +470,25 @@ class MistralConfig(OpenAIGPTConfig):
                 mistral_tool_calls.append(_tool_call_message)
             message["tool_calls"] = mistral_tool_calls
         return message
+
+    @staticmethod
+    def _tool_call_ids(messages: Sequence[AllMessageValues]) -> frozenset[str]:
+        tool_calls: Final[Iterator[ChatCompletionAssistantToolCall]] = chain.from_iterable(
+            message.get("tool_calls") or () for message in messages if message["role"] == "assistant"
+        )
+        return frozenset(tool_call_id for tool_call in tool_calls if (tool_call_id := tool_call.get("id")))
+
+    @staticmethod
+    def _answers(message: AllMessageValues, tool_call_ids: frozenset[str]) -> bool:
+        return message["role"] == "tool" and message.get("tool_call_id") in tool_call_ids
+
+    @staticmethod
+    def _with_tool_reply_content(message: AllMessageValues) -> AllMessageValues:
+        match message:
+            case {"role": "tool"} if not message.get("content"):
+                return {**message, "content": ""}
+            case _:
+                return message
 
     @classmethod
     def _is_empty_assistant_message(cls, message: AllMessageValues) -> bool:

@@ -1,5 +1,6 @@
+import json
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from itertools import chain, islice
+from itertools import chain
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
@@ -7,9 +8,9 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
+from litellm.litellm_core_utils.prompt_templates.factory import sanitize_anthropic_tool_use_id
 from litellm.llms.anthropic.pass_through.messages.utils import normalize_native_messages
-from litellm.responses.litellm_completion_transformation.transformation import drops_unsupported_params
 from litellm.types.utils import TokenCountMessagesFormat
 
 _CONVERTIBLE_BLOCK_TYPES: Final = MappingProxyType(
@@ -170,18 +171,71 @@ def malformed_tool_result_text_error(messages: Iterable[Mapping[str, object]]) -
     return next(chain.from_iterable(map(_tool_result_text_errors, blocks)), None)
 
 
-_IndexedParts: TypeAlias = tuple[tuple[int, object], ...]
+_KeptParts: TypeAlias = Mapping[int, object]
 
 
-def _non_string_text_parts(content: object) -> _IndexedParts:
-    return tuple((index, block) for index, block in enumerate(_list_items(content)) if _has_non_string_text(block))
+def _scannable_text(text: object) -> str:
+    return json.dumps(text, default=str)
 
 
-def _tool_result_non_string_texts(block: object) -> tuple[tuple[str, _IndexedParts], ...]:
+def _scannable_part(part: object) -> object:
+    match as_str_mapping(part):
+        case {"type": "text", "text": str()}:
+            return part
+        case {"type": "text", "text": text} as text_block:
+            return {**text_block, "text": _scannable_text(text)}
+        case _:
+            return part
+
+
+def _scannable_block(block: object) -> object:
+    match as_str_mapping(block):
+        case {"type": "tool_result", "content": list()} as tool_result:
+            return {
+                **tool_result,
+                "content": [_scannable_part(part) for part in _list_items(tool_result.get("content"))],
+            }
+        case _:
+            return block
+
+
+def _scannable_message(message: object) -> object:
+    match as_str_mapping(message):
+        case {"role": "user", "content": list()} as user_message:
+            return {
+                **user_message,
+                "content": [_scannable_block(block) for block in _user_content_blocks(user_message)],
+            }
+        case _:
+            return message
+
+
+def _scannable_messages(messages: object) -> object:
+    items: Final = _list_items(messages)
+    return [_scannable_message(message) for message in items] if items else messages
+
+
+def scannable_tool_result_request(request: object) -> object:
+    match as_str_mapping(request):
+        case {"messages": messages} as request_fields:
+            return {**request_fields, "messages": _scannable_messages(messages)}
+        case None:
+            return request
+        case request_fields:
+            return {**request_fields}
+
+
+def _non_string_text_parts(content: object) -> _KeptParts:
+    return MappingProxyType(
+        {index: block for index, block in enumerate(_list_items(content)) if _has_non_string_text(block)}
+    )
+
+
+def _tool_result_non_string_texts(block: object) -> tuple[tuple[str, _KeptParts], ...]:
     match block:
         case {"type": "tool_result", "tool_use_id": str(tool_use_id), "content": object() as content}:
             parts: Final = _non_string_text_parts(content)
-            return ((tool_use_id, parts),) if parts else ()
+            return ((sanitize_anthropic_tool_use_id(tool_use_id), parts),) if parts else ()
         case _:
             return ()
 
@@ -194,26 +248,38 @@ def _content_blocks(content: object) -> tuple[object, ...]:
             return _list_items(content)
 
 
-def _merged_content(blocks: tuple[object, ...], kept: _IndexedParts) -> tuple[object, ...]:
-    rewritten: Final = iter(blocks)
-    previous_indices: Final = (-1, *(index for index, _ in kept))
-    segments: Final = (
-        (*islice(rewritten, index - previous - 1), part)
-        for previous, (index, part) in zip(previous_indices, kept, strict=False)
-    )
-    return (*chain.from_iterable(segments), *rewritten)
-
-
-def _restored_block(block: object, kept: Mapping[str, _IndexedParts]) -> object:
+def _text_of(block: object) -> str | None:
     match as_str_mapping(block):
-        case {"type": "tool_result", "tool_use_id": str(tool_use_id)} as tool_result if tool_use_id in kept:
-            content: Final = _merged_content(_content_blocks(tool_result.get("content")), kept[tool_use_id])
-            return {**tool_result, "content": list(content)}
+        case {"type": "text", "text": str(text)}:
+            return text
+        case _:
+            return None
+
+
+def _restored_part(block: object, original: object) -> object:
+    match as_str_mapping(original):
+        case {"text": text} if _text_of(block) == _scannable_text(text):
+            return original
         case _:
             return block
 
 
-def _restored_message(message: object, kept: Mapping[str, _IndexedParts]) -> object:
+def _merged_content(blocks: tuple[object, ...], kept: _KeptParts) -> tuple[object, ...]:
+    return tuple(_restored_part(block, kept.get(index)) for index, block in enumerate(blocks))
+
+
+def _restored_block(block: object, kept: Mapping[str, _KeptParts]) -> object:
+    match as_str_mapping(block):
+        case {"type": "tool_result", "tool_use_id": str(tool_use_id)} as tool_result if (
+            sanitize_anthropic_tool_use_id(tool_use_id) in kept
+        ):
+            parts: Final = kept[sanitize_anthropic_tool_use_id(tool_use_id)]
+            return {**tool_result, "content": list(_merged_content(_content_blocks(tool_result.get("content")), parts))}
+        case _:
+            return block
+
+
+def _restored_message(message: object, kept: Mapping[str, _KeptParts]) -> object:
     match as_str_mapping(message):
         case {"role": "user", "content": list()} as user_message:
             blocks: Final = _list_items(user_message.get("content"))
@@ -229,6 +295,34 @@ def keep_non_string_tool_result_texts(rewritten: Sequence[object], original: obj
     if not kept:
         return rewritten
     return [_restored_message(message, kept) for message in rewritten]
+
+
+def _without_non_string_text(block: object) -> object:
+    match as_str_mapping(block):
+        case {"type": "tool_result", "content": list()} as tool_result:
+            parts: Final = _list_items(tool_result.get("content"))
+            return {**tool_result, "content": [part for part in parts if not _has_non_string_text(part)]}
+        case _:
+            return block
+
+
+def _without_non_string_texts(
+    message: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
+    match message:
+        case {"role": "user", "content": list()}:
+            return {**message, "content": [_without_non_string_text(block) for block in _user_content_blocks(message)]}
+        case _:
+            return {**message}
+
+
+def drop_non_string_tool_result_texts(
+    messages: Sequence[dict[str, object]],  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
+    drop_params: object,
+) -> Sequence[dict[str, object]]:  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
+    if not drops_unsupported_params(drop_params) or malformed_tool_result_text_error(messages) is None:
+        return messages
+    return [_without_non_string_texts(message) for message in messages]
 
 
 def deployment_drops_params(deployment: Mapping[str, object] | None) -> bool:

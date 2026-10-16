@@ -14,8 +14,8 @@ from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
     supports_openai_prompt_cache_breakpoint,
 )
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import cache_control_as_prompt_cache_breakpoint
-from litellm.responses.litellm_completion_transformation.transformation import drops_unsupported_params
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
     AllAnthropicMessageValues,

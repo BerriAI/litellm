@@ -347,6 +347,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
 )
 from litellm.llms.anthropic.pass_through.convertible_blocks import (
     deployment_drops_params,
+    drop_non_string_tool_result_texts,
     malformed_tool_result_text_error,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -14462,6 +14463,18 @@ def _deployment_with_request_drop_params(
     return {**resolved_deployment, "litellm_params": {**litellm_params, "drop_params": drop_params}}
 
 
+def _counted_request_messages(
+    messages: Sequence[dict[str, object]] | None,  # mutable-ok: TokenCountRequest.messages is typed list[dict]
+    messages_format: TokenCountMessagesFormat,
+    deployment: Mapping[str, object] | None,
+) -> list[dict[str, object]] | None:  # mutable-ok: BaseTokenCounter.count_tokens takes list messages
+    if messages is None:
+        return None
+    if messages_format != "anthropic":
+        return list(messages)
+    return list(drop_non_string_tool_result_texts(messages, deployment_drops_params(deployment)))
+
+
 def _local_count_tool_result_error(
     messages: Sequence[Mapping[str, object]] | None,
     messages_format: TokenCountMessagesFormat,
@@ -14613,13 +14626,14 @@ async def count_request_tokens(
             code=400,
         )
     prompt_only: Final = bool(prompt) and conversation_empty
+    request_messages: Final = _counted_request_messages(messages, messages_format, count_deployment)
     if provider_counter is not None:
         prompt_as_message: Final = prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
         result: Final = await _try_provider_token_count(
             provider_counter=provider_counter,
             custom_llm_provider=custom_llm_provider,
             model_to_use=model_to_use,
-            messages=[{"role": "user", "content": prompt}] if prompt_as_message else messages,
+            messages=[{"role": "user", "content": prompt}] if prompt_as_message else request_messages,
             contents=None if prompt_as_message else contents,
             deployment=count_deployment,
             request_model=request.model,
@@ -14631,7 +14645,7 @@ async def count_request_tokens(
         if result is not None:
             return result
 
-    local_count_error: Final = _local_count_tool_result_error(messages, messages_format, count_deployment)
+    local_count_error: Final = _local_count_tool_result_error(request_messages, messages_format, count_deployment)
     if local_count_error is not None:
         raise ProxyException(message=local_count_error, type="token_counting_error", param="messages", code=400)
 
@@ -14660,7 +14674,7 @@ async def count_request_tokens(
     prompt_turn: Final = prompt_only and not (system_message is None and not tools)
     typed_messages: Final = cast(  # cast-ok: request messages are raw chat-shaped dicts that token_counter normalizes
         Sequence[AllMessageValues] | None,
-        [{"role": "user", "content": prompt}] if prompt_turn else (None if prompt_only else messages),
+        [{"role": "user", "content": prompt}] if prompt_turn else (None if prompt_only else request_messages),
     )
     counted_messages: Final = (
         typed_messages if typed_messages is None or system_message is None else (system_message, *typed_messages)

@@ -10,6 +10,7 @@ from litellm.llms.anthropic.pass_through.messages.transformation import (
 from litellm.llms.anthropic.wif import get_anthropic_wif_token
 from litellm.llms.minimax.messages.transformation import MinimaxMessagesConfig
 from litellm.llms.tencent.messages.transformation import TencentAnthropicMessagesConfig
+from litellm.types.router import GenericLiteLLMParams
 from tests.unit.llms.anthropic.test_anthropic_wif import (
     ScriptedPoster,
     make_engine,
@@ -116,3 +117,43 @@ def test_wif_token_exchange_reaches_only_anthropic_not_minimax_or_tencent(
         assert config._allows_workload_identity is False
 
     assert len(poster.requests) == 1
+
+
+@pytest.mark.parametrize(
+    ("drop_params", "expected_tool_result_content"),
+    [
+        (True, [{"type": "text", "text": "sunny"}]),
+        (None, [{"type": "text", "text": 5}, {"type": "text", "text": "sunny"}]),
+    ],
+    ids=["drop_params", "no_drop_params"],
+)
+def test_drop_params_drops_a_non_string_tool_result_text_on_the_native_request(
+    drop_params, expected_tool_result_content
+):
+    messages = [
+        {"role": "user", "content": "What is the weather?"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01",
+                    "content": [{"type": "text", "text": 5}, {"type": "text", "text": "sunny"}],
+                }
+            ],
+        },
+    ]
+
+    request = AnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="claude-sonnet-4-5",
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 64},
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+        headers={},
+    )
+
+    assert request["messages"][2]["content"][0]["content"] == expected_tool_result_content

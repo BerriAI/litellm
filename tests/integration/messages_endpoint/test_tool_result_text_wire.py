@@ -582,7 +582,18 @@ def test_rewriting_guardrail_puts_each_malformed_text_back_in_its_own_tool_resul
         assert _texts(tool_results["toolu_03"]) == (_redacted(_WEEKEND),), tool_results
 
 
-def test_rewriting_guardrail_leaves_the_rejection_to_the_chat_bridge(gateway: Gateway) -> None:
+def _null_text_answering(tool_use_id: str) -> list[JsonValue]:
+    return [
+        {"role": "user", "content": f"What is the weather in {_CITY}?"},
+        {"role": "assistant", "content": [_tool_use(tool_use_id)]},
+        {"role": "user", "content": [_tool_result(tool_use_id, None)]},
+    ]
+
+
+@pytest.mark.parametrize("tool_use_id", ("toolu_01", "functions.get_weather:0"))
+def test_rewriting_guardrail_leaves_the_rejection_to_the_chat_bridge_for_any_tool_use_id(
+    gateway: Gateway, tool_use_id: str
+) -> None:
     with (
         wire_server(_chat_peer) as provider,
         wire_server(_guardrail_peer) as guard,
@@ -590,12 +601,7 @@ def test_rewriting_guardrail_leaves_the_rejection_to_the_chat_bridge(gateway: Ga
     ):
         model: Final = _mistral_model(scenario, provider)
         guardrail: Final = _guardrail(gateway, scenario, guard, "rows")
-        messages: Final[list[JsonValue]] = [
-            {"role": "user", "content": f"What is the weather in {_CITY}?"},
-            {"role": "assistant", "content": [_tool_use("toolu_01")]},
-            {"role": "user", "content": [_tool_result("toolu_01", None)]},
-        ]
-        body: Final = _body(model, messages, max_tokens=64, guardrails=[guardrail])
+        body: Final = _body(model, _null_text_answering(tool_use_id), max_tokens=64, guardrails=[guardrail])
         response: Final = gateway.request("POST", "/v1/messages", body)
         message: Final = _anthropic_error_message(response.status_code, response.text, response.content)
         assert "content.0.text: Input should be a valid string" in message, message

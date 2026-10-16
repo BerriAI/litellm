@@ -945,6 +945,46 @@ def test_mistral_transform_request_keeps_an_empty_tool_message_after_its_tool_ca
     assert result[2].get("tool_call_id") == "call_1"
 
 
+@pytest.mark.parametrize("reply", [{"content": None}, {}], ids=["null", "missing"])
+def test_mistral_transform_request_sends_a_null_tool_reply_as_empty_text(reply):
+    messages: List[AllMessageValues] = cast(
+        List[AllMessageValues],
+        [
+            {"role": "user", "content": "read the log"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", **reply},
+        ],
+    )
+
+    request = MistralConfig().transform_request(
+        model="mistral-small-latest", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert request["messages"][2] == {"role": "tool", "tool_call_id": "call_1", "content": ""}
+
+
+def test_mistral_transform_request_drops_an_empty_tool_message_no_tool_call_asked_for():
+    messages: List[AllMessageValues] = cast(
+        List[AllMessageValues],
+        [
+            {"role": "user", "content": "hi"},
+            {"role": "tool", "tool_call_id": "call_9", "content": ""},
+        ],
+    )
+
+    request = MistralConfig().transform_request(
+        model="mistral-small-latest", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert request["messages"] == [{"role": "user", "content": "hi"}]
+
+
 @pytest.mark.parametrize("role", ["system", "user"])
 def test_mistral_transform_request_drops_a_message_with_null_content(role):
     messages: List[AllMessageValues] = cast(
