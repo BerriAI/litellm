@@ -14622,7 +14622,13 @@ async def count_request_tokens(
     if (
         call_endpoint is True
         and deployment is not None
-        and (model_info is None or cast(Mapping[str, object], model_info).get("use_token_counting_api") is not False)
+        and (
+            model_info is None
+            or cast(  # cast-ok: ModelInfo has unrelated Unknown fields, so this Mapping view types the lookup
+                Mapping[str, object], model_info
+            ).get("use_token_counting_api")
+            is not False
+        )
     ):
         # Auto-route to the correct provider based on model
         provider_counter, _model, custom_llm_provider = _get_provider_token_counter(deployment, model_to_use)
