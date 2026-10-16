@@ -222,6 +222,6 @@ export const toSubmittedValues = (
 });
 
 export const clearMcpGrants = (setValue: UseFormSetValue<KeyEditFormValues>) => {
-  setValue("mcp_servers_and_groups", { servers: [], accessGroups: [], toolsets: [] });
-  setValue("mcp_tool_permissions", {});
+  setValue("mcp_servers_and_groups", { servers: [], accessGroups: [], toolsets: [] }, { shouldDirty: true });
+  setValue("mcp_tool_permissions", {}, { shouldDirty: true });
 };

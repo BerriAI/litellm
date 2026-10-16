@@ -1050,7 +1050,10 @@ describe("KeyEditView", () => {
       metadata: JSON.stringify({ note: "new" }, null, 2),
       vector_stores: ["store-new"],
     };
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining(expected)));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining(expected), expect.any(Array)));
+    const [, dirtyFields] = onSubmit.mock.calls[0];
+    expect(dirtyFields).toContain("max_budget");
+    expect(dirtyFields).not.toContain("rpm_limit");
   });
 
   it("should start a fresh budget draft when switching to another key", async () => {
@@ -1075,7 +1078,9 @@ describe("KeyEditView", () => {
     );
     await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
 
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ max_budget: 25 })));
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ max_budget: 25 }), expect.any(Array)),
+    );
   });
 
   it("should persist a canonical budget_duration value, not a word-form the backend cannot parse", async () => {
@@ -1671,6 +1676,46 @@ describe("KeyEditView", () => {
       await waitFor(() => {
         expect(screen.getByTestId("mcp-server-selector")).toHaveAttribute("data-team-id", "");
       });
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalled();
+      });
+      expect(onSubmit.mock.calls[0][0]).toMatchObject({
+        mcp_servers_and_groups: { servers: [], accessGroups: [], toolsets: [] },
+        mcp_tool_permissions: {},
+      });
+    });
+
+    it("keeps the team change's cleared MCP grants when the same key refreshes before saving", async () => {
+      const onSubmit = vi.fn().mockResolvedValue(undefined);
+      const keyData = {
+        ...MOCK_KEY_DATA,
+        organization_id: "org-1",
+        team_id: "group-maple",
+        object_permission: { mcp_servers: ["srv-a"], mcp_tool_permissions: { "srv-a": ["read"] } },
+      };
+      const renderEditor = (data: KeyResponse) => (
+        <KeyEditView
+          keyData={data}
+          onCancel={() => {}}
+          onSubmit={onSubmit}
+          accessToken=""
+          userID=""
+          userRole="Admin"
+          premiumUser={false}
+        />
+      );
+      const view = renderWithProviders(renderEditor(keyData));
+
+      await waitFor(() => {
+        expect(screen.getAllByRole("button", { name: "Clear" })).toHaveLength(2);
+      });
+      await userEvent.click(screen.getAllByRole("button", { name: "Clear" })[1]);
+      await waitFor(() => {
+        expect(screen.getByTestId("mcp-server-selector")).toHaveAttribute("data-team-id", "");
+      });
+      view.rerender(renderEditor({ ...keyData, rpm_limit: 75 }));
       await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
 
       await waitFor(() => {

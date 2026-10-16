@@ -89,9 +89,7 @@ interface KeyEditViewProps {
   premiumUser?: boolean;
 }
 
-export function KeyEditView(props: KeyEditViewProps) {
-  return <KeyEditSession key={props.keyData.token} {...props} />;
-}
+export const KeyEditView = (props: KeyEditViewProps) => <KeyEditSession key={props.keyData.token} {...props} />;
 
 function KeyEditSession({
   keyData,
