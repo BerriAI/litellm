@@ -11,7 +11,7 @@ Auth: Bearer token (litellm_params.api_key, BEDROCK_MANTLE_API_KEY, or the
 """
 
 from collections.abc import AsyncIterator, Iterator
-from typing import TYPE_CHECKING, Final, cast
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -144,31 +144,26 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
         replace_max_completion_tokens_with_max_tokens: bool = True,
     ) -> dict[str, object]:  # mutable-ok: OpenAILikeChatConfig.map_openai_params signature
         gpt_reasoning_model: Final = is_gpt_reasoning_series_name(model)
-        mapped_params: dict[str, object] = (
-            super().map_openai_params(  # mutable-ok: may remap max_tokens then strip tools  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # OpenAILikeChatConfig types its params and result as bare dicts  # mutable-ok: parent returns a dict
-                non_default_params,
-                optional_params,
-                model,
-                drop_params,
-                replace_max_completion_tokens_with_max_tokens and not gpt_reasoning_model,
-            )
+        mapped_params: Final[dict[str, object]] = super().map_openai_params(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # OpenAILikeChatConfig types its params and result as bare dicts  # mutable-ok: parent returns a dict
+            non_default_params,
+            optional_params,
+            model,
+            drop_params,
+            replace_max_completion_tokens_with_max_tokens and not gpt_reasoning_model,
         )
-        if gpt_reasoning_model and "max_tokens" in mapped_params:
-            mapped_params = {
+        renamed_params: Final = (
+            {
                 param: value
                 for param, value in (("max_completion_tokens", mapped_params["max_tokens"]), *mapped_params.items())
                 if param != "max_tokens"
             }
-        tools = mapped_params.get("tools")
-        if tools is None:
-            return mapped_params
-        stripped_tools: Final = strip_unsupported_web_search_tool_fields(
-            cast(object, tools),  # cast-ok: bare dict .get is Unknown to basedpyright
+            if gpt_reasoning_model and "max_tokens" in mapped_params
+            else mapped_params
         )
-        return {  # mutable-ok: map_openai_params contract returns a plain dict
-            **mapped_params,
-            "tools": stripped_tools,
-        }
+        tools: Final = renamed_params.get("tools")
+        if tools is None:
+            return renamed_params
+        return {**renamed_params, "tools": strip_unsupported_web_search_tool_fields(tools)}
 
     def _supports_reasoning(self, model: str) -> bool:
         try:

@@ -135,7 +135,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         stripped: Final = strip_unsupported_web_search_tool_fields(kept)
         if isinstance(stripped, list):
             return stripped
-        return [*kept]  # mutable-ok: inherited filter return type is list[object]
+        return [*kept]
 
     @staticmethod
     def _handle_unsupported_service_tier(params: dict, drop_params: bool) -> dict:
@@ -262,7 +262,5 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         tools_list: Final = tools if isinstance(tools, list) else [tools]
         filtered: Final = self._filter_unsupported_tools(tools_list)
         if filtered:
-            return {**params, "tools": filtered}  # mutable-ok: map_openai_params contract returns a plain dict
-        return {  # mutable-ok: map_openai_params contract returns a plain dict
-            key: value for key, value in params.items() if key != "tools"
-        }
+            return {**params, "tools": filtered}
+        return {key: value for key, value in params.items() if key != "tools"}

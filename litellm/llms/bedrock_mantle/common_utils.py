@@ -15,7 +15,7 @@ global state.
 import re
 from collections.abc import Mapping, Sequence
 from functools import partial
-from typing import Final, Literal, cast
+from typing import Final, Literal, cast  # noqa: TID251  # untyped OpenAI tool JSON after isinstance narrowing
 
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, SignsRequestsWithAWS
@@ -185,9 +185,7 @@ def _strip_one_web_search_tool(tool: object) -> object:
         return tool
     if not _UNSUPPORTED_WEB_SEARCH_TOOL_FIELDS.intersection(typed_tool):
         return tool
-    return {  # mutable-ok: OpenAI tool JSON object after dropping Mantle-rejected keys
-        key: value for key, value in typed_tool.items() if key not in _UNSUPPORTED_WEB_SEARCH_TOOL_FIELDS
-    }
+    return {key: value for key, value in typed_tool.items() if key not in _UNSUPPORTED_WEB_SEARCH_TOOL_FIELDS}
 
 
 def strip_unsupported_web_search_tool_fields(tools: object) -> object:
@@ -207,4 +205,4 @@ def strip_unsupported_web_search_tool_fields(tools: object) -> object:
     rewritten: Final = tuple(_strip_one_web_search_tool(tool) for tool in tools_seq)
     if all(new is old for new, old in zip(rewritten, tools_seq, strict=True)):
         return tools
-    return list(rewritten)  # mutable-ok: chat/Responses tools param is a JSON list
+    return list(rewritten)
