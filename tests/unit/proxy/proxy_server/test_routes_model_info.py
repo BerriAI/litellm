@@ -496,7 +496,9 @@ def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monkeypatch
         allowed_model_names=allowed_model_names,
     )
 
-    assert [model["model_name"] for model in result] == ["openai/gpt-4o"]
+    listed: Final = [(model["model_name"], model["litellm_params"]["model"]) for model in result]
+
+    assert listed == [("gpt-4o", "openai/gpt-4o")]
 
 
 # ---------------------------------------------------------------------------
