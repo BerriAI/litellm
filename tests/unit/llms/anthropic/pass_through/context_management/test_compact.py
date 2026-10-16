@@ -2544,7 +2544,7 @@ async def test_prepare_context_managed_request_forwards_proxy_litellm_metadata()
     the summary subcall lands on the router with no parent attribution, and
     those tokens go unbilled to the caller's key/team."""
     from litellm.llms.anthropic.pass_through.adapters.handler import (
-        _prepare_context_managed_request,
+        prepare_context_managed_request,
     )
 
     captured_summary_metadata: Dict[str, Any] = {}
@@ -2561,7 +2561,7 @@ async def test_prepare_context_managed_request_forwards_proxy_litellm_metadata()
         ),
         patch("litellm.token_counter", return_value=200_000),
     ):
-        result = await _prepare_context_managed_request(
+        result = await prepare_context_managed_request(
             model=MODEL,
             messages=_simple_messages(),
             tools=None,

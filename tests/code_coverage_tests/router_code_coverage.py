@@ -114,6 +114,19 @@ ignored_function_names = [
     "_deployment_that_just_failed",  # Tested through the same-boundary hop test in test_router_order_fallback.py
     "_collect_ptu_share_teams",  # Cached behind team_ptu_ceiling, tested through the live model list test in test_router.py
     "_resolve_team_ptu_ceiling",  # Cached behind team_ptu_ceiling, tested through the live model list test in test_router.py
+    "_register_continuation_prefill_check",  # Tested through the continuation tests in test_router.py
+    "_set_mid_stream_fallback_continuation",  # Tested through the update_settings continuation test in test_router.py
+    "_is_flag_enabled",  # Tested through the string-flag continuation tests in test_router.py
+    "_params_sent_to_deployment",  # Tested through the configured-constraint continuation tests in test_router.py
+    "_names_deployment_that_cannot_continue",  # Tested through the deployment-id continuation tests in test_router.py
+    "_set_retry_policy",  # Tested through update_settings in test_router_retry_policy_update.py
+    "_resolve_pre_call_check_input_tokens",  # Tested through the token-count failure pre-call check tests in test_router.py
+    "_params_neither_dropped_nor_allowed",  # Tested through the allowed-or-dropped param pre-call check tests in test_router.py
+    "_deployment_rejects_params",  # Tested through the unsupported-param pre-call check tests in test_router.py
+    "_deployment_lacks_params",  # Tested through the unsupported-param pre-call check tests in test_router.py
+    "_pre_call_check_requested_chat_params",  # Tested through the unsupported-param pre-call check tests in test_router.py
+    "_deployment_supports_param",  # Tested through the deployment-capability pre-call check tests in test_router.py
+    "_capability_model_and_provider",  # Tested through the authenticating-provider pre-call check test in test_router.py
     "_exact_base_model_max_input_tokens",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
     "_base_model_widened_window",  # Tested through get_router_model_info in test_router_model_cost_isolation.py
     "_provider_model_id",  # Tested through get_router_model_info in test_router_model_cost_isolation.py

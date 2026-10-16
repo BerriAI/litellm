@@ -14,6 +14,7 @@ import pytest
 
 from litellm import Router
 from litellm.caching.caching import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.types.utils import BudgetConfig
 import sys, os, asyncio, time, random
@@ -234,7 +235,11 @@ async def test_a_monthly_router_budget_ends_a_calendar_month_after_it_opens(
     """
     monkeypatch.setattr(litellm, "tag_budget_config", tag_budget_config)
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
-    limiter = RouterBudgetLimiting(dual_cache=DualCache(), clock=charged_at.timestamp, **limiter_config)
+    limiter = RouterBudgetLimiting(
+        dual_cache=DualCache(in_memory_cache=InMemoryCache(clock=charged_at.timestamp)),
+        clock=charged_at.timestamp,
+        **limiter_config,
+    )
     await limiter.dual_cache.async_set_cache(key=start_time_key, value=opened_at.timestamp())
 
     await _log_success(
@@ -245,9 +250,8 @@ async def test_a_monthly_router_budget_ends_a_calendar_month_after_it_opens(
         },
     )
 
-    assert limiter.redis_increment_operation_queue == [
-        {"key": spend_key, "increment_value": 0.25, "ttl": int((closes_at - charged_at).total_seconds())}
-    ]
+    assert await limiter.dual_cache.async_get_cache(spend_key) == 0.25
+    assert limiter.dual_cache.in_memory_cache.ttl_dict[spend_key] == closes_at.timestamp()
 
 
 @pytest.mark.asyncio
@@ -364,24 +368,18 @@ async def test_new_budget_window_sets_spend_and_start_time() -> None:
 
 
 @pytest.mark.asyncio
-async def test_spend_increment_updates_memory_and_queues_redis_operation() -> None:
-    provider_budget: Final = RouterBudgetLimiting(dual_cache=DualCache(), provider_budget_config={})
-    await provider_budget.dual_cache.async_set_cache(key="provider_spend:openai:1d", value=1.0, ttl=86400)
-
-    await provider_budget._increment_spend_in_current_window(
-        spend_key="provider_spend:openai:1d",
-        response_cost=0.5,
-        ttl=86400,
+async def test_redis_less_limiter_tracks_spend_without_queueing_redis_increments(disable_budget_sync) -> None:
+    """With no Redis there is nothing to flush to, so queued increments would be retained for the life of the process."""
+    limiter: Final = RouterBudgetLimiting(
+        dual_cache=DualCache(),
+        provider_budget_config={"openai": {"budget_limit": 10.0, "time_period": "1d"}},
     )
 
-    assert await provider_budget.dual_cache.async_get_cache("provider_spend:openai:1d") == 1.5
-    assert provider_budget.redis_increment_operation_queue == [
-        {
-            "key": "provider_spend:openai:1d",
-            "increment_value": 0.5,
-            "ttl": 86400,
-        }
-    ]
+    for _ in range(3):
+        await _log_success(limiter, _success_kwargs(provider_in_litellm_params="openai", provider_in_payload="openai"))
+
+    assert await limiter.dual_cache.async_get_cache("provider_spend:openai:1d") == pytest.approx(0.75)
+    assert limiter.redis_increment_operation_queue == []
 
 
 @pytest.mark.asyncio

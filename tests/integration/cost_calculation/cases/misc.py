@@ -2,7 +2,9 @@
 
 PARITY pairs the streamed case with its plain twin where both bill the same row."""
 
-from typing import Final
+from typing import Final, cast
+
+from pydantic import JsonValue
 
 from integration.cost_calculation.cost_tracking_case import (
     ALWAYS_OPEN_OFF_PEAK_WINDOW,
@@ -20,11 +22,89 @@ from integration.cost_calculation.cost_tracking_case import (
 )
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase, sse_frames
 from integration.cost_calculation.cases.anthropic import (
+    CLAUDE_FABLE_5_1_CACHE_READ,
+    CLAUDE_FABLE_5_1_CACHE_WRITE_1H,
+    CLAUDE_FABLE_5_1_CACHE_WRITE_5M,
     CLAUDE_FABLE_5_1_INPUT_TEXT,
     CLAUDE_FABLE_5_1_STREAM,
+    CLAUDE_FABLE_5_1_THINKING,
+    CLAUDE_FABLE_5_1_TOOL_CALL,
+    CLAUDE_HAIKU_5_5_CACHE_READ,
+    CLAUDE_HAIKU_5_5_CACHE_WRITE_1H,
+    CLAUDE_HAIKU_5_5_CACHE_WRITE_5M,
     CLAUDE_HAIKU_5_5_INPUT_TEXT,
     CLAUDE_HAIKU_5_5_STREAM,
+    CLAUDE_HAIKU_5_5_THINKING,
+    CLAUDE_HAIKU_5_5_TOOL_CALL,
 )
+
+
+def _azure_ai_claude_usage(
+    input_tokens: int,
+    output_tokens: int,
+    inference_geo: str,
+    *,
+    cache_creation_input_tokens: int = 0,
+    cache_read_input_tokens: int = 0,
+    ephemeral_5m_input_tokens: int = 0,
+    ephemeral_1h_input_tokens: int = 0,
+    thinking_tokens: int = 0,
+) -> dict[str, JsonValue]:
+    return {
+        "input_tokens": input_tokens,
+        "cache_creation_input_tokens": cache_creation_input_tokens,
+        "cache_read_input_tokens": cache_read_input_tokens,
+        "cache_creation": {
+            "ephemeral_5m_input_tokens": ephemeral_5m_input_tokens,
+            "ephemeral_1h_input_tokens": ephemeral_1h_input_tokens,
+        },
+        "output_tokens": output_tokens,
+        "output_tokens_details": {"thinking_tokens": thinking_tokens},
+        "service_tier": "standard",
+        "inference_geo": inference_geo,
+        "speed": "standard",
+    }
+
+
+def _azure_ai_claude_shape_case(
+    sibling: CostTrackingTestCase,
+    name: str,
+    model: str,
+    usage: dict[str, JsonValue],
+    expected: ExactExpected,
+    response_content: list[dict[str, JsonValue]] | None = None,
+    adaptive_thinking: bool = False,
+) -> CostTrackingTestCase:
+    response: Final = cast(JsonResponse, sibling.response)
+    request: Final = (
+        {
+            **{
+                key: value
+                for key, value in sibling.request.items()
+                if key not in {"reasoning_effort", "allowed_openai_params"}
+            },
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": "medium"},
+            "allowed_openai_params": ["thinking", "output_config"],
+        }
+        if adaptive_thinking
+        else sibling.request
+    )
+    body: Final = {
+        **response.body,
+        "model": model.rsplit("/", 1)[-1],
+        "usage": usage,
+        **({"content": response_content} if response_content is not None else {}),
+    }
+    return sibling.model_copy(
+        update={
+            "name": name,
+            "model": model,
+            "request": request,
+            "response": response.model_copy(update={"body": body}),
+            "expected": expected,
+        }
+    )
 
 
 # nova-next
@@ -1457,6 +1537,7 @@ AZURE_AI_CLAUDE_FABLE_5_1_INPUT_TEXT: Final = CLAUDE_FABLE_5_1_INPUT_TEXT.model_
                     "output_tokens_details": {"thinking_tokens": 0},
                     "service_tier": "standard",
                     "inference_geo": "not_available",
+                    "speed": "standard",
                 },
             },
         ),
@@ -1495,6 +1576,7 @@ AZURE_AI_CLAUDE_FABLE_5_1_STREAM: Final = CLAUDE_FABLE_5_1_STREAM.model_copy(
                                 "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
                                 "service_tier": "standard",
                                 "inference_geo": "not_available",
+                                "speed": "standard",
                             },
                         },
                     },
@@ -1582,6 +1664,7 @@ AZURE_AI_CLAUDE_HAIKU_5_5_INPUT_TEXT: Final = CLAUDE_HAIKU_5_5_INPUT_TEXT.model_
                     "output_tokens_details": {"thinking_tokens": 0},
                     "service_tier": "standard",
                     "inference_geo": "global",
+                    "speed": "standard",
                 },
                 "diagnostics": None,
             },
@@ -1624,6 +1707,7 @@ AZURE_AI_CLAUDE_HAIKU_5_5_STREAM: Final = CLAUDE_HAIKU_5_5_STREAM.model_copy(
                                 },
                                 "service_tier": "standard",
                                 "inference_geo": "global",
+                                "speed": "standard",
                             },
                         },
                     },
@@ -1713,6 +1797,157 @@ PERPLEXITY_SONAR_NEXT_OFF_PEAK: Final = PERPLEXITY_SONAR_NEXT_NO_SEARCH.model_co
     }
 )
 
+
+AZURE_AI_CLAUDE_FABLE_5_1_CACHE_READ: Final = _azure_ai_claude_shape_case(
+    CLAUDE_FABLE_5_1_CACHE_READ,
+    "azure_ai/claude-fable-5-1-cache_read",
+    "azure_ai/claude-fable-5-1",
+    _azure_ai_claude_usage(input_tokens=14, output_tokens=6, inference_geo="not_available", cache_read_input_tokens=27003),
+    ExactExpected(
+        spend=0.012224275,
+        input_cost=0.011714275,
+        output_cost=0.00051,
+        prompt_tokens=27017,
+        completion_tokens=6,
+    ),
+)
+AZURE_AI_CLAUDE_FABLE_5_1_CACHE_WRITE_5M: Final = _azure_ai_claude_shape_case(
+    CLAUDE_FABLE_5_1_CACHE_WRITE_5M,
+    "azure_ai/claude-fable-5-1-cache_write_5m",
+    "azure_ai/claude-fable-5-1",
+    _azure_ai_claude_usage(
+        input_tokens=14,
+        output_tokens=5,
+        inference_geo="not_available",
+        cache_creation_input_tokens=27011,
+        ephemeral_5m_input_tokens=27011,
+    ),
+    ExactExpected(
+        spend=0.57464675,
+        input_cost=0.57422175,
+        output_cost=0.000425,
+        prompt_tokens=27025,
+        completion_tokens=5,
+    ),
+)
+AZURE_AI_CLAUDE_FABLE_5_1_CACHE_WRITE_1H: Final = _azure_ai_claude_shape_case(
+    CLAUDE_FABLE_5_1_CACHE_WRITE_1H,
+    "azure_ai/claude-fable-5-1-cache_write_1h",
+    "azure_ai/claude-fable-5-1",
+    _azure_ai_claude_usage(
+        input_tokens=14,
+        output_tokens=5,
+        inference_geo="not_available",
+        cache_creation_input_tokens=27011,
+        ephemeral_1h_input_tokens=27011,
+    ),
+    ExactExpected(
+        spend=0.919037,
+        input_cost=0.918612,
+        output_cost=0.000425,
+        prompt_tokens=27025,
+        completion_tokens=5,
+    ),
+)
+AZURE_AI_CLAUDE_FABLE_5_1_THINKING: Final = _azure_ai_claude_shape_case(
+    CLAUDE_FABLE_5_1_THINKING,
+    "azure_ai/claude-fable-5-1-thinking",
+    "azure_ai/claude-fable-5-1",
+    _azure_ai_claude_usage(input_tokens=18, output_tokens=99, inference_geo="not_available", thinking_tokens=33),
+    ExactExpected(
+        spend=0.008721, input_cost=0.000306, output_cost=0.008415, prompt_tokens=18, completion_tokens=99
+    ),
+        [
+            {"type": "thinking", "thinking": "scripted thought", "signature": "scripted signature"},
+            {"type": "text", "text": "scripted answer for cost fixtures"},
+        ],
+    adaptive_thinking=True,
+)
+AZURE_AI_CLAUDE_FABLE_5_1_TOOL_CALL: Final = _azure_ai_claude_shape_case(
+    CLAUDE_FABLE_5_1_TOOL_CALL,
+    "azure_ai/claude-fable-5-1-tool_call",
+    "azure_ai/claude-fable-5-1",
+    _azure_ai_claude_usage(input_tokens=385, output_tokens=50, inference_geo="not_available"),
+    ExactExpected(
+        spend=0.010795, input_cost=0.006545, output_cost=0.00425, prompt_tokens=385, completion_tokens=50
+    ),
+)
+AZURE_AI_CLAUDE_HAIKU_5_5_CACHE_READ: Final = _azure_ai_claude_shape_case(
+    CLAUDE_HAIKU_5_5_CACHE_READ,
+    "azure_ai/claude-haiku-5-5-cache_read",
+    "azure_ai/claude-haiku-5-5",
+    _azure_ai_claude_usage(input_tokens=14, output_tokens=5, inference_geo="global", cache_read_input_tokens=27003),
+    ExactExpected(
+        spend=0.000520467,
+        input_cost=0.000515717,
+        output_cost=0.00000475,
+        prompt_tokens=27017,
+        completion_tokens=5,
+    ),
+)
+AZURE_AI_CLAUDE_HAIKU_5_5_CACHE_WRITE_5M: Final = _azure_ai_claude_shape_case(
+    CLAUDE_HAIKU_5_5_CACHE_WRITE_5M,
+    "azure_ai/claude-haiku-5-5-cache_write_5m",
+    "azure_ai/claude-haiku-5-5",
+    _azure_ai_claude_usage(
+        input_tokens=14,
+        output_tokens=6,
+        inference_geo="global",
+        cache_creation_input_tokens=27011,
+        ephemeral_5m_input_tokens=27011,
+    ),
+    ExactExpected(
+        spend=0.0064234725,
+        input_cost=0.0064177725,
+        output_cost=0.0000057,
+        prompt_tokens=27025,
+        completion_tokens=6,
+    ),
+)
+AZURE_AI_CLAUDE_HAIKU_5_5_CACHE_WRITE_1H: Final = _azure_ai_claude_shape_case(
+    CLAUDE_HAIKU_5_5_CACHE_WRITE_1H,
+    "azure_ai/claude-haiku-5-5-cache_write_1h",
+    "azure_ai/claude-haiku-5-5",
+    _azure_ai_claude_usage(
+        input_tokens=14,
+        output_tokens=6,
+        inference_geo="global",
+        cache_creation_input_tokens=27011,
+        ephemeral_1h_input_tokens=27011,
+    ),
+    ExactExpected(
+        spend=0.01027254,
+        input_cost=0.01026684,
+        output_cost=0.0000057,
+        prompt_tokens=27025,
+        completion_tokens=6,
+    ),
+)
+AZURE_AI_CLAUDE_HAIKU_5_5_THINKING: Final = _azure_ai_claude_shape_case(
+    CLAUDE_HAIKU_5_5_THINKING,
+    "azure_ai/claude-haiku-5-5-thinking",
+    "azure_ai/claude-haiku-5-5",
+    _azure_ai_claude_usage(input_tokens=18, output_tokens=95, inference_geo="global", thinking_tokens=54),
+    ExactExpected(
+        spend=0.00009367, input_cost=0.00000342, output_cost=0.00009025, prompt_tokens=18, completion_tokens=95
+    ),
+        [
+            {"type": "thinking", "thinking": "scripted thought", "signature": "scripted signature"},
+            {"type": "text", "text": "scripted answer for cost fixtures"},
+        ],
+    adaptive_thinking=True,
+)
+AZURE_AI_CLAUDE_HAIKU_5_5_TOOL_CALL: Final = _azure_ai_claude_shape_case(
+    CLAUDE_HAIKU_5_5_TOOL_CALL,
+    "azure_ai/claude-haiku-5-5-tool_call",
+    "azure_ai/claude-haiku-5-5",
+    _azure_ai_claude_usage(input_tokens=511, output_tokens=34, inference_geo="global"),
+    ExactExpected(
+        spend=0.00012939, input_cost=0.00009709, output_cost=0.0000323, prompt_tokens=511, completion_tokens=34
+    ),
+)
+
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     PERPLEXITY_SONAR_NEXT_OFF_PEAK,
     NOVA_NEXT_TRANSCRIPTIONS_PER_SECOND,
@@ -1764,8 +1999,18 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     XAI_GROK_4_7_INPUT_TEXT,
     AZURE_AI_CLAUDE_FABLE_5_1_INPUT_TEXT,
     AZURE_AI_CLAUDE_FABLE_5_1_STREAM,
+    AZURE_AI_CLAUDE_FABLE_5_1_CACHE_READ,
+    AZURE_AI_CLAUDE_FABLE_5_1_CACHE_WRITE_5M,
+    AZURE_AI_CLAUDE_FABLE_5_1_CACHE_WRITE_1H,
+    AZURE_AI_CLAUDE_FABLE_5_1_THINKING,
+    AZURE_AI_CLAUDE_FABLE_5_1_TOOL_CALL,
     AZURE_AI_CLAUDE_HAIKU_5_5_INPUT_TEXT,
     AZURE_AI_CLAUDE_HAIKU_5_5_STREAM,
+    AZURE_AI_CLAUDE_HAIKU_5_5_CACHE_READ,
+    AZURE_AI_CLAUDE_HAIKU_5_5_CACHE_WRITE_5M,
+    AZURE_AI_CLAUDE_HAIKU_5_5_CACHE_WRITE_1H,
+    AZURE_AI_CLAUDE_HAIKU_5_5_THINKING,
+    AZURE_AI_CLAUDE_HAIKU_5_5_TOOL_CALL,
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
