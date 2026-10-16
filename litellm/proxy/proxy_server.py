@@ -10018,6 +10018,7 @@ def _pop_complete_sse_frame(buffer: str) -> tuple[str | None, str]:
 _STREAM_KEEPALIVE: Final = object()
 
 _KEEPALIVE_MIN_SECONDS: Final = 1.0
+_STREAM_LOOP_HOLD_SECONDS: Final = 0.05
 _KEEPALIVE_MAX_SECONDS: Final = 300.0
 _EMPTY_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
 _EMPTY_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
@@ -10293,7 +10294,14 @@ async def async_data_generator(
             else stream_iterator
         )
 
+        loop_released_at = time.monotonic()  # rebind-ok: last time this stream let other tasks run
         async for item in stream_source:
+            # Unblock the event loop: a stream whose chunks are already buffered never awaits
+            # between chunks, so without this yield one long stream holds the loop for its whole body.
+            # A real await in between may already have released the loop; this only guarantees it
+            if time.monotonic() - loop_released_at >= _STREAM_LOOP_HOLD_SECONDS:
+                await asyncio.sleep(0)
+                loop_released_at = time.monotonic()
             if item is _STREAM_KEEPALIVE:
                 yield ": ping\n\n"
                 continue
