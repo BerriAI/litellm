@@ -3,7 +3,8 @@ what runs after the response. Both come from the servers' own accounting, so not
 gateway talks to them: Postgres statement counts from `pg_stat_statements` (read before and after the run) and
 Redis commands from a `MONITOR` connection held open for the run. `DATABASE_URL` and `REDIS_HOST` are the
 runner's own env, as in the other suites; without them the counters are None and any Limit on them reports as
-missing. `E2E_DATABASE_ADMIN_URL`, when set, is used once to create the `pg_stat_statements` extension."""
+missing. `E2E_DATABASE_ADMIN_URL`, when set, is used once to create the `pg_stat_statements` extension. Only the
+runtime user's own statements are read: other users' rows come back with a NULL queryid and hidden text."""
 
 from __future__ import annotations
 
@@ -26,7 +27,8 @@ Bucket = Literal["awaited", "background", "plumbing", "unclassified"]
 _COMMITS_QUERY: Final = "SELECT xact_commit FROM pg_stat_database WHERE datname = current_database()"
 _STATEMENTS_QUERY: Final = (
     "SELECT queryid, calls, query FROM pg_stat_statements "
-    "WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())"
+    "WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database()) "
+    "AND userid = (SELECT usesysid FROM pg_user WHERE usename = current_user) AND queryid IS NOT NULL"
 )
 _CREATE_EXTENSION: Final = "CREATE EXTENSION IF NOT EXISTS pg_stat_statements"
 _COMMITS_ROW: Final = TypeAdapter(tuple[int])
