@@ -1,0 +1,182 @@
+suite: HTTPRoute Configuration Tests
+templates:
+  - httproute.yaml
+tests:
+  - it: should not create an HTTPRoute by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should fail when enabled without parentRefs
+    set:
+      httpRoute.enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: httpRoute.parentRefs must name at least one Gateway when httpRoute.enabled is true. An HTTPRoute with no parent is never attached to a listener, so it accepts no traffic.
+
+  - it: should create a v1 HTTPRoute routing / to the chart Service
+    set:
+      httpRoute.enabled: true
+      httpRoute.parentRefs:
+        - name: external
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: HTTPRoute
+      - isAPIVersion:
+          of: gateway.networking.k8s.io/v1
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-litellm
+      - equal:
+          path: spec.parentRefs[0].name
+          value: external
+      - equal:
+          path: spec.rules[0].matches[0].path.type
+          value: PathPrefix
+      - equal:
+          path: spec.rules[0].matches[0].path.value
+          value: /
+      - equal:
+          path: spec.rules[0].backendRefs[0].kind
+          value: Service
+      - equal:
+          path: spec.rules[0].backendRefs[0].name
+          value: RELEASE-NAME-litellm
+      - equal:
+          path: spec.rules[0].backendRefs[0].port
+          value: 4000
+      - notExists:
+          path: spec.hostnames
+
+  - it: should point the backendRef at the overridden service port
+    set:
+      httpRoute.enabled: true
+      httpRoute.parentRefs:
+        - name: external
+      service.port: 8080
+    asserts:
+      - equal:
+          path: spec.rules[0].backendRefs[0].port
+          value: 8080
+
+  - it: should name the route and its backend after fullnameOverride
+    set:
+      httpRoute.enabled: true
+      httpRoute.parentRefs:
+        - name: external
+      fullnameOverride: litellm-proxy
+    asserts:
+      - equal:
+          path: metadata.name
+          value: litellm-proxy
+      - equal:
+          path: spec.rules[0].backendRefs[0].name
+          value: litellm-proxy
+
+  - it: should keep the namespace and sectionName of every parentRef
+    set:
+      httpRoute.enabled: true
+      httpRoute.parentRefs:
+        - name: external
+          namespace: gateway-system
+          sectionName: https
+        - name: internal
+    asserts:
+      - equal:
+          path: spec.parentRefs[0].namespace
+          value: gateway-system
+      - equal:
+          path: spec.parentRefs[0].sectionName
+          value: https
+      - equal:
+          path: spec.parentRefs[1].name
+          value: internal
+      - notExists:
+          path: spec.parentRefs[1].namespace
+
+  - it: should render the configured hostnames
+    set:
+      httpRoute.enabled: true
+      httpRoute.parentRefs:
+        - name: external
+      httpRoute.hostnames:
+        - api.example.local
+        - api2.example.local
+    asserts:
+      - equal:
+          path: spec.hostnames[0]
+          value: api.example.local
+      - equal:
+          path: spec.hostnames[1]
+          value: api2.example.local
+
+  - it: should back every rule with the chart Service and keep matches, filters, and timeouts
+    set:
+      httpRoute.enabled: true
+      httpRoute.parentRefs:
+        - name: external
+      httpRoute.rules:
+        - matches:
+            - path:
+                type: PathPrefix
+                value: /v1
+          filters:
+            - type: RequestHeaderModifier
+              requestHeaderModifier:
+                set:
+                  - name: X-Forwarded-Proto
+                    value: https
+        - matches:
+            - path:
+                type: Exact
+                value: /health/readiness
+          timeouts:
+            request: 10s
+            backendRequest: 2s
+    asserts:
+      - lengthEqual:
+          path: spec.rules
+          count: 2
+      - equal:
+          path: spec.rules[0].matches[0].path.value
+          value: /v1
+      - equal:
+          path: spec.rules[0].filters[0].requestHeaderModifier.set[0].name
+          value: X-Forwarded-Proto
+      - equal:
+          path: spec.rules[0].backendRefs[0].name
+          value: RELEASE-NAME-litellm
+      - notExists:
+          path: spec.rules[0].timeouts
+      - equal:
+          path: spec.rules[1].matches[0].path.type
+          value: Exact
+      - equal:
+          path: spec.rules[1].timeouts.request
+          value: 10s
+      - equal:
+          path: spec.rules[1].backendRefs[0].port
+          value: 4000
+
+  - it: should carry the chart labels plus any custom labels and annotations
+    set:
+      httpRoute.enabled: true
+      httpRoute.parentRefs:
+        - name: external
+      httpRoute.labels:
+        custom-label: "true"
+      httpRoute.annotations:
+        custom-annotation: "value"
+    asserts:
+      - equal:
+          path: metadata.labels["app.kubernetes.io/name"]
+          value: litellm
+      - equal:
+          path: metadata.labels["custom-label"]
+          value: "true"
+      - equal:
+          path: metadata.annotations["custom-annotation"]
+          value: "value"
+
