@@ -8,7 +8,7 @@ import asyncio
 import contextlib
 import importlib.metadata
 import json
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, MutableMapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, NoReturn, Protocol, runtime_checkable
@@ -21,7 +21,7 @@ from litellm._uuid import uuid
 from litellm.constants import (
     BEDROCK_REALTIME_CLOSE_TIMEOUT_SECONDS,
     BEDROCK_REALTIME_COMMITTED_FAILURE_SCOPE_KEY,
-    BEDROCK_REALTIME_PENDING_SESSION_UPDATE_SCOPE_KEY,
+    BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY,
     BEDROCK_REALTIME_SDK_DISTRIBUTION,
     BEDROCK_REALTIME_SDK_SUPPORTED_RANGE,
     BEDROCK_REALTIME_SESSION_COMMITTED_SCOPE_KEY,
@@ -37,9 +37,8 @@ from litellm.types.realtime import RealtimeResponseTransformInput
 
 from ..base_aws_llm import BaseAWSLLM, run_aws_signing
 from ..common_utils import BedrockError
-from .transformation import BedrockRealtimeConfig, BedrockSessionUpdateRejection
+from .transformation import BedrockRealtimeConfig, BedrockSessionUpdateRejection, requested_modalities
 
-_CLIENT_MODALITIES_ADAPTER: Final[TypeAdapter["list[str] | None"]] = TypeAdapter(list[str] | None)
 _CLIENT_MESSAGE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 _EMPTY_JSON_OBJECT: Final[Mapping[str, JsonValue]] = MappingProxyType({})
@@ -177,25 +176,35 @@ async def _client_messages(client_ws: RealtimeClientWebSocket, initial_message: 
             return
 
 
-def _pending_session_update(scope: Mapping[str, object]) -> str | None:
-    """A fallback attempt on the same websocket replays the session.update the failed attempt never acked."""
-    if scope.get(BEDROCK_REALTIME_SESSION_COMMITTED_SCOPE_KEY) is True:
-        committed_failure: Final = scope.get(BEDROCK_REALTIME_COMMITTED_FAILURE_SCOPE_KEY)
-        raise BedrockError(
-            status_code=400,
-            message=(
-                "Bedrock realtime session already committed to a provider stream; it cannot be replayed"
-                + (f". The committed stream failed with: {committed_failure}" if committed_failure else "")
-            ),
-        )
-    pending: Final = scope.get(BEDROCK_REALTIME_PENDING_SESSION_UPDATE_SCOPE_KEY)
+def _is_session_committed(scope: Mapping[str, object]) -> bool:
+    return scope.get(BEDROCK_REALTIME_SESSION_COMMITTED_SCOPE_KEY) is True
+
+
+def raise_if_session_committed(scope: Mapping[str, object]) -> None:
+    """A fallback attempt on a websocket whose Bedrock stream already took input would silently start over."""
+    if not _is_session_committed(scope):
+        return
+    committed_failure: Final = scope.get(BEDROCK_REALTIME_COMMITTED_FAILURE_SCOPE_KEY)
+    raise BedrockError(
+        status_code=400,
+        message=(
+            "Bedrock realtime session already committed to a provider stream; it cannot be replayed"
+            + (f". The committed stream failed with: {committed_failure}" if committed_failure else "")
+        ),
+    )
+
+
+def _pending_opening_message(scope: Mapping[str, object]) -> str | None:
+    """A fallback attempt on the same websocket replays the opening message Bedrock never accepted a stream for."""
+    raise_if_session_committed(scope)
+    pending: Final = scope.get(BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY)
     return pending if isinstance(pending, str) else None
 
 
 def _raise_provider_failure(scope: MutableMapping[str, object], failure: BaseException) -> NoReturn:
     error: Final = _as_bedrock_error(failure)
     verbose_proxy_logger.error("Bedrock Realtime: provider stream failed: %s", redact_string(str(error)))
-    if scope.get(BEDROCK_REALTIME_SESSION_COMMITTED_SCOPE_KEY) is True:
+    if _is_session_committed(scope):
         scope[BEDROCK_REALTIME_COMMITTED_FAILURE_SCOPE_KEY] = redact_string(str(error))
     raise error from failure
 
@@ -207,30 +216,36 @@ def _parse_client_message(message: str) -> Mapping[str, JsonValue]:
         return _EMPTY_JSON_OBJECT
 
 
-def _mark_session_committed(client_ws: RealtimeClientWebSocket) -> None:
+async def _send_opening_message(
+    client_ws: RealtimeClientWebSocket,
+    bedrock_stream: BedrockBidirectionalStream,
+    message: str,
+    bedrock_messages: Sequence[str],
+    send_to_bedrock: Callable[[str], Awaitable[None]],
+) -> None:
+    """Keep the opening message for a fallback to replay until Bedrock accepts the stream it opened."""
+    client_ws.scope[BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY] = message  # rebind-ok: scope outlives attempts
+    for bedrock_message in bedrock_messages:
+        await send_to_bedrock(bedrock_message)
+    await bedrock_stream.await_output()
+    client_ws.scope.pop(BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY, None)
     client_ws.scope[BEDROCK_REALTIME_SESSION_COMMITTED_SCOPE_KEY] = True  # rebind-ok: scope outlives the attempt
 
 
 async def _ack_session_update(
     client_ws: RealtimeClientWebSocket,
-    bedrock_stream: BedrockBidirectionalStream,
     transformation_config: BedrockRealtimeConfig,
     model: str,
     logging_obj: LiteLLMLogging | None,
     parsed_client_message: Mapping[str, JsonValue],
 ) -> bool:
-    """Ack the client's session.update once Bedrock accepted the stream; False means the client is gone."""
-    await bedrock_stream.await_output()
-    client_ws.scope.pop(BEDROCK_REALTIME_PENDING_SESSION_UPDATE_SCOPE_KEY, None)
-    _mark_session_committed(client_ws)
+    """Ack the client's session.update; False means the client is gone."""
     if logging_obj is None:
         return True
-    requested_modalities: Final = _CLIENT_MODALITIES_ADAPTER.validate_python(
-        _json_dict(parsed_client_message.get("session")).get("modalities")
-    )
+    modalities: Final = requested_modalities(_json_dict(parsed_client_message.get("session")))
     try:
         await client_ws.send_text(
-            json.dumps(transformation_config.session_updated_event(model, logging_obj, requested_modalities))
+            json.dumps(transformation_config.session_updated_event(model, logging_obj, modalities))
         )
     except Exception as e:  # noqa: BLE001  # any send failure means the client is gone
         verbose_proxy_logger.debug("Client to Bedrock forwarding ended: %s", e, exc_info=True)
@@ -318,7 +333,7 @@ class BedrockRealtime(BaseAWSLLM):
         except ImportError as e:
             raise _sdk_import_error(self._sdk_version_lookup(), e) from e
 
-        pending_session_update: Final = _pending_session_update(websocket.scope)
+        pending_opening_message: Final = _pending_opening_message(websocket.scope)
 
         # Get AWS region
         if aws_region_name is None:
@@ -380,7 +395,7 @@ class BedrockRealtime(BaseAWSLLM):
 
         try:
             await self._run_session(
-                websocket, open_bidirectional_stream, model, logging_obj, pending_session_update, drop_params
+                websocket, open_bidirectional_stream, model, logging_obj, pending_opening_message, drop_params
             )
         finally:
             await _close_bedrock_client(bedrock_client)
@@ -391,7 +406,7 @@ class BedrockRealtime(BaseAWSLLM):
         open_bidirectional_stream: Callable[[], Awaitable[BedrockBidirectionalStream]],
         model: str,
         logging_obj: LiteLLMLogging,
-        pending_session_update: str | None,
+        pending_opening_message: str | None,
         drop_params: bool = False,
     ) -> None:
         transformation_config: Final = BedrockRealtimeConfig(drop_params=drop_params)
@@ -400,7 +415,7 @@ class BedrockRealtime(BaseAWSLLM):
 
         verbose_proxy_logger.debug("Bedrock Realtime: Bidirectional stream established")
 
-        if pending_session_update is None:
+        if pending_opening_message is None:
             await websocket.send_text(json.dumps(transformation_config.session_created_event(model, logging_obj)))
             verbose_proxy_logger.debug("Bedrock Realtime: sent session.created to client on connect")
 
@@ -422,7 +437,7 @@ class BedrockRealtime(BaseAWSLLM):
             model,
             session_state,
             logging_obj,
-            initial_message=pending_session_update,
+            initial_message=pending_opening_message,
         )
 
         logged_events: Final = (
@@ -535,20 +550,22 @@ class BedrockRealtime(BaseAWSLLM):
                         if not await _reject_session_update(client_ws, parsed_client_message, rejection):
                             break
                         continue
-                    client_ws.scope[BEDROCK_REALTIME_PENDING_SESSION_UPDATE_SCOPE_KEY] = message
 
                 transformed_messages = transformation_config.transform_realtime_request(
                     message=message,
                     model=model,
                     session_configuration_request=session_state.get("session_configuration_request"),
                 )
-                if transformed_messages and not is_session_update:
-                    _mark_session_committed(client_ws)
-                for bedrock_message in transformed_messages:
-                    await send_to_bedrock(bedrock_message)
+                if transformed_messages and not _is_session_committed(client_ws.scope):
+                    await _send_opening_message(
+                        client_ws, bedrock_stream, message, transformed_messages, send_to_bedrock
+                    )
+                else:
+                    for bedrock_message in transformed_messages:
+                        await send_to_bedrock(bedrock_message)
 
                 if is_session_update and not await _ack_session_update(
-                    client_ws, bedrock_stream, transformation_config, model, logging_obj, parsed_client_message
+                    client_ws, transformation_config, model, logging_obj, parsed_client_message
                 ):
                     break
         finally:

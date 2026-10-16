@@ -1657,6 +1657,10 @@ class TestBedrockRealtimeUserEventsAndUsage:
             ({"output_sample_rate_hertz": "16000"}, "session.output_sample_rate_hertz"),
             ({"instructions": {"role": "pirate"}}, "session.instructions"),
             ({"voice": {"id": "voice_123"}}, "session.voice"),
+            ({"modalities": "text"}, "session.modalities"),
+            ({"modalities": ["text", 1]}, "session.modalities"),
+            ({"input_sample_rate_hertz": "16000"}, "session.input_sample_rate_hertz"),
+            ({"tools": {"type": "function", "name": "lookup"}}, "session.tools"),
         ],
     )
     def test_malformed_setting_is_rejected_without_drop_params(self, session, param):
@@ -1678,6 +1682,13 @@ class TestBedrockRealtimeUserEventsAndUsage:
         assert config.session_update_rejection({"type": "session.update", "session": session}) is None
         inference: Final = self._inference_configuration(config, session)
         assert (inference["temperature"], inference["maxTokens"]) == (0.7, 1024)
+
+    def test_non_number_input_sample_rate_is_dropped_with_drop_params(self):
+        config: Final = BedrockRealtimeConfig(drop_params=True)
+        session: Final = {"input_sample_rate_hertz": "8000"}
+        assert config.session_update_rejection({"type": "session.update", "session": session}) is None
+        config.transform_session_update_event({"type": "session.update", "session": session})
+        assert config.input_sample_rate_hertz == BedrockRealtimeConfig().input_sample_rate_hertz
 
     def test_non_string_instructions_and_voice_are_dropped_with_drop_params(self):
         config: Final = BedrockRealtimeConfig(drop_params=True)

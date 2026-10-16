@@ -39,7 +39,7 @@ from ..litellm_core_utils.get_litellm_params import get_litellm_params
 from ..litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ..llms.azure.common_utils import get_azure_ad_token
 from ..llms.azure.realtime.handler import AzureOpenAIRealtime, azure_realtime_protocol_for_client
-from ..llms.bedrock.realtime.handler import BedrockRealtime
+from ..llms.bedrock.realtime.handler import BedrockRealtime, raise_if_session_committed
 from ..llms.custom_httpx.http_handler import realtime_ssl_for_url
 from ..llms.openai.live.handler import OpenAILiveSessions
 from ..llms.openai.realtime.handler import OpenAIRealtime
@@ -451,6 +451,7 @@ async def _arealtime(
 
     For PROXY use only.
     """
+    raise_if_session_committed(websocket.scope)
     headers = cast(dict | None, kwargs.get("headers"))
     extra_headers: Final = cast(dict | None, kwargs.get("extra_headers"))
     if headers is None:
