@@ -126,7 +126,7 @@ def test_cache_init_creates_redis_cache_without_cluster_config(
 
 @pytest.mark.asyncio
 @patch("redis.RedisCluster")
-async def test_disconnect_closes_cluster_client_without_raising(mock_redis_cluster):
+async def test_disconnect_closes_cluster_client_without_raising(mock_redis_cluster: MagicMock) -> None:
     """Shutting down a proxy in cluster mode used to always raise AttributeError,
     since RedisCache.disconnect() unconditionally dereferences async_redis_conn_pool,
     which is None by design in cluster mode. Regression test for
@@ -144,7 +144,7 @@ async def test_disconnect_closes_cluster_client_without_raising(mock_redis_clust
             nonlocal closed
             closed = True
 
-    cache.redis_async_client = _ClusterClient()
+    cache.redis_async_client = cast(RedisCluster, _ClusterClient())
     cache.redis_client = MagicMock()
 
     await cache.disconnect()
@@ -154,7 +154,7 @@ async def test_disconnect_closes_cluster_client_without_raising(mock_redis_clust
 
 @pytest.mark.asyncio
 @patch("redis.RedisCluster")
-async def test_disconnect_still_closes_redis_client_when_cluster_aclose_fails(mock_redis_cluster):
+async def test_disconnect_still_closes_redis_client_when_cluster_aclose_fails(mock_redis_cluster: MagicMock) -> None:
     cache = RedisClusterCache(
         startup_nodes=[{"host": "localhost", "port": 6379}],
         password="hello",
@@ -170,7 +170,7 @@ async def test_disconnect_still_closes_redis_client_when_cluster_aclose_fails(mo
 
 @pytest.mark.asyncio
 @patch("redis.RedisCluster")
-async def test_disconnect_without_cluster_client_does_not_raise(mock_redis_cluster):
+async def test_disconnect_without_cluster_client_does_not_raise(mock_redis_cluster: MagicMock) -> None:
     """disconnect() must be a no-op for the cluster client when it was never
     initialized (e.g. shutdown before any request touched Redis), rather than
     raising on the absent client or the None connection pool."""

@@ -265,7 +265,9 @@ async def test_proxy_shutdown_event_prisma_disconnect_raises_error(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_proxy_shutdown_event_cache_disconnect_error_does_not_abort_shutdown(monkeypatch):
+async def test_proxy_shutdown_event_cache_disconnect_error_does_not_abort_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A cache backend failing to disconnect must not skip the jwt_handler close
     that runs after it, unlike a prisma disconnect failure which does abort.
     """
