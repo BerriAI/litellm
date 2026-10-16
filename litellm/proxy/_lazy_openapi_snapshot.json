@@ -55471,6 +55471,14 @@
         },
         "TernaryExportResponse": {
           "properties": {
+            "days_uploaded": {
+              "description": "UTC days that had usage and were uploaded, one file each",
+              "items": {
+                "type": "string"
+              },
+              "title": "Days Uploaded",
+              "type": "array"
+            },
             "end_time_utc": {
               "format": "date-time",
               "title": "End Time Utc",
@@ -55494,7 +55502,8 @@
             "message",
             "status",
             "start_time_utc",
-            "end_time_utc"
+            "end_time_utc",
+            "days_uploaded"
           ],
           "title": "TernaryExportResponse",
           "type": "object"
@@ -55696,13 +55705,17 @@
             "status": {
               "anyOf": [
                 {
+                  "enum": [
+                    "configured",
+                    "config_file"
+                  ],
                   "type": "string"
                 },
                 {
                   "type": "null"
                 }
               ],
-              "description": "Configuration status",
+              "description": "'configured' for settings stored here, 'config_file' when the proxy config sets the callback",
               "title": "Status"
             },
             "ternary_base_url": {

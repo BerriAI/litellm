@@ -17,6 +17,8 @@ from litellm.integrations.focus.focus_logger import FocusLogger
 if TYPE_CHECKING:
     from litellm.integrations.focus.export_engine import FocusExportEngine
 
+    from .export_engine import TernaryExportEngine
+
 TERNARY_USAGE_DATA_JOB_NAME: Final = "ternary_export_usage_data"
 
 _SUPPORTED_FREQUENCIES: Final = frozenset({"daily", "interval"})
@@ -100,6 +102,7 @@ class TernaryLogger(FocusLogger):
             prefix="ternary_exports",
             destination_config=destination_config,
         )
+        self._ternary_engine: TernaryExportEngine | None = None
 
         verbose_logger.debug(
             "TernaryLogger initialized (connection_id=%s)",
@@ -120,16 +123,27 @@ class TernaryLogger(FocusLogger):
         """The window a scheduled export at `now` sends."""
         return self._compute_time_window(now)
 
+    async def export_days(
+        self, *, start_time_utc: datetime, end_time_utc: datetime, limit: int | None
+    ) -> tuple[str, ...]:
+        """Export the window now and return the UTC days that had rows to upload."""
+        window: Final = FocusTimeWindow(start_time=start_time_utc, end_time=end_time_utc, frequency=self.frequency)
+        return await self._ternary_export_engine().export_days(window=window, limit=limit)
+
     def _ensure_engine(self) -> FocusExportEngine:
+        return self._ternary_export_engine()
+
+    def _ternary_export_engine(self) -> TernaryExportEngine:
         """Instantiate the polars-backed Ternary export engine lazily."""
-        if self._engine is None:
+        if self._ternary_engine is None:
             from .export_engine import TernaryExportEngine  # noqa: PLC0415  # polars is a proxy extra
 
-            self._engine = TernaryExportEngine(
+            self._ternary_engine = TernaryExportEngine(
                 prefix=self.prefix,
                 destination=FocusTernaryDestination(prefix=self.prefix, config=self._destination_config),
             )
-        return self._engine
+            self._engine = self._ternary_engine
+        return self._ternary_engine
 
     @staticmethod
     async def init_ternary_background_job(
@@ -153,4 +167,8 @@ class TernaryLogger(FocusLogger):
         )
 
 
-__all__ = ("TernaryLogger",)
+class SettingsTernaryLogger(TernaryLogger):
+    """A TernaryLogger built from the settings stored through the proxy's /ternary admin endpoints, not from config."""
+
+
+__all__ = ("SettingsTernaryLogger", "TernaryLogger")

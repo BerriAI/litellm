@@ -370,6 +370,18 @@ async def test_transform_enrich_deliver_enriches_tags_then_delivers():
 
 
 @pytest.mark.asyncio
+async def test_deliver_returns_only_the_days_that_had_something_to_upload():
+    data = pl.DataFrame({"date": ["2026-09-03", "2026-09-04"], "Tags": ["{}", "{}"], "prompt_tokens": [7, 8]})
+    engine = _fake_engine(transformed=pl.DataFrame({"Tags": ["{}"]}), payload=b"")
+    engine._serializer.serialize = MagicMock(side_effect=[b"csv-bytes", b""])
+
+    uploaded = await TernaryExportEngine._deliver_enriched(engine, data, _window())
+
+    assert uploaded == ("2026-09-03",)
+    engine._destination.deliver.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_transform_enrich_deliver_skips_empty_data():
     engine = _fake_engine(transformed=pl.DataFrame(), payload=b"")
     await TernaryExportEngine._deliver_enriched(engine, pl.DataFrame(), _window())

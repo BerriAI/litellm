@@ -46869,6 +46869,11 @@ export interface components {
         /** TernaryExportResponse */
         TernaryExportResponse: {
             /**
+             * Days Uploaded
+             * @description UTC days that had usage and were uploaded, one file each
+             */
+            days_uploaded: string[];
+            /**
              * End Time Utc
              * Format: date-time
              */
@@ -46985,9 +46990,9 @@ export interface components {
             interval_seconds?: number | null;
             /**
              * Status
-             * @description Configuration status
+             * @description 'configured' for settings stored here, 'config_file' when the proxy config sets the callback
              */
-            status?: string | null;
+            status?: ("configured" | "config_file") | null;
             /**
              * Ternary Base Url
              * @description Ternary API base URL
