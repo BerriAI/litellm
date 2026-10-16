@@ -23,7 +23,7 @@ def _non_negative_number(value: object) -> float | None:
 
 
 def _requested_results(optional_params: Mapping[str, object]) -> int:
-    for key in ("numResults", "max_results"):
+    for key in ("max_results", "numResults"):
         requested = _non_negative_number(optional_params.get(key))
         if requested is not None:
             return int(requested)
