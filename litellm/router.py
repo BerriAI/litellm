@@ -13214,17 +13214,26 @@ class Router:
         return candidates - Router._declared_param_allowlist(params) - dropped_names
 
     @staticmethod
-    def _deployment_rejects_params(deployment: DeploymentTypedDict, group: str, params: frozenset[str]) -> bool:
-        if not params:
-            return False
-        checked: Final = Router._params_neither_dropped_nor_allowed(deployment.get("litellm_params") or {}, params)
-        return any(not Router._deployment_accepts_param(deployment, group, param) for param in checked)
+    def _deployment_lacks_params(deployment: DeploymentTypedDict, group: str, params: frozenset[str]) -> bool:
+        return any(not Router._deployment_accepts_param(deployment, group, param) for param in params)
 
     @staticmethod
-    def _pre_call_check_rejectable_params(request_kwargs: Mapping[str, object]) -> frozenset[str]:
+    def _deployment_rejects_params(
+        deployment: DeploymentTypedDict, group: str, params: frozenset[str], request_kwargs: Mapping[str, object]
+    ) -> bool:
+        kept_by_request: Final = Router._params_neither_dropped_nor_allowed(request_kwargs, params)
+        kept: Final = Router._params_neither_dropped_nor_allowed(
+            deployment.get("litellm_params") or {}, kept_by_request
+        )
+        return Router._deployment_lacks_params(deployment, group, kept)
+
+    @staticmethod
+    def _pre_call_check_requested_chat_params(request_kwargs: Mapping[str, object]) -> frozenset[str]:
         requested: Final = litellm.utils.get_non_default_params(passed_params=dict(request_kwargs))
-        return Router._params_neither_dropped_nor_allowed(
-            request_kwargs, frozenset(param for param in requested if param in _PRE_CALL_CHECK_FILTERED_PARAMS)
+        return frozenset(
+            param
+            for param, value in requested.items()
+            if param in _PRE_CALL_CHECK_FILTERED_PARAMS and not isinstance(value, str)
         )
 
     def _pre_call_checks(
@@ -13274,18 +13283,33 @@ class Router:
             and not skip_inline_token_count
             and any(limit is not None for limit in deployment_max_input_tokens),
         )
-        rejectable_params: Final[frozenset[str]] = (
-            self._pre_call_check_rejectable_params(request_kwargs)
+        request_settings: Final[Mapping[str, object]] = request_kwargs if request_kwargs is not None else {}
+        requested_params: Final[frozenset[str]] = (
+            self._pre_call_check_requested_chat_params(request_settings)
             if request_kwargs is not None and litellm.drop_params is False
             else frozenset()
         )
         deployments_lacking_params: Final = tuple(
-            self._deployment_rejects_params(
+            self._deployment_lacks_params(
                 cast(DeploymentTypedDict, deployment),  # cast-ok: router deployments are plain dicts
                 model,
-                rejectable_params,
+                requested_params,
             )
             for deployment in _returned_deployments
+        )
+        no_deployment_takes_params: Final = bool(deployments_lacking_params) and all(deployments_lacking_params)
+        deployments_failing_params: Final = (
+            tuple(
+                self._deployment_rejects_params(
+                    cast(DeploymentTypedDict, deployment),  # cast-ok: router deployments are plain dicts
+                    model,
+                    requested_params,
+                    request_settings,
+                )
+                for deployment in _returned_deployments
+            )
+            if no_deployment_takes_params
+            else deployments_lacking_params
         )
 
         ## get model group RPM ##
@@ -13348,7 +13372,7 @@ class Router:
                         continue
 
             ## INVALID PARAMS ## -> catch 'gpt-3.5-turbo-16k' not supporting 'response_format' param
-            if deployments_lacking_params[idx]:
+            if deployments_failing_params[idx]:
                 invalid_model_indices.add(idx)
 
         if len(invalid_model_indices) == len(_returned_deployments):
@@ -13359,15 +13383,15 @@ class Router:
             """
 
             if (
-                deployments_lacking_params
-                and all(deployments_lacking_params)
+                not _context_window_error
+                and no_deployment_takes_params
                 and all(
-                    self._deployment_rejects_params(deployment, model, rejectable_params)
+                    self._deployment_rejects_params(deployment, model, requested_params, request_settings)
                     for deployment in self.get_all_deployments(model_name=model)
                 )
             ):
                 raise litellm.UnsupportedParamsError(
-                    message=f"no deployment of model={model} supports {sorted(rejectable_params)}. To drop these, set `litellm.drop_params=True`, or send allowed_openai_params={sorted(rejectable_params)} to pass them through",
+                    message=f"no deployment of model={model} supports {sorted(requested_params)}. To drop these, set `litellm.drop_params=True` or for proxy `litellm_settings: drop_params: true`, or send allowed_openai_params={sorted(requested_params)} to pass them through",
                     model=model,
                 )
             if _rate_limit_error is True:  # allow generic fallback logic to take place
