@@ -1,7 +1,7 @@
 import json
 import types
 from collections.abc import AsyncIterator, Iterator, Mapping
-from typing import TYPE_CHECKING, Final, cast
+from typing import TYPE_CHECKING, Final
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
@@ -32,12 +32,8 @@ from litellm.types.llms.openai import (
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
-    ChatCompletionToolCallFunctionChunk,
-    ChatCompletionUsageBlock,
 )
 from litellm.types.utils import (
-    ChatCompletionMessageToolCall,
-    Choices,
     Delta,
     ModelResponse,
     ModelResponseStream,
@@ -983,98 +979,3 @@ class AmazonOpenAICompatibleStreamDecoder(AWSEventStreamDecoder):
 
     def _chunk_parser(self, chunk_data: dict[str, object]) -> ModelResponseStream:
         return self.openai_model_response_iterator.chunk_parser(chunk=chunk_data)
-
-
-class MockResponseIterator:  # for returning ai21 streaming responses
-    def __init__(self, model_response, json_mode: bool | None = False):
-        self.model_response = model_response
-        self.json_mode = json_mode
-        self.is_done = False
-
-    # Sync iterator
-    def __iter__(self):
-        return self
-
-    def _handle_json_mode_chunk(
-        self, text: str, tool_calls: list[ChatCompletionToolCallChunk] | None
-    ) -> tuple[str, ChatCompletionToolCallChunk | None]:
-        """
-        If JSON mode is enabled, convert the tool call to a message.
-
-        Bedrock returns the JSON schema as part of the tool call
-        OpenAI returns the JSON schema as part of the content, this handles placing it in the content
-
-        Args:
-            text: str
-            tool_use: Optional[ChatCompletionToolCallChunk]
-        Returns:
-            Tuple[str, Optional[ChatCompletionToolCallChunk]]
-
-            text: The text to use in the content
-            tool_use: The ChatCompletionToolCallChunk to use in the chunk response
-        """
-        tool_use: ChatCompletionToolCallChunk | None = None
-        if self.json_mode is True and tool_calls is not None:
-            message: Final = litellm.AnthropicConfig().convert_tool_response_to_message(tool_calls=tool_calls)
-            if message is not None:
-                text = message.content or ""
-                tool_use = None
-        elif tool_calls is not None and len(tool_calls) > 0:
-            tool_use = tool_calls[0]
-        return text, tool_use
-
-    def _chunk_parser(self, chunk_data: ModelResponse) -> GChunk:
-        try:
-            chunk_usage: Final[Usage] = getattr(chunk_data, "usage")
-            text = chunk_data.choices[0].message.content or ""
-            tool_use = None
-            _model_response_tool_call: Final = cast(
-                list[ChatCompletionMessageToolCall] | None,
-                cast(Choices, chunk_data.choices[0]).message.tool_calls,
-            )
-            if self.json_mode is True:
-                text, tool_use = self._handle_json_mode_chunk(
-                    text=text,
-                    tool_calls=chunk_data.choices[0].message.tool_calls,
-                )
-            elif _model_response_tool_call is not None:
-                tool_use = ChatCompletionToolCallChunk(
-                    id=_model_response_tool_call[0].id,
-                    type="function",
-                    function=ChatCompletionToolCallFunctionChunk(
-                        name=_model_response_tool_call[0].function.name,
-                        arguments=_model_response_tool_call[0].function.arguments,
-                    ),
-                    index=0,
-                )
-            processed_chunk: Final = GChunk(
-                text=text,
-                tool_use=tool_use,
-                is_finished=True,
-                finish_reason=map_finish_reason(finish_reason=chunk_data.choices[0].finish_reason or ""),
-                usage=ChatCompletionUsageBlock(
-                    prompt_tokens=chunk_usage.prompt_tokens,
-                    completion_tokens=chunk_usage.completion_tokens,
-                    total_tokens=chunk_usage.total_tokens,
-                ),
-                index=0,
-            )
-            return processed_chunk
-        except Exception as e:
-            raise ValueError(f"Failed to decode chunk: {chunk_data}. Error: {e}")
-
-    def __next__(self):
-        if self.is_done:
-            raise StopIteration
-        self.is_done = True
-        return self._chunk_parser(self.model_response)
-
-    # Async iterator
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        if self.is_done:
-            raise StopAsyncIteration
-        self.is_done = True
-        return self._chunk_parser(self.model_response)

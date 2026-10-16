@@ -11,6 +11,7 @@ spend tracking stores, so a follow-up previous_response_id still finds the conve
 """
 
 import json
+from collections.abc import Callable
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -994,6 +995,17 @@ def _reasoning_and_text_in_one_chunk() -> tuple[ModelResponseStream, ...]:
     return (_with_reasoning(_chunk("Hello!", finish_reason="stop"), "let me think"),)
 
 
+def _signed_thinking_and_text_in_one_chunk() -> tuple[ModelResponseStream, ...]:
+    chunk: Final = _chunk("Hello!", finish_reason="stop")
+    signed_block: Final = {"type": "thinking", "thinking": "", "signature": "sig_only"}
+    delta: Final = Delta(**{**chunk.choices[0].delta.model_dump(), "thinking_blocks": [signed_block]})
+    return (
+        chunk.model_copy(update={"choices": [StreamingChoices(index=0, delta=delta, finish_reason="stop")]}),
+    )
+
+
+StreamChunks = Callable[[], tuple[ModelResponseStream, ...]]
+
 REASONING_THEN_TEXT_STREAMS: Final = pytest.mark.parametrize(
     "stream_chunks",
     [_reasoning_then_text_chunks, _reasoning_and_text_in_one_chunk],
@@ -1164,7 +1176,9 @@ async def test_signature_only_thinking_streams_a_replayable_reasoning_item(sync_
 @REASONING_THEN_TEXT_STREAMS
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_reasoning_then_text_announces_message_item_before_text_events(stream_chunks, sync_mode: bool):
+async def test_reasoning_then_text_announces_message_item_before_text_events(
+    stream_chunks: StreamChunks, sync_mode: bool
+):
     iterator: Final = _build_iterator(stream_chunks())
 
     events: Final = await _collect_events(iterator, sync_mode)
@@ -1198,12 +1212,17 @@ async def test_reasoning_then_text_announces_message_item_before_text_events(str
     assert announced_indexes_by_item_type["message"] != announced_indexes_by_item_type["reasoning"]
 
 
-@REASONING_THEN_TEXT_STREAMS
+@pytest.mark.parametrize(
+    "stream_chunks",
+    [_reasoning_then_text_chunks, _reasoning_and_text_in_one_chunk, _signed_thinking_and_text_in_one_chunk],
+    ids=["reasoning_then_text_chunks", "reasoning_and_text_in_one_chunk", "signed_thinking_and_text_in_one_chunk"],
+)
+@pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_reasoning_item_closes_before_message_item_opens(stream_chunks):
+async def test_reasoning_item_closes_before_message_item_opens(stream_chunks: StreamChunks, sync_mode: bool):
     iterator: Final = _build_iterator(stream_chunks())
 
-    events: Final = await _collect_events(iterator, sync_mode=False)
+    events: Final = await _collect_events(iterator, sync_mode)
 
     item_lifecycle: Final = [
         (event.type, event.item.type)
@@ -1217,6 +1236,7 @@ async def test_reasoning_item_closes_before_message_item_opens(stream_chunks):
         (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, "message"),
         (ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, "message"),
     ]
+    assert _event_text(events, ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA) == "Hello!"
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -1247,11 +1267,12 @@ async def test_tool_then_reasoning_then_text_gives_message_its_own_output_index(
     assert len(output_indexes_by_item_id) == len(set(output_indexes_by_item_id.values()))
 
 
+@pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_reasoning_item_closes_before_a_tool_call_from_the_same_chunk_opens():
+async def test_reasoning_item_closes_before_a_tool_call_from_the_same_chunk_opens(sync_mode: bool):
     iterator: Final = _build_iterator([_with_reasoning(_tool_call_chunk(finish_reason="tool_calls"), "let me think")])
 
-    events: Final = await _collect_events(iterator, sync_mode=False)
+    events: Final = await _collect_events(iterator, sync_mode)
 
     item_lifecycle: Final = [
         (event.type, event.item.type)

@@ -24,6 +24,7 @@ from typing_extensions import assert_never
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.exceptions import ContextWindowExceededError, MidStreamFallbackError
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.hidden_params import set_hidden_params
 from litellm.llms.anthropic.pass_through.safeguards import StreamedSafeguardResults
 from litellm.llms.anthropic.pass_through.utils import anthropic_sse_frame
@@ -39,6 +40,7 @@ from litellm.types.llms.anthropic import (
     UsageDelta,
     UsageIteration,
 )
+from litellm.types.llms.openai import ChatCompletionRedactedThinkingBlock, ChatCompletionThinkingBlock
 from litellm.types.utils import AdapterCompletionStreamWrapper, ChatCompletionDeltaToolCall, Delta, Function
 
 if TYPE_CHECKING:
@@ -50,6 +52,7 @@ if TYPE_CHECKING:
 
 _STREAMING_DELTA_TYPES: Final = frozenset(get_args(StreamingContentBlockDeltaType))
 _SSE_EVENT: Final = TypeAdapter(Mapping[str, object])
+_THINKING_BLOCK: Final = TypeAdapter(ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock)
 
 
 class _UsageDeltaWithIterations(UsageDelta, total=False):
@@ -104,6 +107,14 @@ def _delta_payload_field(delta_type: StreamingContentBlockDeltaType) -> str:
             return "signature"
         case _:
             assert_never(delta_type)
+
+
+def _first_thinking_block_index(chunk: "ModelResponseStream") -> int | None:
+    delta: Final = _optional_attr(chunk.choices[0], "delta") if chunk.choices else None
+    blocks: Final = _optional_attr_sequence(delta, "thinking_blocks")
+    first_block: Final = as_str_mapping(blocks[0]) if blocks else None
+    index: Final = first_block.get("index") if first_block is not None else None
+    return index if isinstance(index, int) else None
 
 
 def _optional_str_attr(obj: object, name: str) -> str | None:
@@ -373,13 +384,49 @@ class _CombinedChunkSplitter:
             finish_delta.thinking_blocks = None
         return [content_chunk, finish_chunk]
 
+    @staticmethod
+    def _with_thinking_block(
+        chunk: "ModelResponseStream",
+        block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
+        *,
+        keep_role: bool,
+    ) -> "ModelResponseStream":
+        piece: Final = copy.deepcopy(chunk)
+        role: Final = getattr(piece.choices[0].delta, "role", None) if keep_role else None
+        replayable: Final = block["type"] == "redacted_thinking" or bool(block.get("signature"))
+        thinking: Final = block.get("thinking") if block["type"] == "thinking" else None
+        piece.choices[0].delta = Delta(
+            role=role,
+            reasoning_content=thinking or None,
+            thinking_blocks=[block] if replayable else None,
+        )
+        return piece
+
+    @staticmethod
+    def _split_thinking_blocks(chunk: "ModelResponseStream") -> "tuple[ModelResponseStream, ...]":
+        """Anthropic streams one content block per thinking block, so a delta carrying several is split per block."""
+        choices: Final = _optional_attr_sequence(chunk, "choices")
+        if len(choices) != 1:
+            return (chunk,)
+        delta: Final = _optional_attr(choices[0], "delta")
+        blocks: Final = _optional_attr_sequence(delta, "thinking_blocks")
+        if len(blocks) < 2 or _optional_attr(delta, "content") or _optional_attr(delta, "tool_calls"):
+            return (chunk,)
+        return tuple(
+            _CombinedChunkSplitter._with_thinking_block(
+                chunk, _THINKING_BLOCK.validate_python(block), keep_role=position == 0
+            )
+            for position, block in enumerate(blocks)
+        )
+
     def _expand(self, chunk: "ModelResponseStream") -> "tuple[ModelResponseStream, ...]":
         split_chunks: Final = tuple(
             split_chunk
             for combined_chunk in self._split(chunk)
             for split_chunk in self._split_by_payload_kind(combined_chunk)  # comprehension-ok: flattens nested splits
         )
-        return tuple(itertools.chain.from_iterable(self._route_tool_calls(split_chunk) for split_chunk in split_chunks))
+        block_chunks: Final = tuple(itertools.chain.from_iterable(map(self._split_thinking_blocks, split_chunks)))
+        return tuple(itertools.chain.from_iterable(map(self._route_tool_calls, block_chunks)))
 
     def __iter__(self) -> "Iterator[ModelResponseStream]":
         return self
@@ -458,7 +505,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     sent_first_chunk: bool = False
     sent_content_block_start: bool = False
     sent_content_block_finish: bool = False
-    current_content_block_type: Literal["text", "tool_use", "thinking"] = "text"
+    current_content_block_type: Literal["text", "tool_use", "thinking", "redacted_thinking"] = "text"
+    current_thinking_block_index: int | None = None
     sent_last_message: bool = False
     holding_chunk: ContentBlockDelta | None = None
     holding_stop_reason_chunk: MessageBlockDelta | None = None
@@ -1352,8 +1400,21 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 original_name: Final = self.tool_name_mapping.get(truncated_name, truncated_name)
                 tool_block["name"] = original_name
 
+        thinking_block_index: Final = _first_thinking_block_index(chunk)
+        previous_thinking_block_index: Final = self.current_thinking_block_index
+        if thinking_block_index is not None or block_type != self.current_content_block_type:
+            self.current_thinking_block_index = thinking_block_index
+
         if block_type != self.current_content_block_type:
             self.current_content_block_type = block_type
+            self.current_content_block_start = content_block_start
+            return True
+
+        if (
+            thinking_block_index is not None
+            and previous_thinking_block_index is not None
+            and thinking_block_index != previous_thinking_block_index
+        ):
             self.current_content_block_start = content_block_start
             return True
 

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from itertools import chain
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -387,8 +388,9 @@ def _answer_fields(response: ModelResponse) -> tuple[object, ...]:
 
 
 def _streamed_thinking_blocks(chunks: list[litellm.ModelResponseStream]) -> list[object]:
-    deltas: Final = [choice.delta for chunk in chunks for choice in chunk.choices]
-    return [block for delta in deltas for block in (getattr(delta, "thinking_blocks", None) or [])]
+    deltas: Final = [chunk.choices[0].delta for chunk in chunks if chunk.choices]
+    block_lists: Final = [getattr(delta, "thinking_blocks", None) or [] for delta in deltas]
+    return list(chain.from_iterable(block_lists))
 
 
 def test_fake_streamed_json_mode_answer_keeps_the_reasoning_of_the_non_streamed_answer() -> None:

@@ -12,7 +12,11 @@ content survives.
 import asyncio
 import json
 from types import SimpleNamespace
-from typing import AsyncIterator
+from typing import AsyncIterator, Final
+
+import anthropic
+import httpx
+import pytest
 
 from litellm.llms.anthropic.pass_through.adapters.streaming_iterator import (
     AnthropicStreamWrapper,
@@ -273,3 +277,53 @@ def test_thinking_then_signature_chunk_does_not_crash_stream():
 
     assert "message_stop" in sse
     assert "Done" in sse
+
+
+def _fake_stream_with_thinking(thinking_blocks: list[dict[str, str]]) -> MockResponseIterator:
+    model_response: Final = ModelResponse()
+    model_response.choices = [
+        Choices(
+            index=0,
+            message=Message(
+                role="assistant",
+                content='{"a": 1}',
+                reasoning_content="".join(block.get("thinking", "") for block in thinking_blocks),
+                thinking_blocks=thinking_blocks,
+            ),
+            finish_reason="stop",
+        )
+    ]
+    model_response.usage = Usage(prompt_tokens=5, completion_tokens=7, total_tokens=12)
+    return MockResponseIterator(model_response=model_response)
+
+
+def _anthropic_sdk_final_content(completion_stream: MockResponseIterator) -> list[dict[str, object]]:
+    sse: Final = _collect_async(AnthropicStreamWrapper(completion_stream=completion_stream, model="claude"))
+    transport: Final = httpx.MockTransport(
+        lambda request: httpx.Response(200, content=sse.encode(), headers={"content-type": "text/event-stream"})
+    )
+    client: Final = anthropic.Anthropic(api_key="transport-only", http_client=httpx.Client(transport=transport))
+    with client.messages.stream(
+        model="claude", max_tokens=16, messages=[{"role": "user", "content": "hi"}]
+    ) as stream:
+        return [block.model_dump(exclude_none=True) for block in stream.get_final_message().content]
+
+
+@pytest.mark.parametrize(
+    "thinking_blocks",
+    [
+        [
+            {"type": "thinking", "thinking": "first", "signature": "SIG_A"},
+            {"type": "thinking", "thinking": "second", "signature": "SIG_B"},
+        ],
+        [
+            {"type": "redacted_thinking", "data": "OPAQUE"},
+            {"type": "thinking", "thinking": "visible", "signature": "SIG_C"},
+        ],
+    ],
+    ids=["two_signed_thinking_blocks", "redacted_then_signed_thinking"],
+)
+def test_fake_stream_gives_each_thinking_block_its_own_content_block(thinking_blocks: list[dict[str, str]]):
+    content: Final = _anthropic_sdk_final_content(_fake_stream_with_thinking(thinking_blocks))
+
+    assert content == [*thinking_blocks, {"type": "text", "text": '{"a": 1}'}]

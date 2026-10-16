@@ -595,6 +595,26 @@ class TestSnowflakeCortexClaudeFixes:
         assert blocks[0] == {"type": "thinking", "thinking": "391", "signature": "Eto"}
         assert [b["type"] for b in blocks] == ["thinking", "tool_use"]
 
+    def test_signed_thinking_blocks_replay_without_their_stream_index(self):
+        body = self._transform(
+            [
+                {"role": "user", "content": "hi"},
+                {
+                    "role": "assistant",
+                    "content": "391",
+                    "thinking_blocks": [
+                        {"type": "thinking", "thinking": "391", "signature": "Eto", "index": 0},
+                        {"type": "redacted_thinking", "data": "opaque", "index": 1},
+                    ],
+                },
+            ]
+        )
+        blocks = body["messages"][1]["content"]
+        assert blocks[:2] == [
+            {"type": "thinking", "thinking": "391", "signature": "Eto"},
+            {"type": "redacted_thinking", "data": "opaque"},
+        ]
+
     def test_signed_thinking_blocks_lead_a_plain_text_assistant_turn(self):
         """A thinking response without a tool call must also round-trip on the next request."""
         body = self._transform(
