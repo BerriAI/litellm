@@ -47,6 +47,10 @@ _MASK_INPUT: Final = "compaction-mask-input"
 _MASK_OUTPUT: Final = "compaction-mask-output"
 _BLOCK_OUTPUT: Final = "compaction-block-output"
 _REDACT_HEADER: Final = {"x-litellm-enable-message-redaction": "true"}
+_UNREDACT_HEADER: Final = {"litellm-disable-message-redaction": "true"}
+_SCRIPTED_REJECTION: Final = json.dumps(
+    {"type": "error", "error": {"type": "invalid_request_error", "message": "scripted rejection"}}
+).encode()
 _ASK: Final = re.compile(r"ask-([0-9a-f]{32})")
 
 Route: TypeAlias = Literal["claude-compacting", "claude-plain", "gemini", "openai", "openai-compact", "openai-opaque"]
@@ -58,6 +62,10 @@ def _new_marker() -> str:
 
 def _ask(marker: str, *, compact: bool = False) -> str:
     return f"ask-{marker} compact-now-{marker}" if compact else f"ask-{marker}"
+
+
+def _fail(marker: str) -> str:
+    return f"fail-now-{marker}"
 
 
 def _think(marker: str) -> str:
@@ -164,6 +172,8 @@ def _anthropic_stream(identity: str, content: Sequence[Mapping[str, JsonValue]])
 
 def _claude_reply(body: Mapping[str, JsonValue], raw: bytes) -> Reply:
     marker: Final = _newest_marker(raw)
+    if _fail(marker).encode() in raw:
+        return Reply(status=400, body=_SCRIPTED_REJECTION)
     compaction: Final = (_block(_summary(marker)),) if f"compact-now-{marker}".encode() in raw else ()
     thinking: Final = (_thinking(marker),) if _think(marker).encode() in raw else ()
     content: Final = (*compaction, *thinking, {"type": "text", "text": _answer(marker)})
@@ -645,7 +655,7 @@ _STORED_OPENAI: Final = "compaction-stored-openai"
 _SMALL_CONTEXT: Final = 2000
 
 
-def _stored_config(directory: Path, provider_url: str, guardrail_url: str) -> Path:
+def _stored_config(directory: Path, provider_url: str, guardrail_url: str, **litellm_settings: JsonValue) -> Path:
     stock: Final = _JSON_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
     claude: Final = {"api_key": cc.ANTHROPIC_API_KEY}
     config: Final[dict[str, JsonValue]] = {
@@ -664,6 +674,7 @@ def _stored_config(directory: Path, provider_url: str, guardrail_url: str) -> Pa
             "store_prompts_in_spend_logs": True,
             "disable_responses_id_security": True,
         },
+        "litellm_settings": {**object_value(stock["litellm_settings"]), **litellm_settings},
         "router_settings": {**object_value(stock["router_settings"]), "num_retries": 0, "enable_pre_call_checks": True},
         "guardrails": [
             _guardrail(_MASK_INPUT, "pre_call", f"{guardrail_url}/input"),
@@ -683,22 +694,28 @@ class _StoredRig:
     guardrail: Wire
 
 
-@pytest.fixture(scope="module")
-def stored(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_StoredRig]:
-    directory: Final = tmp_path_factory.mktemp("compaction-stored")
+def _stored_rig(directory: Path, **litellm_settings: JsonValue) -> Iterator[_StoredRig]:
     with (
         wire_server(_vendor) as provider,
         wire_server(_guardrail_peer) as guardrail,
         gateway_from_environment() as gateway,
     ):
-        config: Final = _stored_config(directory, provider.url, guardrail.url)
+        config: Final = _stored_config(directory, provider.url, guardrail.url, **litellm_settings)
         with owned_proxy(gateway, directory, {}, config=config, workers=2) as owned:
             yield _StoredRig(owned, provider, guardrail)
 
 
-def _spend_row(response_id: str) -> dict[str, JsonValue]:
-    decoded: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(response_id).get("response_id")
-    request_id: Final = decoded if isinstance(decoded, str) else response_id
+@pytest.fixture(scope="module")
+def stored(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_StoredRig]:
+    yield from _stored_rig(tmp_path_factory.mktemp("compaction-stored"))
+
+
+@pytest.fixture(scope="module")
+def redacting(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_StoredRig]:
+    yield from _stored_rig(tmp_path_factory.mktemp("compaction-redacting"), turn_off_message_logging=True)
+
+
+def _logged_row(request_id: str, status: Literal["success", "failure"]) -> dict[str, JsonValue]:
     rows: Final = eventually(
         lambda: read_rows(
             'SELECT request_id, proxy_server_request, response, metadata, status FROM "LiteLLM_SpendLogs"'
@@ -708,8 +725,13 @@ def _spend_row(response_id: str) -> dict[str, JsonValue]:
         lambda values: len(values) == 1,
         seconds=70,
     )
-    assert rows[0]["status"] == "success", rows[0]
+    assert rows[0]["status"] == status, rows[0]
     return rows[0]
+
+
+def _spend_row(response_id: str) -> dict[str, JsonValue]:
+    decoded: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(response_id).get("response_id")
+    return _logged_row(decoded if isinstance(decoded, str) else response_id, "success")
 
 
 _REPLAY_ROUTES: Final = (
@@ -944,3 +966,92 @@ def test_redacted_chat_stream_spend_row_holds_no_compaction_delta(stored: _Store
     leaked: Final = {column: text for column, text in logged.items() if any(secret in text for secret in secrets)}
     assert not leaked, {column: text[max(0, text.find(secrets[0]) - 600) :][:1500] for column, text in leaked.items()}
     _only_call(stored.provider, marker)
+
+
+def _failing_request(path: str, marker: str) -> dict[str, JsonValue]:
+    ask: Final = f"{_ask(marker)} {_fail(marker)}"
+    if path == "/v1/responses":
+        return {
+            "model": _STORED_CLAUDE,
+            "input": [_compaction_item(_summary(marker)), {"role": "user", "content": ask}],
+        }
+    return {"model": _STORED_CLAUDE, "max_tokens": 64, "messages": [{"role": "user", "content": ask}]}
+
+
+def _failed_call_row(
+    rig: _StoredRig,
+    path: str,
+    marker: str,
+    headers: Mapping[str, str],
+    key: str | None = None,
+    **fields: JsonValue,
+) -> dict[str, JsonValue]:
+    body: Final = {**_failing_request(path, marker), **fields}
+    response: Final = rig.gateway.request("POST", path, body, headers=headers, key=key)
+    assert response.status_code == 400, response.text
+    _only_call(rig.provider, marker)
+    return _logged_row(response.headers["x-litellm-call-id"], "failure")
+
+
+_LEGACY_REDACT_HEADER: Final = {"litellm-enable-message-redaction": "true"}
+_REDACTED_FAILURES: Final = (
+    pytest.param("/v1/responses", _REDACT_HEADER, id="responses"),
+    pytest.param("/v1/responses", _LEGACY_REDACT_HEADER, id="responses-legacy-header"),
+    pytest.param("/v1/messages", _REDACT_HEADER, id="messages"),
+    pytest.param("/v1/chat/completions", _REDACT_HEADER, id="chat"),
+)
+
+
+@pytest.mark.parametrize(("path", "headers"), _REDACTED_FAILURES)
+def test_failed_call_spend_row_holds_no_request_text_with_the_redaction_header(
+    stored: _StoredRig, path: str, headers: Mapping[str, str]
+) -> None:
+    marker: Final = _new_marker()
+    logged: Final = json.dumps(_failed_call_row(stored, path, marker, headers))
+    assert marker not in logged, logged[max(0, logged.find(marker) - 600) :][:1500]
+
+
+def test_failed_responses_call_spend_row_keeps_the_whole_compaction_summary_without_the_header(
+    stored: _StoredRig,
+) -> None:
+    marker: Final = _new_marker()
+    row: Final = _failed_call_row(stored, "/v1/responses", marker, {})
+    stored_input: Final = _objects(object_value(row["proxy_server_request"])["input"])
+    assert _decoded(string_value(stored_input[0]["encrypted_content"])) == _block(_summary(marker)), stored_input[0]
+    assert f"{_ask(marker)} {_fail(marker)}" in _message_texts(stored_input[1]), stored_input[1]
+
+
+def test_failed_responses_call_stores_the_caller_metadata_without_the_request_headers(stored: _StoredRig) -> None:
+    marker: Final = _new_marker()
+    row: Final = _failed_call_row(stored, "/v1/responses", marker, _REDACT_HEADER, metadata={"caller": marker})
+    stored_metadata: Final = object_value(object_value(row["proxy_server_request"])["metadata"])
+    assert stored_metadata.get("caller") == marker, stored_metadata
+    assert "headers" not in stored_metadata, stored_metadata
+
+
+def test_failed_responses_call_keeps_the_caller_metadata_headers_over_the_redaction_header(stored: _StoredRig) -> None:
+    marker: Final = _new_marker()
+    caller_headers: Final = {"caller": marker}
+    row: Final = _failed_call_row(stored, "/v1/responses", marker, _REDACT_HEADER, metadata={"headers": caller_headers})
+    stored_request: Final = object_value(row["proxy_server_request"])
+    assert object_value(stored_request["metadata"])["headers"] == caller_headers, stored_request["metadata"]
+    assert _ask(marker) in json.dumps(stored_request), json.dumps(stored_request)[:1500]
+
+
+_GLOBALLY_REDACTED_FAILURES: Final = (
+    pytest.param("/v1/responses", _UNREDACT_HEADER, False, id="responses-disable-header"),
+    pytest.param("/v1/chat/completions", _UNREDACT_HEADER, True, id="chat-disable-header"),
+    pytest.param("/v1/responses", {}, False, id="responses-no-header"),
+)
+
+
+@pytest.mark.parametrize(("path", "headers", "kept"), _GLOBALLY_REDACTED_FAILURES)
+def test_opted_out_key_failed_call_spend_row_takes_the_disable_header_over_global_redaction_only_on_chat(
+    redacting: _StoredRig, path: str, headers: Mapping[str, str], kept: bool
+) -> None:
+    marker: Final = _new_marker()
+    with redacting.gateway.scenario() as scenario:
+        key: Final = scenario.key(metadata={"allow_client_message_redaction_opt_out": True})
+        row: Final = _failed_call_row(redacting, path, marker, headers, key)
+    stored_request: Final = json.dumps(row["proxy_server_request"])
+    assert (_ask(marker) in stored_request) is kept, stored_request[:1500]
