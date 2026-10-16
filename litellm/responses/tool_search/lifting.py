@@ -1,5 +1,5 @@
 import json
-from collections.abc import AsyncIterator, Iterator, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from typing import Final, Literal, Protocol
 
 from openai._streaming import ServerSentEvent
@@ -33,7 +33,7 @@ _TERMINAL_EVENTS: Final = frozenset(
 )
 
 
-class _FunctionCall(BaseModel):
+class _FunctionCall(BaseModel, frozen=True):
     type: Literal["function_call"]
     name: str
     namespace: str | None = None
@@ -42,14 +42,14 @@ class _FunctionCall(BaseModel):
     arguments: str = ""
 
 
-class _Event(BaseModel):
+class _Event(BaseModel, frozen=True):
     type: str = ""
     item_id: str | None = None
     item: object = None
-    response: dict[str, object] | None = None
+    response: Mapping[str, object] | None = None
 
 
-class _Response(BaseModel):
+class _Response(BaseModel, frozen=True):
     output: tuple[object, ...] = ()
 
 
@@ -67,7 +67,7 @@ def _tool_search_function_call(item: object) -> _FunctionCall | None:
     return call if call.name == TOOL_SEARCH_FUNCTION_NAME and not call.namespace else None
 
 
-def _search_arguments(arguments: str) -> dict[str, object]:
+def _search_arguments(arguments: str) -> Mapping[str, object]:
     try:
         return _JSON_OBJECT.validate_json(arguments)
     except ValidationError:
@@ -82,7 +82,7 @@ def _tool_search_call_item_id(call: _FunctionCall) -> str:
     return f"{_TOOL_SEARCH_CALL_ID_PREFIX}{source.partition('_')[2] or source}"
 
 
-def _tool_search_call(call: _FunctionCall, status: Literal["in_progress", "completed"]) -> dict[str, object]:
+def _tool_search_call(call: _FunctionCall, status: Literal["in_progress", "completed"]) -> Mapping[str, object]:
     return {
         "type": "tool_search_call",
         "id": _tool_search_call_item_id(call),
@@ -117,7 +117,7 @@ def _lifted_output_dict(item: object) -> object:
     return item if call is None else _tool_search_call(call, "completed")
 
 
-def _lifted_response_dict(response: dict[str, object]) -> dict[str, object]:
+def _lifted_response_dict(response: Mapping[str, object]) -> Mapping[str, object]:
     output: Final = _Response.model_validate(response).output
     return {**response, "output": [_lifted_output_dict(item) for item in output]}
 

@@ -22,7 +22,7 @@ def _lowered_call_kwargs(
     tools: Sequence[object] | None,
     tool_choice: ToolChoice | None,
     call_kwargs: Mapping[str, object],
-) -> dict[str, object]:
+) -> Mapping[str, object]:
     custom_llm_provider: Final = call_kwargs.get("custom_llm_provider")
     lowering: Final = lower_tool_search_request(input=input, tools=tools, tool_choice=tool_choice)
     match lowering:

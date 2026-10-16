@@ -1,5 +1,5 @@
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain
 from typing import Final, Literal, TypeAlias, TypeVar
@@ -17,37 +17,37 @@ _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _LOADABLE_TOOL_TYPES: Final = frozenset({"function", "custom", "namespace"})
 _LOADABLE_MEMBER_TYPES: Final = frozenset({"function", "custom"})
 
-_ModelT = TypeVar("_ModelT", bound=BaseModel)
+_ModelT: Final = TypeVar("_ModelT", bound=BaseModel)
 
 
-class _Typed(BaseModel):
+class _Typed(BaseModel, frozen=True):
     type: str = ""
     name: str | None = None
 
 
-class _ClientToolSearchDeclaration(BaseModel):
+class _ClientToolSearchDeclaration(BaseModel, frozen=True):
     type: Literal["tool_search"]
     execution: Literal["client"]
     description: str | None = None
     parameters: object = None
 
 
-class _ReplayedToolSearchCall(BaseModel):
+class _ReplayedToolSearchCall(BaseModel, frozen=True):
     type: Literal["tool_search_call"]
     call_id: str | None = None
     arguments: object = None
     status: str | None = None
 
 
-class _ReplayedToolSearchOutput(BaseModel):
+class _ReplayedToolSearchOutput(BaseModel, frozen=True):
     type: Literal["tool_search_output"]
     call_id: str | None = None
-    tools: tuple[dict[str, object], ...] = ()
+    tools: tuple[Mapping[str, object], ...] = ()
 
 
-class _Namespace(BaseModel):
+class _Namespace(BaseModel, frozen=True):
     type: Literal["namespace"]
-    tools: tuple[dict[str, object], ...] = ()
+    tools: tuple[Mapping[str, object], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,7 +76,7 @@ def _parsed(model: type[_ModelT], value: object) -> _ModelT | None:
         return None
 
 
-def _json_object(value: object) -> dict[str, object] | None:
+def _json_object(value: object) -> Mapping[str, object] | None:
     try:
         return _JSON_OBJECT.validate_python(_plain(value))
     except ValidationError:
@@ -97,7 +97,7 @@ def needs_tool_search_lowering(input: str | ResponseInputParam, tools: Sequence[
     return not isinstance(input, str) and any(_is_tool_search_item(item) for item in input)
 
 
-def _object_schema(parameters: object) -> dict[str, object]:
+def _object_schema(parameters: object) -> Mapping[str, object]:
     schema: Final = _json_object(parameters)
     if schema is None:
         return {"type": "object", "properties": {}}
@@ -123,7 +123,7 @@ def _lowered_tool(tool: object) -> object:
     }
 
 
-def _loaded_definition(tool: dict[str, object]) -> dict[str, object]:
+def _loaded_definition(tool: Mapping[str, object]) -> Mapping[str, object]:
     loaded: Final = {key: value for key, value in tool.items() if key != "defer_loading"}
     kind: Final = _parsed(_Typed, tool)
     if kind is not None and kind.type == "function":
@@ -136,7 +136,7 @@ def _has_type(tool: object, types: frozenset[str]) -> bool:
     return kind is not None and kind.type in types
 
 
-def _loaded_tool(tool: dict[str, object]) -> dict[str, object]:
+def _loaded_tool(tool: Mapping[str, object]) -> Mapping[str, object]:
     namespace: Final = _parsed(_Namespace, tool)
     if namespace is None:
         return _loaded_definition(tool)
@@ -146,11 +146,11 @@ def _loaded_tool(tool: dict[str, object]) -> dict[str, object]:
     return {**_loaded_definition(tool), "tools": members}
 
 
-def _loadable_tools(output: _ReplayedToolSearchOutput) -> tuple[dict[str, object], ...]:
+def _loadable_tools(output: _ReplayedToolSearchOutput) -> tuple[Mapping[str, object], ...]:
     return tuple(_loaded_tool(tool) for tool in output.tools if _has_type(tool, _LOADABLE_TOOL_TYPES))
 
 
-def _visible_loaded_tool(tool: dict[str, object]) -> dict[str, object]:
+def _visible_loaded_tool(tool: Mapping[str, object]) -> Mapping[str, object]:
     if _parsed(_Namespace, tool) is None:
         return tool
     return {key: value for key, value in tool.items() if key in ("type", "name", "description")}
@@ -177,7 +177,7 @@ def _lowered_item(item: object) -> object:
     }
 
 
-def _loaded_tools(items: Sequence[object]) -> tuple[dict[str, object], ...]:
+def _loaded_tools(items: Sequence[object]) -> tuple[Mapping[str, object], ...]:
     outputs: Final = tuple(_parsed(_ReplayedToolSearchOutput, item) for item in items)
     return tuple(chain.from_iterable(_loadable_tools(output) for output in outputs if output is not None))
 
@@ -189,7 +189,7 @@ def _merge_key(index: int, tool: object) -> tuple[str, str]:
     return "position", str(index)
 
 
-def _namespace_members(group: Sequence[object]) -> tuple[dict[str, object], ...]:
+def _namespace_members(group: Sequence[object]) -> tuple[Mapping[str, object], ...]:
     namespaces: Final = (_parsed(_Namespace, tool) for tool in group)
     return tuple(chain.from_iterable(namespace.tools for namespace in namespaces if namespace is not None))
 

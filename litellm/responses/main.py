@@ -1269,35 +1269,35 @@ def _responses_try_dispatch_mcp_gateway(
 
 def _responses_reentry_kwargs(
     *,
-    include: list[ResponseIncludable] | None,
-    instructions: str | None,
-    max_output_tokens: int | None,
-    prompt: PromptObject | None,
-    metadata: dict[str, object] | None,
-    parallel_tool_calls: bool | None,
-    previous_response_id: str | None,
-    reasoning: Reasoning | None,
-    store: bool | None,
-    background: bool | None,
-    stream: bool | None,
-    temperature: float | None,
+    include: object,
+    instructions: object,
+    max_output_tokens: object,
+    prompt: object,
+    metadata: object,
+    parallel_tool_calls: object,
+    previous_response_id: object,
+    reasoning: object,
+    store: object,
+    background: object,
+    stream: object,
+    temperature: object,
     text: Optional["ResponseText"],
-    tool_choice: ToolChoice | None,
-    top_p: float | None,
-    truncation: Literal["auto", "disabled"] | None,
-    user: str | None,
-    service_tier: str | None,
-    safety_identifier: str | None,
+    tool_choice: object,
+    top_p: object,
+    truncation: object,
+    user: object,
+    service_tier: object,
+    safety_identifier: object,
     text_format: type[BaseModel] | dict | None,
-    allowed_openai_params: list[str] | None,
-    extra_headers: dict[str, object] | None,
-    extra_query: dict[str, object] | None,
-    extra_body: dict[str, object] | None,
-    timeout: float | httpx.Timeout | None,
-    custom_llm_provider: str | None,
+    allowed_openai_params: object,
+    extra_headers: object,
+    extra_query: object,
+    extra_body: object,
+    timeout: object,
+    custom_llm_provider: object,
     use_chat_completions_api: bool,
-    kwargs: dict[str, object],
-) -> dict[str, object]:
+    kwargs: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: a Mapping return loses typing of the unknown text args
     """The keyword arguments an emulation passes when it calls aresponses again for this request."""
     _internal_skip: Final = {"litellm_call_id", "aresponses"}
     return {
@@ -1364,7 +1364,7 @@ def _responses_try_dispatch_emulated_file_search(
     )
 
 
-class _DeploymentToolSearchSupport(BaseModel):
+class _DeploymentToolSearchSupport(BaseModel, frozen=True):
     supports_tool_search: bool | None = None
 
 
