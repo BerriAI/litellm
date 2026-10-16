@@ -11,6 +11,7 @@ Covers the three defects from the ticket:
 """
 
 import cProfile
+import json
 import sys
 import tempfile
 import time
@@ -46,6 +47,38 @@ def _isolate_masked_entity_count():
 
 def _guardrail() -> _ENTERPRISE_SecretDetection:
     return _ENTERPRISE_SecretDetection(guardrail_name="hide-secrets", event_hook="pre_call", default_on=True)
+
+
+def test_tool_payload_scans_raw_values_and_key_context_without_changing_keys():
+    payload = {"password": "hunter2brahms9x", "command": "export API_TOKEN=0123456789abcdef0123456789abcdef01234567",
+               AWS_KEY: "safe", "path": 'C:\\tmp\\"config"', "count": 7, "optional": None, "enabled": False,
+               "nested": [f"AWS_ACCESS_KEY_ID={AWS_KEY}\nkeep this line", "safe"]}
+    result = _guardrail().redact_tool_payload(payload)
+    assert result.keys() == payload.keys()
+    assert result["password"] == "[REDACTED]"
+    assert result["command"] == "export API_TOKEN=[REDACTED]"
+    assert result["nested"] == ["AWS_ACCESS_KEY_ID=[REDACTED]\nkeep this line", "safe"]
+    assert result[AWS_KEY] == "safe"
+    assert result["path"] == payload["path"]
+    assert result["count"] == 7
+    assert result["optional"] is None
+    assert result["enabled"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("arguments", (
+    '{"env":"AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE","env":"safe"}',
+    '{"env":"AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE",broken',
+    json.dumps({"password": "hunter2brahms9x", "ok": True}),
+))
+async def test_tool_arguments_native_hook_cannot_forward_unredacted_credentials(arguments):
+    data = {"messages": [{"role": "assistant", "tool_calls": [{"id": "call_1", "function": {
+        "name": "save_config", "arguments": arguments}}]}]}
+    await _guardrail().async_pre_call_hook(UserAPIKeyAuth(), DualCache(), data, "acompletion")
+    rewritten = data["messages"][0]["tool_calls"][0]["function"]["arguments"]
+    assert AWS_KEY not in rewritten
+    assert "hunter2brahms9x" not in rewritten
+    assert "[REDACTED]" in rewritten
 
 
 def _recorded(request_data: dict) -> dict:

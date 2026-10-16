@@ -14,11 +14,14 @@ sys.path.insert(
 import configparser
 import contextlib
 import itertools
+import json
 import re
 import tempfile
 from collections.abc import Generator, Iterator, Sequence
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, Optional
+
+from pydantic import JsonValue
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
@@ -27,7 +30,7 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.guardrails._content_utils import walk_user_text
+from litellm.proxy.guardrails._content_utils import iter_tool_json_text, map_tool_json_text, walk_user_text
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -40,7 +43,7 @@ GUARDRAIL_PROVIDER = "hide-secrets"
 
 # Per-invocation tally of redacted secrets by detect-secrets plugin type; None
 # means the guardrail did not run, so _process_response records nothing.
-_masked_entity_count: ContextVar[Optional[dict]] = ContextVar(
+_masked_entity_count: ContextVar[Optional[dict[str, int]]] = ContextVar(
     "hide_secrets_masked_entity_count", default=None
 )
 
@@ -580,6 +583,22 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         )
         return pattern.sub("[REDACTED]", text)
 
+    def redact_tool_payload(self, payload: JsonValue) -> JsonValue:
+        texts: Final = tuple(iter_tool_json_text(payload))
+        scan_text: Final = "\n".join((*texts, json.dumps(payload, indent=2, ensure_ascii=False)))
+        detected: Final = tuple(
+            secret for secret in self.scan_message_for_secrets(scan_text)
+            if any(secret["value"] in text for text in texts)
+        )
+        if not detected:
+            return payload
+        counts: Final = _masked_entity_count.get()
+        if counts is not None:
+            for secret in detected:
+                counts[secret["type"]] = counts.get(secret["type"], 0) + 1
+        pattern: Final = re.compile("|".join(re.escape(secret["value"]) for secret in detected))
+        return map_tool_json_text(payload, lambda text: pattern.sub("[REDACTED]", text))
+
     async def should_run_check(self, user_api_key_dict: UserAPIKeyAuth) -> bool:
         if user_api_key_dict.permissions is not None:
             if GUARDRAIL_NAME in user_api_key_dict.permissions:
@@ -641,7 +660,7 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         _masked_entity_count.set({})
 
         # Covers multimodal list content + Responses-API input.
-        inspected = walk_user_text(data, self.redact_text) + self._redact_prompt(data)
+        inspected = walk_user_text(data, self.redact_text, self.redact_tool_payload) + self._redact_prompt(data)
 
         if inspected == 0:
             # Image-only, empty-text, and unsupported payloads inspected

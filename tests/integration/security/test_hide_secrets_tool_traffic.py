@@ -1,0 +1,319 @@
+from __future__ import annotations
+
+import json
+import os
+import uuid
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Final
+
+import httpx
+import pytest
+import yaml
+from integration._support.client import Gateway
+from integration._support.database import scratch_database
+from integration._support.process import OwnedProxy, owned_proxy_process
+from integration._support.wire import Reply, Request, Wire, wire_server
+from integration.security._license_edge import license_edge
+from pydantic import JsonValue
+
+SECRET: Final = "AKIAIOSFODNN7EXAMPLE"
+TEXT: Final = f"AWS_ACCESS_KEY_ID={SECRET}"
+MASTER_KEY: Final = "sk-integration-hide-secrets-7426-synthetic-master"
+
+
+def _provider(request: Request) -> Reply:
+    if request.method != "POST":
+        return Reply()
+    body: Final = json.loads(request.body)
+    identity: Final = uuid.uuid4().hex
+    if request.target.endswith("/messages"):
+        response: Final = {
+            "id": f"msg_{identity}",
+            "type": "message",
+            "role": "assistant",
+            "model": body["model"],
+            "content": [{"type": "text", "text": "accepted"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 10, "output_tokens": 1},
+        }
+        if body.get("stream"):
+            events: Final = (
+                ("message_start", {"type": "message_start", "message": {**response, "content": []}}),
+                (
+                    "content_block_start",
+                    {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+                ),
+                (
+                    "content_block_delta",
+                    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "accepted"}},
+                ),
+                ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+                (
+                    "message_delta",
+                    {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1}},
+                ),
+                ("message_stop", {"type": "message_stop"}),
+            )
+            return Reply(
+                content_type="text/event-stream",
+                chunks=tuple(f"event: {name}\ndata: {json.dumps(value)}\n\n".encode() for name, value in events),
+            )
+        return Reply(body=json.dumps(response).encode())
+    return Reply(
+        body=json.dumps(
+            {
+                "id": f"chatcmpl_{identity}",
+                "object": "chat.completion",
+                "created": 1,
+                "model": body["model"],
+                "choices": [
+                    {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "accepted"}}
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
+            }
+        ).encode()
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class Rig:
+    proxy: Gateway
+    wire: Wire
+    database_url: str
+    owned: OwnedProxy
+    environment: Mapping[str, str]
+
+
+@contextmanager
+def tool_rig(
+    directory: Path,
+    respond: Callable[[Request], Reply] = _provider,
+    *,
+    configure: Callable[[dict[str, JsonValue]], None] | None = None,
+    environment: Mapping[str, str] | None = None,
+) -> Iterator[Rig]:
+    product_root: Final = Path(os.environ.get("INTEGRATION_PROXY_ROOT") or Path(__file__).resolve().parents[3])
+    with (
+        license_edge(directory) as entitlement,
+        wire_server(respond) as wire,
+        scratch_database("hide_secrets") as database,
+    ):
+        config: Final = directory / "config.yaml"
+        configuration: Final = {
+            "model_list": [
+                {
+                    "model_name": "claude",
+                    "litellm_params": {
+                        "model": "anthropic/claude-sonnet-5",
+                        "api_key": "synthetic-provider-key",
+                        "api_base": wire.url,
+                        "num_retries": 0,
+                    },
+                },
+                {
+                    "model_name": "gpt",
+                    "litellm_params": {
+                        "model": "openai/gpt-5",
+                        "api_key": "synthetic-provider-key",
+                        "api_base": wire.url,
+                        "num_retries": 0,
+                    },
+                },
+            ],
+            "general_settings": {
+                "master_key": MASTER_KEY,
+                "store_prompts_in_spend_logs": True,
+                "disable_spend_logs": False,
+                "proxy_batch_write_at": 1,
+                "proxy_batch_polling_interval": 1,
+            },
+            "router_settings": {"num_retries": 0},
+            "litellm_settings": {
+                "cache": True,
+                "cache_params": {
+                    "type": "redis",
+                    "host": "os.environ/REDIS_HOST",
+                    "port": "os.environ/REDIS_PORT",
+                },
+            },
+            "guardrails": [
+                {
+                    "guardrail_name": "hide-secrets",
+                    "litellm_params": {"guardrail": "hide-secrets", "mode": "pre_call", "default_on": True},
+                }
+            ],
+        }
+        if configure is not None:
+            configure(configuration)
+        config.write_text(yaml.safe_dump(configuration))
+        child_environment: Final = {
+            "DATABASE_URL": database,
+            "LITELLM_DISABLE_NO_REDIS_WARNING": "true",
+            "ANTHROPIC_API_BASE": wire.url,
+            "ANTHROPIC_API_KEY": "synthetic-provider-key",
+            "LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS": "True",
+            "PYTHONPATH": os.pathsep.join(
+                (str(product_root / "enterprise"), str(product_root), os.environ.get("PYTHONPATH", ""))
+            ),
+            **(environment or {}),
+            **entitlement,
+        }
+        with httpx.Client() as client:
+            seed: Final = Gateway(client, MASTER_KEY, wire.url)
+            with owned_proxy_process(
+                seed,
+                directory,
+                child_environment,
+                config=config,
+                workers=2,
+            ) as owned:
+                yield Rig(owned.gateway, wire, database, owned, child_environment)
+
+
+@pytest.fixture(scope="module")
+def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
+    with tool_rig(tmp_path_factory.mktemp("hide-secrets-tools")) as value:
+        yield value
+
+
+def _input() -> dict[str, JsonValue]:
+    return {
+        "env": TEXT,
+        "path": 'C:\\tmp\\"config"',
+        "count": 3,
+        "enabled": False,
+        "optional": None,
+        "nested": ["safe", {"value": TEXT}],
+    }
+
+
+def _messages(shape: str) -> dict[str, JsonValue]:
+    user: Final[dict[str, JsonValue]] = {"role": "user", "content": "read .env"}
+    tool: Final[dict[str, JsonValue]] = {
+        "type": "tool_use",
+        "id": "tool_1",
+        "name": "read_file",
+        "input": {"path": ".env"},
+    }
+    prefix: Final[list[JsonValue]] = [user, {"role": "assistant", "content": [tool]}]
+    if shape == "plain":
+        return {"model": "claude", "max_tokens": 32, "messages": [{"role": "user", "content": TEXT}]}
+    if shape.startswith("result"):
+        content: Final[JsonValue] = (
+            TEXT
+            if shape == "result-string"
+            else [
+                {"type": "text", "text": TEXT},
+                {"type": "text", "text": "keep me"},
+            ]
+        )
+        return {
+            "model": "claude",
+            "max_tokens": 32,
+            "messages": [
+                *prefix,
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "tool_1",
+                            "content": content,
+                            "cache_control": {"type": "ephemeral"},
+                        },
+                        {"type": "text", "text": "summarize"},
+                    ],
+                },
+            ],
+        }
+    if shape.startswith("input"):
+        arguments: Final = (
+            _input()
+            if shape == "input-dict"
+            else {"command": "export API_TOKEN=0123456789abcdef0123456789abcdef01234567", "enabled": False}
+        )
+        return {
+            "model": "claude",
+            "max_tokens": 32,
+            "messages": [
+                user,
+                {"role": "assistant", "content": [{**tool, "input": arguments}]},
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tool_1", "content": "done"}]},
+            ],
+        }
+    return {
+        "model": "claude",
+        "max_tokens": 32,
+        "messages": [user],
+        "system": TEXT
+        if shape == "system-string"
+        else [{"type": "text", "text": TEXT, "cache_control": {"type": "ephemeral"}}],
+    }
+
+
+@pytest.mark.parametrize(
+    "shape",
+    ("plain", "result-string", "result-nested", "input-dict", "input-assignment", "system-string", "system-blocks"),
+)
+@pytest.mark.parametrize("stream", (False, True))
+def test_messages_secret_never_reaches_provider(rig: Rig, shape: str, stream: bool) -> None:
+    rig.wire.drain()
+    request: Final = {**_messages(shape), "stream": stream, "cache": {"no-cache": True}}
+    response: Final = rig.proxy.request("POST", "/v1/messages", request)
+    assert response.status_code == 200, response.text
+    assert "accepted" in response.text
+    sent: Final = rig.wire.drain()
+    assert len(sent) == 1
+    assert SECRET.encode() not in sent[0].body
+    assert b"0123456789abcdef0123456789abcdef01234567" not in sent[0].body
+    assert b"REDACTED" in sent[0].body
+    observed: Final = json.loads(sent[0].body)
+    if shape == "input-dict":
+        value: Final = observed["messages"][1]["content"][0]["input"]
+        assert value.keys() == _input().keys()
+        assert value["path"] == _input()["path"]
+        assert value["count"] == 3
+        assert value["enabled"] is False
+        assert value["optional"] is None
+
+
+def test_chat_tool_arguments_remain_valid_json(rig: Rig) -> None:
+    rig.wire.drain()
+    response: Final = rig.proxy.request(
+        "POST",
+        "/v1/chat/completions",
+        {
+            "model": "gpt",
+            "cache": {"no-cache": True},
+            "messages": [
+                {"role": "user", "content": "read .env"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "read_file", "arguments": json.dumps(_input())},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": "done"},
+            ],
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["choices"][0]["message"]["content"] == "accepted"
+    sent: Final = rig.wire.drain()
+    assert len(sent) == 1
+    assert SECRET.encode() not in sent[0].body
+    arguments: Final = json.loads(json.loads(sent[0].body)["messages"][1]["tool_calls"][0]["function"]["arguments"])
+    assert arguments.keys() == _input().keys()
+    assert arguments["count"] == 3
+    assert arguments["path"] == _input()["path"]
+    assert arguments["enabled"] is False
+    assert arguments["optional"] is None
