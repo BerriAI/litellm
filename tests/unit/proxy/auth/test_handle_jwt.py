@@ -13,6 +13,7 @@ from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import (
     DEFAULT_JWKS_STALE_TTL,
     JWTLiteLLMRoleMap,
+    JWTIssuerConfig,
     LiteLLMRoutes,
     LiteLLM_JWTAuth,
     LiteLLM_ModelTable,
@@ -29,9 +30,11 @@ from litellm.proxy._types import (
 from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
 from litellm.proxy.auth.auth_checks import TeamNotFoundError
 from litellm.proxy.auth.handle_jwt import (
+    ID_JAG_TYP,
     JWKS_FETCH_ATTEMPTS,
     STALE_CACHE_KEY_PREFIX,
     STALE_WRITTEN_AT_CACHE_KEY_PREFIX,
+    AssertionRejection,
     HeaderTeam,
     JWKSUnreachableError,
     JWTAuthManager,
@@ -8303,3 +8306,198 @@ def test_team_passthrough_route_denial_names_the_matched_deny_entry(
 
     assert exc_info.value.status_code == 403
     assert expected_detail in str(exc_info.value.detail)
+
+
+ASSERTION_ISSUER = "https://idp.example.com/oauth2/default"
+ASSERTION_JWKS_URL = f"{ASSERTION_ISSUER}/v1/keys"
+GATEWAY_AUDIENCES = ("https://gateway.example.com/mcp", "https://gateway.example.com")
+ID_JAG_CLAIMS = ("iss", "sub", "aud", "exp", "iat", "jti", "client_id")
+
+
+def _assertion_signer():
+    import json
+
+    import jwt as pyjwt
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    private_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    jwk: Final = {**json.loads(pyjwt.algorithms.RSAAlgorithm.to_jwk(private_key.public_key())), "kid": "k1"}
+
+    def sign(claims: Mapping[str, object], typ: str = ID_JAG_TYP) -> str:
+        return pyjwt.encode(dict(claims), private_key, algorithm="RS256", headers={"kid": "k1", "typ": typ})
+
+    return jwk, sign
+
+
+def _id_jag_claims(**overrides):
+    now: Final = int(time.time())
+    return {
+        "iss": ASSERTION_ISSUER,
+        "sub": "okta-user-1",
+        "aud": GATEWAY_AUDIENCES[0],
+        "exp": now + 300,
+        "iat": now - 5,
+        "jti": "jti-1",
+        "client_id": "0oa-requesting-app",
+        **overrides,
+    }
+
+
+def _assertion_handler(jwk, litellm_jwtauth, jwks_url=ASSERTION_JWKS_URL):
+    """A handler whose JWKS for the issuer is already cached, so no HTTP is needed."""
+    handler: Final = JWTHandler()
+    cache: Final = DualCache()
+    cache.set_cache(f"litellm_jwt_auth_keys_{jwks_url}", [jwk])
+    handler.update_environment(prisma_client=None, user_api_key_cache=cache, litellm_jwtauth=litellm_jwtauth)
+    return handler
+
+
+@pytest.mark.asyncio
+async def test_decode_trusted_assertion_verifies_against_the_configured_issuer_with_the_callers_audience():
+    """The assertion is checked with the issuer's JWKS and claim mappings, but for the audience the
+    caller names (the gateway's own issuer values), not the API audience the issuer entry carries,
+    since an ID-JAG is addressed to the authorization server, never to the API."""
+    jwk, sign = _assertion_signer()
+    handler = _assertion_handler(
+        jwk,
+        LiteLLM_JWTAuth(
+            issuers=[
+                JWTIssuerConfig(
+                    issuer=ASSERTION_ISSUER,
+                    jwks_url=ASSERTION_JWKS_URL,
+                    audience="api://litellm",
+                    user_id_jwt_field="sub",
+                )
+            ]
+        ),
+    )
+    claims = _id_jag_claims()
+    verified = await handler.decode_trusted_assertion(sign(claims), GATEWAY_AUDIENCES, ID_JAG_CLAIMS)
+    assert isinstance(verified, dict)
+    assert {key: verified[key] for key in claims} == claims
+    assert handler.get_user_id(token=verified, default_value=None) == "okta-user-1"
+    second = await handler.decode_trusted_assertion(
+        sign(_id_jag_claims(aud=GATEWAY_AUDIENCES[1])), GATEWAY_AUDIENCES, ID_JAG_CLAIMS
+    )
+    assert isinstance(second, dict)
+
+
+@pytest.mark.asyncio
+async def test_decode_trusted_assertion_falls_back_to_the_env_scoped_issuer(monkeypatch):
+    jwk, sign = _assertion_signer()
+    monkeypatch.setenv("JWT_ISSUER", ASSERTION_ISSUER)
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", ASSERTION_JWKS_URL)
+    handler = _assertion_handler(jwk, LiteLLM_JWTAuth())
+    verified = await handler.decode_trusted_assertion(sign(_id_jag_claims()), GATEWAY_AUDIENCES, ID_JAG_CLAIMS)
+    assert isinstance(verified, dict)
+    assert verified["jti"] == "jti-1"
+    monkeypatch.setenv("JWT_ISSUER", "https://someone-else.example.com")
+    foreign = await handler.decode_trusted_assertion(sign(_id_jag_claims()), GATEWAY_AUDIENCES, ID_JAG_CLAIMS)
+    assert isinstance(foreign, AssertionRejection)
+    assert "trusts" in foreign.reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fault, reason",
+    [
+        ({"aud": "api://litellm"}, "udience"),
+        ({"jti": None}, "jti"),
+        ({"client_id": None}, "client_id"),
+        ({"exp": -10}, "xpired"),
+        ({"iat": 600}, "iat"),
+        ({"iss": "https://untrusted.example.com"}, "trusts"),
+    ],
+)
+async def test_decode_trusted_assertion_rejects_a_claim_outside_the_profile(fault: dict[str, object], reason: str):
+    """The claims are built inside the test, relative to the clock the verifier reads, so a slow
+    collection cannot turn an intended claim fault into an unrelated expiry (``None`` drops a claim,
+    an int on ``exp`` or ``iat`` is an offset from now)."""
+    now: Final = int(time.time())
+    offsets: Final = {k: now + v for k, v in fault.items() if k in ("exp", "iat") and isinstance(v, int)}
+    claims: Final = {k: v for k, v in _id_jag_claims(**offsets).items() if fault.get(k, k) is not None}
+    claims.update({k: v for k, v in fault.items() if v is not None and k not in offsets})
+    jwk, sign = _assertion_signer()
+    handler = _assertion_handler(
+        jwk,
+        LiteLLM_JWTAuth(issuers=[JWTIssuerConfig(issuer=ASSERTION_ISSUER, jwks_url=ASSERTION_JWKS_URL, audience="x")]),
+    )
+    rejected = await handler.decode_trusted_assertion(sign(claims), GATEWAY_AUDIENCES, ID_JAG_CLAIMS)
+    assert isinstance(rejected, AssertionRejection)
+    assert reason in rejected.reason
+
+
+@pytest.mark.asyncio
+async def test_decode_trusted_assertion_rejects_a_forged_signature_and_garbage(monkeypatch):
+    jwk, _ = _assertion_signer()
+    _, forge = _assertion_signer()
+    handler = _assertion_handler(
+        jwk,
+        LiteLLM_JWTAuth(issuers=[JWTIssuerConfig(issuer=ASSERTION_ISSUER, jwks_url=ASSERTION_JWKS_URL, audience="x")]),
+    )
+    forged = await handler.decode_trusted_assertion(forge(_id_jag_claims()), GATEWAY_AUDIENCES, ID_JAG_CLAIMS)
+    assert isinstance(forged, AssertionRejection)
+    assert "verification" in forged.reason
+    garbage = await handler.decode_trusted_assertion("not.a.jwt", GATEWAY_AUDIENCES, ID_JAG_CLAIMS)
+    assert isinstance(garbage, AssertionRejection)
+    monkeypatch.delenv("JWT_ISSUER", raising=False)
+    unconfigured = await _assertion_handler(jwk, LiteLLM_JWTAuth()).decode_trusted_assertion(
+        forge(_id_jag_claims()), GATEWAY_AUDIENCES, ID_JAG_CLAIMS
+    )
+    assert isinstance(unconfigured, AssertionRejection)
+    assert "trusts" in unconfigured.reason
+
+
+@pytest.mark.asyncio
+async def test_decode_trusted_assertion_reports_an_unreachable_jwks_as_an_outage_not_a_bad_assertion():
+    jwk, sign = _assertion_signer()
+    handler = _assertion_handler(
+        jwk,
+        LiteLLM_JWTAuth(issuers=[JWTIssuerConfig(issuer=ASSERTION_ISSUER, jwks_url=ASSERTION_JWKS_URL, audience="x")]),
+        jwks_url="https://a-different-cached-url.example.com/keys",
+    )
+    with patch.object(handler, "_fetch_jwks_keys", new_callable=AsyncMock, side_effect=JWKSUnreachableError("down")):
+        with pytest.raises(ProxyException) as outage:
+            await handler.decode_trusted_assertion(sign(_id_jag_claims()), GATEWAY_AUDIENCES, ID_JAG_CLAIMS)
+    assert outage.value.code == "503"
+
+
+@pytest.mark.asyncio
+async def test_auth_jwt_never_accepts_an_id_jag_as_a_bearer_token():
+    """An assertion typed oauth-id-jag+jwt is a grant for the token endpoint, so bearer auth
+    refuses it before any key lookup, even where it would otherwise verify."""
+    jwk, sign = _assertion_signer()
+    handler = _assertion_handler(
+        jwk,
+        LiteLLM_JWTAuth(
+            issuers=[
+                JWTIssuerConfig(issuer=ASSERTION_ISSUER, jwks_url=ASSERTION_JWKS_URL, audience=GATEWAY_AUDIENCES[0])
+            ]
+        ),
+    )
+    accepted = await handler.auth_jwt(sign(_id_jag_claims(), typ="JWT"))
+    assert accepted["jti"] == "jti-1"
+    with pytest.raises(Exception, match="token endpoint"):
+        await handler.auth_jwt(sign(_id_jag_claims()))
+@pytest.mark.asyncio
+@pytest.mark.parametrize("verdict", [True, False])
+async def test_decode_trusted_assertion_runs_the_configured_custom_validate_on_the_verified_claims(verdict):
+    """The operator's ``custom_validate`` gates every JWT the proxy admits, so an assertion redeemed
+    at the token endpoint goes through it too, after signature and claim verification."""
+    jwk, sign = _assertion_signer()
+    seen: Final = []
+    handler = _assertion_handler(
+        jwk,
+        LiteLLM_JWTAuth(
+            issuers=[JWTIssuerConfig(issuer=ASSERTION_ISSUER, jwks_url=ASSERTION_JWKS_URL, audience="api://litellm")]
+        ),
+    )
+    handler.litellm_jwtauth.custom_validate = lambda claims: seen.append(dict(claims)) or verdict
+    claims = _id_jag_claims()
+    verified = await handler.decode_trusted_assertion(sign(claims), GATEWAY_AUDIENCES, ID_JAG_CLAIMS)
+    assert [{key: call[key] for key in claims} for call in seen] == [claims]
+    if verdict:
+        assert isinstance(verified, dict)
+    else:
+        assert isinstance(verified, AssertionRejection)
+        assert "custom_validate" in verified.reason

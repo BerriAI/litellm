@@ -128,6 +128,11 @@ def build_upstream_authorize_url(authorization_url: str, params: Mapping[str, st
     return urlunparse(parsed._replace(query=urlencode(merged)))
 
 
+def proxy_base_url_from_env() -> str | None:
+    """The gateway's fixed public URL from ``PROXY_BASE_URL``, ``None`` when unset or malformed."""
+    return _resolve_proxy_base_url_env()
+
+
 def _resolve_proxy_base_url_env() -> str | None:
     global _warned_invalid_proxy_base_url
     configured: Final = os.environ.get("PROXY_BASE_URL", "").strip()

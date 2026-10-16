@@ -4,6 +4,7 @@ import os
 from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -12,6 +13,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from starlette.datastructures import Headers
 
+from litellm.caching.caching import DualCache
 from litellm.constants import MCP_ALL_TOOLS_WILDCARD
 from litellm.models.access_group import LiteLLM_AccessGroupTable
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
@@ -23,6 +25,7 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
 from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
     LiteLLM_TeamTable,
+    LiteLLM_UserTable,
     ProxyException,
     SpecialHeaders,
     SpecialMCPServerNames,
@@ -11549,3 +11552,117 @@ class TestAccessGroupToolOwnershipAndFaults:
             patch("litellm.proxy.auth.auth_checks.get_access_object", self._loader(groups, missing={"typo-group"})),
         ):
             assert await MCPRequestHandler.get_allowed_tools_for_server("srv", auth) == ["read"]
+
+
+class _EmptyTables:
+    """Storage edge for a session credential's catalog refresh: the user row the real
+    ``reload_admitted_user`` reads, and every other table (keys, MCP servers, config) empty, so the
+    real ``_reload_admitted_key`` fails closed, since a session credential has no key row."""
+
+    def __init__(self, live_user: LiteLLM_UserTable) -> None:
+        self.litellm_usertable = SimpleNamespace(find_unique=AsyncMock(return_value=live_user))
+
+    def __getattr__(self, table: str) -> SimpleNamespace:
+        empty: Final = SimpleNamespace(
+            find_unique=AsyncMock(return_value=None),
+            find_first=AsyncMock(return_value=None),
+            find_many=AsyncMock(return_value=[]),
+            count=AsyncMock(return_value=0),
+        )
+        setattr(self, table, empty)
+        return empty
+
+
+def _session_credential_storage(live_user: LiteLLM_UserTable) -> SimpleNamespace:
+    tables: Final = _EmptyTables(live_user)
+    return SimpleNamespace(db=tables, writer_db=tables)
+
+
+@pytest.mark.asyncio
+async def test_catalog_refresh_reloads_session_credential_through_its_user_and_keeps_token_grants(monkeypatch):
+    """A ``/token``-minted or ``lite login`` credential has no key row: the catalog refresh must read the live
+    user policy, never the key table, and keep the team, routes and models sealed in the token."""
+    from litellm.proxy import proxy_server
+
+    database = _session_credential_storage(
+        LiteLLM_UserTable(user_id="session-user", organization_id="live-org", user_role="internal_user", teams=[])
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
+    caller = UserAPIKeyAuth(
+        api_key="session-token-hash",
+        user_id="session-user",
+        team_id="token-team",
+        org_id="stale-org",
+        user_role="proxy_admin",
+        models=["token-model"],
+        allowed_routes=["mcp_inference_routes"],
+        is_session_token=True,
+    )
+    caller.via_virtual_key = True
+    refreshed = await MCPRequestHandler.refresh_catalog_authority(caller)
+    assert database.writer_db.litellm_usertable.find_unique.await_count >= 1
+    database.writer_db.litellm_verificationtoken.find_unique.assert_not_awaited()
+    assert (refreshed.object_permission, refreshed.object_permission_id) == (None, None)
+    assert (refreshed.user_role, refreshed.org_id) == ("internal_user", "live-org")
+    assert (refreshed.team_id, refreshed.models, refreshed.allowed_routes) == (
+        "token-team",
+        ["token-model"],
+        ["mcp_inference_routes"],
+    )
+    assert refreshed.is_session_token and refreshed.requires_fresh_policy
+    assert caller.org_id == "stale-org" and not caller.requires_fresh_policy
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["litellm:mcp litellm:llm", "litellm:mcp", None])
+async def test_token_minted_credential_lists_tools_for_every_scope_shape(monkeypatch, scope):
+    """``tools/list`` with the credential ``/token`` mints (a session token the shared auth marks
+    ``via_virtual_key`` at the key-cache boundary) returns the tool list instead of the JSON-RPC
+    credential error, for the combined, MCP-only and unscoped ID-JAG shapes."""
+    from mcp.types import ListToolsRequest, ListToolsResult, Tool
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import operations
+    from litellm.proxy._experimental.mcp_server.id_jag_grant import SubjectTokenRefusal, granted_scope
+    from litellm.proxy._experimental.mcp_server.operations import GatewayOperations, prepare_context
+    from litellm.proxy._types import MCPTransport
+    from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-session-credential-tools-list")
+    granted = granted_scope(scope, mcp_resource=False)
+    assert not isinstance(granted, SubjectTokenRefusal)
+    user = LiteLLM_UserTable(user_id="okta-user-1", user_email="okta@example.com", user_role="internal_user")
+    minted = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
+        user, team_id="team-eng", team_alias="eng", allowed_routes=granted.allowed_routes
+    )
+    credential = ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(minted)
+    assert credential is not None and credential.is_session_token
+    credential.api_key = "hash-of-" + minted[:16]
+    credential.via_virtual_key = True
+    server = MCPServer(
+        server_id="eng-server",
+        name="eng_server",
+        server_name="eng_server",
+        alias="eng_server",
+        url="https://upstream.example.com/mcp",
+        transport=MCPTransport.http,
+    )
+    database = _session_credential_storage(user)
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
+    tool = Tool(name="eng_server-list_repos", description="list repos", inputSchema={"type": "object"})
+    with (
+        patch.object(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server])),
+        patch.object(
+            operations.global_mcp_server_manager,
+            "get_tools_page",
+            AsyncMock(return_value=ListToolsResult(tools=[tool])),
+        ),
+    ):
+        result = await GatewayOperations().execute(ListToolsRequest(), prepare_context(user_api_key_auth=credential))
+    assert [listed.name for listed in result.tools] == ["eng_server-list_repos"]
+    assert database.writer_db.litellm_usertable.find_unique.await_count >= 1
+    database.writer_db.litellm_verificationtoken.find_unique.assert_not_awaited()
+    assert credential.team_id == "team-eng" and credential.allowed_routes == list(granted.allowed_routes or ())

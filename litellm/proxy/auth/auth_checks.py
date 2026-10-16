@@ -3960,6 +3960,7 @@ class ExperimentalUIJWTToken:
         team_models: Sequence[str] | None = None,
         team_model_aliases: Mapping[str, str] | None = None,
         max_budget: float | None = None,
+        allowed_routes: Sequence[str] | None = None,
     ) -> str:
         """
         Generate a JWT token for CLI authentication with configurable expiration.
@@ -3973,6 +3974,8 @@ class ExperimentalUIJWTToken:
             team_alias: Team alias for the selected team, if available
             team_models: Model allowlist granted by the selected team
             team_model_aliases: Team model aliases for the selected team
+            allowed_routes: Route groups the session may call, enforced like a virtual key's
+                ``allowed_routes`` on every route; None leaves every route the role allows
 
         Returns:
             Encrypted JWT token string
@@ -4017,6 +4020,7 @@ class ExperimentalUIJWTToken:
             max_parallel_requests=None,
             user_role=LitellmUserRoles(user_info.user_role),
             is_session_token=True,
+            allowed_routes=list(allowed_routes) if allowed_routes is not None else None,
         )
 
         return encrypt_bearer_token(valid_token.model_dump_json(exclude_none=True), prefix=LITELLM_SESSION_TOKEN_PREFIX)
