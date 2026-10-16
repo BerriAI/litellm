@@ -16,11 +16,13 @@ Requires:
 
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, TypeAlias
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -39,6 +41,17 @@ from .base_secret_manager import BaseSecretManager
 
 if TYPE_CHECKING:
     from botocore.awsrequest import HTTPHeaders
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _GetSecretValueResponse(TypedDict):
+    SecretString: ReadOnly[str]
+
+
+_GET_SECRET_VALUE: Final = TypeAdapter(_GetSecretValueResponse)
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
+_JsonPayload: TypeAlias = Mapping[str, object] | Sequence[object] | str | int | float | bool | None
+_JSON_VALUE: Final[TypeAdapter[_JsonPayload]] = TypeAdapter(_JsonPayload, config=ConfigDict(strict=True))
 
 
 class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
@@ -154,7 +167,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         try:
             response: Final = await async_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
             response.raise_for_status()
-            return response.json()["SecretString"]
+            return _GET_SECRET_VALUE.validate_python(response.json())["SecretString"]
         except httpx.TimeoutException:
             raise ValueError("Timeout error occurred")
         except Exception as e:
@@ -232,7 +245,10 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         Returns:
             Dictionary of key-value pairs from the primary secret
         """
-        return json.loads(primary_secret_json_str or "{}")
+        parsed: Final = _JSON_VALUE.validate_python(json.loads(primary_secret_json_str or "{}"))
+        if isinstance(parsed, dict):
+            return parsed
+        raise AttributeError(f"'{type(parsed).__name__}' object has no attribute 'get'")
 
     def sync_read_secret_from_primary_secret(self, secret_name: str, primary_secret_name: str) -> str | None:
         """
@@ -424,7 +440,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         try:
             response: Final = await async_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
             response.raise_for_status()
-            return response.json()
+            return _JSON_OBJECT.validate_python(response.json())
         except httpx.HTTPStatusError as err:
             raise ValueError(f"HTTP error occurred: {err.response.text}")
         except httpx.TimeoutException:
@@ -481,7 +497,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         try:
             response: Final = await async_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
             response.raise_for_status()
-            return response.json()
+            return _JSON_OBJECT.validate_python(response.json())
         except httpx.HTTPStatusError as err:
             raise ValueError(f"HTTP error occurred: {err.response.text}")
         except httpx.TimeoutException:
@@ -533,7 +549,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         try:
             response: Final = await async_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
             response.raise_for_status()
-            return response.json()
+            return _JSON_OBJECT.validate_python(response.json())
         except httpx.HTTPStatusError as err:
             raise ValueError(f"HTTP error occurred: {err.response.text}")
         except httpx.TimeoutException:
@@ -613,7 +629,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         try:
             response: Final = await async_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
             response.raise_for_status()
-            return response.json()
+            return _JSON_OBJECT.validate_python(response.json())
         except httpx.HTTPStatusError as err:
             raise ValueError(f"HTTP error occurred: {err.response.text}")
         except httpx.TimeoutException:

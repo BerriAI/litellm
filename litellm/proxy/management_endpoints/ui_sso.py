@@ -231,7 +231,7 @@ def _team_detail_db(repo: TeamRepository) -> "TableActions[_TeamDetailRow]":
     return repo.table
 
 
-_SSO_TOKEN_CLAIMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_SSO_TOKEN_CLAIMS_ADAPTER: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True))
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
@@ -4577,7 +4577,9 @@ class MicrosoftSSOHandler:
 
             # Decode the JWT without signature verification
             # (signature is already verified by fastapi_sso)
-            decoded_token: Final = jwt.decode(id_token, options={"verify_signature": False})
+            decoded_token: Final = _SSO_TOKEN_CLAIMS_ADAPTER.validate_python(
+                jwt.decode(id_token, options={"verify_signature": False})
+            )
 
             # Extract app_roles claim from the token
             ## check for both 'roles' and 'app_roles' claims

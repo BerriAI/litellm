@@ -6,7 +6,8 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
-from typing_extensions import NotRequired, TypedDict
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -30,9 +31,13 @@ GRAPH_SCOPE: Final = "https://graph.microsoft.com/.default"
 SCOPE_CACHE_TTL_SECONDS: Final = 3600.0
 
 
+@with_config(ConfigDict(extra="allow", strict=True))
 class GraphTokenResponse(TypedDict):
-    access_token: str
-    expires_in: NotRequired[int]
+    access_token: ReadOnly[str]
+    expires_in: NotRequired[ReadOnly[int | str | float]]
+
+
+_GRAPH_TOKEN_RESPONSE_ADAPTER: Final = TypeAdapter(GraphTokenResponse)
 
 
 class PurviewGuardrailBase:
@@ -112,7 +117,10 @@ class PurviewGuardrailBase:
             timeout=self.timeout,
         )
         response.raise_for_status()
-        token_data: Final[GraphTokenResponse] = response.json()
+        token_data: Final[GraphTokenResponse] = _GRAPH_TOKEN_RESPONSE_ADAPTER.validate_python(
+            response.json(),
+            strict=True,
+        )
         access_token: Final = token_data["access_token"]
         expires_in: Final = int(token_data.get("expires_in", 3599))
         # Recompute ``now`` after the await so the expiry reflects when the

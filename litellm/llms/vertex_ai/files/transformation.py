@@ -5,7 +5,7 @@ import json
 import os
 import re
 import time
-from collections.abc import AsyncGenerator, Callable, Iterable, Iterator, Mapping
+from collections.abc import AsyncGenerator, Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import aclosing
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -15,6 +15,7 @@ from urllib.parse import quote, unquote
 import httpx
 from httpx import Headers, Response
 from openai.types.file_deleted import FileDeleted
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, Required
 
 import litellm
@@ -78,6 +79,8 @@ from litellm.types.utils import (
 
 from ..common_utils import VertexAIError
 from ..vertex_llm_base import VertexBase
+
+_BATCH_BODY_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
 
 _GCP_LABEL_VALUE_MAX_LEN: Final = 63
 _CUSTOM_ID_RAW_LABEL_PREFIX: Final = "b32_"
@@ -964,7 +967,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
 
     def _get_gcs_object_name_from_batch_jsonl(
         self,
-        openai_jsonl_content: list[dict[str, Any]],
+        openai_jsonl_content: Sequence[Mapping[str, object]],
         deployment_model: str | None = None,
     ) -> str:
         """
@@ -983,7 +986,10 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         nonexistent publisher model.
         """
         first_entry: Final = openai_jsonl_content[0]
-        body_model: Final = first_entry["body"].get("model") if isinstance(first_entry.get("body"), dict) else None
+        body: Final = first_entry.get("body")
+        body_model: Final[object] = (
+            _BATCH_BODY_ADAPTER.validate_python(body, strict=True).get("model") if isinstance(body, dict) else None
+        )
         jsonl_model: Final = body_model if isinstance(body_model, str) else ""
         raw_model: Final = deployment_model.removeprefix("vertex_ai/") if deployment_model else jsonl_model
         return _managed_batch_object_name(raw_model, passthrough=False)

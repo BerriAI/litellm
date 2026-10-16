@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Final, cast
 
-from pydantic import ConfigDict
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
@@ -31,6 +32,26 @@ class _WhiteSpaceConfig(LiteLLMBaseModel):
 
     max_tokens_per_chunk: object = 800
     max_overlap_tokens: object = 400
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _FileSearchStore(TypedDict):
+    name: ReadOnly[NotRequired[str]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _UploadedFileRef(TypedDict):
+    name: ReadOnly[NotRequired[str]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _UploadResponse(TypedDict):
+    name: ReadOnly[NotRequired[str]]
+    file: ReadOnly[NotRequired[_UploadedFileRef]]
+
+
+_FILE_SEARCH_STORE: Final = TypeAdapter(_FileSearchStore)
+_UPLOAD_RESPONSE: Final = TypeAdapter(_UploadResponse)
 
 
 class GeminiRAGIngestion(BaseRAGIngestion):
@@ -170,7 +191,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
             verbose_logger.error(error_msg)
             raise Exception(error_msg)
 
-        response_data: Final = response.json()
+        response_data: Final = _FILE_SEARCH_STORE.validate_python(response.json())
         store_name: Final = response_data.get("name", "")
 
         verbose_logger.debug("Created File Search store: %s", store_name)
@@ -332,7 +353,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
 
         # Parse response to get file/document ID
         try:
-            response_data: Final = response.json()
+            response_data: Final = _UPLOAD_RESPONSE.validate_python(response.json())
             # The response should contain the document name or file reference
             file_id: Final = response_data.get("name", "") or response_data.get("file", {}).get("name", "")
             verbose_logger.debug("Upload complete. File ID: %s", file_id)

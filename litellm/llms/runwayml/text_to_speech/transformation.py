@@ -6,11 +6,13 @@ Maps OpenAI TTS spec to RunwayML Text-to-Speech API
 
 import asyncio
 import time
-from collections.abc import Coroutine, Sequence
+from collections.abc import Coroutine, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, TypedDict, Union
 
 import httpx
-from typing_extensions import ReadOnly
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly
+from typing_extensions import TypedDict as _ValidatedTypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -38,6 +40,17 @@ class _RunwayTtsTaskResponse(TypedDict, total=False):
     output: ReadOnly[Sequence[object]]
     failure: ReadOnly[str]
     failureCode: ReadOnly[str]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _RunwayTtsTaskPoll(_ValidatedTypedDict):
+    status: NotRequired[ReadOnly[str]]
+    failure: NotRequired[ReadOnly[object]]
+    failureCode: NotRequired[ReadOnly[object]]
+    output: NotRequired[ReadOnly[Sequence[object] | Mapping[str, object] | str | int | float | bool | None]]
+
+
+_RUNWAY_TTS_TASK_POLL: Final = TypeAdapter(_RunwayTtsTaskPoll)
 
 
 class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
@@ -251,7 +264,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
             raise TimeoutError(f"RunwayML TTS task polling timed out after {timeout_secs} seconds")
 
     @staticmethod
-    def _check_task_status(response_data: _RunwayTtsTaskResponse) -> str:
+    def _check_task_status(response_data: _RunwayTtsTaskPoll) -> str:
         """
         Check RunwayML task status from response.
 
@@ -323,7 +336,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
             response = client.get(url=task_url, headers=headers)
             response.raise_for_status()
 
-            response_data: _RunwayTtsTaskResponse = response.json()
+            response_data = _RUNWAY_TTS_TASK_POLL.validate_python(response.json())
 
             # Check task status
             status = self._check_task_status(response_data=response_data)
@@ -371,7 +384,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
             response = await client.get(url=task_url, headers=headers)
             response.raise_for_status()
 
-            response_data: _RunwayTtsTaskResponse = response.json()
+            response_data = _RUNWAY_TTS_TASK_POLL.validate_python(response.json())
 
             # Check task status
             status = self._check_task_status(response_data=response_data)
@@ -492,7 +505,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         )
 
         # Get the completed task data
-        task_data: Final[_RunwayTtsTaskResponse] = polled_response.json()
+        task_data: Final = _RUNWAY_TTS_TASK_POLL.validate_python(polled_response.json())
 
         verbose_logger.debug("RunwayML TTS polling complete, downloading audio")
 
@@ -561,7 +574,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         )
 
         # Get the completed task data
-        task_data: Final[_RunwayTtsTaskResponse] = polled_response.json()
+        task_data: Final = _RUNWAY_TTS_TASK_POLL.validate_python(polled_response.json())
 
         verbose_logger.debug("RunwayML TTS polling complete (async), downloading audio")
 

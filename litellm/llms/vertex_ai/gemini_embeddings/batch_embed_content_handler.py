@@ -6,6 +6,8 @@ import json
 from typing import TYPE_CHECKING, Final, Literal
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import (
@@ -33,6 +35,23 @@ from .batch_embed_content_transformation import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _VertexFileData(TypedDict, total=False):
+    mimeType: ReadOnly[str]
+    uri: ReadOnly[str]
+
+
+_VERTEX_FILE_DATA: Final = TypeAdapter(_VertexFileData)
+
+
+def _file_data_fields(response_body: object, element: str) -> dict[str, str]:
+    file_data: Final = _VERTEX_FILE_DATA.validate_python(response_body)
+    return {
+        "mime_type": file_data.get("mimeType", ""),
+        "uri": file_data.get("uri", element),
+    }
 
 
 class GoogleBatchEmbeddings(VertexLLM):
@@ -74,11 +93,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 if response.status_code != 200:
                     raise Exception(f"Error fetching file {element}: {response.status_code} {response.text}")
 
-                file_data = response.json()
-                resolved_files[element] = {
-                    "mime_type": file_data.get("mimeType", ""),
-                    "uri": file_data.get("uri", element),
-                }
+                resolved_files[element] = _file_data_fields(response.json(), element)
 
         return resolved_files
 
@@ -111,11 +126,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 if response.status_code != 200:
                     raise Exception(f"Error fetching file {element}: {response.status_code} {response.text}")
 
-                file_data = response.json()
-                resolved_files[element] = {
-                    "mime_type": file_data.get("mimeType", ""),
-                    "uri": file_data.get("uri", element),
-                }
+                resolved_files[element] = _file_data_fields(response.json(), element)
 
         return resolved_files
 

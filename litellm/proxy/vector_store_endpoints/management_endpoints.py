@@ -10,10 +10,11 @@ All /vector_store management endpoints
 
 import copy
 import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 if TYPE_CHECKING:
@@ -90,6 +91,7 @@ _LITELLM_PARAMS_MASKER: Final = SensitiveDataMasker(extra_sensitive_patterns=fro
 _REDACT_LITELLM_PARAMS_MAX_DEPTH: Final = 10
 
 _DECODED_JSON: Final = TypeAdapter(object)
+_VECTOR_STORE_METADATA: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 
 def _redact_sensitive_litellm_params(litellm_params: object, _depth: int = 0) -> Any:
@@ -570,11 +572,14 @@ async def get_vector_store_info(
 
                 vector_store_metadata: Final = vector_store.get("vector_store_metadata")
                 # Parse metadata if it's a JSON string
-                parsed_metadata: dict | None = None
+                parsed_metadata: Mapping[str, object] | None = None
                 if isinstance(vector_store_metadata, str):
-                    parsed_metadata = json.loads(vector_store_metadata)
+                    decoded_metadata: Final = json.loads(vector_store_metadata)
+                    parsed_metadata = (
+                        None if decoded_metadata is None else _VECTOR_STORE_METADATA.validate_python(decoded_metadata)
+                    )
                 elif isinstance(vector_store_metadata, dict):
-                    parsed_metadata = vector_store_metadata
+                    parsed_metadata = _VECTOR_STORE_METADATA.validate_python(vector_store_metadata)
 
                 vector_store_pydantic_obj: Final = LiteLLM_ManagedVectorStoresTable(
                     vector_store_id=vector_store.get("vector_store_id") or "",

@@ -13,7 +13,7 @@ import os
 import random
 import time
 import traceback
-from collections.abc import AsyncGenerator, Callable, Coroutine, Mapping, Sequence
+from collections.abc import AsyncGenerator, Callable, Coroutine, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
@@ -21,7 +21,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast, overload
 from urllib.parse import quote, unquote
 
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import LiteralString, ReadOnly, TypedDict
 
 import litellm
@@ -102,6 +102,22 @@ else:
 
 RESPONSES_SESSION_CALL_TYPES: Final = frozenset({CallTypes.responses.value, CallTypes.aresponses.value})
 _SPEND_METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_JsonPayload: TypeAlias = Mapping[str, object] | Sequence[object] | str | int | float | bool | None
+_JSON_VALUE_ADAPTER: Final[TypeAdapter[_JsonPayload]] = TypeAdapter(_JsonPayload, config=ConfigDict(strict=True))
+
+
+def _parsed_request_tags(request_tags: object) -> Iterable[object] | None:
+    if isinstance(request_tags, list):
+        return request_tags
+    if not isinstance(request_tags, str):
+        return None
+    parsed: Final = _JSON_VALUE_ADAPTER.validate_python(safe_json_loads(request_tags, default=[]))
+    if not parsed:
+        verbose_proxy_logger.debug("Failed to parse request_tags JSON: %s", request_tags)
+        return None
+    if isinstance(parsed, (Sequence, Mapping)):
+        return parsed
+    raise TypeError(f"'{type(parsed).__name__}' object is not iterable")
 
 
 def _org_member_transaction_key(org_id: str, user_id: str) -> str:
@@ -1441,15 +1457,8 @@ class DBSpendUpdateWriter:
                 return
 
             # Parse tags from JSON string
-            tags: Sequence[object] = []
-            if isinstance(request_tags, str):
-                tags = safe_json_loads(request_tags, default=[])
-                if not tags:
-                    verbose_proxy_logger.debug("Failed to parse request_tags JSON: %s", request_tags)
-                    return
-            elif isinstance(request_tags, list):
-                tags = request_tags
-            else:
+            tags: Final[Iterable[object] | None] = _parsed_request_tags(request_tags)
+            if tags is None:
                 return
 
             # Update spend for each tag

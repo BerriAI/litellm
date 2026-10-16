@@ -1847,7 +1847,7 @@ async def new_team(
             members_with_roles = complete_team_data.members_with_roles
             complete_team_data.members_with_roles = []
 
-        complete_team_data_dict = complete_team_data.model_dump(exclude_none=True)
+        complete_team_data_dict: dict[str, object] = complete_team_data.model_dump(exclude_none=True)
 
         # Serialize router_settings to JSON (matching key creation pattern)
         router_settings_value: Final = data.router_settings
@@ -2562,8 +2562,8 @@ async def update_team(
 
         # Drop server-owned metadata keys from caller input so they can only
         # be written by the same code path that creates the underlying rows.
-        if isinstance(updated_kv.get("metadata"), dict):
-            TeamMemberBudgetHandler.strip_system_managed_metadata_keys(updated_kv["metadata"])
+        if isinstance(metadata_update := updated_kv.get("metadata"), dict):
+            TeamMemberBudgetHandler.strip_system_managed_metadata_keys(metadata_update)
 
         if "metadata" in updated_kv:
             stored_metadata: Final[Mapping[str, JsonValue] | None] = (

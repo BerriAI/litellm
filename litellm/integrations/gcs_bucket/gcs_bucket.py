@@ -6,6 +6,8 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final
 
+from pydantic import ConfigDict, TypeAdapter
+
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import LITELLM_ASYNCIO_QUEUE_MAXSIZE
@@ -23,6 +25,8 @@ if TYPE_CHECKING:
     from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 else:
     VertexBase = Any
+
+_GCS_RESPONSE_PAYLOAD_ADAPTER: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 
 class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
@@ -346,8 +350,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
                 response = await self.download_gcs_object(object_name)
 
                 if response is not None:
-                    loaded_response = json.loads(response)
-                    return loaded_response
+                    return _GCS_RESPONSE_PAYLOAD_ADAPTER.validate_python(json.loads(response))
             except Exception as e:
                 verbose_logger.debug("Failed to fetch payload for date %s: %s", date_str, e)
                 continue
