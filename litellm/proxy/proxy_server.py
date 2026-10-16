@@ -14465,6 +14465,11 @@ _PROVIDERS_COUNTING_WITHOUT_MESSAGES: Final = frozenset(
 )
 
 
+def _drops_params(deployment: Mapping[str, object] | None) -> bool:
+    litellm_params: Final = as_str_mapping(None if deployment is None else deployment.get("litellm_params"))
+    return litellm.drop_params is True or (litellm_params is not None and litellm_params.get("drop_params") is True)
+
+
 def _system_message(system: object) -> ChatCompletionSystemMessage | None:
     if not isinstance(system, (str, list)) or not system:
         return None
@@ -14531,8 +14536,8 @@ async def count_request_tokens(
             litellm_model_name = litellm_model_name.split("/", 1)[1]
 
     model_to_use: str = (
-        litellm_model_name or request.model
-    )  # use litellm model name, if it's not avalable then fallback to request.model
+        litellm_model_name if isinstance(litellm_model_name, str) and litellm_model_name else request.model
+    )
 
     # Try provider-specific token counting first - only for non-direct requests (from provider endpoints)
     provider_counter: BaseTokenCounter | None = None
@@ -14543,7 +14548,15 @@ async def count_request_tokens(
         if _model is not None:
             model_to_use = _model
 
-    prompt_only: Final = bool(prompt) and not messages and not contents
+    conversation_empty: Final = not messages and not contents
+    if prompt and not conversation_empty and not _drops_params(deployment):
+        raise ProxyException(
+            message="prompt cannot be sent with messages or contents. Set drop_params to count them without the prompt",
+            type="invalid_request_error",
+            param="prompt",
+            code=400,
+        )
+    prompt_only: Final = bool(prompt) and conversation_empty
     if provider_counter is not None:
         prompt_as_message: Final = prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
         result: Final = await _try_provider_token_count(
@@ -14584,8 +14597,10 @@ async def count_request_tokens(
 
     tokenizer_used: Final = str(_tokenizer_used["type"])
     system_message: Final = _system_message(system)
+    prompt_turn: Final = prompt_only and not (system_message is None and not tools)
     typed_messages: Final = cast(  # cast-ok: request messages are raw chat-shaped dicts that token_counter normalizes
-        Sequence[AllMessageValues] | None, None if prompt_only else messages
+        Sequence[AllMessageValues] | None,
+        [{"role": "user", "content": prompt}] if prompt_turn else (None if prompt_only else messages),
     )
     counted_messages: Final = (
         typed_messages if typed_messages is None or system_message is None else (system_message, *typed_messages)
