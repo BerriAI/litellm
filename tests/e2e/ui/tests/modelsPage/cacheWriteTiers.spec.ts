@@ -13,7 +13,7 @@ import { captureRequestBody, readBack } from "../../helpers/roundTrip";
  * `litellm_params`, and read back in the model detail view.
  */
 const FIVE_MINUTE_PER_MILLION = 3.75;
-const ONE_HOUR_PER_MILLION = 6;
+const ONE_HOUR_PER_MILLION = 7.5;
 const perToken = (perMillion: number): number => perMillion / 1_000_000;
 const ONE_HOUR_LABEL = /^Cache Write Cost \(1 hour, per 1M tokens\)/;
 
@@ -79,7 +79,10 @@ test.describe("Cache write cost tiers", () => {
     await page.getByRole("button", { name: "Edit Settings" }).click();
     const oneHour = page.getByLabel(ONE_HOUR_LABEL);
     await oneHour.waitFor({ timeout: 15_000 });
-    await oneHour.fill(String(ONE_HOUR_PER_MILLION));
+    // The cost map already fills a default 1 hour rate in for a known model, so replace it rather than append.
+    await oneHour.click({ clickCount: 3 });
+    await page.keyboard.press("Delete");
+    await page.keyboard.type(String(ONE_HOUR_PER_MILLION));
 
     const patchBody = await captureRequestBody(
       page,
