@@ -1176,3 +1176,67 @@ def test_custom_prefix_that_starts_a_discovered_id_still_prefixes_every_listed_m
         "anthropic/anthropic.claude-haiku-4-5-20251001-v1:0",
         "anthropic/us.anthropic.claude-haiku-4-5-20251001-v1:0",
     ]
+
+
+def _expand_wildcard(wildcard_model: str, model: str) -> list[str]:
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    return get_known_models_from_wildcard(wildcard_model=wildcard_model, litellm_params=LiteLLM_Params(model=model))
+
+
+def _fake_provider_models(monkeypatch: pytest.MonkeyPatch, models: list[str]) -> None:
+    from litellm.proxy.auth import model_checks
+    from litellm.types.router import LiteLLM_Params
+
+    def _fake(provider: str, litellm_params: LiteLLM_Params | None = None) -> list[str]:
+        return list(models)
+
+    monkeypatch.setattr(model_checks, "get_provider_models", _fake)
+
+
+def test_partial_wildcard_filters_provider_prefixed_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Partial wildcards must match cost-map ids that carry the provider prefix (issue #46384)."""
+    _fake_provider_models(
+        monkeypatch,
+        [
+            "cloudflare/@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            "cloudflare/@cf/cloudflare/clef",
+            "cloudflare/@hf/thebloke/codellama-7b-instruct-awq",
+            "cloudflare/clef",
+        ],
+    )
+    assert _expand_wildcard("cloudflare/@cf/*", "cloudflare/@cf/*") == [
+        "cloudflare/@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+        "cloudflare/@cf/cloudflare/clef",
+    ]
+
+
+def test_partial_wildcard_matches_bare_and_prefixed_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Mixed bare/prefixed cost-map keys both match a partial wildcard (issue #46384)."""
+    _fake_provider_models(
+        monkeypatch,
+        ["gemini-2.5-flash-preview-tts", "gemini/gemini-2.5-flash", "gemini/gemini-2.0-flash"],
+    )
+    assert _expand_wildcard("gemini/gemini-2.5*", "gemini/gemini-2.5*") == [
+        "gemini/gemini-2.5-flash-preview-tts",
+        "gemini/gemini-2.5-flash",
+    ]
+
+
+def test_wildcard_lists_bare_and_prefixed_duplicate_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A model keyed both bare and prefixed is listed once (issue #46384)."""
+    _fake_provider_models(monkeypatch, ["gemini-2.5-flash", "gemini/gemini-2.5-flash"])
+    assert _expand_wildcard("gemini/*", "gemini/*") == ["gemini/gemini-2.5-flash"]
+
+
+def test_custom_alias_namespace_still_prepends_provider_models(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unchanged #13116 behavior: a custom alias namespace prepends the listed ids."""
+    _fake_provider_models(monkeypatch, ["gpt-4o", "gpt-4o-mini"])
+    assert _expand_wildcard("genai/test/*", "openai/*") == ["genai/test/gpt-4o", "genai/test/gpt-4o-mini"]
+
+
+def test_custom_prefix_still_replaces_provider_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unchanged behavior: a custom wildcard prefix replaces a known provider prefix."""
+    _fake_provider_models(monkeypatch, ["ollama_chat/gemma3:1b"])
+    assert _expand_wildcard("ollama_server1/*", "ollama_chat/*") == ["ollama_server1/gemma3:1b"]
