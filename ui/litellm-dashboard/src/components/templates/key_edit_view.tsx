@@ -46,6 +46,7 @@ import {
   toKeyEditFormValues,
   toSubmittedValues,
   clearMcpGrants,
+  writeMcpToolPermissions,
 } from "./keyEditFormValues";
 import { BudgetFallbacksEditor } from "../key_team_helpers/BudgetFallbacksEditor";
 import { END_USER_BUDGET_HINT, EndUserBudgetSelect } from "../key_team_helpers/EndUserBudgetSelect";
@@ -775,9 +776,7 @@ function KeyEditSession({
               selectedAccessGroups={mcpSelection?.accessGroups || []}
               selectedToolsets={mcpSelection?.toolsets || []}
               toolPermissions={(mcpToolPermissions as Record<string, string[]> | undefined) || {}}
-              onChange={(perms, origin) =>
-                form.setValue("mcp_tool_permissions", perms, { shouldDirty: origin === "edit" })
-              }
+              onChange={writeMcpToolPermissions(form)}
             />
           </div>
 

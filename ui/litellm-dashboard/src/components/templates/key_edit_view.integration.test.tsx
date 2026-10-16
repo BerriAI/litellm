@@ -1057,26 +1057,27 @@ describe("KeyEditView", () => {
     expect(dirtyFields).not.toContain("rpm_limit");
   });
 
+  const mcpServer = (server_id: string) => ({
+    server_id,
+    server_name: server_id,
+    url: `https://${server_id}.example`,
+    transport: "http",
+    auth_type: "none",
+    created_at: "",
+    created_by: "",
+    updated_at: "",
+    updated_by: "",
+  });
+  const mcpTools = (names: string[]) => ({
+    tools: names.map((name) => ({ name })),
+    error: null,
+    message: null,
+    stack_trace: null,
+  });
+
   it("should not mark MCP tool defaults as an edit when saving only a budget", async () => {
-    vi.mocked(fetchMCPServers).mockResolvedValue([
-      {
-        server_id: "srv-a",
-        server_name: "wiki",
-        url: "https://srv-a.example",
-        transport: "http",
-        auth_type: "none",
-        created_at: "",
-        created_by: "",
-        updated_at: "",
-        updated_by: "",
-      },
-    ]);
-    vi.mocked(listMCPTools).mockResolvedValue({
-      tools: [{ name: "read_page" }, { name: "delete_page" }],
-      error: null,
-      message: null,
-      stack_trace: null,
-    });
+    vi.mocked(fetchMCPServers).mockResolvedValue([mcpServer("srv-a")]);
+    vi.mocked(listMCPTools).mockResolvedValue(mcpTools(["read_page", "delete_page"]));
     testQueryClient.clear();
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     renderWithProviders(
@@ -1101,7 +1102,36 @@ describe("KeyEditView", () => {
     expect(values.mcp_tool_permissions).toHaveProperty("srv-a");
     expect(dirtyFields).toEqual(["max_budget"]);
     vi.mocked(fetchMCPServers).mockResolvedValue([]);
-    vi.mocked(listMCPTools).mockResolvedValue({ tools: [], error: null, message: null, stack_trace: null });
+    vi.mocked(listMCPTools).mockResolvedValue(mcpTools([]));
+  });
+
+  it("should keep default tool limits for a newly added MCP server when the same key refreshes", async () => {
+    vi.mocked(fetchMCPServers).mockResolvedValue([mcpServer("mcp-1")]);
+    vi.mocked(listMCPTools).mockResolvedValue(mcpTools(["read-page", "delete-page"]));
+    testQueryClient.clear();
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const props = {
+      keyData: MOCK_KEY_DATA,
+      onCancel: vi.fn(),
+      onSubmit,
+      accessToken: "test-token",
+      userID: "test-user",
+      userRole: "admin",
+    };
+    const view = renderWithProviders(<KeyEditView {...props} />);
+
+    await userEvent.click(await screen.findByTestId("mcp-server-selector"));
+    await waitFor(() => expect(listMCPTools).toHaveBeenCalledWith("test-token", "mcp-1"));
+    view.rerender(<KeyEditView {...props} keyData={{ ...MOCK_KEY_DATA, rpm_limit: 75 }} />);
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      rpm_limit: 75,
+      mcp_tool_permissions: { "mcp-1": ["read-page"] },
+    });
+    vi.mocked(fetchMCPServers).mockResolvedValue([]);
+    vi.mocked(listMCPTools).mockResolvedValue(mcpTools([]));
   });
 
   it("should start a fresh budget draft when switching between keys identified only by token_id", async () => {

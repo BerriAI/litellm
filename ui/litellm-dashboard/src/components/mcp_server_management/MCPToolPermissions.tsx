@@ -20,13 +20,15 @@ import {
   resolveEffectiveMcpServers,
 } from "./effectiveMcpServers";
 
+export type ToolPermissionsChangeOrigin = "default" | "edit";
+
 interface MCPToolPermissionsProps {
   accessToken: string;
   selectedServers: readonly string[];
   selectedAccessGroups?: readonly string[];
   selectedToolsets?: readonly string[];
   toolPermissions: Record<string, string[]>;
-  onChange: (toolPermissions: Record<string, string[]>, origin: "default" | "edit") => void;
+  onChange: (toolPermissions: Record<string, string[]>, origin: ToolPermissionsChangeOrigin) => void;
   disabled?: boolean;
   preserveUnrestrictedServers?: readonly string[];
 }
