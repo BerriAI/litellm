@@ -1,4 +1,4 @@
-import { useQueries, useQuery, type UseQueryOptions } from "@tanstack/react-query";
+import { useQueries, useQuery, useQueryClient, type UseQueryOptions } from "@tanstack/react-query";
 import { fetchAvailableModels, type ModelGroup } from "@/components/llm_calls/fetch_models";
 import type { MCPServer, MCPTool, MCPToolset } from "@/components/mcp_tools/types";
 import {
@@ -34,6 +34,7 @@ export function usePlaygroundModels(requestKey: string | null) {
 }
 
 export function useMcpCatalog(requestKey: string | null) {
+  const queryClient = useQueryClient();
   const servers = useQuery<readonly MCPServer[]>({
     queryKey: ["playground", "mcpServers", requestKey],
     queryFn: async () => serverList(await fetchMCPServers(requestKey ?? "")),
@@ -53,7 +54,10 @@ export function useMcpCatalog(requestKey: string | null) {
     toolsets: toolsets.data ?? EMPTY,
     isLoading: servers.isLoading || toolsets.isLoading,
     isReady: servers.isSuccess && Boolean(toolsets.data),
-    refetchServers: servers.refetch,
+    refreshCredentials: () => {
+      void servers.refetch();
+      void queryClient.invalidateQueries({ queryKey: ["playground", "mcpTools", requestKey] });
+    },
   };
 }
 

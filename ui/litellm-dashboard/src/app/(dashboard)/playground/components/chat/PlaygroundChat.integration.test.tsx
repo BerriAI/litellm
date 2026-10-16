@@ -7,9 +7,15 @@ import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
 import { makeOpenAIResponsesRequest } from "@/components/llm_calls/responses_api";
 import { callMCPTool, fetchMCPServers, fetchMCPToolsets, listMCPTools } from "@/components/networking";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
+import { fetchClient } from "@/lib/http/api";
 import { PlaygroundChat } from "./PlaygroundChat";
 
 vi.mock("@/app/(dashboard)/hooks/useCan", () => ({ default: () => true }));
+
+vi.mock("@/lib/http/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/http/api")>();
+  return { ...actual, fetchClient: { ...actual.fetchClient, POST: vi.fn() } };
+});
 
 vi.mock("@/components/llm_calls/fetch_models", () => ({ fetchAvailableModels: vi.fn() }));
 
@@ -85,6 +91,9 @@ describe("PlaygroundChat", () => {
     chatRequest.mockReset();
     responsesRequest.mockReset();
     vi.mocked(callMCPTool).mockReset();
+    vi.mocked(fetchClient.POST)
+      .mockReset()
+      .mockResolvedValue({ data: {}, response: new Response() } as never);
     vi.mocked(fetchMCPServers).mockReset().mockResolvedValue([]);
     vi.mocked(fetchMCPToolsets).mockReset().mockResolvedValue([]);
     vi.mocked(listMCPTools).mockReset().mockResolvedValue({ tools: [] });
@@ -499,5 +508,49 @@ describe("PlaygroundChat", () => {
     const stored = Object.keys(sessionStorage).map((key) => sessionStorage.getItem(key) ?? "");
     expect(stored.length).toBeGreaterThan(0);
     expect(stored.filter((value) => value.includes("sk-virtual-123"))).toEqual([]);
+  });
+
+  it("lets a user connect a key for a BYOK server picked for a direct tool call", async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchMCPServers).mockResolvedValue([
+      { server_id: "srv-byok", alias: "Linear", is_byok: true, has_user_credential: false },
+    ]);
+    preload({ endpointType: "mcp", selectedMCPServers: JSON.stringify(["srv-byok"]) });
+    renderChat();
+
+    await user.click(await screen.findByRole("button", { name: "Connect key" }));
+    await user.type(await screen.findByLabelText("Linear API key"), "lin-key-1");
+    await user.click(screen.getByRole("button", { name: "Connect" }));
+
+    await waitFor(() => expect(fetchClient.POST).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(fetchClient.POST).mock.calls[0]?.[1]).toMatchObject({
+      params: { path: { server_id: "srv-byok" } },
+      body: { credential: "lin-key-1" },
+    });
+    await waitFor(() => expect(fetchMCPServers).toHaveBeenCalledTimes(2));
+  });
+
+  it("lets a user replace the key of a connected BYOK server whose tools fail to load", async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchMCPServers).mockResolvedValue([
+      { server_id: "srv-byok", alias: "Linear", is_byok: true, has_user_credential: true },
+    ]);
+    vi.mocked(listMCPTools).mockResolvedValue({ error: "401 from upstream" });
+    preload({ selectedModel: "gpt-fast", selectedMCPServers: JSON.stringify(["srv-byok"]) });
+    renderChat();
+
+    await settled();
+    await user.click(screen.getByRole("button", { name: "MCP" }));
+    await user.click(await screen.findByRole("button", { name: "Replace key" }));
+    await user.type(await screen.findByLabelText("Linear API key"), "lin-key-2");
+    await user.click(screen.getByRole("button", { name: "Connect" }));
+
+    await waitFor(() => expect(fetchClient.POST).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(fetchClient.POST).mock.calls[0]?.[1]).toMatchObject({ body: { credential: "lin-key-2" } });
+    await waitFor(() =>
+      expect(vi.mocked(listMCPTools).mock.calls.filter(([, server]) => server === "srv-byok").length).toBeGreaterThan(
+        1,
+      ),
+    );
   });
 });

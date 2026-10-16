@@ -4,6 +4,8 @@ import { useId, useState } from "react";
 import { Check, ExternalLink, KeyRound } from "lucide-react";
 import { PasswordInput } from "@/components/shared/PasswordInput";
 import { Button } from "@/components/ui/button";
+import { InputGroupButton } from "@/components/ui/input-group";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
@@ -61,10 +63,12 @@ export function ByokConnect({
       <div className="flex flex-col gap-1">
         <p className="flex items-center gap-2 text-sm font-medium">
           <KeyRound className="size-4 text-muted-foreground" />
-          {name} needs your API key
+          {server.has_user_credential ? `Replace your ${name} API key` : `${name} needs your API key`}
         </p>
         <p className="text-sm text-muted-foreground">
-          The gateway calls {name} with your own key. Connect it to list and use its tools.
+          {server.has_user_credential
+            ? `The new key replaces the one the gateway uses for ${name}.`
+            : `The gateway calls ${name} with your own key. Connect it to list and use its tools.`}
         </p>
       </div>
       {server.byok_description && server.byok_description.length > 0 && (
@@ -105,5 +109,35 @@ export function ByokConnect({
         Connect
       </Button>
     </FieldGroup>
+  );
+}
+
+export function ByokKeyButton({
+  server,
+  name,
+  onConnected,
+}: {
+  server: MCPServer;
+  name: string;
+  onConnected: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger render={<InputGroupButton size="xs" className="shrink-0" />}>
+        <KeyRound />
+        {server.has_user_credential ? "Replace key" : "Connect key"}
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-80 p-0">
+        <ByokConnect
+          server={server}
+          name={name}
+          onConnected={() => {
+            setOpen(false);
+            onConnected();
+          }}
+        />
+      </PopoverContent>
+    </Popover>
   );
 }

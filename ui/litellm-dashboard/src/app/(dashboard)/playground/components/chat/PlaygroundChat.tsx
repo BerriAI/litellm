@@ -29,6 +29,7 @@ import { EndpointMenu, VoiceMenu } from "./ComposerControls";
 import { Conversation, formatCost } from "./Conversation";
 import { capabilitiesFor, CODE_INTERPRETER_SUGGESTIONS, SUGGESTIONS } from "./endpointCapabilities";
 import { InspectorPanel, type CodeSdk } from "./Inspector";
+import { ByokKeyButton } from "./ByokConnect";
 import { McpDialog, serverName } from "./McpDialog";
 import { TargetPicker, type OptionGroup } from "./Pickers";
 import { TOOLSET_PREFIX, withEndpoint, withReachableMcp } from "./playgroundSettings";
@@ -162,6 +163,7 @@ export function PlaygroundChat({
   const directToolset = toolsetFor(directSelection, mcp.toolsets);
   const directServers = backingServers(directSelection, directToolset);
   const directServerTools = useServerTools(apiKey, directServers);
+  const directByok = directToolset ? undefined : mcp.servers.find((server) => server.server_id === directSelection);
   const targets = directTargets(directServers, directToolset, directServerTools);
   const directTarget = targets.find((target) => target.tool.name === settings.directTool) ?? null;
   const directTool = directTarget?.tool ?? null;
@@ -302,6 +304,9 @@ export function PlaygroundChat({
             isLoading={mcp.isLoading}
             emptyText="No MCP servers available for this key"
           />
+          {directByok?.is_byok && (
+            <ByokKeyButton server={directByok} name={serverName(directByok)} onConnected={mcp.refreshCredentials} />
+          )}
           {directSelection && (
             <TargetPicker
               label="Tool"
@@ -354,7 +359,7 @@ export function PlaygroundChat({
           selection={settings.mcpSelection}
           toolLimits={settings.toolLimits}
           onChange={(mcpSelection, toolLimits) => update({ mcpSelection, toolLimits })}
-          onCredentialSaved={() => void mcp.refetchServers()}
+          onCredentialSaved={mcp.refreshCredentials}
         />
       }
       vectorStores={{

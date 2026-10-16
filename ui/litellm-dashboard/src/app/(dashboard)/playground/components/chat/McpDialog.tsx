@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useState, type ReactNode } from "react";
-import { Blocks, Search } from "lucide-react";
+import { Blocks, KeyRound, Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -15,7 +15,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Field, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -123,13 +123,14 @@ function ToolRow({
   );
 }
 
-function Note({ title, children }: { title: string; children: ReactNode }) {
+function Note({ title, children, action }: { title: string; children: ReactNode; action?: ReactNode }) {
   return (
     <Empty>
       <EmptyHeader>
         <EmptyTitle className="text-sm">{title}</EmptyTitle>
         <EmptyDescription>{children}</EmptyDescription>
       </EmptyHeader>
+      {action && <EmptyContent>{action}</EmptyContent>}
     </Empty>
   );
 }
@@ -170,6 +171,7 @@ export function McpDialog({
   const [focused, setFocused] = useState<string>(selection.find((item) => item !== ALL_MCP_SERVERS) ?? ALL_MCP_SERVERS);
   const [query, setQuery] = useState("");
   const [toolQuery, setToolQuery] = useState("");
+  const [replacingKey, setReplacingKey] = useState<string | null>(null);
   const serverById = new Map(servers.map((server) => [server.server_id, server]));
   const selectedServers = selection.filter((item) => serverById.has(item));
   const toolsByServer = useServerTools(
@@ -244,9 +246,29 @@ export function McpDialog({
     const server = serverById.get(focused);
     if (!server) return <Note title="Nothing selected">Pick a server or toolset on the left</Note>;
     const name = serverName(server);
-    if (needsKey(server)) return <ByokConnect server={server} name={name} onConnected={onCredentialSaved} />;
+    if (needsKey(server) || replacingKey === focused)
+      return (
+        <ByokConnect
+          server={server}
+          name={name}
+          onConnected={() => {
+            setReplacingKey(null);
+            onCredentialSaved();
+          }}
+        />
+      );
+    const replaceKey = server.is_byok ? (
+      <Button variant="outline" size="sm" onClick={() => setReplacingKey(focused)}>
+        <KeyRound />
+        Replace key
+      </Button>
+    ) : undefined;
     if (!selection.includes(focused))
-      return <Note title={name}>Check this server to choose which of its tools the model can call</Note>;
+      return (
+        <Note title={name} action={replaceKey}>
+          Check this server to choose which of its tools the model can call
+        </Note>
+      );
     const state = toolsByServer[focused];
     if (!state || state.isLoading)
       return (
@@ -254,7 +276,12 @@ export function McpDialog({
           <Spinner />
         </div>
       );
-    if (state.failed) return <Note title={name}>Couldn&apos;t load this server&apos;s tools</Note>;
+    if (state.failed)
+      return (
+        <Note title={name} action={replaceKey}>
+          Couldn&apos;t load this server&apos;s tools
+        </Note>
+      );
     const tools = toolNames(focused);
     if (tools.length === 0) return <Note title={name}>This server has no tools</Note>;
     const allowed = allowedTools(toolLimits, focused, tools);
@@ -275,6 +302,7 @@ export function McpDialog({
           >
             Allow all
           </Button>
+          {replaceKey}
         </div>
         <ScrollArea className="min-h-0 flex-1">
           <div className="grid grid-cols-2 p-1">
