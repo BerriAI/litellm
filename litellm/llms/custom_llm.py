@@ -8,14 +8,14 @@
 - async_streaming
 """
 
-from collections.abc import AsyncIterator, Callable, Coroutine, Iterator
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterator, Sequence
 from typing import (
     TYPE_CHECKING,
-    Any,
     Union,
 )
 
 import httpx
+from openai.types.audio.transcription_create_params import FileTypes
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.utils import GenericStreamingChunk
@@ -103,7 +103,9 @@ class CustomLLM(BaseLLM):
         headers={},
         timeout: float | httpx.Timeout | None = None,
         client: AsyncHTTPHandler | None = None,
-    ) -> Coroutine[Any, Any, Union[ModelResponse, "CustomStreamWrapper"]] | Union[ModelResponse, "CustomStreamWrapper"]:
+    ) -> (
+        Coroutine[None, None, Union[ModelResponse, "CustomStreamWrapper"]] | Union[ModelResponse, "CustomStreamWrapper"]
+    ):
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
     async def astreaming(
@@ -188,7 +190,7 @@ class CustomLLM(BaseLLM):
     def image_edit(
         self,
         model: str,
-        image: Any,
+        image: Sequence[FileTypes],
         prompt: str | None,
         model_response: ImageResponse,
         api_key: str | None,
@@ -203,7 +205,7 @@ class CustomLLM(BaseLLM):
     async def aimage_edit(
         self,
         model: str,
-        image: Any,
+        image: Sequence[FileTypes],
         prompt: str | None,
         model_response: ImageResponse,
         api_key: str | None,

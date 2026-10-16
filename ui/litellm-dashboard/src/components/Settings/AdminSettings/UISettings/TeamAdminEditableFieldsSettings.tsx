@@ -11,6 +11,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import {
   parseSupportedTeamAdminEditableFields,
   parseTeamAdminEditableFields,
+  TEAM_ADMIN_METADATA_FIELD,
   TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION,
   teamAdminFieldLabel,
   type TeamAdminSettingsField,
@@ -34,7 +35,10 @@ const MAX_BUDGET_FIELD: TeamAdminSettingsField = "max_budget";
 const RAISE_MAX_BUDGET_HELP_LABEL = "About raising the team's max budget";
 const RAISE_MAX_BUDGET_TOOLTIP =
   "Lets team admins raise the budget too, capped by the organization's budget when the team has one. Only proxy admins can remove it.";
-const RAISE_MAX_BUDGET_DOCS_URL =
+const METADATA_HELP_LABEL = "About editing team metadata";
+const METADATA_TOOLTIP =
+  "Lets team admins add, change and remove their own metadata keys. Keys the proxy reads as settings stay with proxy admins, and keys declared in the team metadata schema can be changed but not removed.";
+const TEAM_ADMIN_FIELDS_DOCS_URL =
   "https://docs.litellm.ai/docs/proxy/access_control#choosing-what-team-admins-can-edit";
 
 const toggleEditableField = (
@@ -146,6 +150,11 @@ function TeamAdminEditableFieldsForm({
                     checked={field.value.includes(name)}
                     disabled={isPending}
                     onCheckedChange={toggle(name)}
+                    help={
+                      name === TEAM_ADMIN_METADATA_FIELD ? (
+                        <FieldHelp label={METADATA_HELP_LABEL} text={METADATA_TOOLTIP} />
+                      ) : undefined
+                    }
                   />
                   {name === MAX_BUDGET_FIELD && raiseMaxBudgetSupported && (
                     <EditableFieldCheckbox
@@ -154,7 +163,7 @@ function TeamAdminEditableFieldsForm({
                       disabled={isPending || !field.value.includes(MAX_BUDGET_FIELD)}
                       onCheckedChange={toggle(TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION)}
                       className="ml-6"
-                      help={<RaiseMaxBudgetHelp />}
+                      help={<FieldHelp label={RAISE_MAX_BUDGET_HELP_LABEL} text={RAISE_MAX_BUDGET_TOOLTIP} />}
                     />
                   )}
                 </Fragment>
@@ -201,21 +210,26 @@ function EditableFieldCheckbox({
   );
 }
 
-function RaiseMaxBudgetHelp() {
+interface FieldHelpProps {
+  label: string;
+  text: string;
+}
+
+function FieldHelp({ label, text }: FieldHelpProps) {
   return (
     <TooltipProvider>
       <Tooltip>
         <TooltipTrigger
           type="button"
-          aria-label={RAISE_MAX_BUDGET_HELP_LABEL}
+          aria-label={label}
           className="inline-flex cursor-help items-center rounded-sm text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
         >
           <CircleHelp className="size-3.5" />
         </TooltipTrigger>
         <TooltipContent>
           <span>
-            {RAISE_MAX_BUDGET_TOOLTIP}{" "}
-            <a href={RAISE_MAX_BUDGET_DOCS_URL} target="_blank" rel="noopener noreferrer" className="underline">
+            {text}{" "}
+            <a href={TEAM_ADMIN_FIELDS_DOCS_URL} target="_blank" rel="noopener noreferrer" className="underline">
               Learn more
             </a>
           </span>

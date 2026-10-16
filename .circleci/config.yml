@@ -1293,9 +1293,22 @@ jobs:
                   uv venv --python 3.12 .venv-mcp-peer
                   uv pip install --python .venv-mcp-peer 'mcp==1.28.1' 'langchain-mcp-adapters==0.2.1'
                   echo "export MCP_TEST_PEER_PYTHON=$PWD/.venv-mcp-peer/bin/python" >> "$BASH_ENV"
+      - when:
+          condition:
+            equal: [sdk, << parameters.suite >>]
+          steps:
+            - run:
+                name: Install redis-server 7.2.16
+                command: |
+                  mkdir -p /tmp/redis-bin
+                  cid="$(docker create redis:7.2.16@sha256:0637954999d01b7c9ce9167db2da50656e2590d3b884f1c600c5f63bb6e6773c)"
+                  docker cp "${cid}:/usr/local/bin/redis-server" /tmp/redis-bin/redis-server
+                  docker rm "$cid"
+                  /tmp/redis-bin/redis-server --version | grep -q 'v=7.2.16'
+                  echo 'export PATH="/tmp/redis-bin:$PATH"' >> "$BASH_ENV"
       - start_postgres:
           image: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
-          server_args: "-c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all -c pg_stat_statements.max=20000"
+          server_args: "-c max_connections=300 -c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all -c pg_stat_statements.max=20000"
       - start_redis
       - run:
           name: Run owned integration contracts
@@ -1348,12 +1361,27 @@ jobs:
         default: standard
       shards:
         type: integer
-    machine:
-      image: ubuntu-2204:2024.04.1
-    resource_class: medium
+    docker:
+      - image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    resource_class: small
     working_directory: ~/project
+    environment:
+      UV_PYTHON_DOWNLOADS: never
     steps:
-      - setup_litellm_test_deps
+      - checkout
+      - install_uv
+      - run:
+          name: Install the locked shard verifier and coverage dependencies
+          command: |
+            uv export --frozen --all-groups --all-extras --no-emit-project --no-emit-workspace --no-header --no-annotate \
+              | awk '/^[^ ]/ { keep = $0 ~ /^(annotated-types|coverage|pydantic|pydantic-core|typing-extensions|typing-inspection)==/ } keep' \
+              > /tmp/fan-in-requirements.txt
+            test "$(grep -c '^[^ ]' /tmp/fan-in-requirements.txt)" -eq 6
+            uv venv .venv --python 3.12
+            uv pip install --no-config --python .venv --require-hashes -r /tmp/fan-in-requirements.txt
       - attach_workspace:
           at: /tmp/integration-shards
       - run:
@@ -1614,7 +1642,6 @@ workflows:
       - integration_contracts:
           name: integration-mcp
           suite: mcp
-          resource_class: xlarge
           parallelism: 2
           filters: *integration_default_run
       - integration_shard_coverage:

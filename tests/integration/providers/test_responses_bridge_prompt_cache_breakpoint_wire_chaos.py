@@ -1,6 +1,5 @@
 import asyncio
 import dataclasses
-import signal
 import threading
 import uuid
 from collections import Counter
@@ -10,10 +9,8 @@ from pathlib import Path
 from queue import SimpleQueue
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
-from urllib.parse import urlsplit
 
 import httpx
-import psutil
 import pytest
 import yaml
 from integration._support import prompt_cache_breakpoint as pcb
@@ -21,6 +18,7 @@ from integration._support import responses_vendor as rv
 from integration._support.client import Gateway, eventually, gateway_from_environment, string_value
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from pydantic import JsonValue
 
 pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
@@ -215,13 +213,6 @@ def _health(gateway: Gateway, model: str) -> Mapping[str, JsonValue]:
     return rv.JSON_OBJECT.validate_json(response.text)
 
 
-def _free_port() -> int:
-    with wire_server(pcb.respond) as probe:
-        port: Final = urlsplit(probe.url).port
-    assert port is not None, probe.url
-    return port
-
-
 def _chat(gateway: Gateway, model: str, marker: str, breakpoint: JsonValue) -> httpx.Response:
     return gateway.request("POST", "/v1/chat/completions", dict(_body(model, _Call("chat", False, marker), breakpoint)))
 
@@ -287,7 +278,7 @@ async def test_mixed_burst_carries_every_marker_once(gateway: Gateway, spend: pc
 async def test_upstream_outage_fails_cleanly_and_the_restarted_upstream_serves_marked_calls(
     gateway: Gateway, spend: pcb.SpendLogs
 ) -> None:
-    port: Final = _free_port()
+    port: Final = allocate_port()
     while_down: Final = _calls(12, _ENDPOINTS)
     after: Final = _calls(12, _ENDPOINTS)
     with gateway.scenario() as scenario:
@@ -371,16 +362,16 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_answering(
             held_by: Final = MappingProxyType({pid: pcb.open_upstream_connections(pid, wire.url) for pid in workers})
             assert sum(held_by.values()) == 20, held_by
             victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-            victim: Final = psutil.Process(victim_pid)
-            victim.suspend()
-            victim.send_signal(signal.SIGKILL)
-            held.release.set()
-            served: Final = await burst
-            assert held_by[survivor_pid] >= 10, held_by
-            assert len(served) == held_by[survivor_pid], (held_by, len(served))
-            for item in served:
-                _assert_answered_in_its_own_shape(item)
-            _marked_once(pcb.drained_posts(wire), calls, pcb.EXPLICIT)
+            with owned.replacing_worker(victim_pid) as kill:
+                kill.freeze()
+                await asyncio.to_thread(kill)
+                held.release.set()
+                served: Final = await burst
+                assert held_by[survivor_pid] >= 10, held_by
+                assert len(served) == held_by[survivor_pid], (held_by, len(served))
+                for item in served:
+                    _assert_answered_in_its_own_shape(item)
+                _marked_once(pcb.drained_posts(wire), calls, pcb.EXPLICIT)
             follow_up: Final = uuid.uuid4().hex
             call_id: Final = _completion(_chat(candidate, _GLOBAL_UNSET, follow_up, "yes"), follow_up)
             pcb.assert_marker(_user_block_on_wire(wire, follow_up), None)
@@ -397,7 +388,7 @@ async def test_proxy_restart_mid_burst_never_lands_a_served_call_twice(
         with owned_proxy_process(gateway, tmp_path, {}, config=config, workers=2) as first:
             _worker_pids(first)
             burst: Final = await _hold_burst(held, first.gateway, _GLOBAL_UNSET, calls)
-            first.process.terminate()
+            first.begin_shutdown()
             held.release.set()
             served: Final = await burst
         for item in served:

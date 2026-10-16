@@ -499,8 +499,16 @@ def test_cancel_then_delete_on_another_replica_releases_without_a_spend_row(rig:
         key: Final = scenario.key()
         created: Final = _create(rig.creator, model, key)
         _state(rig, created, InteractionState(status="in_progress"))
+        _drain(rig)
         cancelled: Final = rig.settler.request("POST", f"/v1beta/interactions/{created}/cancel", {}, key=key)
         assert cancelled.status_code == 200, cancelled.text
+        assert JSON_OBJECT.validate_json(cancelled.content)["status"] == "cancelled", cancelled.text
+        posted: Final = tuple(
+            string_value(object_value(entry)["path"])
+            for entry in _drain(rig)
+            if string_value(object_value(entry)["method"]) == "POST"
+        )
+        assert len(posted) == 1 and posted[0].endswith(f"/v1beta/interactions/{created}/cancel"), posted
         before_delete: Final = _settlement(created)
         assert before_delete is not None and before_delete["claimed"] is False, before_delete
         deleted: Final = _delete(rig.settler, created, key)
@@ -761,12 +769,12 @@ def test_killed_workers_leave_their_polls_to_the_respawned_workers(rig: Rig) -> 
         for item in created:
             _state(rig, item, InteractionState(status="in_progress"))
         rates: Final = _rates(resumer.gateway, model)
-        killed: Final = _worker_pids(resumer.process.pid)
+        killed: Final = resumer.worker_pids()
         assert len(killed) == 2, killed
-        victims: Final = tuple(psutil.Process(pid) for pid in killed)
-        for victim in victims:
-            victim.kill()
-        psutil.wait_procs(victims, timeout=15)
+        first, second = sorted(killed)
+        with resumer.replacing_worker(first) as kill_first, resumer.replacing_worker(second) as kill_second:
+            kill_first()
+            kill_second()
         for item in created:
             _state(rig, item, _completed())
         for item in created:

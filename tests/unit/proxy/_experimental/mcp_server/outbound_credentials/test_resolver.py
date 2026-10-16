@@ -10,7 +10,9 @@ returning the stub.
 import asyncio
 import logging
 import time
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
+from typing import Final
 
 import httpx2
 import jwt as pyjwt
@@ -23,11 +25,13 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials import (
     AuthorizationCodeConfig,
     AwsSigV4Config,
     Byok,
+    ClientAuth,
     ClientCredentialsConfig,
     ClientSecretAuth,
     CredError,
     Error,
     IdJagConfig,
+    IdJagResourceClient,
     NoneConfig,
     NoOpAuth,
     Ok,
@@ -67,6 +71,10 @@ def _id_jag_config() -> IdJagConfig:
         resource_token_endpoint="https://mcp-as.example.com/token",
         client_id="litellm",
         client_auth=ClientSecretAuth(client_secret=SecretStr("s")),
+        resource_client=IdJagResourceClient(
+            client_id="litellm",
+            client_auth=ClientSecretAuth(client_secret=SecretStr("s")),
+        ),
         audience="api://mcp",
         scopes=("mcp.read",),
     )
@@ -78,9 +86,17 @@ class _FakeTokenEndpoint:
     def __init__(self, results: list[Result[ExchangedToken, CredError]]) -> None:
         self._results = list(results)
         self.calls: list[tuple[str, str, dict[str, str]]] = []
+        self.auths: list[ClientAuth] = []
 
-    async def fetch(self, endpoint, client_id, grant_params, client_auth):
+    async def fetch(
+        self,
+        endpoint: str,
+        client_id: str,
+        grant_params: Mapping[str, str],
+        client_auth: ClientAuth,
+    ) -> Result[ExchangedToken, CredError]:
         self.calls.append((endpoint, client_id, dict(grant_params)))
+        self.auths.append(client_auth)
         return self._results.pop(0)
 
 
@@ -509,15 +525,20 @@ async def test_id_jag_runs_both_legs_and_returns_the_leg2_bearer():
         ]
     )
     provider = UpstreamCredentialProvider(token_endpoint=endpoint)
-    result = await provider.resolve_credentials(
-        _with_inbound("user-id-token"), _spec(_id_jag_config())
+    resource_auth: Final = ClientSecretAuth(client_secret=SecretStr("resource-secret"))
+    config: Final = _id_jag_config().model_copy(
+        update={"resource_client": IdJagResourceClient(client_id="resource-client", client_auth=resource_auth)}
     )
+    result: Final = await provider.resolve_credentials(_with_inbound("user-id-token"), _spec(config))
 
     assert isinstance(result, Ok)
     assert _emitted(result.ok)["Authorization"] == "Bearer final-access"
 
-    leg1_endpoint, _, leg1_params = endpoint.calls[0]
+    leg1_endpoint, leg1_client_id, leg1_params = endpoint.calls[0]
     assert leg1_endpoint == "https://idp.example.com/token"
+    assert leg1_client_id == "litellm"
+    assert isinstance(endpoint.auths[0], ClientSecretAuth)
+    assert endpoint.auths[0].client_secret.get_secret_value() == "s"
     assert (
         leg1_params["grant_type"] == "urn:ietf:params:oauth:grant-type:token-exchange"
     )
@@ -526,8 +547,12 @@ async def test_id_jag_runs_both_legs_and_returns_the_leg2_bearer():
     )
     assert leg1_params["subject_token"] == "user-id-token"
 
-    leg2_endpoint, _, leg2_params = endpoint.calls[1]
+    leg2_endpoint, leg2_client_id, leg2_params = endpoint.calls[1]
     assert leg2_endpoint == "https://mcp-as.example.com/token"
+    assert leg2_client_id == "resource-client"
+    assert isinstance(endpoint.auths[1], ClientSecretAuth)
+    assert endpoint.auths[1].client_secret.get_secret_value() == "resource-secret"
+    assert endpoint.auths[1].client_secret.get_secret_value() != endpoint.auths[0].client_secret.get_secret_value()
     assert leg2_params["grant_type"] == "urn:ietf:params:oauth:grant-type:jwt-bearer"
     # The leg-1 token is forwarded verbatim as the leg-2 assertion.
     assert leg2_params["assertion"] == "the-id-jag"
@@ -1071,6 +1096,22 @@ async def test_id_jag_reuses_the_cached_bearer_for_an_unchanged_config():
         _id_jag_config().model_copy(update={"resource_token_endpoint": "https://mcp-as.example.com/v2/token"}),
         _id_jag_config().model_copy(update={"client_id": "litellm-rotated"}),
         _id_jag_config().model_copy(update={"client_auth": ClientSecretAuth(client_secret=SecretStr("rotated"))}),
+        _id_jag_config().model_copy(
+            update={
+                "resource_client": IdJagResourceClient(
+                    client_id="resource-client-rotated",
+                    client_auth=ClientSecretAuth(client_secret=SecretStr("s")),
+                )
+            }
+        ),
+        _id_jag_config().model_copy(
+            update={
+                "resource_client": IdJagResourceClient(
+                    client_id="litellm",
+                    client_auth=ClientSecretAuth(client_secret=SecretStr("resource-secret-rotated")),
+                )
+            }
+        ),
         _id_jag_config().model_copy(update={"subject_token_type": "urn:ietf:params:oauth:token-type:saml2"}),
     ],
     ids=[
@@ -1081,6 +1122,8 @@ async def test_id_jag_reuses_the_cached_bearer_for_an_unchanged_config():
         "resource_token_endpoint",
         "client_id",
         "client_auth",
+        "resource_client_id",
+        "resource_client_secret",
         "subject_token_type",
     ],
 )
@@ -1272,3 +1315,21 @@ async def test_id_jag_source_describes_final_token_after_both_exchanges() -> Non
     assert result.ok.source.value == "id-jag"
     assert _emitted(result.ok.auth)["Authorization"] == "Bearer resource-token"
     assert len(endpoint.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_client_credentials_subscription_identity_preserves_resolved_grant_scopes():
+    async def resolve(token):
+        source = _FakeM2MSource(Ok(token))
+        result = await UpstreamCredentialProvider(client_credentials_source=source).resolve_credentials(_SUBJECT, _spec(_M2M))
+        assert isinstance(result, Ok)
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.client_credentials import ClientCredentialsBearerAuth
+        assert isinstance(result.ok, ClientCredentialsBearerAuth)
+        return result.ok.subscription_identity
+
+    original = await resolve(OAuthToken(access_token="original", scopes=("read", "write")))
+    renewed = await resolve(OAuthToken(access_token="renewed", scopes=("write", "read")))
+    reduced = await resolve(OAuthToken(access_token="renewed", scopes=("read",)))
+    assert original is not None
+    assert original == renewed
+    assert original != reduced

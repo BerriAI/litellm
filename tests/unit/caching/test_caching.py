@@ -414,6 +414,24 @@ def test_provider_specific_cache_key_ignores_litellm_owned_kwargs(monkeypatch: p
     assert cache.get_cache_key(**{**request, "top_k": 6}) != base_key
 
 
+def test_cache_key_tells_apart_requests_that_differ_only_in_continuation_token() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    request: Final = {
+        "model": "gemini/gemini-4-argon",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 16000,
+    }
+
+    first_segment_key: Final = cache.get_cache_key(**request)
+    resumed_key: Final = cache.get_cache_key(**request, continuation_token="dG9rLTE=")
+
+    assert resumed_key != first_segment_key
+    assert cache.get_cache_key(**request, continuation_token="dG9rLTI=") not in (first_segment_key, resumed_key)
+    assert cache.get_cache_key(**request, continuation_token="dG9rLTE=") == resumed_key
+    assert cache.get_cache_key(**request, continuation_token=None) == first_segment_key
+    assert cache.get_cache_key(**request, continuation_token="") == first_segment_key
+
+
 class PhaseRecordingCache(InMemoryCache):
     """Records the target and the active span each read / write ran under, as a Redis span would."""
 
@@ -1548,3 +1566,23 @@ async def test_redis_caching_ttl_sadd(
     )
 
     redis_client.expire.assert_awaited_once_with("cache-key", timedelta(seconds=120))
+
+
+def test_cache_key_separates_model_ids_unless_a_model_group_owns_the_key() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    variants: Final[tuple[dict[str, object], ...]] = (
+        {"model_id": "component-a"},
+        {"model_id": "component-b"},
+        {},
+        {"model_id": "component-a"},
+        {"model_id": "component-a", "metadata": {"model_group": "embed"}},
+        {"model_id": "component-b", "metadata": {"model_group": "embed"}},
+    )
+    key_a, key_b, bare, key_a_again, grouped_a, grouped_b = (
+        cache.get_cache_key(model="sagemaker/openai/embed", input=["hello"], **extra) for extra in variants
+    )
+
+    assert key_a != key_b
+    assert key_a != bare
+    assert key_a == key_a_again
+    assert grouped_a == grouped_b

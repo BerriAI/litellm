@@ -316,12 +316,12 @@ def test_call_with_invalid_key(prisma_client):
         print("got result", result)
         pytest.fail(f"This should have failed!. IT's an invalid key")
 
-    with pytest.raises(Exception, match="Authentication Error, Invalid proxy server token passed") as exc_info:
+    with pytest.raises(Exception, match="Authentication Error, Invalid API key provided") as exc_info:
         asyncio.run(test())
     e = exc_info.value
     print("Got Exception", e)
     print(e.message)
-    assert "Authentication Error, Invalid proxy server token passed" in e.message
+    assert "Authentication Error, Invalid API key provided" in e.message
 
 
 @pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
@@ -3706,14 +3706,14 @@ async def test_auth_vertex_ai_route(prisma_client):
     request = Request(scope={"type": "http"})
     request._url = URL(url=route)
     request._headers = {"Authorization": "Bearer sk-98765"}
-    with pytest.raises(Exception, match="Invalid proxy server token passed") as exc_info:
+    with pytest.raises(Exception, match="Invalid API key provided") as exc_info:
         await user_api_key_auth(request=request, api_key="Bearer " + "sk-98765")
     e = exc_info.value
     print(vars(e))
     print("error str=", str(e.message))
     error_str = str(e.message)
     assert e.code == "401"
-    assert "Invalid proxy server token passed" in error_str
+    assert "Invalid API key provided" in error_str
 
 
 @pytest.mark.asyncio

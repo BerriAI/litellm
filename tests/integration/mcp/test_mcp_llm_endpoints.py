@@ -12,7 +12,14 @@ from typing import Final, Literal, TypeVar
 import httpx
 import pytest
 import yaml
-from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment, object_value
+from integration._support.client import (
+    Gateway,
+    Scenario,
+    eventually,
+    gateway_from_environment,
+    object_value,
+    string_value,
+)
 from integration._support.database import read_rows
 from integration._support.mcp import (
     McpPeer,
@@ -476,6 +483,45 @@ def test_streaming_chat_executes_the_tool_once_and_streams_the_follow_up(gateway
         )
         assert text == ANSWER, response.text
         assert [call["body"]["params"]["name"] for call in _peer_add_calls(rig.peer)] == ["add"]
+        assert len(rig.upstream_tools()) == 2
+
+
+def _mcp_call_items(
+    events: Sequence[Mapping[str, JsonValue]], kind: str
+) -> tuple[tuple[JsonValue, dict[str, JsonValue]], ...]:
+    announced: Final = tuple(
+        (event["output_index"], object_value(event["item"])) for event in events if event["type"] == kind
+    )
+    return tuple((index, item) for index, item in announced if item.get("type") == "mcp_call")
+
+
+def _add_call_arguments(call: dict[str, object]) -> JsonValue:
+    return object_value(JSON_OBJECT.validate_python(call["body"])["params"])["arguments"]
+
+
+def test_streaming_responses_opens_the_gateway_tool_call_empty_and_streams_its_arguments_once(gateway: Gateway) -> None:
+    with _rig(gateway, "responses") as rig:
+        key: Final = _granted_key(rig)
+        response: Final = rig.send(key, [AUTO], stream=True)
+        assert response.status_code == 200, response.text
+        events: Final = tuple(
+            JSON_OBJECT.validate_json(line.removeprefix("data: "))
+            for line in response.text.splitlines()
+            if line.startswith("data: ") and line != "data: [DONE]"
+        )
+        opened: Final = _mcp_call_items(events, "response.output_item.added")
+        closed: Final = _mcp_call_items(events, "response.output_item.done")
+        assert [(index, item["arguments"], item["status"]) for index, item in opened] == [
+            (closed[0][0], "", "in_progress")
+        ], opened
+        streamed: Final = "".join(
+            string_value(event["delta"])
+            for event in events
+            if event["type"] == "response.mcp_call_arguments.delta" and event["output_index"] == opened[0][0]
+        )
+        assert json.loads(streamed) == ADD, streamed
+        assert string_value(opened[0][1]["arguments"]) + streamed == closed[0][1]["arguments"], (opened, closed)
+        assert [_add_call_arguments(call) for call in _peer_add_calls(rig.peer)] == [ADD]
         assert len(rig.upstream_tools()) == 2
 
 
