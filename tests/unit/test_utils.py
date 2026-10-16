@@ -2418,6 +2418,87 @@ def test_register_model_openrouter_without_slash():
     assert "openai/gpt-4-turbo" in litellm.openrouter_models
 
 
+def test_register_model_makes_the_model_resolvable_and_wildcard_visible_without_a_restart():
+    model_name: Final = "my-tuned-gemini-regression"
+    try:
+        litellm.register_model(
+            {
+                model_name: {
+                    "litellm_provider": "vertex_ai-language-models",
+                    "mode": "chat",
+                    "input_cost_per_token": 0.000001,
+                    "output_cost_per_token": 0.000002,
+                }
+            },
+            persist_across_reloads=False,
+        )
+
+        _, provider, _, _ = litellm.get_llm_provider(model=model_name)
+
+        assert provider == "vertex_ai"
+        assert model_name in litellm.models_by_provider["vertex_ai"]
+    finally:
+        litellm.model_cost.pop(model_name, None)
+        litellm.vertex_language_models.discard(model_name)
+        litellm.models_by_provider["vertex_ai"].discard(model_name)
+
+
+@pytest.mark.parametrize(
+    ("litellm_provider", "wildcard", "provider_set"),
+    [
+        ("ai21", "ai21/*", "ai21_chat_models"),
+        ("vertex_ai-code-chat-models", "vertex_ai/*", "vertex_code_chat_models"),
+    ],
+)
+def test_registered_chat_model_lists_under_its_provider_wildcard(
+    litellm_provider: str, wildcard: str, provider_set: str
+) -> None:
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    model_name: Final = f"chat-listing-regression-{litellm_provider}"
+    try:
+        litellm.register_model(
+            {model_name: {"litellm_provider": litellm_provider, "mode": "chat"}}, persist_across_reloads=False
+        )
+
+        listed: Final = get_known_models_from_wildcard(wildcard)
+
+        assert f"{wildcard.removesuffix('*')}{model_name}" in listed
+    finally:
+        litellm.model_cost.pop(model_name, None)
+        getattr(litellm, provider_set).discard(model_name)
+        litellm.add_known_models(model_cost_map={})
+
+
+def test_priced_router_deployment_id_stays_out_of_wildcard_model_listing():
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    deployment_id: Final = "priced-deployment-id-regression"
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "priced-gemini",
+                "litellm_params": {
+                    "model": "gemini/gemini-2.5-flash",
+                    "api_key": "fake-key",
+                    "input_cost_per_token": 0.000001,
+                    "output_cost_per_token": 0.000002,
+                },
+                "model_info": {"id": deployment_id, "litellm_provider": "gemini", "mode": "chat"},
+            },
+            {"model_name": "gemini/*", "litellm_params": {"model": "gemini/*", "api_key": "fake-key"}},
+        ]
+    )
+
+    router.completion(model="priced-gemini", messages=[{"role": "user", "content": "hi"}], mock_response="ok")
+    listed: Final = get_known_models_from_wildcard("gemini/*")
+
+    assert "gemini/gemini-2.5-flash" in listed
+    assert f"gemini/{deployment_id}" not in listed
+    assert deployment_id not in litellm.models_by_provider["gemini"]
+    assert litellm.model_cost[deployment_id]["input_cost_per_token"] == 0.000001
+
+
 def test_reasoning_content_preserved_in_text_completion_wrapper():
     """Ensure reasoning_content is copied from delta to text_choices."""
     chunk = ModelResponseStream(
@@ -9583,6 +9664,33 @@ def test_get_provider_audio_transcription_config_resolves_for_every_provider() -
 
     assert unexpected == {}
     assert isinstance(configs[LlmProviders.OPENAI], litellm.OpenAIWhisperAudioTranscriptionConfig)
+
+
+@pytest.mark.parametrize(
+    ("model", "optional_params", "expected_response_format"),
+    [
+        ("whisper-1", {}, "verbose_json"),
+        ("my-transcribe-whisper", {}, "verbose_json"),
+        ("whisper-1", {"response_format": "srt"}, "srt"),
+        ("gpt-4o-mini-transcribe", {}, None),
+        ("gpt-transcribe", {}, None),
+        ("gpt-transcribe", {"response_format": "text"}, "text"),
+    ],
+)
+def test_openai_transcription_defaults_verbose_json_only_for_whisper_models(
+    model: str, optional_params: dict[str, str], expected_response_format: str | None
+) -> None:
+    config: Final = ProviderConfigManager.get_provider_audio_transcription_config(
+        model=model, provider=LlmProviders.OPENAI
+    )
+    assert config is not None
+
+    request: Final = config.transform_audio_transcription_request(
+        model=model, audio_file=b"audio", optional_params=dict(optional_params), litellm_params={}
+    )
+
+    assert isinstance(request.data, dict)
+    assert request.data.get("response_format") == expected_response_format
 
 
 def test_get_valid_models_from_provider_cache_invalidation(monkeypatch):

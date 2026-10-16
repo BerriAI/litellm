@@ -1,4 +1,7 @@
 import json
+import sqlite3
+from collections.abc import Sequence
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
@@ -15,7 +18,9 @@ from litellm.responses.litellm_completion_transformation.session_handler import 
     ResponsesSessionHandler,
     _normalize_redacted_tool_call_arguments,
 )
+from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import Message
 
 
@@ -126,7 +131,7 @@ async def test_get_chat_completion_message_history_for_previous_response_id():
         )
 
         # Verify the mock was called with correct parameters
-        mock_get_spend_logs.assert_called_once_with(previous_response_id)
+        mock_get_spend_logs.assert_called_once_with(previous_response_id, ())
 
         # Verify the returned ChatCompletionSession structure
         assert "messages" in result
@@ -460,8 +465,8 @@ class _FakePrismaDB:
         self._results = list(results)
         self.calls = []
 
-    async def query_raw(self, query, *args):
-        self.calls.append(args)
+    async def query_raw(self, query, request_ids):
+        self.calls.append(tuple(request_ids))
         if not self._results:
             return []
         return list(self._results.pop(0))
@@ -554,7 +559,7 @@ async def test_message_history_retries_a_spend_log_the_batch_writer_has_not_flus
         ("assistant", "OK"),
     ]
     assert result["litellm_session_id"] == session_id
-    assert fake_prisma_client.db.calls == [(request_id,), (request_id,)]
+    assert [call[0] for call in fake_prisma_client.db.calls] == [request_id, request_id]
 
 
 @pytest.mark.asyncio
@@ -622,7 +627,91 @@ async def test_message_history_looks_up_the_decoded_chat_completion_id():
             encoded_response_id
         )
 
-    assert fake_prisma_client.db.calls == [(request_id,)]
+    assert len(fake_prisma_client.db.calls) == 1
+    assert request_id in fake_prisma_client.db.calls[0]
+
+
+class _StoredSpendLogs:
+    def __init__(self, rows: tuple[dict, ...]) -> None:
+        self.rows = rows
+
+    async def query_raw(self, query: str, request_ids: Sequence[str]) -> list[dict]:
+        sessions: Final = {row["session_id"] for row in self.rows if row["request_id"] in request_ids}
+        return [row for row in self.rows if row["session_id"] in sessions]
+
+
+@pytest.mark.asyncio
+async def test_message_history_replays_a_bridged_mcp_turn_stored_under_the_client_response_id():
+    client_response_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="anthropic",
+        model_id="e0f302a1412e78470ebb28cbed01fff5f88c0d331c667e9f2ba4b413c6fbd282",
+        response_id="chatcmpl-mcp-final-round",
+    )
+    session_id: Final = "mcp-session"
+    stored: Final = _StoredSpendLogs(
+        (
+            {
+                "request_id": "list-tools-row",
+                "call_type": "list_mcp_tools",
+                "session_id": session_id,
+                "proxy_server_request": {},
+                "response": [{"name": "demo-echo"}],
+            },
+            {
+                "request_id": client_response_id,
+                "call_type": "aresponses",
+                "session_id": session_id,
+                "proxy_server_request": {"input": "Call echo with PING.", "model": "claude-bridge"},
+                "response": {
+                    "id": client_response_id,
+                    "object": "response",
+                    "output": [
+                        {
+                            "type": "reasoning",
+                            "id": "rs_mcp-final-round",
+                            "summary": [{"type": "summary_text", "text": "The echo tool returned PING."}],
+                        },
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "status": "completed",
+                            "content": [{"type": "output_text", "text": "PING", "annotations": []}],
+                        },
+                        *LiteLLM_Proxy_MCP_Handler.add_mcp_output_elements_to_response(
+                            ResponsesAPIResponse(id=client_response_id, created_at=0, output=[]),
+                            mcp_tools_fetched=[{"name": "demo-echo"}],
+                            tool_results=[{"tool_name": "demo-echo", "result": "PING"}],
+                        ).output,
+                    ],
+                },
+            },
+            {
+                "request_id": "call-tool-row",
+                "call_type": "call_mcp_tool",
+                "session_id": session_id,
+                "proxy_server_request": {"name": "echo", "arguments": {"value": "PING"}},
+                "response": {"content": [{"type": "text", "text": "PING"}], "is_error": False},
+            },
+        )
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=stored)):
+        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            client_response_id
+        )
+
+    assert [(message.get("role"), _text_of(message.get("content"))) for message in result["messages"]] == [
+        ("user", "Call echo with PING."),
+        ("assistant", "PING"),
+    ]
+    assert result["messages"][-1].get("reasoning_content") == "The echo tool returned PING."
+    assert result["litellm_session_id"] == session_id
+
+
+def _text_of(content: object) -> object:
+    if isinstance(content, list):
+        return "".join(part.get("text", "") for part in content if isinstance(part, dict))
+    return content
 
 
 @pytest.mark.asyncio
@@ -643,7 +732,7 @@ async def test_session_lookup_does_not_retry_when_spend_logs_are_disabled(
         )
 
     assert spend_logs == []
-    assert fake_prisma_client.db.calls == [("chatcmpl-does-not-exist",)]
+    assert len(fake_prisma_client.db.calls) == 1
 
 
 def test_normalize_redacted_arguments_skips_custom_tool_calls():
@@ -787,3 +876,82 @@ async def test_message_history_replays_real_key_named_tool_payloads() -> None:
     tool_message: Final = result["messages"][2]
     assert json.loads(assistant_message["tool_calls"][0]["function"]["arguments"]) == function_arguments
     assert json.loads(tool_message["content"]) == function_output
+
+
+class _SqliteBackedPrismaDB:
+    def __init__(self, rows: list[tuple[str, str, str, str, str | None, str | None]]) -> None:
+        self._connection = sqlite3.connect(":memory:")
+        self._connection.row_factory = sqlite3.Row
+        self._connection.execute(
+            'CREATE TABLE "LiteLLM_SpendLogs" '
+            '(request_id TEXT, api_key TEXT, session_id TEXT, "endTime" TEXT, "user" TEXT, team_id TEXT)'
+        )
+        self._connection.executemany('INSERT INTO "LiteLLM_SpendLogs" VALUES (?, ?, ?, ?, ?, ?)', rows)
+
+    async def query_raw(self, query: str, *args: object) -> list[dict[str, object]]:
+        sqlite_query: Final = query.replace("= ANY($1::text[])", "IN (SELECT value FROM json_each(?))").replace("$1", "?")
+        sqlite_args: Final = tuple(json.dumps(arg) if isinstance(arg, list) else arg for arg in args)
+        return [dict(row) for row in self._connection.execute(sqlite_query, sqlite_args)]
+
+
+@pytest.mark.asyncio
+async def test_session_lookup_does_not_return_another_keys_rows_for_a_shared_session_id():
+    """A caller-supplied litellm_session_id can collide with another key's session; history must stay per key."""
+    sqlite_db: Final = _SqliteBackedPrismaDB(
+        [
+            ("victim-1", "victim-key", "shared-session", "2026-01-01T00:00:01", "", ""),
+            ("victim-2", "victim-key", "shared-session", "2026-01-01T00:00:02", "", ""),
+            ("attacker-1", "attacker-key", "shared-session", "2026-01-01T00:00:03", "", ""),
+            ("attacker-2", "attacker-key", "other-session", "2026-01-01T00:00:04", "", ""),
+        ]
+    )
+    fake_prisma_client = _FakePrismaClient(results=[])
+    fake_prisma_client.db = sqlite_db
+
+    with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client):
+        spend_logs = await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id("attacker-1")
+        victim_logs = await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id("victim-1")
+
+    assert [row["request_id"] for row in spend_logs] == ["attacker-1"]
+    assert [row["request_id"] for row in victim_logs] == ["victim-1", "victim-2"]
+
+
+async def _history_request_ids(sqlite_db: _SqliteBackedPrismaDB, response_id: str) -> list[str]:
+    fake_prisma_client: Final = _FakePrismaClient(results=[])
+    fake_prisma_client.db = sqlite_db
+    with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client):
+        spend_logs: Final = await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(response_id)
+    return [row["request_id"] for row in spend_logs]
+
+
+@pytest.mark.asyncio
+async def test_session_lookup_keeps_jwt_users_and_teams_apart_when_they_share_an_empty_api_key():
+    sqlite_db: Final = _SqliteBackedPrismaDB(
+        [
+            ("alice-1", "", "shared-session", "2026-01-01T00:00:01", "alice", "team-a"),
+            ("bob-1", "", "shared-session", "2026-01-01T00:00:02", "bob", "team-a"),
+            ("service-a-1", "", "shared-session", "2026-01-01T00:00:03", "", "team-a"),
+            ("service-b-1", "", "shared-session", "2026-01-01T00:00:04", "", "team-b"),
+            ("alice-2", "", "shared-session", "2026-01-01T00:00:05", "alice", "team-a"),
+        ]
+    )
+
+    assert await _history_request_ids(sqlite_db, "alice-1") == ["alice-1", "alice-2"]
+    assert await _history_request_ids(sqlite_db, "bob-1") == ["bob-1"]
+    assert await _history_request_ids(sqlite_db, "service-a-1") == ["service-a-1"]
+    assert await _history_request_ids(sqlite_db, "service-b-1") == ["service-b-1"]
+
+
+@pytest.mark.asyncio
+async def test_session_lookup_follows_the_owner_across_keys_and_keeps_ownerless_keys_apart():
+    sqlite_db: Final = _SqliteBackedPrismaDB(
+        [
+            ("alice-old-key", "hashed-old", "shared-session", "2026-01-01T00:00:01", "alice", "team-a"),
+            ("ownerless-1", "hashed-other", "shared-session", "2026-01-01T00:00:02", "", ""),
+            ("alice-new-key", "hashed-new", "shared-session", "2026-01-01T00:00:03", "alice", "team-a"),
+            ("ownerless-2", "hashed-another", "shared-session", "2026-01-01T00:00:04", "", ""),
+        ]
+    )
+
+    assert await _history_request_ids(sqlite_db, "alice-new-key") == ["alice-old-key", "alice-new-key"]
+    assert await _history_request_ids(sqlite_db, "ownerless-2") == ["ownerless-2"]

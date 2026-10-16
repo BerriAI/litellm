@@ -10,8 +10,8 @@ import litellm
 from litellm.constants import DEFAULT_MAX_TOKENS
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.factory import (
-    custom_prompt,
     prompt_factory,
+    render_custom_prompt_template,
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
@@ -277,11 +277,8 @@ class PredibaseConfig(BaseConfig):
         custom_prompt_dict: Final = litellm_params.get("custom_prompt_dict", {})
         if model in custom_prompt_dict:
             model_prompt_details: Final = custom_prompt_dict[model]
-            prompt = custom_prompt(
-                role_dict=model_prompt_details["roles"],
-                initial_prompt_value=model_prompt_details["initial_prompt_value"],
-                final_prompt_value=model_prompt_details["final_prompt_value"],
-                messages=messages,
+            prompt = render_custom_prompt_template(
+                template=model_prompt_details, messages=messages, model=model, llm_provider="predibase"
             )
         else:
             prompt = prompt_factory(model=model, messages=messages)
