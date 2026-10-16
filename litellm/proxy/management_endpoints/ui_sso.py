@@ -71,6 +71,9 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.login_assertion_exchange import (
+    exchange_login_assertion_if_configured,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
     GOOGLE_REFRESH_TOKEN_PARAMS,
     MICROSOFT_REFRESH_TOKEN_SCOPE,
@@ -2343,7 +2346,7 @@ async def saml_callback(request: Request):
     if "SAMLResponse" not in post_data:
         raise HTTPException(status_code=400, detail="Missing SAMLResponse in callback request.")
 
-    result: Final = await SAMLAuthHandler.handle_acs(request=request, cache=saml_sso_cache, post_data=post_data)
+    user, retained = await SAMLAuthHandler.handle_acs(request=request, cache=saml_sso_cache, post_data=post_data)
 
     await _raise_if_sso_exceeds_free_user_limit(premium_user, prisma_client)
 
@@ -2356,7 +2359,7 @@ async def saml_callback(request: Request):
     )
 
     return await SSOAuthenticationHandler.get_redirect_response_from_openid(
-        result=result,
+        result=user,
         request=request,
         received_response=None,
         generic_client_id=None,
@@ -2364,6 +2367,7 @@ async def saml_callback(request: Request):
         access_token_payload=None,
         jwt_handler=jwt_handler,
         return_to=cp_return_to,
+        sso_assertion=retained,
     )
 
 
@@ -2480,7 +2484,8 @@ async def _complete_cli_sso_callback_session(
         raise HTTPException(status_code=500, detail="Failed to retrieve user information from SSO")
     resolved_user_id: Final = _require_sso_user_id(user_info.user_id)
 
-    await retain_sso_identity_assertion_for_ema(user_id=resolved_user_id, assertion=sso_assertion)
+    retained_assertion: Final = await exchange_login_assertion_if_configured(sso_assertion)
+    await retain_sso_identity_assertion_for_ema(user_id=resolved_user_id, assertion=retained_assertion)
     await warn_if_id_jag_assertion_uncaptured(sso_assertion)
 
     teams: list[str] = []
@@ -3863,7 +3868,8 @@ class SSOAuthenticationHandler:
         )
 
         if isinstance(user_id, str) and user_id:
-            await retain_sso_identity_assertion_for_ema(user_id=user_id, assertion=sso_assertion)
+            retained_assertion: Final = await exchange_login_assertion_if_configured(sso_assertion)
+            await retain_sso_identity_assertion_for_ema(user_id=user_id, assertion=retained_assertion)
             await warn_if_id_jag_assertion_uncaptured(sso_assertion)
 
         disabled_non_admin_personal_key_creation: Final = get_disabled_non_admin_personal_key_creation()

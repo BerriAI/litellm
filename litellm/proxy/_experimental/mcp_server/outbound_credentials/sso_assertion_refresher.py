@@ -80,7 +80,9 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_s
     SSOIdentityAssertion,
     assertion_expired,
     assertion_from_sso_login,
+    carry_exchanged_refresh_token,
     fetch_sso_identity_assertion,
+    is_saml_assertion,
     persist_sso_identity_assertion,
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -293,6 +295,13 @@ class SSOAssertionRefresher:
     async def refresh(
         self, user_id: str, assertion: SSOIdentityAssertion
     ) -> Result[SSOIdentityAssertion, RefreshFailure]:
+        if is_saml_assertion(assertion):
+            verbose_proxy_logger.warning(
+                "ID-JAG: the stored SAML assertion for user_id=%s has reached its NotOnOrAfter. A SAML assertion "
+                "cannot be renewed, so the user has to sign in through SAML SSO again.",
+                user_id,
+            )
+            return Error(RefreshFailure.of_rejected("a SAML assertion cannot be renewed; sign in again"))
         if assertion.refresh_token is None:
             verbose_proxy_logger.warning(
                 "ID-JAG: the stored IdP identity assertion for user_id=%s has expired and no refresh token was "
@@ -358,10 +367,11 @@ class SSOAssertionRefresher:
                 user_id,
             )
             return Error(RefreshFailure.of_rejected("the IdP's refresh response carried no usable id_token"))
-        failure: Final = await self._store_renewal(user_id, previous, renewed)
+        carried: Final = carry_exchanged_refresh_token(previous, renewed)
+        failure: Final = await self._store_renewal(user_id, previous, carried)
         if failure is not None:
             return Error(failure)
-        return Ok(renewed)
+        return Ok(carried)
 
     async def _store_renewal(
         self, user_id: str, previous: SSOIdentityAssertion, renewed: SSOIdentityAssertion
@@ -436,9 +446,12 @@ class RefreshingSSOAssertionStore:
         self._skew = timedelta(seconds=expiry_skew_seconds)
         self._clock = clock
 
+    async def fetch_stored(self, user_id: str) -> SSOIdentityAssertion | None:
+        return await self._inner.fetch(user_id)
+
     async def fetch(self, user_id: str) -> SSOIdentityAssertion | None:
         assertion: Final = await self._inner.fetch(user_id)
-        if not self._expiring(assertion):
+        if assertion is None or is_saml_assertion(assertion) or not self._expiring(assertion):
             return assertion
         await self._coordinator().run(
             user_id,

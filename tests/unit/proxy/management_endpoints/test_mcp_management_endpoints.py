@@ -4530,7 +4530,6 @@ class TestIdJagRegistrationWarnsAboutTheSSOGap:
     @pytest.mark.parametrize(
         "provider_env, expected_fragment",
         [
-            ({"SAML_IDP_METADATA_URL": "https://idp.example.com/metadata"}, "saml"),
             ({}, "no SSO provider is configured"),
         ],
     )
@@ -4564,7 +4563,8 @@ class TestIdJagRegistrationWarnsAboutTheSSOGap:
         )
 
         self._clear_sso_env(monkeypatch)
-        monkeypatch.setenv("SAML_IDP_METADATA_URL", "https://idp.example.com/metadata")
+        for var in ("MICROSOFT_CLIENT_ID", "GOOGLE_CLIENT_ID", "GENERIC_CLIENT_ID", "SAML_IDP_METADATA_URL"):
+            monkeypatch.delenv(var, raising=False)
 
         mock_manager = MagicMock()
         mock_manager.update_server = AsyncMock()
@@ -4601,7 +4601,7 @@ class TestIdJagRegistrationWarnsAboutTheSSOGap:
 
         warnings = self._id_jag_warnings(caplog)
         assert len(warnings) == 1
-        assert "saml" in str(warnings[0])
+        assert "no SSO provider is configured" in str(warnings[0])
 
 
 class TestHealthCheckServers:

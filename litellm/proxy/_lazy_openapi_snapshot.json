@@ -34541,6 +34541,17 @@
               ],
               "title": "Id Jag Resource Token Endpoint"
             },
+            "id_jag_subject_source": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Subject Source"
+            },
             "redirect_uris": {
               "anyOf": [
                 {
@@ -37357,6 +37368,17 @@
                 }
               ],
               "title": "Id Jag Resource Token Endpoint"
+            },
+            "id_jag_subject_source": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Subject Source"
             },
             "redirect_uris": {
               "anyOf": [
@@ -40762,6 +40784,17 @@
                 }
               ],
               "title": "Id Jag Resource Token Endpoint"
+            },
+            "id_jag_subject_source": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Subject Source"
             },
             "redirect_uris": {
               "anyOf": [
@@ -44842,6 +44875,17 @@
                 }
               ],
               "title": "Id Jag Resource Token Endpoint"
+            },
+            "id_jag_subject_source": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id Jag Subject Source"
             },
             "redirect_uris": {
               "anyOf": [

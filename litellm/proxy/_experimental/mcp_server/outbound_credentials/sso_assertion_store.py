@@ -1,9 +1,9 @@
 """Store for the enterprise IdP identity assertion captured at SSO login (EMA).
 
-The ``oauth2_id_jag`` egress arm needs the user's IdP ``id_token`` as its RFC 8693
-``subject_token``. A front-door client holds an identity-only ``llm_session_`` bearer, not an
-IdP assertion, so the assertion captured at the one SSO login is the only usable subject
-source for it. This module owns both sides of that state: the SSO callback persists here
+The ``oauth2_id_jag`` egress arm needs the user's IdP identity assertion as its RFC 8693
+``subject_token``: the OIDC ``id_token``, or the signed SAML assertion when the login was SAML.
+A front-door client holds an identity-only ``llm_session_`` bearer, not an IdP assertion, so
+the assertion captured at the one SSO login is the only usable subject source for it. This module owns both sides of that state: the SSO callback persists here
 (write-through to the DB so a login on one pod is visible to every pod) and the resolver
 seam reads back by ``user_id``. Retention is gated on an ``oauth2_id_jag`` server actually
 being registered, so a gateway with no EMA upstream never stores bearer material.
@@ -17,9 +17,10 @@ TTL ``MCP_SSO_ASSERTION_CACHE_TTL_SECONDS``; invalidation also guards against st
 
 from __future__ import annotations
 
+import base64
 import json
 from collections.abc import Mapping, Sequence
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
@@ -44,6 +45,7 @@ GOOGLE_REFRESH_TOKEN_PARAMS: Final = MappingProxyType({"access_type": "offline",
 
 
 _ASSERTION_DECRYPT_LOG_KEY: Final = "sso_identity_assertion"
+SAML2_SUBJECT_TOKEN_TYPE: Final = "urn:ietf:params:oauth:token-type:saml2"
 _STR_ADAPTER: Final[TypeAdapter[str]] = TypeAdapter(str)
 _MAYBE_STR_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
 
@@ -77,8 +79,10 @@ def _mcp_server_table(prisma_client: PrismaClient) -> _MCPServerTable:
 
 
 class SSOIdentityAssertion(LiteLLMBaseModel):
-    """The IdP material an EMA exchange needs: ``id_token`` is the RFC 8693 subject token,
-    ``expires_at`` bounds its usefulness, and the refresh token renews it without re-login."""
+    """The IdP material an EMA exchange needs: ``id_token`` is the RFC 8693 subject token (the OIDC
+    id_token, or the base64 signed ``<saml:Assertion>`` when ``subject_token_type`` names SAML),
+    ``expires_at`` bounds its usefulness, and the refresh token renews it without re-login.
+    ``subject_token_type`` is ``None`` when the exchange should send the operator-configured type."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -86,6 +90,11 @@ class SSOIdentityAssertion(LiteLLMBaseModel):
     refresh_token: SecretStr | None = None
     issuer: str | None = None
     expires_at: datetime | None = None
+    subject_token_type: str | None = None
+    exchanged_refresh_token: SecretStr | None = None
+    exchanged_refresh_token_expires_at: datetime | None = None
+    exchanged_refresh_token_endpoint: str | None = None
+    exchanged_refresh_token_client_id: str | None = None
 
 
 class SSOAssertionCache:
@@ -138,6 +147,11 @@ class _StoredAssertionPayload(LiteLLMBaseModel):
     refresh_token: str | None = None
     issuer: str | None = None
     expires_at: datetime | None = None
+    subject_token_type: str | None = None
+    exchanged_refresh_token: str | None = None
+    exchanged_refresh_token_expires_at: datetime | None = None
+    exchanged_refresh_token_endpoint: str | None = None
+    exchanged_refresh_token_client_id: str | None = None
 
 
 def assertion_from_sso_login(id_token: object, refresh_token: object) -> SSOIdentityAssertion | None:
@@ -165,6 +179,85 @@ def assertion_from_sso_login(id_token: object, refresh_token: object) -> SSOIden
         issuer=claims.iss,
         expires_at=expires_at,
     )
+
+
+def assertion_from_saml_login(
+    assertion_xml: bytes, not_on_or_after: int | None, issuer: str | None
+) -> SSOIdentityAssertion:
+    """The carrier for a SAML login: the signed ``<saml:Assertion>`` element the IdP issued, base64
+    encoded the way RFC 8693 carries a ``saml2`` subject token, with its own validity window as
+    the expiry and no refresh token, since SAML has none and the user has to sign in again."""
+    return SSOIdentityAssertion(
+        id_token=SecretStr(base64.urlsafe_b64encode(assertion_xml).rstrip(b"=").decode("ascii")),
+        issuer=issuer,
+        expires_at=datetime.fromtimestamp(not_on_or_after, tz=timezone.utc) if not_on_or_after is not None else None,
+        subject_token_type=SAML2_SUBJECT_TOKEN_TYPE,
+    )
+
+
+def is_saml_assertion(assertion: SSOIdentityAssertion) -> bool:
+    return assertion.subject_token_type == SAML2_SUBJECT_TOKEN_TYPE
+
+
+def with_login_refresh_token(
+    assertion: SSOIdentityAssertion,
+    refresh_token: str,
+    expires_in: int | None,
+    now: datetime,
+    *,
+    endpoint: str | None = None,
+    client_id: str | None = None,
+) -> SSOIdentityAssertion:
+    """The same login, now also carrying the refresh token the ID-JAG client exchanged the assertion
+    for, with the lifetime the IdP gave that token. It is kept apart from ``refresh_token``, which an
+    OIDC login holds for the SSO client and which only that client can redeem. The assertion and its
+    own expiry stay as they were, so a server that presents the login assertion directly is unaffected."""
+    return assertion.model_copy(
+        update={
+            "exchanged_refresh_token": SecretStr(refresh_token),
+            "exchanged_refresh_token_expires_at": now + timedelta(seconds=expires_in)
+            if expires_in is not None
+            else None,
+            "exchanged_refresh_token_endpoint": endpoint,
+            "exchanged_refresh_token_client_id": client_id,
+        }
+    )
+
+
+def carry_exchanged_refresh_token(
+    previous: SSOIdentityAssertion, renewed: SSOIdentityAssertion
+) -> SSOIdentityAssertion:
+    """The renewed OIDC assertion still carrying the refresh token the ID-JAG client exchanged at login.
+    Renewal only replaces the id_token and the SSO refresh token, the exchanged one is unrelated to
+    them and stays valid for as long as the IdP said."""
+    return renewed.model_copy(
+        update={
+            "exchanged_refresh_token": previous.exchanged_refresh_token,
+            "exchanged_refresh_token_expires_at": previous.exchanged_refresh_token_expires_at,
+            "exchanged_refresh_token_endpoint": previous.exchanged_refresh_token_endpoint,
+            "exchanged_refresh_token_client_id": previous.exchanged_refresh_token_client_id,
+        }
+    )
+
+
+def exchanged_refresh_token_issued_for(assertion: SSOIdentityAssertion, endpoint: str, client_id: str) -> bool:
+    """Whether the exchanged refresh token was minted at this token endpoint for this client. A refresh
+    token is bound to the client that received it, so one minted for another server's IdP client must
+    never be posted to this server's endpoint."""
+    return (
+        assertion.exchanged_refresh_token_endpoint == endpoint
+        and assertion.exchanged_refresh_token_client_id == client_id
+    )
+
+
+def login_refresh_token_expired(assertion: SSOIdentityAssertion, now: datetime) -> bool:
+    """Whether the refresh token exchanged at login has passed the lifetime the IdP gave it. One
+    with no recorded lifetime is left for the IdP to judge, like an assertion with no ``exp``."""
+    expires_at: Final = assertion.exchanged_refresh_token_expires_at
+    if expires_at is None:
+        return False
+    normalized: Final = expires_at if expires_at.tzinfo is not None else expires_at.replace(tzinfo=timezone.utc)
+    return normalized <= now
 
 
 def assertion_expired(assertion: SSOIdentityAssertion, now: datetime) -> bool:
@@ -220,6 +313,27 @@ async def persist_sso_identity_assertion(
         **({"refresh_token": assertion.refresh_token.get_secret_value()} if assertion.refresh_token else {}),
         **({"issuer": assertion.issuer} if assertion.issuer else {}),
         **({"expires_at": assertion.expires_at.isoformat()} if assertion.expires_at else {}),
+        **({"subject_token_type": assertion.subject_token_type} if assertion.subject_token_type else {}),
+        **(
+            {"exchanged_refresh_token": assertion.exchanged_refresh_token.get_secret_value()}
+            if assertion.exchanged_refresh_token
+            else {}
+        ),
+        **(
+            {"exchanged_refresh_token_expires_at": assertion.exchanged_refresh_token_expires_at.isoformat()}
+            if assertion.exchanged_refresh_token_expires_at
+            else {}
+        ),
+        **(
+            {"exchanged_refresh_token_endpoint": assertion.exchanged_refresh_token_endpoint}
+            if assertion.exchanged_refresh_token_endpoint
+            else {}
+        ),
+        **(
+            {"exchanged_refresh_token_client_id": assertion.exchanged_refresh_token_client_id}
+            if assertion.exchanged_refresh_token_client_id
+            else {}
+        ),
     }
     encoded: Final = _STR_ADAPTER.validate_python(encrypt_value_helper(json.dumps(payload)))
     await _assertion_table(prisma_client).upsert(
@@ -258,6 +372,11 @@ async def _read_assertion_from_db(user_id: str) -> SSOIdentityAssertion | None:
         refresh_token=SecretStr(payload.refresh_token) if payload.refresh_token else None,
         issuer=payload.issuer,
         expires_at=payload.expires_at,
+        subject_token_type=payload.subject_token_type,
+        exchanged_refresh_token=SecretStr(payload.exchanged_refresh_token) if payload.exchanged_refresh_token else None,
+        exchanged_refresh_token_expires_at=payload.exchanged_refresh_token_expires_at,
+        exchanged_refresh_token_endpoint=payload.exchanged_refresh_token_endpoint,
+        exchanged_refresh_token_client_id=payload.exchanged_refresh_token_client_id,
     )
 
 
@@ -298,6 +417,12 @@ class SSOAssertionStore(Protocol):
 
     async def fetch(self, user_id: str) -> SSOIdentityAssertion | None: ...
 
+    async def fetch_stored(self, user_id: str) -> SSOIdentityAssertion | None:
+        """The row as stored, never renewed on the way out. For a server that presents the refresh
+        token exchanged at login, the SSO id_token's own lifetime is irrelevant and an SSO renewal
+        failing must not stand between that server and a still valid refresh token."""
+        ...
+
 
 class DbSSOAssertionStore:
     """The live store: the row the SSO callback wrote, read back by ``user_id``.
@@ -315,6 +440,9 @@ class DbSSOAssertionStore:
             return await fetch_sso_identity_assertion(user_id, cache=self._cache)
         except Exception as exc:  # noqa: BLE001  # any driver/storage failure is an outage, not an absence
             raise AssertionStoreUnavailable(str(exc)) from exc
+
+    async def fetch_stored(self, user_id: str) -> SSOIdentityAssertion | None:
+        return await self.fetch(user_id)
 
     async def fetch_uncached(self, user_id: str) -> SSOIdentityAssertion | None:
         try:

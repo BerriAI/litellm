@@ -8,9 +8,11 @@ rotation re-encrypts stored rows like the sibling per-user credential tables.
 """
 
 import asyncio
+import base64
 import json
 import os
 import time
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import jwt as pyjwt
@@ -18,15 +20,20 @@ import pytest
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
     _ASSERTION_CACHE,
+    SAML2_SUBJECT_TOKEN_TYPE,
     AssertionStoreUnavailable,
     DbSSOAssertionStore,
     SSOAssertionCache,
+    assertion_from_saml_login,
     assertion_from_sso_login,
+    carry_exchanged_refresh_token,
     ema_assertion_retention_enabled,
     fetch_sso_identity_assertion,
+    login_refresh_token_expired,
     persist_sso_identity_assertion,
     retain_sso_identity_assertion_for_ema,
     rotate_sso_identity_assertions_master_key,
+    with_login_refresh_token,
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
 from litellm.types.mcp import MCPAuth
@@ -109,6 +116,41 @@ def test_assertion_from_sso_login_happy_path():
     assert assertion.issuer == ISSUER
     assert assertion.expires_at is not None
     assert assertion.expires_at.timestamp() == pytest.approx(time.time() + 3600, abs=5)
+
+
+SAML_ASSERTION_XML = (
+    b'<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_a1" Version="2.0">'
+    b"<saml:Issuer>https://idp.example.com/metadata</saml:Issuer></saml:Assertion>"
+)
+
+
+def _saml_subject_bytes(encoded: str) -> bytes:
+    assert set(encoded) <= set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"), encoded[:40]
+    return base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+
+
+def test_assertion_from_saml_login_carries_the_base64url_assertion_as_a_saml2_subject_token():
+    not_on_or_after = int(time.time()) + 300
+    assertion = assertion_from_saml_login(SAML_ASSERTION_XML, not_on_or_after, "https://idp.example.com/metadata")
+    assert _saml_subject_bytes(assertion.id_token.get_secret_value()) == SAML_ASSERTION_XML
+    assert assertion.subject_token_type == SAML2_SUBJECT_TOKEN_TYPE
+    assert assertion.refresh_token is None
+    assert assertion.issuer == "https://idp.example.com/metadata"
+    assert assertion.expires_at is not None
+    assert assertion.expires_at.tzinfo is not None
+    assert assertion.expires_at.timestamp() == not_on_or_after
+
+
+def test_assertion_from_saml_login_without_not_on_or_after_has_no_expiry():
+    assertion = assertion_from_saml_login(SAML_ASSERTION_XML, None, None)
+    assert assertion.expires_at is None
+    assert assertion.subject_token_type == SAML2_SUBJECT_TOKEN_TYPE
+
+
+def test_oidc_login_assertion_leaves_the_subject_token_type_to_the_operator():
+    assertion = assertion_from_sso_login(_make_id_token(), None)
+    assert assertion is not None
+    assert assertion.subject_token_type is None
 
 
 def test_assertion_repr_never_leaks_token_material():
@@ -227,6 +269,37 @@ async def test_persist_and_fetch_round_trip_encrypted_at_rest():
 
 
 @pytest.mark.asyncio
+async def test_saml_assertion_round_trips_with_its_subject_token_type():
+    stored: dict[str, str] = {}
+    prisma = _make_prisma(stored)
+    assertion = assertion_from_saml_login(SAML_ASSERTION_XML, int(time.time()) + 300, "https://idp.example.com")
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        await persist_sso_identity_assertion("user-saml", assertion)
+        fetched = await fetch_sso_identity_assertion("user-saml")
+    assert fetched is not None
+    assert fetched.subject_token_type == SAML2_SUBJECT_TOKEN_TYPE
+    assert _saml_subject_bytes(fetched.id_token.get_secret_value()) == SAML_ASSERTION_XML
+    assert fetched.expires_at == assertion.expires_at
+    assert fetched.refresh_token is None
+    assert SAML_ASSERTION_XML.decode() not in stored["user-saml"]
+
+
+@pytest.mark.asyncio
+async def test_oidc_row_written_before_subject_token_types_reads_back_without_one():
+    stored: dict[str, str] = {}
+    prisma = _make_prisma(stored)
+    token = _make_id_token()
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        await persist_sso_identity_assertion("user-a", assertion_from_sso_login(token, None))
+        fetched = await fetch_sso_identity_assertion("user-a")
+    assert fetched is not None
+    assert fetched.subject_token_type is None
+    decrypted = decrypt_value_helper(stored["user-a"], "test", exception_type="debug")
+    assert decrypted is not None
+    assert "subject_token_type" not in json.loads(decrypted)
+
+
+@pytest.mark.asyncio
 async def test_persist_overwrites_previous_login():
     stored = {}
     prisma = _make_prisma(stored)
@@ -248,7 +321,9 @@ async def test_fetch_serves_second_read_from_cache_without_db_read():
     cache = SSOAssertionCache()
     token = _make_id_token()
     assertion = assertion_from_sso_login(token, "rt_1")
-    with patch("litellm.proxy.proxy_server.prisma_client", prisma):  # test-quality-ok: fake DB seam has no injection boundary
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client", prisma
+    ):  # test-quality-ok: fake DB seam has no injection boundary
         await persist_sso_identity_assertion("user-a", assertion, cache=cache)
         first = await fetch_sso_identity_assertion("user-a", cache=cache)
         second = await fetch_sso_identity_assertion("user-a", cache=cache)
@@ -266,7 +341,9 @@ async def test_persist_busts_cache_so_relogin_is_visible_immediately():
     cache = SSOAssertionCache()
     first_token = _make_id_token(exp_offset=100)
     second_token = _make_id_token(exp_offset=7200)
-    with patch("litellm.proxy.proxy_server.prisma_client", prisma):  # test-quality-ok: fake DB seam has no injection boundary
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client", prisma
+    ):  # test-quality-ok: fake DB seam has no injection boundary
         await persist_sso_identity_assertion("user-a", assertion_from_sso_login(first_token, None), cache=cache)
         first = await fetch_sso_identity_assertion("user-a", cache=cache)
         await persist_sso_identity_assertion("user-a", assertion_from_sso_login(second_token, "rt_new"), cache=cache)
@@ -295,7 +372,9 @@ async def test_fetch_racing_a_relogin_does_not_cache_the_previous_assertion():
         return row
 
     prisma.db.litellm_ssoidentityassertion.find_unique = _paused_find_unique
-    with patch("litellm.proxy.proxy_server.prisma_client", prisma):  # test-quality-ok: fake DB seam has no injection boundary
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client", prisma
+    ):  # test-quality-ok: fake DB seam has no injection boundary
         await persist_sso_identity_assertion("user-a", assertion_from_sso_login(first_token, None), cache=cache)
         racing_fetch = asyncio.create_task(fetch_sso_identity_assertion("user-a", cache=cache))
         await db_read_started.wait()
@@ -324,7 +403,9 @@ async def test_fetch_missing_row_returns_none():
 async def test_fetch_does_not_cache_a_missing_row():
     prisma = _make_prisma({})
     cache = SSOAssertionCache()
-    with patch("litellm.proxy.proxy_server.prisma_client", prisma):  # test-quality-ok: fake DB seam has no injection boundary
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client", prisma
+    ):  # test-quality-ok: fake DB seam has no injection boundary
         first = await fetch_sso_identity_assertion("nobody", cache=cache)
         second = await fetch_sso_identity_assertion("nobody", cache=cache)
     assert first is None
@@ -353,7 +434,9 @@ async def test_cached_assertion_expires_after_ttl():
     cache = SSOAssertionCache(ttl_seconds=1)
     first_token = _make_id_token(exp_offset=100)
     second_token = _make_id_token(exp_offset=7200)
-    with patch("litellm.proxy.proxy_server.prisma_client", prisma):  # test-quality-ok: fake DB seam has no injection boundary
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client", prisma
+    ):  # test-quality-ok: fake DB seam has no injection boundary
         await persist_sso_identity_assertion("user-a", assertion_from_sso_login(first_token, None), cache=cache)
         first = await fetch_sso_identity_assertion("user-a", cache=cache)
         await persist_sso_identity_assertion(
@@ -477,7 +560,9 @@ async def test_db_store_uses_injected_cache():
     prisma = _make_prisma(stored)
     cache = SSOAssertionCache()
     token = _make_id_token()
-    with patch("litellm.proxy.proxy_server.prisma_client", prisma):  # test-quality-ok: fake DB seam has no injection boundary
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client", prisma
+    ):  # test-quality-ok: fake DB seam has no injection boundary
         await persist_sso_identity_assertion("alice", assertion_from_sso_login(token, None), cache=cache)
         store = DbSSOAssertionStore(cache=cache)
         first = await store.fetch("alice")
@@ -496,3 +581,58 @@ async def test_db_store_returns_none_for_a_user_with_no_stored_assertion():
     with patch.dict(os.environ, {"LITELLM_SALT_KEY": SALT_KEY}):
         with patch("litellm.proxy.proxy_server.prisma_client", _make_prisma({})):
             assert await DbSSOAssertionStore().fetch("nobody") is None
+
+
+@pytest.mark.asyncio
+async def test_login_refresh_token_round_trips_beside_the_saml_assertion():
+    """A SAML login exchanged for a refresh token keeps the assertion, its type and its expiry, and adds
+    the refresh token with the lifetime the IdP gave it, all encrypted at rest."""
+    stored: dict[str, str] = {}
+    prisma = _make_prisma(stored)
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    saml = assertion_from_saml_login(SAML_ASSERTION_XML, int(time.time()) + 300, "https://idp.example.com")
+    assertion = with_login_refresh_token(
+        saml, "rt-from-login", 3600, now, endpoint="https://idp.example.com/token", client_id="agent"
+    )
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        await persist_sso_identity_assertion("user-rt", assertion)
+        fetched = await fetch_sso_identity_assertion("user-rt")
+    assert fetched is not None
+    assert fetched.exchanged_refresh_token is not None
+    assert fetched.exchanged_refresh_token.get_secret_value() == "rt-from-login"
+    assert fetched.exchanged_refresh_token_expires_at == now + timedelta(seconds=3600)
+    assert fetched.exchanged_refresh_token_endpoint == "https://idp.example.com/token"
+    assert fetched.exchanged_refresh_token_client_id == "agent"
+    assert fetched.refresh_token is None
+    assert fetched.id_token == saml.id_token
+    assert fetched.expires_at == saml.expires_at
+    assert fetched.subject_token_type == SAML2_SUBJECT_TOKEN_TYPE
+    assert "rt-from-login" not in stored["user-rt"]
+    assert not login_refresh_token_expired(fetched, now)
+    assert login_refresh_token_expired(fetched, now + timedelta(seconds=3600))
+
+
+def test_renewal_carries_the_exchanged_refresh_token_forward():
+    """An OIDC renewal rebuilds the row from the new id_token. The refresh token the ID-JAG client
+    exchanged at login is unrelated to that renewal and must survive it."""
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    previous = with_login_refresh_token(
+        assertion_from_sso_login(_make_id_token(), "sso-rt"),
+        "rt-from-login",
+        3600,
+        now,
+        endpoint="https://idp.example.com/token",
+        client_id="agent",
+    )
+    renewed = assertion_from_sso_login(_make_id_token(7200), "sso-rt-2")
+    assert previous is not None and renewed is not None
+
+    carried = carry_exchanged_refresh_token(previous, renewed)
+
+    assert carried.id_token == renewed.id_token
+    assert carried.refresh_token is not None and carried.refresh_token.get_secret_value() == "sso-rt-2"
+    assert carried.exchanged_refresh_token is not None
+    assert carried.exchanged_refresh_token.get_secret_value() == "rt-from-login"
+    assert carried.exchanged_refresh_token_expires_at == now + timedelta(seconds=3600)
+    assert carried.exchanged_refresh_token_endpoint == "https://idp.example.com/token"
+    assert carried.exchanged_refresh_token_client_id == "agent"

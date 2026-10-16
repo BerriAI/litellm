@@ -1641,7 +1641,8 @@ class TestMCPServerManager:
         assert server.oauth2_flow is None
 
     @pytest.mark.asyncio
-    async def test_load_servers_from_config_warns_for_id_jag_with_saml_sso(self, monkeypatch, caplog):
+    async def test_load_servers_from_config_is_silent_for_id_jag_with_saml_sso(self, monkeypatch, caplog):
+        """A SAML login retains the signed assertion as the saml2 subject token, so SAML is not a gap."""
         self._clear_sso_env(monkeypatch)
         monkeypatch.setenv("SAML_IDP_METADATA_URL", "https://idp.example.com/metadata")
         manager = MCPServerManager()
@@ -1652,11 +1653,7 @@ class TestMCPServerManager:
         ):
             await manager.load_servers_from_config(self._id_jag_config())
 
-        warnings = [message for message in caplog.messages if "oauth2_id_jag" in message]
-        assert len(warnings) == 1
-        assert "idjag_server" in warnings[0]
-        assert "saml" in warnings[0]
-        assert "MICROSOFT_CLIENT_ID" in warnings[0]
+        assert [message for message in caplog.messages if "oauth2_id_jag" in message] == []
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("client_id_env", ["GOOGLE_CLIENT_ID", "MICROSOFT_CLIENT_ID", "GENERIC_CLIENT_ID"])
