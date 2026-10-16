@@ -19,7 +19,7 @@ from litellm.llms.base_llm.vector_store.transformation import (
     BaseDirectVectorStoreConfig,
     VectorStoreEmbeddingExecutor,
 )
-from litellm.llms.valkey.common_utils import build_valkey_url, pack_vector
+from litellm.llms.valkey.common_utils import VALKEY_LIB_NAME, build_valkey_url, pack_vector
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import EmbeddingResponse
 from litellm.types.vector_stores import (
@@ -245,16 +245,17 @@ class ValkeyVectorStoreConfig(BaseDirectVectorStoreConfig):
             return self._to_response(raw, query_text, params.text_field)
 
         connect_timeout, op_timeout = self._socket_timeouts(timeout)
-        client: Final = _import_sync_redis().from_url(
+        client: Final = _import_sync_redis().from_url(  # pyright: ignore[reportCallIssue, reportUnknownVariableType]  # types-redis 4.6 stubs shadow redis 5.3.1 and omit from_url(lib_name=...); redis-py accepts it at runtime, but the overload mismatch leaves the return type unknown
             params.connection_url(),
             socket_connect_timeout=connect_timeout,
             socket_timeout=op_timeout,
+            lib_name=VALKEY_LIB_NAME,
         )
         try:
-            raw_result: Final = client.ft(vector_store_id).search(knn, query_params=vec_params)
-            return self._to_response(raw_result, query_text, params.text_field)
+            raw_result: Final = client.ft(vector_store_id).search(knn, query_params=vec_params)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # client's type is unknown (see from_url above), so .ft/.search and their result inherit that
+            return self._to_response(raw_result, query_text, params.text_field)  # pyright: ignore[reportUnknownArgumentType]  # raw_result flows from the from_url client whose return type the types-redis 4.6 stubs leave unknown; the shape is validated inside _to_response
         finally:
-            client.close()
+            client.close()  # pyright: ignore[reportUnknownMemberType]  # client's type is unknown (see from_url above)
 
     async def aexecute_search_vector_store_request(
         self,
@@ -295,18 +296,19 @@ class ValkeyVectorStoreConfig(BaseDirectVectorStoreConfig):
             return self._to_response(raw, query_text, params.text_field)
 
         connect_timeout, op_timeout = self._socket_timeouts(timeout)
-        client: Final = _import_async_redis().from_url(
+        client: Final = _import_async_redis().from_url(  # pyright: ignore[reportCallIssue, reportUnknownVariableType]  # types-redis 4.6 stubs shadow redis 5.3.1 and omit from_url(lib_name=...); redis-py accepts it at runtime, but the overload mismatch leaves the return type unknown
             params.connection_url(),
             socket_connect_timeout=connect_timeout,
             socket_timeout=op_timeout,
+            lib_name=VALKEY_LIB_NAME,
         )
         try:
-            raw_result: Final = await client.ft(vector_store_id).search(  # pyright: ignore[reportGeneralTypeIssues]  # types-redis 4.6 stubs shadow redis 5.3.1 and type the async client's ft() as the sync Search, so search() returns a non-awaitable Result; it is a coroutine at runtime
+            raw_result: Final = await client.ft(vector_store_id).search(  # pyright: ignore[reportGeneralTypeIssues, reportUnknownMemberType, reportUnknownVariableType]  # types-redis 4.6 stubs shadow redis 5.3.1 and type the async client's ft() as the sync Search, so search() returns a non-awaitable Result; it is a coroutine at runtime. client's type is unknown (see from_url above), so .ft/.search and their result inherit that
                 knn, query_params=vec_params
             )
-            return self._to_response(raw_result, query_text, params.text_field)
+            return self._to_response(raw_result, query_text, params.text_field)  # pyright: ignore[reportUnknownArgumentType]  # raw_result flows from the from_url client whose return type the types-redis 4.6 stubs leave unknown; the shape is validated inside _to_response
         finally:
-            await client.aclose()
+            await client.aclose()  # pyright: ignore[reportUnknownMemberType]  # client's type is unknown (see from_url above)
 
     def transform_create_vector_store_request(
         self,

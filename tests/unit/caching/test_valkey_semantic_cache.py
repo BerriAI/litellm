@@ -534,3 +534,12 @@ def test_importing_caching_does_not_require_redis():
     )
     assert result.returncode == 0, result.stderr
     assert "ok" in result.stdout
+
+
+def test_self_built_clients_identify_as_litellm_via_lib_name():
+    # from_url builds a pool without connecting, so the kwargs redis-py will send
+    # on CLIENT SETINFO LIB-NAME can be read straight off the real clients.
+    cache = ValkeySemanticCache(similarity_threshold=0.8, redis_url="redis://valkey-host:6379")
+
+    assert cache.sync_client.connection_pool.connection_kwargs["lib_name"] == "redis-py(litellm)"
+    assert cache.async_client.connection_pool.connection_kwargs["lib_name"] == "redis-py(litellm)"
