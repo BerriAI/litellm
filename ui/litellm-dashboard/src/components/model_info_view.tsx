@@ -341,6 +341,18 @@ export default function ModelInfoView({
           updatedLitellmParams.cache_creation_input_token_cost = null;
         }
       }
+      if (isFieldTouched("cache_write_cost_1h")) {
+        if (
+          values.cache_write_cost_1h !== undefined &&
+          values.cache_write_cost_1h !== null &&
+          values.cache_write_cost_1h !== ""
+        ) {
+          updatedLitellmParams.cache_creation_input_token_cost_above_1hr =
+            Number(values.cache_write_cost_1h) / 1_000_000;
+        } else {
+          updatedLitellmParams.cache_creation_input_token_cost_above_1hr = null;
+        }
+      }
 
       const storedCredentialName: string | null = localModelData?.litellm_params?.litellm_credential_name ?? null;
       const selectedCredentialName: string | null = values.litellm_credential_name ?? null;

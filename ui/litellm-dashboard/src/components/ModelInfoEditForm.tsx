@@ -63,13 +63,19 @@ const PTU_EDIT_FIELDS: PtuEditField[] = [
   { name: PTU_END_FIELD, label: "PTU Effective To (UTC)", input: "datetime" },
 ];
 
-export type TouchedPricingField = "input_cost" | "output_cost" | "cache_read_cost" | "cache_write_cost";
+export type TouchedPricingField =
+  | "input_cost"
+  | "output_cost"
+  | "cache_read_cost"
+  | "cache_write_cost"
+  | "cache_write_cost_1h";
 
 const PRICING_FIELDS: readonly TouchedPricingField[] = [
   "input_cost",
   "output_cost",
   "cache_read_cost",
   "cache_write_cost",
+  "cache_write_cost_1h",
 ] as const;
 
 const COST_SOURCES: Record<TouchedPricingField, { param: string; info: string }> = {
@@ -77,6 +83,10 @@ const COST_SOURCES: Record<TouchedPricingField, { param: string; info: string }>
   output_cost: { param: "output_cost_per_token", info: "output_cost_per_token" },
   cache_read_cost: { param: "cache_read_input_token_cost", info: "cache_read_input_token_cost" },
   cache_write_cost: { param: "cache_creation_input_token_cost", info: "cache_creation_input_token_cost" },
+  cache_write_cost_1h: {
+    param: "cache_creation_input_token_cost_above_1hr",
+    info: "cache_creation_input_token_cost_above_1hr",
+  },
 };
 
 export interface ModelEditFormValues {
@@ -94,6 +104,7 @@ export interface ModelEditFormValues {
   output_cost?: string | number | null;
   cache_read_cost?: string | number | null;
   cache_write_cost?: string | number | null;
+  cache_write_cost_1h?: string | number | null;
   ptu_count?: string | number | null;
   cost_per_ptu_per_hour?: string | number | null;
   ptu_effective_from?: Dayjs | null;
@@ -131,6 +142,7 @@ const modelEditShape = {
   output_cost: scalar,
   cache_read_cost: scalar,
   cache_write_cost: scalar,
+  cache_write_cost_1h: scalar,
   ptu_count: scalar,
   cost_per_ptu_per_hour: scalar,
   ptu_effective_from: z.custom<Dayjs | null>().nullish(),
@@ -242,6 +254,10 @@ export const toModelEditFormValues = (localModelData: any, isWildcardModel: bool
   cache_write_cost: perMillionTokens(
     localModelData.litellm_params?.cache_creation_input_token_cost,
     localModelData.model_info?.cache_creation_input_token_cost,
+  ),
+  cache_write_cost_1h: perMillionTokens(
+    localModelData.litellm_params?.cache_creation_input_token_cost_above_1hr,
+    localModelData.model_info?.cache_creation_input_token_cost_above_1hr,
   ),
   cache_control: localModelData.litellm_params?.cache_control_injection_points ? true : false,
   cache_control_injection_points: localModelData.litellm_params?.cache_control_injection_points || [],
@@ -526,6 +542,12 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
               "Cache Write Cost (per 1M tokens)",
               "Defaults to Input Cost if blank",
               "If left blank on save, defaults to Input Cost (backend falls back to input_cost_per_token).",
+            )}
+            {pricingField(
+              "cache_write_cost_1h",
+              "Cache Write Cost (1 hour, per 1M tokens)",
+              "Defaults to Cache Write Cost if blank",
+              "Rate for prompt cache writes with a 1 hour TTL. If left blank on save, defaults to Cache Write Cost.",
             )}
 
             {textField("api_base", "API Base", "Enter API base", localModelData.litellm_params?.api_base)}

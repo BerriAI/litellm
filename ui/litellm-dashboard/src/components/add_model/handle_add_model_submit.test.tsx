@@ -35,6 +35,38 @@ describe("prepareModelAddRequest", () => {
     expect(deployment.modelInfoObj.team_id).toBe("team-123");
   });
 
+  it("converts both cache write tiers from per-million to per-token", async () => {
+    const formValues = {
+      model_mappings: [{ public_name: "claude-sonnet", litellm_model: "anthropic/claude-sonnet-4-6" }],
+      model_name: "anthropic/claude-sonnet-4-6",
+      custom_pricing: true,
+      input_cost_per_token: "3",
+      output_cost_per_token: "15",
+      cache_creation_input_token_cost: "3.75",
+      cache_creation_input_token_cost_above_1hr: "6",
+    };
+
+    const [deployment] = (await prepareModelAddRequest({ ...formValues }, "token", null))!;
+
+    expect(deployment.litellmParamsObj.cache_creation_input_token_cost).toBeCloseTo(0.00000375, 12);
+    expect(deployment.litellmParamsObj.cache_creation_input_token_cost_above_1hr).toBeCloseTo(0.000006, 12);
+  });
+
+  it("leaves the 1 hour cache write tier unset when its field is blank", async () => {
+    const formValues = {
+      model_mappings: [{ public_name: "claude-sonnet", litellm_model: "anthropic/claude-sonnet-4-6" }],
+      model_name: "anthropic/claude-sonnet-4-6",
+      custom_pricing: true,
+      cache_creation_input_token_cost: "3.75",
+      cache_creation_input_token_cost_above_1hr: "",
+    };
+
+    const [deployment] = (await prepareModelAddRequest({ ...formValues }, "token", null))!;
+
+    expect(deployment.litellmParamsObj).not.toHaveProperty("cache_creation_input_token_cost_above_1hr");
+    expect(deployment.litellmParamsObj.cache_creation_input_token_cost).toBeCloseTo(0.00000375, 12);
+  });
+
   it("uses a lowercase fallback for unrecognized custom providers", async () => {
     const fallbackValues = {
       model_mappings: [

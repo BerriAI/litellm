@@ -81,6 +81,16 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
       } else {
         delete formValues.cache_creation_input_token_cost;
       }
+      if (
+        formValues.cache_creation_input_token_cost_above_1hr !== undefined &&
+        formValues.cache_creation_input_token_cost_above_1hr !== null &&
+        formValues.cache_creation_input_token_cost_above_1hr !== ""
+      ) {
+        formValues.cache_creation_input_token_cost_above_1hr =
+          Number(formValues.cache_creation_input_token_cost_above_1hr) / 1000000;
+      } else {
+        delete formValues.cache_creation_input_token_cost_above_1hr;
+      }
       // Keep input_cost_per_second as is, no conversion needed
 
       // Iterate through the key-value pairs in formValues
@@ -155,7 +165,8 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
           key === "output_cost_per_token" ||
           key === "input_cost_per_second" ||
           key === "cache_read_input_token_cost" ||
-          key === "cache_creation_input_token_cost"
+          key === "cache_creation_input_token_cost" ||
+          key === "cache_creation_input_token_cost_above_1hr"
         ) {
           if (value !== undefined && value !== null && value !== "") {
             litellmParamsObj[key] = Number(value);
