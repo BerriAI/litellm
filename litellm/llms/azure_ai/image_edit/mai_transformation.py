@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from httpx._types import RequestFiles
@@ -13,7 +13,6 @@ from litellm.llms.azure_ai.image_generation.mai_transformation import (
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.llms.openai.image_edit.transformation import OpenAIImageEditConfig
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.llms.openai import FileTypes
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ImageResponse
@@ -26,65 +25,8 @@ if TYPE_CHECKING:
 class AzureFoundryMAIImageEditConfig(OpenAIImageEditConfig):
     """Azure AI Foundry MAI image editing (e.g. MAI-Image-2.5)."""
 
-    DEFAULT_SIZE = "1024x1024"
-
     def get_supported_openai_params(self, model: str) -> list:
-        return ["prompt", "image", "model", "n", "size"]
-
-    def map_openai_params(
-        self,
-        image_edit_optional_params: ImageEditOptionalRequestParams,
-        model: str,
-        drop_params: bool,
-    ) -> dict:
-        optional_params: Final[dict[str, Any]] = {}
-        supported_params: Final = self.get_supported_openai_params(model)
-
-        for key, value in dict(image_edit_optional_params).items():
-            if value is None or key in optional_params:
-                continue
-
-            if key in supported_params:
-                if key == "size" and value:
-                    size_param = cast(str, value)
-                    self._validate_size_param(size_param)
-                    optional_params[key] = size_param
-                else:
-                    optional_params[key] = value
-            elif not drop_params:
-                raise ValueError(
-                    f"Parameter {key} is not supported for model {model}. "
-                    f"Supported parameters are {supported_params}. "
-                    f"Set drop_params=True to drop unsupported parameters."
-                )
-
-        if "size" not in optional_params:
-            optional_params["size"] = self.DEFAULT_SIZE
-
-        return optional_params
-
-    def _validate_size_param(self, size: str) -> None:
-        known_sizes: Final = {
-            "1024x1024",
-            "1792x1024",
-            "1024x1792",
-            "512x512",
-            "256x256",
-        }
-
-        if size in known_sizes:
-            return
-
-        if "x" in size:
-            try:
-                tuple(map(int, size.lower().split("x", 1)))
-                return
-            except ValueError:
-                raise ValueError(f"Invalid size format: '{size}'. Expected format 'WIDTHxHEIGHT' (e.g., '1024x1024').")
-
-        raise ValueError(
-            f"Unsupported size value: '{size}'. Use a known size (e.g., '1024x1024') or a custom 'WIDTHxHEIGHT' string."
-        )
+        return ["prompt", "image", "model", "n"]
 
     def validate_environment(
         self,

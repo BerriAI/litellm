@@ -12,8 +12,6 @@ export interface HealthReadinessDetailsResponse {
   success_callbacks?: string[];
   use_aiohttp_transport?: boolean;
   log_level?: string;
-  is_detailed_debug?: boolean;
-  show_no_redis_warning?: boolean;
 }
 
 const fetchHealthReadinessDetails = async (accessToken: string): Promise<HealthReadinessDetailsResponse> => {

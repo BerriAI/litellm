@@ -1,9 +1,56 @@
-from typing import Any, Final
+import base64
+import io
+from typing import Final, overload
 
 import httpx
+from openai.types.chat import ChatCompletionChunk
+from pydantic import BaseModel, TypeAdapter
 
 from litellm import verbose_logger
+from litellm._uuid import uuid
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.types.utils import ModelResponse, ModelResponseStream
+
+_PROVIDER_FIELDS: Final = TypeAdapter(dict[str, object])
+
+
+class OllamaResponseIdNormalizer:
+    def __init__(self) -> None:
+        self.response_id: str | None = None
+        self.original_response_id: str | None = None
+
+    def observe(self, response: object) -> None:
+        if self.response_id is not None:
+            return
+        if not isinstance(response, (ModelResponse, ModelResponseStream, ChatCompletionChunk)):
+            return
+        if response.system_fingerprint != "fp_ollama":
+            return
+        fields: Final = _PROVIDER_FIELDS.validate_python(
+            BaseModel.model_dump(response).get("provider_specific_fields") or {}
+        )
+        original_id: Final = fields.get("original_response_id")
+        self.original_response_id = original_id if isinstance(original_id, str) else response.id
+        self.response_id = response.id if isinstance(original_id, str) else f"chatcmpl-{uuid.uuid4()}"
+
+    @overload
+    def apply(self, response: ModelResponse) -> ModelResponse: ...
+
+    @overload
+    def apply(self, response: ModelResponseStream) -> ModelResponseStream: ...
+
+    def apply(self, response: ModelResponse | ModelResponseStream) -> ModelResponse | ModelResponseStream:
+        if self.response_id is None:
+            return response
+        fields: Final = _PROVIDER_FIELDS.validate_python(
+            BaseModel.model_dump(response).get("provider_specific_fields") or {}
+        )
+        return response.model_copy(
+            update={
+                "id": self.response_id,
+                "provider_specific_fields": {**fields, "original_response_id": self.original_response_id},
+            }
+        )
 
 
 class OllamaError(BaseLLMException):
@@ -11,36 +58,36 @@ class OllamaError(BaseLLMException):
         super().__init__(status_code=status_code, message=message, headers=headers)
 
 
-def _convert_image(image):
-    """
-    Convert image to base64 encoded image if not already in base64 format
+_JPEG_AND_PNG_SIGNATURES: Final = (b"\xff\xd8\xff", b"\x89PNG\r\n\x1a\n")
 
-    If image is already in base64 format AND is a jpeg/png, return it
 
-    If image is not JPEG/PNG, convert it to JPEG base64 format
-    """
-    import base64
-    import io
-
+def _reencode_as_jpeg(raw_image: bytes, original: str) -> str:
     try:
         from PIL import Image
     except Exception:
         raise Exception("ollama image conversion failed please run `pip install Pillow`")
 
-    orig: Final = image
-    if image.startswith("data:"):
-        image = image.split(",")[-1]
     try:
-        image_data: Final = Image.open(io.BytesIO(base64.b64decode(image)))
-        if image_data.format in ["JPEG", "PNG"]:
-            return image
+        picture: Final = Image.open(io.BytesIO(raw_image))
     except Exception:
-        return orig
+        return original
     jpeg_image: Final = io.BytesIO()
-    image_data.convert("RGB").save(jpeg_image, "JPEG")
-    jpeg_image.seek(0)
+    picture.convert("RGB").save(jpeg_image, "JPEG")
     return base64.b64encode(jpeg_image.getvalue()).decode("utf-8")
 
+
+def convert_image(image: str) -> str:
+    payload: Final = image.split(",")[-1] if image.startswith("data:") else image
+    try:
+        raw_image: Final = base64.b64decode(payload)
+    except ValueError:
+        return image
+    if raw_image.startswith(_JPEG_AND_PNG_SIGNATURES):
+        return payload
+    return _reencode_as_jpeg(raw_image, original=image)
+
+
+_convert_image = convert_image
 
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 
@@ -172,7 +219,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
         model: str,
         api_base: str | None = None,
         api_key: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         from litellm import module_level_client
 
         model = self._strip_ollama_model_prefix(model)
@@ -221,7 +268,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
         model: str,
         api_base: str | None = None,
         api_key: str | None = None,
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, object] | None:
         if self._is_static_ollama_model(model):
             return None
         return self.get_runtime_model_info(model=model, api_base=api_base, api_key=api_key)

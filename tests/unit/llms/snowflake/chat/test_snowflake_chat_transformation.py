@@ -1,0 +1,993 @@
+"""
+Unit tests for Snowflake chat transformation
+Tests tool calling request/response transformations and chat completions
+"""
+
+import asyncio
+import os
+import copy
+import uuid
+import json
+from typing import Any, Dict, List
+
+from unittest.mock import AsyncMock, patch, Mock, MagicMock
+
+import httpx
+import pytest
+
+import litellm
+from litellm import completion, acompletion
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.snowflake.chat.transformation import SnowflakeConfig, SnowflakeStreamingHandler
+from litellm.types.utils import ModelResponse
+
+
+class TestSnowflakeToolTransformation:
+    """Test suite for Snowflake tool calling transformations"""
+
+    def test_transform_request_with_tools(self):
+        """
+        Test that OpenAI tool format is passed through as-is to the native endpoint.
+
+        The native /chat/completions endpoint accepts standard OpenAI tool format
+        directly — no Snowflake-specific tool_spec transformation needed.
+        """
+        config = SnowflakeConfig()
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the current weather in a given location",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "type": "string",
+                                "description": "The city and state, e.g. San Francisco, CA",
+                            },
+                            "unit": {
+                                "type": "string",
+                                "enum": ["celsius", "fahrenheit"],
+                            },
+                        },
+                        "required": ["location"],
+                    },
+                },
+            }
+        ]
+
+        optional_params = {"tools": tools}
+
+        transformed_request = config.transform_request(
+            model="llama3.1-70b",
+            messages=[{"role": "user", "content": "What's the weather?"}],
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+        assert "tools" in transformed_request
+        assert len(transformed_request["tools"]) == 1
+        assert transformed_request["tools"] == tools
+        assert "tool_spec" not in json.dumps(transformed_request)
+
+    def test_transform_request_with_tool_choice(self):
+        """
+        Test that OpenAI tool_choice format is passed through as-is to the native endpoint.
+        """
+        config = SnowflakeConfig()
+
+        tool_choice = {"type": "function", "function": {"name": "get_weather"}}
+
+        optional_params = {"tool_choice": tool_choice}
+
+        transformed_request = config.transform_request(
+            model="llama3.1-70b",
+            messages=[{"role": "user", "content": "What's the weather?"}],
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+        assert "tool_choice" in transformed_request
+        assert transformed_request["tool_choice"] == tool_choice
+
+    def test_transform_request_with_string_tool_choice(self):
+        """
+        Test that string tool_choice values are passed through as-is to the native endpoint.
+
+        The native /chat/completions endpoint accepts OpenAI-style string
+        tool_choice values directly ("auto", "required", "none").
+        """
+        config = SnowflakeConfig()
+
+        for value in ["auto", "required", "none"]:
+            optional_params = {"tool_choice": value}
+
+            transformed_request = config.transform_request(
+                model="llama3.1-70b",
+                messages=[{"role": "user", "content": "Test"}],
+                optional_params=optional_params,
+                litellm_params={},
+                headers={},
+            )
+
+            assert transformed_request["tool_choice"] == value, (
+                f"tool_choice='{value}' should pass through unchanged, got {transformed_request['tool_choice']}"
+            )
+
+    def test_transform_response_with_tool_calls(self):
+        """
+        Test that standard OpenAI tool_calls response format is parsed correctly.
+
+        The native /chat/completions endpoint returns standard OpenAI format.
+        """
+        config = SnowflakeConfig()
+
+        mock_response = {
+            "id": "chatcmpl-123",
+            "object": "chat.completion",
+            "model": "llama3.1-70b",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_abc123",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_weather",
+                                    "arguments": json.dumps({"location": "Paris, France", "unit": "celsius"}),
+                                },
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        }
+
+        response = httpx.Response(
+            status_code=200,
+            json=mock_response,
+            headers={"Content-Type": "application/json"},
+        )
+
+        model_response = ModelResponse(choices=[litellm.Choices(index=0, message=litellm.Message())])
+
+        logging_obj = MagicMock()
+
+        result = config.transform_response(
+            model="llama3.1-70b",
+            raw_response=response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding={},
+        )
+
+        assert isinstance(result, ModelResponse)
+        assert len(result.choices) == 1
+
+        message = result.choices[0].message
+        assert message.tool_calls is not None
+        assert len(message.tool_calls) == 1
+
+        tool_call = message.tool_calls[0]
+        assert tool_call.id == "call_abc123"
+        assert tool_call.type == "function"
+        assert tool_call.function.name == "get_weather"
+
+        arguments = json.loads(tool_call.function.arguments)
+        assert arguments["location"] == "Paris, France"
+        assert arguments["unit"] == "celsius"
+
+    def test_transform_response_with_mixed_content(self):
+        """
+        Test that responses with both text content and tool calls are parsed correctly.
+        """
+        config = SnowflakeConfig()
+
+        mock_response = {
+            "id": "chatcmpl-456",
+            "object": "chat.completion",
+            "model": "llama3.1-70b",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "Let me check the weather for you.",
+                        "tool_calls": [
+                            {
+                                "id": "call_xyz789",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_weather",
+                                    "arguments": json.dumps({"location": "Tokyo, Japan"}),
+                                },
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+            "usage": {"prompt_tokens": 15, "completion_tokens": 25, "total_tokens": 40},
+        }
+
+        response = httpx.Response(
+            status_code=200,
+            json=mock_response,
+            headers={"Content-Type": "application/json"},
+        )
+
+        model_response = ModelResponse(choices=[litellm.Choices(index=0, message=litellm.Message())])
+
+        logging_obj = MagicMock()
+
+        result = config.transform_response(
+            model="llama3.1-70b",
+            raw_response=response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding={},
+        )
+
+        message = result.choices[0].message
+        assert message.content == "Let me check the weather for you."
+        assert len(message.tool_calls) == 1
+        assert message.tool_calls[0].function.name == "get_weather"
+
+    def test_transform_response_without_tool_calls(self):
+        """
+        Test that regular text responses (without tools) work correctly.
+        """
+        config = SnowflakeConfig()
+
+        # Mock Snowflake response without tool calls (standard response)
+        mock_snowflake_response = {
+            "choices": [
+                {
+                    "message": {
+                        "content": "Hello! I'm doing well, thank you for asking.",
+                        "role": "assistant",
+                    }
+                }
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 15, "total_tokens": 25},
+        }
+
+        response = httpx.Response(
+            status_code=200,
+            json=mock_snowflake_response,
+            headers={"Content-Type": "application/json"},
+        )
+
+        model_response = ModelResponse(choices=[litellm.Choices(index=0, message=litellm.Message())])
+
+        logging_obj = MagicMock()
+
+        result = config.transform_response(
+            model="mistral-7b",
+            raw_response=response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding={},
+        )
+
+        # Verify standard response works
+        assert isinstance(result, ModelResponse)
+        assert result.choices[0].message.content == "Hello! I'm doing well, thank you for asking."
+
+    def test_get_supported_openai_params_includes_tools(self):
+        """
+        Test that tools and tool_choice are in supported params.
+        """
+        config = SnowflakeConfig()
+        supported_params = config.get_supported_openai_params("llama3.1-70b")
+
+        assert "tools" in supported_params
+        assert "tool_choice" in supported_params
+        assert "temperature" in supported_params
+        assert "max_tokens" in supported_params
+
+
+class TestSnowflakeCortexClaudeFixes:
+    def setup_method(self):
+        self.config = SnowflakeConfig()
+
+    @staticmethod
+    def _transform(messages, optional_params=None):
+        return SnowflakeConfig().transform_request(
+            model="snowflake/claude-sonnet-4-6",
+            messages=messages,
+            optional_params=optional_params or {},
+            litellm_params={},
+            headers={},
+        )
+
+    def test_thinking_is_offered_on_every_claude_model(self):
+        """Cortex documents extended thinking (budget_tokens) for Claude generally, so a
+        4.6-only gate would silently drop it on the models that do support it."""
+        for model in (
+            "snowflake/claude-sonnet-4-6",
+            "snowflake/claude-sonnet-4-5",
+            "snowflake/claude-3-7-sonnet",
+            "snowflake/claude-4-opus",
+        ):
+            assert "thinking" in self.config.get_supported_openai_params(model), model
+        assert "thinking" not in self.config.get_supported_openai_params("snowflake/llama3.1-70b")
+
+    def test_system_blocks_preserve_cache_control_and_strip_ttl(self):
+        body = self._transform(
+            [
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "You are helpful",
+                            "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                        }
+                    ],
+                },
+                {"role": "user", "content": "hi"},
+            ]
+        )
+        assert body["system"] == [{"type": "text", "text": "You are helpful", "cache_control": {"type": "ephemeral"}}]
+
+    def test_direct_system_param_is_normalized(self):
+        body = self._transform(
+            [{"role": "user", "content": "hi"}],
+            {"system": [{"type": "text", "text": "direct", "cache_control": {"type": "ephemeral", "ttl": "1h"}}]},
+        )
+        assert body["system"] == [{"type": "text", "text": "direct", "cache_control": {"type": "ephemeral"}}]
+
+    def test_message_and_tool_cache_control_are_normalized(self):
+        body = self._transform(
+            [
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+                }
+            ],
+            {
+                "tools": [
+                    {
+                        "name": "f",
+                        "input_schema": {"type": "object", "properties": {}},
+                        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                    }
+                ]
+            },
+        )
+        assert body["messages"][0]["content"][0]["cache_control"] == {"type": "ephemeral"}
+        assert body["tools"][0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_extra_body_message_override_is_normalized(self):
+        body = self._transform(
+            [{"role": "user", "content": "original"}],
+            {
+                "extra_body": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "override",
+                                    "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                                }
+                            ],
+                        }
+                    ]
+                }
+            },
+        )
+        assert body["messages"][0]["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_image_blocks_are_converted_to_anthropic_source(self):
+        body = self._transform(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "data:image/png;base64,ZmFrZQ==", "format": "image/jpeg"},
+                        }
+                    ],
+                }
+            ]
+        )
+        assert body["messages"][0]["content"] == [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "ZmFrZQ=="}}
+        ]
+
+    def test_tool_result_image_list_is_converted(self):
+        body = self._transform(
+            [
+                {"role": "user", "content": "look"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,ZmFrZQ=="}}],
+                },
+            ]
+        )
+        assert body["messages"][2]["content"][0]["content"] == [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "ZmFrZQ=="}}
+        ]
+
+    def test_tool_result_preserves_cache_control(self):
+        """A cache breakpoint the bridge puts on a tool message must survive onto the tool_result."""
+        for tool_content in ("done", [{"type": "text", "text": "done"}]):
+            body = self._transform(
+                [
+                    {"role": "user", "content": "look"},
+                    {
+                        "role": "tool",
+                        "tool_call_id": "call_1",
+                        "content": tool_content,
+                        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                    },
+                ]
+            )
+            tool_result = body["messages"][1]["content"][0]
+            assert tool_result["cache_control"] == {"type": "ephemeral"}, tool_content
+
+    def test_pdf_data_uri_becomes_a_document_block(self):
+        """A bridged pdf data URI is a document block; forwarding it as an image is malformed."""
+        body = self._transform(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": "data:application/pdf;base64,ZmFrZQ=="}},
+                    ],
+                }
+            ]
+        )
+        assert body["messages"][0]["content"] == [
+            {
+                "type": "document",
+                "source": {"type": "base64", "media_type": "application/pdf", "data": "ZmFrZQ=="},
+            }
+        ]
+
+    def test_multipart_tool_result_preserves_text_and_converts_image(self):
+        body = self._transform(
+            [
+                {"role": "user", "content": "look"},
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "content": [
+                        {"type": "text", "text": "first"},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,ZmFrZQ=="}},
+                        {"type": "text", "text": "last"},
+                    ],
+                },
+            ]
+        )
+        assert body["messages"][1]["content"][0]["content"] == [
+            {"type": "text", "text": "first"},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "ZmFrZQ=="}},
+            {"type": "text", "text": "last"},
+        ]
+
+    def test_plain_text_tool_result_remains_string(self):
+        body = self._transform(
+            [{"role": "user", "content": "look"}, {"role": "tool", "tool_call_id": "call_1", "content": "done"}]
+        )
+        assert body["messages"][1]["content"][0]["content"] == "done"
+
+    def test_anthropic_tool_schema_strips_only_top_level_schema_key(self):
+        tools = [
+            {
+                "name": "f",
+                "input_schema": {"$schema": "schema", "type": "object", "properties": {"$schema": {"type": "string"}}},
+            }
+        ]
+        body = self._transform([{"role": "user", "content": "hi"}], {"tools": tools})
+        schema = body["tools"][0]["input_schema"]
+        assert "$schema" not in schema
+        assert "$schema" in schema["properties"]
+
+    def test_tool_schema_strips_only_top_level_schema_key(self):
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "f",
+                    "parameters": {
+                        "$schema": "https://json-schema.org/draft/2020-12/schema",
+                        "type": "object",
+                        "properties": {"$schema": {"type": "string"}},
+                    },
+                },
+            }
+        ]
+        body = self._transform([{"role": "user", "content": "hi"}], {"tools": tools})
+        schema = body["tools"][0]["input_schema"]
+        assert "$schema" not in schema
+        assert "$schema" in schema["properties"]
+
+    def test_streaming_tool_identity_is_emitted_only_on_start(self):
+        handler = SnowflakeStreamingHandler(streaming_response=[], sync_stream=True)
+        start = handler.chunk_parser(
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "tool_use", "id": "tool_1", "name": "read"},
+            }
+        )
+        first_delta = handler.chunk_parser(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": '{"path":'},
+            }
+        )
+        second_delta = handler.chunk_parser(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": '"/tmp"}'},
+            }
+        )
+
+        def _tool_call(chunk):
+            return chunk.choices[0].delta.tool_calls[0]
+
+        assert _tool_call(start).id == "tool_1"
+        assert _tool_call(start).function.name == "read"
+        assert _tool_call(first_delta).id is None
+        assert _tool_call(first_delta).function.name is None
+        assert _tool_call(second_delta).id is None
+        assert _tool_call(second_delta).function.name is None
+        assert _tool_call(first_delta).function.arguments == '{"path":'
+        assert _tool_call(second_delta).function.arguments == '"/tmp"}'
+
+    def test_signed_thinking_blocks_lead_the_assistant_turn(self):
+        """Multi-turn tool use with thinking only works if the signed block is echoed back first."""
+        body = self._transform(
+            [
+                {"role": "user", "content": "hi"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "thinking_blocks": [
+                        {"type": "thinking", "thinking": "391", "signature": "Eto"},
+                        {"type": "thinking", "thinking": "unsigned"},
+                    ],
+                    "tool_calls": [
+                        {"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}
+                    ],
+                },
+            ]
+        )
+        blocks = body["messages"][1]["content"]
+        assert blocks[0] == {"type": "thinking", "thinking": "391", "signature": "Eto"}
+        assert [b["type"] for b in blocks] == ["thinking", "tool_use"]
+
+    def test_signed_thinking_blocks_lead_a_plain_text_assistant_turn(self):
+        """A thinking response without a tool call must also round-trip on the next request."""
+        body = self._transform(
+            [
+                {"role": "user", "content": "hi"},
+                {
+                    "role": "assistant",
+                    "content": "391",
+                    "thinking_blocks": [{"type": "thinking", "thinking": "391", "signature": "Eto"}],
+                },
+                {"role": "user", "content": "continue"},
+            ]
+        )
+        assert body["messages"][1] == {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "391", "signature": "Eto"},
+                {"type": "text", "text": "391"},
+            ],
+        }
+
+    def test_signed_thinking_blocks_preserve_list_content(self):
+        """Cached assistant text reaches this transform as a content list, not a string."""
+        body = self._transform(
+            [
+                {"role": "user", "content": "hi"},
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "391", "cache_control": {"type": "ephemeral"}}],
+                    "thinking_blocks": [{"type": "thinking", "thinking": "391", "signature": "Eto"}],
+                },
+                {"role": "user", "content": "continue"},
+            ]
+        )
+        assert body["messages"][1] == {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "391", "signature": "Eto"},
+                {"type": "text", "text": "391", "cache_control": {"type": "ephemeral"}},
+            ],
+        }
+
+    def test_thinking_only_assistant_turn_sends_no_empty_text_block(self):
+        """Anthropic-shaped APIs reject empty text blocks, so a content-less thinking turn is thinking only."""
+        body = self._transform(
+            [
+                {"role": "user", "content": "hi"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "thinking_blocks": [{"type": "thinking", "thinking": "391", "signature": "Eto"}],
+                },
+                {"role": "user", "content": "continue"},
+            ]
+        )
+        assert body["messages"][1]["content"] == [{"type": "thinking", "thinking": "391", "signature": "Eto"}]
+
+    def test_streaming_surfaces_thinking_and_prompt_cache_usage(self):
+        """Cortex streams thinking deltas, signatures and cache counts; all must reach the caller."""
+        handler = SnowflakeStreamingHandler(streaming_response=[], sync_stream=True)
+        handler.chunk_parser(
+            {
+                "type": "message_start",
+                "message": {"usage": {"input_tokens": 18, "cache_creation_input_tokens": 1323}},
+            }
+        )
+        thinking = handler.chunk_parser(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "thinking_delta", "thinking": "391"},
+            }
+        )
+        signature = handler.chunk_parser(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "signature_delta", "signature": "Eto"},
+            }
+        )
+        final = handler.chunk_parser(
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn"},
+                "usage": {"output_tokens": 8, "cache_read_input_tokens": 1323},
+            }
+        )
+
+        assert thinking.choices[0].delta.reasoning_content == "391"
+        assert signature.choices[0].delta.thinking_blocks[0]["signature"] == "Eto"
+        assert final.usage.prompt_tokens_details.cached_tokens == 1323
+
+
+class TestSnowFlakeCompletion:
+    model_name = "mistral"
+
+    messages = [
+        {"role": "system", "content": "hi"},
+        {"role": "user", "content": "the capital of France"},
+    ]
+
+    response = {
+        "choices": [
+            {
+                "message": {
+                    "content": "Paris",
+                    "content_list": [{"type": "text", "text": "Paris"}],
+                }
+            }
+        ],
+        "usage": {"prompt_tokens": 16, "completion_tokens": 18, "total_tokens": 34},
+    }
+
+    @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
+    def test_snowflake_jwt_account_id(self, mock_post):
+        mock_post().json.return_value = copy.deepcopy(self.response)
+
+        response = litellm.completion(
+            f"snowflake/{self.model_name}",
+            messages=self.messages,
+            api_key="00000",
+            account_id="AAAA-BBBB",
+        )
+        assert len(response.choices) == 1
+        assert response.choices[0]["message"].content == "Paris"
+
+        # check request
+        post_kwargs = mock_post.call_args_list[-1][1]
+        body = json.loads(post_kwargs["data"])
+        assert body["model"] == self.model_name
+        assert "the capital of France" in str(body["messages"])
+
+        # JWT key was used
+        assert "00000" in post_kwargs["headers"]["Authorization"]
+        # account id was used
+        assert "AAAA-BBBB" in post_kwargs["url"]
+        # uses native endpoint
+        assert post_kwargs["url"].endswith("cortex/v1/chat/completions")
+
+    @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
+    def test_snowflake_pat_key_account_id(self, mock_post):
+        mock_post().json.return_value = copy.deepcopy(self.response)
+
+        response = litellm.completion(
+            f"snowflake/{self.model_name}",
+            messages=self.messages,
+            api_key="pat/xxxxx",
+            account_id="AAAA-BBBB",
+        )
+        assert len(response.choices) == 1
+        assert response.choices[0]["message"].content == "Paris"
+
+        # PAT key was used
+        post_kwargs = mock_post.call_args_list[-1][1]
+        assert "xxxxx" in post_kwargs["headers"]["Authorization"]
+        assert post_kwargs["headers"]["X-Snowflake-Authorization-Token-Type"] == "PROGRAMMATIC_ACCESS_TOKEN"
+
+        # account id was used
+        assert "AAAA-BBBB" in post_kwargs["url"]
+
+    @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
+    def test_snowflake_env(self, mock_post):
+        mock_post().json.return_value = copy.deepcopy(self.response)
+
+        os.environ["SNOWFLAKE_ACCOUNT_ID"] = "AAAA-BBBB"
+        os.environ["SNOWFLAKE_JWT"] = "00000"
+
+        response = litellm.completion(
+            f"snowflake/{self.model_name}",
+            messages=self.messages,
+        )
+
+        assert len(response.choices) == 1
+        assert response.choices[0]["message"].content == "Paris"
+
+        # JWT key was used
+        post_kwargs = mock_post.call_args_list[-1][1]
+        assert "00000" in post_kwargs["headers"]["Authorization"]
+        # account id was used
+        assert "AAAA-BBBB" in post_kwargs["url"]
+
+        os.environ.pop("SNOWFLAKE_ACCOUNT_ID", None)
+        os.environ.pop("SNOWFLAKE_JWT", None)
+
+
+FAKE_API_BASE = "https://fake-snowflake.example.com/api/v2/cortex/inference:chat"
+
+
+def _make_mock_response(json_data: Dict[str, Any]) -> MagicMock:
+    mock = MagicMock(spec=httpx.Response)
+    mock.status_code = 200
+    mock.headers = {"content-type": "application/json"}
+    mock.json.return_value = json_data
+    mock.text = json.dumps(json_data)
+    return mock
+
+
+def _chat_response() -> Dict[str, Any]:
+    return {
+        "id": "chatcmpl-snowflake-123",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "mistral-7b",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "The sky above is painted blue,\nWith clouds of white and morning dew.",
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 30,
+            "total_tokens": 40,
+        },
+    }
+
+
+def _streaming_chunks() -> List[str]:
+    base = {
+        "id": "chatcmpl-snowflake-stream-123",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "mistral-7b",
+    }
+    deltas = [
+        {"role": "assistant", "content": "The"},
+        {"content": " sky"},
+        {"content": " is blue"},
+    ]
+    chunks = []
+    for i, delta in enumerate(deltas):
+        finish = "stop" if i == len(deltas) - 1 else None
+        chunks.append(
+            json.dumps(
+                {
+                    **base,
+                    "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+                }
+            )
+        )
+    return chunks
+
+
+class TestSnowflakeChatCompletion:
+    """End-to-end chat completion tests (mocked HTTP)."""
+
+    messages = [{"role": "user", "content": "Write me a poem about the blue sky"}]
+
+    @pytest.mark.parametrize("sync_mode", [True, False])
+    def test_chat_completion_snowflake(self, sync_mode):
+        mock_resp = _make_mock_response(_chat_response())
+
+        if sync_mode:
+            with patch.object(HTTPHandler, "post", return_value=mock_resp) as mock_post:
+                response = completion(
+                    model="snowflake/mistral-7b",
+                    messages=self.messages,
+                    api_key="fake-jwt",
+                    account_id="FAKE-ACCOUNT",
+                    api_base=FAKE_API_BASE,
+                )
+                mock_post.assert_called_once()
+        else:
+            with patch.object(AsyncHTTPHandler, "post", new_callable=AsyncMock, return_value=mock_resp) as mock_post:
+                response = asyncio.run(
+                    acompletion(
+                        model="snowflake/mistral-7b",
+                        messages=self.messages,
+                        api_key="fake-jwt",
+                        account_id="FAKE-ACCOUNT",
+                        api_base=FAKE_API_BASE,
+                    )
+                )
+                mock_post.assert_called_once()
+
+        assert response is not None
+        assert response.choices[0].message.content is not None
+        assert "sky" in response.choices[0].message.content.lower()
+        assert response.usage.prompt_tokens == 10
+        assert response.usage.completion_tokens == 30
+
+    @pytest.mark.parametrize("sync_mode", [True, False])
+    def test_chat_completion_snowflake_stream(self, sync_mode):
+        raw_chunks = _streaming_chunks()
+
+        if sync_mode:
+
+            def _iter_lines():
+                for chunk in raw_chunks:
+                    yield f"data: {chunk}"
+                yield "data: [DONE]"
+
+            mock_resp = MagicMock()
+            mock_resp.iter_lines.return_value = _iter_lines()
+            mock_resp.status_code = 200
+            mock_resp.headers = {"content-type": "text/event-stream"}
+
+            with patch.object(HTTPHandler, "post", return_value=mock_resp) as mock_post:
+                response = completion(
+                    model="snowflake/mistral-7b",
+                    messages=self.messages,
+                    max_tokens=100,
+                    stream=True,
+                    api_key="fake-jwt",
+                    account_id="FAKE-ACCOUNT",
+                    api_base=FAKE_API_BASE,
+                )
+                chunks_received = list(response)
+                mock_post.assert_called_once()
+        else:
+
+            async def _aiter_lines():
+                for chunk in raw_chunks:
+                    yield f"data: {chunk}"
+                yield "data: [DONE]"
+
+            mock_resp = MagicMock()
+            mock_resp.aiter_lines.return_value = _aiter_lines()
+            mock_resp.status_code = 200
+            mock_resp.headers = {"content-type": "text/event-stream"}
+
+            async def _run():
+                with patch.object(
+                    AsyncHTTPHandler,
+                    "post",
+                    new_callable=AsyncMock,
+                    return_value=mock_resp,
+                ) as mock_post:
+                    resp = await acompletion(
+                        model="snowflake/mistral-7b",
+                        messages=self.messages,
+                        max_tokens=100,
+                        stream=True,
+                        api_key="fake-jwt",
+                        account_id="FAKE-ACCOUNT",
+                        api_base=FAKE_API_BASE,
+                    )
+                    received = []
+                    async for chunk in resp:
+                        received.append(chunk)
+                    mock_post.assert_called_once()
+                    return received
+
+            chunks_received = asyncio.run(_run())
+
+        assert len(chunks_received) > 0
+        content = "".join(c.choices[0].delta.content for c in chunks_received if c.choices[0].delta.content)
+
+
+async def test_snowflake_claude_async_completion_inlines_remote_images_off_the_event_loop(async_only_image_fetch):
+    image_url = f"http://img.example/{uuid.uuid4()}.png"
+    captured = {}
+
+    def handle(request):
+        captured["body"] = request.content.decode()
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-6",
+                "content": [{"type": "text", "text": "Green"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+    response = await litellm.acompletion(
+        model="snowflake/claude-sonnet-4-6",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What colour is this?"},
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                ],
+            }
+        ],
+        api_key="fake-jwt",
+        account_id="FAKE-ACCOUNT",
+        api_base=FAKE_API_BASE,
+        client=client,
+    )
+
+    assert response.choices[0].message.content == "Green"
+    assert async_only_image_fetch.fetched == [image_url]
+    assert image_url not in captured["body"]
+    assert async_only_image_fetch.base64_png in captured["body"]
