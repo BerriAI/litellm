@@ -2,7 +2,7 @@
 Helper utilities for tracking the cost of built-in tools.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final, Literal, cast
 
 from pydantic import ValidationError
@@ -246,7 +246,7 @@ class StandardBuiltInToolCostTracking:
 
     @staticmethod
     def _image_generation_tool_model(response_object: ResponsesAPIResponse) -> str:
-        tools: Final[list[object]] = cast(list[object], getattr(response_object, "tools", None) or [])
+        tools: Final[Sequence[object]] = cast(Sequence[object], response_object.tools or ())  # cast-ok: dict tool union
         for tool in tools:
             if _output_item_field(tool, "type") != "image_generation":
                 continue
@@ -307,7 +307,7 @@ class StandardBuiltInToolCostTracking:
     def _handle_image_generation_cost(response_object: object, custom_llm_provider: str | None) -> float:
         if not isinstance(response_object, ResponsesAPIResponse):
             return 0.0
-        output: Final[list[object]] = cast(list[object], response_object.output)  # cast-ok: narrowed by isinstance
+        output: Final[Sequence[object]] = cast(Sequence[object], response_object.output)  # cast-ok: isinstance-narrowed
         completed_items: Final = tuple(
             output_item
             for output_item in output
