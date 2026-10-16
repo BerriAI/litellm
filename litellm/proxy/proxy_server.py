@@ -10244,7 +10244,7 @@ async def async_data_generator(
         else response
     )
     stream_source: AsyncIterator[object] | None = None  # rebind-ok: bound once the keepalive policy resolves
-    stream_started: bool = False  # rebind-ok: flips once the first item arrives, after which errors go in-band
+    stream_started: bool = False  # rebind-ok: set after the first chunk clears its hooks, then errors go in-band
     try:
         error_message: str | None = None
         requested_model_from_client: Final = _get_client_requested_model_for_streaming(request_data=request_data)
@@ -10294,7 +10294,6 @@ async def async_data_generator(
 
         loop_released_at = time.monotonic()  # rebind-ok: last time this stream let other tasks run
         async for item in stream_source:
-            stream_started = True
             # Unblock the event loop: a stream whose chunks are already buffered never awaits
             # between chunks, so without this yield one long stream holds the loop for its whole body.
             # A real await in between may already have released the loop; this only guarantees it
@@ -10313,6 +10312,7 @@ async def async_data_generator(
                     request_data=request_data,
                     str_so_far=_str_so_far,
                 )
+            stream_started = True
 
             # Mid-stream fallbacks surface metadata on individual chunks rather than
             # the response wrapper. Keep scanning chunks until a fallback model is

@@ -1035,14 +1035,25 @@ class _ReplacesClientErrors(CustomLogger):
 
 
 @pytest.mark.asyncio
-async def test_guardrail_block_mid_stream_sends_the_failure_hook_replacement(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    "chunks_before_block,expected_status",
+    [
+        pytest.param(0, 403, id="before_the_first_chunk"),
+        pytest.param(1, 200, id="mid_stream"),
+    ],
+)
+async def test_guardrail_block_sends_the_failure_hook_replacement(
+    monkeypatch, chunks_before_block: int, expected_status: int
+) -> None:
     monkeypatch.setattr(litellm, "callbacks", [_ReplacesClientErrors()])
 
-    _, _, frames = await _served(_blocked_after(1, {"error": _BLOCK_MESSAGE}))
+    status_code, _, frames = await _served(_blocked_after(chunks_before_block, {"error": _BLOCK_MESSAGE}))
 
+    assert status_code == expected_status
     assert _BLOCK_MESSAGE not in "".join(frames)
-    assert _error_of(frames[1])["message"] == "Request blocked by policy"
-    assert _error_of(frames[1])["code"] == "403"
+    assert _error_of(frames[-2])["message"] == "Request blocked by policy"
+    assert _error_of(frames[-2])["code"] == "403"
+    assert frames[-1] == "data: [DONE]"
 
 
 @pytest.mark.asyncio
@@ -1052,6 +1063,39 @@ async def test_guardrail_block_before_the_first_chunk_keeps_its_http_status() ->
     assert (status_code, media_type) == (400, "text/event-stream")
     assert frames[-1] == "data: [DONE]"
     assert _error_of(frames[0])["message"] == _BLOCK_MESSAGE
+
+
+
+class _BlocksKeeperPerChunk(CustomLogger):
+    async def async_post_call_streaming_hook(self, user_api_key_dict: UserAPIKeyAuth, response: str) -> None:
+        if "keeper" in response:
+            raise HTTPException(status_code=400, detail={"error": _BLOCK_MESSAGE})
+
+
+async def _chunks(*contents: str) -> AsyncIterator[ModelResponseStream]:
+    for content in contents:
+        yield _simple_chunk(content=content)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "contents,expected_status,expected_frames",
+    [
+        pytest.param(("the keeper",), 400, 2, id="first_chunk"),
+        pytest.param(("partial", "the keeper"), 200, 3, id="second_chunk"),
+    ],
+)
+async def test_per_chunk_guardrail_block_keeps_early_blocks_on_their_status_and_ends_later_ones_in_band(
+    monkeypatch, contents: tuple[str, ...], expected_status: int, expected_frames: int
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_BlocksKeeperPerChunk()])
+
+    status_code, media_type, frames = await _served(_chunks(*contents))
+
+    assert (status_code, media_type) == (expected_status, "text/event-stream")
+    assert len(frames) == expected_frames
+    assert _error_of(frames[-2])["message"] == _BLOCK_MESSAGE
+    assert frames[-1] == "data: [DONE]"
 
 
 _UPSTREAM_BODY: Final = {
