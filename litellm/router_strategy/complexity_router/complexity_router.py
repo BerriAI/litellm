@@ -2339,6 +2339,33 @@ class ComplexityRouter(CustomLogger):
                 ),
                 provider=accounting_provider,
             )
+            refusal_reason: Final = self._jev_route_down_refusal_reason(
+                config=config,
+                chosen_tier=tier_name,
+                strongest_tier=self.config.tier_names()[-1],
+                confidence=answer.confidence,
+                choice_count=len(criteria),
+            )
+            if refusal_reason is not None:
+                # A confident-enough classifier is a healthy classifier: a gate refusal is a
+                # policy decision about the verdict, not a health failure, so the breaker closes.
+                if breaker is not None and permit is not None:
+                    breaker.record_success(permit)
+                refused: Final = self._classifier_failure_outcome(
+                    f"{config.provider} classifier route-down refused ({refusal_reason}, verdict {tier_name}, "
+                    f"confidence {answer.confidence:.4f})",
+                    prompt,
+                    system_prompt,
+                    failure_reason="declined",
+                    signal=f"{config.provider}-refused:{refusal_reason}",
+                )
+                # Keep the verdict and its cost on the refusal for provenance: the request paid
+                # for the classifier call, and the routing decision still logs what it answered.
+                return refused._replace(
+                    signals=(*refused.signals, f"{config.provider}-classifier:{tier_name}"),
+                    classifier_cost=verdict.cost,
+                    jev_verdict=verdict,
+                )
             if breaker is not None and permit is not None:
                 breaker.record_success(permit)
             return ClassificationOutcome(
@@ -2370,6 +2397,44 @@ class ComplexityRouter(CustomLogger):
                 failure_reason=_classifier_failure_reason(e),
                 error_type=type(e).__name__,
             )
+
+    @staticmethod
+    def _jev_route_down_refusal_reason(
+        config: OpenSourceClassifierConfig,
+        chosen_tier: str,
+        strongest_tier: str,
+        confidence: float,
+        complexity_score: float | None = None,
+        complexity_confidence: float | None = None,
+        choice_count: int | None = None,
+    ) -> str | None:
+        """Why a Jev verdict that routes below the strongest tier must not be applied, or None.
+
+        A verdict naming the strongest tier is not a route-down and is never gated. Every
+        configured gate must pass: the verdict's own confidence, plus the complexity answer's
+        score and confidence when the protocol carries one. The confidence gate follows the
+        decision question's shape: a question with exactly two options is yes/no-shaped and
+        uses confidence_threshold_yes_no, a wider one is choice-shaped and uses
+        confidence_threshold_choice, and each per-type value falls back to the single
+        confidence_threshold. Missing complexity data is hard
+        (score 1.0, confidence 0.0), so a configured complexity gate refuses every route-down
+        until the wire carries a complexity answer; complexity_max=1.0 and
+        complexity_confidence_min=0.0 are the values at which missing data passes.
+        """
+        if chosen_tier == strongest_tier:
+            return None
+        threshold: Final = (
+            config.confidence_threshold if choice_count is None else config.confidence_threshold_for(choice_count)
+        )
+        if threshold is not None and confidence < threshold:
+            return "low-confidence"
+        score: Final = 1.0 if complexity_score is None else complexity_score  # unknown complexity is hard
+        if config.complexity_max is not None and score > config.complexity_max:
+            return "high-complexity"
+        verdict_confidence: Final = 0.0 if complexity_confidence is None else complexity_confidence
+        if config.complexity_confidence_min is not None and verdict_confidence < config.complexity_confidence_min:
+            return "low-complexity-confidence"
+        return None
 
     def _classifier_failure_outcome(
         self,
