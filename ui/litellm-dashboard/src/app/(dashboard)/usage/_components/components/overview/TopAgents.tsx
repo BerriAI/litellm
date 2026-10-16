@@ -36,11 +36,11 @@ const MONOGRAMS: Readonly<Record<string, { text: string; className: string }>> =
 };
 
 /** Claude Code's mark: a white spark on Claude terracotta. Drawn here since no Claude asset ships in the repo. */
-function ClaudeSpark() {
+function ClaudeSpark({ size }: { size: "sm" | "md" }) {
   const rays = Array.from({ length: 12 }, (_, i) => i * 30);
   return (
     <span className="flex size-full items-center justify-center bg-[#d97757]">
-      <svg viewBox="0 0 24 24" className="size-5" aria-hidden="true">
+      <svg viewBox="0 0 24 24" className={cn(size === "sm" ? "size-3.5" : "size-5")} aria-hidden="true">
         {rays.map((angle) => (
           <rect
             key={angle}
@@ -58,15 +58,17 @@ function ClaudeSpark() {
   );
 }
 
-function AgentGlyph({ agent }: { agent: AgentRow }) {
-  if (agent.id === "claude-code") return <ClaudeSpark />;
-  if (agent.logo) return <Logo src={agent.logo} label={agent.label} className="size-5" />;
+function AgentGlyph({ agent, size }: { agent: AgentRow; size: "sm" | "md" }) {
+  if (agent.id === "claude-code") return <ClaudeSpark size={size} />;
+  if (agent.logo)
+    return <Logo src={agent.logo} label={agent.label} className={cn(size === "sm" ? "size-3.5" : "size-5")} />;
   const monogram = MONOGRAMS[agent.id];
   if (monogram) {
     return (
       <span
         className={cn(
-          "flex size-full items-center justify-center text-xs font-semibold tracking-tight",
+          "flex size-full items-center justify-center font-semibold tracking-tight",
+          size === "sm" ? "text-[9px]" : "text-xs",
           monogram.className,
         )}
       >
@@ -74,13 +76,22 @@ function AgentGlyph({ agent }: { agent: AgentRow }) {
       </span>
     );
   }
-  return <span className="text-sm font-semibold uppercase text-muted-foreground">{agent.label.charAt(0)}</span>;
+  return (
+    <span className={cn("font-semibold uppercase text-muted-foreground", size === "sm" ? "text-xs" : "text-sm")}>
+      {agent.label.charAt(0)}
+    </span>
+  );
 }
 
-function AgentMark({ agent }: { agent: AgentRow }) {
+export function AgentMark({ agent, size = "md" }: { agent: AgentRow; size?: "sm" | "md" }) {
   return (
-    <span className="inline-flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-background">
-      <AgentGlyph agent={agent} />
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center justify-center overflow-hidden border bg-background",
+        size === "sm" ? "size-6 rounded-md" : "size-9 rounded-lg",
+      )}
+    >
+      <AgentGlyph agent={agent} size={size} />
     </span>
   );
 }

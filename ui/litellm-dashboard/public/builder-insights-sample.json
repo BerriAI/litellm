@@ -1,0 +1,2482 @@
+{
+  "window": {
+    "start": "2026-09-09",
+    "end": "2026-10-08",
+    "sampleStart": "2026-10-02",
+    "sampleEnd": "2026-10-08",
+    "tz": "PT"
+  },
+  "markdown": "## Team overview\n\n- **10 builders** contribute AI-assisted work across the 30-day window.",
+  "teamMedianCostPerPr": 70.0,
+  "hidden": [],
+  "builders": [
+    {
+      "id": "ava",
+      "name": "Ava",
+      "email": "ava@example.com",
+      "verdict": "productive",
+      "verdictLabel": "Productive",
+      "verdictLine": "Ships 45 PRs at $20 each, mostly through Devin, well below the $70 team median",
+      "markdown": "## Is AI paying off?\n- Cost per merged PR is **$20**, under a third of the **$70** team median, across **45** merged PRs.\n- Devin produced **89%** of those PRs (40 of 45), and Devin compute is billed outside the gateway, so true cost per PR is higher than shown.\n- Ava drives **8.7%** of team gateway spend over only **10** active days in the 30 day window.\n\n## Why $20 per PR\n- The **$900** of gateway spend is spread over 45 PRs, but only **5** of those PRs are Ava's own work.\n- `claude-opus-5-5` accounts for **$486** of the spend (54%), with `gpt-6-astra` at $261 and `claude-sonnet-5` at $153.\n- Prompts dominate usage: **7.56M** of 8.06M tokens are input, and completions are only about 6%.\n\n## Good patterns\n- Heavy Devin delegation produced **40** merged PRs, which keeps gateway cost per PR far below the team median.\n- **0** of 420 requests failed, so no spend was lost to errors or retries.\n- Context stays lean, averaging about **18,000** prompt tokens per request against a 58,000 p90.\n\n## Bad patterns\n- The costliest session was a `python` SDK script that spent **$117** on 22 requests in 23 seconds, about 4x the $26.47 median session.\n- Only **24%** of prompt tokens came from cache, so most of the 7.56M input tokens were billed at full rate.\n- Against Ava's own **5** PRs alone, the $900 gateway spend works out to $180 each, which shows how much the low headline cost depends on Devin.",
+      "archetype": "Agentic Builder",
+      "tagline": "Routes daily work through `claude-code`",
+      "uses": "Mostly uses `claude-code` across the 7d sample",
+      "spend": 900,
+      "requests": 420,
+      "tokens": 8064000,
+      "cacheHitRate": 0.24,
+      "failed": 0,
+      "activeDays": 10,
+      "prsOwn": 5,
+      "prsDevin": 40,
+      "prs": 45,
+      "spendPerPr": 20.0,
+      "medianPromptTokens": 21000,
+      "p90PromptTokens": 58000,
+      "daily": [
+        {
+          "date": "2026-09-09",
+          "spend": 900.0,
+          "requests": 420.0
+        },
+        {
+          "date": "2026-09-10",
+          "spend": 1008.0,
+          "requests": 453.6
+        },
+        {
+          "date": "2026-09-11",
+          "spend": 1116.0,
+          "requests": 487.2
+        },
+        {
+          "date": "2026-09-12",
+          "spend": 1224.0,
+          "requests": 520.8
+        },
+        {
+          "date": "2026-09-13",
+          "spend": 1332.0,
+          "requests": 554.4
+        },
+        {
+          "date": "2026-09-14",
+          "spend": 900.0,
+          "requests": 588.0
+        },
+        {
+          "date": "2026-09-15",
+          "spend": 1008.0,
+          "requests": 621.6
+        },
+        {
+          "date": "2026-09-16",
+          "spend": 1116.0,
+          "requests": 420.0
+        },
+        {
+          "date": "2026-09-17",
+          "spend": 1224.0,
+          "requests": 453.6
+        },
+        {
+          "date": "2026-09-18",
+          "spend": 1332.0,
+          "requests": 487.2
+        },
+        {
+          "date": "2026-09-19",
+          "spend": 900.0,
+          "requests": 520.8
+        },
+        {
+          "date": "2026-09-20",
+          "spend": 1008.0,
+          "requests": 554.4
+        },
+        {
+          "date": "2026-09-21",
+          "spend": 1116.0,
+          "requests": 588.0
+        },
+        {
+          "date": "2026-09-22",
+          "spend": 1224.0,
+          "requests": 621.6
+        },
+        {
+          "date": "2026-09-23",
+          "spend": 1332.0,
+          "requests": 420.0
+        },
+        {
+          "date": "2026-09-24",
+          "spend": 900.0,
+          "requests": 453.6
+        },
+        {
+          "date": "2026-09-25",
+          "spend": 1008.0,
+          "requests": 487.2
+        },
+        {
+          "date": "2026-09-26",
+          "spend": 1116.0,
+          "requests": 520.8
+        },
+        {
+          "date": "2026-09-27",
+          "spend": 1224.0,
+          "requests": 554.4
+        },
+        {
+          "date": "2026-09-28",
+          "spend": 1332.0,
+          "requests": 588.0
+        },
+        {
+          "date": "2026-09-29",
+          "spend": 900.0,
+          "requests": 621.6
+        },
+        {
+          "date": "2026-09-30",
+          "spend": 1008.0,
+          "requests": 420.0
+        },
+        {
+          "date": "2026-10-01",
+          "spend": 1116.0,
+          "requests": 453.6
+        },
+        {
+          "date": "2026-10-02",
+          "spend": 1224.0,
+          "requests": 487.2
+        },
+        {
+          "date": "2026-10-03",
+          "spend": 1332.0,
+          "requests": 520.8
+        },
+        {
+          "date": "2026-10-04",
+          "spend": 900.0,
+          "requests": 554.4
+        },
+        {
+          "date": "2026-10-05",
+          "spend": 1008.0,
+          "requests": 588.0
+        },
+        {
+          "date": "2026-10-06",
+          "spend": 1116.0,
+          "requests": 621.6
+        },
+        {
+          "date": "2026-10-07",
+          "spend": 1224.0,
+          "requests": 420.0
+        },
+        {
+          "date": "2026-10-08",
+          "spend": -31248.0,
+          "requests": -14582.4
+        }
+      ],
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "requests": 227,
+          "spend": 486.0
+        },
+        {
+          "model": "gpt-6-astra",
+          "requests": 122,
+          "spend": 261.0
+        },
+        {
+          "model": "claude-sonnet-5",
+          "requests": 71,
+          "spend": 153.0
+        }
+      ],
+      "agents": [
+        {
+          "id": "claude-code",
+          "requests": 302,
+          "spend": 142.56,
+          "share": 0.72
+        },
+        {
+          "id": "codex",
+          "requests": 76,
+          "spend": 35.64,
+          "share": 0.18
+        },
+        {
+          "id": "python",
+          "requests": 42,
+          "spend": 19.8,
+          "share": 0.1
+        }
+      ],
+      "hoursPdt": [1, 8, 2, 9, 3, 10, 4, 11, 5, 12, 6, 13, 7, 1, 8, 2, 9, 3, 10, 4, 11, 5, 12, 6],
+      "heatPdt": [
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5],
+        [1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6],
+        [2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7],
+        [3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8],
+        [4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0],
+        [5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1],
+        [6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2]
+      ],
+      "topSessions": [
+        {
+          "agent": "claude-code",
+          "durationMs": 8000,
+          "requests": 12,
+          "spend": 72.0
+        },
+        {
+          "agent": "codex",
+          "durationMs": 15500,
+          "requests": 17,
+          "spend": 94.5
+        },
+        {
+          "agent": "python",
+          "durationMs": 23000,
+          "requests": 22,
+          "spend": 117.0
+        }
+      ],
+      "prScopes": [
+        ["proxy", 8],
+        ["ui", 5],
+        ["sdk", 0]
+      ]
+    },
+    {
+      "id": "ben",
+      "name": "Ben",
+      "email": "ben@example.com",
+      "verdict": "productive",
+      "verdictLabel": "Productive",
+      "verdictLine": "Ships 20 PRs at $25 each, about a third of the $70 team median",
+      "markdown": "## Is AI paying off?\n- Yes: cost per merged PR is **$25**, roughly 36% of the **$70** team median.\n- Ben merged **20** PRs over **12** active days on **$500** of spend, only **4.9%** of team spend.\n- Merged work is concentrated in `proxy` (**9** PRs) and `ui` (**6** PRs), so spend maps to core product areas.\n\n## Why $25 per PR\n- **$500** across **557** requests averages about **$0.90** per request, a modest rate spread over a solid PR count.\n- `claude-opus-5-5` drives the most cost at **$270**, about 54% of total spend.\n- Prompts stay moderate, with a median of **25,200** tokens and a p90 of **66,500**, so context size is not inflating cost.\n\n## Good patterns\n- Only **3** of 557 requests failed (about 0.5%), so almost no spend is lost to errors.\n- Cache served **3.4M** prompt tokens, about 31% of prompt volume, which cuts the cost of repeated context.\n- Sessions are cheap and contained, with a median session spend of **$11.11** across **45** sessions.\n\n## Bad patterns\n- A scripted `python` SDK session cost **$65** in 22 requests, about 6x the median session, and the `sdk` scope shows **0** merged PRs to justify it.\n- `claude-sonnet-5` costs about **$0.89** per request, nearly the same as `claude-opus-5-5`, so the model mix is not producing savings as currently used.\n- In the 7 day sample, peak hours include **3** and **5** AM PDT, a risk sign of unattended runs that spend without review.",
+      "archetype": "SDK Builder",
+      "tagline": "Routes daily work through `codex`",
+      "uses": "Mostly uses `codex` across the 7d sample",
+      "spend": 500,
+      "requests": 557,
+      "tokens": 11702570,
+      "cacheHitRate": 0.31,
+      "failed": 3,
+      "activeDays": 12,
+      "prsOwn": 20,
+      "prsDevin": 0,
+      "prs": 20,
+      "spendPerPr": 25.0,
+      "medianPromptTokens": 25200,
+      "p90PromptTokens": 66500,
+      "daily": [
+        {
+          "date": "2026-09-09",
+          "spend": 560.0,
+          "requests": 601.56
+        },
+        {
+          "date": "2026-09-10",
+          "spend": 620.0,
+          "requests": 646.12
+        },
+        {
+          "date": "2026-09-11",
+          "spend": 680.0,
+          "requests": 690.68
+        },
+        {
+          "date": "2026-09-12",
+          "spend": 740.0,
+          "requests": 735.24
+        },
+        {
+          "date": "2026-09-13",
+          "spend": 500.0,
+          "requests": 779.8
+        },
+        {
+          "date": "2026-09-14",
+          "spend": 560.0,
+          "requests": 824.36
+        },
+        {
+          "date": "2026-09-15",
+          "spend": 620.0,
+          "requests": 557.0
+        },
+        {
+          "date": "2026-09-16",
+          "spend": 680.0,
+          "requests": 601.56
+        },
+        {
+          "date": "2026-09-17",
+          "spend": 740.0,
+          "requests": 646.12
+        },
+        {
+          "date": "2026-09-18",
+          "spend": 500.0,
+          "requests": 690.68
+        },
+        {
+          "date": "2026-09-19",
+          "spend": 560.0,
+          "requests": 735.24
+        },
+        {
+          "date": "2026-09-20",
+          "spend": 620.0,
+          "requests": 779.8
+        },
+        {
+          "date": "2026-09-21",
+          "spend": 680.0,
+          "requests": 824.36
+        },
+        {
+          "date": "2026-09-22",
+          "spend": 740.0,
+          "requests": 557.0
+        },
+        {
+          "date": "2026-09-23",
+          "spend": 500.0,
+          "requests": 601.56
+        },
+        {
+          "date": "2026-09-24",
+          "spend": 560.0,
+          "requests": 646.12
+        },
+        {
+          "date": "2026-09-25",
+          "spend": 620.0,
+          "requests": 690.68
+        },
+        {
+          "date": "2026-09-26",
+          "spend": 680.0,
+          "requests": 735.24
+        },
+        {
+          "date": "2026-09-27",
+          "spend": 740.0,
+          "requests": 779.8
+        },
+        {
+          "date": "2026-09-28",
+          "spend": 500.0,
+          "requests": 824.36
+        },
+        {
+          "date": "2026-09-29",
+          "spend": 560.0,
+          "requests": 557.0
+        },
+        {
+          "date": "2026-09-30",
+          "spend": 620.0,
+          "requests": 601.56
+        },
+        {
+          "date": "2026-10-01",
+          "spend": 680.0,
+          "requests": 646.12
+        },
+        {
+          "date": "2026-10-02",
+          "spend": 740.0,
+          "requests": 690.68
+        },
+        {
+          "date": "2026-10-03",
+          "spend": 500.0,
+          "requests": 735.24
+        },
+        {
+          "date": "2026-10-04",
+          "spend": 560.0,
+          "requests": 779.8
+        },
+        {
+          "date": "2026-10-05",
+          "spend": 620.0,
+          "requests": 824.36
+        },
+        {
+          "date": "2026-10-06",
+          "spend": 680.0,
+          "requests": 557.0
+        },
+        {
+          "date": "2026-10-07",
+          "spend": 740.0,
+          "requests": 601.56
+        },
+        {
+          "date": "2026-10-08",
+          "spend": -17600.0,
+          "requests": -19383.6
+        }
+      ],
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "requests": 301,
+          "spend": 270.0
+        },
+        {
+          "model": "gpt-6-astra",
+          "requests": 162,
+          "spend": 145.0
+        },
+        {
+          "model": "claude-sonnet-5",
+          "requests": 95,
+          "spend": 85.0
+        }
+      ],
+      "agents": [
+        {
+          "id": "codex",
+          "requests": 362,
+          "spend": 71.5,
+          "share": 0.65
+        },
+        {
+          "id": "cursor",
+          "requests": 139,
+          "spend": 27.5,
+          "share": 0.25
+        },
+        {
+          "id": "python",
+          "requests": 56,
+          "spend": 11.0,
+          "share": 0.1
+        }
+      ],
+      "hoursPdt": [4, 11, 5, 12, 6, 13, 7, 1, 8, 2, 9, 3, 10, 4, 11, 5, 12, 6, 13, 7, 1, 8, 2, 9],
+      "heatPdt": [
+        [1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6],
+        [2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7],
+        [3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8],
+        [4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0],
+        [5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1],
+        [6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2],
+        [7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3]
+      ],
+      "topSessions": [
+        {
+          "agent": "codex",
+          "durationMs": 9200,
+          "requests": 12,
+          "spend": 40.0
+        },
+        {
+          "agent": "cursor",
+          "durationMs": 16700,
+          "requests": 17,
+          "spend": 52.5
+        },
+        {
+          "agent": "python",
+          "durationMs": 24200,
+          "requests": 22,
+          "spend": 65.0
+        }
+      ],
+      "prScopes": [
+        ["proxy", 9],
+        ["ui", 6],
+        ["sdk", 0]
+      ]
+    },
+    {
+      "id": "chloe",
+      "name": "Chloe",
+      "email": "chloe@example.com",
+      "verdict": "productive",
+      "verdictLabel": "Productive",
+      "verdictLine": "Ships 20 PRs at $30 each, less than half the $70 team median, 15 written directly",
+      "markdown": "## Is AI paying off?\n- Cost per merged PR is **$30**, less than half the **$70** team median.\n- **$600** of spend over **14** active days produced **20** merged PRs, while using only **5.8%** of team spend.\n- **15** of the 20 PRs were her own and **5** came from Devin, so the gateway figure is close to her true cost per PR.\n\n## Why $30 per PR\n- **$600** spread across **694** requests works out to about **$0.86** per request.\n- `claude-opus-5-5` accounts for **$324** of spend (**54%**) on 375 requests, with `gpt-6-astra` adding **$174**.\n- A median prompt of **29,400** tokens keeps individual calls moderate, so most of the spend goes to frequent, short work.\n\n## Good patterns\n- **38%** of prompt tokens were served from cache, which cuts the input bill on 14.85M prompt tokens.\n- Only **6** of 694 requests failed, so almost no spend was wasted on errors.\n- The median session costs **$10.71** across **56** sessions, which shows short, contained bursts instead of long runaway loops.\n\n## Bad patterns\n- Her most expensive session was a `python` SDK script that spent **$78** on 22 requests in about 25 seconds, and unattended scripted traffic like this can burn money fast.\n- A `claude-code` session spent **$63** in under 18 seconds, about **6x** the median session cost in a single burst.\n- Her p90 prompt is **75,000** tokens, about 2.5x the median, and oversized contexts like these drive up per-request cost.",
+      "archetype": "Agentic Builder",
+      "tagline": "Routes daily work through `cursor`",
+      "uses": "Mostly uses `cursor` across the 7d sample",
+      "spend": 600,
+      "requests": 694,
+      "tokens": 15837080,
+      "cacheHitRate": 0.38,
+      "failed": 6,
+      "activeDays": 14,
+      "prsOwn": 15,
+      "prsDevin": 5,
+      "prs": 20,
+      "spendPerPr": 30.0,
+      "medianPromptTokens": 29400,
+      "p90PromptTokens": 75000,
+      "daily": [
+        {
+          "date": "2026-09-09",
+          "spend": 744.0,
+          "requests": 805.04
+        },
+        {
+          "date": "2026-09-10",
+          "spend": 816.0,
+          "requests": 860.56
+        },
+        {
+          "date": "2026-09-11",
+          "spend": 888.0,
+          "requests": 916.08
+        },
+        {
+          "date": "2026-09-12",
+          "spend": 600.0,
+          "requests": 971.6
+        },
+        {
+          "date": "2026-09-13",
+          "spend": 672.0,
+          "requests": 1027.12
+        },
+        {
+          "date": "2026-09-14",
+          "spend": 744.0,
+          "requests": 694.0
+        },
+        {
+          "date": "2026-09-15",
+          "spend": 816.0,
+          "requests": 749.52
+        },
+        {
+          "date": "2026-09-16",
+          "spend": 888.0,
+          "requests": 805.04
+        },
+        {
+          "date": "2026-09-17",
+          "spend": 600.0,
+          "requests": 860.56
+        },
+        {
+          "date": "2026-09-18",
+          "spend": 672.0,
+          "requests": 916.08
+        },
+        {
+          "date": "2026-09-19",
+          "spend": 744.0,
+          "requests": 971.6
+        },
+        {
+          "date": "2026-09-20",
+          "spend": 816.0,
+          "requests": 1027.12
+        },
+        {
+          "date": "2026-09-21",
+          "spend": 888.0,
+          "requests": 694.0
+        },
+        {
+          "date": "2026-09-22",
+          "spend": 600.0,
+          "requests": 749.52
+        },
+        {
+          "date": "2026-09-23",
+          "spend": 672.0,
+          "requests": 805.04
+        },
+        {
+          "date": "2026-09-24",
+          "spend": 744.0,
+          "requests": 860.56
+        },
+        {
+          "date": "2026-09-25",
+          "spend": 816.0,
+          "requests": 916.08
+        },
+        {
+          "date": "2026-09-26",
+          "spend": 888.0,
+          "requests": 971.6
+        },
+        {
+          "date": "2026-09-27",
+          "spend": 600.0,
+          "requests": 1027.12
+        },
+        {
+          "date": "2026-09-28",
+          "spend": 672.0,
+          "requests": 694.0
+        },
+        {
+          "date": "2026-09-29",
+          "spend": 744.0,
+          "requests": 749.52
+        },
+        {
+          "date": "2026-09-30",
+          "spend": 816.0,
+          "requests": 805.04
+        },
+        {
+          "date": "2026-10-01",
+          "spend": 888.0,
+          "requests": 860.56
+        },
+        {
+          "date": "2026-10-02",
+          "spend": 600.0,
+          "requests": 916.08
+        },
+        {
+          "date": "2026-10-03",
+          "spend": 672.0,
+          "requests": 971.6
+        },
+        {
+          "date": "2026-10-04",
+          "spend": 744.0,
+          "requests": 1027.12
+        },
+        {
+          "date": "2026-10-05",
+          "spend": 816.0,
+          "requests": 694.0
+        },
+        {
+          "date": "2026-10-06",
+          "spend": 888.0,
+          "requests": 749.52
+        },
+        {
+          "date": "2026-10-07",
+          "spend": 600.0,
+          "requests": 805.04
+        },
+        {
+          "date": "2026-10-08",
+          "spend": -21048.0,
+          "requests": -24206.72
+        }
+      ],
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "requests": 375,
+          "spend": 324.0
+        },
+        {
+          "model": "gpt-6-astra",
+          "requests": 201,
+          "spend": 174.0
+        },
+        {
+          "model": "claude-sonnet-5",
+          "requests": 118,
+          "spend": 102.0
+        }
+      ],
+      "agents": [
+        {
+          "id": "cursor",
+          "requests": 382,
+          "spend": 72.6,
+          "share": 0.5499999999999999
+        },
+        {
+          "id": "claude-code",
+          "requests": 243,
+          "spend": 46.2,
+          "share": 0.35000000000000003
+        },
+        {
+          "id": "python",
+          "requests": 69,
+          "spend": 13.2,
+          "share": 0.09999999999999999
+        }
+      ],
+      "hoursPdt": [7, 1, 8, 2, 9, 3, 10, 4, 11, 5, 12, 6, 13, 7, 1, 8, 2, 9, 3, 10, 4, 11, 5, 12],
+      "heatPdt": [
+        [2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7],
+        [3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8],
+        [4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0],
+        [5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1],
+        [6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2],
+        [7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3],
+        [8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4]
+      ],
+      "topSessions": [
+        {
+          "agent": "cursor",
+          "durationMs": 10400,
+          "requests": 12,
+          "spend": 48.0
+        },
+        {
+          "agent": "claude-code",
+          "durationMs": 17900,
+          "requests": 17,
+          "spend": 63.0
+        },
+        {
+          "agent": "python",
+          "durationMs": 25400,
+          "requests": 22,
+          "spend": 78.0
+        }
+      ],
+      "prScopes": [
+        ["proxy", 10],
+        ["ui", 7],
+        ["sdk", 1]
+      ]
+    },
+    {
+      "id": "dev",
+      "name": "Dev",
+      "email": "dev@example.com",
+      "verdict": "productive",
+      "verdictLabel": "Productive",
+      "verdictLine": "Ships 20 PRs at $40 each, mostly own work, well below the $70 team median",
+      "markdown": "## Is AI paying off?\n- Dev merged **20 PRs** on **$800** of gateway spend, landing at **$40 per PR** against a **$70** team median.\n- **16 of 20** PRs are Dev's own work, so the low cost reflects gateway spend rather than outside Devin compute.\n- Dev accounts for **7.8%** of team spend over **16 active days**, roughly **$50** per active day.\n\n## Why $40 per PR\n- `claude-opus-5-5` drives **$432** of the **$800**, about **54%**, so most of the cost is premium model usage.\n- **67 sessions** at a **$11.94** median session spend means a typical PR uses about three ordinary sessions.\n- About **45%** of prompt tokens (**8.6M of 19.2M**) came from cache, which keeps a prompt-heavy workload affordable.\n\n## Good patterns\n- Cache reads of **8.6M tokens** cut repeated context costs on a workload where input tokens are **94%** of the total.\n- Only **9 of 831** requests failed (**1.1%**), so very little spend is wasted on retries.\n- Spreading work across `gpt-6-astra` (**$232**) and `claude-sonnet-5` (**$136**) keeps some traffic off `claude-opus-5-5`.\n\n## Bad patterns\n- A scripted `python` SDK session spent **$104** in **27 seconds** across 22 requests, about **9x** the median session, and suggests a costly unattended loop.\n- Short bursts are expensive: the top `opencode` session cost **$84** in **19 seconds** and the top `claude-code` session cost **$64** in **12 seconds**.\n- Prompt size reaches **83,500 tokens** at p90 versus a **33,600** median, and that large context feeds the **54%** Opus share of spend.",
+      "archetype": "SDK Builder",
+      "tagline": "Routes daily work through `claude-code`",
+      "uses": "Mostly uses `claude-code` across the 7d sample",
+      "spend": 800,
+      "requests": 831,
+      "tokens": 20467530,
+      "cacheHitRate": 0.45,
+      "failed": 9,
+      "activeDays": 16,
+      "prsOwn": 16,
+      "prsDevin": 4,
+      "prs": 20,
+      "spendPerPr": 40.0,
+      "medianPromptTokens": 33600,
+      "p90PromptTokens": 83500,
+      "daily": [
+        {
+          "date": "2026-09-09",
+          "spend": 1088.0,
+          "requests": 1030.44
+        },
+        {
+          "date": "2026-09-10",
+          "spend": 1184.0,
+          "requests": 1096.92
+        },
+        {
+          "date": "2026-09-11",
+          "spend": 800.0,
+          "requests": 1163.4
+        },
+        {
+          "date": "2026-09-12",
+          "spend": 896.0,
+          "requests": 1229.88
+        },
+        {
+          "date": "2026-09-13",
+          "spend": 992.0,
+          "requests": 831.0
+        },
+        {
+          "date": "2026-09-14",
+          "spend": 1088.0,
+          "requests": 897.48
+        },
+        {
+          "date": "2026-09-15",
+          "spend": 1184.0,
+          "requests": 963.96
+        },
+        {
+          "date": "2026-09-16",
+          "spend": 800.0,
+          "requests": 1030.44
+        },
+        {
+          "date": "2026-09-17",
+          "spend": 896.0,
+          "requests": 1096.92
+        },
+        {
+          "date": "2026-09-18",
+          "spend": 992.0,
+          "requests": 1163.4
+        },
+        {
+          "date": "2026-09-19",
+          "spend": 1088.0,
+          "requests": 1229.88
+        },
+        {
+          "date": "2026-09-20",
+          "spend": 1184.0,
+          "requests": 831.0
+        },
+        {
+          "date": "2026-09-21",
+          "spend": 800.0,
+          "requests": 897.48
+        },
+        {
+          "date": "2026-09-22",
+          "spend": 896.0,
+          "requests": 963.96
+        },
+        {
+          "date": "2026-09-23",
+          "spend": 992.0,
+          "requests": 1030.44
+        },
+        {
+          "date": "2026-09-24",
+          "spend": 1088.0,
+          "requests": 1096.92
+        },
+        {
+          "date": "2026-09-25",
+          "spend": 1184.0,
+          "requests": 1163.4
+        },
+        {
+          "date": "2026-09-26",
+          "spend": 800.0,
+          "requests": 1229.88
+        },
+        {
+          "date": "2026-09-27",
+          "spend": 896.0,
+          "requests": 831.0
+        },
+        {
+          "date": "2026-09-28",
+          "spend": 992.0,
+          "requests": 897.48
+        },
+        {
+          "date": "2026-09-29",
+          "spend": 1088.0,
+          "requests": 963.96
+        },
+        {
+          "date": "2026-09-30",
+          "spend": 1184.0,
+          "requests": 1030.44
+        },
+        {
+          "date": "2026-10-01",
+          "spend": 800.0,
+          "requests": 1096.92
+        },
+        {
+          "date": "2026-10-02",
+          "spend": 896.0,
+          "requests": 1163.4
+        },
+        {
+          "date": "2026-10-03",
+          "spend": 992.0,
+          "requests": 1229.88
+        },
+        {
+          "date": "2026-10-04",
+          "spend": 1088.0,
+          "requests": 831.0
+        },
+        {
+          "date": "2026-10-05",
+          "spend": 1184.0,
+          "requests": 897.48
+        },
+        {
+          "date": "2026-10-06",
+          "spend": 800.0,
+          "requests": 963.96
+        },
+        {
+          "date": "2026-10-07",
+          "spend": 896.0,
+          "requests": 1030.44
+        },
+        {
+          "date": "2026-10-08",
+          "spend": -27968.0,
+          "requests": -29051.76
+        }
+      ],
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "requests": 449,
+          "spend": 432.0
+        },
+        {
+          "model": "gpt-6-astra",
+          "requests": 241,
+          "spend": 232.0
+        },
+        {
+          "model": "claude-sonnet-5",
+          "requests": 141,
+          "spend": 136.0
+        }
+      ],
+      "agents": [
+        {
+          "id": "claude-code",
+          "requests": 499,
+          "spend": 105.6,
+          "share": 0.6
+        },
+        {
+          "id": "opencode",
+          "requests": 249,
+          "spend": 52.8,
+          "share": 0.3
+        },
+        {
+          "id": "python",
+          "requests": 83,
+          "spend": 17.6,
+          "share": 0.1
+        }
+      ],
+      "hoursPdt": [10, 4, 11, 5, 12, 6, 13, 7, 1, 8, 2, 9, 3, 10, 4, 11, 5, 12, 6, 13, 7, 1, 8, 2],
+      "heatPdt": [
+        [3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8],
+        [4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0],
+        [5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1],
+        [6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2],
+        [7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3],
+        [8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4],
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5]
+      ],
+      "topSessions": [
+        {
+          "agent": "claude-code",
+          "durationMs": 11600,
+          "requests": 12,
+          "spend": 64.0
+        },
+        {
+          "agent": "opencode",
+          "durationMs": 19100,
+          "requests": 17,
+          "spend": 84.0
+        },
+        {
+          "agent": "python",
+          "durationMs": 26600,
+          "requests": 22,
+          "spend": 104.0
+        }
+      ],
+      "prScopes": [
+        ["proxy", 11],
+        ["ui", 8],
+        ["sdk", 2]
+      ]
+    },
+    {
+      "id": "elena",
+      "name": "Elena",
+      "email": "elena@example.com",
+      "verdict": "mixed",
+      "verdictLabel": "Mixed",
+      "verdictLine": "Ships 10 PRs at $100 each, 43% above the $70 team median, mostly on Opus.",
+      "markdown": "## Is AI paying off?\n- Partly: **$1,000** of spend produced **10** merged PRs, which is the core of the Mixed verdict.\n- Cost per PR of **$100** sits **43%** above the **$70** team median, so output is real but expensive.\n- Elena accounts for **9.7%** of team spend across **18** active days, so this is steady daily use rather than a one-off spike.\n\n## Why $100 per PR\n- `claude-opus-5-5` took **$540**, or **54%** of spend, across **523** requests, so the priciest model drives most of the cost.\n- Prompts are large, with a median of **37,800** tokens and a p90 of **92,000**, and prompt tokens (**24.0M**) outweigh completions (**1.59M**) about **15 to 1**.\n- Each request averages about **$1.03**, so heavy context on a premium model inflates every PR.\n\n## Good patterns\n- About **52%** of prompt tokens (**12.5M**) were served from cache, which roughly halves the cost of the large contexts.\n- Only **12** of **968** requests failed (**1.2%**), so little spend is wasted on errors.\n- `claude-sonnet-5` handled **165** requests for **$170**, showing some routine work already goes to a cheaper model.\n\n## Bad patterns\n- A scripted `python` SDK session spent **$130** on **22** requests in under **28** seconds, about **10x** the **$12.82** median session, so automated bursts can burn budget fast.\n- Short `cursor` and `codex` sessions also hit **$105** and **$80** in about **20** and **13** seconds, which suggests parallel or high-context calls that should go to cheaper models.\n- Hour **0** PDT is a peak hour in the 7 day sample, so late-night runs may be getting less review per dollar spent.",
+      "archetype": "Agentic Builder",
+      "tagline": "Routes daily work through `codex`",
+      "uses": "Mostly uses `codex` across the 7d sample",
+      "spend": 1000,
+      "requests": 968,
+      "tokens": 25593920,
+      "cacheHitRate": 0.52,
+      "failed": 12,
+      "activeDays": 18,
+      "prsOwn": 8,
+      "prsDevin": 2,
+      "prs": 10,
+      "spendPerPr": 100.0,
+      "medianPromptTokens": 37800,
+      "p90PromptTokens": 92000,
+      "daily": [
+        {
+          "date": "2026-09-09",
+          "spend": 1480.0,
+          "requests": 1277.76
+        },
+        {
+          "date": "2026-09-10",
+          "spend": 1000.0,
+          "requests": 1355.2
+        },
+        {
+          "date": "2026-09-11",
+          "spend": 1120.0,
+          "requests": 1432.64
+        },
+        {
+          "date": "2026-09-12",
+          "spend": 1240.0,
+          "requests": 968.0
+        },
+        {
+          "date": "2026-09-13",
+          "spend": 1360.0,
+          "requests": 1045.44
+        },
+        {
+          "date": "2026-09-14",
+          "spend": 1480.0,
+          "requests": 1122.88
+        },
+        {
+          "date": "2026-09-15",
+          "spend": 1000.0,
+          "requests": 1200.32
+        },
+        {
+          "date": "2026-09-16",
+          "spend": 1120.0,
+          "requests": 1277.76
+        },
+        {
+          "date": "2026-09-17",
+          "spend": 1240.0,
+          "requests": 1355.2
+        },
+        {
+          "date": "2026-09-18",
+          "spend": 1360.0,
+          "requests": 1432.64
+        },
+        {
+          "date": "2026-09-19",
+          "spend": 1480.0,
+          "requests": 968.0
+        },
+        {
+          "date": "2026-09-20",
+          "spend": 1000.0,
+          "requests": 1045.44
+        },
+        {
+          "date": "2026-09-21",
+          "spend": 1120.0,
+          "requests": 1122.88
+        },
+        {
+          "date": "2026-09-22",
+          "spend": 1240.0,
+          "requests": 1200.32
+        },
+        {
+          "date": "2026-09-23",
+          "spend": 1360.0,
+          "requests": 1277.76
+        },
+        {
+          "date": "2026-09-24",
+          "spend": 1480.0,
+          "requests": 1355.2
+        },
+        {
+          "date": "2026-09-25",
+          "spend": 1000.0,
+          "requests": 1432.64
+        },
+        {
+          "date": "2026-09-26",
+          "spend": 1120.0,
+          "requests": 968.0
+        },
+        {
+          "date": "2026-09-27",
+          "spend": 1240.0,
+          "requests": 1045.44
+        },
+        {
+          "date": "2026-09-28",
+          "spend": 1360.0,
+          "requests": 1122.88
+        },
+        {
+          "date": "2026-09-29",
+          "spend": 1480.0,
+          "requests": 1200.32
+        },
+        {
+          "date": "2026-09-30",
+          "spend": 1000.0,
+          "requests": 1277.76
+        },
+        {
+          "date": "2026-10-01",
+          "spend": 1120.0,
+          "requests": 1355.2
+        },
+        {
+          "date": "2026-10-02",
+          "spend": 1240.0,
+          "requests": 1432.64
+        },
+        {
+          "date": "2026-10-03",
+          "spend": 1360.0,
+          "requests": 968.0
+        },
+        {
+          "date": "2026-10-04",
+          "spend": 1480.0,
+          "requests": 1045.44
+        },
+        {
+          "date": "2026-10-05",
+          "spend": 1000.0,
+          "requests": 1122.88
+        },
+        {
+          "date": "2026-10-06",
+          "spend": 1120.0,
+          "requests": 1200.32
+        },
+        {
+          "date": "2026-10-07",
+          "spend": 1240.0,
+          "requests": 1277.76
+        },
+        {
+          "date": "2026-10-08",
+          "spend": -34840.0,
+          "requests": -33918.72
+        }
+      ],
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "requests": 523,
+          "spend": 540.0
+        },
+        {
+          "model": "gpt-6-astra",
+          "requests": 281,
+          "spend": 290.0
+        },
+        {
+          "model": "claude-sonnet-5",
+          "requests": 165,
+          "spend": 170.0
+        }
+      ],
+      "agents": [
+        {
+          "id": "codex",
+          "requests": 561,
+          "spend": 127.6,
+          "share": 0.58
+        },
+        {
+          "id": "cursor",
+          "requests": 310,
+          "spend": 70.4,
+          "share": 0.32
+        },
+        {
+          "id": "python",
+          "requests": 97,
+          "spend": 22.0,
+          "share": 0.1
+        }
+      ],
+      "hoursPdt": [13, 7, 1, 8, 2, 9, 3, 10, 4, 11, 5, 12, 6, 13, 7, 1, 8, 2, 9, 3, 10, 4, 11, 5],
+      "heatPdt": [
+        [4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0],
+        [5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1],
+        [6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2],
+        [7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3],
+        [8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4],
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5],
+        [1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6]
+      ],
+      "topSessions": [
+        {
+          "agent": "codex",
+          "durationMs": 12800,
+          "requests": 12,
+          "spend": 80.0
+        },
+        {
+          "agent": "cursor",
+          "durationMs": 20300,
+          "requests": 17,
+          "spend": 105.0
+        },
+        {
+          "agent": "python",
+          "durationMs": 27800,
+          "requests": 22,
+          "spend": 130.0
+        }
+      ],
+      "prScopes": [
+        ["proxy", 12],
+        ["ui", 9],
+        ["sdk", 3]
+      ]
+    },
+    {
+      "id": "felix",
+      "name": "Felix",
+      "email": "felix@example.com",
+      "verdict": "mixed",
+      "verdictLabel": "Mixed",
+      "verdictLine": "Ships 10 PRs at $120 each, about 1.7x the $70 team median, driven by large contexts",
+      "markdown": "## Is AI paying off?\n- Felix merged **10** PRs on **$1,200** of gateway spend, which works out to **$120** per PR against a **$70** team median.\n- He used AI on **20** active days across **89** sessions, so usage is steady, but output per dollar is below the team norm.\n- He accounts for **11.7%** of team spend, which measures activity, not the value of what he shipped.\n\n## Why $120 per PR\n- Prompt tokens are **29.3M** of **31.2M** total tokens (about **94%**), so cost comes mainly from context sent in, not from output generated.\n- Median prompt size is **42,000** tokens and p90 is **100,500**, so a typical request carries a large context.\n- `claude-opus-5-5` drives **$648** of spend (**54%**) across **597** requests, so the heaviest model handles most of the work.\n\n## Good patterns\n- Only **15** of **1,105** requests failed (about **1.4%**), so very little spend is wasted on errors.\n- The median session costs **$13.48**, so most day-to-day sessions stay contained.\n- **7.0M** prompt tokens were served from cache, which reduces the cost of repeated context.\n\n## Bad patterns\n- Cache covers only about **24%** of prompt tokens, so roughly **22M** tokens were billed at full price despite large, repeated contexts.\n- The top `python` SDK session spent **$156** across **22** requests in **29** seconds, which is scripted traffic costing over **10x** the median session.\n- Short agent bursts are also expensive, with `claude-code` spending **$126** in **21.5** seconds and `opencode` spending **$96** in **14** seconds, which points to oversized context per call.",
+      "archetype": "SDK Builder",
+      "tagline": "Routes daily work through `opencode`",
+      "uses": "Mostly uses `opencode` across the 7d sample",
+      "spend": 1200,
+      "requests": 1105,
+      "tokens": 31216250,
+      "cacheHitRate": 0.24,
+      "failed": 15,
+      "activeDays": 20,
+      "prsOwn": 10,
+      "prsDevin": 0,
+      "prs": 10,
+      "spendPerPr": 120.0,
+      "medianPromptTokens": 42000,
+      "p90PromptTokens": 100500,
+      "daily": [
+        {
+          "date": "2026-09-09",
+          "spend": 1200.0,
+          "requests": 1547.0
+        },
+        {
+          "date": "2026-09-10",
+          "spend": 1344.0,
+          "requests": 1635.4
+        },
+        {
+          "date": "2026-09-11",
+          "spend": 1488.0,
+          "requests": 1105.0
+        },
+        {
+          "date": "2026-09-12",
+          "spend": 1632.0,
+          "requests": 1193.4
+        },
+        {
+          "date": "2026-09-13",
+          "spend": 1776.0,
+          "requests": 1281.8
+        },
+        {
+          "date": "2026-09-14",
+          "spend": 1200.0,
+          "requests": 1370.2
+        },
+        {
+          "date": "2026-09-15",
+          "spend": 1344.0,
+          "requests": 1458.6
+        },
+        {
+          "date": "2026-09-16",
+          "spend": 1488.0,
+          "requests": 1547.0
+        },
+        {
+          "date": "2026-09-17",
+          "spend": 1632.0,
+          "requests": 1635.4
+        },
+        {
+          "date": "2026-09-18",
+          "spend": 1776.0,
+          "requests": 1105.0
+        },
+        {
+          "date": "2026-09-19",
+          "spend": 1200.0,
+          "requests": 1193.4
+        },
+        {
+          "date": "2026-09-20",
+          "spend": 1344.0,
+          "requests": 1281.8
+        },
+        {
+          "date": "2026-09-21",
+          "spend": 1488.0,
+          "requests": 1370.2
+        },
+        {
+          "date": "2026-09-22",
+          "spend": 1632.0,
+          "requests": 1458.6
+        },
+        {
+          "date": "2026-09-23",
+          "spend": 1776.0,
+          "requests": 1547.0
+        },
+        {
+          "date": "2026-09-24",
+          "spend": 1200.0,
+          "requests": 1635.4
+        },
+        {
+          "date": "2026-09-25",
+          "spend": 1344.0,
+          "requests": 1105.0
+        },
+        {
+          "date": "2026-09-26",
+          "spend": 1488.0,
+          "requests": 1193.4
+        },
+        {
+          "date": "2026-09-27",
+          "spend": 1632.0,
+          "requests": 1281.8
+        },
+        {
+          "date": "2026-09-28",
+          "spend": 1776.0,
+          "requests": 1370.2
+        },
+        {
+          "date": "2026-09-29",
+          "spend": 1200.0,
+          "requests": 1458.6
+        },
+        {
+          "date": "2026-09-30",
+          "spend": 1344.0,
+          "requests": 1547.0
+        },
+        {
+          "date": "2026-10-01",
+          "spend": 1488.0,
+          "requests": 1635.4
+        },
+        {
+          "date": "2026-10-02",
+          "spend": 1632.0,
+          "requests": 1105.0
+        },
+        {
+          "date": "2026-10-03",
+          "spend": 1776.0,
+          "requests": 1193.4
+        },
+        {
+          "date": "2026-10-04",
+          "spend": 1200.0,
+          "requests": 1281.8
+        },
+        {
+          "date": "2026-10-05",
+          "spend": 1344.0,
+          "requests": 1370.2
+        },
+        {
+          "date": "2026-10-06",
+          "spend": 1488.0,
+          "requests": 1458.6
+        },
+        {
+          "date": "2026-10-07",
+          "spend": 1632.0,
+          "requests": 1547.0
+        },
+        {
+          "date": "2026-10-08",
+          "spend": -41664.0,
+          "requests": -38807.6
+        }
+      ],
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "requests": 597,
+          "spend": 648.0
+        },
+        {
+          "model": "gpt-6-astra",
+          "requests": 320,
+          "spend": 348.0
+        },
+        {
+          "model": "claude-sonnet-5",
+          "requests": 188,
+          "spend": 204.0
+        }
+      ],
+      "agents": [
+        {
+          "id": "opencode",
+          "requests": 608,
+          "spend": 145.2,
+          "share": 0.5499999999999999
+        },
+        {
+          "id": "claude-code",
+          "requests": 387,
+          "spend": 92.4,
+          "share": 0.35000000000000003
+        },
+        {
+          "id": "python",
+          "requests": 110,
+          "spend": 26.4,
+          "share": 0.09999999999999999
+        }
+      ],
+      "hoursPdt": [3, 10, 4, 11, 5, 12, 6, 13, 7, 1, 8, 2, 9, 3, 10, 4, 11, 5, 12, 6, 13, 7, 1, 8],
+      "heatPdt": [
+        [5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1],
+        [6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2],
+        [7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3],
+        [8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4],
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5],
+        [1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6],
+        [2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7]
+      ],
+      "topSessions": [
+        {
+          "agent": "opencode",
+          "durationMs": 14000,
+          "requests": 12,
+          "spend": 96.0
+        },
+        {
+          "agent": "claude-code",
+          "durationMs": 21500,
+          "requests": 17,
+          "spend": 126.0
+        },
+        {
+          "agent": "python",
+          "durationMs": 29000,
+          "requests": 22,
+          "spend": 156.0
+        }
+      ],
+      "prScopes": [
+        ["proxy", 13],
+        ["ui", 10],
+        ["sdk", 4]
+      ]
+    },
+    {
+      "id": "grace",
+      "name": "Grace",
+      "email": "grace@example.com",
+      "verdict": "expensive",
+      "verdictLabel": "Expensive per PR",
+      "verdictLine": "Spends $400 per merged PR across 5 PRs, about 5.7x the $70 team median",
+      "markdown": "## Is AI paying off?\n- Not yet on output: **$2,000** of spend produced **5** merged PRs, or **$400** each against a **$70** team median.\n- Grace accounts for **19.4%** of team spend over **22** active days, about **$91** per active day.\n- Spend shows heavy activity, not value, so the gap may reflect unmerged or non-PR work that this data cannot see.\n\n## Why $400 per PR\n- The denominator is small: only **5** merged PRs absorb the full **$2,000** of 30-day spend.\n- `claude-opus-5-5` drives **$1,080**, or **54%** of spend, across **671** requests.\n- Traffic is prompt-heavy: completions are only **6.2%** of **37.3M** tokens, with a median prompt of **46,200** tokens per request.\n\n## Good patterns\n- Requests are reliable, with **18** failures out of **1,242**, or **1.4%**, so little spend is wasted on errors.\n- **31%** of prompt tokens (**10.9M**) came from cache, which lowers the cost of repeated context.\n- `claude-code` carries **75%** of 7-day agent spend, a consistent primary workflow that is easy to tune.\n\n## Bad patterns\n- A scripted `python` SDK session spent **$260** in **22** requests over about **30 seconds**, a burst **13x** the **$20** median session with no visible PR tied to it.\n- `codex` and `claude-code` top sessions cost **$210** and **$160** in under **23 seconds** each, so short bursts dominate cost.\n- p90 prompts reach **109,000** tokens and **69%** of prompt tokens were uncached, so large context is repeatedly paid for at full price.",
+      "archetype": "Agentic Builder",
+      "tagline": "Routes daily work through `claude-code`",
+      "uses": "Mostly uses `claude-code` across the 7d sample",
+      "spend": 2000,
+      "requests": 1242,
+      "tokens": 37334520,
+      "cacheHitRate": 0.31,
+      "failed": 18,
+      "activeDays": 22,
+      "prsOwn": 5,
+      "prsDevin": 0,
+      "prs": 5,
+      "spendPerPr": 400.0,
+      "medianPromptTokens": 46200,
+      "p90PromptTokens": 109000,
+      "daily": [
+        {
+          "date": "2026-09-09",
+          "spend": 2240.0,
+          "requests": 1838.16
+        },
+        {
+          "date": "2026-09-10",
+          "spend": 2480.0,
+          "requests": 1242.0
+        },
+        {
+          "date": "2026-09-11",
+          "spend": 2720.0,
+          "requests": 1341.36
+        },
+        {
+          "date": "2026-09-12",
+          "spend": 2960.0,
+          "requests": 1440.72
+        },
+        {
+          "date": "2026-09-13",
+          "spend": 2000.0,
+          "requests": 1540.08
+        },
+        {
+          "date": "2026-09-14",
+          "spend": 2240.0,
+          "requests": 1639.44
+        },
+        {
+          "date": "2026-09-15",
+          "spend": 2480.0,
+          "requests": 1738.8
+        },
+        {
+          "date": "2026-09-16",
+          "spend": 2720.0,
+          "requests": 1838.16
+        },
+        {
+          "date": "2026-09-17",
+          "spend": 2960.0,
+          "requests": 1242.0
+        },
+        {
+          "date": "2026-09-18",
+          "spend": 2000.0,
+          "requests": 1341.36
+        },
+        {
+          "date": "2026-09-19",
+          "spend": 2240.0,
+          "requests": 1440.72
+        },
+        {
+          "date": "2026-09-20",
+          "spend": 2480.0,
+          "requests": 1540.08
+        },
+        {
+          "date": "2026-09-21",
+          "spend": 2720.0,
+          "requests": 1639.44
+        },
+        {
+          "date": "2026-09-22",
+          "spend": 2960.0,
+          "requests": 1738.8
+        },
+        {
+          "date": "2026-09-23",
+          "spend": 2000.0,
+          "requests": 1838.16
+        },
+        {
+          "date": "2026-09-24",
+          "spend": 2240.0,
+          "requests": 1242.0
+        },
+        {
+          "date": "2026-09-25",
+          "spend": 2480.0,
+          "requests": 1341.36
+        },
+        {
+          "date": "2026-09-26",
+          "spend": 2720.0,
+          "requests": 1440.72
+        },
+        {
+          "date": "2026-09-27",
+          "spend": 2960.0,
+          "requests": 1540.08
+        },
+        {
+          "date": "2026-09-28",
+          "spend": 2000.0,
+          "requests": 1639.44
+        },
+        {
+          "date": "2026-09-29",
+          "spend": 2240.0,
+          "requests": 1738.8
+        },
+        {
+          "date": "2026-09-30",
+          "spend": 2480.0,
+          "requests": 1838.16
+        },
+        {
+          "date": "2026-10-01",
+          "spend": 2720.0,
+          "requests": 1242.0
+        },
+        {
+          "date": "2026-10-02",
+          "spend": 2960.0,
+          "requests": 1341.36
+        },
+        {
+          "date": "2026-10-03",
+          "spend": 2000.0,
+          "requests": 1440.72
+        },
+        {
+          "date": "2026-10-04",
+          "spend": 2240.0,
+          "requests": 1540.08
+        },
+        {
+          "date": "2026-10-05",
+          "spend": 2480.0,
+          "requests": 1639.44
+        },
+        {
+          "date": "2026-10-06",
+          "spend": 2720.0,
+          "requests": 1738.8
+        },
+        {
+          "date": "2026-10-07",
+          "spend": 2960.0,
+          "requests": 1838.16
+        },
+        {
+          "date": "2026-10-08",
+          "spend": -70400.0,
+          "requests": -43718.4
+        }
+      ],
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "requests": 671,
+          "spend": 1080.0
+        },
+        {
+          "model": "gpt-6-astra",
+          "requests": 360,
+          "spend": 580.0
+        },
+        {
+          "model": "claude-sonnet-5",
+          "requests": 211,
+          "spend": 340.0
+        }
+      ],
+      "agents": [
+        {
+          "id": "claude-code",
+          "requests": 932,
+          "spend": 330.0,
+          "share": 0.75
+        },
+        {
+          "id": "codex",
+          "requests": 248,
+          "spend": 88.0,
+          "share": 0.2
+        },
+        {
+          "id": "python",
+          "requests": 62,
+          "spend": 22.0,
+          "share": 0.05
+        }
+      ],
+      "hoursPdt": [6, 13, 7, 1, 8, 2, 9, 3, 10, 4, 11, 5, 12, 6, 13, 7, 1, 8, 2, 9, 3, 10, 4, 11],
+      "heatPdt": [
+        [6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2],
+        [7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3],
+        [8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4],
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5],
+        [1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6],
+        [2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7],
+        [3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8]
+      ],
+      "topSessions": [
+        {
+          "agent": "claude-code",
+          "durationMs": 15200,
+          "requests": 12,
+          "spend": 160.0
+        },
+        {
+          "agent": "codex",
+          "durationMs": 22700,
+          "requests": 17,
+          "spend": 210.0
+        },
+        {
+          "agent": "python",
+          "durationMs": 30200,
+          "requests": 22,
+          "spend": 260.0
+        }
+      ],
+      "prScopes": [
+        ["proxy", 14],
+        ["ui", 11],
+        ["sdk", 5]
+      ]
+    },
+    {
+      "id": "hiro",
+      "name": "Hiro",
+      "email": "hiro@example.com",
+      "verdict": "expensive",
+      "verdictLabel": "Expensive per PR",
+      "verdictLine": "Spends $2,500 for 5 merged PRs, $500 each, about 7x the $70 team median",
+      "markdown": "## Is AI paying off?\n- Not yet on a per-PR basis: **$500** per merged PR is about 7x the **$70** team median.\n- Hiro accounts for **24.3%** of team spend but merged only **5** PRs in the 30-day window.\n- Activity is steady across **24** active days and **111** sessions, so the gap is low PR conversion, not low usage.\n\n## Why $500 per PR\n- `claude-opus-5-5` drives **$1,350** (54%) of the $2,500, making it the main cost driver per PR.\n- Prompts dominate tokens at **41.2M** prompt versus **2.7M** completion, a heavy context load for a small output.\n- Only **5** merged PRs (4 own, 1 via Devin) absorb the full spend, which concentrates cost on each one.\n\n## Good patterns\n- Cache reads cover **15.7M** of 41.2M prompt tokens (about 38%), which cuts the cost of repeated context.\n- Only **21** of 1,379 requests failed (about 1.5%), so little spend is wasted on errors.\n- `claude-sonnet-5` handles **234** requests, showing some use of a lighter model alongside Opus.\n\n## Bad patterns\n- The top `python` SDK session spent **$325** on 22 requests in about 31 seconds, so scripted traffic can burn budget faster than any human review could catch.\n- The top `codex` and `cursor` sessions cost **$262.50** and **$200**, roughly 9x to 14x the $22.52 median session, so a few runs inflate per-PR cost.\n- Peak hours span **6** to **21** PDT, which points to long, spread-out working days with spend that is not converting into merged PRs.",
+      "archetype": "SDK Builder",
+      "tagline": "Routes daily work through `cursor`",
+      "uses": "Mostly uses `cursor` across the 7d sample",
+      "spend": 2500,
+      "requests": 1379,
+      "tokens": 43948730,
+      "cacheHitRate": 0.38,
+      "failed": 21,
+      "activeDays": 24,
+      "prsOwn": 4,
+      "prsDevin": 1,
+      "prs": 5,
+      "spendPerPr": 500.0,
+      "medianPromptTokens": 50400,
+      "p90PromptTokens": 117500,
+      "daily": [
+        {
+          "date": "2026-09-09",
+          "spend": 3100.0,
+          "requests": 1379.0
+        },
+        {
+          "date": "2026-09-10",
+          "spend": 3400.0,
+          "requests": 1489.32
+        },
+        {
+          "date": "2026-09-11",
+          "spend": 3700.0,
+          "requests": 1599.64
+        },
+        {
+          "date": "2026-09-12",
+          "spend": 2500.0,
+          "requests": 1709.96
+        },
+        {
+          "date": "2026-09-13",
+          "spend": 2800.0,
+          "requests": 1820.28
+        },
+        {
+          "date": "2026-09-14",
+          "spend": 3100.0,
+          "requests": 1930.6
+        },
+        {
+          "date": "2026-09-15",
+          "spend": 3400.0,
+          "requests": 2040.92
+        },
+        {
+          "date": "2026-09-16",
+          "spend": 3700.0,
+          "requests": 1379.0
+        },
+        {
+          "date": "2026-09-17",
+          "spend": 2500.0,
+          "requests": 1489.32
+        },
+        {
+          "date": "2026-09-18",
+          "spend": 2800.0,
+          "requests": 1599.64
+        },
+        {
+          "date": "2026-09-19",
+          "spend": 3100.0,
+          "requests": 1709.96
+        },
+        {
+          "date": "2026-09-20",
+          "spend": 3400.0,
+          "requests": 1820.28
+        },
+        {
+          "date": "2026-09-21",
+          "spend": 3700.0,
+          "requests": 1930.6
+        },
+        {
+          "date": "2026-09-22",
+          "spend": 2500.0,
+          "requests": 2040.92
+        },
+        {
+          "date": "2026-09-23",
+          "spend": 2800.0,
+          "requests": 1379.0
+        },
+        {
+          "date": "2026-09-24",
+          "spend": 3100.0,
+          "requests": 1489.32
+        },
+        {
+          "date": "2026-09-25",
+          "spend": 3400.0,
+          "requests": 1599.64
+        },
+        {
+          "date": "2026-09-26",
+          "spend": 3700.0,
+          "requests": 1709.96
+        },
+        {
+          "date": "2026-09-27",
+          "spend": 2500.0,
+          "requests": 1820.28
+        },
+        {
+          "date": "2026-09-28",
+          "spend": 2800.0,
+          "requests": 1930.6
+        },
+        {
+          "date": "2026-09-29",
+          "spend": 3100.0,
+          "requests": 2040.92
+        },
+        {
+          "date": "2026-09-30",
+          "spend": 3400.0,
+          "requests": 1379.0
+        },
+        {
+          "date": "2026-10-01",
+          "spend": 3700.0,
+          "requests": 1489.32
+        },
+        {
+          "date": "2026-10-02",
+          "spend": 2500.0,
+          "requests": 1599.64
+        },
+        {
+          "date": "2026-10-03",
+          "spend": 2800.0,
+          "requests": 1709.96
+        },
+        {
+          "date": "2026-10-04",
+          "spend": 3100.0,
+          "requests": 1820.28
+        },
+        {
+          "date": "2026-10-05",
+          "spend": 3400.0,
+          "requests": 1930.6
+        },
+        {
+          "date": "2026-10-06",
+          "spend": 3700.0,
+          "requests": 2040.92
+        },
+        {
+          "date": "2026-10-07",
+          "spend": 2500.0,
+          "requests": 1379.0
+        },
+        {
+          "date": "2026-10-08",
+          "spend": -87700.0,
+          "requests": -47878.88
+        }
+      ],
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "requests": 745,
+          "spend": 1350.0
+        },
+        {
+          "model": "gpt-6-astra",
+          "requests": 400,
+          "spend": 725.0
+        },
+        {
+          "model": "claude-sonnet-5",
+          "requests": 234,
+          "spend": 425.0
+        }
+      ],
+      "agents": [
+        {
+          "id": "cursor",
+          "requests": 717,
+          "spend": 286.0,
+          "share": 0.52
+        },
+        {
+          "id": "codex",
+          "requests": 524,
+          "spend": 209.0,
+          "share": 0.38
+        },
+        {
+          "id": "python",
+          "requests": 138,
+          "spend": 55.0,
+          "share": 0.1
+        }
+      ],
+      "hoursPdt": [9, 3, 10, 4, 11, 5, 12, 6, 13, 7, 1, 8, 2, 9, 3, 10, 4, 11, 5, 12, 6, 13, 7, 1],
+      "heatPdt": [
+        [7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3],
+        [8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4],
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5],
+        [1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6],
+        [2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7],
+        [3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8],
+        [4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0]
+      ],
+      "topSessions": [
+        {
+          "agent": "cursor",
+          "durationMs": 16400,
+          "requests": 12,
+          "spend": 200.0
+        },
+        {
+          "agent": "codex",
+          "durationMs": 23900,
+          "requests": 17,
+          "spend": 262.5
+        },
+        {
+          "agent": "python",
+          "durationMs": 31400,
+          "requests": 22,
+          "spend": 325.0
+        }
+      ],
+      "prScopes": [
+        ["proxy", 15],
+        ["ui", 12],
+        ["sdk", 6]
+      ]
+    },
+    {
+      "id": "ines",
+      "name": "Ines",
+      "email": "ines@example.com",
+      "verdict": "none",
+      "verdictLabel": "No shipped PRs",
+      "verdictLine": "Spent $300 across 1,516 requests with no merged PRs, against a $70 team median per PR",
+      "markdown": "## Is AI paying off?\n- Not yet: there are **0 merged PRs** in the 30-day window despite **$300** in spend.\n- That **$300** would cover about **4 PRs** at the **$70** team median cost per PR.\n- Usage is steady across **26** active days, but spend measures activity, not shipped value.\n\n## Why $300 with no PRs\n- `claude-opus-5-5` drove **$162** of the $300, about 54% of spend, across 819 requests.\n- Input dominates output at **47.9M** prompt tokens versus **3.2M** completion tokens, roughly 15 to 1.\n- The top three sessions alone cost **$94.50**, each finishing in under 33 seconds.\n\n## Good patterns\n- **45%** of prompt tokens (21.6M) were served from cache, which cuts the cost of repeated context.\n- Only **24** of 1,516 requests failed (1.6%), so little spend was wasted on errors.\n- Median session spend is **$2.46** across 122 sessions, so most sessions stay cheap.\n\n## Bad patterns\n- Short bursts run hot: one 22-request `claude-code` session cost **$39** in 32.6 seconds, about $1.77 per request versus a $0.20 overall average.\n- Prompt size has a long tail, with a p90 of **126,000** tokens, more than double the 54,600 median, which inflates per-request cost.\n- Scripted `python` SDK traffic made up **40%** of requests in the 7-day sample, with peaks at 2am and midnight PDT, so automated spend is running without producing merged PRs.",
+      "archetype": "Agentic Builder",
+      "tagline": "Routes daily work through `claude-code`",
+      "uses": "Mostly uses `claude-code` across the 7d sample",
+      "spend": 300,
+      "requests": 1516,
+      "tokens": 51058880,
+      "cacheHitRate": 0.45,
+      "failed": 24,
+      "activeDays": 26,
+      "prsOwn": 0,
+      "prsDevin": 0,
+      "prs": 0,
+      "spendPerPr": null,
+      "medianPromptTokens": 54600,
+      "p90PromptTokens": 126000,
+      "daily": [
+        {
+          "date": "2026-09-09",
+          "spend": 408.0,
+          "requests": 1637.28
+        },
+        {
+          "date": "2026-09-10",
+          "spend": 444.0,
+          "requests": 1758.56
+        },
+        {
+          "date": "2026-09-11",
+          "spend": 300.0,
+          "requests": 1879.84
+        },
+        {
+          "date": "2026-09-12",
+          "spend": 336.0,
+          "requests": 2001.12
+        },
+        {
+          "date": "2026-09-13",
+          "spend": 372.0,
+          "requests": 2122.4
+        },
+        {
+          "date": "2026-09-14",
+          "spend": 408.0,
+          "requests": 2243.68
+        },
+        {
+          "date": "2026-09-15",
+          "spend": 444.0,
+          "requests": 1516.0
+        },
+        {
+          "date": "2026-09-16",
+          "spend": 300.0,
+          "requests": 1637.28
+        },
+        {
+          "date": "2026-09-17",
+          "spend": 336.0,
+          "requests": 1758.56
+        },
+        {
+          "date": "2026-09-18",
+          "spend": 372.0,
+          "requests": 1879.84
+        },
+        {
+          "date": "2026-09-19",
+          "spend": 408.0,
+          "requests": 2001.12
+        },
+        {
+          "date": "2026-09-20",
+          "spend": 444.0,
+          "requests": 2122.4
+        },
+        {
+          "date": "2026-09-21",
+          "spend": 300.0,
+          "requests": 2243.68
+        },
+        {
+          "date": "2026-09-22",
+          "spend": 336.0,
+          "requests": 1516.0
+        },
+        {
+          "date": "2026-09-23",
+          "spend": 372.0,
+          "requests": 1637.28
+        },
+        {
+          "date": "2026-09-24",
+          "spend": 408.0,
+          "requests": 1758.56
+        },
+        {
+          "date": "2026-09-25",
+          "spend": 444.0,
+          "requests": 1879.84
+        },
+        {
+          "date": "2026-09-26",
+          "spend": 300.0,
+          "requests": 2001.12
+        },
+        {
+          "date": "2026-09-27",
+          "spend": 336.0,
+          "requests": 2122.4
+        },
+        {
+          "date": "2026-09-28",
+          "spend": 372.0,
+          "requests": 2243.68
+        },
+        {
+          "date": "2026-09-29",
+          "spend": 408.0,
+          "requests": 1516.0
+        },
+        {
+          "date": "2026-09-30",
+          "spend": 444.0,
+          "requests": 1637.28
+        },
+        {
+          "date": "2026-10-01",
+          "spend": 300.0,
+          "requests": 1758.56
+        },
+        {
+          "date": "2026-10-02",
+          "spend": 336.0,
+          "requests": 1879.84
+        },
+        {
+          "date": "2026-10-03",
+          "spend": 372.0,
+          "requests": 2001.12
+        },
+        {
+          "date": "2026-10-04",
+          "spend": 408.0,
+          "requests": 2122.4
+        },
+        {
+          "date": "2026-10-05",
+          "spend": 444.0,
+          "requests": 2243.68
+        },
+        {
+          "date": "2026-10-06",
+          "spend": 300.0,
+          "requests": 1516.0
+        },
+        {
+          "date": "2026-10-07",
+          "spend": 336.0,
+          "requests": 1637.28
+        },
+        {
+          "date": "2026-10-08",
+          "spend": -10488.0,
+          "requests": -52756.8
+        }
+      ],
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "requests": 819,
+          "spend": 162.0
+        },
+        {
+          "model": "gpt-6-astra",
+          "requests": 440,
+          "spend": 87.0
+        },
+        {
+          "model": "claude-sonnet-5",
+          "requests": 258,
+          "spend": 51.0
+        }
+      ],
+      "agents": [
+        {
+          "id": "claude-code",
+          "requests": 910,
+          "spend": 39.6,
+          "share": 0.6
+        },
+        {
+          "id": "python",
+          "requests": 606,
+          "spend": 26.4,
+          "share": 0.39999999999999997
+        }
+      ],
+      "hoursPdt": [12, 6, 13, 7, 1, 8, 2, 9, 3, 10, 4, 11, 5, 12, 6, 13, 7, 1, 8, 2, 9, 3, 10, 4],
+      "heatPdt": [
+        [8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4],
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5],
+        [1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6],
+        [2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7],
+        [3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8],
+        [4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0],
+        [5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1]
+      ],
+      "topSessions": [
+        {
+          "agent": "claude-code",
+          "durationMs": 17600,
+          "requests": 12,
+          "spend": 24.0
+        },
+        {
+          "agent": "python",
+          "durationMs": 25100,
+          "requests": 17,
+          "spend": 31.5
+        },
+        {
+          "agent": "claude-code",
+          "durationMs": 32600,
+          "requests": 22,
+          "spend": 39.0
+        }
+      ],
+      "prScopes": [
+        ["proxy", 16],
+        ["ui", 13],
+        ["sdk", 7]
+      ]
+    },
+    {
+      "id": "jonah",
+      "name": "Jonah",
+      "email": "jonah@example.com",
+      "verdict": "none",
+      "verdictLabel": "No shipped PRs",
+      "verdictLine": "Spent $500 over 28 active days with no merged PRs, so AI output is not yet shipping",
+      "markdown": "## Is AI paying off?\n- Not yet measurably: **$500** across **1,653** requests produced **0** merged PRs in the 30 day window.\n- Usage is steady rather than idle, with activity on **28** of 30 days and **4.9%** of total team spend.\n- PR scope tags list **39** entries (proxy 17, ui 14, sdk 8), but none are counted as merged, so the work may still be unshipped.\n\n## Why $500 with no PRs\n- `claude-opus-5-5` is the largest cost line at **$270** (**54%** of spend) over 893 requests.\n- Three sessions alone cost **$157.50** (**31.5%** of spend) in just 51 requests, against a median session of **$3.76**.\n- Prompts are large, with a median of **58,800** tokens and a p90 of **134,500**, so each request carries heavy context.\n\n## Good patterns\n- Cache reuse is solid at **52%** of prompt tokens (28.6M of 55.0M), which roughly halves the effective input cost of large contexts.\n- Only **27** of 1,653 requests failed (**1.6%**), so little spend is lost to errors or retries.\n- Most sessions stay cheap at a **$3.76** median across **133** sessions, showing normal interactive use is controlled.\n\n## Bad patterns\n- The top `opencode` session spent **$65** in under **34 seconds** across 22 requests, a burst pattern that burns budget fast on oversized context.\n- Per request cost is about **$0.30** on every model, including `claude-sonnet-5`, so switching models alone will not cut spend without trimming context.\n- In the 7 day sample, peak hours include **22:00** and **20:00** PDT, late sessions that coincide with no merged output.",
+      "archetype": "SDK Builder",
+      "tagline": "Routes daily work through `opencode`",
+      "uses": "Mostly uses `opencode` across the 7d sample",
+      "spend": 500,
+      "requests": 1653,
+      "tokens": 58664970,
+      "cacheHitRate": 0.52,
+      "failed": 27,
+      "activeDays": 28,
+      "prsOwn": 0,
+      "prsDevin": 0,
+      "prs": 0,
+      "spendPerPr": null,
+      "medianPromptTokens": 58800,
+      "p90PromptTokens": 134500,
+      "daily": [
+        {
+          "date": "2026-09-09",
+          "spend": 740.0,
+          "requests": 1917.48
+        },
+        {
+          "date": "2026-09-10",
+          "spend": 500.0,
+          "requests": 2049.72
+        },
+        {
+          "date": "2026-09-11",
+          "spend": 560.0,
+          "requests": 2181.96
+        },
+        {
+          "date": "2026-09-12",
+          "spend": 620.0,
+          "requests": 2314.2
+        },
+        {
+          "date": "2026-09-13",
+          "spend": 680.0,
+          "requests": 2446.44
+        },
+        {
+          "date": "2026-09-14",
+          "spend": 740.0,
+          "requests": 1653.0
+        },
+        {
+          "date": "2026-09-15",
+          "spend": 500.0,
+          "requests": 1785.24
+        },
+        {
+          "date": "2026-09-16",
+          "spend": 560.0,
+          "requests": 1917.48
+        },
+        {
+          "date": "2026-09-17",
+          "spend": 620.0,
+          "requests": 2049.72
+        },
+        {
+          "date": "2026-09-18",
+          "spend": 680.0,
+          "requests": 2181.96
+        },
+        {
+          "date": "2026-09-19",
+          "spend": 740.0,
+          "requests": 2314.2
+        },
+        {
+          "date": "2026-09-20",
+          "spend": 500.0,
+          "requests": 2446.44
+        },
+        {
+          "date": "2026-09-21",
+          "spend": 560.0,
+          "requests": 1653.0
+        },
+        {
+          "date": "2026-09-22",
+          "spend": 620.0,
+          "requests": 1785.24
+        },
+        {
+          "date": "2026-09-23",
+          "spend": 680.0,
+          "requests": 1917.48
+        },
+        {
+          "date": "2026-09-24",
+          "spend": 740.0,
+          "requests": 2049.72
+        },
+        {
+          "date": "2026-09-25",
+          "spend": 500.0,
+          "requests": 2181.96
+        },
+        {
+          "date": "2026-09-26",
+          "spend": 560.0,
+          "requests": 2314.2
+        },
+        {
+          "date": "2026-09-27",
+          "spend": 620.0,
+          "requests": 2446.44
+        },
+        {
+          "date": "2026-09-28",
+          "spend": 680.0,
+          "requests": 1653.0
+        },
+        {
+          "date": "2026-09-29",
+          "spend": 740.0,
+          "requests": 1785.24
+        },
+        {
+          "date": "2026-09-30",
+          "spend": 500.0,
+          "requests": 1917.48
+        },
+        {
+          "date": "2026-10-01",
+          "spend": 560.0,
+          "requests": 2049.72
+        },
+        {
+          "date": "2026-10-02",
+          "spend": 620.0,
+          "requests": 2181.96
+        },
+        {
+          "date": "2026-10-03",
+          "spend": 680.0,
+          "requests": 2314.2
+        },
+        {
+          "date": "2026-10-04",
+          "spend": 740.0,
+          "requests": 2446.44
+        },
+        {
+          "date": "2026-10-05",
+          "spend": 500.0,
+          "requests": 1653.0
+        },
+        {
+          "date": "2026-10-06",
+          "spend": 560.0,
+          "requests": 1785.24
+        },
+        {
+          "date": "2026-10-07",
+          "spend": 620.0,
+          "requests": 1917.48
+        },
+        {
+          "date": "2026-10-08",
+          "spend": -17420.0,
+          "requests": -57656.64
+        }
+      ],
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "requests": 893,
+          "spend": 270.0
+        },
+        {
+          "model": "gpt-6-astra",
+          "requests": 479,
+          "spend": 145.0
+        },
+        {
+          "model": "claude-sonnet-5",
+          "requests": 281,
+          "spend": 85.0
+        }
+      ],
+      "agents": [
+        {
+          "id": "opencode",
+          "requests": 1074,
+          "spend": 71.5,
+          "share": 0.65
+        },
+        {
+          "id": "cursor",
+          "requests": 579,
+          "spend": 38.5,
+          "share": 0.35
+        }
+      ],
+      "hoursPdt": [2, 9, 3, 10, 4, 11, 5, 12, 6, 13, 7, 1, 8, 2, 9, 3, 10, 4, 11, 5, 12, 6, 13, 7],
+      "heatPdt": [
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5],
+        [1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6],
+        [2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7],
+        [3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8],
+        [4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0],
+        [5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1],
+        [6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2]
+      ],
+      "topSessions": [
+        {
+          "agent": "opencode",
+          "durationMs": 18800,
+          "requests": 12,
+          "spend": 40.0
+        },
+        {
+          "agent": "cursor",
+          "durationMs": 26300,
+          "requests": 17,
+          "spend": 52.5
+        },
+        {
+          "agent": "opencode",
+          "durationMs": 33800,
+          "requests": 22,
+          "spend": 65.0
+        }
+      ],
+      "prScopes": [
+        ["proxy", 17],
+        ["ui", 14],
+        ["sdk", 8]
+      ]
+    }
+  ]
+}

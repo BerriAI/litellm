@@ -1,4 +1,4 @@
-import { BarChart3, Bot, Building2, Globe, LineChart, ShoppingCart, Tags, User, Users } from "lucide-react";
+import { BarChart3, Bot, Building2, Globe, LineChart, ShoppingCart, Sparkles, Tags, User, Users } from "lucide-react";
 import React from "react";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -13,6 +13,7 @@ export type UsageOption =
   | "tag"
   | "agent"
   | "user"
+  | "builders"
   | "user-agent-activity";
 export interface UsageViewSelectProps {
   value: UsageOption;
@@ -95,6 +96,14 @@ const OPTIONS: OptionConfig[] = [
     description: "View usage by individual users",
     icon: <User className="size-4" />,
     adminOnly: true,
+  },
+  {
+    value: "builders",
+    label: "Builder Insights",
+    description: "Spend, PR output and AI productivity verdicts",
+    icon: <Sparkles className="size-4" />,
+    adminOnly: true,
+    badgeText: "Beta",
   },
   {
     value: "user-agent-activity",
