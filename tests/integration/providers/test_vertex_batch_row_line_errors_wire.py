@@ -7,6 +7,7 @@ import openai
 import pytest
 from integration._support.client import Gateway, Scenario
 from integration._support.wire import Reply, wire_server
+from integration._support.ports import allocate_port
 from pydantic import JsonValue
 
 from integration.providers._vertex_batch_rows import (
@@ -16,7 +17,6 @@ from integration.providers._vertex_batch_rows import (
     ROUTES,
     Route,
     chat_row,
-    closed_port,
     encoded,
     error_of,
     gcs_peer,
@@ -264,7 +264,7 @@ def test_bucket_failures_keep_their_status_and_never_blame_a_row(
     gateway: Gateway, route: Route, reply: Reply | None, status: int
 ) -> None:
     with wire_server(lambda _request: reply or Reply()) as wire, gateway.scenario() as scenario:
-        url: Final = wire.url if reply is not None else f"http://127.0.0.1:{closed_port()}"
+        url: Final = wire.url if reply is not None else f"http://127.0.0.1:{allocate_port()}"
         model: Final = vertex_model(gateway, scenario, url)
         response: Final = upload(gateway, route, model, jsonl(encoded(chat_row("first", model, "one"))))
         assert response.status_code == status, response.text
@@ -330,7 +330,7 @@ def _unreachable_anthropic_model(scenario: Scenario) -> str:
     return scenario.model(
         model="anthropic/claude-haiku-4-5",
         api_key="synthetic-anthropic-key",
-        api_base=f"http://127.0.0.1:{closed_port()}",
+        api_base=f"http://127.0.0.1:{allocate_port()}",
         num_retries=0,
     )
 

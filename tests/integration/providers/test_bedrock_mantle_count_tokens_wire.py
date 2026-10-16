@@ -1,7 +1,6 @@
 import asyncio
 import json
 import re
-import socket
 import threading
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -23,6 +22,7 @@ from integration._support.bedrock_runtime_peer import respond as runtime_generat
 from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment, object_value
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from integration.providers._count_tokens_system_lift import (
     ASSISTANT,
     FOLLOW_UP,
@@ -181,19 +181,13 @@ def _mantle_environment(port: int) -> Mapping[str, str]:
 _INHERITED_BEARER: Final = ("AWS_BEARER_TOKEN_BEDROCK",)
 
 
-def _reserved_port() -> int:
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        return reserve.getsockname()[1]
-
-
 def _closed_port_url() -> str:
-    return f"http://127.0.0.1:{_reserved_port()}"
+    return f"http://127.0.0.1:{allocate_port()}"
 
 
 @pytest.fixture(scope="module")
 def mantle_port() -> int:
-    return _reserved_port()
+    return allocate_port()
 
 
 @pytest.fixture(scope="module")

@@ -134,6 +134,23 @@ resource "litellm_mcp_server" "enterprise_api_server" {
 }
 ```
 
+### OAuth 2.0 Client Credentials Kept Out of State
+
+```terraform
+resource "litellm_mcp_server" "crm" {
+  server_name = "crm"
+  url         = "https://mcp.example.com/mcp"
+  transport   = "http"
+  auth_type   = "oauth2"
+
+  client_id                = var.crm_client_id
+  client_secret_wo         = var.crm_client_secret
+  client_secret_wo_version = 1
+}
+```
+
+The proxy encrypts the credentials at rest and never returns them on read, so the only copy outside the proxy is the variable you pass in.
+
 ## Argument Reference
 
 The following arguments are supported:
@@ -149,7 +166,12 @@ The following arguments are supported:
 * `alias` - (Optional) Alias for the MCP server. Used for easier reference.
 * `description` - (Optional) Description of the MCP server.
 * `spec_version` - (Optional) MCP specification version. Defaults to `2024-11-05`.
-* `auth_type` - (Optional) Authentication type. Valid values: `none`, `bearer`, `basic`. Defaults to `none`.
+* `auth_type` - (Optional) Authentication type the proxy uses against this server. Valid values: `none`, `api_key`, `bearer_token`, `basic`, `authorization`, `oauth2`, `aws_sigv4`, `token`, `oauth2_token_exchange`, `oauth2_id_jag`, `true_passthrough`, `oauth_delegate` (`bearer` is still accepted). Defaults to `none`.
+* `auth_value_wo` - (Optional, Write-only, Sensitive) Credential for `api_key`, `bearer_token`, `basic` and `authorization` auth types (the token, or `user:password` for basic). Sent to the proxy on every apply and never written to plan or state. Requires Terraform 1.11 or later and `auth_value_wo_version`.
+* `auth_value_wo_version` - (Optional) Integer that triggers an update when `auth_value_wo` changes. Bump it whenever you rotate the token.
+* `client_id` - (Optional) OAuth 2.0 client id the proxy presents to the server's token endpoint (`oauth2` auth types). Not a secret, stored in state.
+* `client_secret_wo` - (Optional, Write-only, Sensitive) OAuth 2.0 client secret paired with `client_id`. Sent to the proxy on every apply and never written to plan or state. Requires Terraform 1.11 or later, `client_id` and `client_secret_wo_version`.
+* `client_secret_wo_version` - (Optional) Integer that triggers an update when `client_secret_wo` changes. Bump it whenever you rotate the secret.
 * `mcp_access_groups` - (Optional) List of access groups that can use this MCP server.
 * `command` - (Optional) Command to run for stdio transport.
 * `args` - (Optional) List of arguments for the command (stdio transport only). Do not pass secrets as arguments; args are shown in plans, stored unencrypted in state, and visible in the server's process list.

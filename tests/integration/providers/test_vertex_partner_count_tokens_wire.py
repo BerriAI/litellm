@@ -1,6 +1,5 @@
 import json
 import re
-import socket
 import threading
 import uuid
 from collections.abc import Callable, Mapping, Sequence
@@ -18,6 +17,7 @@ from integration._support.client import Gateway, Scenario, eventually
 from integration._support.process import owned_proxy_process
 from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from pydantic import JsonValue, TypeAdapter
 
 _BACKEND: Final = "claude-sonnet-4-6"
@@ -224,9 +224,7 @@ def _local_count(gateway: Gateway, body: Mapping[str, JsonValue]) -> int:
 
 
 def _closed_port_url() -> str:
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        return f"http://127.0.0.1:{reserve.getsockname()[1]}"
+    return f"http://127.0.0.1:{allocate_port()}"
 
 
 def _clients(stack: ExitStack, base_url: str, count: int) -> tuple[httpx.Client, ...]:

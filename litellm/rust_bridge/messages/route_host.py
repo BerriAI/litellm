@@ -9,6 +9,7 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.request_timeout_resolver import get_configured_request_timeout
 from litellm.llms.anthropic.pass_through.utils import is_reasoning_auto_summary_enabled
 from litellm.rust_bridge import failures
 from litellm.rust_bridge.public_call import optional_str
@@ -22,6 +23,7 @@ class MessagesSettings:
     drop_params: bool
     reasoning_auto_summary: bool
     additional_drop_params: Sequence[str]
+    request_timeout: float | None
 
 
 def response(value: Mapping[str, object]) -> AnthropicMessagesResponse:
@@ -69,5 +71,6 @@ def settings(kwargs: Mapping[str, object]) -> dict[str, object]:
             drop_params=_drop_params(kwargs),
             reasoning_auto_summary=is_reasoning_auto_summary_enabled(),
             additional_drop_params=_additional_drop_params(kwargs),
+            request_timeout=get_configured_request_timeout(),
         )
     )

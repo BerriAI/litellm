@@ -8,12 +8,12 @@ from typing import Final
 import httpx
 from integration._support.client import Gateway, eventually
 from integration._support.wire import Request, wire_server
+from integration._support.ports import allocate_port
 
 from integration.providers._vertex_batch_rows import (
     ROUTES,
     Route,
     chat_row,
-    closed_port,
     encoded,
     error_of,
     gcs_peer,
@@ -124,7 +124,7 @@ def test_concurrent_mixed_burst_names_each_bad_files_own_line_and_lands_each_goo
 
 
 def test_bucket_outage_answers_500_without_blaming_a_row_and_recovers_on_restart(gateway: Gateway) -> None:
-    port: Final = closed_port()
+    port: Final = allocate_port()
     with gateway.scenario() as scenario, _burst_client(gateway) as client:
         model: Final = vertex_model(gateway, scenario, f"http://127.0.0.1:{port}")
         with wire_server(gcs_peer, port=port) as before:

@@ -8,6 +8,7 @@ import pytest
 from integration._support.client import JSON_OBJECT, Gateway, eventually, object_value, string_value
 from integration._support.responses_vendor import same_response
 from integration._support.wire import Reply, Request, wire_server
+from integration._support.ports import allocate_port
 from integration.providers._coralbricks import (
     ANSWER,
     API_KEY,
@@ -24,7 +25,6 @@ from integration.providers._coralbricks import (
     catalog_rows,
     async_anthropic_client,
     async_openai_client,
-    closed_port,
     deployment,
     expected_spend,
     failing_provider,
@@ -365,7 +365,7 @@ def test_unreachable_api_base_reports_the_connection_error_and_leaves_the_proxy_
     with gateway.scenario() as scenario:
         control: Final = scenario.model()
         alias: Final = scenario.model(
-            model=f"{PROVIDER}/{MODEL}", api_base=f"http://127.0.0.1:{closed_port()}/v1", api_key=API_KEY
+            model=f"{PROVIDER}/{MODEL}", api_base=f"http://127.0.0.1:{allocate_port()}/v1", api_key=API_KEY
         )
         response: Final = eventually(
             lambda: gateway.request(
@@ -593,7 +593,7 @@ def test_fallback_from_a_refused_primary_lands_on_coralbricks(gateway: Gateway) 
     with wire_server(provider(identity)) as wire, gateway.scenario() as scenario:
         alias: Final = deployment(scenario, wire)
         primary: Final = scenario.model(
-            model=f"{PROVIDER}/{MODEL}", api_base=f"http://127.0.0.1:{closed_port()}/v1", api_key=API_KEY
+            model=f"{PROVIDER}/{MODEL}", api_base=f"http://127.0.0.1:{allocate_port()}/v1", api_key=API_KEY
         )
         wire.drain()
         response: Final = eventually(

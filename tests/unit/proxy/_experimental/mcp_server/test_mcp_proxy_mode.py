@@ -1,6 +1,7 @@
 from litellm.proxy._experimental.mcp_server import operations as mcp_operations
 import asyncio
 import json
+import logging
 from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
@@ -185,3 +186,68 @@ async def test_proxy_call_tool_on_a_never_listed_tool_hands_the_pre_hook_no_list
     assert pre_call_tool_check.await_args.kwargs["name"] == "echo"
     assert pre_call_tool_check.await_args.kwargs["tool"] is None
     assert listed is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("meta_tool", ("get_tool_schema", "call_tool"))
+async def test_proxy_schema_and_call_resolve_tool_id_without_waiting_on_unrelated_servers(
+    meta_tool: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """get_tool_schema and call_tool only need the server that owns tool_id. A sibling server whose
+    tools/list never answers, and whose session is slow to tear down once cancelled, must not hold up a
+    tool on a server that already listed, and cancelling that sibling is not an error."""
+    manager = mcp_operations.global_mcp_server_manager
+    fast = MCPServer(server_id="proxy-fast", name="proxy-fast", transport=MCPTransport.http, url="http://fast")
+    slow = MCPServer(server_id="proxy-slow", name="proxy-slow", transport=MCPTransport.http, url="http://slow")
+    auth = UserAPIKeyAuth(api_key="sk-proxy-fast", user_id="proxy-caller")
+    slow_release = asyncio.Event()
+    slow_teardown = asyncio.Event()
+    served_as = with_mcp_proxy_identity(MCPTool(name="proxy-fast-echo", inputSchema={}), fast.server_id)
+
+    async def fetch_tools(client: object, server_name: str) -> list[MCPTool]:
+        if server_name == slow.name:
+            try:
+                await slow_release.wait()
+            except asyncio.CancelledError:
+                await slow_teardown.wait()
+                raise
+        return [MCPTool(name="echo", description="Echo text back", inputSchema={"type": "object"})]
+
+    async def call_regular_mcp_tool(*, tasks: list[asyncio.Task[object]], **_: object) -> CallToolResult:
+        await asyncio.gather(*tasks)
+        return CallToolResult(content=[TextContent(type="text", text="echoed")])
+
+    arguments = {"tool_id": mcp_proxy_tool_id(served_as)}
+    with (
+        patch.dict(manager.registry, {fast.server_id: fast, slow.server_id: slow}),
+        patch.dict(manager.tool_name_to_mcp_server_name_mapping),
+        patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[slow, fast])),
+        patch.object(manager, "create_mcp_client", AsyncMock(return_value=object())),
+        patch.object(manager, "_fetch_tools_with_timeout", fetch_tools),
+        patch.object(manager, "pre_call_tool_check", AsyncMock(return_value={})),
+        patch.object(manager, "_call_regular_mcp_tool", call_regular_mcp_tool),
+    ):
+        try:
+            caplog.set_level(logging.ERROR, logger="LiteLLM")
+            result = await asyncio.wait_for(
+                handle_mcp_proxy_tool(
+                    name=meta_tool,
+                    arguments={**arguments, "arguments": {}} if meta_tool == "call_tool" else arguments,
+                    user_api_key_dict=auth,
+                ),
+                timeout=15,
+            )
+        finally:
+            slow_release.set()
+            slow_teardown.set()
+            await asyncio.sleep(0)
+            manager._drop_listed_tools(fast.server_id)
+            manager._drop_listed_tools(slow.server_id)
+
+    assert result.is_error is False
+    assert [record.getMessage() for record in caplog.records if slow.name in record.getMessage()] == []
+    payload = result.content[0].text
+    if meta_tool == "call_tool":
+        assert payload == "echoed"
+    else:
+        assert json.loads(payload)["tool_id"] == arguments["tool_id"]
