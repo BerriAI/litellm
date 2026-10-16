@@ -1354,20 +1354,34 @@ async def test_errors_other_than_cannot_count_raise_without_a_fallback(status_co
 
 
 @pytest.mark.asyncio
-async def test_failed_fallback_raises_the_requested_model_error_naming_the_fallback_error():
+async def test_unavailable_fallback_model_keeps_the_requested_model_error_unchanged():
     counter = _ScriptedCounter(
         {
             "us.anthropic.claude-sonnet-5-5": _provider_reply("sonnet", status_code=404),
-            "us.anthropic.claude-opus-5-5": _provider_reply("opus", status_code=400),
+            "us.anthropic.claude-opus-5-5": _provider_reply("opus", status_code=404),
         }
     )
 
     with pytest.raises(ProxyException) as raised:
-        await _ladder(counter, TokenCountSettings(framing=None, fallback_model="us.anthropic.claude-opus-5-5"))
+        await _ladder(counter, TokenCountSettings(framing=10, fallback_model="us.anthropic.claude-opus-5-5"))
 
-    assert raised.value.code == "404"
-    assert "scripted 404 for sonnet" in raised.value.message
-    assert "scripted 400 for opus" in raised.value.message
+    assert (raised.value.code, raised.value.message) == ("404", "scripted 404 for sonnet")
+
+
+@pytest.mark.parametrize("status_code", [400, 403, 429, 500])
+@pytest.mark.asyncio
+async def test_fallback_failure_answers_with_the_fallback_error_and_its_status(status_code: int):
+    counter = _ScriptedCounter(
+        {
+            "us.anthropic.claude-sonnet-5-5": _provider_reply("sonnet", status_code=404),
+            "us.anthropic.claude-opus-5-5": _provider_reply("opus", status_code=status_code),
+        }
+    )
+
+    with pytest.raises(ProxyException) as raised:
+        await _ladder(counter, TokenCountSettings(framing=10, fallback_model="us.anthropic.claude-opus-5-5"))
+
+    assert (raised.value.code, raised.value.message) == (str(status_code), f"scripted {status_code} for opus")
 
 
 @pytest.mark.asyncio
@@ -1467,6 +1481,46 @@ async def test_uncountable_model_keeps_the_provider_error_when_local_counting_is
 
     assert raised.value.code == "400"
     assert "scripted 400 for kimi" in raised.value.message
+
+
+@pytest.mark.parametrize(("model_info", "counted_models"), [
+    ({}, ["us.anthropic.claude-sonnet-5-5", "us.anthropic.claude-opus-5-5"]),
+    ({"token_count_fallback_model": ""}, ["us.anthropic.claude-sonnet-5-5"]),
+])
+@pytest.mark.asyncio
+async def test_empty_configured_fallback_model_turns_off_the_shipped_fallback(
+    monkeypatch: pytest.MonkeyPatch, model_info: dict[str, object], counted_models: list[str]
+):
+    counter: Final = _ScriptedCounter(
+        {
+            "us.anthropic.claude-sonnet-5-5": _provider_reply("sonnet", status_code=404),
+            "us.anthropic.claude-opus-5-5": _provider_reply("opus", status_code=404),
+        }
+    )
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "sonnet",
+                    "litellm_params": {"model": "bedrock/us.anthropic.claude-sonnet-5-5"},
+                    "model_info": model_info,
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "_get_provider_token_counter", lambda deployment, model: (counter, model, "bedrock")
+    )
+
+    with pytest.raises(ProxyException) as raised:
+        await token_counter(
+            request=TokenCountRequest(model="sonnet", messages=[{"role": "user", "content": "hi"}]), call_endpoint=True
+        )
+
+    assert (raised.value.code, raised.value.message) == ("404", "scripted 404 for sonnet")
+    assert [call[0] for call in counter.calls] == counted_models
 
 
 @pytest.mark.asyncio

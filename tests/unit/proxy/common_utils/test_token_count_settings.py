@@ -29,9 +29,15 @@ _COST_MAP: Final = Path(__file__).parents[4] / "model_prices_and_context_window.
             TokenCountSettings(framing=97, fallback_model="anthropic.claude-opus-5-5"),
         ),
         (
-            {"token_count_framing": True, "token_count_fallback_model": ""},
+            {"token_count_framing": True, "token_count_fallback_model": 5},
             TokenCountSettings(framing=97, fallback_model="anthropic.claude-opus-5-5"),
         ),
+        ({"token_count_framing": 78.0}, TokenCountSettings(framing=78, fallback_model="anthropic.claude-opus-5-5")),
+        ({"token_count_framing": 1.5}, TokenCountSettings(framing=97, fallback_model="anthropic.claude-opus-5-5")),
+        ({"token_count_framing": -1}, TokenCountSettings(framing=97, fallback_model="anthropic.claude-opus-5-5")),
+        ({"token_count_framing": "78"}, TokenCountSettings(framing=97, fallback_model="anthropic.claude-opus-5-5")),
+        ({"token_count_fallback_model": ""}, TokenCountSettings(framing=97, fallback_model=None)),
+        ({"token_count_fallback_model": "  "}, TokenCountSettings(framing=97, fallback_model=None)),
     ],
 )
 def test_config_overrides_the_cost_map_default_key_by_key(

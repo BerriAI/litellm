@@ -309,10 +309,11 @@ TOKEN_COUNT_ENTRY: Final = MappingProxyType(
 )
 
 
-def test_generator_classifies_token_count_settings():
+@pytest.mark.parametrize("framing", [0, 78])
+def test_generator_classifies_token_count_settings(framing: int):
     generator = load_generator()
     schema = json.loads(generator.render(generator.build_schema({"some-model": dict(TOKEN_COUNT_ENTRY)})))
-    assert build_validator(schema).is_valid({"some-model": dict(TOKEN_COUNT_ENTRY)})
+    assert build_validator(schema).is_valid({"some-model": {**TOKEN_COUNT_ENTRY, "token_count_framing": framing}})
 
 
 @pytest.mark.parametrize(
@@ -320,6 +321,7 @@ def test_generator_classifies_token_count_settings():
     [
         {"token_count_framing": -1},
         {"token_count_framing": "78"},
+        {"token_count_framing": 1.5},
         {"token_count_fallback_model": ""},
         {"token_count_fallback_model": 5},
     ],

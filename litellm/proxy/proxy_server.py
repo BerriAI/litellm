@@ -14447,7 +14447,13 @@ async def _provider_or_fallback_token_count(
         if isinstance(fallback, TokenCountResponse):
             return fallback.model_copy(update={"count_source": "fallback_model", "model_used": settings.fallback_model})
         if isinstance(fallback, ProviderCountFailure):
-            raise primary.with_fallback_failure(settings.fallback_model, fallback).to_proxy_exception()
+            verbose_proxy_logger.warning(
+                "Token count fallback model %s failed with %s: %s",
+                settings.fallback_model,
+                fallback.status_code,
+                fallback.message,
+            )
+            raise (primary if fallback.model_unavailable else fallback).to_proxy_exception()
         raise primary.to_proxy_exception()
     if settings.framing is not None and local_estimate_allowed:
         return None

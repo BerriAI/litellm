@@ -9,6 +9,7 @@ from litellm.types.token_count import TokenCountSourceFields
 from litellm.types.utils import TokenCountResponse
 
 CANNOT_COUNT_MODEL_STATUSES: Final = frozenset({400, 404})
+MODEL_UNAVAILABLE_STATUS: Final = 404
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,11 +27,9 @@ class ProviderCountFailure:
     def cannot_count_model(self) -> bool:
         return self.status_code in CANNOT_COUNT_MODEL_STATUSES
 
-    def with_fallback_failure(self, fallback_model: str, fallback: "ProviderCountFailure") -> "ProviderCountFailure":
-        return ProviderCountFailure(
-            status_code=self.status_code,
-            message=f"{self.message} The fallback model {fallback_model} could not count it either: {fallback.message}",
-        )
+    @property
+    def model_unavailable(self) -> bool:
+        return self.status_code == MODEL_UNAVAILABLE_STATUS
 
     def to_proxy_exception(self) -> ProxyException:
         return ProxyException(
@@ -49,19 +48,36 @@ def cost_map_entry(model: str) -> Mapping[str, object]:
 
 
 def _framing(value: object) -> int | None:
-    return value if isinstance(value, int) and not isinstance(value, bool) else None
+    match value:
+        case bool():
+            return None
+        case int() if value >= 0:
+            return value
+        case float() if value.is_integer() and value >= 0:
+            return int(value)
+        case _:
+            return None
 
 
 def _fallback_model(value: object) -> str | None:
-    return value if isinstance(value, str) and value else None
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _resolved_fallback_model(configured: object, default: object) -> str | None:
+    match configured:
+        case str():
+            return _fallback_model(configured)
+        case _:
+            return _fallback_model(default)
 
 
 def resolve_token_count_settings(configured: Mapping[str, object], default: Mapping[str, object]) -> TokenCountSettings:
     framing: Final = _framing(configured.get("token_count_framing"))
-    fallback_model: Final = _fallback_model(configured.get("token_count_fallback_model"))
     return TokenCountSettings(
         framing=framing if framing is not None else _framing(default.get("token_count_framing")),
-        fallback_model=fallback_model or _fallback_model(default.get("token_count_fallback_model")),
+        fallback_model=_resolved_fallback_model(
+            configured.get("token_count_fallback_model"), default.get("token_count_fallback_model")
+        ),
     )
 
 
