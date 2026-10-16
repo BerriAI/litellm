@@ -2579,3 +2579,31 @@ def test_router_get_model_group_info():
     assert model_group_info.model_group == "gpt-4"
     assert model_group_info.input_cost_per_token > 0
     assert model_group_info.output_cost_per_token > 0
+
+
+@pytest.mark.asyncio()
+async def test_router_allowed_model_region_filters_requests_without_messages_or_input():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "region-test",
+                "litellm_params": {"model": "openai/gpt-4o", "region_name": "eu"},
+                "model_info": {"id": "eu-deployment"},
+            },
+            {
+                "model_name": "region-test",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "region_name": "us"},
+                "model_info": {"id": "us-deployment"},
+            },
+        ],
+        enable_pre_call_checks=True,
+    )
+
+    deployments = await router.async_get_healthy_deployments(
+        model="region-test",
+        request_kwargs={"allowed_model_region": "eu"},
+        messages=None,
+        input=None,
+    )
+
+    assert [deployment["model_info"]["id"] for deployment in deployments] == ["eu-deployment"]
