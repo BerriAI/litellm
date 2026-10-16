@@ -1218,14 +1218,25 @@ def _agent_turns_with_tool_results(rounds: int) -> list[dict[str, JsonValue]]:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("additional_drop_params", "router_additional_drop_params", "request_options", "expected_tool_outputs_sent"),
     (
-        (None, None, {}, 1),
-        (["context_management"], None, {}, 3),
-        (None, None, {"additional_drop_params": ["context_management"]}, 3),
-        (["context_management"], None, {"additional_drop_params": []}, 1),
-        (None, ["context_management"], {}, 3),
-        (None, ["context_management"], {"additional_drop_params": []}, 1),
+        "requested_model",
+        "additional_drop_params",
+        "router_additional_drop_params",
+        "request_options",
+        "expected_tool_outputs_sent",
+    ),
+    (
+        ("gemini-agent", None, None, {}, 1),
+        ("gemini-agent", ["context_management"], None, {}, 3),
+        ("gemini-agent", None, None, {"additional_drop_params": ["context_management"]}, 3),
+        ("gemini-agent", ["context_management"], None, {"additional_drop_params": []}, 1),
+        ("gemini-agent", None, ["context_management"], {}, 3),
+        ("gemini-agent", None, ["context_management"], {"additional_drop_params": []}, 1),
+        ("gemini/gemini-2.5-flash", None, None, {}, 1),
+        ("gemini/gemini-2.5-flash", ["context_management"], None, {}, 3),
+        ("gemini/gemini-2.5-flash", None, ["context_management"], {}, 3),
+        ("gemini/gemini-2.5-flash", None, None, {"additional_drop_params": ["context_management"]}, 3),
+        ("gemini/gemini-2.5-flash", ["context_management"], None, {"additional_drop_params": []}, 1),
     ),
     ids=(
         "edits-applied",
@@ -1234,9 +1245,15 @@ def _agent_turns_with_tool_results(rounds: int) -> list[dict[str, JsonValue]]:
         "request-overrides-the-deployment-drop",
         "router-default-drops-context-management",
         "request-overrides-the-router-default-drop",
+        "litellm-model-name-edits-applied",
+        "litellm-model-name-deployment-drops-context-management",
+        "litellm-model-name-router-default-drops-context-management",
+        "litellm-model-name-request-drops-context-management",
+        "litellm-model-name-request-overrides-the-deployment-drop",
     ),
 )
 async def test_gemini_messages_count_tokens_applies_the_context_edits_inference_applies(
+    requested_model: str,
     additional_drop_params: list[str] | None,
     router_additional_drop_params: list[str] | None,
     request_options: dict[str, JsonValue],
@@ -1262,7 +1279,7 @@ async def test_gemini_messages_count_tokens_applies_the_context_edits_inference_
     )
     request_body: Final[dict[str, JsonValue]] = {
         **request_options,
-        "model": "gemini-agent",
+        "model": requested_model,
         "messages": _agent_turns_with_tool_results(3),
         "tools": [{"name": "read_file", "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}}}],
         "context_management": {

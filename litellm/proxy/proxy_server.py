@@ -14466,7 +14466,13 @@ def _routed_litellm_params(router: Router, model: str) -> tuple[Mapping[str, obj
     by_id: Final = None if model in router.model_names else router.get_deployment(model_id=model)
     if by_id is not None:
         return (by_id.litellm_params.model_dump(),)
-    return tuple(deployment["litellm_params"] for deployment in router.get_model_list(model_name=model) or ())
+    by_name: Final = tuple(deployment["litellm_params"] for deployment in router.get_model_list(model_name=model) or ())
+    if by_name:
+        return by_name
+    every_deployment: Final[tuple[Mapping[str, object], ...]] = tuple(
+        deployment["litellm_params"] for deployment in router.get_model_list() or ()
+    )
+    return tuple(params for params in every_deployment if "model" in params and params["model"] == model)
 
 
 def _router_default_litellm_params(router: Router) -> Mapping[str, object]:
