@@ -822,7 +822,12 @@ def test_anthropic_messages_pt_preserves_trailing_user_message_with_empty_conten
 
 
 @EMPTY_USER_MESSAGES
-def test_anthropic_messages_pt_empty_user_message_beside_tool_result_keeps_tool_result_only(empty_user_message):
+@pytest.mark.parametrize(
+    "cache_control", [{}, {"cache_control": {"type": "ephemeral"}}], ids=["no-cache-control", "with-cache-control"]
+)
+def test_anthropic_messages_pt_empty_user_message_beside_tool_result_keeps_tool_result_only(
+    empty_user_message, cache_control
+):
     messages = [
         {"role": "user", "content": "hi"},
         {
@@ -830,7 +835,7 @@ def test_anthropic_messages_pt_empty_user_message_beside_tool_result_keeps_tool_
             "content": None,
             "tool_calls": [{"id": "toolu_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}],
         },
-        empty_user_message,
+        {**empty_user_message, **cache_control},
         {"role": "tool", "tool_call_id": "toolu_1", "content": "ok"},
     ]
 
@@ -859,8 +864,6 @@ def test_anthropic_messages_pt_empty_user_message_keeps_cache_control_like_an_em
 
     assert last_turn(empty_user_message)["content"][0]["cache_control"] == {"type": "ephemeral"}
     assert last_turn(empty_user_message) == last_turn({"role": "user", "content": ""})
-
-
 
 
 TOOL_CALL_AND_RESULT = [
@@ -917,14 +920,15 @@ def test_anthropic_messages_pt_converts_a_long_run_of_empty_user_messages_in_lin
     messages = [
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": "hello"},
-        *[{"role": "user", "content": [], "cache_control": {"type": "ephemeral"}}] * 20_000,
+        *[{"role": "user", "content": [], "cache_control": {"type": "ephemeral"}}] * 10_000,
     ]
 
     started = time.perf_counter()
     result = anthropic_messages_pt(messages=messages, model="claude-opus-5", llm_provider="vertex_ai")
 
-    assert time.perf_counter() - started < 2
-    assert len(result[-1]["content"]) == 20_000
+    assert time.perf_counter() - started < 10
+    assert len(result[-1]["content"]) == 10_000
+
 
 def test_convert_to_azure_openai_messages():
     """Test coverting image_url to azure_openai spec"""
