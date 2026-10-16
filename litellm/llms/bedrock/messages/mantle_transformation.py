@@ -67,6 +67,9 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
     def should_filter_anthropic_beta_headers(self) -> bool:
         return False
 
+    def drops_dangerous_tool_use_beta_without_safeguards(self) -> bool:
+        return False
+
     def get_complete_url(
         self,
         api_base: str | None,
