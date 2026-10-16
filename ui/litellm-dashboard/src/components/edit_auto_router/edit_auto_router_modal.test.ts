@@ -1,4 +1,4 @@
-import { buildUpdatedComplexityRouterConfig } from "./edit_auto_router_modal";
+import { buildUpdatedComplexityRouterConfig, hydrateComplexityRouterConfig } from "./edit_auto_router_modal";
 
 const storedConfigValue = {
   tiers: {
@@ -47,8 +47,11 @@ const expectedClassifiedTierConfig = {
   semantic_keyword_matching: true,
   embedding_model: "voyage-4-large",
   match_threshold: 0.65,
+  classification_mode: "every_request",
   session_affinity: false,
   deployment_affinity: true,
+  modality_routing: false,
+  modality_pin_override: false,
   adaptive: true,
   adaptive_weights: { quality: 0.4, cost: 0.6 },
   adaptive_eligible: "classified_tier",
@@ -68,11 +71,38 @@ const expectedAdaptiveDisabledConfig = {
   semantic_keyword_matching: true,
   embedding_model: "voyage-4-large",
   match_threshold: 0.65,
+  classification_mode: "every_request",
   session_affinity: false,
   deployment_affinity: true,
+  modality_routing: false,
+  modality_pin_override: false,
 };
 
 describe("buildUpdatedComplexityRouterConfig", () => {
+  it.each(["heuristic_first", "hybrid"] as const)(
+    "round-trips %s local heuristic selection without materializing the legacy default",
+    (classifier_type) => {
+      const stored = {
+        ...storedConfigValue,
+        classifier_type,
+        heuristic_first_max_tier: "SIMPLE",
+        hybrid_boundary_margin: 0.1,
+      };
+      const legacy = hydrateComplexityRouterConfig(stored, null);
+      expect(buildUpdatedComplexityRouterConfig(stored, legacy)).not.toHaveProperty("local_heuristic");
+      const selected = { ...stored, local_heuristic: "heuristic_v2", heuristic_v2_success_threshold: 0.9 };
+      const hydrated = hydrateComplexityRouterConfig(selected, null);
+      expect(hydrated.local_heuristic).toBe("heuristic_v2");
+      expect(buildUpdatedComplexityRouterConfig(selected, hydrated)).toMatchObject({
+        local_heuristic: "heuristic_v2",
+        heuristic_v2_success_threshold: 0.9,
+      });
+      expect(buildUpdatedComplexityRouterConfig(selected, { ...hydrated, classifier_type: "llm" })).not.toHaveProperty(
+        "local_heuristic",
+      );
+    },
+  );
+
   it("preserves unrelated options and omits the penalty for classified-tier routing", () => {
     const updatedConfig = buildUpdatedComplexityRouterConfig(storedConfig, classifiedTierValue);
 
@@ -83,6 +113,46 @@ describe("buildUpdatedComplexityRouterConfig", () => {
     const updatedConfig = buildUpdatedComplexityRouterConfig(storedConfig, adaptiveDisabledValue);
 
     expect(updatedConfig).toEqual(expectedAdaptiveDisabledConfig);
+  });
+
+  it("hydrates a stored modality_routing into form state and defaults absent to off", () => {
+    expect(hydrateComplexityRouterConfig({ ...storedConfig, modality_routing: true }, null).modality_routing).toBe(
+      true,
+    );
+    expect(hydrateComplexityRouterConfig(storedConfig, null).modality_routing).toBe(false);
+  });
+
+  it("round-trips modality_routing explicitly in both directions", () => {
+    const enabled = buildUpdatedComplexityRouterConfig(storedConfig, {
+      ...classifiedTierValue,
+      modality_routing: true,
+    });
+    expect(enabled.modality_routing).toBe(true);
+    const disabled = buildUpdatedComplexityRouterConfig(
+      { ...storedConfig, modality_routing: true },
+      { ...classifiedTierValue, modality_routing: false },
+    );
+    expect(disabled.modality_routing).toBe(false);
+  });
+
+  it("hydrates a stored modality_pin_override into form state and defaults absent to off", () => {
+    expect(
+      hydrateComplexityRouterConfig({ ...storedConfig, modality_pin_override: true }, null).modality_pin_override,
+    ).toBe(true);
+    expect(hydrateComplexityRouterConfig(storedConfig, null).modality_pin_override).toBe(false);
+  });
+
+  it("round-trips modality_pin_override explicitly in both directions", () => {
+    const enabled = buildUpdatedComplexityRouterConfig(storedConfig, {
+      ...classifiedTierValue,
+      modality_pin_override: true,
+    });
+    expect(enabled.modality_pin_override).toBe(true);
+    const disabled = buildUpdatedComplexityRouterConfig(
+      { ...storedConfig, modality_pin_override: true },
+      { ...classifiedTierValue, modality_pin_override: false },
+    );
+    expect(disabled.modality_pin_override).toBe(false);
   });
 
   it("includes return_raw_model_name only when enabled", () => {

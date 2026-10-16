@@ -34,8 +34,11 @@ from fastapi import HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 from pydantic import ValidationError
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+from litellm.proxy.management_endpoints.sso_helper_utils import SSO_SESSIONS_TARGET
 from litellm.proxy.management_endpoints.types import CustomOpenID, get_litellm_user_role
 from litellm.proxy.utils import get_custom_url
 
@@ -57,7 +60,7 @@ _SAML_AUTHN_STATE_COOKIE: Final = "litellm_saml_authn"
 _SAML_IDP_SETTINGS_CACHE_PREFIX: Final = "saml_idp_settings"
 _SAML_AUTHN_REQUEST_CACHE_PREFIX: Final = "saml_authn_request"
 _SAML_CONSUMED_ASSERTION_CACHE_PREFIX: Final = "saml_consumed_assertion"
-_SAML_AUTHN_REQUEST_TTL_SECONDS: Final = 600
+SAML_AUTHN_REQUEST_TTL_SECONDS: Final = 600
 _SAML_IDP_METADATA_TTL_SECONDS: Final = 3600
 _SAML_METADATA_FETCH_TIMEOUT_SECONDS: Final = 10
 _SAML_MAX_POST_BYTES: Final = 5 * 1024 * 1024
@@ -131,7 +134,7 @@ class SAMLAuthHandler:
 
     @staticmethod
     def _is_https(request: Request) -> bool:
-        return SAMLAuthHandler._base_url(request).startswith("https")
+        return IPAddressUtils.is_request_https(request)
 
     @staticmethod
     def _acs_url(request: Request) -> str:
@@ -146,6 +149,7 @@ class SAMLAuthHandler:
         return SAMLAuthHandler._env("SAML_SP_ENTITY_ID") or SAMLAuthHandler._metadata_url(request)
 
     @staticmethod
+    @with_service_target(SSO_SESSIONS_TARGET)
     async def _load_idp_settings(cache: DualCache) -> dict[str, object]:
         metadata_url: Final = SAMLAuthHandler._env("SAML_IDP_METADATA_URL")
         metadata_xml: Final = SAMLAuthHandler._env("SAML_IDP_METADATA_XML")
@@ -157,7 +161,7 @@ class SAMLAuthHandler:
             )
 
         cache_key: Final = f"{_SAML_IDP_SETTINGS_CACHE_PREFIX}:{hashlib.sha256(source.encode()).hexdigest()}"
-        cached: Final = cache.get_cache(key=cache_key)
+        cached: Final = await cache.async_get_cache(key=cache_key)
         if isinstance(cached, dict):
             return cast(dict[str, object], cached)  # cast-ok: untyped python3-saml
 
@@ -177,7 +181,7 @@ class SAMLAuthHandler:
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="Could not parse an IdP entityID/SSO URL/certificate from the SAML metadata.",
             )
-        cache.set_cache(key=cache_key, value=idp_settings, ttl=_SAML_IDP_METADATA_TTL_SECONDS)
+        await cache.async_set_cache(key=cache_key, value=idp_settings, ttl=_SAML_IDP_METADATA_TTL_SECONDS)
         return idp_settings
 
     @staticmethod
@@ -240,6 +244,7 @@ class SAMLAuthHandler:
             )
 
     @staticmethod
+    @with_service_target(SSO_SESSIONS_TARGET)
     async def build_login_redirect(
         request: Request, cache: DualCache, relay_state: str | None = None
     ) -> RedirectResponse:
@@ -248,16 +253,16 @@ class SAMLAuthHandler:
         response: Final = RedirectResponse(url=redirect_url, status_code=303)
         request_id: Final = cast(str | None, auth.get_last_request_id())  # cast-ok: untyped python3-saml
         if request_id is not None:
-            cache.set_cache(
+            await cache.async_set_cache(
                 key=f"{_SAML_AUTHN_REQUEST_CACHE_PREFIX}:{request_id}",
                 value="1",
-                ttl=_SAML_AUTHN_REQUEST_TTL_SECONDS,
+                ttl=SAML_AUTHN_REQUEST_TTL_SECONDS,
             )
             secure: Final = SAMLAuthHandler._is_https(request)
             response.set_cookie(
                 key=_SAML_AUTHN_STATE_COOKIE,
                 value=request_id,
-                max_age=_SAML_AUTHN_REQUEST_TTL_SECONDS,
+                max_age=SAML_AUTHN_REQUEST_TTL_SECONDS,
                 httponly=True,
                 secure=secure,
                 samesite="none" if secure else "lax",
@@ -357,6 +362,7 @@ class SAMLAuthHandler:
         return None
 
     @staticmethod
+    @with_service_target(SSO_SESSIONS_TARGET)
     async def _enforce_response_binding(
         auth: "OneLogin_Saml2_Auth",
         cache: DualCache,
@@ -366,7 +372,7 @@ class SAMLAuthHandler:
 
         if in_response_to is not None:
             authn_key: Final = f"{_SAML_AUTHN_REQUEST_CACHE_PREFIX}:{in_response_to}"
-            if cache.get_cache(key=authn_key) is None:
+            if await cache.async_get_cache(key=authn_key) is None:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="SAML response references an unknown or already-used login request.",
@@ -442,7 +448,9 @@ class SAMLAuthHandler:
         last_name: Final = SAMLAuthHandler._attribute_value(
             attributes, "SAML_ATTRIBUTE_LAST_NAME", _LAST_NAME_ATTRIBUTE_CANDIDATES
         )
-        role_value = SAMLAuthHandler._attribute_value(attributes, "SAML_ATTRIBUTE_ROLE", _ROLE_ATTRIBUTE_CANDIDATES)
+        role_values: Final = SAMLAuthHandler._attribute_values(
+            attributes, "SAML_ATTRIBUTE_ROLE", _ROLE_ATTRIBUTE_CANDIDATES
+        )
         team_ids: Final = SAMLAuthHandler._attribute_values(
             attributes, "SAML_ATTRIBUTE_TEAM_IDS", _TEAM_IDS_ATTRIBUTE_CANDIDATES
         )
@@ -463,7 +471,7 @@ class SAMLAuthHandler:
                 picture=None,
                 provider="saml",
                 team_ids=team_ids,
-                user_role=get_litellm_user_role(role_value) if role_value else None,
+                user_role=get_litellm_user_role(role_values),
             )
         except ValidationError as e:
             raise HTTPException(

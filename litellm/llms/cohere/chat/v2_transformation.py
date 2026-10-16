@@ -1,5 +1,6 @@
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -21,6 +22,7 @@ from ..common_utils import validate_environment as cohere_validate_environment
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -92,7 +94,7 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         tool_results: list | None = None,
         seed: int | None = None,
     ) -> None:
-        locals_: Final = locals()
+        locals_: Final[Mapping[str, object]] = MappingProxyType(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -189,7 +191,7 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

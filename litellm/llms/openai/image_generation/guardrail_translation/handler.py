@@ -5,7 +5,8 @@ This module provides guardrail translation support for OpenAI's image generation
 The handler processes the 'prompt' parameter for guardrails.
 """
 
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -13,6 +14,8 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
     from litellm.utils import ImageResponse
 
 
@@ -32,8 +35,8 @@ class OpenAIImageGenerationHandler(BaseTranslation):
         self,
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None = None,
-    ) -> Any:
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
+    ) -> Mapping[str, object]:
         """
         Process input prompt by applying guardrails to text content.
 
@@ -82,10 +85,10 @@ class OpenAIImageGenerationHandler(BaseTranslation):
         self,
         response: "ImageResponse",
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None = None,
-        user_api_key_dict: Any | None = None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
+        user_api_key_dict: "UserAPIKeyAuth | None" = None,
         request_data: dict | None = None,
-    ) -> Any:
+    ) -> "ImageResponse":
         """
         Process output response - typically not needed for image generation.
 

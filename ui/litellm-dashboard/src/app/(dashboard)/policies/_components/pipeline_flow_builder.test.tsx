@@ -169,8 +169,7 @@ describe("PipelineFlowBuilder", () => {
 });
 
 describe("FlowBuilderPage", () => {
-  it("stacks its full-screen shell below the portalled popup layer", () => {
-    const portalLayerZIndex = 50;
+  it("renders its shell in flow with no stacking level, so it can never cover the portalled popup layer", () => {
     const { container } = renderWithProviders(
       <FlowBuilderPage
         onBack={vi.fn()}
@@ -183,8 +182,12 @@ describe("FlowBuilderPage", () => {
     );
 
     const shell = container.firstElementChild as HTMLElement;
+    const shellClasses = shell.className.split(/\s+/);
 
-    expect(shell).toHaveStyle({ position: "fixed" });
-    expect(Number(shell.style.zIndex)).toBeLessThan(portalLayerZIndex);
+    expect(shell).toContainElement(screen.getByPlaceholderText("Policy name..."));
+    expect(shell).not.toHaveStyle({ position: "fixed" });
+    expect(shellClasses).not.toContain("fixed");
+    expect(window.getComputedStyle(shell).zIndex).not.toMatch(/\d/);
+    expect(shellClasses.filter((cls) => /^-?z-/.test(cls))).toEqual([]);
   });
 });

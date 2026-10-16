@@ -76,11 +76,12 @@ import time
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Optional
 
+import httpx
 import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey, RSAPublicKey
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
@@ -89,6 +90,7 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.guardrail_base_init import GuardrailBaseInitKwargs
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypesLiteral
 
@@ -105,6 +107,19 @@ class _JWTDecodeKwargs(TypedDict):
     options: "Options"
     audience: NotRequired[str]
     issuer: NotRequired[str]
+
+
+class _DebugHeaderClaims(TypedDict, total=False):
+    sub: ReadOnly[object]
+    iss: ReadOnly[object]
+    exp: ReadOnly[object]
+    scope: ReadOnly[str]
+
+
+class _SignedClaimSummary(TypedDict):
+    sub: ReadOnly[object]
+    act: ReadOnly[Mapping[str, object]]
+    exp: ReadOnly[object]
 
 
 # Module-level singleton for the JWKS discovery endpoint to access.
@@ -159,7 +174,7 @@ def _compute_kid(public_key: RSAPublicKey) -> str:
     return hashlib.sha256(der_bytes).hexdigest()[:16]
 
 
-async def _fetch_jwks(jwks_uri: str) -> Sequence[Mapping[str, object]]:
+async def _fetch_jwks(jwks_uri: str, timeout: float | httpx.Timeout | None = None) -> Sequence[Mapping[str, object]]:
     """
     Fetch and cache a JWKS from the given URI.
 
@@ -178,7 +193,7 @@ async def _fetch_jwks(jwks_uri: str) -> Sequence[Mapping[str, object]]:
     )
 
     client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
-    resp: Final = await client.get(jwks_uri, headers={"Accept": "application/json"})
+    resp: Final = await client.get(jwks_uri, headers={"Accept": "application/json"}, timeout=timeout)
     resp.raise_for_status()
     jwks_body: Final[Mapping[str, Sequence[Mapping[str, object]]]] = resp.json()
     fetched_keys: Final = jwks_body.get("keys", [])
@@ -186,7 +201,9 @@ async def _fetch_jwks(jwks_uri: str) -> Sequence[Mapping[str, object]]:
     return fetched_keys
 
 
-async def _fetch_oidc_discovery(discovery_uri: str) -> _OIDCDiscoveryDocument:
+async def _fetch_oidc_discovery(
+    discovery_uri: str, timeout: float | httpx.Timeout | None = None
+) -> _OIDCDiscoveryDocument:
     """Fetch an OIDC discovery document and return its parsed JSON."""
     from litellm.llms.custom_httpx.http_handler import (
         get_async_httpx_client,
@@ -194,7 +211,7 @@ async def _fetch_oidc_discovery(discovery_uri: str) -> _OIDCDiscoveryDocument:
     )
 
     client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
-    resp: Final = await client.get(discovery_uri, headers={"Accept": "application/json"})
+    resp: Final = await client.get(discovery_uri, headers={"Accept": "application/json"}, timeout=timeout)
     resp.raise_for_status()
     document: Final[_OIDCDiscoveryDocument] = resp.json()
     return document
@@ -265,7 +282,8 @@ class MCPJWTSigner(CustomGuardrail):
         **kwargs: Any,
     ) -> None:
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
-        super().__init__(**kwargs)
+        base_kwargs: Final[GuardrailBaseInitKwargs] = kwargs
+        super().__init__(**base_kwargs)
 
         # --- Signing key setup ---
         key_material: Final = os.environ.get(self.SIGNING_KEY_ENV)
@@ -402,7 +420,7 @@ class MCPJWTSigner(CustomGuardrail):
         now: Final = time.time()
         cache_expired: Final = (now - self._oidc_discovery_fetched_at) >= self._OIDC_DISCOVERY_TTL
         if (self._oidc_discovery_doc is None or cache_expired) and self.access_token_discovery_uri:
-            doc: Final = await _fetch_oidc_discovery(self.access_token_discovery_uri)
+            doc: Final = await _fetch_oidc_discovery(self.access_token_discovery_uri, timeout=self.timeout)
             if "jwks_uri" in doc:
                 self._oidc_discovery_doc = doc
                 self._oidc_discovery_fetched_at = now
@@ -425,7 +443,7 @@ class MCPJWTSigner(CustomGuardrail):
                 f"at {self.access_token_discovery_uri!r} has no 'jwks_uri'."
             )
 
-        jwks_keys: Final = await _fetch_jwks(jwks_uri)
+        jwks_keys: Final = await _fetch_jwks(jwks_uri, timeout=self.timeout)
 
         # Only read `kid` from the unverified header — never `alg`.
         # Reading `alg` from an attacker-controlled header enables algorithm
@@ -496,6 +514,7 @@ class MCPJWTSigner(CustomGuardrail):
             self.token_introspection_endpoint,
             data={"token": token},
             headers={"Accept": "application/json"},
+            timeout=self.timeout,
         )
         resp.raise_for_status()
         result: Final[dict[str, object]] = resp.json()
@@ -677,7 +696,7 @@ class MCPJWTSigner(CustomGuardrail):
         data: dict,
         jwt_claims: Mapping[str, object] | None = None,
         call_type: CallTypesLiteral | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Build JWT claims for the outbound MCP access token.
 
@@ -752,7 +771,7 @@ class MCPJWTSigner(CustomGuardrail):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _build_debug_header(claims: dict[str, Any], kid: str) -> str:
+    def _build_debug_header(claims: _DebugHeaderClaims, kid: str) -> str:
         """
         Build the x-litellm-mcp-debug header value.
 
@@ -786,6 +805,8 @@ class MCPJWTSigner(CustomGuardrail):
         Signs outbound MCP tool calls and tools/list requests.
         """
         if call_type not in _MCP_JWT_CALL_TYPES:
+            return data
+        if call_type == "list_mcp_tools" and "extra_headers" not in data:
             return data
 
         hook_data: Final = dict(data)
@@ -873,16 +894,18 @@ class MCPJWTSigner(CustomGuardrail):
         # FR-9: Debug header
         # ------------------------------------------------------------------
         if self.debug_headers:
-            new_headers["x-litellm-mcp-debug"] = self._build_debug_header(claims, self._kid)
+            debug_claims: Final[_DebugHeaderClaims] = claims
+            new_headers["x-litellm-mcp-debug"] = self._build_debug_header(debug_claims, self._kid)
 
         hook_data["extra_headers"] = new_headers
 
+        logged_claims: Final[_SignedClaimSummary] = claims
         verbose_proxy_logger.debug(
             "MCPJWTSigner: signed JWT sub=%s act=%s tool=%s exp=%d verified=%s channel=%s call_type=%s",
-            claims.get("sub"),
-            claims.get("act", {}).get("sub"),
+            logged_claims.get("sub"),
+            logged_claims.get("act", {}).get("sub"),
             hook_data.get("mcp_tool_name"),
-            claims["exp"],
+            logged_claims["exp"],
             jwt_claims is not None,
             bool(self.channel_token_audience),
             call_type,

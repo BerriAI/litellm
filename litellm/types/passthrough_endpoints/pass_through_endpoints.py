@@ -1,7 +1,10 @@
 from enum import Enum
 from typing import Final
 
+from pydantic import Field
 from typing_extensions import TypedDict
+
+from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 # Request.state key for programmatic pass-through callers (e.g. Bedrock proxy) that attach
 # JSON without a FastAPI `custom_body` parameter (which would consume the HTTP body).
@@ -10,6 +13,9 @@ LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY: Final = "litellm_pass_through_custom
 # Request.state key for programmatic pass-through callers that must preserve an
 # exact byte/string body, such as AWS SigV4-signed requests.
 LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY: Final = "litellm_pass_through_raw_body"
+
+# `model_info` of the router deployment a provider route (e.g. Vertex) resolved for this request.
+LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY: Final = "litellm_pass_through_deployment_model_info"
 
 # Attribute set on the FastAPI endpoint function of every user-defined pass-through
 # route. Auth reads it off the dispatched endpoint (``request.scope["endpoint"]``) to
@@ -22,9 +28,12 @@ LITELLM_PASS_THROUGH_ENDPOINT_MARKER: Final = "__litellm_pass_through_endpoint__
 
 class EndpointType(str, Enum):
     VERTEX_AI = "vertex-ai"
+    GEMINI = "gemini"
     ANTHROPIC = "anthropic"
     OPENAI = "openai"
+    TINYFISH = "tinyfish"
     GENERIC = "generic"
+    DECISIONS = "decisions"
 
 
 class PassthroughStandardLoggingPayload(TypedDict, total=False):
@@ -58,3 +67,20 @@ class PassthroughStandardLoggingPayload(TypedDict, total=False):
 
     Optional field, we use this for cost tracking only if it's set.
     """
+
+
+class PassThroughGuardrailSettings(LiteLLMPydanticObjectBase):
+    """
+    Settings for a specific guardrail on a passthrough endpoint.
+
+    Allows field-level targeting for guardrail execution.
+    """
+
+    request_fields: list[str] | None = Field(
+        default=None,
+        description="JSONPath expressions for input field targeting (pre_call). Examples: 'query', 'documents[*].text', 'messages[*].content'. If not specified, guardrail runs on entire request payload.",
+    )
+    response_fields: list[str] | None = Field(
+        default=None,
+        description="JSONPath expressions for output field targeting (post_call). Examples: 'results[*].text', 'output'. If not specified, guardrail runs on entire response payload.",
+    )

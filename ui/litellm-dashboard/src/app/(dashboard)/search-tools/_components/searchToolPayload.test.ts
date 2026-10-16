@@ -14,25 +14,39 @@ describe("buildSearchToolPayload", () => {
     );
   });
 
-  it("keeps the full key set in the object even when the optional params are absent", () => {
+  it("builds only the params a form actually collects", () => {
     expect(buildSearchToolPayload(minimal)).toStrictEqual({
       search_tool_name: "tool",
       litellm_params: {
         search_provider: "perplexity",
         api_key: undefined,
-        api_base: undefined,
-        timeout: undefined,
-        max_retries: undefined,
+        input_cost_per_query: undefined,
       },
       search_tool_info: undefined,
     });
+  });
+
+  it("nests a custom cost per query under litellm_params so the proxy prices the tool with it", () => {
+    expect(JSON.stringify(buildSearchToolPayload({ ...minimal, input_cost_per_query: 0.05 }))).toBe(
+      '{"search_tool_name":"tool","litellm_params":{"search_provider":"perplexity","input_cost_per_query":0.05}}',
+    );
+  });
+
+  it("keeps a zero cost per query, since a free tool is a real price and not an unset one", () => {
+    expect(buildSearchToolPayload({ ...minimal, input_cost_per_query: 0 }).litellm_params.input_cost_per_query).toBe(0);
+  });
+
+  it("sends an explicit null when the cost per query is cleared, so an edit removes the old price", () => {
+    expect(JSON.stringify(buildSearchToolPayload({ ...minimal, input_cost_per_query: null }))).toBe(
+      '{"search_tool_name":"tool","litellm_params":{"search_provider":"perplexity","input_cost_per_query":null}}',
+    );
   });
 
   it("passes an api key through untouched", () => {
     expect(buildSearchToolPayload({ ...minimal, api_key: "sk-secret" }).litellm_params.api_key).toBe("sk-secret");
   });
 
-  it("keeps an explicitly emptied api key as an empty string, matching the antd store", () => {
+  it("keeps an explicitly emptied api key as an empty string, so the backend clears it", () => {
     expect(buildSearchToolPayload({ ...minimal, api_key: "" }).litellm_params.api_key).toBe("");
   });
 
@@ -46,19 +60,11 @@ describe("buildSearchToolPayload", () => {
     expect(buildSearchToolPayload({ ...minimal, description: "" }).search_tool_info).toBeUndefined();
   });
 
-  it("parses timeout as a float", () => {
-    expect(buildSearchToolPayload({ ...minimal, timeout: "2.5" }).litellm_params.timeout).toBe(2.5);
-  });
-
-  it("parses max_retries as an integer and truncates a decimal", () => {
-    expect(buildSearchToolPayload({ ...minimal, max_retries: "3.9" }).litellm_params.max_retries).toBe(3);
-  });
-
-  it('parses a "0" timeout as 0, because the original guard tests the string not the number', () => {
-    expect(buildSearchToolPayload({ ...minimal, timeout: "0" }).litellm_params.timeout).toBe(0);
-  });
-
-  it("treats an empty timeout string as absent", () => {
-    expect(buildSearchToolPayload({ ...minimal, timeout: "" }).litellm_params.timeout).toBeUndefined();
+  it("sends the same wire body with an api key and a description as it did before the params were pruned", () => {
+    expect(
+      JSON.stringify(buildSearchToolPayload({ ...minimal, api_key: "sk-secret", description: "finds things" })),
+    ).toBe(
+      '{"search_tool_name":"tool","litellm_params":{"search_provider":"perplexity","api_key":"sk-secret"},"search_tool_info":{"description":"finds things"}}',
+    );
   });
 });

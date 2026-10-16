@@ -7,7 +7,13 @@ import os
 from dataclasses import dataclass
 from typing import Final
 
-from litellm.types.files import get_file_mime_type_from_extension
+from litellm.types.files import (
+    AUDIO_FILE_TYPES,
+    FILE_EXTENSIONS,
+    FILE_MIME_TYPES,
+    FileType,
+    get_file_mime_type_from_extension,
+)
 from litellm.types.utils import FileTypes
 
 
@@ -323,3 +329,75 @@ def calculate_request_duration(file: FileTypes) -> float | None:
     except Exception:
         # Silently fail if duration extraction fails
         return None
+
+
+DEFAULT_SPEECH_MEDIA_TYPE: Final = "audio/mpeg"
+
+
+def _speech_media_type_for_response_format(response_format: str) -> str | None:
+    file_type: Final = next(
+        (candidate for candidate, extensions in FILE_EXTENSIONS.items() if response_format.lower() in extensions),
+        None,
+    )
+    if file_type is None or file_type not in AUDIO_FILE_TYPES:
+        return None
+    return FILE_MIME_TYPES[file_type]
+
+
+def resolve_speech_media_type(upstream_content_type: str | None, response_format: str | None) -> str:
+    upstream_media_type: Final = (upstream_content_type or "").split(";", 1)[0].strip().lower()
+    if upstream_media_type.startswith("audio/"):
+        return upstream_media_type
+    requested_media_type: Final = (
+        None if response_format is None else _speech_media_type_for_response_format(response_format)
+    )
+    return requested_media_type or DEFAULT_SPEECH_MEDIA_TYPE
+
+
+_OGG_OPUS_HEAD_WINDOW: Final = 64
+_ADTS_SYNC_AND_LAYER_MASK: Final = 0xF6
+_ADTS_SYNC_AND_LAYER: Final = 0xF0
+_ADTS_SAMPLE_RATE_INDEX_LIMIT: Final = 13
+_MPEG_SYNC_MASK: Final = 0xE0
+_MPEG_LAYER_MASK: Final = 0x06
+_MPEG_RESERVED_VERSION: Final = 0x01
+_MPEG_INVALID_BITRATE_INDEX: Final = 0x0F
+_MPEG_RESERVED_SAMPLE_RATE_INDEX: Final = 0x03
+
+
+def _adts_aac_frame_media_type(header: bytes) -> str | None:
+    sample_rate_index: Final = (header[2] >> 2) & 0x0F
+    return FILE_MIME_TYPES[FileType.AAC] if sample_rate_index < _ADTS_SAMPLE_RATE_INDEX_LIMIT else None
+
+
+def _mpeg_audio_frame_media_type(header: bytes) -> str | None:
+    version: Final = (header[1] >> 3) & 0x03
+    layer: Final = header[1] & _MPEG_LAYER_MASK
+    bitrate_index: Final = header[2] >> 4
+    sample_rate_index: Final = (header[2] >> 2) & 0x03
+    if (
+        (header[1] & _MPEG_SYNC_MASK) != _MPEG_SYNC_MASK
+        or version == _MPEG_RESERVED_VERSION
+        or layer == 0
+        or bitrate_index == _MPEG_INVALID_BITRATE_INDEX
+        or sample_rate_index == _MPEG_RESERVED_SAMPLE_RATE_INDEX
+    ):
+        return None
+    return FILE_MIME_TYPES[FileType.MP3]
+
+
+def speech_media_type_from_audio_bytes(audio: bytes) -> str | None:
+    if audio[:4] == b"RIFF" and audio[8:12] == b"WAVE":
+        return FILE_MIME_TYPES[FileType.WAV]
+    if audio[:4] == b"fLaC":
+        return FILE_MIME_TYPES[FileType.FLAC]
+    if audio[:4] == b"OggS":
+        is_opus: Final = b"OpusHead" in audio[:_OGG_OPUS_HEAD_WINDOW]
+        return FILE_MIME_TYPES[FileType.OPUS if is_opus else FileType.OGG]
+    if audio[:3] == b"ID3":
+        return FILE_MIME_TYPES[FileType.MP3]
+    if len(audio) < 3 or audio[0] != 0xFF:
+        return None
+    if (audio[1] & _ADTS_SYNC_AND_LAYER_MASK) == _ADTS_SYNC_AND_LAYER:
+        return _adts_aac_frame_media_type(audio)
+    return _mpeg_audio_frame_media_type(audio)

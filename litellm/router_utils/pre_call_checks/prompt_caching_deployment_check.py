@@ -4,6 +4,7 @@ Check if prompt caching is valid for a given deployment
 Route to previously cached model id, if valid
 """
 
+from collections.abc import Callable
 from typing import Final, cast
 
 from litellm import verbose_logger
@@ -14,6 +15,8 @@ from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
 )
 from litellm.integrations.custom_logger import CustomLogger, Span
+from litellm.litellm_core_utils.token_counter import offload_token_count
+from litellm.llms.bedrock.common_utils import supports_bedrock_prompt_cache_ttl
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CallTypes, StandardLoggingPayload
 from litellm.utils import get_prompt_cache_min_tokens, is_prompt_caching_valid_prompt
@@ -46,9 +49,18 @@ def _get_min_token_count_for_deployments(healthy_deployments: list[dict]) -> int
     )
 
 
+def _honors_one_hour_cache_ttl(standard_logging_object: StandardLoggingPayload) -> bool:
+    if standard_logging_object["custom_llm_provider"] == "bedrock":
+        return supports_bedrock_prompt_cache_ttl(standard_logging_object["model"])
+    model_map_value: Final = standard_logging_object["model_map_information"]["model_map_value"]
+    return model_map_value is not None and (model_map_value.get("cache_creation_input_token_cost_above_1hr") or 0) > 0
+
+
 class PromptCachingDeploymentCheck(CustomLogger):
-    def __init__(self, cache: DualCache):
+    def __init__(self, cache: DualCache, is_priority_group: Callable[[str], bool] | None = None):
+        super().__init__()
         self.cache = cache
+        self.is_priority_group = is_priority_group
 
     async def async_filter_deployments(
         self,
@@ -58,7 +70,14 @@ class PromptCachingDeploymentCheck(CustomLogger):
         request_kwargs: dict | None = None,
         parent_otel_span: Span | None = None,
     ) -> list[dict]:
-        if messages is not None and is_prompt_caching_valid_prompt(
+        if self.is_priority_group is not None and self.is_priority_group(model):
+            return healthy_deployments
+        if request_kwargs is not None and request_kwargs.get("_target_order") is not None:
+            return healthy_deployments
+        if not healthy_deployments[1:]:
+            return healthy_deployments
+
+        if messages is not None and await offload_token_count(is_prompt_caching_valid_prompt)(
             messages=messages,
             model=model,
             min_token_count=_get_min_token_count_for_deployments(healthy_deployments),
@@ -87,6 +106,7 @@ class PromptCachingDeploymentCheck(CustomLogger):
                 enable_prompt_caching=(
                     request_kwargs.get("enable_prompt_caching") is True if request_kwargs is not None else None
                 ),
+                request_kwargs=request_kwargs,
             )
 
             model_id_dict: Final = await prompt_cache.async_get_model_id(
@@ -134,18 +154,20 @@ class PromptCachingDeploymentCheck(CustomLogger):
             )
             return
 
+        prompt_messages: Final = cast(list[AllMessageValues], messages)
         ## PROMPT CACHING - cache model id, if prompt caching valid prompt + provider
-        if is_prompt_caching_valid_prompt(
+        if await offload_token_count(is_prompt_caching_valid_prompt)(
             model=model,
-            messages=cast(list[AllMessageValues], messages),
+            messages=prompt_messages,
         ):
             cache: Final = PromptCachingCache(
                 cache=self.cache,
             )
             await cache.async_add_model_id(
                 model_id=model_id,
-                messages=messages,
+                messages=prompt_messages,
                 tools=None,  # [TODO]: add tools once standard_logging_object supports it
+                honors_one_hour_ttl=_honors_one_hour_cache_ttl(standard_logging_object),
             )
 
         return

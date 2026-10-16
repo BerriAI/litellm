@@ -3,13 +3,14 @@
  *
  */
 
+import { Page, PageTabs, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
 import { Plus, Wallet } from "lucide-react";
 import React, { useCallback, useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { prism } from "react-syntax-highlighter/dist/esm/styles/prism";
 
 import { useSyntaxTheme } from "@/hooks/useSyntaxTheme";
-import { LegacyPageHeader } from "@/components/shared/LegacyPageHeader";
+import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
 import { ToolbarSeparator } from "@/components/shared/ToolbarSeparator";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -79,34 +80,32 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
   };
 
   return (
-    <div className="flex h-full flex-col gap-4 p-6 px-12">
-      <LegacyPageHeader
-        icon={<Wallet className="size-5" />}
-        title="Budgets"
-        subtitle="Spend, TPM and RPM limits you can assign to customers."
-      />
-      <Tabs defaultValue="budgets" className="min-h-0 flex-1 gap-0">
-        <div className="flex items-center gap-4 border-b border-border">
-          {canModify && (
-            <>
-              <Button onClick={() => setIsCreateModelVisible(true)}>
-                <Plus className="size-4" />
-                Create Budget
-              </Button>
-              <ToolbarSeparator className="h-6" />
-            </>
-          )}
-          <TabsList variant="line">
-            <TabsTrigger value="budgets" className="flex-none px-4">
-              Budgets
-            </TabsTrigger>
-            <TabsTrigger value="examples" className="flex-none px-4">
-              Examples
-            </TabsTrigger>
-          </TabsList>
-        </div>
+    <Page className="h-full">
+      <PageTabs defaultValue="budgets">
+        <PageHeader>
+          <PageHeaderTitle>
+            <Wallet />
+            Budgets
+          </PageHeaderTitle>
+          <PageHeaderDescription>Spend, TPM and RPM limits you can assign to customers.</PageHeaderDescription>
+          <PageHeaderControls>
+            <PageTabsList>
+              {canModify && (
+                <>
+                  <Button onClick={() => setIsCreateModelVisible(true)}>
+                    <Plus className="size-4" />
+                    Create Budget
+                  </Button>
+                  <ToolbarSeparator className="mx-0 h-6" />
+                </>
+              )}
+              <PageTabsTrigger value="budgets">Budgets</PageTabsTrigger>
+              <PageTabsTrigger value="examples">Examples</PageTabsTrigger>
+            </PageTabsList>
+          </PageHeaderControls>
+        </PageHeader>
         <TabsContent value="budgets" className="flex min-h-0 flex-1 flex-col" keepMounted>
-          <div className="flex min-h-0 flex-1 flex-col pt-6">
+          <div className="flex min-h-0 flex-1 flex-col">
             <BudgetModal isModalVisible={isCreateModelVisible} setIsModalVisible={setIsCreateModelVisible} />
             {selectedBudget && (
               <EditBudgetModal
@@ -131,6 +130,7 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
                 { label: "Max Budget", value: selectedBudget?.max_budget },
                 { label: "TPM", value: selectedBudget?.tpm_limit },
                 { label: "RPM", value: selectedBudget?.rpm_limit },
+                { label: "TPD (batch)", value: selectedBudget?.tpd_limit },
               ]}
               onCancel={handleDeleteCancel}
               onOk={handleDeleteConfirm}
@@ -171,8 +171,8 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
             </Tabs>
           </div>
         </TabsContent>
-      </Tabs>
-    </div>
+      </PageTabs>
+    </Page>
   );
 };
 

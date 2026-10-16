@@ -1,6 +1,6 @@
 import { toast } from "@/lib/toast";
 import { Model, modelCreateCall } from "../networking";
-import { provider_map } from "../provider_info_helpers";
+import { resolveLitellmProviderSlug } from "../provider_info_helpers";
 import { ptuPickerToUtcIso } from "../../utils/ptuDatetime";
 
 export const prepareModelAddRequest = async (formValues: Record<string, any>, accessToken: string, form: any) => {
@@ -14,9 +14,7 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
     // Handle wildcard case
     if (formValues["model"] && formValues["model"].includes("all-wildcard")) {
       const customProviderKey = formValues["custom_llm_provider"] as string;
-      const mappedProvider =
-        provider_map[customProviderKey as keyof typeof provider_map] ?? customProviderKey.toLowerCase();
-      const litellm_custom_provider = mappedProvider;
+      const litellm_custom_provider = resolveLitellmProviderSlug(customProviderKey);
       const wildcardModel = litellm_custom_provider + "/*";
       formValues["model_name"] = wildcardModel;
       modelMappings.push({
@@ -91,6 +89,9 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
         if (value === "") {
           continue;
         }
+        if (key === "litellm_credential_name" && value == null) {
+          continue;
+        }
         // Skip the custom_pricing and pricing_model fields as they're only used for UI control
         if (key === "custom_pricing" || key === "pricing_model" || key === "cache_control") {
           continue;
@@ -98,9 +99,7 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
         if (key == "model_name") {
           litellmParamsObj["model"] = value;
         } else if (key == "custom_llm_provider") {
-          const providerKey = value as string;
-          const mappingResult = provider_map[providerKey as keyof typeof provider_map] ?? providerKey.toLowerCase();
-          litellmParamsObj["custom_llm_provider"] = mappingResult;
+          litellmParamsObj["custom_llm_provider"] = resolveLitellmProviderSlug(value as string);
         } else if (key == "model") {
           continue;
         }
@@ -124,12 +123,12 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
           if (value && value != undefined) {
             try {
               litellmExtraParams = JSON.parse(value);
-              if ("litellm_credential_name" in litellmExtraParams) {
-                delete litellmExtraParams.litellm_credential_name;
-              }
             } catch (error) {
               toast.fromError("Failed to parse LiteLLM Extra Params: " + error);
               throw new Error("Failed to parse litellm_extra_params: " + error);
+            }
+            if ("litellm_credential_name" in litellmExtraParams && formValues.litellm_credential_name) {
+              delete litellmExtraParams.litellm_credential_name;
             }
             for (const [key, value] of Object.entries(litellmExtraParams)) {
               litellmParamsObj[key] = value;

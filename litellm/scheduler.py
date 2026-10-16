@@ -1,12 +1,22 @@
+import asyncio
 import enum
 import heapq
-from typing import Final
+import time
+from collections.abc import Awaitable, Callable, Sequence
+from typing import Final, TypeAlias
 
-from pydantic import BaseModel
+from pydantic import TypeAdapter
 
 from litellm import print_verbose
+from litellm._internal_context import with_service_target
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.constants import DEFAULT_IN_MEMORY_TTL, DEFAULT_POLLING_INTERVAL
+from litellm.exceptions import Timeout
+from litellm.types.llms.base import LiteLLMBaseModel
+
+SCHEDULER_QUEUE_TARGET: Final = "scheduler_queue"
+QueueEntry: TypeAlias = tuple[int, str]
+_QUEUE_ENTRIES: Final = TypeAdapter(list[QueueEntry])
 
 
 class SchedulerCacheKeys(enum.Enum):
@@ -14,7 +24,7 @@ class SchedulerCacheKeys(enum.Enum):
     default_in_memory_ttl = DEFAULT_IN_MEMORY_TTL  # cache queue in-memory for 5s when redis cache available
 
 
-class FlowItem(BaseModel):
+class FlowItem(LiteLLMBaseModel):
     priority: int  # Priority between 0 and 255
     request_id: str
     model_name: str
@@ -31,7 +41,7 @@ class Scheduler:
         """
         polling_interval: float or null - frequency of polling queue. Default is 3ms.
         """
-        self.queue: list = []
+        self.queue: list[QueueEntry] = []
         default_in_memory_ttl: float | None = None
         if redis_cache is not None:
             # if redis-cache available frequently poll that instead of using in-memory.
@@ -49,7 +59,7 @@ class Scheduler:
         # save the queue
         await self.save_queue(queue=queue, model_name=request.model_name)
 
-    async def poll(self, id: str, model_name: str, health_deployments: list) -> bool:
+    async def poll(self, request: FlowItem, health_deployments: Sequence[object]) -> bool:
         """
         Return if request can be processed.
 
@@ -60,29 +70,47 @@ class Scheduler:
         - False:
             * If no healthy deployments available
             * AND request not at the top of queue
+
+        A request the queue no longer holds (its cache key expired or a concurrent writer erased the entry)
+        is put back at its priority so it keeps its place in the order instead of failing or jumping ahead
         """
-        queue: Final = await self.get_queue(model_name=model_name)
-        if not queue:
-            raise Exception(f"Incorrectly setup. Queue is invalid. Queue={queue}")
-
-        # ------------
-        # Setup values
-        # ------------
-
         print_verbose(f"len(health_deployments): {len(health_deployments)}")
-        if len(health_deployments) == 0:
-            print_verbose(f"queue: {queue}, seeking id={id}")
-            # Check if the id is at the top of the heap
-            if queue[0][1] == id:
-                # Remove the item from the queue
-                heapq.heappop(queue)
-                await self.save_queue(queue=queue, model_name=model_name)
-                print_verbose(f"Popped id: {id}")
-                return True
-            else:
-                return False
+        if len(health_deployments) > 0:
+            return True
 
+        queue: Final = await self.get_queue(model_name=request.model_name)
+        entry: Final = (request.priority, request.request_id)
+        print_verbose(f"queue: {queue}, seeking {entry}")
+        if entry not in queue:
+            print_verbose(f"queue no longer holds {entry}, re-enqueueing it")
+            heapq.heappush(queue, entry)
+            if queue[0] != entry:
+                await self.save_queue(queue=queue, model_name=request.model_name)
+                return False
+        elif queue[0] != entry:
+            return False
+
+        heapq.heappop(queue)
+        await self.save_queue(queue=queue, model_name=request.model_name)
+        print_verbose(f"Popped id: {request.request_id}")
         return True
+
+    async def wait_for_turn(
+        self,
+        request: FlowItem,
+        timeout: float,
+        get_healthy_deployments: Callable[[], Awaitable[Sequence[object]]],
+    ) -> None:
+        try:
+            await self.add_request(request=request)
+            end_time: Final = time.monotonic() + timeout
+            while time.monotonic() < end_time:
+                if await self.poll(request=request, health_deployments=await get_healthy_deployments()):
+                    return
+                await asyncio.sleep(self.polling_interval)
+        finally:
+            await asyncio.shield(self.remove_request(request_id=request.request_id, model_name=request.model_name))
+        raise Timeout(message="Request timed out while polling queue", model=request.model_name, llm_provider="openai")
 
     async def remove_request(self, request_id: str, model_name: str) -> None:
         """
@@ -115,20 +143,24 @@ class Scheduler:
         """Get the status of items in the queue"""
         return self.queue
 
-    async def get_queue(self, model_name: str) -> list:
+    @with_service_target(SCHEDULER_QUEUE_TARGET)
+    async def get_queue(self, model_name: str) -> list[QueueEntry]:
         """
-        Return a queue for that specific model group
+        Return a queue for that specific model group.
+
+        Redis hands the queue back as JSON lists, so every entry is validated into the
+        (priority, request_id) tuple the heap operations compare against.
         """
         if self.cache is not None:
             _cache_key: Final = f"{SchedulerCacheKeys.queue.value}:{model_name}"
             response: Final = await self.cache.async_get_cache(key=_cache_key)
-            if response is None or not isinstance(response, list):
+            if not isinstance(response, list):
                 return []
-            elif isinstance(response, list):
-                return response
+            return _QUEUE_ENTRIES.validate_python(response)
         return self.queue
 
-    async def save_queue(self, queue: list, model_name: str) -> None:
+    @with_service_target(SCHEDULER_QUEUE_TARGET)
+    async def save_queue(self, queue: list[QueueEntry], model_name: str) -> None:
         """
         Save the updated queue of the model group
         """
