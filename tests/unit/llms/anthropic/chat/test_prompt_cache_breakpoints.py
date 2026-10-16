@@ -6,6 +6,7 @@ import pytest
 from litellm.exceptions import UnsupportedParamsError
 from litellm.llms.anthropic.chat.prompt_cache_breakpoints import (
     ClaudePromptCache,
+    ClaudeRoute,
     UnsupportedPromptCacheParam,
     claude_prompt_cache,
     resolved_claude_prompt_cache,
@@ -24,7 +25,7 @@ def _cache(
     *,
     drop_params: bool = False,
     tool_config_cache_control: ChatCompletionCachedContent | None = None,
-    function_marks_on_wire: bool = True,
+    route: ClaudeRoute = "anthropic",
     pairs_unanswered_tool_calls: bool = False,
 ) -> ClaudePromptCache | UnsupportedPromptCacheParam:
     return claude_prompt_cache(
@@ -34,7 +35,7 @@ def _cache(
         drop_params=drop_params,
         tool_history_as_text=False,
         tool_config_cache_control=tool_config_cache_control,
-        function_marks_on_wire=function_marks_on_wire,
+        route=route,
         pairs_unanswered_tool_calls=pairs_unanswered_tool_calls,
     )
 
@@ -46,7 +47,7 @@ def _resolved(
     *,
     drop_params: bool = False,
     tool_config_cache_control: ChatCompletionCachedContent | None = None,
-    function_marks_on_wire: bool = True,
+    route: ClaudeRoute = "anthropic",
     pairs_unanswered_tool_calls: bool = False,
 ) -> ClaudePromptCache:
     outcome: Final = _cache(
@@ -55,7 +56,7 @@ def _resolved(
         params,
         drop_params=drop_params,
         tool_config_cache_control=tool_config_cache_control,
-        function_marks_on_wire=function_marks_on_wire,
+        route=route,
         pairs_unanswered_tool_calls=pairs_unanswered_tool_calls,
     )
     assert isinstance(outcome, ClaudePromptCache), outcome
@@ -230,12 +231,12 @@ def test_a_breakpoint_on_a_tool_search_call_nobody_answered_takes_a_slot_only_wh
 
 
 @pytest.mark.parametrize(
-    ("function_marks_on_wire", "system_mark"),
-    [(True, _EPHEMERAL), (False, _ONE_HOUR)],
+    ("route", "system_mark"),
+    [("anthropic", _EPHEMERAL), ("converse", _ONE_HOUR)],
     ids=["route_sends_function_marks", "route_drops_function_marks"],
 )
 def test_a_five_minute_mark_under_a_tools_function_holds_back_an_hour_only_on_a_route_that_sends_it(
-    function_marks_on_wire: bool, system_mark: dict[str, object]
+    route: ClaudeRoute, system_mark: dict[str, object]
 ):
     five_minutes: Final = {"type": "ephemeral", "ttl": "5m"}
     tool: Final = {"type": "function", "function": {"name": "t", "cache_control": five_minutes}}
@@ -246,7 +247,7 @@ def test_a_five_minute_mark_under_a_tools_function_holds_back_an_hour_only_on_a_
             {"role": "user", "content": [_part("ask", prompt_cache_breakpoint={"mode": "explicit", "ttl": "1h"})]},
         ],
         [tool],
-        function_marks_on_wire=function_marks_on_wire,
+        route=route,
     )
 
     assert result.messages[0] == {"role": "system", "content": [_part("sys", cache_control=system_mark)]}

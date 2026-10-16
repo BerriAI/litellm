@@ -216,7 +216,11 @@ from .litellm_core_utils.streaming_chunk_builder_utils import (
     ChunkProcessor as ChunkProcessor,  # noqa: PLC0414  # public re-export
 )
 from .llms.anthropic.chat import AnthropicChatCompletion
-from .llms.anthropic.chat.prompt_cache_breakpoints import claude_prompt_cache, resolved_claude_prompt_cache
+from .llms.anthropic.chat.prompt_cache_breakpoints import (
+    ClaudeRoute,
+    claude_prompt_cache,
+    resolved_claude_prompt_cache,
+)
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
 from .llms.azure.azure import AzureChatCompletion, check_dynamic_azure_params
 from .llms.azure.chat.o_series_handler import AzureOpenAIO1ChatCompletion
@@ -225,6 +229,7 @@ from .llms.azure_ai.anthropic.handler import AzureAnthropicChatCompletion
 from .llms.azure_ai.embed import AzureAIEmbedding
 from .llms.bedrock.chat import BedrockConverseLLM
 from .llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+from .llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import AmazonAnthropicClaudeConfig
 from .llms.bedrock.embed.embedding import BedrockEmbedding
 from .llms.bedrock.image_edit.handler import BedrockImageEdit
 from .llms.bedrock.image_generation.image_handler import BedrockImageGeneration
@@ -1117,16 +1122,22 @@ def _reaches_converse(
         return True
     if custom_llm_provider != "bedrock":
         return False
-    return (
-        bedrock_route_for_request(
-            model,
-            route_params,
-            None
-            if additional_drop_params is None
-            else _ADDITIONAL_DROP_PARAMS_ADAPTER.validate_python(additional_drop_params),
-        )
-        == "converse"
-    )
+    return bedrock_route_for_request(model, route_params, _listed_drop_params(additional_drop_params)) == "converse"
+
+
+def _claude_route(provider_config: BaseConfig | None, reaches_converse: bool) -> ClaudeRoute:
+    if reaches_converse:
+        return "converse"
+    if isinstance(provider_config, AmazonAnthropicClaudeConfig):
+        return "bedrock_invoke"
+    return "anthropic"
+
+
+def _listed_drop_params(additional_drop_params: object) -> tuple[str, ...]:
+    if not isinstance(additional_drop_params, list):
+        return ()
+    listed: Final = cast(list[object], additional_drop_params)  # cast-ok: elements checked below
+    return tuple(param for param in listed if isinstance(param, str))
 
 
 def _history_without_unanswered_tool_search_calls(
@@ -5699,7 +5710,7 @@ def completion(
                         if converse_may_send_tools
                         else None
                     ),
-                    function_marks_on_wire=not reaches_converse,
+                    route=_claude_route(provider_config, reaches_converse),
                     pairs_unanswered_tool_calls=litellm.modify_params is True,
                 ),
                 model=model,

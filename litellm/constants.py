@@ -587,6 +587,7 @@ BEDROCK_IAM_CACHE_FETCH_LOCK_STRIPES: Final = 64
 # still has a usable credential for the whole call.
 STS_CREDENTIAL_EXPIRY_SAFETY_MARGIN_SECONDS: Final = 60
 BEDROCK_MIN_THINKING_BUDGET_TOKENS: Final = get_env_int("BEDROCK_MIN_THINKING_BUDGET_TOKENS", 1024)
+BEDROCK_COMPUTER_USE_TOOLS: Final = ("computer_use_preview", "computer_", "bash_", "text_editor_")
 # Anthropic's Messages API rejects thinking.budget_tokens < 1024.
 ANTHROPIC_MIN_THINKING_BUDGET_TOKENS: Final = 1024
 # Anthropic (and Bedrock Claude) reject requests with more than 4 cache_control

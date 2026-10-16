@@ -8,15 +8,24 @@ from types import MappingProxyType
 from typing import Final, Literal, NoReturn, TypeAlias, cast  # noqa: TID251  # isinstance-checked hot-path JSON
 
 from litellm._logging import verbose_logger
-from litellm.constants import MAX_CACHE_CONTROL_BLOCKS
+from litellm.constants import BEDROCK_COMPUTER_USE_TOOLS, MAX_CACHE_CONTROL_BLOCKS
 from litellm.exceptions import UnsupportedParamsError
 from litellm.responses.litellm_completion_transformation.tool_search import unanswered_tool_search_call_ids
+from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
 from litellm.types.llms.openai import ChatCompletionCachedContent
 
 _Path: TypeAlias = tuple[str | int, ...]
 _Fields: TypeAlias = Mapping[str, object]
 _Mark: TypeAlias = Callable[[_Path, _Fields], _Fields]
 _Kind: TypeAlias = Literal["written", "explicit", "free"]
+ClaudeRoute: TypeAlias = Literal["anthropic", "bedrock_invoke", "converse"]
+_CLAUDE_ROUTES: Final[tuple[ClaudeRoute, ...]] = ("anthropic", "bedrock_invoke", "converse")
+_TOOL_TYPES_SENT_UNMARKED: Final = MappingProxyType(
+    {
+        "anthropic": frozenset({"mcp", "namespace", "url"}),
+        "bedrock_invoke": frozenset({"mcp", "namespace", "url", "tool_search_tool_bm25_20251119"}),
+    }
+)
 _MESSAGE_BLOCK_KEYS: Final = ("content", "tool_calls")
 _TOOL_RESULT_ROLES: Final = ("tool", "function")
 _SYSTEM_ROLES: Final = ("system", "developer")
@@ -134,6 +143,30 @@ def _tool_carries_breakpoint(tool: object) -> bool:
     return _carries_breakpoint(tool) or _carries_breakpoint((_fields(tool) or {}).get("function"))
 
 
+def _namespace_members(tools: Sequence[object]) -> Iterator[tuple[_Path, _Fields]]:
+    namespaces: Final = ((index, tool) for index, tool in _indexed_fields(tools) if tool.get("type") == "namespace")
+    for index, namespace in namespaces:
+        yield from (
+            (("tools", index, "tools", member_index), member)
+            for member_index, member in _indexed_fields(_blocks(namespace.get("tools")) or ())
+        )
+
+
+def _member_mark(member: _Fields) -> object:
+    own: Final = member.get("cache_control")
+    return own if own is not None else (_fields(member.get("function")) or {}).get("cache_control")
+
+
+def _namespace_member_marks(tools: Sequence[object], route: ClaudeRoute) -> tuple[tuple[_Path, object, _Kind], ...]:
+    if route == "converse":
+        return ()
+    return tuple(
+        (path, mark, "written")
+        for path, member in _namespace_members(tools)
+        if tool_mark_reaches_claude(member, route) and (mark := _member_mark(member)) is not None
+    )
+
+
 def _markable(messages: Sequence[object], tools: Sequence[object]) -> Iterator[tuple[_Path, _Fields]]:
     """Every block that can carry a cache mark, in the order Claude renders them: tool definitions, then messages."""
     for index, tool in _indexed_fields(tools):
@@ -183,14 +216,36 @@ def _joined_breakpoint(kept: object, replaced: Sequence[object]) -> object:
     return {**fields, "ttl": "1h"}
 
 
-def _usable(marker: object) -> bool:
+def prompt_cache_breakpoint_is_usable(marker: object) -> bool:
     mark: Final = _breakpoint_mark(marker)
     return not isinstance(mark, UnsupportedPromptCacheParam) or mark.fallback is not None
 
 
+def _converse_sends_tool_mark(tool: _Fields) -> bool:
+    tool_type: Final = tool.get("type")
+    if tool_type in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES:
+        return False
+    if isinstance(tool_type, str) and tool_type.startswith(BEDROCK_COMPUTER_USE_TOOLS):
+        return not (tool_type.startswith("computer_") and "function" in tool)
+    return "function" in tool or "input_schema" in tool
+
+
+def tool_mark_reaches_claude(tool: object, route: ClaudeRoute) -> bool:
+    fields: Final = _fields(tool) or {}
+    match route:
+        case "converse":
+            return _converse_sends_tool_mark(fields)
+        case "anthropic" | "bedrock_invoke":
+            return fields.get("type") not in _TOOL_TYPES_SENT_UNMARKED[route]
+
+
+def tool_mark_may_reach_claude(tool: object) -> bool:
+    return any(tool_mark_reaches_claude(tool, route) for route in _CLAUDE_ROUTES)
+
+
 def _first_usable(markers: Sequence[object]) -> tuple[object, tuple[object, ...]]:
     """The first breakpoint Claude can use stays, so a malformed one ``drop_params`` drops never takes its place."""
-    index: Final = next((index for index, marker in enumerate(markers) if _usable(marker)), 0)
+    index: Final = next((index for index, marker in enumerate(markers) if prompt_cache_breakpoint_is_usable(marker)), 0)
     return markers[index], (*markers[:index], *markers[index + 1 :])
 
 
@@ -447,15 +502,16 @@ def _on_wire(
     tools: Sequence[object],
     unsent_call_ids: frozenset[str],
     tool_history_as_text: bool,
-    function_marks_on_wire: bool,
+    route: ClaudeRoute,
 ) -> bool:
     """Claude sends a message-level mark on string content, or on list content only for a tool result, and none on
-    a developer message, which reaches it as a system message without one; a mark under ``function`` only on a route
-    that sends one and when the tool carries none of its own; no tool_search call nobody answered; and no mark on
-    tool history the route sends as text."""
+    a developer message, which reaches it as a system message without one; a tool's mark only when the route sends
+    it, and one under ``function`` only off Converse and when the tool carries none of its own; no tool_search call
+    nobody answered; and no mark on tool history the route sends as text."""
     if path[0] == "tools":
-        return len(path) == 2 or (
-            function_marks_on_wire and (_fields(tools[int(path[1])]) or {}).get("cache_control") is None
+        tool: Final = _fields(tools[int(path[1])]) or {}
+        return tool_mark_reaches_claude(tool, route) and (
+            len(path) == 2 or (route != "converse" and tool.get("cache_control") is None)
         )
     message: Final = _fields(messages[int(path[1])]) or {}
     if tool_history_as_text and _is_tool_history(message):
@@ -557,17 +613,17 @@ def claude_prompt_cache(
     drop_params: bool,
     tool_history_as_text: bool,
     tool_config_cache_control: ChatCompletionCachedContent | None,
-    function_marks_on_wire: bool,
+    route: ClaudeRoute,
     pairs_unanswered_tool_calls: bool,
 ) -> ClaudePromptCache | UnsupportedPromptCacheParam:
     """``prompt_cache_breakpoint`` marks renamed to ``cache_control``. A mark Claude cannot honor is reported unless
     ``drop_params``, which keeps what Claude can use and, when the request ends up with more than Claude's four
     breakpoints, drops the earliest translated ones. A request-level ``cache_control`` in ``params`` and the
     ``tool_config_cache_control`` cachePoint a route appends after the tools each take one of the four, and marks on
-    tool history a ``tool_history_as_text`` route flattens, marks under a tool's ``function`` on a route without
-    ``function_marks_on_wire``, and marks on a tool_search call nobody answered, unless the route
-    ``pairs_unanswered_tool_calls`` with a placeholder result, take none. A request carrying no breakpoint is returned
-    as written."""
+    tool history a ``tool_history_as_text`` route flattens, marks on a tool the ``route`` sends without one or under
+    a tool's ``function`` on Converse, and marks on a tool_search call nobody answered, unless the route
+    ``pairs_unanswered_tool_calls`` with a placeholder result, take none. A ``cache_control`` on a ``namespace`` tool's
+    member takes one off Converse and is never changed. A request carrying no breakpoint is returned as written."""
     listed_tools: Final = tools or ()
     if not any(map(_message_carries_breakpoint, messages)) and not any(map(_tool_carries_breakpoint, listed_tools)):
         return ClaudePromptCache(tuple(messages), None if tools is None else tuple(tools))
@@ -602,10 +658,9 @@ def claude_prompt_cache(
             (path, block.get("cache_control"), _kind(path, block.get("cache_control"), translated))
             for path, block in _markable(renamed_messages, renamed_tools)
             if block.get("cache_control") is not None
-            and _on_wire(
-                path, renamed_messages, renamed_tools, unsent_call_ids, tool_history_as_text, function_marks_on_wire
-            )
+            and _on_wire(path, renamed_messages, renamed_tools, unsent_call_ids, tool_history_as_text, route)
         ),
+        *_namespace_member_marks(renamed_tools, route),
         *_route_marks(tool_config_cache_control, request_mark),
     )
     marks: Final = sorted(

@@ -1146,7 +1146,7 @@ def test_cache_control_hook_counts_tool_call_marks_except_answered_server_tool_c
                     "id": "prompt_breakpoint",
                     "type": "function",
                     "function": {"name": "lookup", "arguments": "{}"},
-                    "prompt_cache_breakpoint": {"type": "ephemeral"},
+                    "prompt_cache_breakpoint": {"mode": "explicit"},
                 },
                 {
                     "id": "srvtoolu_web_search",
@@ -1284,7 +1284,7 @@ def _translated_for_claude(messages: list[AllMessageValues], modify_params: bool
         drop_params=False,
         tool_history_as_text=False,
         tool_config_cache_control=None,
-        function_marks_on_wire=True,
+        route="anthropic",
         pairs_unanswered_tool_calls=modify_params,
     )
     assert isinstance(outcome, ClaudePromptCache), outcome
@@ -3162,12 +3162,12 @@ class TestConfiguredInjectionPointsSurviveClientMarks:
         assert _count_cache_control(processed) == 3 + injected
 
     @pytest.mark.parametrize("tool", [MARKED_TOOL_SEARCH_REGEX, MARKED_TOOL_SEARCH_BM25], ids=["regex", "bm25"])
-    def test_chat_cap_ignores_marked_tool_search_tools(self, tool):
+    def test_chat_cap_counts_marked_tool_search_tools_the_anthropic_transform_sends(self, tool):
         messages = [{"role": "system", "content": "sys"}, *self._marked_user_turns(3)]
         params = {"cache_control_injection_points": copy.deepcopy(self.CONFIGURED)}
         self._seed(params, copy.deepcopy(messages), tools=[tool])
         processed = self._chat(params, copy.deepcopy(messages))
-        assert _count_cache_control(processed) == 4
+        assert _count_cache_control(processed) == 3
 
     @pytest.mark.parametrize("marked_turns,forwarded", [(3, ["tool_config"]), (4, [])], ids=["slot_left", "cap_full"])
     def test_chat_forwards_tool_config_point_only_while_a_slot_is_left(self, marked_turns, forwarded):

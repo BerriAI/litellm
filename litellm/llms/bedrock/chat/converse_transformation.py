@@ -17,6 +17,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import (
+    BEDROCK_COMPUTER_USE_TOOLS,
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
     RESPONSE_FORMAT_TOOL_NAME,
 )
@@ -126,13 +127,6 @@ ADAPTIVE_THINKING_ON_UNRESOLVED_ARN_WARNING: Final = (
     "the deployment (for example `us.anthropic.claude-opus-4-8`) to send adaptive thinking as requested."
 )
 
-# Computer use tool prefixes supported by Bedrock
-BEDROCK_COMPUTER_USE_TOOLS: Final = [
-    "computer_use_preview",
-    "computer_",
-    "bash_",
-    "text_editor_",
-]
 BEDROCK_OPENAI_COMPAT_MIN_MAX_TOKENS: Final = 16
 
 # Beta header patterns that are not supported by Bedrock Converse API
