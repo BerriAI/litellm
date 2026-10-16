@@ -187,9 +187,10 @@ The following arguments are supported:
   * Note: the remote API may not echo back all custom parameters; this provider preserves `additional_litellm_params` in state when present in configuration.
 
   **`additional_drop_params`**
-  * Give it a JSON array string, such as `jsonencode(["store"])`. The provider sends the list to the proxy as the deployment's `additional_drop_params`, and the proxy applies it the same as `additional_drop_params` in a `model_list` entry. `terraform plan` fails on any other value or on an entry that is not a name, and `null` entries are skipped
+  * Give it a JSON array string, such as `jsonencode(["store"])`. The provider sends the list to the proxy as the deployment's `additional_drop_params`, and the proxy applies it the same as `additional_drop_params` in a `model_list` entry. `terraform plan` fails on any other value, an empty value, or an entry that is not a name, and `null` entries are skipped
   * Other keys on the resource, such as `vertex_location`, are sent unchanged
-  * Refresh reads the stored list back from the proxy, so a list changed or set outside Terraform shows up as drift. It also reads back a listed key that the resource sets as a string attribute, such as `vertex_location`
+  * When the configuration sets the list, refresh reads the stored list back from the proxy, so a list changed outside Terraform shows up as drift. A model whose configuration has no list keeps a list set outside Terraform out of the plan, but the proxy clears it on the next update
+  * When the proxy has no stored list, as on a model an older provider created, the next plan shows the list and every listed key the configuration sets as changes, since the next apply writes them
 
   Example showing booleans, integers, floats, strings, JSON, and dropped request parameters:
 

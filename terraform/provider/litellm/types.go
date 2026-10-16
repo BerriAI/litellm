@@ -120,7 +120,6 @@ type LiteLLMParams struct {
 	VertexProject                  string                 `json:"vertex_project,omitempty"`
 	VertexLocation                 string                 `json:"vertex_location,omitempty"`
 	VertexCredentials              string                 `json:"vertex_credentials,omitempty"`
-	LiteLLMCredentialName          string                 `json:"litellm_credential_name,omitempty"`
 	AdditionalDropParams           interface{}            `json:"additional_drop_params,omitempty"`
 }
 

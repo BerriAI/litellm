@@ -93,11 +93,12 @@ func parseAdditionalDropParams(raw string) ([]string, error) {
 }
 
 func validateAdditionalDropParams(_ context.Context, d *schema.ResourceDiff, _ interface{}) error {
-	raw, set := d.GetOk("additional_litellm_params." + additionalDropParamsKey)
+	params, _ := d.Get("additional_litellm_params").(map[string]interface{})
+	raw, set := params[additionalDropParamsKey].(string)
 	if !set {
 		return nil
 	}
-	_, err := parseAdditionalDropParams(raw.(string))
+	_, err := parseAdditionalDropParams(raw)
 	return err
 }
 
@@ -110,44 +111,54 @@ func suppressEquivalentDropParams(key, oldValue, newValue string, _ *schema.Reso
 	return oldErr == nil && newErr == nil && slices.Equal(oldNames, newNames)
 }
 
-func withStoredDropParams(params map[string]interface{}, stored interface{}) map[string]interface{} {
-	_, managed := params[additionalDropParamsKey]
-	storedList, _ := stored.([]interface{})
-	if !managed && len(storedList) == 0 {
-		return params
+var attributeSentAsLiteLLMParam = map[string]string{
+	"custom_llm_provider":     "custom_llm_provider",
+	"tpm":                     "tpm",
+	"rpm":                     "rpm",
+	"input_cost_per_token":    "input_cost_per_million_tokens",
+	"output_cost_per_token":   "output_cost_per_million_tokens",
+	"api_key":                 "model_api_key",
+	"api_base":                "model_api_base",
+	"api_version":             "api_version",
+	"input_cost_per_pixel":    "input_cost_per_pixel",
+	"output_cost_per_pixel":   "output_cost_per_pixel",
+	"input_cost_per_second":   "input_cost_per_second",
+	"output_cost_per_second":  "output_cost_per_second",
+	"aws_access_key_id":       "aws_access_key_id",
+	"aws_secret_access_key":   "aws_secret_access_key",
+	"aws_region_name":         "aws_region_name",
+	"aws_session_name":        "aws_session_name",
+	"aws_role_name":           "aws_role_name",
+	"vertex_project":          "vertex_project",
+	"vertex_location":         "vertex_location",
+	"vertex_credentials":      "vertex_credentials",
+	"reasoning_effort":        "reasoning_effort",
+	"thinking":                "thinking_enabled",
+	"litellm_credential_name": "litellm_credential_name",
+}
+
+func refreshAdditionalDropParams(d *schema.ResourceData, stored interface{}) {
+	params, _ := d.Get("additional_litellm_params").(map[string]interface{})
+	raw, managed := params[additionalDropParamsKey].(string)
+	if !managed {
+		return
 	}
-	refreshed := map[string]interface{}{}
-	maps.Copy(refreshed, params)
-	delete(refreshed, additionalDropParamsKey)
+	refreshed := maps.Clone(params)
 	if stored != nil {
 		encoded, _ := json.Marshal(stored)
 		refreshed[additionalDropParamsKey] = string(encoded)
+		d.Set("additional_litellm_params", refreshed)
+		return
 	}
-	return refreshed
-}
-
-func storedStringAttribute(params LiteLLMParams, key string) (string, string, bool) {
-	switch key {
-	case "api_base":
-		return "model_api_base", params.APIBase, true
-	case "api_version":
-		return "api_version", params.APIVersion, true
-	case "aws_region_name":
-		return "aws_region_name", params.AWSRegionName, true
-	case "aws_session_name":
-		return "aws_session_name", params.AWSSessionName, true
-	case "aws_role_name":
-		return "aws_role_name", params.AWSRoleName, true
-	case "vertex_project":
-		return "vertex_project", params.VertexProject, true
-	case "vertex_location":
-		return "vertex_location", params.VertexLocation, true
-	case "reasoning_effort":
-		return "reasoning_effort", params.ReasoningEffort, true
-	case "litellm_credential_name":
-		return "litellm_credential_name", params.LiteLLMCredentialName, true
+	delete(refreshed, additionalDropParamsKey)
+	listed, _ := parseAdditionalDropParams(raw)
+	for _, key := range listed {
+		delete(refreshed, key)
+		if attribute, ok := attributeSentAsLiteLLMParam[key]; ok {
+			d.Set(attribute, nil)
+		}
 	}
-	return "", "", false
+	d.Set("additional_litellm_params", refreshed)
 }
 
 func coerceAdditionalParamValue(strValue string) interface{} {
@@ -458,20 +469,11 @@ func resourceLiteLLMModelRead(d *schema.ResourceData, m interface{}) error {
 		d.Set("merge_reasoning_content_in_choices", modelResp.LiteLLMParams.MergeReasoningContentInChoices)
 	}
 
-	additionalParams, _ := d.Get("additional_litellm_params").(map[string]interface{})
-	if rawDropParams, ok := additionalParams[additionalDropParamsKey].(string); ok {
-		listed, _ := parseAdditionalDropParams(rawDropParams)
-		for _, key := range listed {
-			if attribute, stored, ok := storedStringAttribute(modelResp.LiteLLMParams, key); ok {
-				d.Set(attribute, stored)
-			}
-		}
-	}
-
 	// Preserve additional_litellm_params from state since API might not return all custom parameters
-	if refreshed := withStoredDropParams(additionalParams, modelResp.LiteLLMParams.AdditionalDropParams); len(additionalParams) > 0 || len(refreshed) > 0 {
-		d.Set("additional_litellm_params", refreshed)
+	if _, ok := d.GetOk("additional_litellm_params"); ok {
+		d.Set("additional_litellm_params", d.Get("additional_litellm_params"))
 	}
+	refreshAdditionalDropParams(d, modelResp.LiteLLMParams.AdditionalDropParams)
 
 	return nil
 }

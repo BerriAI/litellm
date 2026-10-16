@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/hashicorp/go-cty/cty"
@@ -193,6 +194,7 @@ func TestResourceLiteLLMModelChecksAdditionalDropParams(t *testing.T) {
 		"object entry is rejected":                     {dropParams: `["store", {"name": "temperature"}]`, wantErr: true},
 		"object is rejected":                           {dropParams: `{"store": true}`, wantErr: true},
 		"bare name is rejected":                        {dropParams: "store", wantErr: true},
+		"empty value is rejected":                      {dropParams: "", wantErr: true},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -258,21 +260,29 @@ func TestResourceLiteLLMModelPlanAcceptsDropParamsUnknownUntilApply(t *testing.T
 }
 
 func TestResourceLiteLLMModelPlanComparesAdditionalDropParamsWithProxy(t *testing.T) {
+	const (
+		listKey     = "additional_litellm_params.additional_drop_params"
+		parallelKey = "additional_litellm_params.max_parallel_requests"
+	)
 	cases := map[string]struct {
-		configured         string
-		stored             interface{}
-		storedLocation     string
-		wantListDiff       bool
-		wantLocationChange bool
+		configured     string
+		configLocation string
+		stored         interface{}
+		storedLocation string
+		wantChanged    []string
 	}{
-		"list never sent by an older provider": {configured: `["store"]`, stored: nil, storedLocation: "eu", wantListDiff: true},
-		"listed key an older provider deleted": {configured: `["store", "vertex_location"]`, stored: nil, wantListDiff: true, wantLocationChange: true},
-		"list changed in the Admin UI":         {configured: `["store"]`, stored: []string{"temperature"}, storedLocation: "eu", wantListDiff: true},
-		"list set outside Terraform":           {stored: []string{"store"}, storedLocation: "eu", wantListDiff: true},
-		"same list written with spaces":        {configured: `["store", "vertex_location"]`, stored: []string{"store", "vertex_location"}, storedLocation: "eu"},
-		"null entry the proxy never received":  {configured: `["store", null]`, stored: []string{"store"}, storedLocation: "eu"},
-		"listed key changed in the Admin UI":   {configured: `["vertex_location"]`, stored: []string{"vertex_location"}, storedLocation: "us-east5", wantLocationChange: true},
-		"no list on the model or in the proxy": {storedLocation: "eu"},
+		"list never sent by an older provider": {configured: `["store"]`, configLocation: "eu", storedLocation: "eu", wantChanged: []string{listKey}},
+		"listed keys an older provider deleted": {
+			configured:     `["store", "vertex_location", "tpm", "max_parallel_requests"]`,
+			configLocation: "eu",
+			wantChanged:    []string{listKey, "vertex_location", "tpm", parallelKey},
+		},
+		"list changed in the Admin UI":         {configured: `["store"]`, configLocation: "eu", stored: []string{"temperature"}, storedLocation: "eu", wantChanged: []string{listKey}},
+		"list set outside Terraform":           {configLocation: "eu", stored: []string{"store"}, storedLocation: "eu"},
+		"same list written with spaces":        {configured: `["store", "vertex_location"]`, configLocation: "eu", stored: []string{"store", "vertex_location"}, storedLocation: "eu"},
+		"null entry the proxy never received":  {configured: `["store", null]`, configLocation: "eu", stored: []string{"store"}, storedLocation: "eu"},
+		"listed key left out of the config":    {configured: `["vertex_location"]`, stored: []string{"vertex_location"}, storedLocation: "us-east5"},
+		"no list on the model or in the proxy": {configLocation: "eu", storedLocation: "eu"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -294,14 +304,19 @@ func TestResourceLiteLLMModelPlanComparesAdditionalDropParamsWithProxy(t *testin
 			defer srv.Close()
 
 			res := resourceLiteLLMModel()
-			config := map[string]interface{}{
-				"model_name":          "vertex-claude-haiku",
-				"custom_llm_provider": "vertex_ai",
-				"base_model":          "claude-haiku-4-5",
-				"vertex_location":     "eu",
-			}
+			additionalParams := map[string]interface{}{"max_parallel_requests": "8"}
 			if tc.configured != "" {
-				config["additional_litellm_params"] = map[string]interface{}{"additional_drop_params": tc.configured}
+				additionalParams["additional_drop_params"] = tc.configured
+			}
+			config := map[string]interface{}{
+				"model_name":                "vertex-claude-haiku",
+				"custom_llm_provider":       "vertex_ai",
+				"base_model":                "claude-haiku-4-5",
+				"tpm":                       1000,
+				"additional_litellm_params": additionalParams,
+			}
+			if tc.configLocation != "" {
+				config["vertex_location"] = tc.configLocation
 			}
 			d := schema.TestResourceDataRaw(t, res.Schema, config)
 			d.SetId("model-123")
@@ -313,18 +328,15 @@ func TestResourceLiteLLMModelPlanComparesAdditionalDropParamsWithProxy(t *testin
 			if err != nil {
 				t.Fatalf("diff failed: %v", err)
 			}
-			changed := func(key string) bool {
-				if diff == nil {
-					return false
+			for _, key := range []string{listKey, "vertex_location", "tpm", parallelKey} {
+				attr := (*terraform.ResourceAttrDiff)(nil)
+				if diff != nil {
+					attr = diff.Attributes[key]
 				}
-				attr := diff.Attributes[key]
-				return attr != nil && attr.Old != attr.New
-			}
-			if got := changed("additional_litellm_params.additional_drop_params"); got != tc.wantListDiff {
-				t.Errorf("plan shows additional_drop_params change = %v, want %v", got, tc.wantListDiff)
-			}
-			if got := changed("vertex_location"); got != tc.wantLocationChange {
-				t.Errorf("plan shows vertex_location change = %v, want %v", got, tc.wantLocationChange)
+				got := attr != nil && attr.Old != attr.New
+				if want := slices.Contains(tc.wantChanged, key); got != want {
+					t.Errorf("plan shows %s change = %v, want %v", key, got, want)
+				}
 			}
 		})
 	}
