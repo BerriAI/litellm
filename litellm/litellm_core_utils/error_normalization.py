@@ -60,13 +60,13 @@ class _HasProxyErrorType(Protocol):
 
 
 _MESSAGE_PATTERNS: Final[tuple[tuple[re.Pattern[str], str], ...]] = (
+    (re.compile(r"upstream passthrough request failed", re.IGNORECASE), UPSTREAM_PASSTHROUGH),
     (
         re.compile(r"budget has been exceeded|max budget|crossed budget", re.IGNORECASE),
         BUDGET_EXCEEDED,
     ),
     (re.compile(r"no healthy deployments?|no deployments available", re.IGNORECASE), NO_HEALTHY_DEPLOYMENTS),
     (re.compile(r"not allowed to access model due to tags configuration", re.IGNORECASE), MODEL_ACCESS_DENIED),
-    (re.compile(r"upstream passthrough request failed", re.IGNORECASE), UPSTREAM_PASSTHROUGH),
     (re.compile(r"is not supported for provider|not implemented", re.IGNORECASE), UNSUPPORTED_OPERATION),
     (
         re.compile(r"context window|context length|(prompt|input) is too long|tokens? ?> ?\d+ ?maximum", re.IGNORECASE),
@@ -103,9 +103,14 @@ _PROXY_ERROR_TYPE_MAP: Final[Mapping[str, str]] = MappingProxyType(
         "org_model_access_denied": MODEL_ACCESS_DENIED,
         "project_model_access_denied": MODEL_ACCESS_DENIED,
         "agent_model_access_denied": MODEL_ACCESS_DENIED,
+        "customer_model_access_denied": MODEL_ACCESS_DENIED,
         "key_vector_store_access_denied": PERMISSION_DENIED,
         "team_vector_store_access_denied": PERMISSION_DENIED,
         "org_vector_store_access_denied": PERMISSION_DENIED,
+        "user_vector_store_access_denied": PERMISSION_DENIED,
+        "key_search_tool_access_denied": PERMISSION_DENIED,
+        "team_search_tool_access_denied": PERMISSION_DENIED,
+        "user_search_tool_access_denied": PERMISSION_DENIED,
         "tool_access_denied": PERMISSION_DENIED,
         "team_member_permission_error": PERMISSION_DENIED,
         "not_found_error": RESOURCE_NOT_FOUND,

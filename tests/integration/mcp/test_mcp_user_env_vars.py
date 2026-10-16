@@ -1,4 +1,3 @@
-import signal
 import uuid
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -195,7 +194,7 @@ def test_malformed_bodies_missing_users_and_foreign_servers_are_rejected(gateway
         path: Final = f"/v1/mcp/server/{identity}/user-env-vars"
         payload: Final[dict[str, JsonValue]] = {"values": {TOKEN: "x"}}
         malformed: Final[tuple[dict[str, JsonValue], ...]] = ({"values": {TOKEN: 7}}, {"values": ["a"]}, {})
-        assert [gateway.request("POST", path, body, key=key).status_code for body in malformed] == [422, 422, 422]
+        assert [gateway.request("POST", path, bad, key=key).status_code for bad in malformed] == [422, 422, 422]
         assert set_names(env_status(gateway, key, identity)) == {TOKEN: False}
         assert [gateway.client.request(method, path, json=payload).status_code for method in METHODS] == [401, 401, 401]
         no_user: Final = tuple(gateway.request(method, path, payload, key=userless) for method in METHODS)
@@ -311,8 +310,7 @@ def test_concurrent_users_across_processes_never_leak_and_survive_a_killed_proce
             outcomes: Final = burst(pool, (gateway, peer, doomed.gateway))
             assert all(code in {200, 412} for _, code in outcomes), outcomes
             assert all(code == 200 for index, code in outcomes if index % 4 != 2), outcomes
-            doomed.process.send_signal(signal.SIGKILL)
-            doomed.process.wait(timeout=10)
+            doomed.kill_supervisor()
             after_kill: Final = burst(pool, (gateway, peer))
             assert all(code in {200, 412} for _, code in after_kill), after_kill
             assert all(code == 200 for index, code in after_kill if index % 4 != 2), after_kill

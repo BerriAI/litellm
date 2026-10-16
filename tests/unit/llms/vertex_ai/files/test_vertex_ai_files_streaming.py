@@ -8,8 +8,8 @@ dicts, joined output), which keeps peak memory bounded on large uploads.
 These tests lock in the behaviour that would regress if the streaming path were
 replaced by a list-based pipeline:
   1. Byte-for-byte output parity with a list pipeline (wire format).
-  2. The streaming transform peaks at a clear fraction of a list pipeline on the
-     same input (relative differential, robust to GC noise).
+  2. The upload stream parses and transforms a row only when the HTTP client
+     pulls it, and a Path source is read from disk as the upload proceeds.
   3. ``get_object_name`` only parses the first JSONL row, so a payload whose
      later rows are not valid JSON does not raise.
   4. A tuple-wrapped file handle uploaded through the real create_file ordering
@@ -26,9 +26,13 @@ import gc
 import gzip
 import io
 import json
+import sys
 import tempfile
 import time
 import tracemalloc
+from collections.abc import Callable
+from pathlib import Path
+from typing import Final
 
 import httpx
 import pytest
@@ -44,7 +48,7 @@ from litellm.llms.vertex_ai.files.transformation import (
     VertexAIFilesConfig,
     _get_litellm_batch_custom_id_from_labels,
     _iter_openai_jsonl_entries,
-    _iter_openai_jsonl_lines,
+    _iter_numbered_openai_jsonl_lines,
     _openai_batch_jsonl_entry_to_vertex_rows,
     _OpenAIToVertexBatchUploadStream,
 )
@@ -137,7 +141,7 @@ class TestFileLikeInputNotPartiallyConsumed:
     (get_complete_file_url -> get_object_name) runs before
     transform_create_file_request, and both read the same create_file_data
     source. When the file is a tuple-wrapped open handle, the streaming reader
-    must still emit every row including entry 0: ``_iter_openai_jsonl_lines``
+    must still emit every row including entry 0: ``_iter_numbered_openai_jsonl_lines``
     rewinds a seekable source (seek(0)) before each pass, so the object-name
     step's partial read of the cursor does not consume the upload. A partial
     upload missing the first request would be silent and hard to catch, so this
@@ -179,17 +183,17 @@ class TestFileLikeInputNotPartiallyConsumed:
 class TestStreamingLineIterator:
     def test_skips_blank_and_whitespace_lines(self):
         content = b'{"a": 1}\n\n   \n{"b": 2}\n'
-        assert list(_iter_openai_jsonl_lines(content)) == ['{"a": 1}', '{"b": 2}']
+        assert list(_iter_numbered_openai_jsonl_lines(content)) == [(1, '{"a": 1}'), (4, '{"b": 2}')]
 
     def test_handles_crlf_and_missing_trailing_newline(self):
         content = b'{"a": 1}\r\n{"b": 2}'
-        assert [json.loads(line) for line in _iter_openai_jsonl_lines(content)] == [
+        assert [json.loads(line) for _, line in _iter_numbered_openai_jsonl_lines(content)] == [
             {"a": 1},
             {"b": 2},
         ]
 
     def test_accepts_str_bytes_tuple_and_filelike(self):
-        expected = [{"a": 1}, {"b": 2}]
+        expected = [(1, {"a": 1}), (2, {"b": 2})]
         text = '{"a": 1}\n{"b": 2}\n'
         for source in (
             text,
@@ -200,19 +204,19 @@ class TestStreamingLineIterator:
             assert list(_iter_openai_jsonl_entries(source)) == expected
 
     def test_str_input_without_trailing_newline(self):
-        assert list(_iter_openai_jsonl_lines('{"a": 1}\n{"b": 2}')) == [
-            '{"a": 1}',
-            '{"b": 2}',
+        assert list(_iter_numbered_openai_jsonl_lines('{"a": 1}\n{"b": 2}')) == [
+            (1, '{"a": 1}'),
+            (2, '{"b": 2}'),
         ]
 
     def test_pathlike_input_is_read_line_by_line(self, tmp_path):
         path = tmp_path / "batch.jsonl"
         path.write_bytes(b'{"a": 1}\n{"b": 2}\n')
-        assert list(_iter_openai_jsonl_entries(path)) == [{"a": 1}, {"b": 2}]
+        assert list(_iter_openai_jsonl_entries(path)) == [(1, {"a": 1}), (2, {"b": 2})]
 
     def test_unsupported_content_type_raises(self):
         with pytest.raises(ValueError, match="Unsupported file content type"):
-            list(_iter_openai_jsonl_lines(12345))  # type: ignore[arg-type]
+            list(_iter_numbered_openai_jsonl_lines(12345))  # type: ignore[arg-type]
 
     def test_non_seekable_handle_raises_instead_of_dropping_first_row(self):
         # The handle is read twice (object-name probe, then body). A non-seekable
@@ -233,15 +237,17 @@ class TestStreamingLineIterator:
 
         handle = _NonSeekable(b'{"custom_id": "request-0"}\n{"custom_id": "request-1"}\n')
         with pytest.raises(ValueError, match="seekable"):
-            list(_iter_openai_jsonl_lines(handle))
+            list(_iter_numbered_openai_jsonl_lines(handle))
 
     def test_is_lazy_does_not_parse_past_first_entry(self):
         # Second row is invalid JSON; pulling only the first entry must not raise.
         content = b'{"custom_id": "first"}\nnot-json-at-all\n'
         gen = _iter_openai_jsonl_entries(content)
-        assert next(gen)["custom_id"] == "first"
-        with pytest.raises(json.JSONDecodeError):
+        assert next(gen) == (1, {"custom_id": "first"})
+        with pytest.raises(VertexAIError) as exc_info:
             next(gen)
+        assert exc_info.value.status_code == 400
+        assert "line 2" in str(exc_info.value)
 
 
 class TestGetObjectNameLazyParse:
@@ -253,43 +259,41 @@ class TestGetObjectNameLazyParse:
         object_name = cfg.get_object_name(("batch.jsonl", raw, "application/jsonl"), purpose="batch")
         assert "gemini-2.5-flash" in object_name
 
+    @pytest.mark.parametrize(
+        "first_row",
+        [
+            b'{"custom_id": "r-0", "body": null}',
+            b'{"custom_id": "r-0", "body": "hi"}',
+            b'{"custom_id": "r-0", "body": {"model": null, "messages": [{"role": "user", "content": "hi"}]}}',
+            b'{"custom_id": "r-0", "body": {"model": 5, "messages": [{"role": "user", "content": "hi"}]}}',
+        ],
+    )
+    def test_bad_body_on_line_1_is_reported_as_a_400_naming_the_line(self, first_row: bytes):
+        cfg: Final = VertexAIFilesConfig()
+        file_data: Final = ("batch.jsonl", first_row + b"\n", "application/jsonl")
+        cfg.get_object_name(file_data, purpose="batch")
+        with pytest.raises(VertexAIError) as exc_info:
+            list(_OpenAIToVertexBatchUploadStream(file_data, cfg._map_openai_to_vertex_params).iter_bytes())
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.message.startswith("Batch input file line 1 could not be converted")
 
-class TestStreamingPeakMemory:
-    """
-    Differential guard: the streaming transform must stay well under the peak
-    that a list pipeline incurs on the same input. If the hot path builds full
-    intermediate lists, the streaming assertion fails.
 
-    The assertion that matters is the *relative* one: ``streaming_peak`` must be
-    a clear fraction of ``list_peak`` on the identical input. Absolute
-    ``tracemalloc`` ratios drift with GC timing and the live set carried in from
-    earlier tests, so they make poor CI gates; the relative comparison cancels
-    that shared noise and is exactly what regresses (toward 1.0) when the hot
-    path builds full intermediate lists. ``gc.collect()`` before each
-    measurement removes any garbage the previous run left behind.
-    """
-
-    def test_streaming_peak_well_below_list_pipeline(self):
-        cfg = VertexAIFilesConfig()
-        raw = _make_openai_jsonl_bytes(8000)
-        content_str = raw.decode("utf-8")
-
-        def drain_stream():
-            # Consume the upload body one row at a time, as the chunked uploader
-            # does, without accumulating it.
-            for _ in _OpenAIToVertexBatchUploadStream(raw, cfg._map_openai_to_vertex_params).iter_bytes():
-                pass
-
-        streaming_peak = _measure_peak(drain_stream)
-        list_peak = _measure_peak(lambda: _reference_vertex_jsonl_string(cfg, content_str))
-
-        # Core guard: the lazily consumed streaming body peaks well under a list
-        # pipeline that materializes every transformed row. Building full
-        # intermediate lists in the hot path pushes this ratio back toward 1.0.
-        assert streaming_peak < list_peak * 0.6, (
-            f"streaming peak {streaming_peak} not a clear win over list pipeline "
-            f"{list_peak} (ratio {streaming_peak / list_peak:.2f})"
+class TestStreamingLaziness:
+    def test_upload_stream_transforms_rows_only_as_they_are_pulled(self) -> None:
+        cfg: Final = VertexAIFilesConfig()
+        valid_rows: Final = 3
+        raw: Final = _make_openai_jsonl_bytes(valid_rows) + b"\n" + b"\n".join(b"not-json" for _ in range(8000))
+        chunks: Final = _OpenAIToVertexBatchUploadStream(raw, cfg._map_openai_to_vertex_params).iter_bytes()
+        pulled: Final = tuple(next(chunks) for _ in range(valid_rows))
+        custom_ids: Final = tuple(
+            _get_litellm_batch_custom_id_from_labels(json.loads(chunk)["request"]["labels"]) for chunk in pulled
         )
+
+        assert custom_ids == ("request-0", "request-1", "request-2")
+        with pytest.raises(VertexAIError) as exc_info:
+            next(chunks)
+        assert exc_info.value.status_code == 400
+        assert "line 4" in exc_info.value.message
 
     def test_get_object_name_does_not_scale_with_payload(self):
         cfg = VertexAIFilesConfig()
@@ -345,34 +349,36 @@ class TestPathSourcedStreaming:
         first_labels = json.loads(lines[0])["request"]["labels"]
         assert _get_litellm_batch_custom_id_from_labels(first_labels) == "request-0"
 
-    def test_path_source_peak_stays_below_list_pipeline(self, tmp_path):
-        cfg = VertexAIFilesConfig()
-        path, raw = self._write_jsonl(tmp_path, 8000)
-        data = self._batch_request(path)
-        content_str = raw.decode("utf-8")
-
-        def drain_stream():
-            cfg.get_complete_file_url(
-                api_base=None,
-                api_key=None,
-                model="",
-                optional_params={},
-                litellm_params={"gcs_bucket_name": "test-bucket"},
-                data=data,
-            )
-            out = cfg.transform_create_file_request(
-                model="", create_file_data=data, optional_params={}, litellm_params={}
-            )
-            for _ in _upload_stream(out).iter_bytes():
-                pass
-
-        streaming_peak = _measure_peak(drain_stream)
-        list_peak = _measure_peak(lambda: _reference_vertex_jsonl_string(cfg, content_str))
-
-        assert streaming_peak < list_peak * 0.3, (
-            f"path-sourced streaming peak {streaming_peak} not a clear win over list pipeline "
-            f"{list_peak} (ratio {streaming_peak / list_peak:.2f})"
+    def test_path_source_is_read_as_the_upload_is_pulled(self, tmp_path: Path) -> None:
+        cfg: Final = VertexAIFilesConfig()
+        n_rows: Final = 8000
+        path, raw = self._write_jsonl(tmp_path, n_rows)
+        data: Final = self._batch_request(path)
+        cfg.get_complete_file_url(
+            api_base=None,
+            api_key=None,
+            model="",
+            optional_params={},
+            litellm_params={"gcs_bucket_name": "test-bucket"},
+            data=data,
         )
+        out: Final = cfg.transform_create_file_request(
+            model="", create_file_data=data, optional_params={}, litellm_params={}
+        )
+        chunks: Final = _upload_stream(out).iter_bytes()
+        first: Final = next(chunks)
+
+        with open(path, "r+b") as handle:
+            handle.seek(raw.index(b'"request-6000"'))
+            handle.write(b'"rewrote-6000"')
+        custom_ids: Final = tuple(
+            _get_litellm_batch_custom_id_from_labels(json.loads(chunk)["request"]["labels"])
+            for chunk in (first, *chunks)
+        )
+
+        assert len(custom_ids) == n_rows
+        assert custom_ids[0] == "request-0"
+        assert custom_ids[6000] == "rewrote-6000"
 
     def test_path_source_stream_is_reiterable(self, tmp_path):
         cfg = VertexAIFilesConfig()
@@ -384,6 +390,17 @@ class TestPathSourcedStreaming:
         first = b"".join(stream.iter_bytes())
         second = b"".join(stream.iter_bytes())
         assert first == second and len(first) > 0
+
+
+_LINE_2_NOT_CONVERTED: Final = "Batch input file line 2 could not be converted to a Vertex AI request"
+
+
+def _as_utf8_bytes(text: str) -> bytes:
+    return text.encode("utf-8")
+
+
+def _as_str(text: str) -> str:
+    return text
 
 
 _GCS_OBJECT_JSON = {
@@ -482,6 +499,144 @@ class TestUploadUrl:
 
 
 class TestUploadStreamBody:
+    def test_stream_rejects_malformed_single_row(self):
+        stream = _OpenAIToVertexBatchUploadStream(
+            openai_file_content=b"this is not json\n",
+            map_openai_to_vertex_params=lambda body: body,
+        )
+        with pytest.raises(VertexAIError) as exc_info:
+            list(stream.iter_bytes())
+        assert exc_info.value.status_code == 400
+        assert "line 1" in str(exc_info.value)
+
+    def test_stream_reports_file_line_number_for_malformed_file_like_input(self):
+        valid_row = json.dumps(
+            {
+                "custom_id": "r1",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": "gemini-2.5-flash",
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+            }
+        ).encode("utf-8")
+        raw = valid_row + b"\n\nthis is not json\n"
+        stream = _OpenAIToVertexBatchUploadStream(
+            openai_file_content=io.BytesIO(raw),
+            map_openai_to_vertex_params=lambda body: body,
+        )
+        with pytest.raises(VertexAIError) as exc_info:
+            list(stream.iter_bytes())
+        assert "line 3" in str(exc_info.value)
+
+    def test_stream_reports_file_line_number_for_malformed_bytes_input(self):
+        valid_row = json.dumps(
+            {
+                "custom_id": "r1",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": "gemini-2.5-flash",
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+            }
+        ).encode("utf-8")
+        raw = valid_row + b"\n\nthis is not json\n"
+        stream = _OpenAIToVertexBatchUploadStream(
+            openai_file_content=raw,
+            map_openai_to_vertex_params=lambda body: body,
+        )
+        with pytest.raises(VertexAIError) as exc_info:
+            list(stream.iter_bytes())
+        assert "line 3" in str(exc_info.value)
+
+    @pytest.mark.parametrize(
+        ("bad_row", "expected_message"),
+        [
+            (b"[1, 2]", "Batch input file line 2 is not a JSON object"),
+            (b'"text"', "Batch input file line 2 is not a JSON object"),
+            (b"42", "Batch input file line 2 is not a JSON object"),
+            (
+                b'{"custom_id": "r2", "body": "hi"}',
+                f"{_LINE_2_NOT_CONVERTED}: `body` on batch requests must be a JSON object",
+            ),
+            (
+                b'{"custom_id": "r2", "body": [1]}',
+                f"{_LINE_2_NOT_CONVERTED}: `body` on batch requests must be a JSON object",
+            ),
+            (
+                b'{"custom_id": "r2", "body": null}',
+                f"{_LINE_2_NOT_CONVERTED}: `body` on batch requests must be a JSON object",
+            ),
+            (
+                b'{"custom_id": "r2", "body": ""}',
+                f"{_LINE_2_NOT_CONVERTED}: `body` on batch requests must be a JSON object",
+            ),
+            (b'{"custom_id": "r2"}', f"{_LINE_2_NOT_CONVERTED}: `body` on batch requests must be a JSON object"),
+            (b"[" * 1_000_000, "Batch input file line 2 could not be parsed"),
+            (
+                b'{"n": ' + b"9" * (sys.get_int_max_str_digits() + 1) + b"}",
+                "Batch input file line 2 could not be parsed",
+            ),
+            (b'{"custom_id": "r2", "body": {"a": "\xff"}}', "Batch input file line 2 is not valid UTF-8"),
+            (
+                b'{"custom_id": "r2", "url": "/v1/embeddings", "body": {"model": "gemini-embedding-001"}}',
+                f"{_LINE_2_NOT_CONVERTED}: `input` is required",
+            ),
+            (
+                b'{"custom_id": "r2", "url": "/v1/embeddings", "body": {"model": "gemini-embedding-001", "input": 5}}',
+                _LINE_2_NOT_CONVERTED,
+            ),
+            (
+                b'{"custom_id": "r2", "body": {"model": "gemini-2.5-flash", "messages": [{"content": "hi"}]}}',
+                f"{_LINE_2_NOT_CONVERTED}: missing field 'role'",
+            ),
+            (
+                b'{"custom_id": "r2", "body": {"model": "gemini-2.5-flash", "messages": [{"role": 5, "content": "hi"}]}}',
+                _LINE_2_NOT_CONVERTED,
+            ),
+            (b'{"custom_id": "r2", "body": {"a": 1,}}', "Batch input file line 2 is not valid JSON"),
+        ],
+    )
+    def test_stream_rejects_malformed_row_naming_its_line(self, bad_row: bytes, expected_message: str):
+        valid_row = json.dumps({"custom_id": "r1", "body": {"model": "gemini-2.5-flash"}}).encode("utf-8")
+        stream = _OpenAIToVertexBatchUploadStream(
+            openai_file_content=valid_row + b"\n" + bad_row + b"\n",
+            map_openai_to_vertex_params=lambda body: body,
+        )
+        with pytest.raises(VertexAIError) as exc_info:
+            list(stream.iter_bytes())
+        assert exc_info.value.status_code == 400
+        assert expected_message in exc_info.value.message
+
+    @pytest.mark.parametrize("encode", [_as_utf8_bytes, _as_str])
+    @pytest.mark.parametrize("bad_row", ['{"custom_id": "r1",}', "   {bad", '\t\t{"a": tru}'])
+    def test_invalid_json_error_names_the_column(self, bad_row: str, encode: Callable[[str], bytes | str]):
+        stream = _OpenAIToVertexBatchUploadStream(
+            openai_file_content=encode(bad_row + "\n"),
+            map_openai_to_vertex_params=lambda body: body,
+        )
+        with pytest.raises(VertexAIError) as exc_info:
+            list(stream.iter_bytes())
+        with pytest.raises(json.JSONDecodeError) as parsed:
+            json.loads(bad_row)
+        assert exc_info.value.message.endswith(f"{parsed.value.msg} at column {parsed.value.colno}")
+
+    @pytest.mark.parametrize("encode", [_as_utf8_bytes, _as_str])
+    def test_stream_uploads_a_file_that_starts_with_a_byte_order_mark(self, encode: Callable[[str], bytes | str]):
+        row: Final = json.dumps(
+            {"custom_id": "r1", "body": {"model": "gemini-2.5-flash", "messages": [{"role": "user", "content": "hi"}]}}
+        )
+        with_bom: Final = _OpenAIToVertexBatchUploadStream(encode("\ufeff" + row + "\n"), lambda body: body)
+        without_bom: Final = _OpenAIToVertexBatchUploadStream((row + "\n").encode("utf-8"), lambda body: body)
+        assert b"".join(with_bom.iter_bytes()) == b"".join(without_bom.iter_bytes())
+
+    def test_get_object_name_rejects_malformed_batch_jsonl(self):
+        with pytest.raises(VertexAIError) as exc_info:
+            VertexAIFilesConfig().get_object_name(file_data=b"not json\n", purpose="batch")
+        assert exc_info.value.status_code == 400
+
     def test_stream_matches_legacy_pipeline(self):
         cfg = VertexAIFilesConfig()
         raw = _make_openai_jsonl_bytes(120)

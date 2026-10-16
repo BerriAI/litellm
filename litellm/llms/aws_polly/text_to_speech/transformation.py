@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Final, Union
 import httpx
 
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
+from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
     TextToSpeechRequestData,
@@ -262,11 +263,9 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
         Returns:
             Tuple of (signed_headers, json_body_string)
         """
-        try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-        except ImportError:
-            raise ImportError("Missing boto3 to call AWS Polly. Run 'pip install boto3'.")
+        ensure_optional_import("botocore")
+        from botocore.auth import SigV4Auth
+        from botocore.awsrequest import AWSRequest
 
         # Get AWS region
         aws_region_name: Final = litellm_params.get("aws_region_name", self.DEFAULT_REGION)

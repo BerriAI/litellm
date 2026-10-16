@@ -1,7 +1,7 @@
 """Shared VCR (Redis-backed) plumbing imported by per-directory conftests.
 
-See ``tests/llm_translation/Readme.md`` for the full design and
-``tests/llm_translation/conftest.py`` for the reference wiring."""
+See ``tests/VCR_TESTING.md`` for the full design and
+``tests/_vcr_conftest_common.py`` for the shared wiring."""
 
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ from tests._vcr_redis_persister import (
 # network call entirely, so skip tests record nothing (NOOP) and passing tests
 # stop carrying a volatile github episode. This matches the established idiom in
 # the unit-test suite, which sets the same flag (see e.g.
-# tests/test_litellm/test_cost_calculator.py). ``setdefault`` so an explicit
+# tests/unit/test_cost_calculator.py). ``setdefault`` so an explicit
 # override still wins.
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
@@ -1090,6 +1090,7 @@ def vcr_config_dict() -> dict:
         "decode_compressed_response": True,
         "record_mode": "new_episodes",
         "allow_playback_repeats": True,
+        "ignore_localhost": True,
         "match_on": (
             "method",
             "scheme",

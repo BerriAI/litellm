@@ -1,27 +1,183 @@
+import copy
 import json
-
-import pytest
-from fastapi.testclient import TestClient
-
+from collections.abc import Iterator
+from typing import Final
 from unittest.mock import MagicMock, patch
 
+import httpx
+import pytest
+import respx
+from openai.lib.streaming.chat import ChatCompletionStreamState
+from openai.types.chat import ChatCompletionChunk
+from pydantic import TypeAdapter
+from fastapi.testclient import TestClient
+from pydantic import BaseModel, ConfigDict
+
 import litellm
+from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
 )
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.databricks.chat.transformation import (
     DatabricksChatResponseIterator,
     DatabricksConfig,
     _sanitize_empty_content,
 )
+from litellm.types.llms.openai import AllMessageValues
+import asyncio
+from unittest.mock import Mock
+from litellm._version import version
+from litellm.utils import CustomStreamWrapper
+from typing import Any, Dict
+from typing import List
+
+DATABRICKS_API_BASE: Final = "https://my.workspace.cloud.databricks.com/serving-endpoints"
+DATABRICKS_API_KEY: Final = "dapimykey"
+DATABRICKS_CHAT_COMPLETIONS_URL: Final = f"{DATABRICKS_API_BASE}/chat/completions"
+DATABRICKS_EMBEDDINGS_URL: Final = f"{DATABRICKS_API_BASE}/embeddings"
+JSON_SCHEMA_RESPONSE_FORMAT: Final = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "P",
+        "strict": True,
+        "schema": {
+            "$defs": {
+                "Person": {
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}},
+                    "required": ["name"],
+                }
+            },
+            "type": "object",
+            "properties": {"p": {"$ref": "#/$defs/Person"}},
+            "required": ["p"],
+        },
+    },
+}
 
 
 @pytest.fixture()
 def _use_local_model_cost_map(monkeypatch):
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+
+@pytest.fixture
+def _databricks_httpx_transport(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    client_cache: Final = LLMClientCache()
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", client_cache)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "force_ipv4", False)
+    monkeypatch.setattr(litellm, "sync_transport", None, raising=False)
+    yield
+    client_cache.flush_cache()
+
+
+def _databricks_chat_response(model: str, usage: dict[str, object]) -> dict[str, object]:
+    return {
+        "id": "chatcmpl_3f78f09a-489c-4b8d-a587-f162c7497891",
+        "object": "chat.completion",
+        "created": 1726285449,
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": usage,
+    }
+
+
+def _databricks_embedding_response() -> dict[str, object]:
+    return {
+        "object": "list",
+        "model": "bge-large-en-v1.5",
+        "data": [
+            {
+                "index": 0,
+                "object": "embedding",
+                "embedding": [
+                    0.06768798828125,
+                    -0.01291656494140625,
+                    -0.0501708984375,
+                    0.0245361328125,
+                    -0.030364990234375,
+                ],
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 8,
+            "total_tokens": 8,
+            "completion_tokens": 0,
+            "completion_tokens_details": None,
+            "prompt_tokens_details": None,
+        },
+    }
+
+
+def _databricks_anthropic_cache_response(
+    cache_read_input_tokens: int,
+    cache_creation_input_tokens: int,
+) -> dict[str, object]:
+    usage: Final = {
+        "completion_tokens": 117,
+        "prompt_tokens": 1549,
+        "total_tokens": 1666,
+        "completion_tokens_details": None,
+        "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "cache_creation_tokens": cache_creation_input_tokens,
+        },
+        "cache_read_input_tokens": cache_read_input_tokens,
+        "cache_creation_input_tokens": cache_creation_input_tokens,
+    }
+    return _databricks_chat_response("claude-3-7-sonnet", usage)
+
+
+def _databricks_streaming_chat_chunks() -> tuple[str, ...]:
+    return (
+        json.dumps(
+            {
+                "id": "chatcmpl_8a7075d1-956e-4960-b3a6-892cd4649ff3",
+                "object": "chat.completion.chunk",
+                "created": 1726469651,
+                "model": "dbrx-instruct-071224",
+                "choices": [{"delta": {"role": "assistant", "content": "Hello"}, "finish_reason": None}],
+                "usage": {"prompt_tokens": 230, "completion_tokens": 1, "total_tokens": 231},
+            }
+        ),
+        json.dumps(
+            {
+                "id": "chatcmpl_8a7075d1-956e-4960-b3a6-892cd4649ff3",
+                "object": "chat.completion.chunk",
+                "created": 1726469651,
+                "model": "dbrx-instruct-071224",
+                "choices": [{"delta": {"content": " world"}, "finish_reason": None}],
+                "usage": {"prompt_tokens": 230, "completion_tokens": 1, "total_tokens": 231},
+            }
+        ),
+        json.dumps(
+            {
+                "id": "chatcmpl_8a7075d1-956e-4960-b3a6-892cd4649ff3",
+                "object": "chat.completion.chunk",
+                "created": 1726469651,
+                "model": "dbrx-instruct-071224",
+                "choices": [{"delta": {"content": "!"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 230, "completion_tokens": 1, "total_tokens": 231},
+            }
+        ),
+    )
+
+
+def _assert_databricks_request(request: httpx.Request, expected_url: str, api_key: str) -> None:
+    assert request.headers["Content-Type"] == "application/json"
+    assert request.headers["Authorization"] == f"Bearer {api_key}"
+    assert str(request.url) == expected_url
 
 
 def test_transform_choices():
@@ -179,6 +335,44 @@ def test_transform_choices_with_citations():
     }
 
 
+def _databricks_reasoning_chunk(chunk_id: str, summaries: list[dict[str, str]], text: str | None = None) -> dict:
+    content: Final = [{"type": "reasoning", "summary": summaries}] + ([{"type": "text", "text": text}] if text else [])
+    return {
+        "id": chunk_id,
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "databricks-qwen",
+        "choices": [{"delta": {"role": "assistant", "content": content}, "index": 0, "finish_reason": None}],
+    }
+
+
+def test_streamed_reasoning_summaries_accumulate_in_the_openai_sdk_stream_state():
+    """`client.chat.completions.stream()` runs every delta through the OpenAI SDK's `ChatCompletionStreamState`,
+    which raises `RuntimeError: Expected list delta entry to have an \`index\` key` on the second chunk unless each
+    streamed `thinking_blocks` entry carries its list position"""
+    iterator: Final = DatabricksChatResponseIterator(None, sync_stream=True)
+    chunks: Final = (
+        _databricks_reasoning_chunk("c1", [{"type": "summary_text", "text": "Step 1. "}]),
+        _databricks_reasoning_chunk("c1", [{"type": "summary_text", "text": "Step 2.", "signature": "sig-a"}]),
+        _databricks_reasoning_chunk(
+            "c1",
+            [{"type": "summary_text", "text": "", "signature": ""}, {"type": "summary_text", "text": "Step 3."}],
+            text="391",
+        ),
+    )
+
+    state: Final = ChatCompletionStreamState()
+    for chunk in chunks:
+        state.handle_chunk(ChatCompletionChunk.model_validate(iterator.chunk_parser(chunk).model_dump()))
+    message: Final = state.get_final_completion().choices[0].message.model_dump()
+
+    assert message["content"] == "391"
+    assert message["thinking_blocks"] == [
+        {"type": "thinking", "thinking": "Step 1. Step 2.", "signature": "sig-a", "index": 0},
+        {"type": "thinking", "thinking": "Step 3.", "signature": "", "index": 1},
+    ]
+
+
 def test_chunk_parser_with_citation():
     iterator = DatabricksChatResponseIterator(None, sync_stream=True)
     chunk = {
@@ -262,7 +456,7 @@ def test_transform_messages_sanitizes_empty_content():
         {"role": "user", "content": [{"type": "text", "text": ""}]},
         {"role": "user", "content": "Hi"},
     ]
-    result = config._transform_messages(messages=messages, model="databricks-claude", is_async=False)
+    result = config.transform_messages(messages=messages, model="databricks-claude", is_async=False)
     assert "content" not in result[0]
     assert result[1]["content"] == "Hi"
 
@@ -278,6 +472,119 @@ def test_transform_request_preserves_unity_model_service_name():
     )
 
     assert result["model"] == "system.ai.kimi-k3"
+
+
+@pytest.mark.parametrize(
+    "model,messages,optional_params,expected_content",
+    [
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [{"role": "user", "content": [{"type": "text", "text": "Reply in JSON"}]}],
+            {"response_format": {"type": "json_object"}},
+            "Reply in JSON",
+            id="user",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [{"role": "system", "content": [{"type": "text", "text": "Reply in JSON"}]}],
+            {"response_format": {"type": "json_object"}},
+            "Reply in JSON",
+            id="system",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [{"role": "assistant", "content": [{"type": "text", "text": "Reply in JSON"}]}],
+            {"response_format": {"type": "json_object"}},
+            "Reply in JSON",
+            id="assistant",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "content": [{"type": "text", "text": "Reply in JSON"}],
+                }
+            ],
+            {"response_format": {"type": "json_object"}},
+            "Reply in JSON",
+            id="tool",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "Reply in JSON", "cache_control": {"type": "ephemeral"}}],
+                }
+            ],
+            {"response_format": {"type": "json_object"}},
+            [{"type": "text", "text": "Reply in JSON", "cache_control": {"type": "ephemeral"}}],
+            id="cache-control",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [{"role": "user", "content": [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}]}],
+            {"response_format": {"type": "json_object"}},
+            [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}],
+            id="multiple-text-blocks",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Reply in JSON"},
+                        {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}},
+                    ],
+                }
+            ],
+            {"response_format": {"type": "json_object"}},
+            [
+                {"type": "text", "text": "Reply in JSON"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}},
+            ],
+            id="text-and-image",
+        ),
+        pytest.param(
+            "databricks-meta-llama-3-3-70b-instruct",
+            [{"role": "user", "content": "Reply in JSON"}],
+            {"response_format": {"type": "json_object"}},
+            "Reply in JSON",
+            id="plain-string",
+        ),
+        pytest.param(
+            "databricks-claude-sonnet-5",
+            [{"role": "user", "content": [{"type": "text", "text": "Reply in JSON"}]}],
+            {"response_format": {"type": "json_object"}},
+            [{"type": "text", "text": "Reply in JSON"}],
+            id="claude",
+        ),
+    ],
+)
+def test_transform_request_collapses_single_plain_text_block_for_non_claude_models(
+    model: str,
+    messages: list[AllMessageValues],
+    optional_params: dict[str, object],
+    expected_content: object,
+) -> None:
+    config: Final[DatabricksConfig] = DatabricksConfig()
+    result: Final[dict[str, object]] = TypeAdapter(dict[str, object]).validate_python(
+        config.transform_request(  # pyright: ignore[reportUnknownMemberType]  # inherited hook is untyped
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+    )
+    outgoing_messages: Final[list[dict[str, object]]] = TypeAdapter(list[dict[str, object]]).validate_python(
+        result["messages"]
+    )
+
+    assert outgoing_messages == [{**messages[0], "content": expected_content}]
 
 
 def test_transform_request_strips_thinking_blocks_and_reasoning_content():
@@ -808,3 +1115,1335 @@ def test_chunk_parser_surfaces_top_level_reasoning_delta(reasoning_key: str) -> 
 
     assert parsed.choices[0].delta.reasoning_content == "We need answer"
     assert parsed.choices[0].delta.content is None
+
+
+def test_completion_merges_leading_system_and_developer_messages_for_chat_template_models(
+    respx_mock: respx.MockRouter,
+):
+    upstream: Final = respx_mock.post("https://example.databricks.test/serving-endpoints/chat/completions").mock(
+        return_value=httpx.Response(
+            status_code=200,
+            json={
+                "id": "chatcmpl-123",
+                "object": "chat.completion",
+                "created": 1677652288,
+                "model": "my-custom-model",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "Answer"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="databricks/my-custom-model",
+        messages=[
+            {"role": "system", "content": "You are terse."},
+            {"role": "developer", "content": "Skills: none."},
+            {"role": "user", "content": "Hello"},
+        ],
+        api_base="https://example.databricks.test/serving-endpoints",
+        api_key="fake-databricks-api-key",
+        num_retries=0,
+    )
+
+    assert upstream.call_count == 1
+    request_body: Final = json.loads(upstream.calls[0].request.read())
+    assert request_body["messages"] == [
+        {"role": "system", "content": "You are terse.\n\nSkills: none."},
+        {"role": "user", "content": "Hello"},
+    ]
+    assert response.choices[0].message.content == "Answer"
+
+
+def test_completion_merges_system_messages_when_one_has_empty_content(respx_mock: respx.MockRouter):
+    upstream: Final = respx_mock.post("https://example.databricks.test/serving-endpoints/chat/completions").mock(
+        return_value=httpx.Response(
+            status_code=200,
+            json={
+                "id": "chatcmpl-123",
+                "object": "chat.completion",
+                "created": 1677652288,
+                "model": "my-custom-model",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "Answer"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
+            },
+        )
+    )
+
+    litellm.completion(
+        model="databricks/my-custom-model",
+        messages=[
+            {"role": "system", "content": "You are terse."},
+            {"role": "system", "content": ""},
+            {"role": "user", "content": "Hello"},
+        ],
+        api_base="https://example.databricks.test/serving-endpoints",
+        api_key="fake-databricks-api-key",
+        num_retries=0,
+    )
+
+    request_body: Final = json.loads(upstream.calls[0].request.read())
+    assert request_body["messages"] == [
+        {"role": "system", "content": "You are terse."},
+        {"role": "user", "content": "Hello"},
+    ]
+
+
+def test_chunk_parser_relays_the_served_service_tier():
+    iterator = DatabricksChatResponseIterator(streaming_response=None, sync_stream=True)
+
+    with_tier: Final = iterator.chunk_parser({**_streaming_chunk(), "service_tier": "priority"})
+    assert with_tier.model_dump()["service_tier"] == "priority"
+
+    without_tier: Final = iterator.chunk_parser(_streaming_chunk())
+    assert getattr(without_tier, "service_tier", None) is None
+
+
+def test_completions_with_sync_http_handler(monkeypatch):
+    base_url = "https://my.workspace.cloud.databricks.com/serving-endpoints"
+    api_key = "dapimykey"
+    monkeypatch.setenv("DATABRICKS_API_BASE", base_url)
+    monkeypatch.setenv("DATABRICKS_API_KEY", api_key)
+
+    sync_handler = HTTPHandler()
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = mock_chat_response()
+
+    expected_response_json = {
+        **mock_chat_response(),
+        **{
+            "model": "databricks/dbrx-instruct-071224",
+        },
+    }
+
+    messages = [{"role": "user", "content": "How are you?"}]
+
+    with patch.object(HTTPHandler, "post", return_value=mock_response) as mock_post:
+        response = litellm.completion(
+            model="databricks/dbrx-instruct-071224",
+            messages=messages,
+            client=sync_handler,
+            temperature=0.5,
+            extraparam="testpassingextraparam",
+        )
+
+        assert (
+            mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
+        )
+        assert (
+            mock_post.call_args.kwargs["headers"]["Authorization"]
+            == f"Bearer {api_key}"
+        )
+        assert mock_post.call_args.kwargs["url"] == f"{base_url}/chat/completions"
+        assert mock_post.call_args.kwargs["stream"] == False
+
+        actual_data = json.loads(
+            mock_post.call_args.kwargs["data"]
+        )  # Deserialize the actual data
+        expected_data = {
+            "model": "dbrx-instruct-071224",
+            "messages": messages,
+            "temperature": 0.5,
+            "extraparam": "testpassingextraparam",
+        }
+        assert actual_data == expected_data, f"Unexpected JSON data: {actual_data}"
+
+
+def test_completions_with_async_http_handler(monkeypatch):
+    base_url = "https://my.workspace.cloud.databricks.com/serving-endpoints"
+    api_key = "dapimykey"
+    monkeypatch.setenv("DATABRICKS_API_BASE", base_url)
+    monkeypatch.setenv("DATABRICKS_API_KEY", api_key)
+
+    async_handler = AsyncHTTPHandler()
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = mock_chat_response()
+
+    expected_response_json = {
+        **mock_chat_response(),
+        **{
+            "model": "databricks/dbrx-instruct-071224",
+        },
+    }
+
+    messages = [{"role": "user", "content": "How are you?"}]
+
+    with patch.object(
+        AsyncHTTPHandler, "post", return_value=mock_response
+    ) as mock_post:
+        response = asyncio.run(
+            litellm.acompletion(
+                model="databricks/dbrx-instruct-071224",
+                messages=messages,
+                client=async_handler,
+                temperature=0.5,
+                extraparam="testpassingextraparam",
+            )
+        )
+
+        assert (
+            mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
+        )
+        assert (
+            mock_post.call_args.kwargs["headers"]["Authorization"]
+            == f"Bearer {api_key}"
+        )
+        assert mock_post.call_args.kwargs["url"] == f"{base_url}/chat/completions"
+        assert mock_post.call_args.kwargs["stream"] == False
+
+        actual_data = json.loads(
+            mock_post.call_args.kwargs["data"]
+        )  # Deserialize the actual data
+        expected_data = {
+            "model": "dbrx-instruct-071224",
+            "messages": messages,
+            "temperature": 0.5,
+            "extraparam": "testpassingextraparam",
+        }
+        assert actual_data == expected_data, f"Unexpected JSON data: {actual_data}"
+
+
+def test_completions_streaming_with_sync_http_handler(monkeypatch):
+    base_url = "https://my.workspace.cloud.databricks.com/serving-endpoints"
+    api_key = "dapimykey"
+    monkeypatch.setenv("DATABRICKS_API_BASE", base_url)
+    monkeypatch.setenv("DATABRICKS_API_KEY", api_key)
+
+    sync_handler = HTTPHandler()
+
+    messages = [{"role": "user", "content": "How are you?"}]
+    mock_response = mock_http_handler_chat_streaming_response()
+
+    with patch.object(HTTPHandler, "post", return_value=mock_response) as mock_post:
+        response_stream: CustomStreamWrapper = litellm.completion(
+            model="databricks/dbrx-instruct-071224",
+            messages=messages,
+            client=sync_handler,
+            temperature=0.5,
+            extraparam="testpassingextraparam",
+            stream=True,
+        )
+        response = list(response_stream)
+        assert "dbrx-instruct-071224" in str(response)
+        assert "chatcmpl" in str(response)
+        assert len(response) == 4
+
+        assert (
+            mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
+        )
+        assert (
+            mock_post.call_args.kwargs["headers"]["Authorization"]
+            == f"Bearer {api_key}"
+        )
+        assert mock_post.call_args.kwargs["url"] == f"{base_url}/chat/completions"
+        assert mock_post.call_args.kwargs["stream"] == True
+
+        actual_data = json.loads(
+            mock_post.call_args.kwargs["data"]
+        )  # Deserialize the actual data
+        expected_data = {
+            "model": "dbrx-instruct-071224",
+            "messages": messages,
+            "temperature": 0.5,
+            "stream": True,
+            "extraparam": "testpassingextraparam",
+        }
+        assert actual_data == expected_data, f"Unexpected JSON data: {actual_data}"
+
+
+def test_completions_streaming_with_async_http_handler(monkeypatch):
+    base_url = "https://my.workspace.cloud.databricks.com/serving-endpoints"
+    api_key = "dapimykey"
+    monkeypatch.setenv("DATABRICKS_API_BASE", base_url)
+    monkeypatch.setenv("DATABRICKS_API_KEY", api_key)
+
+    async_handler = AsyncHTTPHandler()
+
+    messages = [{"role": "user", "content": "How are you?"}]
+    mock_response = mock_http_handler_chat_async_streaming_response()
+
+    with patch.object(
+        AsyncHTTPHandler, "post", return_value=mock_response
+    ) as mock_post:
+        response_stream: CustomStreamWrapper = asyncio.run(
+            litellm.acompletion(
+                model="databricks/dbrx-instruct-071224",
+                messages=messages,
+                client=async_handler,
+                temperature=0.5,
+                extraparam="testpassingextraparam",
+                stream=True,
+            )
+        )
+
+        # Use async list gathering for the response
+        async def gather_responses():
+            return [item async for item in response_stream]
+
+        response = asyncio.run(gather_responses())
+        assert "dbrx-instruct-071224" in str(response)
+        assert "chatcmpl" in str(response)
+        assert len(response) == 4
+
+        assert (
+            mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
+        )
+        assert (
+            mock_post.call_args.kwargs["headers"]["Authorization"]
+            == f"Bearer {api_key}"
+        )
+        assert mock_post.call_args.kwargs["url"] == f"{base_url}/chat/completions"
+        assert mock_post.call_args.kwargs["stream"] == True
+
+        actual_data = json.loads(
+            mock_post.call_args.kwargs["data"]
+        )  # Deserialize the actual data
+        expected_data = {
+            "model": "dbrx-instruct-071224",
+            "messages": messages,
+            "temperature": 0.5,
+            "stream": True,
+            "extraparam": "testpassingextraparam",
+        }
+        assert actual_data == expected_data, f"Unexpected JSON data: {actual_data}"
+
+
+def test_embeddings_with_sync_http_handler(monkeypatch):
+    base_url = "https://my.workspace.cloud.databricks.com/serving-endpoints"
+    api_key = "dapimykey"
+    monkeypatch.setenv("DATABRICKS_API_BASE", base_url)
+    monkeypatch.setenv("DATABRICKS_API_KEY", api_key)
+
+    sync_handler = HTTPHandler()
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = mock_embedding_response()
+
+    inputs = ["Hello", "World"]
+
+    with patch.object(HTTPHandler, "post", return_value=mock_response) as mock_post:
+        response = litellm.embedding(
+            model="databricks/bge-large-en-v1.5",
+            input=inputs,
+            client=sync_handler,
+            extraparam="testpassingextraparam",
+        )
+        assert response.to_dict() == mock_embedding_response()
+
+        mock_post.assert_called_once_with(
+            f"{base_url}/embeddings",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "User-Agent": f"litellm/{version}",
+            },
+            data=json.dumps(
+                {
+                    "model": "bge-large-en-v1.5",
+                    "input": inputs,
+                    "extraparam": "testpassingextraparam",
+                }
+            ),
+        )
+
+
+def test_embeddings_with_async_http_handler(monkeypatch):
+    base_url = "https://my.workspace.cloud.databricks.com/serving-endpoints"
+    api_key = "dapimykey"
+    monkeypatch.setenv("DATABRICKS_API_BASE", base_url)
+    monkeypatch.setenv("DATABRICKS_API_KEY", api_key)
+
+    async_handler = AsyncHTTPHandler()
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = mock_embedding_response()
+
+    inputs = ["Hello", "World"]
+
+    with patch.object(
+        AsyncHTTPHandler, "post", return_value=mock_response
+    ) as mock_post:
+        response = asyncio.run(
+            litellm.aembedding(
+                model="databricks/bge-large-en-v1.5",
+                input=inputs,
+                client=async_handler,
+                extraparam="testpassingextraparam",
+            )
+        )
+        assert response.to_dict() == mock_embedding_response()
+
+        mock_post.assert_called_once_with(
+            f"{base_url}/embeddings",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "User-Agent": f"litellm/{version}",
+            },
+            data=json.dumps(
+                {
+                    "model": "bge-large-en-v1.5",
+                    "input": inputs,
+                    "extraparam": "testpassingextraparam",
+                }
+            ),
+        )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_databricks_embeddings(sync_mode, monkeypatch):
+    """
+    Test Databricks embeddings with instruction parameter in both sync and async modes using mocked HTTP responses.
+    """
+    import openai
+
+    base_url = "https://my.workspace.cloud.databricks.com/serving-endpoints"
+    api_key = "dapimykey"
+    monkeypatch.setenv("DATABRICKS_API_BASE", base_url)
+    monkeypatch.setenv("DATABRICKS_API_KEY", api_key)
+
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = mock_embedding_response()
+
+    inputs = ["good morning from litellm"]
+    instruction = "Represent this sentence for searching relevant passages:"
+
+    litellm.set_verbose = True
+    litellm.drop_params = True
+
+    if sync_mode:
+        sync_handler = HTTPHandler()
+        with patch.object(HTTPHandler, "post", return_value=mock_response) as mock_post:
+            response = litellm.embedding(
+                model="databricks/databricks-bge-large-en",
+                input=inputs,
+                instruction=instruction,
+                client=sync_handler,
+            )
+
+            openai.types.CreateEmbeddingResponse.model_validate(
+                response.model_dump(), strict=True
+            )
+
+            mock_post.assert_called_once_with(
+                f"{base_url}/embeddings",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "User-Agent": f"litellm/{version}",
+                },
+                data=json.dumps(
+                    {
+                        "model": "databricks-bge-large-en",
+                        "input": inputs,
+                        "instruction": instruction,
+                    }
+                ),
+            )
+    else:
+        async_handler = AsyncHTTPHandler()
+        with patch.object(
+            AsyncHTTPHandler, "post", return_value=mock_response
+        ) as mock_post:
+            response = await litellm.aembedding(
+                model="databricks/databricks-bge-large-en",
+                input=inputs,
+                instruction=instruction,
+                client=async_handler,
+            )
+
+            openai.types.CreateEmbeddingResponse.model_validate(
+                response.model_dump(), strict=True
+            )
+
+            mock_post.assert_called_once_with(
+                f"{base_url}/embeddings",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "User-Agent": f"litellm/{version}",
+                },
+                data=json.dumps(
+                    {
+                        "model": "databricks-bge-large-en",
+                        "input": inputs,
+                        "instruction": instruction,
+                    }
+                ),
+            )
+
+
+def test_completion_with_prompt_caching_anthropic_model_repeat(monkeypatch):
+    base_url = "https://my.workspace.cloud.databricks.com/serving-endpoints"
+    api_key = "dapimykey"
+    monkeypatch.setenv("DATABRICKS_API_BASE", base_url)
+    monkeypatch.setenv("DATABRICKS_API_KEY", api_key)
+
+    sync_handler = HTTPHandler()
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = (
+        mock_chat_response_anthropic_prompt_caching_repeat()
+    )
+
+    mock_text = "example text" * 512
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "You are a helpful assistant that explains the content of the given text.",
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": mock_text,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+    ]
+
+    with patch.object(HTTPHandler, "post", return_value=mock_response) as mock_post:
+        response = litellm.completion(
+            model="databricks/databricks-claude-3-7-sonnet",
+            messages=messages,
+            client=sync_handler,
+            temperature=0.5,
+            extraparam="testpassingextraparam",
+        )
+        assert (
+            mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
+        )
+        assert (
+            mock_post.call_args.kwargs["headers"]["Authorization"]
+            == f"Bearer {api_key}"
+        )
+        assert mock_post.call_args.kwargs["url"] == f"{base_url}/chat/completions"
+        assert mock_post.call_args.kwargs["stream"] == False
+
+        # TODO: add test for entire expected output schema in the future
+        # Check the response object returned from litellm.completion()
+        assert "claude-3-7-sonnet" in response["model"]
+        assert response["usage"]["cache_read_input_tokens"] == 1545
+        assert response["usage"]["cache_creation_input_tokens"] == 0
+        assert response["usage"]["prompt_tokens"] == 1549
+        assert response["usage"]["completion_tokens"] == 117
+        assert response["usage"]["total_tokens"] == 1666
+
+
+def test_completion_with_prompt_caching_nonanthropic_model(monkeypatch):
+    base_url = "https://my.workspace.cloud.databricks.com/serving-endpoints"
+    api_key = "dapimykey"
+    monkeypatch.setenv("DATABRICKS_API_BASE", base_url)
+    monkeypatch.setenv("DATABRICKS_API_KEY", api_key)
+
+    sync_handler = HTTPHandler()
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = mock_chat_response_nonanthropic_prompt_caching()
+
+    mock_text = "example text" * 512
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "You are a helpful assistant that explains the content of the given text.",
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": mock_text,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+    ]
+
+    with patch.object(HTTPHandler, "post", return_value=mock_response) as mock_post:
+        response = litellm.completion(
+            model="databricks/databricks-gpt-oss-20b",
+            messages=messages,
+            client=sync_handler,
+            temperature=0.5,
+            extraparam="testpassingextraparam",
+        )
+        assert (
+            mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
+        )
+        assert (
+            mock_post.call_args.kwargs["headers"]["Authorization"]
+            == f"Bearer {api_key}"
+        )
+        assert mock_post.call_args.kwargs["url"] == f"{base_url}/chat/completions"
+        assert mock_post.call_args.kwargs["stream"] == False
+
+        # TODO: add test for entire expected output schema in the future
+        # Check the response object returned from litellm.completion()
+        assert "gpt-oss-20b" in response["model"]
+        assert ("cache_read_input_tokens" not in response["usage"]) or response[
+            "usage"
+        ]["cache_read_input_tokens"] in [0, None]
+        assert ("cache_creation_input_tokens" not in response["usage"]) or response[
+            "usage"
+        ]["cache_creation_input_tokens"] in [0, None]
+        assert response["usage"]["prompt_tokens"] == 1638
+        assert response["usage"]["completion_tokens"] == 500
+        assert response["usage"]["total_tokens"] == 2138
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["databricks/databricks-claude-3-7-sonnet"],
+)
+def test_databricks_anthropic_function_call_with_no_schema(model, monkeypatch):
+    """
+    Test function calling with tools that have no parameters schema using mocked HTTP responses.
+    Relevant Issue: https://github.com/BerriAI/litellm/issues/6012
+    """
+    base_url = "https://my.workspace.cloud.databricks.com/serving-endpoints"
+    api_key = "dapimykey"
+    monkeypatch.setenv("DATABRICKS_API_BASE", base_url)
+    monkeypatch.setenv("DATABRICKS_API_KEY", api_key)
+
+    mock_response_data = {
+        "id": "chatcmpl-abc123",
+        "object": "chat.completion",
+        "created": 1699896916,
+        "model": "databricks-claude-3-7-sonnet",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_abc123",
+                            "type": "function",
+                            "function": {
+                                "name": "get_current_weather",
+                                "arguments": "{}",
+                            },
+                        }
+                    ],
+                },
+                "logprobs": None,
+                "finish_reason": "tool_calls",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 50,
+            "completion_tokens": 10,
+            "total_tokens": 60,
+        },
+    }
+
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = mock_response_data
+
+    sync_handler = HTTPHandler()
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in New York",
+            },
+        }
+    ]
+    messages = [
+        {"role": "user", "content": "What is the current temperature in New York?"}
+    ]
+
+    with patch.object(HTTPHandler, "post", return_value=mock_response):
+        response = litellm.completion(
+            model=model,
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+            client=sync_handler,
+        )
+
+        assert response.choices[0].message.tool_calls is not None
+        assert len(response.choices[0].message.tool_calls) == 1
+        assert (
+            response.choices[0].message.tool_calls[0].function.name
+            == "get_current_weather"
+        )
+
+
+def test_databricks_anthropic_user_string_content_cache_injection(monkeypatch):
+    base_url = "https://my.workspace.cloud.databricks.com/serving-endpoints"
+    api_key = "dapimykey"
+    monkeypatch.setenv("DATABRICKS_API_BASE", base_url)
+    monkeypatch.setenv("DATABRICKS_API_KEY", api_key)
+
+    sync_handler = HTTPHandler()
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = mock_chat_response_anthropic_prompt_caching()
+
+    mock_text = "example text" * 512
+    messages = [
+        {"role": "system", "content": "You are an expert summarizer."},
+        {"role": "user", "content": mock_text},
+    ]
+    cache_control_injection_points = [{"location": "message", "role": "user"}]
+
+    with patch.object(HTTPHandler, "post", return_value=mock_response) as mock_post:
+        response = litellm.completion(
+            model="databricks/databricks-claude-3-7-sonnet",
+            messages=messages,
+            client=sync_handler,
+            temperature=0.5,
+            cache_control_injection_points=cache_control_injection_points,
+            extraparam="testpassingextraparam",
+        )
+        assert (
+            mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
+        )
+        assert (
+            mock_post.call_args.kwargs["headers"]["Authorization"]
+            == f"Bearer {api_key}"
+        )
+        assert mock_post.call_args.kwargs["url"] == f"{base_url}/chat/completions"
+        assert mock_post.call_args.kwargs["stream"] == False
+
+        # TODO: add test for entire expected output schema in the future
+        # Check the response object returned from litellm.completion()
+        assert "claude-3-7-sonnet" in response["model"]
+        assert response["usage"]["cache_read_input_tokens"] == 0
+        assert response["usage"]["cache_creation_input_tokens"] == 1545
+        assert response["usage"]["prompt_tokens"] == 1549
+        assert response["usage"]["completion_tokens"] == 117
+        assert response["usage"]["total_tokens"] == 1666
+
+
+def test_databricks_anthropic_system_string_content_cache_injection(monkeypatch):
+    base_url = "https://my.workspace.cloud.databricks.com/serving-endpoints"
+    api_key = "dapimykey"
+    monkeypatch.setenv("DATABRICKS_API_BASE", base_url)
+    monkeypatch.setenv("DATABRICKS_API_KEY", api_key)
+
+    sync_handler = HTTPHandler()
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = mock_chat_response_anthropic_prompt_caching()
+
+    mock_text = "example text" * 512
+    messages = [
+        {"role": "system", "content": mock_text},
+        {"role": "user", "content": "You are an expert summarizer."},
+    ]
+    cache_control_injection_points = [{"location": "message", "role": "system"}]
+
+    with patch.object(HTTPHandler, "post", return_value=mock_response) as mock_post:
+        response = litellm.completion(
+            model="databricks/databricks-claude-3-7-sonnet",
+            messages=messages,
+            client=sync_handler,
+            temperature=0.5,
+            cache_control_injection_points=cache_control_injection_points,
+            extraparam="testpassingextraparam",
+        )
+        assert (
+            mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
+        )
+        assert (
+            mock_post.call_args.kwargs["headers"]["Authorization"]
+            == f"Bearer {api_key}"
+        )
+        assert mock_post.call_args.kwargs["url"] == f"{base_url}/chat/completions"
+        assert mock_post.call_args.kwargs["stream"] == False
+
+        # TODO: add test for entire expected output schema in the future
+        # Check the response object returned from litellm.completion()
+        assert "claude-3-7-sonnet" in response["model"]
+        assert response["usage"]["cache_read_input_tokens"] == 0
+        assert response["usage"]["cache_creation_input_tokens"] == 1545
+        assert response["usage"]["prompt_tokens"] == 1549
+        assert response["usage"]["completion_tokens"] == 117
+        assert response["usage"]["total_tokens"] == 1666
+
+
+def test_databricks_anthropic_system_string_content_cache_injection_not_enough_tokens(
+    monkeypatch,
+):
+    base_url = "https://my.workspace.cloud.databricks.com/serving-endpoints"
+    api_key = "dapimykey"
+    monkeypatch.setenv("DATABRICKS_API_BASE", base_url)
+    monkeypatch.setenv("DATABRICKS_API_KEY", api_key)
+
+    sync_handler = HTTPHandler()
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = (
+        mock_chat_response_anthropic_prompt_caching_not_enough_tokens()
+    )
+
+    mock_text = "example text" * 512
+    messages = [
+        {
+            "role": "system",
+            "content": "You are a helpful assistant that explains the content of the given text.",
+        },
+        {"role": "user", "content": mock_text},
+    ]
+    cache_control_injection_points = [{"location": "message", "role": "system"}]
+
+    with patch.object(HTTPHandler, "post", return_value=mock_response) as mock_post:
+        response = litellm.completion(
+            model="databricks/databricks-claude-3-7-sonnet",
+            messages=messages,
+            client=sync_handler,
+            temperature=0.5,
+            cache_control_injection_points=cache_control_injection_points,
+            extraparam="testpassingextraparam",
+        )
+        assert (
+            mock_post.call_args.kwargs["headers"]["Content-Type"] == "application/json"
+        )
+        assert (
+            mock_post.call_args.kwargs["headers"]["Authorization"]
+            == f"Bearer {api_key}"
+        )
+        assert mock_post.call_args.kwargs["url"] == f"{base_url}/chat/completions"
+        assert mock_post.call_args.kwargs["stream"] == False
+
+        # TODO: add test for entire expected output schema in the future
+        # Check the response object returned from litellm.completion()
+        assert "claude-3-7-sonnet" in response["model"]
+        assert response["usage"]["cache_read_input_tokens"] == 0
+        assert response["usage"]["cache_creation_input_tokens"] == 0
+        assert response["usage"]["prompt_tokens"] == 1549
+        assert response["usage"]["completion_tokens"] == 117
+        assert response["usage"]["total_tokens"] == 1666
+
+
+def mock_chat_response() -> Dict[str, Any]:
+    return {
+        "id": "chatcmpl_3f78f09a-489c-4b8d-a587-f162c7497891",
+        "object": "chat.completion",
+        "created": 1726285449,
+        "model": "dbrx-instruct-071224",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello! I'm an AI assistant. I'm doing well. How can I help?",
+                    "function_call": None,
+                    "tool_calls": None,
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 230,
+            "completion_tokens": 38,
+            "completion_tokens_details": None,
+            "total_tokens": 268,
+            "prompt_tokens_details": None,
+        },
+        "system_fingerprint": None,
+    }
+
+
+def mock_chat_response_anthropic_prompt_caching() -> Dict[str, Any]:
+    return {
+        "id": "msg_01234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+        "object": "chat.completion",
+        "created": 1761118943,
+        "model": "claude-3-7-sonnet",  # Mock model name for testing
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "I notice that you've provided a repetitive text that simply repeats \"example text\" many times rather than actual content to summarize. \n\nTo provide you with a meaningful summary, I would need:\n- Actual substantive text with real information, arguments, or narrative\n- Content that has key points, themes, or conclusions to extract\n- Material with varying ideas or concepts to synthesize\n\nCould you please share the actual text you'd like me to summarize? I'm ready to help once you provide content with real information to work with.",
+                    "refusal": None,
+                    "function_call": None,
+                    "tool_calls": None,
+                    "annotations": None,
+                    "audio": None,
+                },
+                "finish_reason": "stop",
+                "logprobs": None,
+            }
+        ],
+        "usage": {
+            "completion_tokens": 117,
+            "prompt_tokens": 1549,
+            "total_tokens": 1666,
+            "completion_tokens_details": None,
+            "prompt_tokens_details": {
+                "audio_tokens": None,
+                "cached_tokens": 0,
+                "text_tokens": None,
+                "image_tokens": None,
+                "cache_creation_tokens": 1545,
+            },
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 1545,
+        },
+        "service_tier": None,
+        "system_fingerprint": None,
+    }
+
+
+def mock_chat_response_anthropic_prompt_caching_not_enough_tokens() -> Dict[str, Any]:
+    return {
+        "id": "msg_01234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+        "object": "chat.completion",
+        "created": 1761118943,
+        "model": "claude-3-7-sonnet",  # Mock model name for testing
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "I notice that you've provided a repetitive text that simply repeats \"example text\" many times rather than actual content to summarize. \n\nTo provide you with a meaningful summary, I would need:\n- Actual substantive text with real information, arguments, or narrative\n- Content that has key points, themes, or conclusions to extract\n- Material with varying ideas or concepts to synthesize\n\nCould you please share the actual text you'd like me to summarize? I'm ready to help once you provide content with real information to work with.",
+                    "refusal": None,
+                    "function_call": None,
+                    "tool_calls": None,
+                    "annotations": None,
+                    "audio": None,
+                },
+                "finish_reason": "stop",
+                "logprobs": None,
+            }
+        ],
+        "usage": {
+            "completion_tokens": 117,
+            "prompt_tokens": 1549,
+            "total_tokens": 1666,
+            "completion_tokens_details": None,
+            "prompt_tokens_details": {
+                "audio_tokens": None,
+                "cached_tokens": 0,
+                "text_tokens": None,
+                "image_tokens": None,
+                "cache_creation_tokens": 0,
+            },
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+        },
+        "service_tier": None,
+        "system_fingerprint": None,
+    }
+
+
+def mock_chat_response_anthropic_prompt_caching_repeat() -> Dict[str, Any]:
+    return {
+        "id": "msg_01234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+        "object": "chat.completion",
+        "created": 1761118943,
+        "model": "claude-3-7-sonnet",  # Mock model name for testing
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "I notice that you've provided a repetitive text that simply repeats \"example text\" many times rather than actual content to summarize. \n\nTo provide you with a meaningful summary, I would need:\n- Actual substantive text with real information, arguments, or narrative\n- Content that has key points, themes, or conclusions to extract\n- Material with varying ideas or concepts to synthesize\n\nCould you please share the actual text you'd like me to summarize? I'm ready to help once you provide content with real information to work with.",
+                    "refusal": None,
+                    "function_call": None,
+                    "tool_calls": None,
+                    "annotations": None,
+                    "audio": None,
+                },
+                "finish_reason": "stop",
+                "logprobs": None,
+            }
+        ],
+        "usage": {
+            "completion_tokens": 117,
+            "prompt_tokens": 1549,
+            "total_tokens": 1666,
+            "completion_tokens_details": None,
+            "prompt_tokens_details": {
+                "audio_tokens": None,
+                "cached_tokens": 0,
+                "text_tokens": None,
+                "image_tokens": None,
+                "cache_creation_tokens": 1545,
+            },
+            "cache_read_input_tokens": 1545,
+            "cache_creation_input_tokens": 0,
+        },
+        "service_tier": None,
+        "system_fingerprint": None,
+    }
+
+
+def mock_chat_response_nonanthropic_prompt_caching() -> Dict[str, Any]:
+    return {
+        "id": "msg_01234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+        "object": "chat.completion",
+        "created": 1761119150,
+        "model": "gpt-oss-20b",  # Mock model nama for testing
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "reasoning",
+                            "summary": [
+                                {
+                                    "type": "summary_text",
+                                    "text": "The user just posted a block of text repeated: \"example textexample\" many times. It is unclear what they want. The instruction says: \"You are a helpful assistant that explains the content of the given text.\" So I need to explain the content.\n\nThe content is basically a repeated phrase 'example textexample' many times, possibly a demonstration of repeated words or filler text. Perhaps they test that the assistant enumerates or condenses. Should I explain that it is a repeated phrase used maybe as placeholder text? It looks like a placeholder or filler. Could say that it's essentially nonsense.\n\nExplain that the text consists of the word \"example\" concatenated with \"text\" repeated many times. It's not meaningful content. Might indicate filler text for page layout.\n\nAlternatively, explain why repeated 'example textexample' (without whitespace in some places?) is repeated. This could be a test. The user probably expects a response like: \"It says 'example textexample' several times.\" So I should summarize: The text is a repeated phrase used as filler.\n\nGiven the instruction, let's explain the content. Mention that it's repetitive placeholder, no meaningful content, just repeated phrase. Also note that \"example text\" repeated words. No specific meaning beyond being placeholder.\n\nSo respond: This is basically a placeholder used in design documents: the phrase \"example text\" repeated to fill a space, no distinct meaning beyond placeholder usage. 'text' might be part of the 'example text' phrase or 'textexample' it's concatenated. These might serve to fill text boxes, test fonts, etc.\n\nAlso mention the pattern: Could be used for testing text rendering, typographic layouts, measuring dimensions.\n\nAnswer accordingly.",
+                                }
+                            ],
+                        },
+                        {
+                            "type": "text",
+                            "text": 'The passage you pasted is essentially a block of **placeholder text**.  \nIt repeats the phrase "example textexample" (or "example text" in some places) over and over again.  There isn\'t any hidden message, concept, or argument buried in it – the purpose is purely to fill space, imitate real content, or test something like typography, layout, or rendering.\n\nIn design and copy‑editing, such repeated strings are often used to:\n\n* **Fill a page or template** so the designer can see how multiple lines of content will look.\n* **Test the appearance of fonts, line‑height, paragraph spacing, and other typographic settings.**\n* **Serve as a stand',
+                        },
+                    ],
+                    "refusal": None,
+                    "function_call": None,
+                    "tool_calls": None,
+                    "annotations": None,
+                    "audio": None,
+                },
+                "finish_reason": "stop",
+                "logprobs": None,
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 1638,
+            "completion_tokens": 500,
+            "total_tokens": 2138,
+            "completion_tokens_details": None,
+            "prompt_tokens_details": None,
+        },
+        "service_tier": None,
+        "system_fingerprint": None,
+    }
+
+
+def mock_http_handler_chat_streaming_response() -> MagicMock:
+    mock_stream_chunks = mock_chat_streaming_response_chunks()
+
+    def mock_iter_lines():
+        for chunk in mock_stream_chunks:
+            for line in chunk.splitlines():
+                yield line
+
+    mock_response = MagicMock()
+    mock_response.iter_lines.side_effect = mock_iter_lines
+    mock_response.status_code = 200
+
+    return mock_response
+
+
+def mock_http_handler_chat_async_streaming_response() -> MagicMock:
+    mock_stream_chunks = mock_chat_streaming_response_chunks()
+
+    async def mock_iter_lines():
+        for chunk in mock_stream_chunks:
+            for line in chunk.splitlines():
+                yield line
+
+    mock_response = MagicMock()
+    mock_response.aiter_lines.return_value = mock_iter_lines()
+    mock_response.status_code = 200
+
+    return mock_response
+
+
+def mock_embedding_response() -> Dict[str, Any]:
+    return {
+        "object": "list",
+        "model": "bge-large-en-v1.5",
+        "data": [
+            {
+                "index": 0,
+                "object": "embedding",
+                "embedding": [
+                    0.06768798828125,
+                    -0.01291656494140625,
+                    -0.0501708984375,
+                    0.0245361328125,
+                    -0.030364990234375,
+                ],
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 8,
+            "total_tokens": 8,
+            "completion_tokens": 0,
+            "completion_tokens_details": None,
+            "prompt_tokens_details": None,
+        },
+    }
+
+
+def mock_chat_streaming_response_chunks() -> List[str]:
+    return [
+        json.dumps(
+            {
+                "id": "chatcmpl_8a7075d1-956e-4960-b3a6-892cd4649ff3",
+                "object": "chat.completion.chunk",
+                "created": 1726469651,
+                "model": "dbrx-instruct-071224",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": "Hello"},
+                        "finish_reason": None,
+                        "logprobs": None,
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 230,
+                    "completion_tokens": 1,
+                    "total_tokens": 231,
+                },
+            }
+        ),
+        json.dumps(
+            {
+                "id": "chatcmpl_8a7075d1-956e-4960-b3a6-892cd4649ff3",
+                "object": "chat.completion.chunk",
+                "created": 1726469651,
+                "model": "dbrx-instruct-071224",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"content": " world"},
+                        "finish_reason": None,
+                        "logprobs": None,
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 230,
+                    "completion_tokens": 1,
+                    "total_tokens": 231,
+                },
+            }
+        ),
+        json.dumps(
+            {
+                "id": "chatcmpl_8a7075d1-956e-4960-b3a6-892cd4649ff3",
+                "object": "chat.completion.chunk",
+                "created": 1726469651,
+                "model": "dbrx-instruct-071224",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"content": "!"},
+                        "finish_reason": "stop",
+                        "logprobs": None,
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 230,
+                    "completion_tokens": 1,
+                    "total_tokens": 231,
+                },
+            }
+        ),
+    ]
+
+
+@pytest.mark.parametrize(
+    "model",
+    (
+        "databricks-meta-llama-3-3-70b-instruct",
+        "databricks-qwen35-122b-a10b",
+        "databricks-gpt-oss-120b",
+        "system.ai.deepseek-v4-1-flash",
+    ),
+)
+def test_databricks_non_claude_json_schema_preserves_refs(model: str) -> None:
+    optional_params: Final = litellm.utils.get_optional_params(
+        model=model,
+        custom_llm_provider="databricks",
+        response_format=copy.deepcopy(JSON_SCHEMA_RESPONSE_FORMAT),
+    )
+
+    assert optional_params["response_format"] == JSON_SCHEMA_RESPONSE_FORMAT
+
+
+def test_databricks_claude_json_schema_preserves_refs_in_tool_parameters() -> None:
+    optional_params: Final = litellm.utils.get_optional_params(
+        model="databricks-claude-haiku-4-5",
+        custom_llm_provider="databricks",
+        response_format=copy.deepcopy(JSON_SCHEMA_RESPONSE_FORMAT),
+    )
+
+    assert "response_format" not in optional_params
+    assert optional_params["tools"] == [
+        {
+            "type": "function",
+            "function": {
+                "name": "json_tool_call",
+                "parameters": JSON_SCHEMA_RESPONSE_FORMAT["json_schema"]["schema"],
+            },
+        }
+    ]
+
+
+def test_databricks_pydantic_json_schema_preserves_nested_refs() -> None:
+    class Person(BaseModel):
+        model_config = ConfigDict(frozen=True)
+
+        name: str
+
+    class Order(BaseModel):
+        model_config = ConfigDict(frozen=True)
+
+        person: Person
+
+    optional_params: Final = litellm.utils.get_optional_params(
+        model="databricks-meta-llama-3-3-70b-instruct",
+        custom_llm_provider="databricks",
+        response_format=Order,
+    )
+    schema: Final = optional_params["response_format"]["json_schema"]["schema"]
+
+    assert schema["properties"]["person"] == {"$ref": "#/$defs/Person"}
+    assert schema["$defs"]["Person"] == {
+        "additionalProperties": False,
+        "properties": {"name": {"title": "Name", "type": "string"}},
+        "required": ["name"],
+        "title": "Person",
+        "type": "object",
+    }
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_completion_with_prompt_caching_anthropic_model(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setenv("DATABRICKS_API_BASE", DATABRICKS_API_BASE)
+    monkeypatch.setenv("DATABRICKS_API_KEY", DATABRICKS_API_KEY)
+    route: Final = respx_mock.post(DATABRICKS_CHAT_COMPLETIONS_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json=_databricks_anthropic_cache_response(cache_read_input_tokens=0, cache_creation_input_tokens=1545),
+        )
+    )
+    cached_block: Final = {"type": "text", "text": "example text" * 512, "cache_control": {"type": "ephemeral"}}
+    messages: Final = [
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "You are a helpful assistant that explains the content of the given text."}
+            ],
+        },
+        {"role": "user", "content": [cached_block]},
+    ]
+
+    response: Final = litellm.completion(
+        model="databricks/databricks-claude-3-7-sonnet",
+        messages=messages,
+        temperature=0.5,
+    )
+
+    _assert_databricks_request(route.calls.last.request, DATABRICKS_CHAT_COMPLETIONS_URL, DATABRICKS_API_KEY)
+    request_body: Final = json.loads(route.calls.last.request.content)
+    assert request_body["model"] == "databricks-claude-3-7-sonnet"
+    assert "stream" not in request_body
+    assert request_body["messages"][1]["content"] == [cached_block]
+    assert response.model == "databricks/claude-3-7-sonnet"
+    assert response.usage.prompt_tokens == 1549
+    assert response.usage.completion_tokens == 117
+    assert response.usage.total_tokens == 1666
+    assert response.usage.cache_read_input_tokens == 0
+    assert response.usage.cache_creation_input_tokens == 1545
+
+
+def test_get_optional_params_keeps_service_tier_for_databricks() -> None:
+    optional_params: Final = litellm.utils.get_optional_params(
+        model="databricks-claude-opus-5",
+        custom_llm_provider="databricks",
+        service_tier="priority",
+        drop_params=True,
+    )
+
+    assert optional_params["service_tier"] == "priority"
+
+
+@pytest.mark.parametrize("served_tier", ["priority", "default", None])
+def test_transform_response_carries_served_service_tier(served_tier: str | None) -> None:
+    raw_response: Final = MagicMock()
+    raw_response.json.return_value = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 0,
+        "model": "dbrx",
+        **({"service_tier": served_tier} if served_tier is not None else {}),
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+
+    result: Final = DatabricksConfig().transform_response(
+        model="databricks/dbrx",
+        raw_response=raw_response,
+        model_response=litellm.ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert result.to_dict().get("service_tier") == served_tier
+
+
+_DATABRICKS_TOOLS_WITH_OPENAI_TOOL_SEARCH: Final = [
+    {"type": "tool_search", "execution": "server"},
+    {
+        "type": "function",
+        "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+        "defer_loading": True,
+    },
+]
+
+
+def test_databricks_claude_answers_400_for_the_openai_tool_search_tool_without_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.utils.UnsupportedParamsError) as raised:
+        DatabricksConfig().map_openai_params(
+            non_default_params={"tools": _DATABRICKS_TOOLS_WITH_OPENAI_TOOL_SEARCH},
+            optional_params={},
+            model="databricks-claude-opus-5-5",
+            drop_params=False,
+        )
+    assert raised.value.status_code == 400
+    assert "tool_search" in str(raised.value)
+
+
+def test_databricks_claude_drops_the_openai_tool_search_tool_under_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    mapped: Final = DatabricksConfig().map_openai_params(
+        non_default_params={"tools": _DATABRICKS_TOOLS_WITH_OPENAI_TOOL_SEARCH},
+        optional_params={},
+        model="databricks-claude-opus-5-5",
+        drop_params=True,
+    )
+    assert mapped["tools"] == [
+        {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}}}
+    ]

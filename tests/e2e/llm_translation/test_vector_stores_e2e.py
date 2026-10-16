@@ -12,6 +12,7 @@ from typing import Literal
 
 import pytest
 from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, unique_marker
+from e2e_metadata import Domain, Provider, Route, Subject, meta
 from e2e_http import (
     FileUploadForm,
     NoBody,
@@ -162,6 +163,7 @@ def _await_store_in_list(proxy: ProxyClient, key: str, store_id: str) -> None:
 
 class TestVectorStores:
     @pytest.mark.covers("llm.vector_stores.openai.basic.nonstream.works")
+    @meta(Subject(domain=Domain.LLM_TRANSLATION, route=Route.VECTOR_STORES, providers=(Provider.OPENAI,)))
     def test_create_list_retrieve_delete_lifecycle(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         key = resources.key()
         name = f"e2e-vector-store-{unique_marker()}"
@@ -204,6 +206,7 @@ class TestVectorStores:
         reason="stage red: product gap, vector store search 500s (asearch TypeError) on missing query instead of 400"
     )
     @pytest.mark.covers("llm.vector_stores.openai.input_validation.nonstream.works")
+    @meta(Subject(domain=Domain.LLM_TRANSLATION, route=Route.VECTOR_STORES, providers=(Provider.OPENAI,)))
     def test_search_missing_query_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         key = resources.key()
         created = unwrap(
@@ -223,6 +226,7 @@ class TestVectorStores:
         assert_client_error(result, "vector store search missing query")
 
     @pytest.mark.covers("llm.vector_stores.openai.basic.nonstream.works")
+    @meta(Subject(domain=Domain.LLM_TRANSLATION, route=Route.VECTOR_STORES, providers=(Provider.OPENAI,)))
     def test_file_attach_poll_and_search(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         key = resources.key()
         marker = f"azure-falcon-{unique_marker()}"
@@ -309,6 +313,7 @@ class TestVectorStores:
         reason="stage red: product gap, retrieving a nonexistent vector store returns 2xx with an error envelope in the body instead of 404"
     )
     @pytest.mark.covers("llm.vector_stores.openai.input_validation.nonstream.works")
+    @meta(Subject(domain=Domain.LLM_TRANSLATION, route=Route.VECTOR_STORES, providers=(Provider.OPENAI,)))
     def test_retrieve_invalid_id_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         key = resources.key()
         result = proxy.transport.get(
@@ -328,6 +333,7 @@ class TestVectorStores:
                 pytest.fail(f"invalid vector store id must be a client error, got {other!r}")
 
     @pytest.mark.covers("llm.vector_stores.openai.input_validation.nonstream.works")
+    @meta(Subject(domain=Domain.LLM_TRANSLATION, route=Route.VECTOR_STORES, providers=(Provider.OPENAI,)))
     def test_invalid_chunking_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         key = resources.key()
         result = proxy.transport.send(

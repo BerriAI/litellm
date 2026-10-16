@@ -12,7 +12,7 @@ fn resolver(value: Option<&str>) -> SecretResolver {
     SecretResolver::new_python_compatible(
         Arc::new(SecretManagerState::default()),
         Arc::new(move |_: &str| value.clone()),
-        OidcResolver::default(),
+        OidcResolver::new(litellm_http::Client::plain_for_test()),
     )
 }
 
@@ -35,7 +35,7 @@ async fn native_reads_preserve_strings_and_report_conversion_errors(#[case] mana
         let resolver = SecretResolver::new(
             Arc::new(state),
             Arc::new(move |_: &str| Some(raw.to_owned())),
-            OidcResolver::default(),
+            OidcResolver::new(litellm_http::Client::plain_for_test()),
         );
         assert_eq!(
             resolver
@@ -75,7 +75,7 @@ async fn native_defaults_apply_to_absence_but_never_hide_provider_failures() {
                 KeyManagementSettings::default(),
             )),
             Arc::new(|_: &str| None),
-            OidcResolver::default(),
+            OidcResolver::new(litellm_http::Client::plain_for_test()),
         );
         let result = resolver
             .get_secret_str("key", Some(SecretValue::new("default")))
@@ -189,7 +189,7 @@ fn managed(reply: Result<Option<Secret>, ()>, environment: Option<&'static str>)
             KeyManagementSettings::default(),
         )),
         Arc::new(move |_: &str| environment.map(str::to_owned)),
-        OidcResolver::default(),
+        OidcResolver::new(litellm_http::Client::plain_for_test()),
     )
     .with_failure_policy(FailurePolicy::EnvironmentFallback)
 }
@@ -281,7 +281,7 @@ async fn prefix_is_removed_once_and_resolved_from_environment() {
     let resolver = SecretResolver::new_python_compatible(
         Arc::new(state),
         Arc::new(|name: &str| (name == "os.environ/KEY").then(|| "value".into())),
-        OidcResolver::default(),
+        OidcResolver::new(litellm_http::Client::plain_for_test()),
     );
     assert_eq!(
         resolver
@@ -340,7 +340,7 @@ async fn excluded_hosted_keys_keep_the_python_manager_conversion_path(
             },
         )),
         Arc::new(move |_: &str| Some(raw.to_owned())),
-        OidcResolver::default(),
+        OidcResolver::new(litellm_http::Client::plain_for_test()),
     );
     assert_eq!(
         resolver.get_secret("KEY", None).await.unwrap(),
@@ -373,7 +373,7 @@ async fn azure_callback_absence_preserves_none_but_errors_fall_back(
             KeyManagementSettings::default(),
         )),
         Arc::new(|_: &str| Some("environment".into())),
-        OidcResolver::default(),
+        OidcResolver::new(litellm_http::Client::plain_for_test()),
     );
     assert_eq!(
         resolver

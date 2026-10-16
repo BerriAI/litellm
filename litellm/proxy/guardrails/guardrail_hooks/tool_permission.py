@@ -4,11 +4,16 @@ from collections.abc import AsyncGenerator, AsyncIterable, Mapping, Sequence
 from typing import Any, Final, Literal, TypedDict
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, Required
 
 from litellm import ChatCompletionToolParam
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.completion_extras.litellm_responses_transformation.transformation import (
+    replayed_tool_search_tools,
+    without_tool_search_items_loading,
+)
 from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
@@ -40,6 +45,8 @@ from litellm.types.utils import (
 )
 
 GUARDRAIL_NAME: Final = "tool_permission"
+_DECODED_ARGUMENTS: Final = TypeAdapter(object)
+_REQUEST_DATA: Final = TypeAdapter(object)
 
 
 def _object_mapping(value: object) -> Mapping[str, object] | None:
@@ -50,6 +57,12 @@ def _object_mapping(value: object) -> Mapping[str, object] | None:
 def _object_list(value: object) -> Sequence[object] | None:
     """Return ``value`` as an opaque sequence when it is a list."""
     return value if isinstance(value, list) else None
+
+
+def _function_tool_name(tool: object) -> str | None:
+    fields: Final = _object_mapping(tool)
+    name: Final = fields.get("name") if fields is not None and fields.get("type") == "function" else None
+    return name if isinstance(name, str) else None
 
 
 class _ToolPermissionRuleFields(TypedDict, total=False):
@@ -314,7 +327,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         parsed_arguments: object = {}
         try:
             if isinstance(arguments, str):
-                parsed_arguments = json.loads(arguments)
+                parsed_arguments = _DECODED_ARGUMENTS.validate_python(json.loads(arguments))
             elif isinstance(arguments, dict):
                 parsed_arguments = arguments
             else:
@@ -579,9 +592,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
         verbose_proxy_logger.info("Blocking %s unauthorized tool uses", len(denied_tools))
 
-        error_by_tool_use_id: Final[
-            Mapping[object, str]
-        ] = {  # mutable-ok: read-only lookup, never mutated after construction
+        error_by_tool_use_id: Final[Mapping[object, str]] = {
             tool_call.id: self._create_permission_error_result(tool_call, error).content
             for tool_call, error in denied_tools
         }
@@ -596,9 +607,9 @@ class ToolPermissionGuardrail(CustomGuardrail):
             message for message in (_denied_message(block) for block in content) if message is not None
         )
         kept_blocks: Final = tuple(block for block in content if _denied_message(block) is None)
-        new_content: Final = [  # mutable-ok: response content is a JSON array on the wire
+        new_content: Final = [
             *kept_blocks,
-            {"type": "text", "text": "\n".join(error_messages)},  # mutable-ok: content block is a JSON object
+            {"type": "text", "text": "\n".join(error_messages)},
         ]
 
         response["content"] = new_content  # rebind-ok: the guardrail rewrites the provider response in place
@@ -655,6 +666,9 @@ class ToolPermissionGuardrail(CustomGuardrail):
             if forced_tool_name is not None:
                 request_tools.append((forced_tool_name, "function"))
 
+        replayed: Final = map(_function_tool_name, replayed_tool_search_tools(_REQUEST_DATA.validate_python(data)))
+        request_tools.extend((name, "function") for name in replayed if name is not None)
+
         return request_tools
 
     def _modify_request_with_permission_errors(
@@ -702,6 +716,12 @@ class ToolPermissionGuardrail(CustomGuardrail):
         named_function_call: Final = self._get_named_function_call(data)
         if named_function_call in error_tool_names:
             data["function_call"] = "none"
+
+        messages: Final = without_tool_search_items_loading(
+            _REQUEST_DATA.validate_python(data), frozenset(denied_tool_names)
+        )
+        if messages is not None:
+            data["messages"] = messages  # rebind-ok: rewrite mode edits the request in place
 
         return data
 

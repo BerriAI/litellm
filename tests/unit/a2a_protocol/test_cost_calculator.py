@@ -10,6 +10,12 @@ import pytest
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+
+async def _reset_callbacks_and_settle_pending_logs() -> None:
+    litellm.logging_callback_manager._reset_all_callbacks()
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
 
 
 def _make_send_message_request(request_id: str, user_text: str = "Hello"):
@@ -111,6 +117,7 @@ class CostLogger(CustomLogger):
 
     def __init__(self):
         self.response_cost: Optional[float] = None
+        self.logged = asyncio.Event()
         super().__init__()
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -119,6 +126,7 @@ class CostLogger(CustomLogger):
             self.response_cost = (
                 slp.get("response_cost") if isinstance(slp, dict) else getattr(slp, "response_cost", None)
             )
+        self.logged.set()
 
 
 @pytest.mark.asyncio
@@ -129,7 +137,7 @@ async def test_asend_message_uses_cost_per_query(monkeypatch):
     from litellm.a2a_protocol import asend_message
 
     # Setup logger
-    litellm.logging_callback_manager._reset_all_callbacks()
+    await _reset_callbacks_and_settle_pending_logs()
     cost_logger = CostLogger()
     monkeypatch.setattr(litellm, "callbacks", [cost_logger])
 
@@ -151,7 +159,7 @@ async def test_asend_message_uses_cost_per_query(monkeypatch):
             cost_per_query=0.05,
         )
 
-    await asyncio.sleep(0.1)
+    assert await asyncio.wait_for(cost_logger.logged.wait(), timeout=5)
 
     assert cost_logger.response_cost == 0.05
 
@@ -164,7 +172,7 @@ async def test_asend_message_uses_cost_per_query_from_litellm_params_dict(monkey
     """
     from litellm.a2a_protocol import asend_message
 
-    litellm.logging_callback_manager._reset_all_callbacks()
+    await _reset_callbacks_and_settle_pending_logs()
     cost_logger = CostLogger()
     monkeypatch.setattr(litellm, "callbacks", [cost_logger])
 
@@ -188,7 +196,7 @@ async def test_asend_message_uses_cost_per_query_from_litellm_params_dict(monkey
             },
         )
 
-    await asyncio.sleep(0.1)
+    assert await asyncio.wait_for(cost_logger.logged.wait(), timeout=5)
 
     assert cost_logger.response_cost == 0.5
 
@@ -200,6 +208,7 @@ class TokenAndCostLogger(CustomLogger):
         self.response_cost: Optional[float] = None
         self.prompt_tokens: Optional[int] = None
         self.completion_tokens: Optional[int] = None
+        self.logged = asyncio.Event()
         super().__init__()
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -214,6 +223,7 @@ class TokenAndCostLogger(CustomLogger):
             self.completion_tokens = (
                 slp.get("completion_tokens") if isinstance(slp, dict) else getattr(slp, "completion_tokens", None)
             )
+        self.logged.set()
 
 
 @pytest.mark.asyncio
@@ -225,7 +235,7 @@ async def test_asend_message_uses_input_output_cost_per_token(monkeypatch):
     from litellm.a2a_protocol import asend_message
 
     # Setup logger
-    litellm.logging_callback_manager._reset_all_callbacks()
+    await _reset_callbacks_and_settle_pending_logs()
     token_cost_logger = TokenAndCostLogger()
     monkeypatch.setattr(litellm, "callbacks", [token_cost_logger])
 
@@ -251,7 +261,7 @@ async def test_asend_message_uses_input_output_cost_per_token(monkeypatch):
             output_cost_per_token=output_cost_per_token,
         )
 
-    await asyncio.sleep(0.1)
+    assert await asyncio.wait_for(token_cost_logger.logged.wait(), timeout=5)
 
     # Get actual token counts from logger
     prompt_tokens = token_cost_logger.prompt_tokens
@@ -284,11 +294,13 @@ class AgentIdLogger(CustomLogger):
     def __init__(self):
         self.agent_id: Optional[str] = None
         self.kwargs: Optional[dict] = None
+        self.logged = asyncio.Event()
         super().__init__()
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         self.kwargs = kwargs
         self.agent_id = kwargs.get("agent_id")
+        self.logged.set()
 
 
 @pytest.mark.asyncio
@@ -299,7 +311,7 @@ async def test_asend_message_passes_agent_id_to_callback(monkeypatch):
     from litellm.a2a_protocol import asend_message
 
     # Setup logger
-    litellm.logging_callback_manager._reset_all_callbacks()
+    await _reset_callbacks_and_settle_pending_logs()
     agent_id_logger = AgentIdLogger()
     monkeypatch.setattr(litellm, "callbacks", [agent_id_logger])
 
@@ -323,7 +335,7 @@ async def test_asend_message_passes_agent_id_to_callback(monkeypatch):
             agent_id=test_agent_id,
         )
 
-    await asyncio.sleep(0.1)
+    assert await asyncio.wait_for(agent_id_logger.logged.wait(), timeout=5)
 
     # Verify agent_id was passed to callback
     assert agent_id_logger.agent_id == test_agent_id, (
@@ -340,6 +352,7 @@ class MetadataLogger(CustomLogger):
         self.user_api_key: Optional[str] = None
         self.user_id: Optional[str] = None
         self.team_id: Optional[str] = None
+        self.logged = asyncio.Event()
         super().__init__()
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -348,6 +361,7 @@ class MetadataLogger(CustomLogger):
         self.user_api_key = self.metadata.get("user_api_key")
         self.user_id = self.metadata.get("user_api_key_user_id")
         self.team_id = self.metadata.get("user_api_key_team_id")
+        self.logged.set()
 
 
 @pytest.mark.asyncio
@@ -359,7 +373,7 @@ async def test_asend_message_streaming_propagates_metadata():
     from litellm.a2a_protocol import asend_message_streaming
 
     # Setup logger
-    litellm.logging_callback_manager._reset_all_callbacks()
+    await _reset_callbacks_and_settle_pending_logs()
     metadata_logger = MetadataLogger()
     litellm.logging_callback_manager.add_litellm_async_success_callback(metadata_logger)
 
@@ -390,7 +404,7 @@ async def test_asend_message_streaming_propagates_metadata():
         ):
             chunks.append(chunk)
 
-    await asyncio.sleep(0.2)
+    assert await asyncio.wait_for(metadata_logger.logged.wait(), timeout=5)
 
     # Verify metadata was propagated to callback
     assert metadata_logger.user_api_key == "sk-test-key-hash-12345"
@@ -406,7 +420,7 @@ async def test_asend_message_streaming_triggers_callbacks():
     from litellm.a2a_protocol import asend_message_streaming
 
     # Setup logger - must use logging_callback_manager to properly register
-    litellm.logging_callback_manager._reset_all_callbacks()
+    await _reset_callbacks_and_settle_pending_logs()
     callback_logger = AgentIdLogger()
     litellm.logging_callback_manager.add_litellm_async_success_callback(callback_logger)
     litellm.logging_callback_manager.add_litellm_success_callback(callback_logger)
@@ -433,7 +447,7 @@ async def test_asend_message_streaming_triggers_callbacks():
         ):
             chunks.append(chunk)
 
-    await asyncio.sleep(0.2)
+    assert await asyncio.wait_for(callback_logger.logged.wait(), timeout=5)
 
     # Verify chunks were received
     assert len(chunks) == 2

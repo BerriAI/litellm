@@ -1,19 +1,15 @@
 import json
-import signal
-import socket
-import subprocess
 import threading
 import uuid
-from collections.abc import Callable, Generator
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Final
 
 import httpx
-import psutil
 from integration._support.client import Gateway, eventually, object_value, string_value
 from integration._support.process import owned_proxy_process
+from integration._support.redis_process import owned_redis
 from integration._support.wire import Reply, Request, wire_server
 from prometheus_client.parser import text_string_to_metric_families
 from test_cache_hit_guardrail_metrics import (
@@ -29,22 +25,6 @@ from test_cache_hit_guardrail_metrics import (
 )
 
 BURST: Final = 10
-
-
-@contextmanager
-def _redis(port: int) -> Generator[subprocess.Popen[bytes], None, None]:
-    process: Final = subprocess.Popen(["redis-server", "--port", str(port), "--save", ""], stdout=subprocess.DEVNULL)
-    try:
-        yield process
-    finally:
-        process.kill()
-        process.wait(timeout=10)
-
-
-def _free_port() -> int:
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        return reserve.getsockname()[1]
 
 
 def _deployment_id(candidate: Gateway, model_name: str) -> str:
@@ -224,18 +204,16 @@ def test_stalled_guardrail_sink_recovers_and_counts(gateway: Gateway, tmp_path: 
 
 
 def test_redis_outage_keeps_serving_in_memory_hits(gateway: Gateway, tmp_path: Path) -> None:
-    """X2: the redis cache keeps an in-memory shadow, so a redis kill does not stop cache-hit rejects."""
+    """X2: the redis cache keeps an in-memory shadow, so a redis outage does not stop cache-hit rejects."""
     marker: Final = uuid.uuid4().hex
-    port: Final = _free_port()
-    with _redis(port) as redis_one:
-        with _rig(gateway, tmp_path, marker, env={"REDIS_HOST": "127.0.0.1", "REDIS_PORT": str(port)}) as rig:
+    with owned_redis(tmp_path) as cache:
+        with _rig(gateway, tmp_path, marker, env={"REDIS_HOST": cache.host, "REDIS_PORT": str(cache.port)}) as rig:
             bodies: Final = _burst_bodies(rig, marker, None)[:BURST]
             _warm(rig, bodies)
             reject: Final = rig.candidate.request("POST", *bodies[0])
             assert reject.status_code == 400, reject.text
             warmed_hits: Final = rig.provider.received.qsize()
-            redis_one.kill()
-            redis_one.wait(timeout=10)
+            cache.stop()
             outcomes: Final = _fire(rig, bodies[1:])
             assert all(status == 400 for status, _ in outcomes), outcomes
             assert rig.provider.received.qsize() == warmed_hits, (
@@ -243,13 +221,13 @@ def test_redis_outage_keeps_serving_in_memory_hits(gateway: Gateway, tmp_path: P
                 warmed_hits,
                 rig.provider.received.qsize(),
             )
-            with _redis(port):
-                recovered: Final = rig.candidate.request(
-                    "POST",
-                    "/v1/chat/completions",
-                    _chat_body(rig.model_name, "x2 rehit " + marker, rig.guardrail_name),
-                )
-                assert recovered.status_code == 400, recovered.text
+            cache.start()
+            recovered: Final = rig.candidate.request(
+                "POST",
+                "/v1/chat/completions",
+                _chat_body(rig.model_name, "x2 rehit " + marker, rig.guardrail_name),
+            )
+            assert recovered.status_code == 400, recovered.text
             _expect_exactly_once(rig, (rig.model_name,), (rig.deployment_id,), 1 + len(bodies))
 
 
@@ -259,14 +237,13 @@ def test_worker_kill_mid_burst_keeps_counting(gateway: Gateway, tmp_path: Path) 
     with _rig(gateway, tmp_path, marker, workers=2) as rig:
         bodies: Final = _burst_bodies(rig, marker, None)
         _warm(rig, bodies)
-        children: Final = psutil.Process(rig.process.pid).children(recursive=True)
-        assert children, "no uvicorn worker children found"
-        with ThreadPoolExecutor(max_workers=8) as pool:
+        workers: Final = eventually(rig.owned.worker_pids, lambda pids: len(pids) == 2)
+        with rig.owned.replacing_worker(min(workers)) as kill, ThreadPoolExecutor(max_workers=8) as pool:
             futures: Final = tuple(
                 pool.submit(lambda b: rig.candidate.request("POST", b[0], b[1]), body) for body in bodies
             )
             eventually(lambda: rig.policy.received.qsize() >= 3, bool, seconds=30)
-            children[0].send_signal(signal.SIGKILL)
+            kill()
             statuses: list[int] = []  # mutable-ok: collect per-request outcomes from concurrent futures
             for future in futures:
                 try:
@@ -283,7 +260,7 @@ def test_worker_kill_mid_burst_keeps_counting(gateway: Gateway, tmp_path: Path) 
 
 
 def test_proxy_restart_mid_burst_keeps_counting(gateway: Gateway, tmp_path: Path) -> None:
-    """X4: restart the owned proxy between the two halves; pre-restart count asserted, then recounted."""
+    """X4: the boot wipes the kept directory, so the second proxy counts only the second half."""
     marker: Final = uuid.uuid4().hex
     prom_dir: Final = tmp_path / "prom"
     prom_dir.mkdir()
@@ -341,8 +318,8 @@ def test_proxy_restart_mid_burst_keeps_counting(gateway: Gateway, tmp_path: Path
                     _populated(_samples(owned_two.gateway, (model,)), deployment),
                     _blank(_samples(owned_two.gateway, (model,))),
                 ),
-                lambda observed: observed[0] == len(named) and observed[1] == 0,
+                lambda observed: observed[0] == len(second_half) and observed[1] == 0,
                 seconds=70,
             )
-            assert post[0] == len(named), (pre, post, outcomes_two)
+            assert post[0] == len(second_half), (pre, post, outcomes_two)
             owned_two.gateway.post("/model/delete", {"id": deployment})

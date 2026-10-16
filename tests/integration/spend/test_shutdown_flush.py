@@ -1,6 +1,5 @@
 import json
 import os
-import signal
 import threading
 import uuid
 from collections.abc import Callable, Iterator
@@ -163,7 +162,7 @@ class _Shutdown:
 
     def terminate_once(self, blocked: Callable[[], bool], release: Callable[[], None]) -> None:
         eventually(blocked, lambda state: state, seconds=60)
-        self.owned.process.send_signal(signal.SIGTERM)
+        self.owned.begin_shutdown()
         eventually(lambda: self.logged(CANCEL_LOG_LINE), lambda seen: seen, seconds=60)
         release()
         self.owned.process.wait(timeout=120)
@@ -196,12 +195,14 @@ def _proxy_with_one_seeded_row(
             gateway,
             tmp_path,
             {
+                "DATABASE_URL": os.environ["DATABASE_URL"],
                 "LITELLM_LOG": "DEBUG",
                 "GRACEFUL_SHUTDOWN_TIMEOUT": "1",
                 "SCHEDULED_JOB_SHUTDOWN_FINISH_TIMEOUT_SECONDS": "1",
                 "SCHEDULED_JOB_SHUTDOWN_CANCEL_TIMEOUT_SECONDS": str(cancel_timeout_seconds),
             },
             config=_config_with_pool_limit(tmp_path, pool_limit),
+            remove_environment=("DATABASE_URL_READ_REPLICA",),
             workers=workers,
         ) as owned:
             key: Final = string_value(

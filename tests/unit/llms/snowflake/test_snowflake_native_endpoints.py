@@ -7,7 +7,7 @@ Covers:
     - Claude models → /messages (Anthropic format)
 
 Run:
-    pytest tests/test_litellm/llms/snowflake/test_snowflake_native_endpoints.py -v
+    pytest tests/unit/llms/snowflake/test_snowflake_native_endpoints.py -v
 """
 
 import json
@@ -18,7 +18,7 @@ import pytest
 
 from litellm.llms.snowflake.chat.transformation import (
     SnowflakeConfig,
-    _is_claude_model,
+    is_snowflake_claude_model,
 )
 from litellm.types.utils import ModelResponse
 
@@ -68,6 +68,7 @@ def _make_anthropic_response(content: str = "Hello!") -> httpx.Response:
 
 
 # ─── SnowflakeConfig (OpenAI-compatible) ───────────────────────────────────
+
 
 class TestSnowflakeConfigURL:
     def setup_method(self):
@@ -265,6 +266,7 @@ class TestSnowflakeConfigResponse:
 
 
 # ─── SnowflakeConfig ────────────────────────────────────────
+
 
 class TestAnthropicConfigURL:
     def setup_method(self):
@@ -533,20 +535,22 @@ class TestAnthropicConfigResponse:
 
 # ─── Model detection helper ────────────────────────────────────────────────
 
+
 class TestIsClaudeModel:
     def test_claude_model_detected(self):
-        assert _is_claude_model("snowflake/claude-sonnet-4-5") is True
-        assert _is_claude_model("claude-3-haiku") is True
-        assert _is_claude_model("snowflake/claude-opus-4") is True
+        assert is_snowflake_claude_model("snowflake/claude-sonnet-4-5") is True
+        assert is_snowflake_claude_model("claude-3-haiku") is True
+        assert is_snowflake_claude_model("snowflake/claude-opus-4") is True
 
     def test_non_claude_not_detected(self):
-        assert _is_claude_model("snowflake/llama3.1-70b") is False
-        assert _is_claude_model("snowflake/mistral-large") is False
-        assert _is_claude_model("snowflake/deepseek-r1") is False
-        assert _is_claude_model("snowflake/snowflake-arctic") is False
+        assert is_snowflake_claude_model("snowflake/llama3.1-70b") is False
+        assert is_snowflake_claude_model("snowflake/mistral-large") is False
+        assert is_snowflake_claude_model("snowflake/deepseek-r1") is False
+        assert is_snowflake_claude_model("snowflake/snowflake-arctic") is False
 
 
 # ─── Anthropic Tool Transformation Tests ──────────────────────────────────
+
 
 class TestAnthropicToolTransformation:
     def setup_method(self):
