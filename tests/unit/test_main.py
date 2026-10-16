@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from importlib import import_module
+from itertools import chain
 from pathlib import Path
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -635,7 +636,7 @@ def _converse_cache_points(body: Mapping[str, object]) -> tuple[str, ...]:
     system: Final = body.get("system")
     messages: Final = body["messages"]
     assert isinstance(system, list) and isinstance(messages, list)
-    in_messages: Final = tuple(block for message in messages for block in message["content"])
+    in_messages: Final = tuple(chain.from_iterable(message["content"] for message in messages))
     return (
         *("system" for block in system if "cachePoint" in block),
         *("message" for block in in_messages if "cachePoint" in block),
@@ -954,7 +955,7 @@ def _converse_cache_point_ttls(body: Mapping[str, object]) -> tuple[str | None, 
     tools: Final = tool_config["tools"] if isinstance(tool_config, dict) else []
     messages: Final = body["messages"]
     assert isinstance(messages, list)
-    in_messages: Final = tuple(block for message in messages for block in message["content"])
+    in_messages: Final = tuple(chain.from_iterable(message["content"] for message in messages))
     return tuple(block["cachePoint"].get("ttl") for block in (*tools, *in_messages) if "cachePoint" in block)
 
 
@@ -1030,7 +1031,7 @@ def _sent_cache_ttls(body: Mapping[str, object]) -> tuple[str | None, ...]:
     system: Final = body["system"]
     messages: Final = body["messages"]
     assert isinstance(system, list) and isinstance(messages, list)
-    blocks: Final = (*system, *(block for message in messages for block in message["content"]))
+    blocks: Final = (*system, *chain.from_iterable(message["content"] for message in messages))
     marks: Final = tuple(block.get("cache_control") or block.get("cachePoint") for block in blocks)
     return tuple(mark.get("ttl") for mark in marks if mark is not None)
 
