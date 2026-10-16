@@ -1,5 +1,8 @@
 import json
 import time
+import tracemalloc
+from collections.abc import Iterator
+from typing import Final
 from unittest.mock import patch
 
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
@@ -175,40 +178,48 @@ def test_accumulation_of_many_fragments_is_not_quadratic():
     assert elapsed_ms < 50, f"1000-fragment append took {elapsed_ms:.1f} ms (expected < 50 ms); O(n^2) regression?"
 
 
+def _popped_values(accumulator: JSONFragmentAccumulator) -> Iterator[object]:
+    while True:
+        found, value = accumulator.pop_next_value()
+        if not found:
+            return
+        yield value
+
+
 def test_draining_many_concatenated_values_is_not_quadratic():
     """
     Regression guard: peeling N JSON values already sitting in one buffer,
     one pop_next_value() call per value with no new fragments in between,
-    must be O(n) total. Re-copying the shrinking remainder on every pop
-    (slicing a new string instead of advancing a cursor) makes total drain
-    time scale with the square of the buffer size.
+    must advance a cursor instead of re-slicing the shrinking remainder.
 
-    Uses a doubling ratio rather than an absolute ms budget so it isn't
-    flaky on a slower or busier CI runner: doubling the input should
-    roughly double an O(n) drain's time but roughly quadruple an O(n^2)
-    drain's time, and that ratio holds regardless of machine speed.
+    Measures peak allocation during the drain rather than wall-clock time:
+    a cursor drain only allocates per-value decode scratch, so its peak
+    stays far below the payload, while every re-slice copies the remainder,
+    so the peak reaches the payload size. Allocation is deterministic where
+    a timing ratio trips on a busy CI runner.
     """
+    count: Final = 40_000
+    payload: Final = '{"a": 1}' * count
+    accumulator: Final = JSONFragmentAccumulator()
+    accumulator.append(payload)
 
-    def drain_time_ms(n: int) -> float:
-        accumulator = JSONFragmentAccumulator()
-        accumulator.append('{"a": 1}' * n)
-        start = time.perf_counter()
-        drained = 0
-        while True:
-            found, _ = accumulator.pop_next_value()
-            if not found:
-                break
-            drained += 1
-        assert drained == n
-        return (time.perf_counter() - start) * 1000
+    already_tracing: Final = tracemalloc.is_tracing()
+    if not already_tracing:
+        tracemalloc.start()
+    tracemalloc.reset_peak()
+    baseline, _ = tracemalloc.get_traced_memory()
+    try:
+        drained: Final = sum(1 for _ in _popped_values(accumulator))
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        if not already_tracing:
+            tracemalloc.stop()
 
-    small_ms = drain_time_ms(40_000)
-    large_ms = drain_time_ms(80_000)
-
-    ratio = large_ms / max(small_ms, 0.001)
-    assert ratio < 3.0, (
-        f"doubling drained values scaled time by {ratio:.2f}x ({small_ms:.1f} ms -> {large_ms:.1f} ms); "
-        "expected roughly 2x for O(n); O(n^2) regression?"
+    assert drained == count
+    peak_bytes: Final = peak - baseline
+    assert peak_bytes < len(payload) // 8, (
+        f"draining {count} values allocated a peak of {peak_bytes} bytes over a {len(payload)} byte payload; "
+        "a cursor drain allocates per-value scratch only; re-slicing the remainder on every pop?"
     )
 
 
