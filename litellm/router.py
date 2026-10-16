@@ -328,6 +328,7 @@ from litellm.types.router import (
     FallbackBudgetCheck,
     GuardrailTypedDict,
     LiteLLM_Params,
+    LiteLLMParamsTypedDict,
     MockRouterTestingParams,
     ModelGroupInfo,
     OptionalPreCallChecks,
@@ -12643,16 +12644,34 @@ class Router:
             str(deployment_params.get("model") or ""), deployment_params.get("custom_llm_provider")
         ):
             return True
+        return Router._deployment_supports_param(deployment, group, param)
+
+    @staticmethod
+    def _capability_model_and_provider(deployment_params: LiteLLMParamsTypedDict, group: str) -> tuple[str, str]:
+        model_label: Final = str(deployment_params.get("model") or group)
+        authenticating_provider: Final = declared_authenticating_provider(
+            model_label, deployment_params.get("custom_llm_provider")
+        )
+        if authenticating_provider is not None:
+            return model_label.removeprefix(f"{authenticating_provider}/"), authenticating_provider
+        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+            model=model_label,
+            custom_llm_provider=deployment_params.get("custom_llm_provider"),
+            litellm_params=LiteLLM_Params.model_validate(deployment_params),
+        )
+        return model, custom_llm_provider
+
+    @staticmethod
+    def _deployment_supports_param(deployment: DeploymentTypedDict, group: str, param: str) -> bool:
+        deployment_params: Final = deployment.get("litellm_params")
+        if not deployment_params:
+            return True
         deployment_model_info: Final = deployment.get("model_info")
         base_model: Final = (
             deployment_model_info.get("base_model") if deployment_model_info else None
         ) or deployment_params.get("base_model")
         try:
-            model, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                model=deployment_params.get("model") or group,
-                custom_llm_provider=deployment_params.get("custom_llm_provider"),
-                litellm_params=LiteLLM_Params.model_validate(deployment_params),
-            )
+            model, custom_llm_provider = Router._capability_model_and_provider(deployment_params, group)
             supported: Final = litellm.get_supported_openai_params(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
@@ -12660,7 +12679,7 @@ class Router:
             )
         except Exception as e:  # noqa: BLE001  # best-effort filter: an unresolvable provider must not narrow the request
             verbose_router_logger.debug(
-                "litellm.router.py::_deployment_accepts_param: keeping %s for model=%s. Got - %s", param, group, e
+                "litellm.router.py::_deployment_supports_param: keeping %s for model=%s. Got - %s", param, group, e
             )
             return True
         return supported is None or param in supported
@@ -13215,7 +13234,7 @@ class Router:
 
     @staticmethod
     def _deployment_lacks_params(deployment: DeploymentTypedDict, group: str, params: frozenset[str]) -> bool:
-        return any(not Router._deployment_accepts_param(deployment, group, param) for param in params)
+        return any(not Router._deployment_supports_param(deployment, group, param) for param in params)
 
     @staticmethod
     def _deployment_rejects_params(
@@ -13289,28 +13308,6 @@ class Router:
             if request_kwargs is not None and litellm.drop_params is False
             else frozenset()
         )
-        deployments_lacking_params: Final = tuple(
-            self._deployment_lacks_params(
-                cast(DeploymentTypedDict, deployment),  # cast-ok: router deployments are plain dicts
-                model,
-                requested_params,
-            )
-            for deployment in _returned_deployments
-        )
-        no_deployment_takes_params: Final = bool(deployments_lacking_params) and all(deployments_lacking_params)
-        deployments_failing_params: Final = (
-            tuple(
-                self._deployment_rejects_params(
-                    cast(DeploymentTypedDict, deployment),  # cast-ok: router deployments are plain dicts
-                    model,
-                    requested_params,
-                    request_settings,
-                )
-                for deployment in _returned_deployments
-            )
-            if no_deployment_takes_params
-            else deployments_lacking_params
-        )
 
         ## get model group RPM ##
         dt: Final = get_utc_datetime()
@@ -13371,23 +13368,43 @@ class Router:
                         invalid_model_indices.add(idx)
                         continue
 
-            ## INVALID PARAMS ## -> catch 'gpt-3.5-turbo-16k' not supporting 'response_format' param
-            if deployments_failing_params[idx]:
-                invalid_model_indices.add(idx)
+        typed_deployments: Final = tuple(
+            cast(DeploymentTypedDict, deployment)  # cast-ok: router deployments are plain dicts
+            for deployment in _returned_deployments
+        )
+        param_candidates: Final = tuple(
+            (idx, deployment) for idx, deployment in enumerate(typed_deployments) if idx not in invalid_model_indices
+        )
+        candidates_lacking_params: Final = tuple(
+            self._deployment_lacks_params(deployment, model, requested_params) for _, deployment in param_candidates
+        )
+        no_deployment_takes_params: Final = bool(candidates_lacking_params) and all(candidates_lacking_params)
+        candidates_failing_params: Final = (
+            tuple(
+                self._deployment_rejects_params(deployment, model, requested_params, request_settings)
+                for _, deployment in param_candidates
+            )
+            if no_deployment_takes_params
+            else candidates_lacking_params
+        )
+        excluded_indices: Final = frozenset(invalid_model_indices) | frozenset(
+            idx for (idx, _), fails in zip(param_candidates, candidates_failing_params, strict=True) if fails
+        )
 
-        if len(invalid_model_indices) == len(_returned_deployments):
+        if len(excluded_indices) == len(_returned_deployments):
             """
             - no healthy deployments available b/c context window checks or rate limit error
 
             - First check for rate limit errors (if this is true, it means the model passed the context window check but failed the rate limit check)
             """
 
+            group_deployments: Final = tuple(self.get_all_deployments(model_name=model)) or typed_deployments
             if (
                 not _context_window_error
-                and no_deployment_takes_params
+                and group_deployments
                 and all(
                     self._deployment_rejects_params(deployment, model, requested_params, request_settings)
-                    for deployment in self.get_all_deployments(model_name=model)
+                    for deployment in group_deployments
                 )
             ):
                 raise litellm.UnsupportedParamsError(
@@ -13405,9 +13422,9 @@ class Router:
                     model=model,
                     llm_provider="",
                 )
-        if len(invalid_model_indices) > 0:
+        if len(excluded_indices) > 0:
             # Single-pass filter using set for O(1) lookups (avoids O(n^2) from repeated pops)
-            _returned_deployments = [d for i, d in enumerate(_returned_deployments) if i not in invalid_model_indices]
+            _returned_deployments = [d for i, d in enumerate(_returned_deployments) if i not in excluded_indices]
 
         return _returned_deployments
 

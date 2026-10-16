@@ -27013,8 +27013,9 @@ def test_completion_uses_context_window_fallback_when_the_small_deployment_also_
         ({}, {"drop_params": True}),
         ({}, {"additional_drop_params": ["response_format"]}),
         ({"drop_params": True}, {}),
+        ({"allowed_openai_params": ["response_format"]}, {}),
     ],
-    ids=["request-allowlist", "request-drop", "request-additional-drop", "deployment-drop"],
+    ids=["request-allowlist", "request-drop", "request-additional-drop", "deployment-drop", "deployment-allowlist"],
 )
 def test_pre_call_checks_prefers_a_deployment_that_takes_the_param_over_dropping_it(
     monkeypatch, deployment_params, request_kwargs
@@ -27042,6 +27043,78 @@ def test_pre_call_checks_prefers_a_deployment_that_takes_the_param_over_dropping
     )
 
     assert [d["model_info"]["id"] for d in filtered] == ["gpt-4o"]
+
+
+def test_pre_call_checks_drops_the_param_when_the_capable_deployment_is_outside_the_region(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    model_list: Final = [
+        {
+            "model_name": "regional-json-mode",
+            "litellm_params": {"model": "openai/gpt-3.5-turbo-16k", "api_key": "my-fake-key", "region_name": "eu"},
+            "model_info": {"id": "eu-without-json-mode", "max_input_tokens": 100},
+        },
+        {
+            "model_name": "regional-json-mode",
+            "litellm_params": {"model": "openai/gpt-4o", "api_key": "my-fake-key", "region_name": "us"},
+            "model_info": {"id": "us-with-json-mode", "max_input_tokens": 100},
+        },
+    ]
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
+
+    filtered: Final = router._pre_call_checks(
+        model="regional-json-mode",
+        healthy_deployments=model_list,
+        messages=[{"role": "user", "content": "hi"}],
+        request_kwargs={"response_format": {"type": "json_object"}, "drop_params": True, "allowed_model_region": "eu"},
+    )
+
+    assert [d["model_info"]["id"] for d in filtered] == ["eu-without-json-mode"]
+
+
+def test_pre_call_checks_filters_an_authenticating_provider_deployment_that_lacks_the_param(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    model_list: Final = [
+        {
+            "model_name": "mixed-json-mode",
+            "litellm_params": {"model": "github_copilot/gpt-4"},
+            "model_info": {"id": "copilot-gpt-4", "max_input_tokens": 100},
+        },
+        {
+            "model_name": "mixed-json-mode",
+            "litellm_params": {"model": "openai/gpt-4o", "api_key": "my-fake-key"},
+            "model_info": {"id": "gpt-4o", "max_input_tokens": 100},
+        },
+    ]
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
+
+    filtered: Final = router._pre_call_checks(
+        model="mixed-json-mode",
+        healthy_deployments=model_list,
+        messages=[{"role": "user", "content": "hi"}],
+        request_kwargs={"response_format": {"type": "json_object"}},
+    )
+
+    assert [d["model_info"]["id"] for d in filtered] == ["gpt-4o"]
+
+
+def test_pre_call_checks_answers_400_when_the_group_name_lists_no_deployments(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    model_list: Final = [
+        {
+            "model_name": "no-json-mode",
+            "litellm_params": {"model": "openai/gpt-3.5-turbo-16k", "api_key": "my-fake-key"},
+            "model_info": {"id": "only", "max_input_tokens": 100},
+        }
+    ]
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
+
+    with pytest.raises(litellm.UnsupportedParamsError):
+        router._pre_call_checks(
+            model="team-public-name",
+            healthy_deployments=model_list,
+            messages=[{"role": "user", "content": "hi"}],
+            request_kwargs={"response_format": {"type": "json_object"}},
+        )
 
 
 def test_pre_call_checks_ignores_an_image_response_format_string(monkeypatch):

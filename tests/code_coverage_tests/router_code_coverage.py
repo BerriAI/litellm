@@ -119,6 +119,8 @@ ignored_function_names = [
     "_deployment_rejects_params",  # Tested through the unsupported-param pre-call check tests in test_router.py
     "_deployment_lacks_params",  # Tested through the unsupported-param pre-call check tests in test_router.py
     "_pre_call_check_requested_chat_params",  # Tested through the unsupported-param pre-call check tests in test_router.py
+    "_deployment_supports_param",  # Tested through the deployment-capability pre-call check tests in test_router.py
+    "_capability_model_and_provider",  # Tested through the authenticating-provider pre-call check test in test_router.py
 ]
 
 
