@@ -261,6 +261,16 @@ def _recording_client(**response_kwargs):
     return requests, HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handle)))
 
 
+def _async_recording_client(**response_kwargs):
+    requests: list[httpx.Request] = []
+
+    async def handle(request):
+        requests.append(request)
+        return httpx.Response(200, **response_kwargs)
+
+    return requests, AsyncHTTPHandler(transport=httpx.MockTransport(handle))
+
+
 @pytest.mark.parametrize(
     "model, model_path",
     [
@@ -598,6 +608,7 @@ def _weather_tool_named(name):
         ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "logprobs": True}, "converse"),
         ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "logprobs": False}, "responses"),
         ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low", "prompt_cache_key": "k"}, "responses"),
+        ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": {"effort": "low", "summary": "auto"}}, "converse"),
         ({"reasoning_effort": "low"}, "chat_completions"),
         ({"tools": None, "reasoning_effort": "low"}, "chat_completions"),
         ({"tools": [], "reasoning_effort": "low"}, "chat_completions"),
@@ -1134,9 +1145,11 @@ RESPONSES_TOOL_CALL_JSON = {
 @pytest.mark.parametrize(
     "model", ["bedrock/chat_completions/global.openai.gpt-5.6-sol", "bedrock/global.openai.gpt-6-sol"]
 )
-def test_gpt56_and_newer_tools_with_reasoning_effort_bridge_to_runtime_responses(local_cost_map, fake_aws_env, model):
-    requests, client = _recording_client(json={**RESPONSES_TOOL_CALL_JSON, "model": model})
-    response = litellm.completion(
+async def test_gpt56_and_newer_tools_with_reasoning_effort_bridge_to_runtime_responses(
+    local_cost_map, fake_aws_env, model
+):
+    requests, client = _async_recording_client(json={**RESPONSES_TOOL_CALL_JSON, "model": model})
+    response = await litellm.acompletion(
         model=model,
         messages=[{"role": "user", "content": "weather in Paris"}],
         tools=[GET_WEATHER_TOOL],
@@ -1160,9 +1173,9 @@ def test_gpt56_and_newer_tools_with_reasoning_effort_bridge_to_runtime_responses
     assert response._hidden_params["response_cost"] > 0
 
 
-def test_tools_with_reasoning_bridge_stores_only_when_the_caller_asks(local_cost_map, fake_aws_env):
-    requests, client = _recording_client(json={**RESPONSES_TOOL_CALL_JSON, "model": "global.openai.gpt-6-sol"})
-    litellm.completion(
+async def test_tools_with_reasoning_bridge_stores_only_when_the_caller_asks(local_cost_map, fake_aws_env):
+    requests, client = _async_recording_client(json={**RESPONSES_TOOL_CALL_JSON, "model": "global.openai.gpt-6-sol"})
+    await litellm.acompletion(
         model="bedrock/global.openai.gpt-6-sol",
         messages=[{"role": "user", "content": "weather in Paris"}],
         tools=[GET_WEATHER_TOOL],
@@ -1176,12 +1189,12 @@ def test_tools_with_reasoning_bridge_stores_only_when_the_caller_asks(local_cost
     assert "include" not in body
 
 
-def test_tools_with_reasoning_and_a_param_the_bridge_drops_fail_like_converse_without_drop_params(
+async def test_tools_with_reasoning_and_a_param_the_bridge_drops_fail_like_converse_without_drop_params(
     local_cost_map, fake_aws_env
 ):
-    requests, client = _recording_client(json={**RESPONSES_TOOL_CALL_JSON, "model": "global.openai.gpt-6-sol"})
+    requests, client = _async_recording_client(json={**RESPONSES_TOOL_CALL_JSON, "model": "global.openai.gpt-6-sol"})
     with pytest.raises(litellm.UnsupportedParamsError, match="seed"):
-        litellm.completion(
+        await litellm.acompletion(
             model="bedrock/global.openai.gpt-6-sol",
             messages=[{"role": "user", "content": "weather in Paris"}],
             tools=[GET_WEATHER_TOOL],
@@ -1201,7 +1214,7 @@ def test_tools_with_reasoning_and_a_param_the_bridge_drops_fail_like_converse_wi
         (None, None, "proxy.example.com"),
     ],
 )
-def test_tools_with_reasoning_bridge_goes_to_the_host_converse_would(
+async def test_tools_with_reasoning_bridge_goes_to_the_host_converse_would(
     local_cost_map, fake_aws_env, monkeypatch, runtime_endpoint_param, runtime_endpoint_env, expected_host
 ):
     if runtime_endpoint_env:
@@ -1213,21 +1226,23 @@ def test_tools_with_reasoning_bridge_goes_to_the_host_converse_would(
         "api_base": "https://proxy.example.com",
         "aws_bedrock_runtime_endpoint": runtime_endpoint_param,
     }
-    converse_requests, converse_client = _recording_client(json=CONVERSE_JSON)
-    litellm.completion(**params, tools=[_weather_tool_named("get weather!")], client=converse_client)
-    bridge_requests, bridge_client = _recording_client(
+    converse_requests, converse_client = _async_recording_client(json=CONVERSE_JSON)
+    await litellm.acompletion(**params, tools=[_weather_tool_named("get weather!")], client=converse_client)
+    bridge_requests, bridge_client = _async_recording_client(
         json={**RESPONSES_TOOL_CALL_JSON, "model": "global.openai.gpt-6-sol"}
     )
-    litellm.completion(**params, tools=[GET_WEATHER_TOOL], client=bridge_client)
+    await litellm.acompletion(**params, tools=[GET_WEATHER_TOOL], client=bridge_client)
 
     assert converse_requests[0].url.raw_path.endswith(b"/converse")
     assert bridge_requests[0].url.path == "/openai/v1/responses"
     assert bridge_requests[0].url.host == converse_requests[0].url.host == expected_host
 
 
-def test_tools_with_reasoning_and_a_name_openai_rejects_keep_converse_and_its_name_mapping(local_cost_map, fake_aws_env):
-    requests, client = _recording_client(json=CONVERSE_JSON)
-    litellm.completion(
+async def test_tools_with_reasoning_and_a_name_openai_rejects_keep_converse_and_its_name_mapping(
+    local_cost_map, fake_aws_env
+):
+    requests, client = _async_recording_client(json=CONVERSE_JSON)
+    await litellm.acompletion(
         model="bedrock/global.openai.gpt-6-sol",
         messages=[{"role": "user", "content": "weather in Paris"}],
         tools=[_weather_tool_named("get weather!")],
@@ -1239,9 +1254,11 @@ def test_tools_with_reasoning_and_a_name_openai_rejects_keep_converse_and_its_na
     assert json.loads(requests[0].content)["toolConfig"]["tools"][0]["toolSpec"]["name"] == "get_weather_"
 
 
-def test_a_caller_param_named_like_the_bridge_flag_neither_crashes_nor_steers_the_route(local_cost_map, fake_aws_env):
-    requests, client = _recording_client(json={**RESPONSES_TOOL_CALL_JSON, "model": "global.openai.gpt-6-sol"})
-    response = litellm.completion(
+async def test_a_caller_param_named_like_the_bridge_flag_neither_crashes_nor_steers_the_route(
+    local_cost_map, fake_aws_env
+):
+    requests, client = _async_recording_client(json={**RESPONSES_TOOL_CALL_JSON, "model": "global.openai.gpt-6-sol"})
+    response = await litellm.acompletion(
         model="bedrock/global.openai.gpt-6-sol",
         messages=[{"role": "user", "content": "weather in Paris"}],
         tools=[GET_WEATHER_TOOL],
@@ -1255,9 +1272,9 @@ def test_a_caller_param_named_like_the_bridge_flag_neither_crashes_nor_steers_th
     assert response.choices[0].message.tool_calls[0].function.name == "get_weather"
 
 
-def test_tools_with_reasoning_bridge_keeps_the_reasoning_summary_alias(local_cost_map, fake_aws_env):
-    requests, client = _recording_client(json={**RESPONSES_TOOL_CALL_JSON, "model": "global.openai.gpt-6-sol"})
-    litellm.completion(
+async def test_tools_with_reasoning_bridge_keeps_the_reasoning_summary_alias(local_cost_map, fake_aws_env):
+    requests, client = _async_recording_client(json={**RESPONSES_TOOL_CALL_JSON, "model": "global.openai.gpt-6-sol"})
+    await litellm.acompletion(
         model="bedrock/global.openai.gpt-6-sol",
         messages=[{"role": "user", "content": "weather in Paris"}],
         tools=[GET_WEATHER_TOOL],
@@ -1267,6 +1284,32 @@ def test_tools_with_reasoning_bridge_keeps_the_reasoning_summary_alias(local_cos
     )
 
     assert json.loads(requests[0].content)["reasoning"] == {"effort": "low", "summary": "auto"}
+
+
+def test_sync_tools_with_reasoning_stay_on_converse(local_cost_map, fake_aws_env):
+    requests, client = _recording_client(json=CONVERSE_JSON)
+    litellm.completion(
+        model="bedrock/global.openai.gpt-6-sol",
+        messages=[{"role": "user", "content": "weather in Paris"}],
+        tools=[GET_WEATHER_TOOL],
+        reasoning_effort="low",
+        client=client,
+    )
+
+    assert requests[0].url.raw_path.endswith(b"/model/global.openai.gpt-6-sol/converse")
+
+
+async def test_tools_with_an_object_reasoning_effort_stay_on_converse_like_main(local_cost_map, fake_aws_env):
+    requests, client = _async_recording_client(json=CONVERSE_JSON)
+    await litellm.acompletion(
+        model="bedrock/global.openai.gpt-6-sol",
+        messages=[{"role": "user", "content": "weather in Paris"}],
+        tools=[GET_WEATHER_TOOL],
+        reasoning_effort={"effort": "low", "summary": "auto"},
+        client=client,
+    )
+
+    assert requests[0].url.raw_path.endswith(b"/model/global.openai.gpt-6-sol/converse")
 
 
 async def test_async_tools_with_reasoning_bridge_uses_the_supplied_client(local_cost_map, fake_aws_env):
@@ -1307,9 +1350,9 @@ class _LegacyBedrockClient:
         return _LegacyCredentials()
 
 
-def test_tools_with_reasoning_and_a_legacy_aws_bedrock_client_stay_on_converse(local_cost_map, fake_aws_env):
-    requests, client = _recording_client(json=CONVERSE_JSON)
-    litellm.completion(
+async def test_tools_with_reasoning_and_a_legacy_aws_bedrock_client_stay_on_converse(local_cost_map, fake_aws_env):
+    requests, client = _async_recording_client(json=CONVERSE_JSON)
+    await litellm.acompletion(
         model="bedrock/global.openai.gpt-6-sol",
         messages=[{"role": "user", "content": "weather in Paris"}],
         tools=[GET_WEATHER_TOOL],

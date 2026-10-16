@@ -5683,10 +5683,11 @@ def completion(
             "allowed_openai_params": allowed_openai_params,
             "base_model": base_model,
         }
+        bedrock_responses_bridge_allowed: Final = acompletion is True and not skip_responses_api_bridge
         optional_params = get_optional_params(
             **optional_param_args,
             **non_default_params,
-            _litellm_responses_api_bridge_allowed=not skip_responses_api_bridge,
+            _litellm_responses_api_bridge_allowed=bedrock_responses_bridge_allowed,
         )
         processed_non_default_params: Final = pre_process_non_default_params(
             model=model,
@@ -5855,7 +5856,7 @@ def completion(
                 {
                     **optional_param_args,
                     **non_default_params,
-                    "_litellm_responses_api_bridge_allowed": not skip_responses_api_bridge,
+                    "_litellm_responses_api_bridge_allowed": bedrock_responses_bridge_allowed,
                 }
             )
         )

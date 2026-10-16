@@ -11,7 +11,7 @@ import os
 import re
 import warnings
 from collections.abc import Iterator, Mapping, Sequence
-from types import MappingProxyType
+from types import MappingProxyType, NoneType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
 
 from typing_extensions import ReadOnly, TypedDict
@@ -1112,6 +1112,7 @@ def _bridgeable_to_responses(model: str, request_params: Mapping[str, object]) -
         and _function_tools_only(request_params.get("tools"))
         and _extra_body_bridgeable(request_params.get("extra_body"))
         and not _sets_a_chat_param_the_responses_bridge_drops(request_params)
+        and isinstance(request_params.get("reasoning_effort"), (str, NoneType))
         and _bedrock_serves_responses(model)
     )
 
