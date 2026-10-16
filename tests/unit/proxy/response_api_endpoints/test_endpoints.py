@@ -3601,7 +3601,7 @@ class TestResponsesInputTokens:
         assert error["message"].startswith("tools: ")
         counter.assert_not_awaited()
 
-    def test_invalid_tools_are_dropped_under_drop_params(self):
+    def test_invalid_tools_are_dropped_under_drop_params(self) -> None:
         response, counter = self._post_input_tokens(
             {"model": "gpt-4o", "input": "hi", "tools": [5, {"type": "web_search"}], "drop_params": True}
         )
@@ -3609,7 +3609,7 @@ class TestResponsesInputTokens:
         assert response.status_code == 200, response.text
         assert counter.await_args.kwargs["request"].tools == [{"type": "web_search"}]
 
-    def test_malformed_tools_follow_the_counted_deployment_even_when_fallbacks_are_configured(self):
+    def test_malformed_tools_follow_the_counted_deployment_even_when_fallbacks_are_configured(self) -> None:
         router: Final = litellm.Router(
             model_list=[
                 {
@@ -3628,7 +3628,7 @@ class TestResponsesInputTokens:
         assert response.status_code == 200, response.text
         assert counter.await_args.kwargs["request"].tools is None
 
-    def test_malformed_tools_for_a_model_outside_the_router_get_a_clean_400(self):
+    def test_malformed_tools_for_a_model_outside_the_router_get_a_clean_400(self) -> None:
         router: Final = litellm.Router(
             model_list=[{"model_name": "gpt-5.2", "litellm_params": {"model": "openai/gpt-5.2", "api_key": "sk-test"}}]
         )

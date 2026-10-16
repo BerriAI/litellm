@@ -4,6 +4,7 @@ and ``_handle_logging_proxy_only_error``."""
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from datetime import datetime
 from types import MappingProxyType
 from typing import Final
@@ -931,8 +932,11 @@ async def test_post_call_failure_hook_falls_back_to_body_shape_without_a_route(p
     ],
 )
 async def test_post_call_failure_hook_keeps_the_call_type_request_setup_logged(
-    proxy_logging, make_user_api_key_auth, call_type, body
-):
+    proxy_logging: ProxyLogging,
+    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
+    call_type: str,
+    body: dict[str, object],
+) -> None:
     """A request rejected after request setup already carries its endpoint's call type, so the body
     shape must not relabel a /v1/messages rejection as a chat completion or a list-input /v1/responses
     rejection as an embedding."""

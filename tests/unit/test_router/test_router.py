@@ -8546,7 +8546,10 @@ def test_update_kwargs_with_deployment_merge_tools_request_overrides_tool_choice
     ],
 )
 def test_update_kwargs_with_deployment_keeps_deployment_tools_when_malformed_request_tools_drop(
-    deployment_params: dict, router_defaults: dict, request_params: dict, expected_tools: object
+    deployment_params: dict[str, object],
+    router_defaults: dict[str, object],
+    request_params: dict[str, object],
+    expected_tools: object,
 ) -> None:
     router: Final = litellm.Router(
         model_list=[
@@ -8586,7 +8589,7 @@ _NAMED_REQUEST_TOOL_CHOICE: Final = {"type": "function", "function": {"name": "l
     ids=["deployment_tool_choice_applies", "no_deployment_tool_choice", "no_drop_policy"],
 )
 def test_update_kwargs_with_deployment_drops_request_tool_settings_with_malformed_request_tools(
-    deployment_params: dict, expected_tool_fields: dict
+    deployment_params: dict[str, object], expected_tool_fields: dict[str, object]
 ) -> None:
     router: Final = litellm.Router(
         model_list=[
