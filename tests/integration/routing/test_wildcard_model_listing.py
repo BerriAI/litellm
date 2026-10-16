@@ -13,6 +13,7 @@ from pydantic import JsonValue
 pytestmark: Final = pytest.mark.timeout(180)
 
 _PRICED_DEPLOYMENT_ID: Final = f"priced-deployment-{uuid.uuid4().hex}"
+_REGISTERED_AI21_CHAT_MODEL: Final = f"jamba-house-{uuid.uuid4().hex}"
 
 
 @pytest.fixture(scope="module")
@@ -33,6 +34,12 @@ def candidate(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
                         **credentials,
                     },
                     "model_info": {"id": _PRICED_DEPLOYMENT_ID},
+                },
+                {"model_name": "ai21/*", "litellm_params": {"model": "ai21/*", **credentials}},
+                {
+                    "model_name": "house-jamba",
+                    "litellm_params": {"model": f"ai21/{_REGISTERED_AI21_CHAT_MODEL}", **credentials},
+                    "model_info": {"litellm_provider": "ai21", "mode": "chat"},
                 },
             ],
         }
@@ -56,3 +63,9 @@ def test_wildcard_listing_after_a_priced_call_names_each_model_once_and_no_deplo
     assert "openai/gpt-4o-mini" in listed and "priced-chat" in listed, listed
     assert {model: count for model, count in Counter(listed).items() if count > 1} == {}, listed
     assert [model for model in listed if _PRICED_DEPLOYMENT_ID in str(model)] == [], listed
+
+
+def test_ai21_wildcard_listing_names_a_chat_model_registered_from_the_config(candidate: Gateway) -> None:
+    listed: Final = _listed_ids(candidate)
+
+    assert f"ai21/{_REGISTERED_AI21_CHAT_MODEL}" in listed, listed

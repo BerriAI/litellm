@@ -2443,6 +2443,33 @@ def test_register_model_makes_the_model_resolvable_and_wildcard_visible_without_
         litellm.models_by_provider["vertex_ai"].discard(model_name)
 
 
+@pytest.mark.parametrize(
+    ("litellm_provider", "wildcard", "provider_set"),
+    [
+        ("ai21", "ai21/*", "ai21_chat_models"),
+        ("vertex_ai-code-chat-models", "vertex_ai/*", "vertex_code_chat_models"),
+    ],
+)
+def test_registered_chat_model_lists_under_its_provider_wildcard(
+    litellm_provider: str, wildcard: str, provider_set: str
+) -> None:
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    model_name: Final = f"chat-listing-regression-{litellm_provider}"
+    try:
+        litellm.register_model(
+            {model_name: {"litellm_provider": litellm_provider, "mode": "chat"}}, persist_across_reloads=False
+        )
+
+        listed: Final = get_known_models_from_wildcard(wildcard)
+
+        assert f"{wildcard.removesuffix('*')}{model_name}" in listed
+    finally:
+        litellm.model_cost.pop(model_name, None)
+        getattr(litellm, provider_set).discard(model_name)
+        litellm.add_known_models(model_cost_map={})
+
+
 def test_priced_router_deployment_id_stays_out_of_wildcard_model_listing():
     from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
 
