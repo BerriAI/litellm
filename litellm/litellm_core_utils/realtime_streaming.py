@@ -197,6 +197,8 @@ class RealtimeEventNormalizer(Protocol):
     def normalize(self, event: dict) -> dict: ...
     def patch_outgoing_session(self, session: dict) -> dict: ...
     def gate_turn_detection(self, turn_detection: object, /) -> Mapping[str, object]: ...
+    @property
+    def deletes_conversation_items(self) -> bool: ...
 
 
 class RealtimeUsageMeter(Protocol):
@@ -294,6 +296,9 @@ class RealTimeStreaming:
         self._event_normalizer = event_normalizer
         self._gate_turn_detection: Final[_TurnDetectionGate] = (
             _turn_detection_with_auto_response_off if event_normalizer is None else event_normalizer.gate_turn_detection
+        )
+        self._deletes_conversation_items: Final = (
+            event_normalizer is None or event_normalizer.deletes_conversation_items
         )
         self._usage_meter = usage_meter
 
@@ -835,7 +840,7 @@ class RealTimeStreaming:
 
     async def _withdraw_blocked_turn(self, item_id: str | None) -> None:
         await self._send_guardrail_cancel()
-        if item_id is not None:
+        if item_id is not None and self._deletes_conversation_items:
             await self._send_to_backend(json.dumps({"type": "conversation.item.delete", "item_id": item_id}))
 
     def _is_guardrail_cancel_error(self, event: Mapping[str, object]) -> bool:

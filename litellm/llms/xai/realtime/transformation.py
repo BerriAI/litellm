@@ -82,6 +82,11 @@ class XAIRealtimeNormalizer:
         """xAI auto-answers under ``server_vad`` even with ``create_response`` off, so the gate is always untyped."""
         return {"create_response": False}
 
+    @property
+    def deletes_conversation_items(self) -> bool:
+        """xAI answers ``conversation.item.delete`` for an audio input item with ``Item not found``."""
+        return False
+
     def patch_outgoing_session(self, session: dict) -> dict:
         """Patch a client ``session.update`` payload before forwarding to xAI.
 

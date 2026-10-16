@@ -4189,8 +4189,18 @@ async def test_client_never_sees_the_error_caused_by_the_guardrail_cancel(monkey
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("event_normalizer", "expected_frames"),
+    [
+        (None, ["response.cancel", "conversation.item.delete", "conversation.item.create", "response.create"]),
+        (XAIRealtimeNormalizer(), ["response.cancel", "conversation.item.create", "response.create"]),
+    ],
+    ids=["deletes_the_blocked_item", "xai_keeps_the_item_it_cannot_delete"],
+)
 async def test_blocked_transcript_is_removed_from_the_conversation_before_the_refusal_turn(
     monkeypatch: pytest.MonkeyPatch,
+    event_normalizer: XAIRealtimeNormalizer | None,
+    expected_frames: list[str],
 ):
     class _BlockingGuardrail(CustomGuardrail):
         async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
@@ -4222,13 +4232,10 @@ async def test_blocked_transcript_is_removed_from_the_conversation_before_the_re
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
 
-    await RealTimeStreaming(client_ws, backend_ws, logging_obj).backend_to_client_send_messages()
+    await RealTimeStreaming(
+        client_ws, backend_ws, logging_obj, event_normalizer=event_normalizer
+    ).backend_to_client_send_messages()
 
     sent: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
-    assert [event["type"] for event in sent] == [
-        "response.cancel",
-        "conversation.item.delete",
-        "conversation.item.create",
-        "response.create",
-    ]
-    assert sent[1]["item_id"] == "item_blocked"
+    assert [event["type"] for event in sent] == expected_frames
+    assert all(event["item_id"] == "item_blocked" for event in sent if event["type"] == "conversation.item.delete")
