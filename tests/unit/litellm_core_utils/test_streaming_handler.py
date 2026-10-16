@@ -6689,3 +6689,81 @@ async def test_leaving_an_async_with_block_closes_the_provider_stream():
     async with _wrapper_over(stream):
         pass
     assert stream.close_calls == 1
+
+
+def test_openrouter_stream_chunk_uses_served_model(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """Routed openrouter streams (e.g. openrouter/auto) must carry the served
+    model on each chunk, the same way azure streams re-read the chunk model -
+    otherwise streamed responses are priced and logged under the router name."""
+    wrapper = initialized_custom_stream_wrapper
+    wrapper.custom_llm_provider = "openrouter"
+    wrapper.model = "auto"
+    chunk = ModelResponseStream(
+        id="chatcmpl-openrouter-1",
+        created=1742056047,
+        model="deepseek/deepseek-v4.1-flash",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="Hello", role="assistant"),
+                logprobs=None,
+            )
+        ],
+    )
+    model_response = wrapper.chunk_creator(chunk)
+    assert wrapper.model == "deepseek/deepseek-v4.1-flash"
+    assert model_response is not None
+    assert model_response.model == "deepseek/deepseek-v4.1-flash"
+
+
+def test_openrouter_stream_assembled_response_uses_served_model(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """The served model must survive chunk aggregation, not just per-chunk
+    handling: an assembled response built from the emitted chunks is what the
+    cost/logging callbacks price, so it must carry the served model rather
+    than the requested alias (openrouter/auto)."""
+    from litellm.litellm_core_utils.streaming_chunk_builder_utils import (
+        stream_chunk_builder,
+    )
+
+    wrapper = initialized_custom_stream_wrapper
+    wrapper.custom_llm_provider = "openrouter"
+    wrapper.model = "auto"
+
+    served_model = "deepseek/deepseek-v4.1-flash"
+    emitted_chunks = []
+    for delta, finish_reason in (
+        (Delta(content="Hello", role="assistant"), None),
+        (Delta(), "stop"),
+    ):
+        chunk = ModelResponseStream(
+            id="chatcmpl-openrouter-1",
+            created=1742056047,
+            model=served_model,
+            object="chat.completion.chunk",
+            system_fingerprint=None,
+            choices=[
+                StreamingChoices(
+                    finish_reason=finish_reason, index=0, delta=delta, logprobs=None
+                )
+            ],
+        )
+        model_response = wrapper.chunk_creator(chunk)
+        if model_response is not None:
+            emitted_chunks.append(model_response)
+
+    assert len(emitted_chunks) == 2
+    for emitted in emitted_chunks:
+        assert emitted.model == served_model
+
+    assembled = stream_chunk_builder(emitted_chunks)
+    assert assembled is not None
+    assert assembled.model == served_model
+    assert assembled.choices[0].message.content == "Hello"
+    assert assembled.choices[0].finish_reason == "stop"
