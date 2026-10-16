@@ -22,13 +22,20 @@ Pins covered:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from opentelemetry.trace import Span
 
 import litellm.proxy.proxy_server as ps
+from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.proxy._types import LiteLLM_UserTable
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_local
+from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
 from .conftest import normalize
 
@@ -1600,3 +1607,66 @@ async def test_update_cache_user_cache_failure_invalid_state_is_swallowed(monkey
     )
 
     assert result is None
+
+
+class _EvictAfterReadUserApiKeyCache(UserApiKeyCache):
+    """Runs the real eviction path between ``update_cache``'s read and its write-back."""
+
+    def __init__(self, evict_keys: Sequence[str] = ()) -> None:
+        super().__init__(in_memory_cache=InMemoryCache())
+        self._evict_keys: Final = tuple(evict_keys)
+
+    async def async_batch_get_cache(
+        self,
+        keys: list,
+        parent_otel_span: Span | None = None,
+        local_only: bool = False,
+        throttle_redis: bool = True,
+        **kwargs,
+    ):
+        result = await super().async_batch_get_cache(
+            keys,
+            parent_otel_span=parent_otel_span,
+            local_only=local_only,
+            throttle_redis=throttle_redis,
+            **kwargs,
+        )
+        evict_local(self._evict_keys, self)
+        return result
+
+
+@pytest.mark.parametrize("evicted_mid_flight", [True, False])
+@pytest.mark.asyncio
+async def test_update_cache_does_not_resurrect_entry_evicted_mid_flight(evicted_mid_flight):
+    user_id: Final = "user-race-1"
+    user_key: Final = ps.update_cache_read_keys(
+        user_id=user_id, end_user_id=None, team_id=None, tags=None, response_cost=0.01
+    )[0]
+    cache: Final = _EvictAfterReadUserApiKeyCache(evict_keys=(user_key,) if evicted_mid_flight else ())
+    seed: Final = CacheCodec.serialize(
+        LiteLLM_UserTable(user_id=user_id, rpm_limit=1000, tpm_limit=100000, spend=0.0),
+        model_type=LiteLLM_UserTable,
+    )
+    cache.set_cache(user_key, seed, local_only=True)
+
+    await ps.update_cache(
+        token=None,
+        user_id=user_id,
+        end_user_id=None,
+        team_id=None,
+        response_cost=0.01,
+        parent_otel_span=None,
+        cache=cache,
+    )
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    memory: Final = cache.in_memory_cache_for(user_key)
+    stored: Final = memory.get_cache(user_key)
+    if evicted_mid_flight:
+        assert stored is None
+    else:
+        user: Final = CacheCodec.deserialize(stored, LiteLLM_UserTable)
+        assert user is not None
+        assert user.spend == pytest.approx(0.01)
+        assert user.rpm_limit == 1000
