@@ -15,12 +15,8 @@ from fastapi import HTTPException, Request
 
 import litellm
 from litellm._uuid import uuid
-<<<<<<< HEAD
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.proxy._types import LiteLLM_UserTable, NewUserResponse
-=======
 from litellm.proxy._types import LiteLLM_UserTable, NewUserResponse, SSOUserDefinedValues
->>>>>>> 89f54e3ced (fix(proxy): refuse a 6th SSO user on the free tier instead of locking everyone out)
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
 from litellm.proxy.management_endpoints.types import CustomOpenID
