@@ -1205,14 +1205,12 @@ def _gemini_word_counting_peer(request: httpx.Request) -> httpx.Response:
     return httpx.Response(200, json={"totalTokens": total}, request=request)
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "text", ["hello there", "The quick brown fox jumps over the lazy dog. " * 50], ids=["short", "long"]
-)
-async def test_call_endpoint_counts_a_prompt_like_the_same_text_sent_as_a_user_message(
-    text: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    router: Final = Router(
+def _gemini_unavailable_peer(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(503, json={"error": {"message": "unavailable"}}, request=request)
+
+
+def _gemini_router() -> Router:
+    return Router(
         model_list=[
             {
                 "model_name": "gemini-counted",
@@ -1224,7 +1222,16 @@ async def test_call_endpoint_counts_a_prompt_like_the_same_text_sent_as_a_user_m
             }
         ]
     )
-    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "text", ["hello there", "The quick brown fox jumps over the lazy dog. " * 50], ids=["short", "long"]
+)
+async def test_call_endpoint_counts_a_prompt_like_the_same_text_sent_as_a_user_message(
+    text: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _gemini_router())
     client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_gemini_word_counting_peer))
 
     with patch.object(gemini_count_tokens_handler, "get_async_httpx_client", return_value=client):
@@ -1238,3 +1245,31 @@ async def test_call_endpoint_counts_a_prompt_like_the_same_text_sent_as_a_user_m
 
     assert from_prompt.error is False
     assert from_prompt.total_tokens == from_message.total_tokens == len(text.split())
+
+
+@pytest.mark.asyncio
+async def test_call_endpoint_prompt_keeps_the_local_count_when_the_provider_count_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _gemini_router())
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_gemini_unavailable_peer))
+    text: Final = "hello there"
+
+    with patch.object(gemini_count_tokens_handler, "get_async_httpx_client", return_value=client):
+        from_prompt: Final = await token_counter(
+            request=TokenCountRequest(model="gemini-counted", prompt=text), call_endpoint=True
+        )
+        with pytest.raises(ProxyException):
+            await token_counter(
+                request=TokenCountRequest(model="gemini-counted", messages=[{"role": "user", "content": text}]),
+                call_endpoint=True,
+            )
+    local: Final = await token_counter(
+        request=TokenCountRequest(model="gemini-counted", prompt=text), call_endpoint=False
+    )
+
+    assert (from_prompt.error, from_prompt.total_tokens, from_prompt.tokenizer_type) == (
+        False,
+        local.total_tokens,
+        local.tokenizer_type,
+    )

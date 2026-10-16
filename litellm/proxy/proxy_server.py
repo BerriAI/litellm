@@ -14460,6 +14460,18 @@ async def _try_provider_token_count(
     return result
 
 
+async def _local_count_on_provider_error(
+    provider_count: Awaitable["TokenCountResponse | None"],
+) -> "TokenCountResponse | None":
+    try:
+        return await provider_count
+    except Exception:  # noqa: BLE001  # counters also raise bare Exception; prompt-only always got a local count
+        verbose_proxy_logger.exception(
+            "Provider token counting failed for a prompt-only request, using local token counting"
+        )
+        return None
+
+
 def _system_message(system: object) -> ChatCompletionSystemMessage | None:
     if not isinstance(system, (str, list)) or not system:
         return None
@@ -14539,13 +14551,12 @@ async def count_request_tokens(
             model_to_use = _model
 
     if provider_counter is not None:
-        result: Final = await _try_provider_token_count(
+        prompt_only: Final = bool(prompt) and messages is None and contents is None
+        provider_count: Final = _try_provider_token_count(
             provider_counter=provider_counter,
             custom_llm_provider=custom_llm_provider,
             model_to_use=model_to_use,
-            messages=[{"role": "user", "content": prompt}]
-            if prompt and messages is None and contents is None
-            else messages,
+            messages=[{"role": "user", "content": prompt}] if prompt_only else messages,
             contents=contents,
             deployment=deployment,
             request_model=request.model,
@@ -14554,6 +14565,7 @@ async def count_request_tokens(
             messages_format=messages_format,
             output_format=output_format,
         )
+        result: Final = await (_local_count_on_provider_error(provider_count) if prompt_only else provider_count)
         if result is not None:
             return result
 
