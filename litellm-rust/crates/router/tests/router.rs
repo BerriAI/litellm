@@ -103,6 +103,7 @@ fn programmatic_deployments_preserve_overrides_and_last_entry_wins() {
         shaping: MessagesShaping {
             settings: MessagesSettings {
                 additional_drop_params: vec!["metadata.test".into()],
+                ..MessagesSettings::default()
             },
             ..Default::default()
         },
