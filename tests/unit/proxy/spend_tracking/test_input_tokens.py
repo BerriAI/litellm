@@ -56,3 +56,26 @@ async def test_history_before_a_compaction_item_is_not_counted(model: str) -> No
 
     assert full_counts[model] == compacted_counts[model]
     assert count_input_tokens_for_model(request_body=full_body, model=model) == compacted_counts[model]
+
+
+def _compaction_item_carrying(extra_block_fields: dict[str, str]) -> dict[str, str]:
+    return {
+        "type": "compaction",
+        "id": "cmp_1",
+        "encrypted_content": json.dumps(
+            {"type": "compaction", "content": "Turn one planned Tokyo.", **extra_block_fields}
+        ),
+    }
+
+
+@pytest.mark.parametrize("model", [CL100K_MODEL, "claude-sonnet-5-5"])
+def test_a_compaction_item_counts_only_its_summary(model: str) -> None:
+    plain_body: Final = {"model": model, "input": [_compaction_item_carrying({}), _TURN_AFTER_COMPACTION]}
+    padded_body: Final = {
+        "model": model,
+        "input": [_compaction_item_carrying({"opaque_state": "x" * 4000}), _TURN_AFTER_COMPACTION],
+    }
+
+    assert count_input_tokens_for_model(request_body=padded_body, model=model) == count_input_tokens_for_model(
+        request_body=plain_body, model=model
+    )

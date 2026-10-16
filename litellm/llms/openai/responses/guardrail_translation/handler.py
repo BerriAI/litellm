@@ -1520,11 +1520,9 @@ class OpenAIResponsesHandler(BaseTranslation):
         message_items: Final = tuple(
             item for item in output_items if stream_item_field(item, "type") not in _OUTPUT_TOOL_CALL_ITEM_TYPES
         )
+        message_parts: Final = chain.from_iterable(stream_item_items(item, "content") for item in message_items)
         part_texts: Final = tuple(
-            text
-            for item in message_items
-            for part in stream_item_items(item, "content")
-            if isinstance(text := stream_item_field(part, "text"), str) and text
+            text for part in message_parts if isinstance(text := stream_item_field(part, "text"), str) and text
         )
         summaries: Final = tuple(summary for item in output_items if (summary := _output_compaction_summary(item)))
         return StreamingScanKey(

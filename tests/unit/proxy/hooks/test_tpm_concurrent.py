@@ -3759,3 +3759,19 @@ def test_reservation_skips_the_history_a_compaction_item_replaces(rate_limiter):
     ) == handler._estimate_precise_input_tokens(
         {**compacted_request, "input": _SUMMARY_INPUT}, model="gpt-4o", call_type="aresponses"
     )
+
+
+def test_reservation_counts_a_compaction_item_by_its_summary(rate_limiter):
+    handler, _cache = rate_limiter
+    padded_item: Final = {
+        **_COMPACTED_INPUT[2],
+        "encrypted_content": json.dumps(
+            {"type": "compaction", "content": _COMPACTION_SUMMARY, "opaque_state": "x" * 4000}
+        ),
+    }
+
+    assert handler._estimate_input_and_output_tokens(
+        data={"model": "gpt-4o", "input": [padded_item, _NEXT_TURN], "max_output_tokens": 1}, call_type="aresponses"
+    ) == handler._estimate_input_and_output_tokens(
+        data={"model": "gpt-4o", "input": _COMPACTED_INPUT[2:], "max_output_tokens": 1}, call_type="aresponses"
+    )

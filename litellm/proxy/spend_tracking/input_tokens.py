@@ -20,8 +20,8 @@ from typing import Final
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.responses.litellm_completion_transformation.compaction_items import (
+    billable_input_since_newest_compaction,
     holds_compaction_summary,
-    input_since_newest_compaction,
 )
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.catalog import Route, RouteContext
@@ -145,7 +145,9 @@ def count_input_tokens_for_model(request_body: dict, model: str) -> int | None:
         if "prompt" in request_body:
             return _count_text_tokens(model=model, text=request_body.get("prompt"))
         if "input" in request_body:
-            return _count_text_tokens(model=model, text=input_since_newest_compaction(request_body.get("input")))
+            return _count_text_tokens(
+                model=model, text=billable_input_since_newest_compaction(request_body.get("input"))
+            )
         if "query" in request_body or "documents" in request_body:
             query_tokens: Final = _count_text_tokens(model=model, text=request_body.get("query"))
             document_tokens: Final = _count_text_tokens(

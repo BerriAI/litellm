@@ -169,12 +169,15 @@ def _is_instruction_item(item: object) -> bool:
     return fields is not None and fields.get("role") in _INSTRUCTION_ROLES
 
 
-def instruction_items(input: object) -> tuple[object, ...]:
+def input_items(input: object) -> tuple[object, ...]:
     try:
-        items: Final = _OBJECT_LIST.validate_python(input)
+        return tuple(_OBJECT_LIST.validate_python(input))
     except ValidationError:
         return ()
-    return tuple(item for item in items if _is_instruction_item(item))
+
+
+def instruction_items(input: object) -> tuple[object, ...]:
+    return tuple(item for item in input_items(input) if _is_instruction_item(item))
 
 
 def _items_from_newest_compaction(input: Sequence[_Item]) -> tuple[_Item, ...]:
@@ -188,12 +191,17 @@ def without_items_before_compaction(input: str | ResponseInputParam) -> str | Re
     return list(_items_from_newest_compaction(input)) if isinstance(input, list) else input
 
 
-def input_since_newest_compaction(input: object) -> object:
+def _summary_or_item(item: object) -> object:
+    summary: Final = compaction_summary(item)
+    return item if summary is None else summary
+
+
+def billable_input_since_newest_compaction(input: object) -> object:
     try:
         items: Final = _OBJECT_LIST.validate_python(input)
     except ValidationError:
         return input
-    return list(_items_from_newest_compaction(items))
+    return [_summary_or_item(item) for item in _items_from_newest_compaction(items)]
 
 
 def _as_summary_message(item: ResponseInputItemParam) -> ResponseInputItemParam:

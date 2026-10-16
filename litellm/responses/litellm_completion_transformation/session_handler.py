@@ -2,6 +2,7 @@ import asyncio
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
@@ -10,6 +11,7 @@ from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_
 from litellm.litellm_core_utils.cold_storage_handler import ColdStorageHandler
 from litellm.responses.litellm_completion_transformation.compaction_items import (
     holds_compaction_summary,
+    input_items,
     instruction_items,
     response_holds_compaction_block,
 )
@@ -102,15 +104,35 @@ def _replay_start(
 
 
 def _replayed_request(
-    index: int, proxy_server_request: Mapping[str, object] | None, start: _ReplayStart
+    index: int,
+    proxy_server_request: Mapping[str, object] | None,
+    start: _ReplayStart,
+    earlier_instructions: tuple[object, ...],
 ) -> Mapping[str, object] | None:
-    if proxy_server_request is None or not start.at_output or index != start.index:
+    if proxy_server_request is None or index != start.index:
         return proxy_server_request
-    return {
-        **proxy_server_request,
-        "input": list(instruction_items(proxy_server_request.get("input"))),
-        "messages": None,
-    }
+    stored_input: Final = proxy_server_request.get("input")
+    if start.at_output:
+        return {
+            **proxy_server_request,
+            "input": [*earlier_instructions, *instruction_items(stored_input)],
+            "messages": None,
+        }
+    if not earlier_instructions:
+        return proxy_server_request
+    return {**proxy_server_request, "input": [*earlier_instructions, *input_items(stored_input)]}
+
+
+def _instruction_items_before(
+    proxy_server_requests: Sequence[Mapping[str, object] | None], start: _ReplayStart
+) -> tuple[object, ...]:
+    return tuple(
+        chain.from_iterable(
+            instruction_items(request.get("input"))
+            for request in proxy_server_requests[: start.index]
+            if request is not None
+        )
+    )
 
 
 def _stored_instructions(proxy_server_request: Mapping[str, object] | None) -> str | None:
@@ -158,11 +180,14 @@ class ResponsesSessionHandler:
             for spend_log in all_spend_logs
         ]
         start: Final = _replay_start(all_spend_logs, proxy_server_requests)
+        earlier_instructions: Final = _instruction_items_before(proxy_server_requests, start)
         for index in range(start.index, len(all_spend_logs)):
             chat_completion_message_history = (
                 ResponsesSessionHandler.extend_chat_completion_message_with_spend_log_payload(
                     spend_log=all_spend_logs[index],
-                    proxy_server_request_dict=_replayed_request(index, proxy_server_requests[index], start),
+                    proxy_server_request_dict=_replayed_request(
+                        index, proxy_server_requests[index], start, earlier_instructions
+                    ),
                     chat_completion_message_history=chat_completion_message_history,
                     item_cache_control=item_cache_control,
                 )

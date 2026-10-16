@@ -71,7 +71,7 @@ from litellm.proxy.hooks.batch_enqueued_tokens import (
     canonical_provider_batch_id,
 )
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
-from litellm.responses.litellm_completion_transformation.compaction_items import input_since_newest_compaction
+from litellm.responses.litellm_completion_transformation.compaction_items import billable_input_since_newest_compaction
 from litellm.router_utils.add_retry_fallback_headers import (
     ensure_response_additional_headers,
     response_has_hidden_params,
@@ -1228,7 +1228,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         )
         messages, prompt, raw_input = selected_fields
         input_text: Final = (
-            input_since_newest_compaction(raw_input) if call_type in RESPONSES_API_CALL_TYPES else raw_input
+            billable_input_since_newest_compaction(raw_input) if call_type in RESPONSES_API_CALL_TYPES else raw_input
         )
 
         total_chars: Final = (

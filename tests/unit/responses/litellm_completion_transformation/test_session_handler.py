@@ -18,6 +18,7 @@ from litellm.responses.litellm_completion_transformation.session_handler import 
     ResponsesSessionHandler,
     _normalize_redacted_tool_call_arguments,
 )
+from litellm.responses.litellm_completion_transformation.transformation import ChatCompletionSession
 from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ResponsesAPIResponse
@@ -233,11 +234,10 @@ async def test_e2e_cold_storage_successful_retrieval():
         patch.object(session_handler, "COLD_STORAGE_HANDLER") as mock_cold_storage,
         patch("litellm.cold_storage_custom_logger", return_value="s3"),
     ):
-
         # Setup mocks
         mock_get_spend_logs.return_value = mock_spend_logs
-        mock_cold_storage.get_proxy_server_request_from_cold_storage_with_object_key = (
-            AsyncMock(return_value=full_proxy_request)
+        mock_cold_storage.get_proxy_server_request_from_cold_storage_with_object_key = AsyncMock(
+            return_value=full_proxy_request
         )
 
         # Call the main function
@@ -291,7 +291,6 @@ async def test_e2e_cold_storage_fallback_to_truncated_payload():
         ) as mock_get_spend_logs,
         patch.object(session_handler, "COLD_STORAGE_HANDLER") as mock_cold_storage,
     ):
-
         # Setup mocks
         mock_get_spend_logs.return_value = mock_spend_logs
 
@@ -358,41 +357,25 @@ async def test_should_check_cold_storage_for_full_payload():
 
     with patch("litellm.cold_storage_custom_logger", return_value="s3"):
         # Test case 1: Should return True for truncated content
-        result1 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(
-            proxy_request_with_truncated_pdf
-        )
-        assert (
-            result1 == True
-        ), "Should return True for proxy request with truncated PDF content"
+        result1 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_request_with_truncated_pdf)
+        assert result1 == True, "Should return True for proxy request with truncated PDF content"
 
         # Test case 2: Should return False for regular content
-        result2 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(
-            proxy_request_regular
-        )
-        assert (
-            result2 == False
-        ), "Should return False for regular proxy request without truncation"
+        result2 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_request_regular)
+        assert result2 == False, "Should return False for regular proxy request without truncation"
 
         # Test case 3: Should return True for empty request
-        result3 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(
-            proxy_request_empty
-        )
+        result3 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_request_empty)
         assert result3 == True, "Should return True for empty proxy request"
 
         # Test case 4: Should return True for None request
-        result4 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(
-            proxy_request_none
-        )
+        result4 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_request_none)
         assert result4 == True, "Should return True for None proxy request"
 
     # Test case 5: Should return False when cold storage is not configured
     with patch.object(litellm, "cold_storage_custom_logger", None):
-        result5 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(
-            proxy_request_with_truncated_pdf
-        )
-        assert (
-            result5 == False
-        ), "Should return False when cold storage is not configured, even with truncated content"
+        result5 = ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_request_with_truncated_pdf)
+        assert result5 == False, "Should return False when cold storage is not configured, even with truncated content"
 
 
 @pytest.mark.asyncio
@@ -422,9 +405,7 @@ async def test_get_chat_completion_message_history_empty_response_dict():
         }
     ]
 
-    with patch.object(
-        ResponsesSessionHandler, "get_all_spend_logs_for_previous_response_id"
-    ) as mock_get_spend_logs:
+    with patch.object(ResponsesSessionHandler, "get_all_spend_logs_for_previous_response_id") as mock_get_spend_logs:
         mock_get_spend_logs.return_value = mock_spend_logs
 
         # Call the function
@@ -518,9 +499,7 @@ async def test_message_history_reconstructs_list_shaped_input():
     ) as mock_get_spend_logs:
         mock_get_spend_logs.return_value = mock_spend_logs
 
-        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
-            request_id
-        )
+        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(request_id)
 
     messages = result["messages"]
     assert [(message.get("role"), message.get("content")) for message in messages] == [
@@ -549,9 +528,7 @@ async def test_message_history_retries_a_spend_log_the_batch_writer_has_not_flus
     fake_prisma_client = _FakePrismaClient(results=[[], [spend_log]])
 
     with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client):
-        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
-            request_id
-        )
+        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(request_id)
 
     messages = result["messages"]
     assert [(message.get("role"), message.get("content")) for message in messages] == [
@@ -618,14 +595,10 @@ async def test_message_history_looks_up_the_decoded_chat_completion_id():
         model_id="e0f302a1412e78470ebb28cbed01fff5f88c0d331c667e9f2ba4b413c6fbd282",
         response_id=request_id,
     )
-    fake_prisma_client = _FakePrismaClient(
-        results=[[_spend_log(request_id, "session-a", "Hello.", "Hi.")]]
-    )
+    fake_prisma_client = _FakePrismaClient(results=[[_spend_log(request_id, "session-a", "Hello.", "Hi.")]])
 
     with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client):
-        await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
-            encoded_response_id
-        )
+        await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(encoded_response_id)
 
     assert len(fake_prisma_client.db.calls) == 1
     assert request_id in fake_prisma_client.db.calls[0]
@@ -724,8 +697,9 @@ async def test_session_lookup_does_not_retry_when_spend_logs_are_disabled(
     """
     fake_prisma_client = _FakePrismaClient(results=[])
 
-    with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client), patch(
-        "litellm.proxy.proxy_server.disable_spend_logs", True
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client),
+        patch("litellm.proxy.proxy_server.disable_spend_logs", True),
     ):
         spend_logs = await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
             "chatcmpl-does-not-exist"
@@ -741,7 +715,11 @@ def test_normalize_redacted_arguments_skips_custom_tool_calls():
         content=None,
         tool_calls=[
             {"id": "call_c", "type": "custom", "custom": {"name": "run_code", "input": "print(1)"}},
-            {"id": "call_f", "type": "function", "function": {"name": "get_weather", "arguments": "redacted-by-litellm"}},
+            {
+                "id": "call_f",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": "redacted-by-litellm"},
+            },
         ],
     )
 
@@ -796,11 +774,13 @@ async def test_message_history_normalizes_redacted_tool_call_arguments():
         }
     ]
 
-    with patch.object(  # test-quality-ok: the handler has no DI seam for the spend-log fetch; every test in this file stubs this same boundary
-        ResponsesSessionHandler,
-        "get_all_spend_logs_for_previous_response_id",
-        new_callable=AsyncMock,
-    ) as mock_get_spend_logs:
+    with (
+        patch.object(  # test-quality-ok: the handler has no DI seam for the spend-log fetch; every test in this file stubs this same boundary
+            ResponsesSessionHandler,
+            "get_all_spend_logs_for_previous_response_id",
+            new_callable=AsyncMock,
+        ) as mock_get_spend_logs
+    ):
         mock_get_spend_logs.return_value = mock_spend_logs
 
         result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
@@ -902,6 +882,15 @@ def _role_and_content(message: object) -> tuple[object, object]:
     return getattr(message, "role", None), getattr(message, "content", None)
 
 
+async def _history_from_stored_turns(
+    spend_logs: tuple[dict[str, object], ...], previous_response_id: str
+) -> ChatCompletionSession:
+    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=_StoredSpendLogs(spend_logs))):
+        return await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            previous_response_id
+        )
+
+
 @pytest.mark.asyncio
 async def test_previous_response_history_starts_at_the_newest_turn_that_sent_a_compaction_item():
     first_turn: Final = [{"role": "user", "content": "Plan a Tokyo trip."}]
@@ -916,20 +905,12 @@ async def test_previous_response_history_starts_at_the_newest_turn_that_sent_a_c
         compaction_item,
         {"role": "user", "content": "And Osaka?"},
     ]
-    spend_logs: Final = [
+    spend_logs: Final = (
         _turn_spend_log(first_turn, "Day one, Asakusa."),
         _turn_spend_log(second_turn, "Dotonbori."),
-    ]
+    )
 
-    with patch.object(
-        ResponsesSessionHandler,
-        "get_all_spend_logs_for_previous_response_id",
-        new_callable=AsyncMock,
-        return_value=spend_logs,
-    ):
-        session: Final = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
-            "resp_4"
-        )
+    session: Final = await _history_from_stored_turns(spend_logs, "resp_4")
 
     assert [_role_and_content(message) for message in session["messages"]] == [
         ("user", "Turn one planned Tokyo."),
@@ -941,7 +922,7 @@ async def test_previous_response_history_starts_at_the_newest_turn_that_sent_a_c
 @pytest.mark.asyncio
 async def test_previous_response_history_starts_at_the_newest_answer_that_compacted():
     compaction_blocks: Final = [{"type": "compaction", "content": "Turn one planned Tokyo."}]
-    spend_logs: Final = [
+    spend_logs: Final = (
         _turn_spend_log([{"role": "user", "content": "Hi."}], "Hello."),
         _turn_spend_log(
             [{"role": "developer", "content": "Answer briefly."}, {"role": "user", "content": "Plan a Tokyo trip."}],
@@ -949,17 +930,9 @@ async def test_previous_response_history_starts_at_the_newest_answer_that_compac
             compaction_blocks,
         ),
         _turn_spend_log([{"role": "user", "content": "And Osaka?"}], "Dotonbori."),
-    ]
+    )
 
-    with patch.object(
-        ResponsesSessionHandler,
-        "get_all_spend_logs_for_previous_response_id",
-        new_callable=AsyncMock,
-        return_value=spend_logs,
-    ):
-        session: Final = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
-            "resp_1"
-        )
+    session: Final = await _history_from_stored_turns(spend_logs, "resp_1")
 
     assert [_role_and_content(message) for message in session["messages"]] == [
         ("developer", "Answer briefly."),
@@ -968,6 +941,53 @@ async def test_previous_response_history_starts_at_the_newest_answer_that_compac
         ("assistant", "Dotonbori."),
     ]
     assert getattr(session["messages"][1], "provider_specific_fields", None) == {"compaction_blocks": compaction_blocks}
+
+
+_COMPACTION_ITEM_SENT: Final = {
+    "type": "compaction",
+    "id": "cmp_1",
+    "encrypted_content": json.dumps({"type": "compaction", "content": "Turn one planned Tokyo."}),
+}
+
+
+@pytest.mark.parametrize(
+    "compacting_turn",
+    [
+        pytest.param(
+            _turn_spend_log(
+                [{"role": "user", "content": "Plan a Tokyo trip."}],
+                "Day one, Asakusa.",
+                [{"type": "compaction", "content": "Turn one planned Tokyo."}],
+            ),
+            id="answer_compacted",
+        ),
+        pytest.param(
+            _turn_spend_log(
+                [_COMPACTION_ITEM_SENT, {"role": "user", "content": "Plan a Tokyo trip."}], "Day one, Asakusa."
+            ),
+            id="input_sent_a_compaction_item",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_previous_response_history_keeps_instructions_from_turns_the_compaction_covers(
+    compacting_turn: dict[str, object],
+):
+    spend_logs: Final = (
+        _turn_spend_log(
+            [{"role": "developer", "content": "Use metric units."}, {"role": "user", "content": "Hi."}], "Hello."
+        ),
+        compacting_turn,
+        _turn_spend_log([{"role": "user", "content": "And Osaka?"}], "Dotonbori."),
+    )
+
+    session: Final = await _history_from_stored_turns(spend_logs, "resp_1")
+
+    roles_and_contents: Final = [_role_and_content(message) for message in session["messages"]]
+    assert roles_and_contents[0] == ("developer", "Use metric units.")
+    assert ("user", "Hi.") not in roles_and_contents
+    assert ("assistant", "Hello.") not in roles_and_contents
+    assert roles_and_contents[-2:] == [("user", "And Osaka?"), ("assistant", "Dotonbori.")]
 
 
 class _SqliteBackedPrismaDB:
@@ -981,7 +1001,9 @@ class _SqliteBackedPrismaDB:
         self._connection.executemany('INSERT INTO "LiteLLM_SpendLogs" VALUES (?, ?, ?, ?, ?, ?)', rows)
 
     async def query_raw(self, query: str, *args: object) -> list[dict[str, object]]:
-        sqlite_query: Final = query.replace("= ANY($1::text[])", "IN (SELECT value FROM json_each(?))").replace("$1", "?")
+        sqlite_query: Final = query.replace("= ANY($1::text[])", "IN (SELECT value FROM json_each(?))").replace(
+            "$1", "?"
+        )
         sqlite_args: Final = tuple(json.dumps(arg) if isinstance(arg, list) else arg for arg in args)
         return [dict(row) for row in self._connection.execute(sqlite_query, sqlite_args)]
 
