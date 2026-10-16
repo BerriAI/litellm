@@ -13071,7 +13071,7 @@ class Router:
             parent_otel_span=parent_otel_span,
         )
 
-        if self.enable_pre_call_checks and (messages is not None or input is not None):
+        if self.enable_pre_call_checks:
             deployments_to_check: Final = cast(list[dict], healthy_deployments)
             healthy_deployments = self._pre_call_checks(
                 model=model,
