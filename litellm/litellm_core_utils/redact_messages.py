@@ -10,9 +10,11 @@
 import asyncio
 import copy
 import inspect
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Final
+
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.constants import REDACTED_BY_LITELLM
@@ -177,48 +179,65 @@ def _redact_responses_api_output(output_items):
             output_item.input = REDACTED_BY_LITELLM
 
 
+_RESPONSE_ITEMS: Final = TypeAdapter(tuple[object, ...])
+
+
 def _redacted_responses_api_output_part(part: object, fields: tuple[str, ...], redacted_str: str) -> object:
-    if not isinstance(part, dict):
+    if (part_mapping := _as_mapping(part)) is None:
         return part
-    return {key: redacted_str if key in fields and value is not None else value for key, value in part.items()}
+    return {key: redacted_str if key in fields and value is not None else value for key, value in part_mapping.items()}
 
 
 def _redacted_responses_api_output_item(item: object, redacted_str: str) -> object:
-    if not isinstance(item, dict):
+    if (item_mapping := _as_mapping(item)) is None:
         return item
-    content: Final = item.get("content")
-    summary: Final = item.get("summary")
+    content: Final = item_mapping.get("content")
+    summary: Final = item_mapping.get("summary")
     return {
-        **item,
-        **({"text": redacted_str} if item.get("text") is not None else {}),
+        **item_mapping,
+        **({"text": redacted_str} if item_mapping.get("text") is not None else {}),
         **(
             {
                 "content": [
-                    _redacted_responses_api_output_part(part, ("text", "refusal"), redacted_str) for part in content
+                    _redacted_responses_api_output_part(part, ("text", "refusal"), redacted_str)
+                    for part in _RESPONSE_ITEMS.validate_python(content)
                 ]
             }
             if isinstance(content, list)
             else {}
         ),
         **(
-            {"summary": [_redacted_responses_api_output_part(part, ("text",), redacted_str) for part in summary]}
-            if item.get("type") == "reasoning" and isinstance(summary, list)
+            {
+                "summary": [
+                    _redacted_responses_api_output_part(part, ("text",), redacted_str)
+                    for part in _RESPONSE_ITEMS.validate_python(summary)
+                ]
+            }
+            if item_mapping.get("type") == "reasoning" and isinstance(summary, list)
             else {}
         ),
-        **({"arguments": redacted_str} if item.get("type") == "function_call" and "arguments" in item else {}),
-        **({"input": redacted_str} if item.get("type") == "custom_tool_call" and "input" in item else {}),
+        **(
+            {"arguments": redacted_str}
+            if item_mapping.get("type") == "function_call" and "arguments" in item_mapping
+            else {}
+        ),
+        **(
+            {"input": redacted_str}
+            if item_mapping.get("type") == "custom_tool_call" and "input" in item_mapping
+            else {}
+        ),
     }
 
 
-def _redact_responses_api_output_dict(output_items: list[object], redacted_str: str) -> list[object]:
+def _redact_responses_api_output_dict(output_items: Sequence[object], redacted_str: str) -> Sequence[object]:
     return [_redacted_responses_api_output_item(item, redacted_str) for item in output_items]
 
 
-def _redacted_responses_api_response(response: Mapping[str, object]) -> dict[str, object]:
+def _redacted_responses_api_response(response: Mapping[str, object]) -> Mapping[str, object]:
     output: Final = response.get("output")
     return {
         **response,
-        "output": _redact_responses_api_output_dict(output, REDACTED_BY_LITELLM)
+        "output": _redact_responses_api_output_dict(_RESPONSE_ITEMS.validate_python(output), REDACTED_BY_LITELLM)
         if isinstance(output, list)
         else output,
         **({"instructions": REDACTED_BY_LITELLM} if response.get("instructions") is not None else {}),
