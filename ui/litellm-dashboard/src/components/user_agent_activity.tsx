@@ -123,6 +123,8 @@ interface UserAgentActivityProps {
   onDateChange?: (value: DateRangePickerValue) => void; // Optional - not used anymore
   /** Tags to pre-select, e.g. an agent's user-agent tags when opened from the Overview's Top agents. */
   initialTags?: readonly string[];
+  selectedTags?: readonly string[];
+  onSelectedTagsChange?: (tags: readonly string[]) => void;
 }
 
 const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
@@ -131,6 +133,8 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
   dateValue,
   onDateChange,
   initialTags,
+  selectedTags: selectedTagsProp,
+  onSelectedTagsChange,
 }) => {
   const anchor = useComboboxAnchor();
   // Maximum number of categories to show in charts to prevent color palette overflow
@@ -146,7 +150,15 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
 
   // Tag filtering state
   const [availableTags, setAvailableTags] = useState<string[]>([]);
-  const [selectedTags, setSelectedTags] = useState<string[]>(() => [...(initialTags ?? [])]);
+  const [localSelectedTags, setLocalSelectedTags] = useState<string[]>(() => [...(initialTags ?? [])]);
+  const selectedTags = selectedTagsProp ?? localSelectedTags;
+  const updateSelectedTags = (next: string[]) => {
+    if (onSelectedTagsChange) {
+      onSelectedTagsChange(next);
+      return;
+    }
+    setLocalSelectedTags(next);
+  };
   const [tagsLoading, setTagsLoading] = useState(false);
 
   // Separate loading states for each endpoint
@@ -184,7 +196,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
         accessToken,
         today,
         userAgentFilter || undefined,
-        selectedTags.length > 0 ? selectedTags : undefined,
+        selectedTags.length > 0 ? [...selectedTags] : undefined,
       );
       setDauData(data);
     } catch (error) {
@@ -203,7 +215,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
         accessToken,
         today,
         userAgentFilter || undefined,
-        selectedTags.length > 0 ? selectedTags : undefined,
+        selectedTags.length > 0 ? [...selectedTags] : undefined,
       );
       setWauData(data);
     } catch (error) {
@@ -222,7 +234,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
         accessToken,
         today,
         userAgentFilter || undefined,
-        selectedTags.length > 0 ? selectedTags : undefined,
+        selectedTags.length > 0 ? [...selectedTags] : undefined,
       );
       setMauData(data);
     } catch (error) {
@@ -241,7 +253,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
         accessToken,
         dateValue.from,
         dateValue.to,
-        selectedTags.length > 0 ? selectedTags : undefined,
+        selectedTags.length > 0 ? [...selectedTags] : undefined,
       );
       setSummaryData(summary);
     } catch (error) {
@@ -455,12 +467,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({
         action={
           <div className="flex w-full items-center gap-2 sm:w-96">
             <label className="shrink-0 text-xs text-muted-foreground">Filter by User Agents</label>
-            <Combobox
-              multiple
-              items={availableTags}
-              value={selectedTags}
-              onValueChange={(next: string[]) => setSelectedTags(next)}
-            >
+            <Combobox multiple items={availableTags} value={[...selectedTags]} onValueChange={updateSelectedTags}>
               <ComboboxChips render={<div ref={anchor} />} className="min-w-0 flex-1" aria-busy={tagsLoading}>
                 <ComboboxValue>
                   {(selected: string[]) =>
