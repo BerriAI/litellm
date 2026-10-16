@@ -48,6 +48,7 @@ class CostMapEntry(BaseModel):
     supports_reasoning: bool | None = None
     supports_prompt_caching: bool | None = None
     supported_endpoints: tuple[str, ...] | None = None
+    use_openai_responses_path: bool | None = None
     supports_bedrock_runtime_chat_completions_tools_with_reasoning: bool | None = None
     supports_bedrock_runtime_chat_completions_response_format: bool | None = None
     cache_creation_input_token_cost_above_100k_tokens: float | None = None
