@@ -14543,13 +14543,9 @@ async def count_request_tokens(
         if _model is not None:
             model_to_use = _model
 
+    prompt_only: Final = bool(prompt) and not messages and not contents
     if provider_counter is not None:
-        prompt_as_message: Final = (
-            bool(prompt)
-            and not messages
-            and not contents
-            and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
-        )
+        prompt_as_message: Final = prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
         result: Final = await _try_provider_token_count(
             provider_counter=provider_counter,
             custom_llm_provider=custom_llm_provider,
@@ -14589,7 +14585,7 @@ async def count_request_tokens(
     tokenizer_used: Final = str(_tokenizer_used["type"])
     system_message: Final = _system_message(system)
     typed_messages: Final = cast(  # cast-ok: request messages are raw chat-shaped dicts that token_counter normalizes
-        Sequence[AllMessageValues] | None, messages
+        Sequence[AllMessageValues] | None, None if prompt_only else messages
     )
     counted_messages: Final = (
         typed_messages if typed_messages is None or system_message is None else (system_message, *typed_messages)
@@ -14599,7 +14595,7 @@ async def count_request_tokens(
     )
     total_tokens: Final = await offload_token_count(litellm.token_counter)(
         model=model_to_use,
-        text=prompt,
+        text=prompt if counted_messages is None else None,
         messages=counted_messages,
         tools=counted_tools,
         custom_tokenizer=_tokenizer_used,

@@ -1339,6 +1339,26 @@ async def test_call_endpoint_prompt_next_to_an_empty_conversation_counts_the_pro
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("messages", "counted_alone"),
+    [([], {"prompt": "hi there"}), ([{"role": "user", "content": _FOX}], {"messages": [{"role": "user", "content": _FOX}]})],
+    ids=["empty_messages_count_the_prompt", "messages_count_the_conversation"],
+)
+async def test_local_count_of_a_prompt_next_to_messages(
+    messages: list[JsonValue], counted_alone: dict[str, JsonValue], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _gemini_router())
+
+    with_prompt: Final = await token_counter(
+        request=TokenCountRequest(model="gemini-counted", prompt="hi there", messages=messages), call_endpoint=False
+    )
+    alone: Final = await token_counter(request=TokenCountRequest(model="gemini-counted", **counted_alone))
+
+    assert with_prompt.error is False
+    assert with_prompt.total_tokens == alone.total_tokens > 0
+
+
+@pytest.mark.asyncio
 async def test_call_endpoint_prompt_keeps_the_local_count_on_a_counter_that_needs_messages(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
