@@ -526,6 +526,63 @@ async def test_deployment_callback_on_success_counts_a_responses_websocket_turn(
     assert await router.cache.async_get_cache(key=tpm_key) == 17
 
 
+async def _kwargs_routed_to(router: Router, model: str, function_name: str) -> dict[str, object]:
+    routed: Final[dict[str, object]] = {}
+
+    async def call(**kwargs: object) -> None:
+        routed.update(kwargs)
+
+    call.__name__ = function_name
+    await router._ageneric_api_call_with_fallbacks_helper(model=model, original_generic_function=call)
+    return routed
+
+
+@pytest.mark.asyncio
+async def test_responses_websocket_turn_is_refused_once_its_deployment_crosses_budget():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "ws-budget",
+                "litellm_params": {
+                    "model": "openai/gpt-5-mini",
+                    "api_key": "sk-fake",
+                    "max_budget": 0.001,
+                    "budget_duration": "1d",
+                },
+                "model_info": {"id": "ws-budget-dep"},
+            }
+        ]
+    )
+    assert "turn_admission" not in await _kwargs_routed_to(router, "ws-budget", "aresponses")
+    admit_turn: Final = (await _kwargs_routed_to(router, "ws-budget", "_aresponses_websocket"))["turn_admission"]
+    assert callable(admit_turn)
+
+    await admit_turn()
+    await router.cache.async_set_cache("deployment_spend:ws-budget-dep:1d", 0.002)
+
+    with pytest.raises(litellm.RateLimitError, match="crossed budget"):
+        await admit_turn()
+
+
+@pytest.mark.asyncio
+async def test_responses_websocket_turn_after_the_first_counts_toward_deployment_rpm():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "ws-rpm",
+                "litellm_params": {"model": "openai/gpt-5-mini", "api_key": "sk-fake", "rpm": 1},
+                "model_info": {"id": "ws-rpm-dep"},
+            }
+        ],
+        optional_pre_call_checks=["enforce_model_rate_limits"],
+    )
+    admit_turn: Final = (await _kwargs_routed_to(router, "ws-rpm", "_aresponses_websocket"))["turn_admission"]
+    assert callable(admit_turn)
+
+    with pytest.raises(litellm.RateLimitError, match="RPM limit=1"):
+        await admit_turn()
+
+
 @pytest.mark.asyncio
 async def test_deployment_callback_on_success_tracks_tpm_for_io_deployment():
     """

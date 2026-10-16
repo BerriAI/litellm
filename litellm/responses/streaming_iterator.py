@@ -1892,6 +1892,13 @@ async def _enforce_frame_project_quota(
         )
 
 
+async def _admit_frame_turn(turn_admission: Callable[[], Awaitable[None]] | None, raw_message: str) -> None:
+    frame: Final = _json_object_or_none(raw_message)
+    if turn_admission is None or frame is None or frame.get("type") != "response.create":
+        return
+    await turn_admission()
+
+
 RESPONSES_WS_LOGGED_EVENT_TYPES: Final = [
     "response.created",
     "response.completed",
@@ -2062,6 +2069,7 @@ class ResponsesWebSocketStreaming:
         authorized_model: str | None = None,
         custom_llm_provider: str | None = None,
         request_defaults: ResponsesWebSocketRequestDefaults | None = None,
+        turn_admission: Callable[[], Awaitable[None]] | None = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
@@ -2081,6 +2089,7 @@ class ResponsesWebSocketStreaming:
         # response.create frame to prevent deployment-substitution attacks.
         self.authorized_model: str | None = authorized_model
         self.request_defaults: ResponsesWebSocketRequestDefaults | None = request_defaults
+        self.turn_admission: Callable[[], Awaitable[None]] | None = turn_admission
 
     def _start_turn(self, client_frame: str | None) -> None:
         start_time: Final = datetime.now()  # noqa: DTZ005  # naive to match the logging pipeline start_time
@@ -2522,8 +2531,10 @@ class ResponsesWebSocketStreaming:
 
         return json.dumps(evt_obj) if modified else response_str
 
-    async def _enforce_or_reject_frame(self, message: str) -> bool:
-        """Run the per-frame project quota check.
+    async def _enforce_or_reject_frame(
+        self, message: str, turn_admission: Callable[[], Awaitable[None]] | None = None
+    ) -> bool:
+        """Run the per-frame project quota check, then the deployment's own admission for a turn after the first.
 
         On rejection, sends an ``error`` event to the client and reports that
         the frame must be dropped instead of forwarded, so the connection
@@ -2533,6 +2544,7 @@ class ResponsesWebSocketStreaming:
             await _enforce_frame_project_quota(
                 self.quota_callbacks, self.user_api_key_dict, self.authorized_model, message
             )
+            await _admit_frame_turn(turn_admission, message)
         except RateLimitError as e:
             try:
                 await self.websocket.send_text(
@@ -2561,7 +2573,7 @@ class ResponsesWebSocketStreaming:
 
             while True:
                 message = await self.websocket.receive_text()
-                if not await self._enforce_or_reject_frame(message):
+                if not await self._enforce_or_reject_frame(message, self.turn_admission):
                     continue
                 masked = await self._mask_response_create(message)
                 self._record_client_frame(masked)
@@ -2642,6 +2654,7 @@ class ManagedResponsesWebSocketHandler:
         custom_llm_provider: str | None = None,
         first_message: str | None = None,
         quota_callbacks: Sequence[ProjectQuotaCallback] | None = None,
+        turn_admission: Callable[[], Awaitable[None]] | None = None,
         **kwargs: object,
     ) -> None:
         self.websocket = websocket
@@ -2660,6 +2673,7 @@ class ManagedResponsesWebSocketHandler:
         self._connection_provider = self._resolve_provider(model) or custom_llm_provider
         self.first_message = first_message
         self.quota_callbacks: tuple[ProjectQuotaCallback, ...] = tuple(quota_callbacks) if quota_callbacks else ()
+        self.turn_admission: Callable[[], Awaitable[None]] | None = turn_admission
         # Carry through safe pass-through kwargs (e.g. extra_headers)
         self.extra_kwargs: dict[str, object] = {k: v for k, v in kwargs.items() if k not in _MANAGED_WS_SKIP_KWARGS}
         # In-memory session history: response_id → full accumulated message list.
@@ -3027,7 +3041,9 @@ class ManagedResponsesWebSocketHandler:
     # Core request handler
     # ------------------------------------------------------------------
 
-    async def _process_response_create(self, raw_message: str) -> None:
+    async def _process_response_create(
+        self, raw_message: str, turn_admission: Callable[[], Awaitable[None]] | None = None
+    ) -> None:
         """
         Parse one ``response.create`` event, call ``litellm.aresponses(stream=True)``,
         and forward every streaming event to the client.
@@ -3067,6 +3083,7 @@ class ManagedResponsesWebSocketHandler:
             await _enforce_frame_project_quota(
                 self.quota_callbacks, self.user_api_key_dict, self.model_group or self.model, raw_message
             )
+            await _admit_frame_turn(turn_admission, raw_message)
         except RateLimitError as e:
             await self._send_error(str(e), error_type="rate_limit_exceeded")
             return
@@ -3123,7 +3140,7 @@ class ManagedResponsesWebSocketHandler:
                     verbose_logger.debug("ManagedResponsesWS: client disconnected: %s", exc)
                     break
 
-                await self._process_response_create(message)
+                await self._process_response_create(message, self.turn_admission)
 
         except Exception as exc:
             verbose_logger.exception("ManagedResponsesWS: unexpected error: %s", exc)

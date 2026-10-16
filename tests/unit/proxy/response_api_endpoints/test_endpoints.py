@@ -1596,7 +1596,7 @@ class TestManagedResponsesWSFirstMessage:
 
         processed: list = []
 
-        async def fake_process(msg: str) -> None:
+        async def fake_process(msg: str, turn_admission: object = None) -> None:
             processed.append(msg)
 
         handler = ManagedResponsesWebSocketHandler(
@@ -1639,6 +1639,26 @@ class TestResponsesWSStreamingFirstMessage:
         await streaming.client_to_backend()
 
         backend_ws.send.assert_awaited_once_with(first)
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_status", "expected_type"),
+    [
+        (ValueError("No deployments available - crossed budget: Exceeded budget for deployment"), 429, "rate_limit_exceeded"),
+        (litellm.BadRequestError(message="bad input", model="m", llm_provider="openai"), 400, "invalid_request_error"),
+        (RuntimeError("boom"), 500, "server_error"),
+    ],
+    ids=["crossed-budget", "bad-request", "unexpected"],
+)
+def test_responses_ws_failure_frame_uses_the_http_status_for_the_same_failure(
+    failure: Exception, expected_status: int, expected_type: str
+):
+    from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_failure_frame
+
+    frame: Final = json.loads(_responses_ws_failure_frame(failure))
+
+    assert frame["status"] == expected_status
+    assert frame["error"]["type"] == expected_type
 
 
 class TestWSSessionCostTracking:

@@ -1105,6 +1105,38 @@ async def test_track_cost_callback_skips_when_no_standard_logging_object():
         mock_proxy_logging.failed_tracking_alert.assert_not_called()
 
 
+class _FailedTrackingAlerts:
+    def __init__(self) -> None:
+        self.messages: tuple[str, ...] = ()
+
+    async def failed_tracking_alert(self, error_message: str, failing_model: str) -> None:
+        self.messages = (*self.messages, error_message)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("call_type", "alerted"), [("_aresponses_websocket", True), ("_arealtime", False)])
+async def test_track_cost_callback_alerts_on_a_websocket_turn_with_no_logging_object(call_type: str, alerted: bool):
+    kwargs: Final = {
+        "call_type": call_type,
+        "model": "gpt-5-mini",
+        "litellm_call_id": "turn-call-id",
+        "litellm_params": {},
+        "stream": False,
+    }
+    alerts: Final = _FailedTrackingAlerts()
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", alerts):
+        await ProxyDBLogger()._PROXY_track_cost_callback(
+            kwargs=kwargs,
+            completion_response=None,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+        await asyncio.sleep(0)
+
+    assert any(f"call_type: {call_type}" in message for message in alerts.messages) is alerted
+
+
 @pytest.mark.asyncio
 async def test_track_cost_callback_defers_in_progress_background_interaction():  # test-quality-ok: writing no spend row and raising no alert is the whole observable contract of the deferral path
     """

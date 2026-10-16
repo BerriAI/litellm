@@ -1344,6 +1344,107 @@ class TestWebSocketProjectQuotaEnforcement:
         quota_callback.enforce_project_io_token_quota_for_frame.assert_awaited_once()
 
 
+def _turn_frames() -> tuple[str, str, str]:
+    return tuple(json.dumps({"type": "response.create", "input": word}) for word in ("one", "two", "three"))
+
+
+def _admission_refusing_the_next_turn():
+    from unittest.mock import AsyncMock
+
+    from litellm.exceptions import RateLimitError
+
+    return AsyncMock(side_effect=[RateLimitError(message="crossed budget", llm_provider="", model=""), None])
+
+
+class TestWebSocketTurnAdmission:
+    """A turn after the connection's first is admitted by the deployment again before it reaches the provider."""
+
+    @pytest.mark.asyncio
+    async def test_native_relay_drops_a_later_turn_the_deployment_refuses(self):
+        from unittest.mock import AsyncMock
+
+        first, second, third = _turn_frames()
+        cancel: Final = json.dumps({"type": "response.cancel"})
+        turn_admission: Final = _admission_refusing_the_next_turn()
+        backend_ws: Final = MagicMock()
+        backend_ws.send = AsyncMock()
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock()
+        websocket.receive_text = AsyncMock(side_effect=[second, cancel, third, Exception("stop")])
+        handler: Final = _make_streaming(
+            websocket=websocket,
+            backend_ws=backend_ws,
+            request_data={},
+            first_message=first,
+            turn_admission=turn_admission,
+        )
+
+        await handler.client_to_backend()
+
+        assert [json.loads(call.args[0]) for call in backend_ws.send.await_args_list] == [
+            json.loads(first),
+            json.loads(cancel),
+            json.loads(third),
+        ]
+        assert turn_admission.await_count == 2
+        refusal: Final = json.loads(websocket.send_text.await_args.args[0])
+        assert refusal["error"]["type"] == "rate_limit_exceeded"
+        assert "crossed budget" in refusal["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_managed_relay_skips_a_later_turn_the_deployment_refuses(self, monkeypatch):
+        from unittest.mock import AsyncMock
+
+        import litellm
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
+
+        answered: Final[list[object]] = []
+
+        async def fake_aresponses(*args, **kwargs):
+            answered.append(kwargs.get("input"))
+
+            async def _empty():
+                return
+                yield
+
+            return _empty()
+
+        monkeypatch.setattr(litellm, "aresponses", fake_aresponses)
+        first, second, third = _turn_frames()
+        turn_admission: Final = _admission_refusing_the_next_turn()
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock()
+        websocket.receive_text = AsyncMock(side_effect=[second, third, Exception("stop")])
+        handler: Final = ManagedResponsesWebSocketHandler(
+            websocket=websocket,
+            model="test-model",
+            logging_obj=Logging(
+                model="test-model",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="test-id",
+                function_id="test-func",
+            ),
+            first_message=first,
+            turn_admission=turn_admission,
+        )
+
+        await handler.run()
+
+        assert len(answered) == 2
+        assert "two" not in json.dumps(answered)
+        assert turn_admission.await_count == 2
+        refusals: Final = [
+            json.loads(call.args[0])
+            for call in websocket.send_text.await_args_list
+            if json.loads(call.args[0]).get("type") == "error"
+        ]
+        assert [refusal["error"]["type"] for refusal in refusals] == ["rate_limit_exceeded"]
+
+
 def _deployment_defaults():
     from types import MappingProxyType
 
