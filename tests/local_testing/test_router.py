@@ -2579,3 +2579,45 @@ def test_router_get_model_group_info():
     assert model_group_info.model_group == "gpt-4"
     assert model_group_info.input_cost_per_token > 0
     assert model_group_info.output_cost_per_token > 0
+
+
+@pytest.mark.asyncio()
+async def test_router_ocr_capability_gate_skips_chat_fallbacks():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "document-ocr",
+                "litellm_params": {"model": "openai/gpt-4o"},
+                "model_info": {"id": "ocr", "mode": "ocr"},
+            },
+            {
+                "model_name": "document-ocr",
+                "litellm_params": {"model": "openai/gpt-4o-mini"},
+                "model_info": {"id": "chat", "mode": "chat"},
+            },
+        ],
+        enable_pre_call_checks=True,
+    )
+
+    deployments = router._pre_call_checks(
+        model="document-ocr",
+        healthy_deployments=router.get_model_list(model_name="document-ocr"),
+        messages=None,
+        input=None,
+        request_kwargs={"original_function": lambda: None},
+    )
+
+    assert len(deployments) == 2
+
+    async def aocr(*args, **kwargs):
+        return None
+
+    deployments = router._pre_call_checks(
+        model="document-ocr",
+        healthy_deployments=router.get_model_list(model_name="document-ocr"),
+        messages=None,
+        input=None,
+        request_kwargs={"original_function": aocr},
+    )
+
+    assert [d["model_info"]["id"] for d in deployments] == ["ocr"]
