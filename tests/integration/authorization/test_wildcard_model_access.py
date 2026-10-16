@@ -6,11 +6,19 @@ from typing import Final
 import httpx
 import pytest
 import yaml
-from integration._support.client import Gateway, gateway_from_environment
+from integration._support.client import (
+    JSON_OBJECT,
+    Gateway,
+    gateway_from_environment,
+    list_value,
+    object_value,
+    string_value,
+)
 from integration._support.process import owned_proxy
 from pydantic import JsonValue
 
 pytestmark: Final = pytest.mark.timeout(180)
+SAMPLED_LISTED_IDS: Final = 3
 
 
 def _deployment(model_name: str, model: str, upstream_url: str) -> dict[str, JsonValue]:
@@ -57,6 +65,13 @@ def _observed_models(upstream: httpx.Client) -> list[JsonValue]:
     return [request["body"]["model"] for request in upstream.get("/__observations").json()["requests"]]
 
 
+def _listed_names(gateway: Gateway, path: str, field: str, key: str) -> list[str]:
+    response: Final = gateway.request("GET", path, key=key)
+    assert response.status_code == 200, response.text
+    rows: Final = list_value(JSON_OBJECT.validate_json(response.content)["data"])
+    return [string_value(object_value(row)[field]) for row in rows]
+
+
 def test_an_all_models_key_reaches_a_model_served_only_by_the_catch_all_deployment(
     candidate: Gateway, upstream: httpx.Client
 ) -> None:
@@ -88,3 +103,16 @@ def test_a_key_without_models_inherits_the_users_exact_and_wildcard_grants(
         assert _observed_models(upstream) == []
         assert _chat(candidate, f"groq/{wildcard_model}", candidate.key).status_code == 200
         assert _observed_models(upstream) == [wildcard_model]
+
+
+def test_a_key_scoped_to_a_provider_wildcard_on_the_catch_all_lists_only_ids_that_reach_the_upstream_as_named(
+    candidate: Gateway, upstream: httpx.Client
+) -> None:
+    with candidate.scenario() as scenario:
+        key: Final = scenario.key(models=["openai/*"])
+        listed: Final = _listed_names(candidate, "/v1/models", "id", key)
+        sampled: Final = listed[:SAMPLED_LISTED_IDS]
+        for model in sampled:
+            _chat(candidate, model, key)
+        assert _observed_models(upstream) == [model.removeprefix("openai/") for model in sampled]
+        assert sorted(_listed_names(candidate, "/model/info", "model_name", key)) == sorted(listed)
