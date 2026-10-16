@@ -134,15 +134,20 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
     setIsCredentialModalOpen(true);
   };
 
-  const handleSubmit = async () => {
-    if (selectedAuthType?.credentialOnly && !selectedCredentialName) {
+  const rejectMissingCredential = (): boolean => {
+    const missing = selectedAuthType?.credentialOnly === true && !selectedCredentialName;
+    if (missing) {
       toast.error("Create or select a credential for this auth type");
-      return false;
     }
-    return handleOk();
+    return missing;
   };
 
+  const handleSubmit = async () => (rejectMissingCredential() ? false : handleOk());
+
   const handleTestConnection = async () => {
+    if (rejectMissingCredential() || !(await form.trigger(registry.mountedNames() as string[]))) {
+      return;
+    }
     setIsTestingConnection(true);
     setConnectionTestId(`test-${Date.now()}`);
     setIsResultModalVisible(true);

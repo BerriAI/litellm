@@ -358,6 +358,10 @@ def _has_root(spans: tuple[Span, ...]) -> bool:
     return any(span["kind"] == SERVER for span in spans)
 
 
+def _has_model_span(spans: tuple[Span, ...]) -> bool:
+    return any("gen_ai.operation.name" in span["attributes"] for span in spans)
+
+
 def _trace_of_call(sink: str, call_id: str, since: int) -> tuple[Span, ...]:
     _, spans = recorded_spans(sink, since)
     traces: Final = {span["trace_id"] for span in spans if span["attributes"].get("litellm.call_id") == call_id}
@@ -367,7 +371,7 @@ def _trace_of_call(sink: str, call_id: str, since: int) -> tuple[Span, ...]:
 def _operator_trace(rig: Rig, sent: Sent, cursors: Cursors) -> tuple[Span, ...]:
     trace: Final = eventually(
         lambda: _trace_of_call(rig.sinks.operator, sent.call_id, cursors.operator),
-        lambda spans: _has_root(spans) and "redis" in _db_systems(spans),
+        lambda spans: _has_root(spans) and "redis" in _db_systems(spans) and _has_model_span(spans),
         seconds=40,
     )
     assert len({span["trace_id"] for span in trace}) == 1, _names(trace)
@@ -405,7 +409,7 @@ def _assert_tenant_mirrors(rig: Rig, operator: tuple[Span, ...], cursors: Cursor
 
 def _assert_withheld(rig: Rig, sent: Sent, cursors: Cursors) -> tuple[Span, ...]:
     tenant: Final = _assert_tenant_mirrors(rig, _operator_trace(rig, sent, cursors), cursors)
-    assert any("gen_ai.operation.name" in span["attributes"] for span in tenant), _names(tenant)
+    assert _has_model_span(tenant), _names(tenant)
     return tenant
 
 
@@ -719,7 +723,7 @@ def _assert_tenant_kept(
         return (
             sum(1 for span in spans if span["kind"] == SERVER) == 1
             and "redis" in _db_systems(spans)
-            and (not needs_model_span or any("gen_ai.operation.name" in span["attributes"] for span in spans))
+            and (not needs_model_span or _has_model_span(spans))
         )
 
     tenant: Final = eventually(
@@ -730,7 +734,7 @@ def _assert_tenant_kept(
     )
     assert sum(1 for span in tenant if span["kind"] == SERVER) == 1, _names(tenant)
     assert "redis" in _db_systems(tenant), f"redis spans missing at the tenant: {_names(tenant)}"
-    assert not needs_model_span or any("gen_ai.operation.name" in span["attributes"] for span in tenant), _names(tenant)
+    assert not needs_model_span or _has_model_span(tenant), _names(tenant)
     return tenant
 
 
