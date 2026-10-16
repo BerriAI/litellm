@@ -2357,6 +2357,13 @@ async def test_model_connection(
         # Clean the result for display
         cleaned_result: Final = clean_endpoint_data({**health_check_params, **result}, details=True)
 
+        if "error" in result:
+            verbose_proxy_logger.error(
+                "test_model_connection failure for model '%s': %s",
+                litellm_params.get("model", "unknown"),
+                result["error"],
+            )
+
         return {
             "status": "error" if "error" in result else "success",
             "result": cleaned_result,
