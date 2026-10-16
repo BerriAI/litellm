@@ -384,9 +384,6 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         self.dual_cache = dual_cache
         self._clock = clock
         self.redis_increment_operation_queue = []
-        self._spend_awaiting_redis = {}
-        self._prune_spend_awaiting_redis_at = 0
-        self._held_spend_unconfirmed_in_redis = False
         self._redis_increment_queue_lock = asyncio.Lock()
         self._redis_increment_flush_lock = asyncio.Lock()
         self._detached_increment_operations = None
@@ -584,8 +581,6 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         redis_cache: Final = self.dual_cache.redis_cache
         if redis_cache is None:
             return await self.dual_cache.async_get_cache(key=spend_key)
-        if self._spend_awaiting_redis or self._held_spend_unconfirmed_in_redis:
-            await self._push_in_memory_increments_to_redis()
         return await redis_cache.async_get_cache(key=spend_key)
 
     @with_service_target("model_budgets")
