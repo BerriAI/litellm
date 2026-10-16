@@ -1240,7 +1240,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 status_code=400,
             )
 
-    def _map_audio_params(self, value: Mapping[str, object]) -> Mapping[str, object]:
+    def _map_audio_params(
+        self,
+        value: Mapping[str, object],
+    ) -> dict[str, object]:  # mutable-ok: the public forwarding interface returns a concrete request dictionary
         """
         Expected input:
         {
@@ -1306,7 +1309,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         self,
         value: dict[str, object],  # mutable-ok: mirrors override contract
     ) -> dict[str, object]:  # mutable-ok: mirrors override contract
-        return {**self._map_audio_params(value)}
+        return self._map_audio_params(value)
 
     @staticmethod
     def _apply_include_server_side_tool_invocations(
