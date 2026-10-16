@@ -2,7 +2,6 @@
 OpenAI Token Counter implementation using the Responses API /input_tokens endpoint.
 """
 
-import os
 from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
@@ -15,7 +14,7 @@ from litellm.llms.anthropic.pass_through.responses_adapters.transformation impor
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
-from litellm.llms.openai.common_utils import OpenAIError
+from litellm.llms.openai.common_utils import OpenAIError, get_openai_credentials
 from litellm.llms.openai.responses.count_tokens.handler import (
     OpenAICountTokensHandler,
 )
@@ -107,10 +106,7 @@ class OpenAITokenCounter(BaseTokenCounter):
         deployment = deployment or {}
         litellm_params: Final = deployment.get("litellm_params", {})
 
-        # Get OpenAI API key from deployment config or environment
-        api_key = litellm_params.get("api_key")
-        if not api_key:
-            api_key = os.getenv("OPENAI_API_KEY")
+        api_key: Final = get_openai_credentials(api_key=litellm_params.get("api_key")).api_key
 
         if not api_key:
             return TokenCountResponse(

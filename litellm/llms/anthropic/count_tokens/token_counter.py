@@ -6,6 +6,7 @@ from typing import Any, Final
 
 from pydantic import JsonValue
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.exceptions import AuthenticationError
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
@@ -61,7 +62,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
 
         try:
             auth_header: Final = await AnthropicModelInfo.aget_auth_header(
-                api_key=litellm_params.get("api_key"),
+                api_key=litellm_params.get("api_key") or litellm.anthropic_key or litellm.api_key,
                 api_base=api_base,
                 litellm_params=litellm_params,
                 allow_workload_identity=True,

@@ -388,3 +388,22 @@ async def test_undecodable_count_body_becomes_a_500_error_response_carrying_the_
             "status_code": 500,
         }
     )
+
+
+@pytest.mark.asyncio
+async def test_count_uses_the_global_openai_key_chat_would_use(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "openai_key", "sk-from-litellm-settings")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 9}))
+        result: Final = await OpenAITokenCounter().count_tokens(
+            model_to_use="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            deployment={"litellm_params": {}},
+            request_model="openai/gpt-4o",
+        )
+    assert result is not None
+    assert result.total_tokens == 9
+    assert route.calls.last.request.headers["authorization"] == "Bearer sk-from-litellm-settings"
