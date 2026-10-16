@@ -26,6 +26,7 @@ import httpx
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
+import litellm
 from litellm.litellm_core_utils.audio_utils.utils import (
     get_audio_file_name,
     process_audio_file,
@@ -39,9 +40,10 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.llms.soniox.audio_transcription.transformation import (
     SONIOX_HANDLER_ONLY_PARAMS,
     SonioxAudioTranscriptionConfig,
-    SonioxInvalidBoolParam,
+    SonioxInvalidFormParam,
     decode_soniox_form_params,
     raise_soniox_form_error,
+    soniox_language_hints,
 )
 from litellm.llms.soniox.common_utils import (
     SONIOX_DEFAULT_CLEANUP,
@@ -64,7 +66,7 @@ else:
     LiteLLMLoggingObj = Any
 
 
-_CLEANUP_TARGETS: Final = TypeAdapter(tuple[str, ...])
+_CLEANUP_ENTRIES: Final = TypeAdapter(tuple[object, ...])
 _NOT_FORWARDED_TO_SONIOX: Final[frozenset[str]] = frozenset(
     (*SONIOX_HANDLER_ONLY_PARAMS, "audio_url", "file_id", "response_format", "language")
 )
@@ -87,6 +89,14 @@ def _int_or_default(value: object, default: int) -> int:
         return int(str(value))
     except (ValueError, OverflowError):
         return default
+
+
+def _cleanup_targets(raw: object) -> tuple[str, ...]:
+    if raw is None:
+        return ()
+    if isinstance(raw, str):
+        return tuple(target.strip() for target in raw.split(",") if target.strip())
+    return tuple(target for target in _CLEANUP_ENTRIES.validate_python(raw) if isinstance(target, str))
 
 
 class _TranscriptionMeta(TypedDict, total=False):
@@ -229,8 +239,10 @@ class SonioxAudioTranscriptionHandler:
 
         base_url: Final = get_soniox_api_base(api_base)
 
-        decoded: Final = decode_soniox_form_params(optional_params)
-        if isinstance(decoded, SonioxInvalidBoolParam):
+        decoded: Final = decode_soniox_form_params(
+            optional_params, drop_params=litellm_params.get("drop_params") is True or litellm.drop_params is True
+        )
+        if isinstance(decoded, SonioxInvalidFormParam):
             raise_soniox_form_error(decoded)
 
         # Server-side clamps. Caller-supplied poll settings (from request kwargs)
@@ -242,14 +254,8 @@ class SonioxAudioTranscriptionHandler:
         max_attempts: Final = _int_or_default(
             decoded.get("soniox_max_polling_attempts"), SONIOX_DEFAULT_MAX_POLL_ATTEMPTS
         )
-        cleanup_raw: Final = decoded.get("soniox_cleanup", SONIOX_DEFAULT_CLEANUP)
-        cleanup: Final[tuple[str, ...]] = (
-            ()
-            if cleanup_raw is None
-            else (cleanup_raw,)
-            if isinstance(cleanup_raw, str)
-            else _CLEANUP_TARGETS.validate_python(cleanup_raw)
-        )
+        cleanup: Final = _cleanup_targets(decoded.get("soniox_cleanup", SONIOX_DEFAULT_CLEANUP))
+        language_hints: Final = soniox_language_hints(decoded.get("language"), decoded.get("language_hints"))
 
         # response_format is handled by LiteLLM post-processing, not Soniox.
         handler_opts: Final[_HandlerOptions] = {
@@ -263,7 +269,10 @@ class SonioxAudioTranscriptionHandler:
         }
 
         provider_params: Final = MappingProxyType(
-            {key: value for key, value in decoded.items() if key not in _NOT_FORWARDED_TO_SONIOX}
+            {
+                **{key: value for key, value in decoded.items() if key not in _NOT_FORWARDED_TO_SONIOX},
+                **({} if language_hints is None else {"language_hints": language_hints}),
+            }
         )
         return auth_headers, base_url, provider_params, handler_opts
 

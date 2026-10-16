@@ -9,6 +9,7 @@ async API requires multiple HTTP calls and does not fit the single-request
 contract of `base_llm_http_handler.audio_transcriptions`.
 """
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -30,6 +31,7 @@ from litellm.llms.soniox.common_utils import (
     render_soniox_tokens_as_srt,
     render_soniox_tokens_as_vtt,
 )
+from litellm.llms.soniox.types import SonioxContext
 from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIAudioTranscriptionOptionalParams,
@@ -67,30 +69,71 @@ SONIOX_BOOL_PARAMS: Final[frozenset[str]] = frozenset(
     {"enable_speaker_diarization", "enable_language_identification", "language_hints_strict"}
 )
 _JSON_CONTAINER: Final = TypeAdapter[dict[str, object] | list[object]](dict[str, object] | list[object])
+_STRUCTURED_CONTEXT: Final = TypeAdapter(SonioxContext)
+_FORM_BOOL: Final = TypeAdapter(bool)
+_LANGUAGE_HINTS: Final = TypeAdapter(tuple[object, ...])
+_BRACKETED_FORM_FIELD: Final = re.compile(r"(?P<param>context|translation)\[(?P<field>\w+)\]")
 
 
 @dataclass(frozen=True, slots=True)
-class SonioxInvalidBoolParam:
+class SonioxInvalidFormParam:
     key: str
     value: str
+    expected: str
 
 
-def raise_soniox_form_error(error: SonioxInvalidBoolParam) -> NoReturn:
+def raise_soniox_form_error(error: SonioxInvalidFormParam) -> NoReturn:
     raise SonioxException(
-        message=f"`{error.key}` must be a boolean, got {error.value!r}", status_code=400, headers=None
+        message=f"`{error.key}` must be {error.expected}, got {error.value!r}", status_code=400, headers=None
     )
 
 
-def _decode_form_value(key: str, value: object) -> object | SonioxInvalidBoolParam:
+def soniox_language_hints(language: object, hints: object) -> object:
+    """Soniox has no `language` field, so the OpenAI `language` leads its `language_hints`."""
+    if not isinstance(language, str) or not language:
+        return hints
+    if hints is None:
+        return (language,)
+    try:
+        known: Final = _LANGUAGE_HINTS.validate_python(hints)
+    except ValidationError:
+        return hints
+    return known if language in known else (language, *known)
+
+
+def _decode_bool(key: str, value: str) -> bool | SonioxInvalidFormParam:
+    try:
+        return _FORM_BOOL.validate_python(value.strip())
+    except ValidationError:
+        return SonioxInvalidFormParam(key=key, value=value, expected="a boolean")
+
+
+def _decode_polling_interval(value: str) -> str | SonioxInvalidFormParam:
+    try:
+        float(value)
+    except ValueError:
+        return SonioxInvalidFormParam(key="soniox_polling_interval", value=value, expected="a number")
+    return value
+
+
+def _decode_context(value: str) -> SonioxContext | str:
+    if not value.lstrip().startswith("{"):
+        return value
+    try:
+        return _STRUCTURED_CONTEXT.validate_json(value)
+    except ValidationError:
+        return value
+
+
+def _decode_form_value(key: str, value: object) -> object | SonioxInvalidFormParam:
     if not isinstance(value, str):
         return value
     if key in SONIOX_BOOL_PARAMS:
-        lowered: Final = value.strip().lower()
-        if lowered in ("true", "1"):
-            return True
-        if lowered in ("false", "0"):
-            return False
-        return SonioxInvalidBoolParam(key=key, value=value)
+        return _decode_bool(key, value)
+    if key == "soniox_polling_interval":
+        return _decode_polling_interval(value)
+    if key == "context":
+        return _decode_context(value)
     if key in SONIOX_JSON_PARAMS and value.lstrip()[:1] in ("{", "["):
         try:
             return _JSON_CONTAINER.validate_json(value)
@@ -101,14 +144,31 @@ def _decode_form_value(key: str, value: object) -> object | SonioxInvalidBoolPar
     return value
 
 
+def _nest_bracketed_form_fields(params: Mapping[str, object]) -> Mapping[str, object]:
+    """The OpenAI SDK sends a dict in `extra_body` as `context[terms]`-style form keys."""
+    matches: Final = {key: _BRACKETED_FORM_FIELD.fullmatch(key) for key in params}
+    bracketed: Final = tuple((match["param"], match["field"], params[key]) for key, match in matches.items() if match)
+    nested: Final = {
+        param: {field: value for owner, field, value in bracketed if owner == param}
+        for param in {param for param, _, _ in bracketed}
+    }
+    unbracketed: Final = {key: value for key, value in params.items() if matches[key] is None}
+    return {**nested, **unbracketed}
+
+
 def decode_soniox_form_params(
     optional_params: Mapping[str, object],
-) -> Mapping[str, object] | SonioxInvalidBoolParam:
+    drop_params: bool = False,
+) -> Mapping[str, object] | SonioxInvalidFormParam:
     """Multipart form fields reach the proxy as strings; restore the JSON types Soniox expects."""
-    decoded: Final = {key: _decode_form_value(key, value) for key, value in optional_params.items()}
-    return next(
-        (value for value in decoded.values() if isinstance(value, SonioxInvalidBoolParam)),
-        MappingProxyType(decoded),
+    decoded: Final = {
+        key: _decode_form_value(key, value) for key, value in _nest_bracketed_form_fields(optional_params).items()
+    }
+    invalid: Final = next((value for value in decoded.values() if isinstance(value, SonioxInvalidFormParam)), None)
+    if invalid is not None and not drop_params:
+        return invalid
+    return MappingProxyType(
+        {key: value for key, value in decoded.items() if not isinstance(value, SonioxInvalidFormParam)}
     )
 
 
@@ -128,25 +188,26 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        # Translate the OpenAI `language` param into Soniox `language_hints`.
-        if "language" in non_default_params and non_default_params["language"]:
-            language: Final = non_default_params["language"]
-            existing_hints: Final = optional_params.get("language_hints")
-            if not existing_hints:
-                optional_params["language_hints"] = [language]
-            elif language not in existing_hints:
-                optional_params["language_hints"] = [language] + list(existing_hints)
-
-        # Capture response_format for post-processing (not sent to Soniox API).
-        if "response_format" in non_default_params:
-            optional_params["response_format"] = non_default_params["response_format"]
-
-        # Pass through Soniox-native kwargs unchanged.
-        for key in SONIOX_PASSTHROUGH_PARAMS + SONIOX_HANDLER_ONLY_PARAMS:
-            if key in non_default_params and non_default_params[key] is not None:
-                optional_params[key] = non_default_params[key]
-
-        return optional_params
+        language: Final[object] = non_default_params.get("language")
+        language_params: Final[Mapping[str, object]] = (
+            {
+                "language": language,
+                "language_hints": soniox_language_hints(language, optional_params.get("language_hints")),
+            }
+            if language
+            else {}
+        )
+        response_format_params: Final[Mapping[str, object]] = (
+            {"response_format": non_default_params["response_format"]}
+            if "response_format" in non_default_params
+            else {}
+        )
+        passthrough_params: Final[Mapping[str, object]] = {
+            key: non_default_params[key]
+            for key in SONIOX_PASSTHROUGH_PARAMS + SONIOX_HANDLER_ONLY_PARAMS
+            if non_default_params.get(key) is not None
+        }
+        return {**optional_params, **language_params, **response_format_params, **passthrough_params}
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
         return SonioxException(message=error_message, status_code=status_code, headers=headers)
@@ -271,9 +332,14 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             # "verbose_json")
             has_speaker: Final = any(t.get("speaker") is not None for t in tokens)
             has_language = any(t.get("language") is not None for t in tokens)
+            translated_text: Final = "".join(
+                t.get("text", "") for t in tokens if t.get("translation_status") == "translation"
+            )
 
             if (has_speaker or has_language) and tokens:
                 text = render_soniox_tokens(tokens)
+            elif translated_text:
+                text = translated_text
             elif transcript.get("text"):
                 text = transcript["text"]
             elif tokens:

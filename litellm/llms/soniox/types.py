@@ -1,6 +1,7 @@
 from collections.abc import Sequence
 from typing import Literal
 
+from pydantic import ConfigDict, with_config
 from typing_extensions import ReadOnly, TypedDict
 
 
@@ -14,6 +15,7 @@ class SonioxTranslationTerm(TypedDict):
     target: ReadOnly[str]
 
 
+@with_config(ConfigDict(extra="forbid"))
 class SonioxContext(TypedDict, total=False):
     """Soniox `context` request field: https://soniox.com/docs/stt/concepts/context"""
 

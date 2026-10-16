@@ -345,7 +345,7 @@ class TestPollLimitsClamping:
             handler._prepare(
                 audio_file=None,
                 optional_params={
-                    "enable_speaker_diarization": "yes",
+                    "enable_speaker_diarization": "maybe",
                     "audio_url": "https://example.com/a.wav",
                 },
                 litellm_params={},
@@ -356,6 +356,34 @@ class TestPollLimitsClamping:
             )
         assert exc_info.value.status_code == 400
         assert "enable_speaker_diarization" in str(exc_info.value)
+
+    def test_should_raise_400_when_poll_interval_is_not_a_number(self):
+        with pytest.raises(SonioxException) as exc_info:
+            SonioxAudioTranscriptionHandler()._prepare(
+                audio_file=None,
+                optional_params={"soniox_polling_interval": "abc", "audio_url": "https://example.com/a.wav"},
+                litellm_params={},
+                api_key="sk-test",
+                api_base=None,
+                provider_config=SonioxAudioTranscriptionConfig(),
+                headers={},
+            )
+        assert exc_info.value.status_code == 400
+        assert "soniox_polling_interval" in str(exc_info.value)
+
+    def test_should_use_default_poll_interval_for_bad_value_when_drop_params_is_set(self):
+        from litellm.llms.soniox.common_utils import SONIOX_DEFAULT_POLL_INTERVAL
+
+        _, _, _, opts = SonioxAudioTranscriptionHandler()._prepare(
+            audio_file=None,
+            optional_params={"soniox_polling_interval": "abc", "audio_url": "https://example.com/a.wav"},
+            litellm_params={"drop_params": True},
+            api_key="sk-test",
+            api_base=None,
+            provider_config=SonioxAudioTranscriptionConfig(),
+            headers={},
+        )
+        assert opts["poll_interval"] == SONIOX_DEFAULT_POLL_INTERVAL
 
     def test_should_clamp_poll_interval_to_minimum(self):
         from litellm.llms.soniox.common_utils import SONIOX_MIN_POLL_INTERVAL
@@ -723,6 +751,54 @@ class TestCleanupNormalization:
         )
         deletes = [c["url"] for c in client.calls if c["method"] == "DELETE"]
         assert "https://api.soniox.com/v1/transcriptions/tx_1" in deletes
+
+
+    @pytest.mark.parametrize(
+        "cleanup, expected",
+        [("file,transcription", ("file", "transcription")), (["transcription", 1, None], ("transcription",))],
+    )
+    def test_should_normalize_cleanup_lists_and_comma_strings(self, cleanup: object, expected: tuple):
+        _, _, _, opts = SonioxAudioTranscriptionHandler()._prepare(
+            audio_file=None,
+            optional_params={"soniox_cleanup": cleanup, "audio_url": "https://example.com/a.wav"},
+            litellm_params={},
+            api_key="sk-test",
+            api_base=None,
+            provider_config=SonioxAudioTranscriptionConfig(),
+            headers={},
+        )
+        assert opts["cleanup"] == expected
+
+    @pytest.mark.parametrize(
+        "language_hints, expected",
+        [("en,es", ["de", "en", "es"]), ("de,en", ["de", "en"]), (None, ["de"])],
+    )
+    def test_should_keep_language_alongside_language_hints(self, language_hints, expected, monkeypatch):
+        import litellm
+
+        monkeypatch.setattr("time.sleep", lambda *_: None)
+        client = _MockSyncClient(
+            {
+                "POST https://api.soniox.com/v1/transcriptions": [_make_response({"id": "tx_1"})],
+                "GET https://api.soniox.com/v1/transcriptions/tx_1": [_make_response({"status": "completed"})],
+                "GET https://api.soniox.com/v1/transcriptions/tx_1/transcript": [
+                    _make_response({"text": "hallo", "tokens": []})
+                ],
+                "DELETE https://api.soniox.com/v1/transcriptions/tx_1": [_make_response({})],
+            }
+        )
+        litellm.transcription(
+            model="soniox/stt-async-v4",
+            file=("a.wav", b"RIFF", "audio/wav"),
+            language="de",
+            api_key="sk-test",
+            client=client,
+            audio_url="https://example.com/a.wav",
+            **({} if language_hints is None else {"language_hints": language_hints}),
+        )
+        body = next(c for c in client.calls if c["method"] == "POST")["json"]
+        assert list(body["language_hints"]) == expected
+        assert "language" not in body
 
 
 class TestErrorResponses:

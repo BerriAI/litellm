@@ -9,7 +9,7 @@ import pytest
 
 from litellm.llms.soniox.audio_transcription.transformation import (
     SonioxAudioTranscriptionConfig,
-    SonioxInvalidBoolParam,
+    SonioxInvalidFormParam,
     decode_soniox_form_params,
     raise_soniox_form_error,
 )
@@ -49,7 +49,7 @@ class TestMapOpenAIParams:
             model="stt-async-v4",
             drop_params=False,
         )
-        assert result["language_hints"] == ["en"]
+        assert list(result["language_hints"]) == ["en"]
 
     def test_should_prepend_language_to_existing_hints(self):
         cfg = SonioxAudioTranscriptionConfig()
@@ -59,7 +59,7 @@ class TestMapOpenAIParams:
             model="stt-async-v4",
             drop_params=False,
         )
-        assert result["language_hints"] == ["en", "fr"]
+        assert list(result["language_hints"]) == ["en", "fr"]
 
     def test_should_not_duplicate_language_already_in_hints(self):
         cfg = SonioxAudioTranscriptionConfig()
@@ -69,7 +69,7 @@ class TestMapOpenAIParams:
             model="stt-async-v4",
             drop_params=False,
         )
-        assert result["language_hints"] == ["en", "fr"]
+        assert list(result["language_hints"]) == ["en", "fr"]
 
     def test_should_passthrough_soniox_native_kwargs(self):
         cfg = SonioxAudioTranscriptionConfig()
@@ -251,6 +251,21 @@ class TestTransformAudioTranscriptionResponse:
         resp = cfg.build_response_from_payload(payload)
         assert "Speaker 1:" in resp.text
         assert "Speaker 2:" in resp.text
+
+    def test_should_return_translated_text_for_one_way_translation_without_tags(self):
+        cfg = SonioxAudioTranscriptionConfig()
+        payload = {
+            "transcript": {
+                "text": "Hello there.",
+                "tokens": [
+                    {"text": "Hello", "translation_status": "none"},
+                    {"text": " there.", "translation_status": "none"},
+                    {"text": "Hallo", "translation_status": "translation"},
+                    {"text": " zusammen.", "translation_status": "translation"},
+                ],
+            }
+        }
+        assert cfg.build_response_from_payload(payload).text == "Hallo zusammen."
 
     def test_should_set_language_when_all_tokens_share_one(self):
         cfg = SonioxAudioTranscriptionConfig()
@@ -753,16 +768,61 @@ class TestDecodeSonioxFormParams:
             "language_hints_strict": expected,
         }
 
-    def test_should_return_error_value_on_non_boolean_string(self):
-        result = decode_soniox_form_params({"context": '{"general": []}', "enable_speaker_diarization": "yes"})
-        assert result == SonioxInvalidBoolParam(key="enable_speaker_diarization", value="yes")
+    @pytest.mark.parametrize("raw, expected", [("on", True), ("yes", True), ("off", False), ("no", False)])
+    def test_should_decode_html_style_boolean_strings(self, raw: str, expected: bool):
+        assert decode_soniox_form_params({"enable_speaker_diarization": raw})["enable_speaker_diarization"] is expected
 
-    def test_should_map_invalid_bool_error_to_400(self):
+    def test_should_return_error_value_on_non_boolean_string(self):
+        result = decode_soniox_form_params({"context": '{"general": []}', "enable_speaker_diarization": "maybe"})
+        assert result == SonioxInvalidFormParam(key="enable_speaker_diarization", value="maybe", expected="a boolean")
+
+    def test_should_drop_non_boolean_string_when_drop_params_is_set(self):
+        result = decode_soniox_form_params(
+            {"enable_speaker_diarization": "maybe", "language_hints_strict": "true"}, drop_params=True
+        )
+        assert result == {"language_hints_strict": True}
+
+    def test_should_return_error_value_on_non_numeric_polling_interval(self):
+        result = decode_soniox_form_params({"soniox_polling_interval": "abc"})
+        assert result == SonioxInvalidFormParam(key="soniox_polling_interval", value="abc", expected="a number")
+
+    def test_should_drop_non_numeric_polling_interval_when_drop_params_is_set(self):
+        assert decode_soniox_form_params({"soniox_polling_interval": "abc"}, drop_params=True) == {}
+
+    def test_should_map_invalid_form_value_error_to_400(self):
         with pytest.raises(SonioxException) as exc_info:
-            raise_soniox_form_error(SonioxInvalidBoolParam(key="enable_speaker_diarization", value="yes"))
+            raise_soniox_form_error(
+                SonioxInvalidFormParam(key="enable_speaker_diarization", value="maybe", expected="a boolean")
+            )
         assert exc_info.value.status_code == 400
         assert "enable_speaker_diarization" in str(exc_info.value)
-        assert "yes" in str(exc_info.value)
+        assert "maybe" in str(exc_info.value)
+
+    @pytest.mark.parametrize(
+        "raw", ['["Celebrex", "Zyrtec"]', '{"note": "follow-up visit"}', '{"terms": "Celebrex"}', '"quoted"']
+    )
+    def test_should_keep_json_context_soniox_cannot_take_as_an_object_as_string(self, raw: str):
+        assert decode_soniox_form_params({"context": raw})["context"] == raw
+
+    def test_should_nest_openai_sdk_bracketed_form_fields(self):
+        result = decode_soniox_form_params(
+            {
+                "context[terms]": ["Celebrex", "Zyrtec"],
+                "context[text]": "Follow-up visit.",
+                "translation[type]": "one_way",
+                "translation[target_language]": "de",
+                "client_reference_id": "ref-1",
+            }
+        )
+        assert result == {
+            "context": {"terms": ["Celebrex", "Zyrtec"], "text": "Follow-up visit."},
+            "translation": {"type": "one_way", "target_language": "de"},
+            "client_reference_id": "ref-1",
+        }
+
+    def test_should_prefer_explicit_field_over_bracketed_fields(self):
+        result = decode_soniox_form_params({"context": "plain text", "context[terms]": ["Celebrex"]})
+        assert result == {"context": "plain text"}
 
     @pytest.mark.parametrize(
         "raw, expected",
