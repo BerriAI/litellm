@@ -438,17 +438,21 @@ async def test_an_explicit_responses_prefix_wins_over_a_chat_pin(gateway: Gatewa
         _assert_logged(answer, model, "success")
 
 
+_SUMMARY_REASONING: Final[Mapping[str, JsonValue]] = MappingProxyType({"effort": "low", "summary": "auto"})
+
+
 @pytest.mark.parametrize(
-    "extra",
+    ("extra", "reasoning"),
     (
-        {"tools": [dict(_FUNCTION_TOOL)]},
-        {"reasoning_effort": {"effort": "low", "summary": "auto"}},
-        {"web_search_options": {"search_context_size": "low"}},
+        ({"tools": [dict(_FUNCTION_TOOL)]}, None),
+        ({"reasoning_effort": dict(_SUMMARY_REASONING)}, _SUMMARY_REASONING),
+        ({"extra_body": {"reasoning_effort": dict(_SUMMARY_REASONING)}}, _SUMMARY_REASONING),
+        ({"web_search_options": {"search_context_size": "low"}}, None),
     ),
-    ids=("function-tools", "reasoning-summary", "web-search"),
+    ids=("function-tools", "reasoning-summary", "extra-body-reasoning-summary", "web-search"),
 )
 async def test_a_mantle_chat_pin_sends_what_chat_cannot_serve_to_responses(
-    gateway: Gateway, extra: Mapping[str, JsonValue]
+    gateway: Gateway, extra: Mapping[str, JsonValue], reasoning: Mapping[str, JsonValue] | None
 ) -> None:
     marker: Final = uuid.uuid4().hex
     with wire_server(_upstream()) as wire, gateway.scenario() as scenario:
@@ -458,7 +462,7 @@ async def test_a_mantle_chat_pin_sends_what_chat_cannot_serve_to_responses(
         )
         (attempt,) = _attempts(wire)
         assert attempt.api == "responses", attempt
-        assert "reasoning_effort" not in extra or attempt.body["reasoning"] == extra["reasoning_effort"], attempt.body
+        assert reasoning is None or attempt.body["reasoning"] == reasoning, attempt.body
         _assert_logged(answer, pinned, "success")
 
 

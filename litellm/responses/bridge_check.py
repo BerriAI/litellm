@@ -4,6 +4,7 @@ from urllib.parse import urlsplit
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.azure_ai.common_utils import (
     azure_ai_supports_native_responses,
     foundry_chat_rejects_function_tools_while_reasoning,
@@ -11,7 +12,8 @@ from litellm.llms.azure_ai.common_utils import (
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import OpenAIWebSearchOptions
-from litellm.utils import get_model_info_helper
+from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager, get_model_info_helper
 
 _OPENAI_DEFAULT_API_BASE: Final = "https://api.openai.com/v1"
 RESPONSES_ONLY_PROVIDERS: Final = frozenset({"chatgpt", "github_copilot"})
@@ -59,14 +61,24 @@ def _mantle_responses_series_name(model: str) -> str | None:
     return split_mantle_region_prefix(model)[1].removeprefix("openai.")
 
 
-def bridge_deployment_info(model_info: object) -> Mapping[str, object] | None:
-    """The router deployment's ``model_info`` when the call carries one, read without narrowing the
-    caller's variable (``litellm.completion`` reuses it for pricing registration)."""
-    if not isinstance(model_info, Mapping):
+def str_keyed_mapping(value: object) -> Mapping[str, object] | None:
+    """A request field such as a deployment's ``model_info`` when it is a mapping, read without narrowing the
+    caller's variable (``litellm.completion`` reuses ``model_info`` for pricing registration)."""
+    if not isinstance(value, Mapping):
         return None
-    return cast(  # cast-ok: isinstance only narrows to Mapping[Unknown, Unknown]; deployment model_info keys are str
-        Mapping[str, object], model_info
+    return cast(  # cast-ok: isinstance only narrows to Mapping[Unknown, Unknown]; request JSON keys are str
+        Mapping[str, object], value
     )
+
+
+def bridge_reasoning_effort(
+    reasoning_effort: str | Mapping[str, object] | None, extra_body: object
+) -> str | Mapping[str, object] | None:
+    nested_body: Final = str_keyed_mapping(extra_body)
+    if reasoning_effort is not None or nested_body is None:
+        return reasoning_effort
+    nested_effort: Final = nested_body.get("reasoning_effort")
+    return nested_effort if isinstance(nested_effort, str) else str_keyed_mapping(nested_effort)
 
 
 def backend_serves_chat_completions(shared_model_info: Mapping[str, object]) -> bool:
@@ -78,6 +90,18 @@ def backend_serves_chat_completions(shared_model_info: Mapping[str, object]) -> 
     if not isinstance(supported_endpoints, Sequence) or isinstance(supported_endpoints, str):
         return shared_model_info.get("mode") != "responses"
     return "/v1/chat/completions" in supported_endpoints
+
+
+def chat_target_accepts_reasoning_summary(model: str, custom_llm_provider: str | None) -> bool:
+    try:
+        local_model, provider, _, _ = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+        chat_config: Final = ProviderConfigManager.get_provider_chat_config(
+            model=local_model, provider=LlmProviders(provider)
+        )
+    except Exception as e:  # noqa: BLE001  # a capability probe must never fail the request it probes for
+        verbose_logger.debug("chat target reasoning summary check failed: %s", e)
+        return False
+    return chat_config is not None and chat_config.accepts_reasoning_summary_in_reasoning_effort
 
 
 def responses_api_bridge_check(

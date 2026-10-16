@@ -11880,3 +11880,55 @@ def test_masking_function_not_in_metadata_when_not_provided():
     assert "_langfuse_masking_function" not in result
 
     assert result["metadata"]["some_key"] == "some_value"
+
+
+def test_copy_for_new_call_logs_a_turn_under_its_own_call_id_against_the_connections_reservation() -> None:
+    reservation: Final[dict[str, object]] = {"reserved_cost": 0.5, "entries": []}
+    connection: Final = LitellmLogging(
+        model="gpt-5.4",
+        messages=[],
+        stream=False,
+        call_type=CallTypes.aresponses_websocket.value,
+        start_time=time.time(),
+        litellm_call_id="connection-call",
+        function_id="connection-call",
+    )
+    connection.litellm_params = {
+        "litellm_call_id": "connection-call",
+        "metadata": {"user_api_key": "hashed-key", "user_api_key_budget_reservation": reservation},
+    }
+    connection.model_call_details["litellm_params"] = connection.litellm_params
+    turn_start: Final = datetime.datetime(2026, 1, 1, 12, 0, 0)
+
+    turn: Final = connection.copy_for_new_call(litellm_call_id="turn-1", start_time=turn_start)
+
+    assert (turn.litellm_call_id, turn.start_time) == ("turn-1", turn_start)
+    assert (turn.model_call_details["litellm_call_id"], turn.model_call_details["start_time"]) == ("turn-1", turn_start)
+    assert turn.model_call_details["litellm_params"]["litellm_call_id"] == "turn-1"
+    assert turn.litellm_params["metadata"]["user_api_key"] == "hashed-key"
+    assert turn.litellm_params["metadata"]["user_api_key_budget_reservation"] is reservation
+    turn.litellm_params["metadata"]["turn_only"] = True
+    assert "turn_only" not in connection.litellm_params["metadata"]
+    assert (connection.litellm_call_id, connection.model_call_details["litellm_call_id"]) == (
+        "connection-call",
+        "connection-call",
+    )
+
+
+@pytest.mark.parametrize("response_id, expected_row_id", [(None, "turn-7"), ("resp_9", "resp_9")])
+def test_a_websocket_turn_row_is_keyed_by_the_response_id_or_else_its_call_id(
+    logging_obj: LitellmLogging, response_id: str | None, expected_row_id: str
+) -> None:
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+
+    now: Final = datetime_unit_test(2026, 1, 1, 12, 0, 0)
+    payload: Final = get_standard_logging_object_payload(
+        kwargs={"litellm_call_id": "turn-7", "litellm_params": {"metadata": {}}},
+        init_response_obj=LiteLLMRealtimeStreamLoggingObject(id=response_id, usage=Usage(), results=[]),
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+    assert payload is not None
+    assert payload["id"] == expected_row_id

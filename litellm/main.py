@@ -52,6 +52,7 @@ from litellm.utils import (
     get_litellm_params,
     get_optional_params,
     peek_reasoning_summary_aliases,
+    reasoning_effort_with_summary_alias,
     strip_reasoning_summary_aliases_from_optional_params,
 )
 
@@ -1077,7 +1078,8 @@ from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the o
     _resolve_openai_api_base as _resolve_openai_api_base,  # pyright: ignore[reportPrivateUsage]  # noqa: PLC0414  # re-export of moved helper
 )
 from litellm.responses.bridge_check import (
-    bridge_deployment_info,
+    bridge_reasoning_effort,
+    str_keyed_mapping,
 )
 from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
     responses_api_bridge_check as responses_api_bridge_check,  # pyright: ignore[reportUnknownVariableType]  # noqa: PLC0414  # re-export of moved function
@@ -5534,7 +5536,7 @@ def completion(
             custom_llm_provider=custom_llm_provider,
             web_search_options=web_search_options,
             api_base=api_base,
-            deployment_model_info=bridge_deployment_info(
+            deployment_model_info=str_keyed_mapping(
                 cast(object, model_info)  # cast-ok: model_info is the untyped dict kwarg
             ),
         )
@@ -5687,7 +5689,15 @@ def completion(
             "allowed_openai_params": allowed_openai_params,
             "base_model": base_model,
         }
-        optional_params = get_optional_params(**optional_param_args, **non_default_params)
+        provider_reasoning_effort: Final = reasoning_effort_with_summary_alias(
+            reasoning_effort,
+            non_default_params,
+            accepts_summary=provider_config is not None
+            and provider_config.accepts_reasoning_summary_in_reasoning_effort,
+        )
+        optional_params = get_optional_params(
+            **{**optional_param_args, "reasoning_effort": provider_reasoning_effort}, **non_default_params
+        )
         processed_non_default_params: Final = pre_process_non_default_params(
             model=model,
             passed_params=optional_param_args,
@@ -5845,10 +5855,10 @@ def completion(
                 custom_llm_provider=custom_llm_provider,
                 web_search_options=web_search_options,
                 tools=tools,
-                reasoning_effort=reasoning_effort,
+                reasoning_effort=bridge_reasoning_effort(reasoning_effort, optional_params.get("extra_body")),
                 reasoning_summary=_reasoning_summary_for_bridge,
                 api_base=api_base,
-                deployment_model_info=bridge_deployment_info(
+                deployment_model_info=str_keyed_mapping(
                     cast(object, model_info)  # cast-ok: model_info is the untyped dict kwarg
                 ),
             )

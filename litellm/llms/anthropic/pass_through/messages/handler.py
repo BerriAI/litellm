@@ -56,12 +56,12 @@ _SAFEGUARD_MESSAGES: Final = TypeAdapter(Sequence[Mapping[str, object]])
 
 
 def _bridges_to_responses_api(model: str, custom_llm_provider: str, deployment_model_info: object) -> bool:
-    from litellm.responses.bridge_check import bridge_deployment_info, responses_api_bridge_check
+    from litellm.responses.bridge_check import responses_api_bridge_check, str_keyed_mapping
 
     model_info, _ = responses_api_bridge_check(
         model=model,
         custom_llm_provider=custom_llm_provider,
-        deployment_model_info=bridge_deployment_info(deployment_model_info),
+        deployment_model_info=str_keyed_mapping(deployment_model_info),
     )
     return model_info.get("mode") == "responses"
 
