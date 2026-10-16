@@ -6,6 +6,7 @@ import pytest
 import respx
 
 import litellm
+from litellm.utils import ProviderConfigManager
 from tests.unit.llms.sail.helpers import (
     CACHED_TOKENS,
     COMPLETION_TOKENS,
@@ -19,6 +20,15 @@ from tests.unit.llms.sail.helpers import (
 )
 
 MESSAGES: Final = [{"role": "user", "content": "hi"}]
+
+
+def test_sail_messages_advertise_window_metadata_support() -> None:
+    config: Final = ProviderConfigManager.get_provider_anthropic_messages_config(
+        model=MODEL, provider=litellm.LlmProviders.SAIL
+    )
+
+    assert config is not None
+    assert "metadata" in config.get_supported_anthropic_messages_params(model=MODEL)
 
 
 @pytest.mark.asyncio
