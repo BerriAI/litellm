@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import copy
 import json
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -31,7 +32,7 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import EMPTY_MAPPING, MANAGED_BACKGROUND_RESPONSE_METADATA_KEY, TERMINAL_RESPONSE_STATUSES
 from litellm.integrations.custom_guardrail import ModifyResponseException
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.internal_call_metadata import is_background_response, requests_background
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.tool_fields import first_validation_error
@@ -63,6 +64,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attributio
     request_tags_from_request_data,
 )
 from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
+from litellm.responses.streaming_iterator import GuardedResponsesWsFrame, ResponsesWsFrameGuard
 from litellm.router import Router
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
@@ -1810,6 +1812,51 @@ async def _enforce_responses_ws_first_frame_model_auth(
     )
 
 
+_WS_FRAME: Final = TypeAdapter(dict[str, object])
+_GUARDRAIL_INFORMATION: Final = TypeAdapter(list[dict[str, object]])
+_GUARDED_FRAME_FIELDS: Final = ("input", "instructions")
+
+
+def _responses_ws_frame_guard(
+    admitted: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth, proxy_logging_obj: "ProxyLogging"
+) -> ResponsesWsFrameGuard:
+    """Socket admission skips guardrails (the first frame's ``input`` is not part of the admitted request), so every
+    ``response.create`` frame gets the pre_call guardrail walk the HTTP ``/v1/responses`` path runs on its body."""
+    metadata_key: Final = get_metadata_variable_name_from_kwargs(admitted)
+    admitted_bucket: Final = admitted.get(metadata_key)
+    bucket: Final = {
+        key: value
+        for key, value in (admitted_bucket.items() if isinstance(admitted_bucket, dict) else ())
+        if key != "standard_logging_guardrail_information"
+    }
+    model: Final = admitted.get("model")
+
+    async def guard(frame: str) -> GuardedResponsesWsFrame:
+        frame_obj: Final = _WS_FRAME.validate_json(frame)
+        frame_data: Final = {
+            **{key: value for key, value in frame_obj.items() if key != "type"},
+            "model": model,
+            metadata_key: copy.deepcopy(bucket),
+        }
+        guarded: Final = await proxy_logging_obj.pre_call_hook(
+            user_api_key_dict=user_api_key_dict, data=frame_data, call_type="aresponses", guardrails_only=True
+        )
+        guarded_bucket: Final = guarded.get(metadata_key)
+        recorded: Final = (
+            guarded_bucket.get("standard_logging_guardrail_information") if isinstance(guarded_bucket, dict) else None
+        )
+        rewritten: Final = {
+            **frame_obj,
+            **{key: guarded[key] for key in _GUARDED_FRAME_FIELDS if key in guarded},
+        }
+        return GuardedResponsesWsFrame(
+            frame=json.dumps(rewritten),
+            guardrail_information=tuple(_GUARDRAIL_INFORMATION.validate_python(recorded)) if recorded else (),
+        )
+
+    return guard
+
+
 async def _responses_websocket_session(
     websocket: WebSocket,
     model: str | None,
@@ -1885,6 +1932,7 @@ async def _responses_websocket_session(
             user_api_base=user_api_base,
             model=resolved_model,
             route_type="_aresponses_websocket",
+            skip_guardrails=True,
         )
     except Exception as e:
         verbose_proxy_logger.exception("Responses WebSocket pre-call error")
@@ -1906,7 +1954,10 @@ async def _responses_websocket_session(
         return
 
     routed_data: Final = dict(
-        data, user_api_key_dict=user_api_key_dict, **_routing_hints_from_first_ws_frame(first_message)
+        data,
+        user_api_key_dict=user_api_key_dict,
+        responses_ws_frame_guard=_responses_ws_frame_guard(data, user_api_key_dict, proxy_logging_obj),
+        **_routing_hints_from_first_ws_frame(first_message),
     )
     # Phase 2: route to upstream provider
     try:

@@ -1921,6 +1921,19 @@ RESPONSES_WS_MASKABLE_TEXT_BLOCK_TYPES: Final = frozenset({"input_text", "output
 
 _RESPONSES_WS_FAILURE_EVENT_TYPES: Final = frozenset({"error", "response.failed"})
 _PER_TURN_METADATA_KEYS: Final = frozenset({"metadata", "litellm_metadata"})
+_GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
+
+
+@dataclass(frozen=True, slots=True)
+class GuardedResponsesWsFrame:
+    """A ``response.create`` frame after the proxy's pre_call guardrails ran on it: the frame to forward (guardrails
+    may rewrite ``input`` and ``instructions``) and the guardrail records that bill against this turn only."""
+
+    frame: str
+    guardrail_information: tuple[Mapping[str, object], ...] = ()
+
+
+ResponsesWsFrameGuard = Callable[[str], Awaitable[GuardedResponsesWsFrame]]
 
 _RESPONSES_WS_TERMINAL_EVENT_TYPES: Final = _HISTORY_TERMINAL_EVENT_TYPES | _RESPONSES_WS_FAILURE_EVENT_TYPES
 
@@ -1951,6 +1964,25 @@ def _user_texts_in_input_item(item: object) -> tuple[str, ...]:
         and isinstance(text := block.get("text"), str)
         and text
     )
+
+
+def _set_turn_guardrail_information(
+    turn_logging_obj: LiteLLMLoggingObj, guardrail_information: tuple[Mapping[str, object], ...]
+) -> None:
+    """A turn bills the guardrails that ran on its own ``response.create`` frame, never the records the
+    connection-level logging object carries from an earlier frame."""
+    litellm_params: Final = _json_object_or_none(
+        turn_logging_obj.litellm_params  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging.litellm_params is untyped
+    )
+    if litellm_params is None:
+        return
+    for key in _PER_TURN_METADATA_KEYS:
+        bucket: Final = litellm_params.get(key)
+        if not _is_json_object(bucket):
+            continue
+        bucket.pop(_GUARDRAIL_INFORMATION_KEY, None)
+        if guardrail_information:
+            bucket[_GUARDRAIL_INFORMATION_KEY] = [dict(entry) for entry in guardrail_information]
 
 
 def _logged_user_messages(client_frame: object) -> tuple[Mapping[str, object], ...]:
@@ -2077,11 +2109,13 @@ class ResponsesWebSocketStreaming:
         authorized_model: str | None = None,
         custom_llm_provider: str | None = None,
         request_defaults: ResponsesWebSocketRequestDefaults | None = None,
+        frame_guard: ResponsesWsFrameGuard | None = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
         self.logging_obj = logging_obj
         self.user_api_key_dict = user_api_key_dict
+        self.frame_guard: ResponsesWsFrameGuard | None = frame_guard
         self.request_data: dict[str, object] = request_data or {}
         litellm_metadata: Final = self.request_data.get("litellm_metadata")
         self.litellm_metadata: dict[str, object] = litellm_metadata if _is_json_object(litellm_metadata) else {}
@@ -2097,12 +2131,15 @@ class ResponsesWebSocketStreaming:
         self.authorized_model: str | None = authorized_model
         self.request_defaults: ResponsesWebSocketRequestDefaults | None = request_defaults
 
-    def _start_turn(self, client_frame: str | None) -> None:
+    def _start_turn(
+        self, client_frame: str | None, guardrail_information: tuple[Mapping[str, object], ...] = ()
+    ) -> None:
         start_time: Final = datetime.now()  # noqa: DTZ005  # naive to match the logging pipeline start_time
         turn_logging_obj: Final = self.logging_obj.copy_for_new_call(
             litellm_call_id=str(uuid.uuid4()), start_time=start_time
         )
         self._detach_budget_reservation()
+        _set_turn_guardrail_information(turn_logging_obj, guardrail_information)
         turn_logging_obj.model_call_details["messages"] = list(_logged_user_messages(client_frame))
         turn_logging_obj.pre_call(input=client_frame, api_key="")
         self._open_turns = (*self._open_turns, _ResponsesWsTurn(logging_obj=turn_logging_obj))
@@ -2121,10 +2158,36 @@ class ResponsesWebSocketStreaming:
             for key, value in litellm_params.items()
         }
 
-    def _record_client_frame(self, client_frame: str) -> None:
+    def _record_client_frame(
+        self, client_frame: str, guardrail_information: tuple[Mapping[str, object], ...] = ()
+    ) -> None:
         frame: Final = _json_object_or_none(client_frame)
         if frame is not None and frame.get("type") == "response.create":
-            self._start_turn(client_frame)
+            self._start_turn(client_frame, guardrail_information)
+
+    async def _guard_frame(self, message: str) -> GuardedResponsesWsFrame | None:
+        """Run the proxy's pre_call guardrails on one ``response.create`` frame.
+
+        Returns None when a guardrail rejects the frame: the client gets an ``error`` event and the
+        frame is dropped while the connection stays open for the next turn.
+        """
+        frame: Final = _json_object_or_none(message)
+        if self.frame_guard is None or frame is None or frame.get("type") != "response.create":
+            return GuardedResponsesWsFrame(frame=message)
+        try:
+            return await self.frame_guard(message)
+        except Exception as e:  # noqa: BLE001  # any guardrail rejection maps to one client-facing error event
+            verbose_logger.info("Responses WebSocket: pre_call guardrail rejected a response.create frame: %s", e)
+            await self._send_error_event("invalid_request_error", str(e))
+            return None
+
+    async def _forward_guarded_frame(self, message: str) -> None:
+        guarded: Final = await self._guard_frame(message)
+        if guarded is None:
+            return
+        masked: Final = await self._mask_response_create(guarded.frame)
+        self._record_client_frame(masked, guarded.guardrail_information)
+        await self.backend_ws.send(masked)
 
     def _record_backend_event(self, event: str) -> None:
         event_obj: Final = _json_object_or_none(event)
@@ -2549,38 +2612,29 @@ class ResponsesWebSocketStreaming:
                 self.quota_callbacks, self.user_api_key_dict, self.authorized_model, message
             )
         except RateLimitError as e:
-            try:
-                await self.websocket.send_text(
-                    json.dumps(
-                        {
-                            "type": "error",
-                            "error": {
-                                "type": "rate_limit_exceeded",
-                                "message": str(e),
-                            },
-                        }
-                    )
-                )
-            except Exception:  # noqa: BLE001, S110  # client may already be gone
-                pass
+            await self._send_error_event("rate_limit_exceeded", str(e))
             return False
         return True
+
+    async def _send_error_event(self, error_type: str, message: str) -> None:
+        try:
+            await self.websocket.send_text(
+                json.dumps({"type": "error", "error": {"type": error_type, "message": message}})
+            )
+        except Exception:  # noqa: BLE001, S110  # client may already be gone
+            pass
 
     async def client_to_backend(self) -> None:
         """Forward response.create events from client to backend."""
         try:
             if self.first_message is not None and await self._enforce_or_reject_frame(self.first_message):
-                masked_first: Final = await self._mask_response_create(self.first_message)
-                self._record_client_frame(masked_first)
-                await self.backend_ws.send(masked_first)
+                await self._forward_guarded_frame(self.first_message)
 
             while True:
                 message = await self.websocket.receive_text()
                 if not await self._enforce_or_reject_frame(message):
                     continue
-                masked = await self._mask_response_create(message)
-                self._record_client_frame(masked)
-                await self.backend_ws.send(masked)
+                await self._forward_guarded_frame(message)
 
         except Exception as e:
             verbose_logger.debug("Responses WS client_to_backend ended: %s", e)

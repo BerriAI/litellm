@@ -2667,6 +2667,7 @@ async def _aresponses_websocket(
         "api_key",
         "timeout",
         "first_message",
+        "responses_ws_frame_guard",
         *_RESPONSES_WS_ROUTING_HINT_KEYS,
     }
     remaining_kwargs: Final = {k: v for k, v in kwargs.items() if k not in _explicit_keys}
@@ -2690,5 +2691,6 @@ async def _aresponses_websocket(
         litellm_metadata=_build_litellm_metadata_for_ws(kwargs),
         custom_llm_provider=_custom_llm_provider,
         request_defaults=_build_responses_websocket_request_defaults(deployment_kwargs),
+        frame_guard=kwargs.get("responses_ws_frame_guard"),
         **remaining_kwargs,
     )

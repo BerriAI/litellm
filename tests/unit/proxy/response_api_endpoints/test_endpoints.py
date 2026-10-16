@@ -1918,8 +1918,43 @@ class TestResponsesWSFirstFrameModelAuth:
         assert routed["input"] == replayed_input
         assert routed["previous_response_id"] == "resp_prev"
         assert processor.common_processing_pre_call_logic.await_args.kwargs["model"] == "gpt-4o-mini"
+        assert processor.common_processing_pre_call_logic.await_args.kwargs["skip_guardrails"] is True
+        assert callable(routed["responses_ws_frame_guard"])
         assert mock_route_request.await_args.kwargs["route_type"] == "_aresponses_websocket"
         ws.close.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_frame_guard_runs_the_guardrail_walk_on_the_frame_body_and_returns_its_records(self):
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
+
+        async def pre_call_hook(user_api_key_dict, data, call_type, guardrails_only):
+            assert call_type == "aresponses" and guardrails_only is True
+            assert "type" not in data and data["model"] == "gpt-4o-mini"
+            assert data["litellm_metadata"]["user_api_key_hash"] == "hash"
+            assert "standard_logging_guardrail_information" not in data["litellm_metadata"]
+            data["litellm_metadata"]["standard_logging_guardrail_information"] = [{"guardrail_name": "turn"}]
+            return {**data, "input": data["input"] + " [guarded]"}
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=pre_call_hook)
+        admitted = {
+            "model": "gpt-4o-mini",
+            "litellm_metadata": {
+                "user_api_key_hash": "hash",
+                "standard_logging_guardrail_information": [{"guardrail_name": "admission"}],
+            },
+        }
+        guard = _responses_ws_frame_guard(admitted, MagicMock(), proxy_logging_obj)
+
+        first = await guard(json.dumps({"type": "response.create", "model": "alias", "input": "hi"}))
+        second = await guard(json.dumps({"type": "response.create", "input": "again"}))
+
+        assert json.loads(first.frame) == {"type": "response.create", "model": "alias", "input": "hi [guarded]"}
+        assert first.guardrail_information == ({"guardrail_name": "turn"},)
+        assert json.loads(second.frame)["input"] == "again [guarded]"
+        assert admitted["litellm_metadata"]["standard_logging_guardrail_information"] == [
+            {"guardrail_name": "admission"}
+        ]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("provider_rejected", [True, False])

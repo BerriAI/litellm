@@ -204,6 +204,7 @@ def _rust_responses_websocket_enabled(
 from .http_handler import get_shared_realtime_ssl_context, realtime_ssl_for_url
 
 if TYPE_CHECKING:
+    from litellm.responses.streaming_iterator import ResponsesWsFrameGuard
     from aiohttp import ClientSession
     from websockets.asyncio.client import ClientConnection
 
@@ -6806,6 +6807,7 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str | None = None,
         first_message: str | None = None,
         request_defaults: ResponsesWebSocketRequestDefaults | None = None,
+        frame_guard: "ResponsesWsFrameGuard | None" = None,
         **kwargs: object,
     ) -> Exception | None:
         """
@@ -6962,6 +6964,7 @@ class BaseLLMHTTPHandler:
                     authorized_model=model,
                     custom_llm_provider=custom_llm_provider,
                     request_defaults=request_defaults,
+                    frame_guard=frame_guard,
                 )
                 return await streaming.bidirectional_forward()
 
