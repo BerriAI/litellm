@@ -1545,9 +1545,9 @@ def test_system_prompt_only_adds_blank_user_message():
 
 @pytest.fixture
 def _cached_vertex_credentials(monkeypatch: pytest.MonkeyPatch) -> str:
-    from litellm.main import (
+    from litellm.main import vertex_embedding
+    from litellm.native.chat_providers.handlers import (
         vertex_chat_completion,
-        vertex_embedding,
         vertex_model_garden_chat_completion,
         vertex_partner_models_chat_completion,
     )

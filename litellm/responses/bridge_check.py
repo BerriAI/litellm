@@ -22,9 +22,9 @@ def _is_openai_backed_api_base(api_base: str) -> bool:
     return hostname is not None and (hostname == _OPENAI_API_HOST or hostname.endswith(f".{_OPENAI_API_HOST}"))
 
 
-def _resolve_openai_api_base(api_base: str | None) -> str:
+def resolve_openai_api_base(api_base: str | None) -> str:
     """Effective OpenAI base a chat request will hit: arg > global > env > default. The bridge gate
-    and the ``_complete_custom_openai`` chat handler MUST resolve this identically, or a custom base
+    and the ``complete_custom_openai`` chat handler MUST resolve this identically, or a custom base
     set via ``litellm.api_base`` or ``OPENAI_BASE_URL``/``OPENAI_API_BASE`` is invisible to the gate,
     which then misreads it as the default OpenAI endpoint and bridges a request the backend can't serve."""
     return (
@@ -122,7 +122,7 @@ def responses_api_bridge_check(
     # exactly as the chat handler does, so a custom base set via litellm.api_base or
     # OPENAI_BASE_URL/OPENAI_API_BASE isn't misread as the default and bridged to a /responses route it
     # lacks. A whitespace-only base collapses to the default too.
-    resolved_api_base: Final = _resolve_openai_api_base(api_base).strip()
+    resolved_api_base: Final = resolve_openai_api_base(api_base).strip()
     on_foundry_openai_endpoint: Final = custom_llm_provider == "azure_ai" and azure_ai_supports_native_responses(
         model, api_base
     )
