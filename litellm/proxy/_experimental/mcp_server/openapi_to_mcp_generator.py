@@ -9,7 +9,15 @@ import os
 import re
 from collections.abc import Mapping, Sequence
 from pathlib import PurePosixPath
-from typing import Final, Literal, Protocol, TypeAlias, TypedDict, cast, overload
+from typing import (
+    Final,
+    Literal,
+    Protocol,
+    TypeAlias,
+    TypedDict,
+    cast,  # noqa: TID251  # narrows validated OpenAPI mappings to the static schema
+    overload,
+)
 from urllib.parse import quote
 
 import httpx
@@ -244,7 +252,9 @@ def _validate_openapi_mapping(value: object) -> _OpenAPISpec:
         validated: Final = _OPENAPI_MAPPING_ADAPTER.validate_python(value)
     except ValueError as exc:
         raise TypeError("OpenAPI spec must be a JSON or YAML object") from exc
-    return cast(_OpenAPISpec, validated)
+    return cast(  # cast-ok: the outer mapping is validated, while nested OpenAPI fields remain dynamic
+        _OpenAPISpec, validated
+    )
 
 
 async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None) -> _OpenAPISpec:
