@@ -49,6 +49,20 @@ lite config unset hidden_commands   # list everything again
 
 Hidden commands drop out of both `lite --help` and the interactive shell's "Available commands" block, and stay runnable so existing scripts keep working
 
+## Automatic Browser Sign-In for Agents
+
+When a command that calls the proxy (`lite keys`, `lite models`, `lite model-groups`, `lite users`, `lite teams`, `lite credentials`) gets a 401 and you did not pass a key with `--api-key` or `LITELLM_PROXY_API_KEY`, `lite` signs you in through your browser and then runs the same command again with the new key. That covers a proxy you never logged in to and a stored login the proxy no longer accepts. It needs no terminal, so an AI agent that runs `lite` through its shell tool finishes the command on its own once you approve the sign-in in the browser:
+
+```bash
+lite --base-url https://your-proxy.example.com keys generate --models gpt-5.4-mini --key-alias experiment-1
+```
+
+The sign-in is the browser flow of `lite login --pkce`, so you pick your team on the consent page, the credential is stored where `lite login` stores it, and its refresh token renews the key on its own from then on. Every line about the sign-in goes to stderr, so stdout carries only the command's own output, such as the JSON from `lite keys generate`. If another `lite` process stored a newer login for the same proxy in the meantime, that key is tried first and no browser opens. `lite` keeps one stored login, so when that login is for a different proxy, the command fails and tells you to run `lite --base-url <proxy> login` to switch, instead of replacing and revoking the other proxy's login on its own
+
+Nothing signs in ahead of time. A proxy that accepts the request without a key never opens a browser, and neither does `--help`. The proxy also answers 401 when a valid key lacks the role a command needs, such as a non-admin key running `lite credentials list`, so before it signs in, `lite` checks the rejected key against `/v1/models`. When the proxy answers that check with a success, the command fails with an error that says the key likely lacks the role, and no browser opens. A key you passed yourself is never swapped out, and a 401 for it fails with an error that names `--api-key` and `LITELLM_PROXY_API_KEY`. When the browser sign-in cannot finish (the machine has no web browser, the proxy does not serve `/.well-known/litellm-cli-auth`, you deny the request, or nobody approves it within 5 minutes), the command fails and tells you to run `lite login` from a terminal or set `LITELLM_PROXY_API_KEY`
+
+`lite chat`, `lite http request`, `lite keys import`, and `lite teams assign-key` do not sign in on their own. `lite chat` and `lite teams assign-key` are interactive, `lite keys import` also talks to a second proxy, and `lite http request` cannot tell a 401 from the proxy apart from a provider's 401 that the proxy passes through
+
 ## Global Options
 
 - `--version`, `-v`: Print the LiteLLM Proxy client and server version and exit.
