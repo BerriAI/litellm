@@ -21,11 +21,13 @@ from fastapi.responses import JSONResponse
 
 import litellm
 from litellm import Router
+from litellm.llms.anthropic.count_tokens import handler as anthropic_count_tokens_handler
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
+from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import VertexAIPartnerModelsTokenCounter
 from litellm.proxy._types import ProxyException, TokenCountRequest
 from litellm.proxy.anthropic_endpoints.endpoints import (
     count_tokens as anthropic_count_tokens,
@@ -1205,7 +1207,7 @@ def _gemini_word_counting_peer(request: httpx.Request) -> httpx.Response:
     return httpx.Response(200, json={"totalTokens": total}, request=request)
 
 
-def _gemini_unavailable_peer(request: httpx.Request) -> httpx.Response:
+def _unavailable_peer(request: httpx.Request) -> httpx.Response:
     return httpx.Response(503, json={"error": {"message": "unavailable"}}, request=request)
 
 
@@ -1247,28 +1249,92 @@ async def test_call_endpoint_counts_a_prompt_like_the_same_text_sent_as_a_user_m
     assert from_prompt.total_tokens == from_message.total_tokens == len(text.split())
 
 
+class _PartnerMessage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    content: str = ""
+
+
+class _PartnerCountRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    messages: tuple[_PartnerMessage, ...] = ()
+
+
+async def _vertex_partner_word_count(
+    model: str, request_data: JsonValue, litellm_params: JsonValue
+) -> dict[str, JsonValue]:
+    body: Final = _PartnerCountRequest.model_validate(request_data)
+    return {"input_tokens": sum(len(message.content.split()) for message in body.messages)}
+
+
 @pytest.mark.asyncio
-async def test_call_endpoint_prompt_keeps_the_local_count_when_the_provider_count_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_call_endpoint_counts_a_prompt_on_a_vertex_ai_deployment(monkeypatch: pytest.MonkeyPatch) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "vertex-counted",
+                "litellm_params": {
+                    "model": "vertex_ai/claude-sonnet-4-5",
+                    "vertex_project": "test-project",
+                    "vertex_location": "us-east5",
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    text: Final = "The quick brown fox jumps over the lazy dog."
+
+    with patch.object(
+        VertexAIPartnerModelsTokenCounter, "handle_count_tokens_request", side_effect=_vertex_partner_word_count
+    ):
+        from_prompt: Final = await token_counter(
+            request=TokenCountRequest(model="vertex-counted", prompt=text), call_endpoint=True
+        )
+
+    assert (from_prompt.error, from_prompt.total_tokens) == (False, 9)
+
+
+@pytest.mark.asyncio
+async def test_call_endpoint_prompt_next_to_messages_counts_the_messages(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _gemini_router())
-    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_gemini_unavailable_peer))
-    text: Final = "hello there"
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_gemini_word_counting_peer))
+    messages: Final = [{"role": "user", "content": "The quick brown fox jumps over the lazy dog."}]
 
     with patch.object(gemini_count_tokens_handler, "get_async_httpx_client", return_value=client):
-        from_prompt: Final = await token_counter(
-            request=TokenCountRequest(model="gemini-counted", prompt=text), call_endpoint=True
+        with_prompt: Final = await token_counter(
+            request=TokenCountRequest(model="gemini-counted", prompt="hi", messages=messages), call_endpoint=True
         )
-        with pytest.raises(ProxyException):
-            await token_counter(
-                request=TokenCountRequest(model="gemini-counted", messages=[{"role": "user", "content": text}]),
-                call_endpoint=True,
-            )
-    local: Final = await token_counter(
-        request=TokenCountRequest(model="gemini-counted", prompt=text), call_endpoint=False
-    )
+        messages_only: Final = await token_counter(
+            request=TokenCountRequest(model="gemini-counted", messages=messages), call_endpoint=True
+        )
 
-    assert (from_prompt.error, from_prompt.total_tokens, from_prompt.tokenizer_type) == (
+    assert with_prompt.total_tokens == messages_only.total_tokens == 9
+
+
+@pytest.mark.asyncio
+async def test_call_endpoint_prompt_keeps_the_local_count_on_a_counter_that_needs_messages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "anthropic-counted",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-5",
+                    "api_key": "test-key",
+                    "api_base": "https://count-tokens.test",
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_unavailable_peer))
+    request: Final = TokenCountRequest(model="anthropic-counted", prompt="The quick brown fox jumps over the lazy dog.")
+
+    with patch.object(anthropic_count_tokens_handler, "get_async_httpx_client", return_value=client):
+        with_endpoint: Final = await token_counter(request=request, call_endpoint=True)
+    local: Final = await token_counter(request=request, call_endpoint=False)
+
+    assert (with_endpoint.error, with_endpoint.total_tokens, with_endpoint.tokenizer_type) == (
         False,
         local.total_tokens,
         local.tokenizer_type,
