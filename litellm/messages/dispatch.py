@@ -14,15 +14,14 @@ from litellm.rust_bridge.messages.entrypoints import (
     NATIVE_MESSAGES,
 )
 from litellm.rust_bridge.public_call import (
+    AsyncFlag,
     NativeCall,
     bind,
-    keyword_arguments,
     native_call,
     native_call_hook,
     optional_sequence,
     optional_str,
     signature,
-    without,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 
@@ -49,6 +48,7 @@ def _python_amessages() -> PythonAmessages:
 
 _PYTHON_MESSAGES: Final = _python_messages()
 _MESSAGES: Final = signature(_PYTHON_MESSAGES)
+_FLAG: Final = AsyncFlag("is_async", sync=_MESSAGES)
 _PYTHON_AMESSAGES: Final = _python_amessages()
 _AMESSAGES: Final = signature(_PYTHON_AMESSAGES)
 
@@ -124,8 +124,8 @@ def anthropic_messages_handler(
     **kwargs: object,  # kwargs-ok: preserve the public Anthropic Messages call shape
 ) -> MessagesResult | Coroutine[object, object, MessagesResult]:
     python: Final = _PYTHON_MESSAGES
-    if kwargs.get("is_async") is True:
-        return anthropic_messages(**keyword_arguments(_MESSAGES, args, kwargs, without="is_async"))
+    if _FLAG.requested(kwargs):
+        return anthropic_messages(**_FLAG.keywords(args, kwargs))
     return _DISPATCH.run(
         args,
         kwargs,
@@ -139,7 +139,7 @@ async def anthropic_messages(*args: object, **kwargs: object) -> MessagesResult:
     python: Final = _PYTHON_AMESSAGES
     return await _ADISPATCH.arun(
         args,
-        without(kwargs, "is_async"),
+        _FLAG.dropped(kwargs),
         python=python,
         binding=NATIVE_AMESSAGES,
         native=native_call_hook,

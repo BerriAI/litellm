@@ -7,14 +7,13 @@ from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterat
 from litellm.rust_bridge.catalog import Route, RouteContext
 from litellm.rust_bridge.dispatch import PublicDispatch
 from litellm.rust_bridge.public_call import (
+    AsyncFlag,
     NativeCall,
     bind,
-    keyword_arguments,
     native_call,
     native_call_hook,
     optional_str,
     signature,
-    without,
 )
 from litellm.rust_bridge.responses.entrypoints import (
     NATIVE_ARESPONSES,
@@ -45,6 +44,7 @@ def _python_aresponses() -> PythonAresponses:
 
 _PYTHON_RESPONSES: Final = _python_responses()
 _RESPONSES: Final = signature(_PYTHON_RESPONSES)
+_FLAG: Final = AsyncFlag("aresponses", sync=_RESPONSES)
 _PYTHON_ARESPONSES: Final = _python_aresponses()
 _ARESPONSES: Final = signature(_PYTHON_ARESPONSES)
 
@@ -87,8 +87,8 @@ def responses(
     **kwargs: object,  # kwargs-ok: preserve the public Responses call shape
 ) -> ResponsesResult | Coroutine[object, object, ResponsesResult]:
     python: Final = _PYTHON_RESPONSES
-    if kwargs.get("aresponses") is True:
-        return aresponses(**keyword_arguments(_RESPONSES, args, kwargs, without="aresponses"))
+    if _FLAG.requested(kwargs):
+        return aresponses(**_FLAG.keywords(args, kwargs))
     return _DISPATCH.run(
         args,
         kwargs,
@@ -102,7 +102,7 @@ async def aresponses(*args: object, **kwargs: object) -> ResponsesResult:  # kwa
     python: Final = _PYTHON_ARESPONSES
     return await _ADISPATCH.arun(
         args,
-        without(kwargs, "aresponses"),
+        _FLAG.dropped(kwargs),
         python=python,
         binding=NATIVE_ARESPONSES,
         native=native_call_hook,

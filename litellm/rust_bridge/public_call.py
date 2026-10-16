@@ -113,15 +113,23 @@ def _without_bags(legacy: inspect.Signature, named: Mapping[str, object]) -> Map
     return MappingProxyType({name: value for name, value in named.items() if legacy.parameters[name].kind not in _BAGS})
 
 
-def without(kwargs: Mapping[str, object], flag: str) -> Mapping[str, object]:
-    return MappingProxyType({name: value for name, value in kwargs.items() if name != flag})
+@dataclass(frozen=True, slots=True)
+class AsyncFlag:
+    """The keyword that makes a sync entry hand off to its async entry, as in ``completion(..., acompletion=True)``."""
 
+    name: str
+    sync: inspect.Signature
 
-def keyword_arguments(
-    legacy: inspect.Signature, args: tuple[object, ...], kwargs: Mapping[str, object], *, without: str
-) -> Mapping[str, object]:
-    named: Final = _without_bags(legacy, legacy.bind_partial(*args, **kwargs).arguments)
-    return MappingProxyType({name: value for name, value in {**named, **kwargs}.items() if name != without})
+    def requested(self, kwargs: Mapping[str, object]) -> bool:
+        return kwargs.get(self.name) is True
+
+    def dropped(self, kwargs: Mapping[str, object]) -> Mapping[str, object]:
+        return MappingProxyType({name: value for name, value in kwargs.items() if name != self.name})
+
+    def keywords(self, args: tuple[object, ...], kwargs: Mapping[str, object]) -> Mapping[str, object]:
+        """Name positionals by the sync signature, since the async entry may order its parameters differently."""
+        named: Final = _without_bags(self.sync, self.sync.bind_partial(*args, **kwargs).arguments)
+        return self.dropped({**named, **kwargs})
 
 
 def native_call(legacy: inspect.Signature, args: tuple[object, ...], kwargs: Mapping[str, object]) -> NativeCall:

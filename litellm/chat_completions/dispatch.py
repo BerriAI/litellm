@@ -10,15 +10,14 @@ from litellm.rust_bridge.chat_completions.entrypoints import (
 )
 from litellm.rust_bridge.dispatch import PublicDispatch
 from litellm.rust_bridge.public_call import (
+    AsyncFlag,
     NativeCall,
     bind,
-    keyword_arguments,
     native_call,
     native_call_hook,
     optional_sequence,
     optional_str,
     signature,
-    without,
 )
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
@@ -46,6 +45,7 @@ def _python_acompletion() -> PythonAcompletion:
 
 _PYTHON_COMPLETION: Final = _python_completion()
 _COMPLETION: Final = signature(_PYTHON_COMPLETION)
+_FLAG: Final = AsyncFlag("acompletion", sync=_COMPLETION)
 _PYTHON_ACOMPLETION: Final = _python_acompletion()
 _ACOMPLETION: Final = signature(_PYTHON_ACOMPLETION)
 
@@ -89,8 +89,8 @@ def completion(
     **kwargs: object,  # kwargs-ok: preserve the public chat completions call shape
 ) -> ChatResult | Coroutine[object, object, ChatResult]:
     python: Final = _PYTHON_COMPLETION
-    if kwargs.get("acompletion") is True:
-        return acompletion(**keyword_arguments(_COMPLETION, args, kwargs, without="acompletion"))
+    if _FLAG.requested(kwargs):
+        return acompletion(**_FLAG.keywords(args, kwargs))
     return _DISPATCH.run(
         args,
         kwargs,
@@ -104,7 +104,7 @@ async def acompletion(*args: object, **kwargs: object) -> ChatResult:  # kwargs-
     python: Final = _PYTHON_ACOMPLETION
     return await _ADISPATCH.arun(
         args,
-        without(kwargs, "acompletion"),
+        _FLAG.dropped(kwargs),
         python=python,
         binding=NATIVE_ACOMPLETION,
         native=native_call_hook,

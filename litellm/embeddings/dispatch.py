@@ -10,14 +10,13 @@ from litellm.rust_bridge.embeddings.entrypoints import (
     NATIVE_EMBEDDING,
 )
 from litellm.rust_bridge.public_call import (
+    AsyncFlag,
     NativeCall,
     bind,
-    keyword_arguments,
     native_call,
     native_call_hook,
     optional_str,
     signature,
-    without,
 )
 from litellm.types.utils import EmbeddingResponse
 
@@ -33,6 +32,7 @@ _PYTHON_AEMBEDDING: Final = cast(  # cast-ok: [LIT006] preserve the legacy publi
     PythonAembedding, main.aembedding
 )
 _EMBEDDING_SIGNATURE: Final = signature(_PYTHON_EMBEDDING)
+_FLAG: Final = AsyncFlag("aembedding", sync=_EMBEDDING_SIGNATURE)
 
 
 def _public_request(
@@ -72,8 +72,8 @@ def embedding(
     *args: object,
     **kwargs: object,  # kwargs-ok: preserve the public embedding call shape
 ) -> EmbeddingResponse | Coroutine[object, object, EmbeddingResponse]:
-    if kwargs.get("aembedding") is True:
-        return aembedding(**keyword_arguments(_EMBEDDING_SIGNATURE, args, kwargs, without="aembedding"))
+    if _FLAG.requested(kwargs):
+        return aembedding(**_FLAG.keywords(args, kwargs))
     return _DISPATCH.run(
         args,
         kwargs,
@@ -86,7 +86,7 @@ def embedding(
 async def aembedding(*args: object, **kwargs: object) -> EmbeddingResponse:  # kwargs-ok: preserve the public call shape
     return await _ADISPATCH.arun(
         args,
-        without(kwargs, "aembedding"),
+        _FLAG.dropped(kwargs),
         python=_PYTHON_AEMBEDDING,
         binding=NATIVE_AEMBEDDING,
         native=native_call_hook,
