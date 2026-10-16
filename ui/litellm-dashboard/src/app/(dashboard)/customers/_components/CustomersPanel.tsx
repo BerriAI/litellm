@@ -7,7 +7,6 @@ import { useCallback, useMemo, useState } from "react";
 import {
   useCustomer,
   useDeleteCustomers,
-  useSetCustomerBlockedState,
   useSetCustomersBlockedState,
 } from "@/app/(dashboard)/hooks/customers/useCustomerMutations";
 import { useCustomers, type EndUser } from "@/app/(dashboard)/hooks/customers/useCustomers";
@@ -65,9 +64,8 @@ export default function CustomersPanel() {
   const customer = useCustomer(customerId);
   const budgetCounts = useMemo(() => getCustomerBudgetCounts(customers.data ?? []), [customers.data]);
   const deleteCustomers = useDeleteCustomers();
-  const setBlockedState = useSetCustomerBlockedState();
-  const setBulkBlockedState = useSetCustomersBlockedState();
-  const isBlocking = setBlockedState.isPending || setBulkBlockedState.isPending;
+  const setBlockedState = useSetCustomersBlockedState();
+  const isBlocking = setBlockedState.isPending;
 
   const openCustomer = useCallback(
     (id: string) => void setView({ customer: id, edit: null, customer_tab: null }),
@@ -79,20 +77,6 @@ export default function CustomersPanel() {
   );
   const closeCustomer = useCallback(() => void setView({ customer: null, edit: null, customer_tab: null }), [setView]);
   const cancelEdit = useCallback(() => void setView({ edit: null, customer_tab: "settings" }), [setView]);
-  const handleSetBlocked = useCallback(
-    async (target: EndUser) => {
-      const canSetBlocked = canModify && !isBlocking && premiumUser;
-      if (!canSetBlocked) return;
-      try {
-        await setBlockedState.mutateAsync({ userId: target.user_id, blocked: !target.blocked });
-        toast.success(target.blocked ? "Customer unblocked" : "Customer blocked");
-        setBlockTarget(null);
-      } catch (error) {
-        toast.fromError(error);
-      }
-    },
-    [canModify, premiumUser, isBlocking, setBlockedState],
-  );
   const handleDelete = async () => {
     if (!deleteTarget || !canModify) return;
     try {
@@ -105,11 +89,11 @@ export default function CustomersPanel() {
     }
   };
 
-  const handleBulkSetBlocked = async (userIds: string[], blocked: boolean): Promise<boolean> => {
+  const handleSetBlocked = async (userIds: string[], blocked: boolean): Promise<boolean> => {
     const canSetBlocked = canModify && !isBlocking && premiumUser;
     if (!userIds.length || !canSetBlocked) return false;
     try {
-      await setBulkBlockedState.mutateAsync({ userIds, blocked });
+      await setBlockedState.mutateAsync({ userIds, blocked });
       toast.success(
         `${userIds.length} customer${userIds.length === 1 ? "" : "s"} ${blocked ? "blocked" : "unblocked"}`,
       );
@@ -160,7 +144,7 @@ export default function CustomersPanel() {
           <CustomersHeader canModify={canModify} onCreate={() => setIsCreateOpen(true)} />
           <CustomersTable
             isBlocking={isBlocking}
-            onBulkSetBlocked={handleBulkSetBlocked}
+            onBulkSetBlocked={handleSetBlocked}
             data={customers.data ?? []}
             isLoading={customers.isLoading}
             isError={customers.isError}
@@ -183,8 +167,10 @@ export default function CustomersPanel() {
             blocked={!blockTarget?.blocked}
             isPending={isBlocking}
             onCancel={() => setBlockTarget(null)}
-            onConfirm={() => {
-              if (blockTarget) void handleSetBlocked(blockTarget);
+            onConfirm={async () => {
+              if (blockTarget && (await handleSetBlocked([blockTarget.user_id], !blockTarget.blocked))) {
+                setBlockTarget(null);
+              }
             }}
           />
           <CreateCustomerModal open={isCreateOpen} onOpenChange={setIsCreateOpen} onCreated={openCustomer} />
