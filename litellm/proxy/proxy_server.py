@@ -14455,7 +14455,7 @@ _DEPLOYMENT_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 def _deployment_with_request_drop_params(
     deployment: dict[str, object] | None,  # mutable-ok: BaseTokenCounter.count_tokens takes a dict deployment
-    drop_params: JsonValue,
+    drop_params: object,
 ) -> dict[str, object] | None:  # mutable-ok: BaseTokenCounter.count_tokens takes a dict deployment
     if drop_params is None:
         return deployment
@@ -14540,7 +14540,7 @@ _PROVIDERS_COUNTING_WITHOUT_MESSAGES: Final = frozenset(
 )
 
 
-def _router_default_litellm_params(router: Router) -> Mapping[str, object]:
+def _router_default_litellm_params(router: Router | None) -> Mapping[str, object]:
     defaults: Final[Mapping[str, object] | None] = getattr(router, "default_litellm_params", None)
     if defaults is None:
         return {}
@@ -14653,9 +14653,8 @@ async def count_request_tokens(
         if _model is not None:
             model_to_use = _model
 
-    count_deployment: Final = _deployment_with_request_drop_params(
-        deployment, request_litellm_params.get("drop_params")
-    )
+    sent_params: Final[Mapping[str, object]] = {**_router_default_litellm_params(llm_router), **request_litellm_params}
+    count_deployment: Final = _deployment_with_request_drop_params(deployment, sent_params.get("drop_params"))
     conversation_empty: Final = not messages and not contents
     if prompt and not conversation_empty and not deployment_drops_params(count_deployment):
         raise ProxyException(

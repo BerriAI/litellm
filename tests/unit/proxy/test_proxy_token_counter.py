@@ -1294,7 +1294,7 @@ def _build_log_messages(log_text: JsonValue) -> list[dict[str, JsonValue]]:
 
 
 async def _count_on_a_model_without_a_count_api(
-    monkeypatch: pytest.MonkeyPatch, body: dict[str, JsonValue]
+    monkeypatch: pytest.MonkeyPatch, body: Mapping[str, object], router_defaults: dict[str, JsonValue] | None = None
 ) -> JSONResponse | dict[str, JsonValue]:
     import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
     import litellm.proxy.proxy_server as proxy_server
@@ -1305,7 +1305,8 @@ async def _count_on_a_model_without_a_count_api(
                 "model_name": "mistral-tool-result",
                 "litellm_params": {"model": "mistral/mistral-small-latest", "api_key": "sk-test"},
             }
-        ]
+        ],
+        default_litellm_params=router_defaults,
     )
     request: Final = MagicMock(spec=Request)
     request.headers = {"user-agent": "python-httpx/0.28.1"}
@@ -1344,6 +1345,25 @@ async def test_count_tokens_without_a_count_api_counts_a_non_string_tool_result_
 
     assert isinstance(response, dict)
     assert isinstance(response["input_tokens"], int) and response["input_tokens"] > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("body_drop_params", "expected_status"), (({}, None), ({"drop_params": False}, 400)))
+async def test_count_tokens_honors_router_default_drop_params_unless_the_body_overrides_it(
+    monkeypatch: pytest.MonkeyPatch, body_drop_params: dict[str, JsonValue], expected_status: int | None
+) -> None:
+    response: Final = await _count_on_a_model_without_a_count_api(
+        monkeypatch,
+        {"model": "mistral-tool-result", "messages": _build_log_messages(None), **body_drop_params},
+        router_defaults={"drop_params": True},
+    )
+
+    match response:
+        case JSONResponse():
+            assert response.status_code == expected_status
+        case _:
+            assert expected_status is None
+            assert isinstance(response["input_tokens"], int) and response["input_tokens"] > 0
 
 
 @pytest.mark.asyncio
