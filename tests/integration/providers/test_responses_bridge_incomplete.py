@@ -50,6 +50,7 @@ _TWO_MESSAGES_THEN_CALL: Final = (
 )
 
 
+@pytest.mark.covers("other.provider_wire.responses_bridge.two_messages_and_function_call_fold_into_one_choice")
 def test_chat_over_responses_deployment_folds_two_messages_and_function_call_into_one_choice(
     gateway: Gateway,
 ) -> None:
@@ -116,6 +117,7 @@ _COMMENTARY_THEN_FINAL_ANSWER: Final = (
 )
 
 
+@pytest.mark.covers("other.provider_wire.responses_bridge.commentary_and_final_answer_fold_into_one_choice")
 def test_chat_over_responses_deployment_folds_commentary_and_final_answer_into_one_choice(
     gateway: Gateway,
 ) -> None:
@@ -239,6 +241,7 @@ def _responses_body(response_id: str, output: tuple[dict[str, JsonValue], ...]) 
     ).encode()
 
 
+@pytest.mark.covers("other.provider_wire.responses_bridge.reasoning_messages_and_call_fold_into_one_choice")
 def test_chat_over_responses_deployment_folds_reasoning_two_messages_and_function_call_into_one_choice(
     gateway: Gateway,
 ) -> None:
@@ -282,6 +285,7 @@ def test_chat_over_responses_deployment_folds_reasoning_two_messages_and_functio
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/responses")]
 
 
+@pytest.mark.covers("other.provider_wire.responses_bridge.message_and_two_calls_fold_numbered_0_1")
 def test_chat_over_responses_deployment_folds_message_and_two_function_calls_into_one_choice(
     gateway: Gateway,
 ) -> None:
@@ -423,6 +427,7 @@ def _sse_payloads(lines: list[str]) -> list[dict[str, JsonValue]]:
     return [json.loads(line[6:]) for line in lines if line.startswith("data: ") and line != "data: [DONE]"]
 
 
+@pytest.mark.covers("other.provider_wire.responses_bridge.stream_two_messages_and_call_fold_into_one_choice")
 def test_chat_stream_over_responses_deployment_folds_two_messages_and_function_call_into_one_choice(
     gateway: Gateway,
 ) -> None:
@@ -504,6 +509,7 @@ def test_chat_stream_over_responses_deployment_folds_two_messages_and_function_c
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/responses")]
 
 
+@pytest.mark.covers("other.provider_wire.responses_bridge.stream_commentary_and_final_answer_fold_into_one_choice")
 def test_chat_stream_over_responses_deployment_folds_commentary_and_final_answer_into_one_choice(
     gateway: Gateway,
 ) -> None:
@@ -613,6 +619,7 @@ def _stream_tool_calls(deltas: list[dict[str, JsonValue]]) -> list[dict[str, Jso
     ]
 
 
+@pytest.mark.covers("other.provider_wire.responses_bridge.stream_reasoning_messages_and_call_fold_into_one_choice")
 def test_chat_stream_over_responses_deployment_folds_reasoning_two_messages_and_function_call_into_one_choice(
     gateway: Gateway,
 ) -> None:
@@ -673,6 +680,7 @@ def test_chat_stream_over_responses_deployment_folds_reasoning_two_messages_and_
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/responses")]
 
 
+@pytest.mark.covers("other.provider_wire.responses_bridge.stream_message_and_two_calls_fold_numbered_0_1")
 def test_chat_stream_over_responses_deployment_folds_message_and_two_function_calls_into_one_choice(
     gateway: Gateway,
 ) -> None:
