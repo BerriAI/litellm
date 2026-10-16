@@ -88,7 +88,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_parent_otel_span_from_kwargs,
 )
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
-from litellm.litellm_core_utils.credential_accessor import CredentialAccessor, reject_federated_credential_reference
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor, reject_api_key_secret_reference
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     declared_authenticating_provider,
@@ -346,7 +346,6 @@ from litellm.types.router import (
     SearchToolTypedDict,
     TaggedPreRoutingStrategy,
     holds_secret_pointer,
-    reject_server_owned_wif_params,
 )
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
@@ -13940,8 +13939,7 @@ class Router:
         back on a routing pass that pins none."""
         if not tier_litellm_params:
             return False
-        reject_server_owned_wif_params(tier_litellm_params)
-        reject_federated_credential_reference(tier_litellm_params)
+        reject_api_key_secret_reference(tier_litellm_params)
         accepted_tier_params: Final = self._tier_params_the_target_accepts(model, tier_litellm_params, request_kwargs)
         surface_tier_params: Final = self._tier_ceiling_under_the_surface_name(
             accepted_tier_params, responses_call=responses_call

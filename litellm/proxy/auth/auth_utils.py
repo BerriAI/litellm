@@ -21,7 +21,7 @@ from litellm.constants import (
     MINIMUM_CUSTOM_KEY_LENGTH,
     STANDARD_CUSTOMER_ID_HEADERS,
 )
-from litellm.litellm_core_utils.credential_accessor import reject_federated_credential_reference
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor, reject_api_key_secret_reference
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import (
     SSRFError,
@@ -36,7 +36,7 @@ from litellm.proxy.common_utils.http_parsing_utils import extract_nested_form_me
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
 )
-from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS, Deployment
+from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS, Deployment, server_owned_wif_fields_present
 from litellm.types.router import reject_server_owned_wif_params as _reject_server_owned_wif_params
 from litellm.types.utils import CustomPricingLiteLLMParams, oauth_token_exchange_litellm_params
 
@@ -244,8 +244,40 @@ def _allow_model_level_clientside_configurable_parameters(
 # post-authentication merge without core importing from the proxy package.
 reject_server_owned_wif_params = _reject_server_owned_wif_params
 
+_CREDENTIAL_VALUES: Final = TypeAdapter(dict[str, object])
 _DECODED_JSON: Final = TypeAdapter(object)
 _LIST_ENTRIES: Final = TypeAdapter(tuple[object, ...])
+
+
+def reject_federated_credential_reference(body: Mapping[str, object]) -> None:
+    """Raise ``ValueError`` if a request body picks a server-owned identity by credential name.
+
+    ``load_credentials_from_list`` merges a named credential's values into the call, so a body
+    naming a federated credential moves the token exchange onto that credential's federation rule
+    and organization exactly as sending the federation fields inline would, which
+    ``reject_server_owned_wif_params`` already refuses, and a body naming one whose ``api_key`` is
+    an ``oidc/`` secret reference gets the proxy to read that secret for a call it shapes. Attaching
+    either is a deployment decision, so it is refused with no client-side opt-in to relax it, the
+    same as the inline form.
+
+    Only credentials already loaded into memory can be resolved here, which is every credential the
+    proxy would resolve for the call itself: ``load_credentials_from_list`` reads the same list.
+    ``route_manages_deployments`` names the routes this is not applied to, where choosing the
+    credential a deployment federates through is the point of the call.
+    """
+    named: Final = body.get("litellm_credential_name")
+    if not isinstance(named, str) or not named:
+        return
+    wif_fields: Final = server_owned_wif_fields_present(
+        _CREDENTIAL_VALUES.validate_python(CredentialAccessor.get_credential_values(named))
+    )
+    if wif_fields:
+        raise ValueError(
+            f"Rejected Request: litellm_credential_name={named!r} names a credential configured for "
+            f"workload identity federation or OAuth token exchange, or holding an oidc/ api_key secret "
+            f"reference ({wif_fields[0]}), which a request body cannot choose. "
+            "A proxy admin attaches it to a deployment."
+        )
 
 
 _DEPLOYMENT_MANAGEMENT_ROUTES: Final[frozenset[str]] = frozenset(
@@ -644,8 +676,7 @@ def is_request_body_safe(
                 manages_deployments=manages_deployments,
             )
     for user_config_params in _user_config_litellm_params(request_body):  # pyright: ignore[reportUnknownArgumentType]  # request_body is an untyped dict
-        reject_server_owned_wif_params(user_config_params)
-        reject_federated_credential_reference(user_config_params)
+        reject_api_key_secret_reference(user_config_params)
     return True
 
 

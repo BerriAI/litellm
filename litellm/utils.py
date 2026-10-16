@@ -7996,6 +7996,23 @@ def _infer_valid_provider_from_env_vars(
     return valid_providers
 
 
+def _provider_listing_params(
+    custom_llm_provider: str, litellm_params: LiteLLM_Params | None
+) -> Mapping[str, object] | None:
+    if litellm_params is None:
+        return None
+    params: Final = litellm_params.model_dump(exclude_none=True)
+    api_key: Final = litellm_params.api_key
+    if api_key is None or not api_key.startswith(OIDC_SECRET_REFERENCE_PREFIX):
+        return params
+    return {
+        **params,
+        "api_key": _secret_behind_api_key_reference(
+            api_key, model=litellm_params.model, llm_provider=custom_llm_provider
+        ),
+    }
+
+
 def _get_valid_models_from_provider_api(
     provider_config: BaseLLMModelInfo,
     custom_llm_provider: str,
@@ -8007,7 +8024,7 @@ def _get_valid_models_from_provider_api(
         if cached_result is not None:
             return cached_result
         models: Final = provider_config.discover_models(
-            litellm_params=litellm_params.model_dump(exclude_none=True) if litellm_params is not None else None
+            litellm_params=_provider_listing_params(custom_llm_provider, litellm_params)
         )
 
         _model_cache.set_cached_model_info(custom_llm_provider, litellm_params, models)

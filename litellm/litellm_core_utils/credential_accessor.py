@@ -4,8 +4,8 @@ from collections.abc import Mapping
 from typing import Final
 
 import litellm
-from litellm.types.router import server_owned_wif_fields_present
-from litellm.types.utils import CredentialItem
+from litellm.types.router import holds_api_key_secret_reference
+from litellm.types.utils import API_KEY_SECRET_REFERENCE_REJECTION, CredentialItem
 
 
 class CredentialAccessor:
@@ -42,30 +42,12 @@ class CredentialAccessor:
                 litellm.credential_list.append(credential)
 
 
-def reject_federated_credential_reference(body: Mapping[str, object]) -> None:
-    """Raise ``ValueError`` if a request body picks a server-owned identity by credential name.
-
-    ``load_credentials_from_list`` merges a named credential's values into the call, so a body
-    naming a federated credential moves the token exchange onto that credential's federation rule
-    and organization exactly as sending the federation fields inline would, which
-    ``reject_server_owned_wif_params`` already refuses, and a body naming one whose ``api_key`` is
-    an ``oidc/`` secret reference gets the proxy to read that secret for a call it shapes. Attaching
-    either is a deployment decision, so it is refused with no client-side opt-in to relax it, the
-    same as the inline form.
-
-    Only credentials already loaded into memory can be resolved here, which is every credential the
-    proxy would resolve for the call itself: ``load_credentials_from_list`` reads the same list.
-    ``route_manages_deployments`` names the routes this is not applied to, where choosing the
-    credential a deployment federates through is the point of the call.
-    """
-    named: Final = body.get("litellm_credential_name")
-    if not isinstance(named, str) or not named:
-        return
-    wif_fields: Final = server_owned_wif_fields_present(CredentialAccessor.get_credential_values(named))
-    if wif_fields:
+def reject_api_key_secret_reference(params: Mapping[str, object]) -> None:
+    if holds_api_key_secret_reference(params):
+        raise ValueError(API_KEY_SECRET_REFERENCE_REJECTION)
+    named: Final = params.get("litellm_credential_name")
+    if isinstance(named, str) and holds_api_key_secret_reference(CredentialAccessor.get_credential_values(named)):
         raise ValueError(
-            f"Rejected Request: litellm_credential_name={named!r} names a credential configured for "
-            f"workload identity federation or OAuth token exchange, or holding an oidc/ api_key secret "
-            f"reference ({wif_fields[0]}), which a request body cannot choose. "
-            "A proxy admin attaches it to a deployment."
+            f"Rejected Request: litellm_credential_name={named!r} names a credential holding an oidc/ api_key "
+            "secret reference, which only a deployment a proxy admin configures can attach."
         )

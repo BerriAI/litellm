@@ -13,7 +13,7 @@ import litellm
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs, safe_deep_copy
-from litellm.litellm_core_utils.credential_accessor import reject_federated_credential_reference
+from litellm.litellm_core_utils.credential_accessor import reject_api_key_secret_reference
 from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
 from litellm.router_utils.add_retry_fallback_headers import (
@@ -783,7 +783,7 @@ async def run_async_fallback(
     for target in fallback_model_group:
         if isinstance(target, dict):
             reject_server_owned_wif_params(target)
-            reject_federated_credential_reference(target)
+            reject_api_key_secret_reference(target)
 
     for mg in fallback_model_group:
         if mg == failed_model_group:

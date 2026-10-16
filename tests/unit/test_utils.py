@@ -6954,6 +6954,26 @@ def test_oidc_api_key_of_a_kind_api_key_cannot_resolve_is_a_bad_request(
     assert reference in excinfo.value.message
 
 
+def test_provider_model_listing_sends_the_token_behind_an_oidc_api_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    token: Final = _allowed_token_file(tmp_path, monkeypatch, "listing-token")
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.get("https://api.openai.com/v1/models").respond(
+            200, json={"object": "list", "data": [{"id": "gpt-listed", "object": "model"}]}
+        )
+        listed: Final = get_valid_models(
+            check_provider_endpoint=True,
+            custom_llm_provider="openai",
+            litellm_params=LiteLLM_Params(model="openai/*", api_key=f"oidc/file/{token}"),
+        )
+        sent: Final = upstream.calls.last.request.headers["Authorization"]
+
+    assert sent == "Bearer listing-token"
+    assert any(model.endswith("gpt-listed") for model in listed)
+
+
 _MOCK_STREAM_ID: Final = "chatcmpl-mock-stream"
 _ChunkSnapshot = tuple[str, tuple[str | None, ...], Usage | None]
 
