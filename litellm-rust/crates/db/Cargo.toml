@@ -7,4 +7,11 @@ repository.workspace = true
 
 [dependencies]
 serde.workspace = true
+serde_json.workspace = true
 sqlx.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+litellm-db-testing.workspace = true
+rstest.workspace = true
+tokio.workspace = true

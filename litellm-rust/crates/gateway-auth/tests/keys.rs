@@ -3,7 +3,7 @@ use std::time::{Duration, SystemTime};
 use litellm_auth_types::SecretValue;
 use litellm_gateway_auth::{
     KeyError,
-    keys::{KeyHash, KeyLookup, KeyStatus, LookupFuture, verify_key},
+    keys::{KeyHash, KeyLookup, KeyStatus, LookupFuture, ModelAccess, verify_key},
 };
 use rstest::{fixture, rstest};
 
@@ -49,16 +49,16 @@ async fn checks_expiration(
     let hash = KeyHash::from_token(&token);
     let lookup = Lookup {
         hash: hash.clone(),
-        status: Some(KeyStatus::Active {
-            expires_at: expiration
-                .map(|seconds| SystemTime::UNIX_EPOCH + Duration::from_secs(seconds)),
-        }),
+        status: Some(KeyStatus::active(
+            expiration.map(|seconds| SystemTime::UNIX_EPOCH + Duration::from_secs(seconds)),
+            ModelAccess::default(),
+        )),
     };
 
     let result = verify_key(&lookup, &token, || now).await;
 
     match valid {
-        true => assert_eq!(result.unwrap(), hash),
+        true => assert_eq!(result.unwrap().hash, hash),
         false => assert!(matches!(result, Err(KeyError::Expired))),
     }
 }
@@ -85,10 +85,24 @@ async fn rejects_unusable_keys(
 
 #[rstest]
 #[tokio::test]
+async fn reports_blocked_keys_separately(token: SecretValue, now: SystemTime) {
+    let lookup = Lookup {
+        hash: KeyHash::from_token(&token),
+        status: Some(KeyStatus::Blocked),
+    };
+
+    assert!(matches!(
+        verify_key(&lookup, &token, || now).await,
+        Err(KeyError::Blocked)
+    ));
+}
+
+#[rstest]
+#[tokio::test]
 async fn rejects_a_different_token(token: SecretValue, now: SystemTime) {
     let lookup = Lookup {
         hash: KeyHash::from_token(&token),
-        status: Some(KeyStatus::Active { expires_at: None }),
+        status: Some(KeyStatus::active(None, ModelAccess::default())),
     };
 
     assert!(matches!(

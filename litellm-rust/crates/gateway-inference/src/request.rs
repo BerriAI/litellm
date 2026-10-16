@@ -127,6 +127,7 @@ pub(crate) async fn authorize(
     let access = litellm_gateway_auth::AccessRequest::Model {
         name: name.into(),
         deployment: deployment.model.clone(),
+        team_id: deployment.team_id.clone(),
     };
     identity
         .authorize(access.clone())
@@ -153,13 +154,32 @@ pub(crate) fn resolve_group<'a>(
         .ok_or_else(|| Error::UnknownModel(model.to_owned()))
 }
 
-/// One deployment of the group a request names, for endpoints served without retries.
+/// Whether routing may pick `deployment` for the caller: a deployment owned by a team
+/// (`model_info.team_id`) serves only that team's virtual keys, as the proxy's
+/// `filter_team_based_models` does.
+pub(crate) fn usable(
+    identity: &litellm_gateway_auth::AuthenticatedRequest,
+) -> impl Fn(&Deployment) -> bool + '_ {
+    |deployment| identity.may_use_deployment(deployment.team_id.as_deref())
+}
+
+/// The error for a group none of whose deployments the caller may use.
+pub(crate) fn no_usable_deployment(body: &Map<String, Value>) -> Error {
+    Error::UnknownModel(model_name(body).unwrap_or_default().to_owned())
+}
+
+/// One deployment the caller may use of the group a request names, for endpoints served
+/// without retries.
 pub(crate) fn resolve_deployment<'a>(
     gateway: &'a Gateway,
+    identity: &litellm_gateway_auth::AuthenticatedRequest,
     body: &Map<String, Value>,
 ) -> Result<&'a Deployment, Error> {
     let model = model_name(body)?;
-    let deployment = gateway.models.select(resolve_group(gateway, body)?);
+    let deployment = gateway
+        .models
+        .select_where(resolve_group(gateway, body)?, usable(identity))
+        .ok_or_else(|| no_usable_deployment(body))?;
     crate::observe::record(model, deployment);
     Ok(deployment)
 }

@@ -42,6 +42,26 @@ docker compose logs procmon
 Or without Docker: `go build -o bin/ ./cmd/...` and run the binaries against
 `cargo run --release -p litellm-gateway` with `LITELLM_CONFIG=out/config.yaml`.
 
+## Virtual keys
+
+The gateway accepts the master key and the virtual keys in `LiteLLM_VerificationToken`, read from
+`general_settings.database_url` or `DATABASE_URL`. Load `keys.sql` into a database the proxy's
+migrations have created, start the gateway with `DATABASE_URL` set, and drop `-key` so loadgen
+spreads requests over `out/keys.txt`:
+
+```sh
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f out/keys.sql
+DATABASE_URL=... LITELLM_CONFIG=out/config.yaml litellm-gateway &
+loadgen -workload workloads/key-churn.json -target http://127.0.0.1:4000 -messages-auth x-api-key
+```
+
+`-messages-auth x-api-key` sends the key the way the Anthropic SDK does; the gateway also reads
+`Authorization: Bearer` and Azure's `api-key`. Keys are cached for 60 s (unknown keys for 5 s), so
+`key-churn` exercises the miss path and other workloads mostly hit the cache. With `create_postgres`
+in Terraform the stack migrates the database, loads `keys.sql` and passes `DATABASE_URL` to the
+gateway; leave `KEY` unset for `cloud-run.sh`. `-key sk-loadtest-master` still works and needs no
+database.
+
 ## Run in AWS
 
 `terraform/aws` creates one VPC with a cluster placement group holding the gateway machine(s),
@@ -95,9 +115,3 @@ carry static dummy AWS keys, so every request is SigV4-signed, and mockllm answe
 `/model/<id>/invoke` and `/invoke-with-response-stream` with AWS event-stream framing that the
 gateway re-encodes as Anthropic SSE. Bedrock hits show up as `bedrock-<g>-<i>` in the mock's `/stats`.
 
-## Until the gateway gains these features
-
-- Virtual keys: the Rust gateway only accepts the master key today, so pass `-key sk-loadtest-master`
-  (`KEY=` for `cloud-run.sh`). Once keys are read from Postgres, drop it and set `create_postgres`.
-- `/v1/messages` auth: `-messages-auth x-api-key` sends the key the way the Anthropic SDK does.
-  The gateway reads only `Authorization: Bearer` today.

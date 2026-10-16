@@ -6,14 +6,19 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-axum = { workspace = true, features = ["matched-path"] }
+axum = { workspace = true, features = ["json", "matched-path"] }
 axum-login.workspace = true
 litellm-auth-types.workspace = true
 litellm-config.workspace = true
 litellm-secrets.workspace = true
+moka = { workspace = true, features = ["sync"] }
+serde_json.workspace = true
 sha2.workspace = true
+strum.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["time"] }
+tracing.workspace = true
 serde.workspace = true
 tower-sessions.workspace = true
 veil.workspace = true

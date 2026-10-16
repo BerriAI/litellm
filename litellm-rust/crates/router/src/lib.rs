@@ -62,6 +62,7 @@ impl Router {
                     model.model_name.clone(),
                     Deployment {
                         timeout: deployment.timeout.or(policy.timeout),
+                        team_id: owner_team(model),
                         ..deployment
                     },
                 ))
@@ -110,6 +111,40 @@ impl Router {
         &group.member(index).deployment
     }
 
+    /// Like [`Router::select`], among the deployments `usable` accepts; `None` when it accepts
+    /// none of them.
+    pub fn select_where<'a>(
+        &self,
+        group: &'a ModelGroup,
+        usable: impl Fn(&Deployment) -> bool,
+    ) -> Option<&'a Deployment> {
+        let excluded = excluded(group, usable);
+        group
+            .choose(self.policy.strategy, self.now(), &excluded, rand::random())
+            .map(|index| &group.member(index).deployment)
+    }
+
+    /// Like [`Router::route`], among the deployments `usable` accepts, so neither the first
+    /// attempt nor a retry reaches another. `None`, without calling, when it accepts none.
+    pub async fn route_where<'a, T, E, F, Fut, C>(
+        &self,
+        group: &'a ModelGroup,
+        usable: impl Fn(&Deployment) -> bool,
+        call: F,
+        classify: C,
+    ) -> Option<Result<Routed<T>, E>>
+    where
+        F: FnMut(Attempt<'a>) -> Fut,
+        Fut: Future<Output = Result<T, E>>,
+        C: Fn(&E) -> Option<Failure>,
+    {
+        let excluded = excluded(group, usable);
+        if excluded.len() >= group.len() {
+            return None;
+        }
+        Some(self.route_among(group, excluded, call, classify).await)
+    }
+
     /// Runs `call` on a deployment of `group` and, while `classify` names the error a
     /// [`Failure`] and `num_retries` allows, again on a deployment not yet tried. Every
     /// failure counts toward its deployment's cooldown. A call that returned `Ok` is never
@@ -117,6 +152,22 @@ impl Router {
     pub async fn route<'a, T, E, F, Fut, C>(
         &self,
         group: &'a ModelGroup,
+        call: F,
+        classify: C,
+    ) -> Result<Routed<T>, E>
+    where
+        F: FnMut(Attempt<'a>) -> Fut,
+        Fut: Future<Output = Result<T, E>>,
+        C: Fn(&E) -> Option<Failure>,
+    {
+        self.route_among(group, Vec::new(), call, classify).await
+    }
+
+    /// Routes over the deployments of `group` not in `excluded`, which leaves at least one.
+    async fn route_among<'a, T, E, F, Fut, C>(
+        &self,
+        group: &'a ModelGroup,
+        excluded: Vec<usize>,
         mut call: F,
         classify: C,
     ) -> Result<Routed<T>, E>
@@ -128,7 +179,8 @@ impl Router {
         let attempts = usize::try_from(self.policy.num_retries)
             .unwrap_or(usize::MAX)
             .saturating_add(1);
-        let mut tried = Vec::new();
+        let skipped = excluded.len();
+        let mut tried = excluded;
         let mut index = group
             .choose(self.policy.strategy, self.now(), &tried, rand::random())
             .unwrap_or_default();
@@ -138,7 +190,7 @@ impl Router {
             let in_flight = InFlight::enter(&member.health);
             let attempt = Attempt {
                 deployment: &member.deployment,
-                last: tried.len() >= attempts || tried.len() >= group.len(),
+                last: tried.len() - skipped >= attempts || tried.len() >= group.len(),
             };
             let last = attempt.last;
             let error = match call(attempt).await {
@@ -186,6 +238,23 @@ impl Router {
 
     fn now(&self) -> u64 {
         u64::try_from(self.epoch.elapsed().as_millis()).unwrap_or(u64::MAX)
+    }
+}
+
+/// The indices of the deployments in `group` that `usable` rejects.
+fn excluded(group: &ModelGroup, usable: impl Fn(&Deployment) -> bool) -> Vec<usize> {
+    (0..group.len())
+        .filter(|index| !usable(&group.member(*index).deployment))
+        .collect()
+}
+
+/// `model_info.team_id`. A value that is not a string still marks the deployment as owned, by
+/// a team no key can name, so it is never shared by mistake.
+fn owner_team(model: &Model) -> Option<String> {
+    match model.model_info.get("team_id")? {
+        litellm_config::Value::Null => None,
+        litellm_config::Value::String(team_id) => Some(team_id.clone()),
+        other => Some(format!("{other:?}")),
     }
 }
 
@@ -275,6 +344,114 @@ mod tests {
         assert_eq!(tried.len(), 2);
         assert_ne!(tried[0].0, tried[1].0);
         assert_eq!(result.ok().map(|routed| routed.value), Some("served"));
+    }
+
+    fn owned_by(teams: &[(&str, Option<&str>)]) -> Router {
+        Router::new(
+            teams.iter().map(|(model, team_id)| {
+                (
+                    "group".to_owned(),
+                    Deployment {
+                        model: (*model).to_owned(),
+                        team_id: team_id.map(str::to_owned),
+                        ..Deployment::default()
+                    },
+                )
+            }),
+            retries(5),
+        )
+    }
+
+    #[rstest]
+    #[case::team_a(Some("team-a"), Some(vec!["a", "shared"]))]
+    #[case::teamless(None, Some(vec!["shared"]))]
+    #[case::team_c(Some("team-c"), Some(vec!["shared"]))]
+    #[tokio::test]
+    async fn route_where_never_reaches_a_rejected_deployment(
+        #[case] team: Option<&str>,
+        #[case] expected: Option<Vec<&str>>,
+    ) {
+        let router = owned_by(&[
+            ("shared", None),
+            ("a", Some("team-a")),
+            ("b", Some("team-b")),
+        ]);
+        let group = router.group("group").unwrap();
+        let usable = |deployment: &Deployment| {
+            deployment.team_id.is_none() || deployment.team_id.as_deref() == team
+        };
+        let tried = RefCell::new(Vec::new());
+
+        let result = router
+            .route_where(
+                group,
+                usable,
+                |attempt| {
+                    tried
+                        .borrow_mut()
+                        .push((attempt.deployment.model.clone(), attempt.last));
+                    async { Err::<(), _>(Some(Failure::Unavailable)) }
+                },
+                |failure| *failure,
+            )
+            .await;
+
+        let tried = tried.into_inner();
+        let mut models: Vec<&str> = tried.iter().map(|(model, _)| model.as_str()).collect();
+        models.sort_unstable();
+        assert_eq!(Some(models), expected);
+        assert_eq!(tried.last().map(|(_, last)| *last), Some(true));
+        assert!(matches!(result, Some(Err(Some(Failure::Unavailable)))));
+        for _ in 0..50 {
+            let selected = router.select_where(group, usable).map(|d| d.model.as_str());
+            assert!(selected.is_some_and(|model| model != "b"), "{selected:?}");
+        }
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn route_where_without_a_usable_deployment_calls_nothing() {
+        let router = owned_by(&[("a", Some("team-a"))]);
+        let group = router.group("group").unwrap();
+        let calls = RefCell::new(0);
+
+        let result = router
+            .route_where(
+                group,
+                |deployment| deployment.team_id.is_none(),
+                |_| {
+                    *calls.borrow_mut() += 1;
+                    async { Ok::<_, Option<Failure>>("served") }
+                },
+                |failure| *failure,
+            )
+            .await;
+
+        assert!(result.is_none());
+        assert_eq!(calls.into_inner(), 0);
+        assert!(
+            router
+                .select_where(group, |deployment| deployment.team_id.is_none())
+                .is_none()
+        );
+    }
+
+    #[rstest]
+    #[case::string("team_id: team-a", Some("team-a"))]
+    #[case::null("team_id: null", None)]
+    #[case::absent("id: x", None)]
+    #[case::number("team_id: 7", Some("Number(7)"))]
+    fn reads_the_owning_team_from_model_info(#[case] info: &str, #[case] expected: Option<&str>) {
+        let config = Config::from_yaml(&format!(
+            "model_list:\n  - model_name: m\n    litellm_params:\n      model: openai/m\n    model_info:\n      {info}\n"
+        ))
+        .unwrap();
+        let router = Router::from_config(&config).unwrap();
+        let group = router.group("m").unwrap();
+        assert_eq!(
+            group.deployments().next().unwrap().team_id.as_deref(),
+            expected
+        );
     }
 
     #[rstest]

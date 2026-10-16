@@ -8,9 +8,9 @@ use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
 use crate::{
-    AuthenticatedCaller, AuthenticatedRequest, Authentication, AuthenticationMethod, Authorizer,
-    Bearer, CredentialExtractor, Error, NoAdditionalPolicy, Permissions, Principal, PrincipalKind,
-    ResolvedIdentity, VerifiedIdentity,
+    ApiKeyHeaders, AuthenticatedCaller, AuthenticatedRequest, Authentication, AuthenticationMethod,
+    Authorizer, Bearer, CredentialExtractor, Error, NoAdditionalPolicy, Permissions, Principal,
+    PrincipalKind, ResolvedIdentity, VerifiedIdentity,
 };
 
 pub type AuthFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
@@ -55,6 +55,11 @@ impl IdentityResolver for LocalAdministrator {
         Box::pin(async move {
             let allowed = match identity.authentication.method {
                 AuthenticationMethod::MasterKey => identity.principal == master_principal(),
+                // The key's own restrictions (`Permissions::VirtualKey`) narrow what it may do.
+                AuthenticationMethod::VirtualKey => {
+                    identity.principal.authority() == crate::virtual_keys::AUTHORITY
+                        && identity.principal.kind() == PrincipalKind::Service
+                }
                 AuthenticationMethod::Session => {
                     identity.principal.authority() == "litellm:local-ui"
                         && identity.principal.kind() == PrincipalKind::Human
@@ -103,7 +108,7 @@ impl Auth {
             secrets,
         });
         Self {
-            extractor: Arc::new(Bearer),
+            extractor: Arc::new(ApiKeyHeaders),
             authenticator: master,
             identities: Arc::new(LocalAdministrator),
             authorizer: Arc::new(NoAdditionalPolicy),
@@ -113,6 +118,18 @@ impl Auth {
 
     pub fn with_extractor(self, extractor: Arc<dyn CredentialExtractor>) -> Self {
         Self { extractor, ..self }
+    }
+
+    /// Also accepts virtual keys from `keys`; the configured authenticator is tried first.
+    pub fn with_virtual_keys(self, keys: crate::CachedKeyLookup) -> Self {
+        Self {
+            authenticator: Arc::new(crate::VirtualKeyAuthenticator::new(
+                self.authenticator.clone(),
+                keys,
+                self.clock.clone(),
+            )),
+            ..self
+        }
     }
 
     pub async fn authenticate_parts(&self, request: &Parts) -> Result<AuthenticatedRequest, Error> {

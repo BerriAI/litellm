@@ -237,6 +237,7 @@ fn model(name: &str) -> AccessRequest {
     AccessRequest::Model {
         name: name.into(),
         deployment: name.into(),
+        team_id: None,
     }
 }
 

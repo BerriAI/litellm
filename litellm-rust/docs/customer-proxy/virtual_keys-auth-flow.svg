@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 700" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="14">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker>
+    <marker id="r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#dc2626"/></marker>
+  </defs>
+  <rect width="1000" height="700" fill="#ffffff"/>
+  <text x="24" y="34" font-size="18" font-weight="600" fill="#0f172a">Virtual key auth in the Rust gateway: one request</text>
+
+  <!-- request -->
+  <rect x="24" y="60" width="220" height="92" rx="8" fill="#eff6ff" stroke="#3b82f6"/>
+  <text x="38" y="84" font-weight="600" fill="#1e3a8a">Client request</text>
+  <text x="38" y="106" fill="#1e293b" font-size="13">Authorization: Bearer sk-...</text>
+  <text x="38" y="124" fill="#1e293b" font-size="13">or x-api-key (Anthropic SDK)</text>
+  <text x="38" y="142" fill="#1e293b" font-size="13">or api-key (Azure)</text>
+
+  <!-- extractor -->
+  <rect x="300" y="60" width="300" height="92" rx="8" fill="#f8fafc" stroke="#64748b"/>
+  <text x="314" y="84" font-weight="600" fill="#0f172a">ApiKeyHeaders (gateway-auth/http.rs)</text>
+  <text x="314" y="106" fill="#334155" font-size="13">first header present must hold one key</text>
+  <text x="314" y="124" fill="#334155" font-size="13">none: 401 "No api key passed in."</text>
+  <text x="314" y="142" fill="#334155" font-size="13">duplicate or malformed: 401</text>
+  <line x1="244" y1="106" x2="298" y2="106" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- master -->
+  <rect x="660" y="60" width="316" height="92" rx="8" fill="#ecfdf5" stroke="#10b981"/>
+  <text x="674" y="84" font-weight="600" fill="#065f46">1. MasterKeyAuthenticator</text>
+  <text x="674" y="106" fill="#1e293b" font-size="13">constant-time compare with master_key</text>
+  <text x="674" y="124" fill="#1e293b" font-size="13">match: Permissions::All, no DB touched</text>
+  <text x="674" y="142" fill="#1e293b" font-size="13">no match / unset: try virtual keys</text>
+  <line x1="600" y1="106" x2="658" y2="106" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- hash + fresh cache -->
+  <rect x="660" y="190" width="316" height="112" rx="8" fill="#fffbeb" stroke="#f59e0b"/>
+  <text x="674" y="214" font-weight="600" fill="#92400e">2. CachedKeyLookup: fresh cache</text>
+  <text x="674" y="236" fill="#1e293b" font-size="13">key = sha256 hex of the raw key</text>
+  <text x="674" y="254" fill="#1e293b" font-size="13">moka, per-entry TTL: found 60 s, unknown 5 s</text>
+  <text x="674" y="272" fill="#1e293b" font-size="13">hit: no await on I/O (~10 µs debug build)</text>
+  <text x="674" y="290" fill="#1e293b" font-size="13">misses for one key share one read</text>
+  <line x1="818" y1="152" x2="818" y2="188" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- postgres -->
+  <rect x="660" y="340" width="316" height="112" rx="8" fill="#f5f3ff" stroke="#8b5cf6"/>
+  <text x="674" y="364" font-weight="600" fill="#5b21b6">3. Postgres (litellm-db, sqlx checked query)</text>
+  <text x="674" y="386" fill="#1e293b" font-size="13">SELECT expires, blocked, models</text>
+  <text x="674" y="404" fill="#1e293b" font-size="13">FROM "LiteLLM_VerificationToken"</text>
+  <text x="674" y="422" fill="#1e293b" font-size="13">WHERE token = $1   (5 s timeout)</text>
+  <text x="674" y="440" fill="#1e293b" font-size="13">lazy pool: gateway starts with DB down</text>
+  <line x1="818" y1="302" x2="818" y2="338" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+  <text x="826" y="326" fill="#475569" font-size="12">miss</text>
+
+  <!-- stale -->
+  <rect x="300" y="340" width="300" height="112" rx="8" fill="#fef2f2" stroke="#ef4444"/>
+  <text x="314" y="364" font-weight="600" fill="#991b1b">Store failed or timed out</text>
+  <text x="314" y="386" fill="#1e293b" font-size="13">serve the last answer for this key</text>
+  <text x="314" y="404" fill="#1e293b" font-size="13">(stale cache, kept up to 1 h)</text>
+  <text x="314" y="422" fill="#1e293b" font-size="13">pause store reads for 5 s</text>
+  <text x="314" y="440" fill="#1e293b" font-size="13">never seen: 503, no queueing</text>
+  <line x1="660" y1="396" x2="602" y2="396" stroke="#dc2626" stroke-width="1.5" marker-end="url(#r)"/>
+
+  <!-- verify -->
+  <rect x="660" y="490" width="316" height="92" rx="8" fill="#f8fafc" stroke="#64748b"/>
+  <text x="674" y="514" font-weight="600" fill="#0f172a">4. verify_key (gateway-auth/keys.rs)</text>
+  <text x="674" y="536" fill="#1e293b" font-size="13">unknown: 401 token_not_found_in_db</text>
+  <text x="674" y="554" fill="#1e293b" font-size="13">blocked: 401 auth_error</text>
+  <text x="674" y="572" fill="#1e293b" font-size="13">expires &lt;= now: 401 expired_key</text>
+  <line x1="818" y1="452" x2="818" y2="488" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+  <path d="M450 452 L450 536 L658 536" fill="none" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- identity + model -->
+  <rect x="300" y="600" width="300" height="80" rx="8" fill="#ecfdf5" stroke="#10b981"/>
+  <text x="314" y="624" font-weight="600" fill="#065f46">5. Permissions::VirtualKey(models)</text>
+  <text x="314" y="646" fill="#1e293b" font-size="13">routes: allowed; MCP and UI: denied</text>
+  <text x="314" y="664" fill="#1e293b" font-size="13">principal = key hash, expiry rechecked</text>
+  <path d="M818 582 L818 640 L602 640" fill="none" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <rect x="24" y="600" width="230" height="80" rx="8" fill="#eff6ff" stroke="#3b82f6"/>
+  <text x="38" y="624" font-weight="600" fill="#1e3a8a">6. Handler: body.model</text>
+  <text x="38" y="646" fill="#1e293b" font-size="13">[] / * / exact / claude-*: call</text>
+  <text x="38" y="664" fill="#1e293b" font-size="13">else 403 key_model_access_denied</text>
+  <line x1="300" y1="640" x2="256" y2="640" stroke="#475569" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <text x="24" y="210" font-weight="600" fill="#0f172a">Error body (all failures)</text>
+  <text x="24" y="232" fill="#334155" font-size="13" font-family="Menlo, Consolas, monospace">{"error": {"message": "...",</text>
+  <text x="24" y="250" fill="#334155" font-size="13" font-family="Menlo, Consolas, monospace">  "type": "expired_key",</text>
+  <text x="24" y="268" fill="#334155" font-size="13" font-family="Menlo, Consolas, monospace">  "param": "None", "code": "401"}}</text>
+  <text x="24" y="292" fill="#64748b" font-size="12">same shape as the Python proxy's ProxyException</text>
+</svg>

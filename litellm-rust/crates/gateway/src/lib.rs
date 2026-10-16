@@ -2,6 +2,8 @@ mod auth;
 pub mod drain;
 mod error;
 pub mod health;
+mod key_status;
+mod keys;
 pub mod metrics;
 mod secrets;
 pub use error::Error;
@@ -18,7 +20,7 @@ use axum::{
 use http_body_util::BodyExt;
 
 use litellm_config::Config;
-use litellm_gateway_auth::Auth;
+use litellm_gateway_auth::{Auth, CachedKeyLookup, KeyCacheSettings, keys::KeyLookup};
 use litellm_gateway_inference::{Gateway, ModelRouter};
 use litellm_http::{
     ClientVariant, HttpClientPool, HttpSettings, HttpSettingsLayer, Resolution, SslVerify,
@@ -65,12 +67,22 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
         Arc::new(EnvironmentSecrets::python_compatible(client)),
     ));
     let resources = CoreResources::new(pool);
-    Ok(Arc::new(Gateway::new(
-        resources,
-        http,
-        secrets,
-        ModelRouter::from_config(config)?,
-    )?))
+    Ok(Arc::new(
+        Gateway::new(resources, http, secrets, ModelRouter::from_config(config)?)?
+            .with_client_side_credentials(allows_client_side_credentials(config)),
+    ))
+}
+
+/// `general_settings.allow_client_side_credentials`, honoured only when it is the boolean
+/// `true`, as the proxy's `is True` check does.
+fn allows_client_side_credentials(config: &Config) -> bool {
+    matches!(
+        config
+            .general_settings
+            .additional_fields
+            .get("allow_client_side_credentials"),
+        Some(litellm_config::Value::Bool(true))
+    )
 }
 
 pub async fn build_mcp(
@@ -116,13 +128,38 @@ pub async fn build_mcp(
     ))
 }
 
+/// The virtual key store configured for this gateway, if any (see [`keys::store`]).
+pub async fn build_keys(
+    config: &Config,
+    secrets: &dyn litellm_secrets::source::SecretSource,
+) -> Result<Option<Arc<dyn KeyLookup>>, Error> {
+    keys::store(config, secrets).await
+}
+
 pub fn router(
     inference: Arc<Gateway>,
     config: &Config,
     ui: Option<Router>,
     mcp: Option<Router>,
 ) -> Router {
+    router_with_keys(inference, config, ui, mcp, None)
+}
+
+/// [`router`], also accepting virtual keys from `keys` behind a TTL cache.
+pub fn router_with_keys(
+    inference: Arc<Gateway>,
+    config: &Config,
+    ui: Option<Router>,
+    mcp: Option<Router>,
+    keys: Option<Arc<dyn KeyLookup>>,
+) -> Router {
     let auth = Auth::from_config(config, inference.secrets.clone());
+    let auth = match keys {
+        Some(keys) => {
+            auth.with_virtual_keys(CachedKeyLookup::new(keys, KeyCacheSettings::default()))
+        }
+        None => auth,
+    };
     let inference = litellm_gateway_inference::router(inference)
         .merge(mcp.unwrap_or_default())
         .route_layer(axum::middleware::from_fn(auth::bind_session_owner))

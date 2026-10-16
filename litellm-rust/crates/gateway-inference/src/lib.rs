@@ -6,6 +6,7 @@
 mod audio_transcription;
 mod caching;
 mod chat_completions;
+mod client_side;
 mod error;
 pub mod messages;
 pub mod observe;
@@ -32,6 +33,7 @@ pub use request::{JsonBody, JsonObject, RequestId};
 
 pub struct Gateway {
     cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
+    allow_client_side_credentials: bool,
     pub audio_transcription: AudioTranscriptionRoute,
     pub chat_completions: ChatCompletionsRoute,
     pub messages: MessagesRoute,
@@ -51,6 +53,26 @@ impl Gateway {
         }
     }
 
+    /// `general_settings.allow_client_side_credentials`: lets a request body name the
+    /// connection and credential params the proxy otherwise refuses.
+    pub fn with_client_side_credentials(self, allowed: bool) -> Self {
+        Self {
+            allow_client_side_credentials: allowed,
+            ..self
+        }
+    }
+
+    /// The proxy's `is_request_body_safe`, run on every inference body before routing.
+    pub(crate) fn check_body(
+        &self,
+        body: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<(), Error> {
+        Ok(client_side::check(
+            body,
+            self.allow_client_side_credentials,
+        )?)
+    }
+
     pub fn new(
         resources: CoreResources,
         http: HttpClientConfig,
@@ -61,6 +83,7 @@ impl Gateway {
         let auth = resources.auth.clone();
         Ok(Self {
             cache: None,
+            allow_client_side_credentials: false,
             audio_transcription: AudioTranscriptionRoute::new(
                 provider.clone(),
                 auth.clone(),

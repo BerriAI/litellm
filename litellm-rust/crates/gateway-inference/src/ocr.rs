@@ -35,7 +35,8 @@ async fn handle(
         .get("x-req-format")
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
-    let deployment = request::resolve_deployment(gateway, &body)?;
+    gateway.check_body(&body)?;
+    let deployment = request::resolve_deployment(gateway, identity, &body)?;
     request::authorize_model(identity, deployment, &body).await?;
     let document = match upload {
         Some(upload) => OcrDocumentInput::Bytes {
