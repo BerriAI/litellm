@@ -7,7 +7,7 @@ which returns ``FallbackResponsesStreamWrapper``. That wrapper set
 ``self.completed_response = None`` in __init__ and never updated it,
 so the proxy's container-ownership hook (which reads
 ``getattr(stream_response, "completed_response", None)`` via
-``ProxyBaseLLMRequestProcessing._extract_completed_responses_response``)
+``ProxyBaseLLMRequestProcessing.extract_completed_responses_response``)
 saw None on every streaming call and silently recorded nothing —
 follow-up ``GET /v1/containers/<id>/files`` then 403'd for the very
 key that created the container.
@@ -194,7 +194,7 @@ class TestProxyOwnershipHookReadsCompletedResponse:
         wrapper = wrapper_cls(gen())
         asyncio.run(_drain(wrapper))
 
-        extracted = ProxyBaseLLMRequestProcessing._extract_completed_responses_response(
+        extracted = ProxyBaseLLMRequestProcessing.extract_completed_responses_response(
             wrapper
         )
         assert extracted is not None

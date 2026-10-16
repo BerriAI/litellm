@@ -17,7 +17,6 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_stored_json_object
 from litellm.proxy.guardrails.usage_tracking import guardrail_status_to_action
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
@@ -29,6 +28,7 @@ from litellm.repositories.table_repositories import (
     SpendLogGuardrailIndexRepository,
     SpendLogsRepository,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -249,7 +249,7 @@ class _DailyPassBlocked(TypedDict):
     blocked: int
 
 
-class UsageOverviewRow(BaseModel):
+class UsageOverviewRow(LiteLLMBaseModel):
     id: str
     name: str
     type: str
@@ -269,7 +269,7 @@ class UsageOverviewRow(BaseModel):
     )
 
 
-class UsageOverviewResponse(BaseModel):
+class UsageOverviewResponse(LiteLLMBaseModel):
     rows: list[UsageOverviewRow]
     chart: list[UsageChartPoint]  # [{ date, passed, blocked }]
     totalRequests: int
@@ -292,13 +292,13 @@ _EMPTY_OVERVIEW: Final = UsageOverviewResponse(
 )
 
 
-class UsageUnitsDailyPoint(BaseModel):
+class UsageUnitsDailyPoint(LiteLLMBaseModel):
     date: str
     units: Mapping[str, int]
     cost: float | None
 
 
-class UsageDetailResponse(BaseModel):
+class UsageDetailResponse(LiteLLMBaseModel):
     guardrail_id: str
     guardrail_name: str
     type: str
@@ -324,7 +324,7 @@ class UsageDetailResponse(BaseModel):
     untracked_usage_units_by_key: Mapping[str, Mapping[str, int]]
 
 
-class UsageLogEntry(BaseModel):
+class UsageLogEntry(LiteLLMBaseModel):
     id: str
     timestamp: str
     action: str  # blocked | passed | flagged | not_run
@@ -336,7 +336,7 @@ class UsageLogEntry(BaseModel):
     reason: str | None
 
 
-class UsageLogsResponse(BaseModel):
+class UsageLogsResponse(LiteLLMBaseModel):
     logs: list[UsageLogEntry]
     total: int
     page: int
@@ -430,13 +430,6 @@ def _to_dict(value: object) -> dict[str, Any]:
     return {}
 
 
-def _guardrail_litellm_params(g: "_DbOrConfigGuardrail") -> Mapping[str, object]:
-    value: Final = _get_guardrail_field(g, "litellm_params")
-    if isinstance(value, (dict, str)):
-        return decrypt_stored_json_object(value)
-    return _to_dict(value)
-
-
 def _field_str(mapping: Mapping[str, object], key: str, default: str) -> str:
     """Stringify `mapping[key]`, falling back to `default` when the key is absent."""
     return str(mapping.get(key, default))
@@ -471,7 +464,7 @@ def _guardrail_overview_rows(
                 break
         req, blocked = a["requests"], a["blocked"]
         fail_rate = (100.0 * blocked / req) if req else 0.0
-        litellm_params = _guardrail_litellm_params(g)
+        litellm_params = _to_dict(_get_guardrail_field(g, "litellm_params"))
         provider = _field_str(litellm_params, "guardrail", "Unknown")
         guardrail_info = _to_dict(_get_guardrail_field(g, "guardrail_info"))
         gtype = _field_str(guardrail_info, "type", "Guardrail")
@@ -711,7 +704,7 @@ async def guardrails_usage_detail(
         {"date": d, "passed": v["passed"], "blocked": v["blocked"], "score": None}
         for d, v in sorted(ts_by_date.items())
     ]
-    litellm_params: Final = _guardrail_litellm_params(guardrail)
+    litellm_params: Final = _to_dict(_get_guardrail_field(guardrail, "litellm_params"))
     guardrail_info: Final = _to_dict(_get_guardrail_field(guardrail, "guardrail_info"))
     _guardrail_name: Final = _get_guardrail_field(guardrail, "guardrail_name")
     daily_unit_sums: Final = sorted(_by(units_rows, lambda r: r.date, _sum_counter_units).items())

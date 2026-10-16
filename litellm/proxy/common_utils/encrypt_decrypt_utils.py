@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from typing import Final, Literal, cast
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
+from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -14,18 +15,24 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 # Legacy XSalsa20-Poly1305 (nacl) values carry no marker; the colon in the
 # prefix can never appear in base64url(nacl output), so the prefix check is an
 # unambiguous discriminator between the two formats on read.
-_V2_GCM_PREFIX: Final = "v2:gcm:"
+V2_GCM_PREFIX: Final = "v2:gcm:"
+
+_V2_GCM_PREFIX: Final = V2_GCM_PREFIX
 
 # general_settings key selecting the at-rest encryption algorithm for new writes.
 # Default preserves the legacy algorithm so existing deployments are byte-for-byte
 # unchanged until they explicitly opt in. Decrypt is always format-detecting, so
 # flipping this flag forward (or back) never strands previously-written data.
-_ENCRYPTION_ALGORITHM_SETTING: Final = "encryption_algorithm"
-_ALGO_AES_GCM: Final = "aes-256-gcm"
+ENCRYPTION_ALGORITHM_SETTING: Final = "encryption_algorithm"
+
+_ENCRYPTION_ALGORITHM_SETTING: Final = ENCRYPTION_ALGORITHM_SETTING
+ALGO_AES_GCM: Final = "aes-256-gcm"
+
+_ALGO_AES_GCM: Final = ALGO_AES_GCM
 _ALGO_XSALSA20: Final = "xsalsa20-poly1305"
 
 
-def _get_salt_key():
+def get_salt_key() -> str | None:
     from litellm.proxy.proxy_server import master_key
 
     salt_key = os.getenv("LITELLM_SALT_KEY", None)
@@ -34,6 +41,9 @@ def _get_salt_key():
         salt_key = master_key
 
     return salt_key
+
+
+_get_salt_key: Final = get_salt_key
 
 
 def _get_encryption_algorithm() -> str:
@@ -47,14 +57,14 @@ def _get_encryption_algorithm() -> str:
     try:
         from litellm.proxy.proxy_server import general_settings
 
-        algo: Final = general_settings.get(_ENCRYPTION_ALGORITHM_SETTING, _ALGO_XSALSA20)
+        algo: Final = general_settings.get(ENCRYPTION_ALGORITHM_SETTING, _ALGO_XSALSA20)
     except Exception:
         # general_settings may not be importable in some contexts (e.g. SDK-only
         # use of these helpers). Fall back to the legacy algorithm.
         return _ALGO_XSALSA20
 
-    if isinstance(algo, str) and algo.lower() == _ALGO_AES_GCM:
-        return _ALGO_AES_GCM
+    if isinstance(algo, str) and algo.lower() == ALGO_AES_GCM:
+        return ALGO_AES_GCM
     return _ALGO_XSALSA20
 
 
@@ -74,34 +84,63 @@ def _derive_key(signing_key: str) -> bytes:
     return hashlib.sha256(signing_key.encode()).digest()
 
 
-def _encrypt_aes_gcm(value: str, signing_key: str) -> str:
-    """Encrypt under AES-256-GCM and return the versioned ``v2:gcm:`` string."""
+def _seal_aes_gcm(value: str, signing_key: str, aad: bytes | None) -> bytes:
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
     nonce: Final = os.urandom(12)
     # AESGCM.encrypt returns ciphertext || tag(16); wire format is nonce || that.
-    blob: Final = AESGCM(_derive_key(signing_key)).encrypt(nonce, value.encode("utf-8"), None)
-    return _V2_GCM_PREFIX + base64.urlsafe_b64encode(nonce + blob).decode("utf-8")
+    return nonce + AESGCM(_derive_key(signing_key)).encrypt(nonce, value.encode("utf-8"), aad)
+
+
+def _open_aes_gcm(sealed: bytes, signing_key: str, aad: bytes | None) -> str:
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    # An empty plaintext still serializes to nonce(12) || tag(16) = 28 bytes, so a
+    # short/empty buffer here is a corrupt value: let AESGCM.decrypt raise and be
+    # swallowed by the caller (returns None/original), same as legacy.
+    return AESGCM(_derive_key(signing_key)).decrypt(sealed[:12], sealed[12:], aad).decode("utf-8")
+
+
+def _encrypt_aes_gcm(value: str, signing_key: str) -> str:
+    """Encrypt under AES-256-GCM and return the versioned ``v2:gcm:`` string."""
+    sealed: Final = _seal_aes_gcm(value=value, signing_key=signing_key, aad=None)
+    return V2_GCM_PREFIX + base64.urlsafe_b64encode(sealed).decode("utf-8")
 
 
 def _decrypt_aes_gcm(value: str, signing_key: str) -> str:
     """Decrypt a versioned ``v2:gcm:`` string produced by :func:`_encrypt_aes_gcm`."""
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    sealed: Final = base64.urlsafe_b64decode(value[len(V2_GCM_PREFIX) :])
+    return _open_aes_gcm(sealed=sealed, signing_key=signing_key, aad=None)
 
-    raw: Final = base64.urlsafe_b64decode(value[len(_V2_GCM_PREFIX) :])
-    # An empty plaintext still serializes to nonce(12) || tag(16) = 28 bytes, so a
-    # short/empty buffer here is a corrupt value: let AESGCM.decrypt raise and be
-    # swallowed by decrypt_value_helper (returns None/original), same as legacy.
-    nonce, blob = raw[:12], raw[12:]
-    return AESGCM(_derive_key(signing_key)).decrypt(nonce, blob, None).decode("utf-8")
+
+def encrypt_bearer_token(value: str, prefix: str) -> str:
+    """AES-256-GCM as unpadded base64url behind ``prefix``, which is also the AAD so a token can't change kind."""
+    salt_key: Final = get_salt_key()
+    if not isinstance(salt_key, str):
+        raise ValueError("Set LITELLM_SALT_KEY or a master key to mint bearer tokens")
+    sealed: Final = _seal_aes_gcm(value=value, signing_key=salt_key, aad=prefix.encode("utf-8"))
+    return prefix + base64.urlsafe_b64encode(sealed).decode("ascii").rstrip("=")
+
+
+def decrypt_bearer_token(token: str, prefix: str) -> str | None:
+    """None unless ``token`` came from :func:`encrypt_bearer_token` with the same ``prefix``."""
+    salt_key: Final = get_salt_key()
+    if not isinstance(salt_key, str) or not token.startswith(prefix):
+        return None
+    encoded: Final = token.removeprefix(prefix)
+    try:
+        sealed: Final = base64.b64decode(encoded + "=" * (-len(encoded) % 4), altchars=b"-_", validate=True)
+        return _open_aes_gcm(sealed=sealed, signing_key=salt_key, aad=prefix.encode("utf-8"))
+    except Exception:  # noqa: BLE001  # base64 and AES-GCM each raise their own "not a token" type
+        return None
 
 
 def encrypt_value_helper(value: str, new_encryption_key: str | None = None):
-    signing_key: Final = new_encryption_key or _get_salt_key()
+    signing_key: Final = new_encryption_key or get_salt_key()
 
     try:
         if isinstance(value, str):
-            if _get_encryption_algorithm() == _ALGO_AES_GCM:
+            if _get_encryption_algorithm() == ALGO_AES_GCM:
                 # AES path: the v2:gcm: output is already a base64url string, so it
                 # is returned directly with no extra base64 wrapper.
                 return _encrypt_aes_gcm(value=value, signing_key=cast(str, signing_key))
@@ -133,7 +172,7 @@ def _legacy_ciphertext_bytes(value: str) -> bytes:
 def _decrypt_with_signing_key(value: str, signing_key: str) -> str:
     # Versioned AES-256-GCM values are detected before any base64 decode.
     # The prefix is the algorithm tag the legacy nacl format never carried.
-    if value.startswith(_V2_GCM_PREFIX):
+    if value.startswith(V2_GCM_PREFIX):
         return _decrypt_aes_gcm(value=value, signing_key=signing_key)
 
     return decrypt_value(value=_legacy_ciphertext_bytes(value), signing_key=signing_key)
@@ -144,7 +183,7 @@ def decrypt_if_encrypted_with(value: str, signing_key: str) -> str | None:
     try:
         # base64 decoding skips characters outside its alphabet, so "" and "*" decode to no bytes,
         # which decrypt_value reads as an empty plaintext under any key.
-        decodes_to_nothing: Final = not value.startswith(_V2_GCM_PREFIX) and not _legacy_ciphertext_bytes(value)
+        decodes_to_nothing: Final = not value.startswith(V2_GCM_PREFIX) and not _legacy_ciphertext_bytes(value)
         return None if decodes_to_nothing else _decrypt_with_signing_key(value=value, signing_key=signing_key)
     except Exception:  # noqa: BLE001  # base64, nacl and AES-GCM each raise their own "not a ciphertext" type
         return None
@@ -156,7 +195,7 @@ def decrypt_value_helper(
     exception_type: Literal["debug", "error"] = "error",
     return_original_value: bool = False,
 ) -> str | None:
-    signing_key: Final = _get_salt_key()
+    signing_key: Final = get_salt_key()
 
     try:
         if isinstance(value, str):
@@ -262,12 +301,18 @@ def decode_secret_map(value: object, *, key: str) -> Mapping[str, str] | None:
         raise SecretMapDecodeError(f"Cannot decode encrypted MCP {key}; check LITELLM_SALT_KEY") from None
 
 
-_JSON_VALUE: Final = TypeAdapter(JsonValue)
+_JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 
 
+def _is_mapping(
+    value: object,
+) -> TypeIs[Mapping[object, object]]:  # guard-ok: isinstance decides it, keys and values stay object
+    return isinstance(value, Mapping)
+
+
 def json_value(value: object) -> JsonValue:
-    plain: Final = dict(value) if isinstance(value, Mapping) else value
+    plain: Final[object] = dict(value) if _is_mapping(value) else value
     try:
         return _JSON_VALUE.validate_python(plain)
     except ValidationError:
@@ -275,7 +320,7 @@ def json_value(value: object) -> JsonValue:
 
 
 def _plaintext_of(value: str, signing_key: str | None = None) -> str:
-    key: Final = signing_key or _get_salt_key()
+    key: Final = signing_key or get_salt_key()
     if key is None:
         return value
     decrypted: Final = decrypt_if_encrypted_with(value, key)
@@ -283,7 +328,7 @@ def _plaintext_of(value: str, signing_key: str | None = None) -> str:
 
 
 def _encrypted_string(value: str, new_encryption_key: str | None) -> str:
-    if (new_encryption_key or _get_salt_key()) is None:
+    if (new_encryption_key or get_salt_key()) is None:
         return value
     return _SECRET_STRING.validate_python(
         encrypt_value_helper(_plaintext_of(value), new_encryption_key=new_encryption_key), strict=True
@@ -314,14 +359,14 @@ def decrypt_json_strings(value: JsonValue, signing_key: str | None = None, depth
     return value
 
 
-def parse_stored_json_object(value: object) -> dict[str, JsonValue] | None:
+def parse_stored_json_object(value: object) -> Mapping[str, JsonValue] | None:
     try:
         return _JSON_OBJECT.validate_json(value) if isinstance(value, str) else _JSON_OBJECT.validate_python(value)
     except ValidationError:
         return None
 
 
-def _stored_json_object(value: object) -> dict[str, JsonValue]:
+def _stored_json_object(value: object) -> Mapping[str, JsonValue]:
     parsed: Final = parse_stored_json_object(value)
     if parsed is not None:
         return parsed
@@ -330,14 +375,7 @@ def _stored_json_object(value: object) -> dict[str, JsonValue]:
     return {}
 
 
-def encrypt_stored_json_object(value: object, new_encryption_key: str | None = None) -> dict[str, JsonValue] | None:
-    parsed: Final = parse_stored_json_object(value)
-    if parsed is None:
-        return None
-    return {key: encrypt_json_strings(item, new_encryption_key=new_encryption_key) for key, item in parsed.items()}
-
-
-def decrypt_stored_json_object(value: object) -> dict[str, JsonValue]:
+def decrypt_stored_json_object(value: object) -> Mapping[str, JsonValue]:
     return {key: decrypt_json_strings(item) for key, item in _stored_json_object(value).items()}
 
 
@@ -346,14 +384,14 @@ ENCRYPTED_CONFIG_SECTIONS: Final = frozenset({"router_settings"})
 
 def encrypt_config_section(
     section_name: str, section: object, new_encryption_key: str | None = None
-) -> dict[str, JsonValue]:
+) -> Mapping[str, JsonValue]:
     values: Final = _stored_json_object(section)
     if section_name not in ENCRYPTED_CONFIG_SECTIONS:
         return values
     return {key: encrypt_json_strings(item, new_encryption_key=new_encryption_key) for key, item in values.items()}
 
 
-def decrypt_config_section(section_name: str, value: object) -> dict[str, JsonValue]:
+def decrypt_config_section(section_name: str, value: object) -> Mapping[str, JsonValue]:
     if section_name in ENCRYPTED_CONFIG_SECTIONS:
         return decrypt_stored_json_object(value)
     return _stored_json_object(value)

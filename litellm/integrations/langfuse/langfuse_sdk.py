@@ -34,13 +34,14 @@ from opentelemetry.sdk.trace.id_generator import RandomIdGenerator
 from opentelemetry.sdk.trace.sampling import ALWAYS_ON, Decision, Sampler, SamplingResult
 from opentelemetry.trace import Link, NonRecordingSpan, Span, SpanContext, SpanKind, TraceFlags, Tracer, TraceState
 from opentelemetry.util.types import Attributes, AttributeValue
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.langfuse.langfuse import PROMPT_CACHE_TTL_ENV, parse_langfuse_debug, whole_number
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.llms.custom_httpx.http_handler import HTTPHandler, _get_httpx_client
+from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_httpx_client
+from litellm.types.llms.base import LiteLLMBaseModel
 
 __all__ = (
     "AuthCheckFailure",
@@ -684,7 +685,7 @@ class LangfuseSpanExporter(SpanExporter):
     def _round(self, halving: _Halving) -> _Halving:
         sent: Final = tuple((batch, self._send_batch(batch)) for batch in halving.pending)
         return _Halving(
-            pending=tuple(part for batch, outcome in sent if outcome == "too_large" for part in _smaller(batch)),
+            pending=tuple(chain.from_iterable(_smaller(batch) for batch, outcome in sent if outcome == "too_large")),
             settled=halving.settled
             + tuple(
                 SpanExportResult.SUCCESS if outcome == "delivered" else SpanExportResult.FAILURE
@@ -792,7 +793,7 @@ def _build_span_exporter(*, public_key: str, secret_key: str, base_url: str) -> 
     export_path: Final = os.getenv("LANGFUSE_OTEL_TRACES_EXPORT_PATH") or "/api/public/otel/v1/traces"
     encoded_auth: Final = b64encode(f"{public_key}:{secret_key}".encode()).decode("ascii")
     return LangfuseSpanExporter(
-        handler=_get_httpx_client(),
+        handler=get_httpx_client(),
         endpoint=f"{base_url.rstrip('/')}/{export_path.lstrip('/')}",
         headers=MappingProxyType(
             {
@@ -1063,7 +1064,7 @@ def _auth_check_failure(reason: str) -> AuthCheckFailure:
     return AuthCheckFailure(reason)
 
 
-class _ApiErrorDetail(BaseModel):
+class _ApiErrorDetail(LiteLLMBaseModel):
     """The status and body of an ``ApiError``, whose own ``str`` also dumps every response header."""
 
     model_config = ConfigDict(frozen=True, from_attributes=True)

@@ -18,7 +18,7 @@ from litellm.llms.base_llm.text_to_speech.transformation import (
     TextToSpeechRequestData,
 )
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.utils import all_litellm_params
+from litellm.types.utils import is_litellm_owned_kwarg
 
 from ..common_utils import ElevenLabsException
 
@@ -241,7 +241,7 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
                 continue
             mapped_params[key] = value
 
-        reserved_kwarg_keys: Final = set(all_litellm_params) | {
+        reserved_kwarg_keys: Final = {
             self.ELEVENLABS_QUERY_PARAMS_KEY,
             self.ELEVENLABS_VOICE_ID_KEY,
             "voice",
@@ -260,7 +260,7 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
                 mapped_params[key] = value
 
         for key in list(kwargs.keys()):
-            if key in reserved_kwarg_keys:
+            if key in reserved_kwarg_keys or is_litellm_owned_kwarg(key):
                 continue
             value = kwargs[key]
             if value is None:

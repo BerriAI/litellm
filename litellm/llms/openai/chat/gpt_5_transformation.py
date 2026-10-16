@@ -5,9 +5,9 @@ from typing import Final
 
 import litellm
 from litellm.utils import (
-    _supports_factory,
     declared_value_factory,
     is_explicitly_disabled_factory,
+    supports_factory,
 )
 
 from .gpt_transformation import OpenAIGPTConfig
@@ -48,7 +48,7 @@ def _normalize_reasoning_effort_for_chat_completion(
     return None
 
 
-def _get_effort_level(value: str | dict | None) -> str | None:
+def get_effort_level(value: str | dict | None) -> str | None:
     """Extract the effective effort level from reasoning_effort (string or dict).
 
     Use this for guards that compare effort level (e.g. xhigh validation, "none" checks).
@@ -64,12 +64,14 @@ def _get_effort_level(value: str | dict | None) -> str | None:
     return None
 
 
+_get_effort_level = get_effort_level
+
 GPT_REASONING_SERIES_MARKERS: Final = ("gpt-5", "gpt-6")
 
 
 def is_gpt_reasoning_series_name(model: str) -> bool:
     normalized: Final = model.split("/")[-1]
-    return any(marker in model for marker in GPT_REASONING_SERIES_MARKERS) and not normalized.startswith("gpt-5-chat")
+    return any(marker in model for marker in GPT_REASONING_SERIES_MARKERS) and "gpt-5-chat" not in normalized
 
 
 class OpenAIGPT5Config(OpenAIGPTConfig):
@@ -157,11 +159,19 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         the shared ``_supports_factory`` helper.
         Returns False for unknown models (safe fallback).
         """
-        return _supports_factory(
+        return supports_factory(
             model=cls._model_map_lookup_name(model),
             custom_llm_provider=None,
             key=f"supports_{level}_reasoning_effort",
         )
+
+    @classmethod
+    def supports_reasoning_effort_level(
+        cls,
+        model: str,
+        level: str,
+    ) -> bool:
+        return cls._supports_reasoning_effort_level(model, level)
 
     @classmethod
     def effort_resolves_to_none(cls, model: str, effective_effort: str | None) -> bool:
@@ -274,7 +284,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         # tool/sampling guards — dict inputs like {"effort": "none", "summary": "detailed"}
         # must be treated as effort="none" to avoid incorrect tool-drop or sampling errors.
         raw_reasoning_effort = non_default_params.get("reasoning_effort") or optional_params.get("reasoning_effort")
-        effective_effort: Final = _get_effort_level(raw_reasoning_effort)
+        effective_effort: Final = get_effort_level(raw_reasoning_effort)
 
         # Normalize dict reasoning_effort to string for Chat Completions API.
         # Example: {"effort": "high", "summary": "detailed"} -> "high"

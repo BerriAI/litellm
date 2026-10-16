@@ -68,14 +68,14 @@ class TestLangfusePromptManagement:
     def test_langfuse_client_init_passes_dedicated_httpx_client(self):
         import httpx
 
-        from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+        from litellm.llms.custom_httpx.http_handler import get_httpx_client
 
-        shared_client = _get_httpx_client().client
+        shared_client = get_httpx_client().client
         built = MagicMock()
         with (
             patch(
                 "litellm.integrations.langfuse.langfuse_prompt_management.resolve_langfuse_credentials",
-                return_value=("pk-1234", "sk-1234", "https://localhost"),
+                return_value=("pk-1234", "sk-9876", "https://localhost"),
             ),
             patch(
                 "litellm.integrations.langfuse.langfuse_sdk.build_langfuse_client", built
@@ -87,7 +87,7 @@ class TestLangfusePromptManagement:
         ):
             langfuse_client_init(
                 langfuse_public_key="pk-1234",
-                langfuse_secret="sk-1234",
+                langfuse_secret="sk-9876",
                 langfuse_host="https://localhost",
             )
 

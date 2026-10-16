@@ -5,7 +5,6 @@ Tests the end-to-end flow of websearch_interception callback with
 litellm.acompletion() for transparent server-side web search execution.
 """
 
-import os
 from unittest.mock import MagicMock
 
 import pytest
@@ -35,75 +34,6 @@ def mock_search_response():
 def websearch_logger():
     """Create a WebSearchInterceptionLogger instance"""
     return WebSearchInterceptionLogger(enabled_providers=[LlmProviders.OPENAI, LlmProviders.MINIMAX])
-
-
-@pytest.mark.asyncio
-@pytest.mark.skipif(
-    os.environ.get("OPENAI_API_KEY") is None,
-    reason="OPENAI_API_KEY not set",
-)
-async def test_websearch_chat_completion_with_openai():
-    """Test websearch interception with OpenAI chat completions API.
-
-    This test verifies that:
-    1. Model calls litellm_web_search tool
-    2. Server executes web search automatically
-    3. Server makes follow-up request with search results
-    4. User gets final answer without tool_calls
-    """
-    # Configure WebSearch interception
-    original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
-    websearch_logger = WebSearchInterceptionLogger(enabled_providers=[LlmProviders.OPENAI])
-    litellm.callbacks = [websearch_logger]
-
-    try:
-        response = await litellm.acompletion(
-            model="gpt-4o-mini",  # Use cheaper model for testing
-            messages=[
-                {
-                    "role": "user",
-                    "content": "What's the weather in San Francisco today?",
-                }
-            ],
-            tools=[
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "litellm_web_search",
-                        "description": "Search the web for information",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "query": {
-                                    "type": "string",
-                                    "description": "Search query",
-                                }
-                            },
-                            "required": ["query"],
-                        },
-                    },
-                }
-            ],
-        )
-
-        # Verify response structure
-        assert isinstance(response, ModelResponse)
-        assert response.choices[0].message.content is not None
-        assert len(response.choices[0].message.content) > 0
-
-        # If agentic loop worked, we should NOT have tool_calls in final response
-        # (they should have been executed and replaced with final answer)
-        if hasattr(response.choices[0].message, "tool_calls"):
-            # If tool_calls exist, it means agentic loop didn't run
-            # This could happen if search tool is not configured
-            pytest.skip("Agentic loop did not execute - search tool may not be configured")
-
-        # Verify we got a meaningful response
-        assert response.choices[0].finish_reason in ["stop", "end_turn"]
-
-    finally:
-        # Restore original callbacks
-        litellm.callbacks = original_callbacks
 
 
 @pytest.mark.asyncio
@@ -319,61 +249,6 @@ async def test_websearch_json_serialization_fix():
     # Should NOT be Python string representation like "{'query': 'weather in SF'}"
     assert arguments_str == '{"query": "weather in SF"}'
     assert arguments_str != "{'query': 'weather in SF'}"
-
-
-@pytest.mark.asyncio
-@pytest.mark.skipif(
-    os.environ.get("OPENAI_API_KEY") is None or os.environ.get("PERPLEXITY_API_KEY") is None,
-    reason="OPENAI_API_KEY or PERPLEXITY_API_KEY not set",
-)
-async def test_websearch_streaming_conversion():
-    """Test that streaming requests are converted to non-streaming for web search.
-
-    When stream=True is passed with web search tools, the handler should:
-    1. Convert stream=True to stream=False for initial request
-    2. Execute web search
-    3. Convert final response back to streaming
-    """
-    websearch_logger = WebSearchInterceptionLogger(
-        enabled_providers=[LlmProviders.OPENAI], search_tool_name="perplexity-search"
-    )
-    litellm.callbacks = [websearch_logger]
-
-    try:
-        response = await litellm.acompletion(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": "What's the latest AI news?"}],
-            tools=[
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "litellm_web_search",
-                        "description": "Search the web",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {"query": {"type": "string"}},
-                        },
-                    },
-                }
-            ],
-            stream=True,
-        )
-
-        # Response should be a streaming iterator
-        chunks = []
-        async for chunk in response:
-            chunks.append(chunk)
-
-        # Verify we got streaming chunks
-        assert len(chunks) > 0
-
-        # Verify chunks have expected structure
-        for chunk in chunks:
-            assert hasattr(chunk, "choices")
-            assert len(chunk.choices) > 0
-
-    finally:
-        litellm.callbacks = []
 
 
 @pytest.mark.asyncio

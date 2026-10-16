@@ -13,7 +13,7 @@ import pytest
 
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+from litellm.llms.anthropic.pass_through.messages.fake_stream_iterator import (
     FakeAnthropicMessagesStreamIterator,
 )
 from litellm.types.integrations.custom_logger import AgenticLoopPlan

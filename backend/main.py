@@ -8,9 +8,13 @@ Run with:
     uvicorn backend.main:app --host 0.0.0.0 --port 4001
 """
 
+from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
+from typing import Final
 
-from fastapi.routing import Mount
+from starlette.applications import Starlette
+from starlette.routing import Mount
+from starlette.types import Lifespan
 
 # See gateway/main.py for why we assemble DATABASE_URL(s) here before
 # importing proxy_server.
@@ -43,14 +47,16 @@ def _is_backend_route(route) -> bool:
 
 # See gateway/main.py for why the trim runs inside the lifespan instead of at
 # module scope.
-_proxy_lifespan = app.router.lifespan_context
+_proxy_lifespan: Final = app.router.lifespan_context
 
 
 @asynccontextmanager
-async def _backend_lifespan(app_):
-    async with _proxy_lifespan(app_):
+async def _backend_lifespan(
+    app_: Starlette, lifespan: Lifespan[Starlette] = _proxy_lifespan
+) -> AsyncGenerator[Mapping[str, object], None]:
+    async with lifespan(app_) as state:
         app_.router.routes = [r for r in app_.router.routes if _is_backend_route(r)]
-        yield
+        yield state if state is not None else {}
 
 
 app.router.lifespan_context = _backend_lifespan
