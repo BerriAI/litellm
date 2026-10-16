@@ -1,5 +1,4 @@
 from collections.abc import Sequence
-from typing import Literal
 
 from pydantic import ConfigDict, with_config
 from typing_extensions import ReadOnly, TypedDict
@@ -23,12 +22,3 @@ class SonioxContext(TypedDict, total=False):
     text: ReadOnly[str]
     terms: ReadOnly[Sequence[str]]
     translation_terms: ReadOnly[Sequence[SonioxTranslationTerm]]
-
-
-class SonioxTranslation(TypedDict, total=False):
-    """Soniox `translation` request field: https://soniox.com/docs/translation/stt-translation"""
-
-    type: ReadOnly[Literal["one_way", "two_way"]]
-    target_language: ReadOnly[str]
-    language_a: ReadOnly[str]
-    language_b: ReadOnly[str]

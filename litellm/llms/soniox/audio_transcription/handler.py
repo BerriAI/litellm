@@ -95,7 +95,7 @@ def _cleanup_targets(raw: object) -> tuple[str, ...]:
     if raw is None:
         return ()
     if isinstance(raw, str):
-        return tuple(target.strip() for target in raw.split(",") if target.strip())
+        return (raw,)
     return tuple(target for target in _CLEANUP_ENTRIES.validate_python(raw) if isinstance(target, str))
 
 

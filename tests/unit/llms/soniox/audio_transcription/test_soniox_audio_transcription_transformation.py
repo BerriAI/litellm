@@ -17,7 +17,6 @@ from litellm.llms.soniox.common_utils import SonioxException
 from litellm.llms.soniox.types import (
     SonioxContext,
     SonioxContextGeneralEntry,
-    SonioxTranslation,
     SonioxTranslationTerm,
 )
 from litellm.types.utils import TranscriptionResponse
@@ -728,7 +727,7 @@ class TestDecodeSonioxFormParams:
             terms=["Celebrex"],
             translation_terms=[SonioxTranslationTerm(source="Mr. Smith", target="Sr. Smith")],
         )
-        translation = SonioxTranslation(type="one_way", target_language="es")
+        translation = {"type": "one_way", "target_language": "es"}
         result = decode_soniox_form_params(
             {
                 "context": context,
@@ -853,8 +852,8 @@ class TestDecodeSonioxFormParams:
         result = decode_soniox_form_params(
             {
                 "context[terms]": ["Celebrex"],
-                "context[general][][key]": ["domain", "topic"],
-                "context[general][][value]": ["Healthcare", "Follow-up visit"],
+                "context[general][][key]": "domain",
+                "context[general][][value]": "Healthcare",
                 "context[translation_terms][][source]": "Mr. Smith",
                 "context[translation_terms][][target]": "Sr. Smith",
             }
@@ -862,10 +861,7 @@ class TestDecodeSonioxFormParams:
         assert result == {
             "context": {
                 "terms": ["Celebrex"],
-                "general": (
-                    {"key": "domain", "value": "Healthcare"},
-                    {"key": "topic", "value": "Follow-up visit"},
-                ),
+                "general": ({"key": "domain", "value": "Healthcare"},),
                 "translation_terms": ({"source": "Mr. Smith", "target": "Sr. Smith"},),
             }
         }

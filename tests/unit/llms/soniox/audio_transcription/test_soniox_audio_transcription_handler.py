@@ -766,21 +766,17 @@ class TestCleanupNormalization:
         assert "https://api.soniox.com/v1/transcriptions/tx_1" in deletes
 
 
-    @pytest.mark.parametrize(
-        "cleanup, expected",
-        [("file,transcription", ("file", "transcription")), (["transcription", 1, None], ("transcription",))],
-    )
-    def test_should_normalize_cleanup_lists_and_comma_strings(self, cleanup: object, expected: tuple):
+    def test_should_skip_non_string_cleanup_entries(self):
         _, _, _, opts = SonioxAudioTranscriptionHandler()._prepare(
             audio_file=None,
-            optional_params={"soniox_cleanup": cleanup, "audio_url": "https://example.com/a.wav"},
+            optional_params={"soniox_cleanup": ["transcription", 1, None], "audio_url": "https://example.com/a.wav"},
             litellm_params={},
             api_key="sk-test",
             api_base=None,
             provider_config=SonioxAudioTranscriptionConfig(),
             headers={},
         )
-        assert opts["cleanup"] == expected
+        assert opts["cleanup"] == ("transcription",)
 
     @pytest.mark.parametrize(
         "language_hints, expected",

@@ -159,15 +159,6 @@ def _decode_form_value(key: str, value: object) -> object | SonioxInvalidFormPar
     return value
 
 
-def _form_entries(columns: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
-    """`context[general][][key]` and `context[general][][value]` hold one column each of the entries."""
-    values: Final = {
-        name: _ITEMS.validate_python(column) if isinstance(column, list) else (column,)
-        for name, column in columns.items()
-    }
-    return tuple(dict(zip(values, row)) for row in zip(*values.values()))
-
-
 def _nested_form_param(param: str, fields: tuple[_BracketedField, ...]) -> Mapping[str, object]:
     owned: Final = tuple(field for field in fields if field[0] == param)
     flat: Final = {name: value for _, name, entry_field, value in owned if entry_field is None}
@@ -175,12 +166,12 @@ def _nested_form_param(param: str, fields: tuple[_BracketedField, ...]) -> Mappi
     return {
         **flat,
         **{
-            name: _form_entries(
+            name: (
                 {
                     entry_field: value
                     for _, owner, entry_field, value in owned
                     if owner == name and entry_field is not None
-                }
+                },
             )
             for name in listed
         },
