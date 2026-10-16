@@ -3927,6 +3927,12 @@ async def test_transcription_session_guardrail_block_only_reports_violation(
     assert backend_ws.close.await_count == (1 if expect_session_closed else 0)
 
 
+_GA_GUARDRAIL_GATE: Final = {
+    "type": "realtime",
+    "audio": {"input": {"turn_detection": {"type": "server_vad", "create_response": False}}},
+}
+
+
 async def _forwarded_ga_session_updates(
     monkeypatch: pytest.MonkeyPatch,
     *client_sessions: dict[str, object],
@@ -3972,10 +3978,11 @@ async def test_first_ga_session_update_keeps_client_turn_detection_when_guardrai
         },
     )
 
-    assert len(forwarded) == 1
-    assert "turn_detection" not in forwarded[0]
-    assert forwarded[0]["instructions"] == "hi"
-    assert forwarded[0]["audio"]["input"] == {
+    gate, client_update = forwarded
+    assert gate == _GA_GUARDRAIL_GATE
+    assert "turn_detection" not in client_update
+    assert client_update["instructions"] == "hi"
+    assert client_update["audio"]["input"] == {
         "turn_detection": {"type": "server_vad", "silence_duration_ms": 700, "create_response": False},
         "transcription": {"model": "gpt-4o-transcribe"},
     }
@@ -3985,9 +3992,10 @@ async def test_first_ga_session_update_keeps_client_turn_detection_when_guardrai
 async def test_first_ga_session_update_without_turn_detection_gets_a_typed_gate(monkeypatch: pytest.MonkeyPatch):
     forwarded: Final = await _forwarded_ga_session_updates(monkeypatch, {"type": "realtime", "instructions": "hi"})
 
-    assert len(forwarded) == 1
-    assert "turn_detection" not in forwarded[0]
-    assert forwarded[0]["audio"]["input"]["turn_detection"] == {"type": "server_vad", "create_response": False}
+    gate, client_update = forwarded
+    assert gate == _GA_GUARDRAIL_GATE
+    assert "turn_detection" not in client_update
+    assert client_update["audio"]["input"]["turn_detection"] == {"type": "server_vad", "create_response": False}
 
 
 @pytest.mark.asyncio
@@ -4002,9 +4010,10 @@ async def test_later_ga_session_update_without_turn_detection_is_forwarded_witho
         {"type": "realtime", "instructions": "later"},
     )
 
-    assert len(forwarded) == 2
-    assert forwarded[0]["audio"]["input"]["turn_detection"] == {"type": "server_vad", "create_response": False}
-    assert forwarded[1] == {"type": "realtime", "instructions": "later"}
+    gate, first, later = forwarded
+    assert gate == _GA_GUARDRAIL_GATE
+    assert first["audio"]["input"]["turn_detection"] == {"type": "server_vad", "create_response": False}
+    assert later == {"type": "realtime", "instructions": "later"}
 
 
 _XAI_TYPED_VAD_SESSION: Final = {
@@ -4036,7 +4045,7 @@ async def test_xai_session_update_gate_leaves_out_the_vad_type(
 
     assert [session["audio"]["input"]["turn_detection"] for session in forwarded] == [
         {"create_response": False}
-    ] * len(client_sessions)
+    ] * (len(client_sessions) + 1)
 
 
 @pytest.mark.asyncio
@@ -4076,11 +4085,11 @@ async def test_xai_session_created_gate_leaves_out_the_vad_type(monkeypatch: pyt
         pytest.param({"type": "server_vad", "silence_duration_ms": 700}, id="tuned-server-vad"),
     ],
 )
-async def test_turn_detection_sent_before_session_created_outlasts_the_guardrail_gate(
+async def test_guardrail_gate_goes_ahead_of_a_session_update_sent_before_session_created(
     monkeypatch: pytest.MonkeyPatch, client_turn_detection: dict[str, object]
 ):
-    """A client updating on connect reaches OpenAI before the proxy's session.created gate,
-    so that gate must not be the last turn_detection the session applies."""
+    """OpenAI applies events in order, so the gate must precede a client update sent on connect:
+    the client's turn_detection then wins, and when OpenAI refuses that update the gate still holds."""
     monkeypatch.setattr(litellm, "callbacks", [_transcription_guardrail()])
     client_ws: Final = AsyncMock()
     client_ws.scope = {"headers": []}
@@ -4108,11 +4117,11 @@ async def test_turn_detection_sent_before_session_created_outlasts_the_guardrail
     await streaming.client_ack_messages()
     await streaming.backend_to_client_send_messages()
 
-    applied_last: Final = json.loads(backend_ws.send.await_args_list[-1].args[0])
-    assert applied_last["session"]["audio"]["input"]["turn_detection"] == {
-        **client_turn_detection,
-        "create_response": False,
-    }
+    sent: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+    assert [event["session"]["audio"]["input"]["turn_detection"] for event in sent] == [
+        {"type": "server_vad", "create_response": False},
+        {**client_turn_detection, "create_response": False},
+    ]
 
 
 @pytest.mark.asyncio

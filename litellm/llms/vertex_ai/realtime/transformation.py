@@ -251,9 +251,12 @@ def vertex_realtime_config(
     resolve_access_token: Callable[[], Awaitable[str]],
     project: str,
     location: str | None,
+    drop_params: bool,
 ) -> VertexAIRealtimeConfig | VertexChirpRealtimeConfig:
     if is_vertex_speech_to_text_model(model):
-        return VertexChirpRealtimeConfig(resolve_access_token=resolve_access_token, project=project, location=location)
+        return VertexChirpRealtimeConfig(
+            resolve_access_token=resolve_access_token, project=project, location=location, drop_params=drop_params
+        )
     return VertexAIRealtimeConfig(
         access_token=access_token,
         project=project,
