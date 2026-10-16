@@ -429,19 +429,17 @@ def test_budget_window_start_reads_json_encoded_windows(window: str, expected: d
 
 
 @pytest.mark.asyncio
-
-
 @pytest.mark.asyncio
 async def test_reserve_budget_increments_prometheus_counter_on_failure():
     from litellm.proxy.hooks.rate_limit_failure_metrics import _get_counter
     from litellm.proxy.spend_tracking.budget_reservation import reserve_budget_for_request
 
     counter = _get_counter()
-    before = counter.labels(limiter_type='budget_reservation', error_type='reservation_failure')._value.get()
+    before = counter.labels(limiter_type="budget_reservation", error_type="reservation_failure")._value.get()
 
     result = await reserve_budget_for_request(
-        request_body={'model': 'unknown-model-xyz', 'messages': [{'role': 'user', 'content': 'hi'}]},
-        route='/v1/chat/completions',
+        request_body={"model": "unknown-model-xyz", "messages": [{"role": "user", "content": "hi"}]},
+        route="/v1/chat/completions",
         llm_router=None,
         valid_token=None,
         team_object=None,
@@ -452,7 +450,7 @@ async def test_reserve_budget_increments_prometheus_counter_on_failure():
     )
     assert result is None
 
-    after = counter.labels(limiter_type='budget_reservation', error_type='reservation_failure')._value.get()
+    after = counter.labels(limiter_type="budget_reservation", error_type="reservation_failure")._value.get()
     assert after == before
 
 
@@ -464,14 +462,14 @@ async def test_fail_closed_budget_reservation_default_follows_rate_limit_setting
 
     import litellm.proxy.proxy_server as proxy_server
 
-    monkeypatch.delitem(proxy_server.general_settings, 'fail_closed_budget_enforcement', raising=False)
-    monkeypatch.setitem(proxy_server.general_settings, 'fail_closed_rate_limit_enforcement', True)
+    monkeypatch.delitem(proxy_server.general_settings, "fail_closed_budget_enforcement", raising=False)
+    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", True)
     assert fail_closed_rate_limit_enforcement_enabled(proxy_server.general_settings) is True
 
-    monkeypatch.setitem(proxy_server.general_settings, 'fail_closed_rate_limit_enforcement', False)
+    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", False)
     assert fail_closed_rate_limit_enforcement_enabled(proxy_server.general_settings) is False
 
-    monkeypatch.delitem(proxy_server.general_settings, 'fail_closed_rate_limit_enforcement', raising=False)
+    monkeypatch.delitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", raising=False)
     assert fail_closed_rate_limit_enforcement_enabled(proxy_server.general_settings) is True
 
 
@@ -481,9 +479,9 @@ def test_resolve_budget_fail_closed_for_auth_rate_limit_default(monkeypatch):
         _resolve_budget_fail_closed_for_auth,
     )
 
-    monkeypatch.delitem(proxy_server.general_settings, 'fail_closed_budget_enforcement', raising=False)
+    monkeypatch.delitem(proxy_server.general_settings, "fail_closed_budget_enforcement", raising=False)
 
-    monkeypatch.setitem(proxy_server.general_settings, 'fail_closed_rate_limit_enforcement', True)
+    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", True)
     assert (
         _resolve_budget_fail_closed_for_auth(
             general_settings=proxy_server.general_settings,
@@ -492,7 +490,7 @@ def test_resolve_budget_fail_closed_for_auth_rate_limit_default(monkeypatch):
         is True
     )
 
-    monkeypatch.setitem(proxy_server.general_settings, 'fail_closed_rate_limit_enforcement', False)
+    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", False)
     assert (
         _resolve_budget_fail_closed_for_auth(
             general_settings=proxy_server.general_settings,
@@ -508,8 +506,8 @@ def test_resolve_budget_fail_closed_for_auth_budget_setting_override(monkeypatch
         _resolve_budget_fail_closed_for_auth,
     )
 
-    monkeypatch.setitem(proxy_server.general_settings, 'fail_closed_budget_enforcement', True)
-    monkeypatch.setitem(proxy_server.general_settings, 'fail_closed_rate_limit_enforcement', False)
+    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_budget_enforcement", True)
+    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", False)
     assert (
         _resolve_budget_fail_closed_for_auth(
             general_settings=proxy_server.general_settings,
@@ -518,8 +516,8 @@ def test_resolve_budget_fail_closed_for_auth_budget_setting_override(monkeypatch
         is True
     )
 
-    monkeypatch.setitem(proxy_server.general_settings, 'fail_closed_budget_enforcement', False)
-    monkeypatch.setitem(proxy_server.general_settings, 'fail_closed_rate_limit_enforcement', True)
+    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_budget_enforcement", False)
+    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", True)
     assert (
         _resolve_budget_fail_closed_for_auth(
             general_settings=proxy_server.general_settings,
@@ -535,8 +533,8 @@ def test_resolve_budget_fail_closed_for_auth_billing_agent_forces_fail_closed(mo
         _resolve_budget_fail_closed_for_auth,
     )
 
-    monkeypatch.setitem(proxy_server.general_settings, 'fail_closed_budget_enforcement', False)
-    monkeypatch.setitem(proxy_server.general_settings, 'fail_closed_rate_limit_enforcement', False)
+    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_budget_enforcement", False)
+    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", False)
     assert (
         _resolve_budget_fail_closed_for_auth(
             general_settings=proxy_server.general_settings,

@@ -21,12 +21,12 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     RateLimitUnverifiableError,
     _fail_closed_rate_limit_enforcement_from_general_settings,
 )
+from litellm.proxy.hooks.rate_limit_failure_metrics import (
+    _increment_rate_limiter_failure_counter,
+)
 from litellm.proxy.hooks.rate_limiter_utils import (
     convert_priority_to_percent,
     resolve_llm_provider_for_rate_limit,
-)
-from litellm.proxy.hooks.rate_limit_failure_metrics import (
-    _increment_rate_limiter_failure_counter,
 )
 from litellm.types.router import ModelGroupInfo
 from litellm.types.utils import CallTypesLiteral, LLMResponseTypes

@@ -464,9 +464,7 @@ def io_token_pre_call_check(
                 "io_token_pre_call_check: Redis failure, fail-closed enabled — rejecting. err=%s", e
             )
             raise RateLimitUnverifiableError() from e
-        verbose_router_logger.debug(
-            "io_token_pre_call_check: Redis failure, fail-open — allowing request. err=%s", e
-        )
+        verbose_router_logger.debug("io_token_pre_call_check: Redis failure, fail-open — allowing request. err=%s", e)
         return deployment
 
     _stash_reservation_in_metadata(

@@ -1000,15 +1000,15 @@ async def _check_key_model_budget_with_fallback(
             user_api_key_dict=valid_token,
             model=model_name,
         )
-    except litellm.BudgetExceededError as e:
+    except litellm.BudgetExceededError:
         if request_data.get("model") != model_name:
-            raise e
+            raise
         fallback_model: Final = await model_max_budget_limiter.get_fallback_model_within_budget(
             user_api_key_dict=valid_token,
             model=model_name,
         )
         if fallback_model is None:
-            raise e
+            raise
         if not await _is_fallback_model_authorized(
             model=fallback_model,
             valid_token=valid_token,
@@ -1430,9 +1430,8 @@ async def check_api_key_for_custom_headers_or_pass_through_endpoints(
             if normalized_route.startswith(mapped_route):
                 is_mapped_pass_through_route = True
                 break
-    if is_mapped_pass_through_route:
-        if request.headers.get("litellm_user_api_key") is not None:
-            api_key = request.headers.get("litellm_user_api_key") or ""
+    if is_mapped_pass_through_route and request.headers.get("litellm_user_api_key") is not None:
+        api_key = request.headers.get("litellm_user_api_key") or ""
     if pass_through_endpoints is not None:
         for endpoint in pass_through_endpoints:
             if isinstance(endpoint, dict) and endpoint.get("path", "") == route:
@@ -2111,7 +2110,7 @@ async def user_api_key_auth_builder(
             )
         pass_through_endpoints: Final[list[dict] | None] = general_settings.get("pass_through_endpoints", None)
         ## CHECK IF X-LITELM-API-KEY IS PASSED IN - supercedes Authorization header
-        api_key, passed_in_key = get_api_key(
+        api_key, _passed_in_key = get_api_key(
             custom_litellm_key_header=custom_litellm_key_header,
             api_key=api_key,
             azure_api_key_header=azure_api_key_header,
@@ -2565,7 +2564,7 @@ async def user_api_key_auth_builder(
                         )
             except Exception as e:
                 if isinstance(e, litellm.BudgetExceededError):
-                    raise e
+                    raise
                 verbose_proxy_logger.debug("Unable to find user in db. Error - %s", e)
 
         ### CHECK IF ADMIN ###
@@ -4464,7 +4463,7 @@ async def _lookup_end_user_and_apply_budget(
                     valid_token.end_user_max_budget = default_budget.max_budget
     except Exception as e:
         if isinstance(e, litellm.BudgetExceededError):
-            raise e
+            raise
         verbose_proxy_logger.debug("Unable to find user in db. Error - %s", e)
     return valid_token, end_user_object
 

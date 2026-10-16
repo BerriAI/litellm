@@ -10,7 +10,8 @@ import itertools
 import logging
 import os
 import uuid
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence, Set
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -95,7 +96,6 @@ if TYPE_CHECKING:
 
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
     from litellm.types.agents import AgentResponse
-    from litellm.types.caching import RedisPipelineIncrementOperation
 
     Span = _Span | Any
     InternalUsageCache = _InternalUsageCache
@@ -184,7 +184,8 @@ def fail_closed_rate_limit_enforcement_enabled(general_settings: Mapping[str, ob
         validated: Final = _FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_FLAG.validate_python(raw_value)
         if validated is None:
             return True
-        return validated is True
+        else:
+            return validated is True
     except ValidationError:
         verbose_proxy_logger.warning(
             "general_settings.%s=%r is not a boolean, treating it as disabled",
@@ -4540,7 +4541,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         operation_keys: Final = [op["key"] for op in pipeline_operations]
         key_groups: Final = self._group_keys_by_hash_tag(operation_keys)
 
-        for _hash_tag, group_keys in key_groups.items():
+        for group_keys in key_groups.values():
             # Get operations for this hash tag group
             group_operations = [op for op in pipeline_operations if op["key"] in group_keys]
 
@@ -4952,14 +4953,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if otpm_reserved > 0
             else ()
         )
-        return tuple((*itpm_ops, *otpm_ops))
+        return (*itpm_ops, *otpm_ops)
 
     def _collect_tpm_scope_targets(
         self,
         standard_logging_metadata: dict[str, Any],
         kwargs: object,
         model_group: str | None,
-        tpm_limited_tags: Set[str] = frozenset(),
+        tpm_limited_tags: AbstractSet[str] = frozenset(),
     ) -> list[tuple[str, str]]:
         """
         Enumerate every (scope_key, scope_value) pair that *might* carry a
@@ -5021,7 +5022,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     def _build_reservation_aware_tpm_ops(
         self,
         targets: Sequence[tuple[str, str]],
-        reserved_scopes: Set[tuple[str, str]],
+        reserved_scopes: AbstractSet[tuple[str, str]],
         actual_tokens: int,
         reserved_tokens: int,
     ) -> list[RedisPipelineIncrementOperation]:
@@ -5057,7 +5058,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     def _build_project_reservation_op(
         self,
         scope: tuple[str, str],
-        reserved_scopes: Set[tuple[str, str]],
+        reserved_scopes: AbstractSet[tuple[str, str]],
         actual_tokens: int,
         reserved_tokens: int,
         reservation_window_identities: frozenset[tuple[str, str, Literal["redis", "local"]]],
@@ -5094,7 +5095,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     def _build_project_reservation_ops(
         self,
         targets: Sequence[tuple[str, str]],
-        reserved_scopes: Set[tuple[str, str]],
+        reserved_scopes: AbstractSet[tuple[str, str]],
         actual_tokens: int,
         reserved_tokens: int,
         reservation_window_identities: frozenset[tuple[str, str, Literal["redis", "local"]]],
@@ -5238,7 +5239,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         standard_logging_metadata: Mapping[str, object],
         usage_source: object,
         reconcile_model: RateLimitedModel | None,
-        reserved_scopes: Set[tuple[str, str]],
+        reserved_scopes: AbstractSet[tuple[str, str]],
         reserved_ceiling: PTUTeamCeiling | None,
         reserved_tokens: int,
         reserved_windows: frozenset[ReservationWindowIdentity],
