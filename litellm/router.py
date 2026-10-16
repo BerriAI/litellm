@@ -376,6 +376,7 @@ from litellm.utils import (
     get_utc_datetime,
     is_region_allowed,
     provider_rejectable_params,
+    resolve_api_key_secret_reference,
     set_live_deployment_replay,
 )
 
@@ -10984,7 +10985,9 @@ class Router:
             return
         if api_base is None or "*" in model or params.get("use_clientside_credentials"):
             return
-        api_key: Final = params.api_key or dynamic_api_key
+        api_key: Final = resolve_api_key_secret_reference(
+            params.api_key or dynamic_api_key, model=model, llm_provider=provider
+        )
         headers: Final = TypeAdapter(Mapping[str, str]).validate_python(
             params.get("extra_headers") or params.get("headers") or MappingProxyType({})
         )

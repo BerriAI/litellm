@@ -1421,6 +1421,14 @@ def reject_server_owned_wif_params(body: Mapping[str, object]) -> None:
     This lives here rather than under ``litellm.proxy`` so the router can call it on a
     post-authentication merge without core importing from the proxy package.
     """
+    reject_server_owned_wif_fields(body)
+    if holds_api_key_secret_reference(body):
+        raise ValueError(_API_KEY_SECRET_REFERENCE_REJECTION)
+
+
+def reject_server_owned_wif_fields(body: Mapping[str, object]) -> None:
+    """``reject_server_owned_wif_params`` without the ``oidc/`` api_key check, for the deployment writes whose
+    role gate already refuses a non-admin setting one."""
     for param in _server_owned_wif_litellm_params:
         if param in body:
             raise ValueError(
@@ -1429,5 +1437,3 @@ def reject_server_owned_wif_params(body: Mapping[str, object]) -> None:
                 "and cannot be set in a request body. A proxy admin configures it on the deployment "
                 "or on a stored credential."
             )
-    if holds_api_key_secret_reference(body):
-        raise ValueError(_API_KEY_SECRET_REFERENCE_REJECTION)

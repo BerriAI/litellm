@@ -2,6 +2,7 @@ import asyncio
 import json
 import time
 from collections.abc import Awaitable, Callable, Mapping
+from pathlib import Path
 from types import TracebackType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -522,6 +523,29 @@ async def test_bearer_health_check_sends_stored_credential_as_bearer_token(
         )
     assert connect.kwargs["additional_headers"] == {"Authorization": "Bearer sk-from-credential"}
     assert connect.url == expected_url
+
+
+@pytest.mark.asyncio
+async def test_bearer_health_check_sends_the_secret_behind_an_oidc_credential(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
+    token: Final = tmp_path / "token"
+    token.write_text("sk-from-token-file")
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [CredentialItem(credential_name="voice-sa", credential_values={"api_key": f"oidc/file/{token}"}, credential_info={})],
+    )
+    connect: Final = _CapturingConnect()
+    with patch("websockets.connect", connect):
+        assert await realtime_main._realtime_health_check(
+            model="gpt-realtime",
+            custom_llm_provider="openai",
+            api_key=None,
+            model_params={"model": "openai/gpt-realtime", "litellm_credential_name": "voice-sa"},
+        )
+    assert connect.kwargs["additional_headers"] == {"Authorization": "Bearer sk-from-token-file"}
 
 
 @pytest.mark.asyncio

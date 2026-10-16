@@ -36,7 +36,12 @@ from litellm.proxy.common_utils.http_parsing_utils import extract_nested_form_me
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
 )
-from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS, Deployment, server_owned_wif_fields_present
+from litellm.types.router import (
+    CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS,
+    Deployment,
+    reject_server_owned_wif_fields,
+    server_owned_wif_fields_present,
+)
 from litellm.types.router import reject_server_owned_wif_params as _reject_server_owned_wif_params
 from litellm.types.utils import CustomPricingLiteLLMParams, oauth_token_exchange_litellm_params
 
@@ -663,8 +668,10 @@ def is_request_body_safe(
             _reject_url_valued_fallback_target(target)
     litellm_params: Final = _coerce_metadata_to_dict(request_body.get("litellm_params"))
     if litellm_params is not None:
-        reject_server_owned_wif_params(litellm_params)
-        if not manages_deployments:
+        if manages_deployments:
+            reject_server_owned_wif_fields(litellm_params)
+        else:
+            reject_server_owned_wif_params(litellm_params)
             reject_federated_credential_reference(litellm_params)
         litellm_params_metadata: Final = _coerce_metadata_to_dict(litellm_params.get("metadata"))
         if litellm_params_metadata is not None:

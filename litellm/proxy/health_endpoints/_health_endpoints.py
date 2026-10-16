@@ -42,7 +42,6 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.auth_utils import (
     _BANNED_REQUEST_BODY_PARAMS,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the request-body check
-    reject_server_owned_wif_params,
 )
 from litellm.proxy.auth.model_checks import get_key_models
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -80,6 +79,7 @@ from litellm.router_utils.clientside_credential_handler import (
 )
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.proxy.litellm_pre_call_utils import RedactedDict, SecretFields
+from litellm.types.router import reject_server_owned_wif_fields
 
 #### Health ENDPOINTS ####
 
@@ -2291,7 +2291,7 @@ async def test_model_connection(
                 )
 
         selected_by_id: Final = deployment_by_id is not None
-        reject_server_owned_wif_params(request_litellm_params)
+        reject_server_owned_wif_fields(request_litellm_params)
         # Merge: config params (from proxy config) as base, request params override
         litellm_params = {
             **_config_base_for_health_check(

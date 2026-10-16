@@ -384,7 +384,6 @@ def oidc_api_key_credential(monkeypatch):
     [
         {"model": "devstral", "api_key": _SERVICE_ACCOUNT_TOKEN_REFERENCE},
         {"model": "devstral", "extra_body": {"api_key": _SERVICE_ACCOUNT_TOKEN_REFERENCE}},
-        {"model": "devstral", "litellm_params": {"api_key": _SERVICE_ACCOUNT_TOKEN_REFERENCE}},
         {"model": "devstral", "fallbacks": [{"model": "other", "api_key": _SERVICE_ACCOUNT_TOKEN_REFERENCE}]},
         {
             "model": "devstral",
@@ -398,7 +397,6 @@ def oidc_api_key_credential(monkeypatch):
     ids=[
         "top_level",
         "extra_body",
-        "litellm_params",
         "fallback_target",
         "user_config",
         "user_config_defaults",
@@ -440,6 +438,68 @@ def test_a_request_body_cannot_name_a_credential_holding_an_oidc_api_key(oidc_ap
             llm_router=None,
             model="devstral",
         )
+
+
+@pytest.mark.parametrize("route", [None, "/chat/completions"])
+def test_a_call_cannot_carry_an_oidc_api_key_in_litellm_params(route: str | None):
+    with pytest.raises(ValueError, match="api_key holds an oidc/ secret reference"):
+        is_request_body_safe(
+            request_body={"model": "devstral", "litellm_params": {"api_key": _SERVICE_ACCOUNT_TOKEN_REFERENCE}},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="devstral",
+            route=route,
+        )
+
+
+@pytest.mark.parametrize("route", ["/model/new", "/model/update", "/model/deployment-1/update", "/health/test_connection"])
+def test_a_deployment_write_may_carry_an_oidc_api_key_in_litellm_params(route: str):
+    """A proxy admin configures an oidc/ api_key on a deployment through these routes, and the model management role
+    gate refuses anyone else with a 403."""
+    assert (
+        is_request_body_safe(
+            request_body={
+                "model": "devstral",
+                "litellm_params": {"model": "mistral/devstral-latest", "api_key": _SERVICE_ACCOUNT_TOKEN_REFERENCE},
+            },
+            general_settings={},
+            llm_router=None,
+            model="devstral",
+            route=route,
+        )
+        is True
+    )
+
+
+_OIDC_DEPLOYMENT_PARAMS: Final = (
+    pytest.param({"model": "mistral/devstral-latest", "api_key": _SERVICE_ACCOUNT_TOKEN_REFERENCE}, id="inline"),
+    pytest.param({"model": "mistral/devstral-latest", "litellm_credential_name": "admin-oidc"}, id="named_credential"),
+)
+
+
+@pytest.mark.parametrize("override", ["api_base", "base_url"])
+@pytest.mark.parametrize("deployment_params", _OIDC_DEPLOYMENT_PARAMS)
+def test_a_base_override_cannot_send_the_deployments_oidc_api_key(
+    oidc_api_key_credential, deployment_params: dict, override: str
+):
+    from litellm.exceptions import BadRequestError
+    from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+
+    with pytest.raises(BadRequestError, match="api_key is an oidc/ secret reference"):
+        get_dynamic_litellm_params(
+            litellm_params=dict(deployment_params), request_kwargs={override: "https://caller.example/v1"}
+        )
+
+
+@pytest.mark.parametrize("deployment_params", _OIDC_DEPLOYMENT_PARAMS)
+def test_a_base_override_with_the_callers_own_api_key_is_allowed(oidc_api_key_credential, deployment_params: dict):
+    from litellm.router_utils.clientside_credential_handler import get_dynamic_litellm_params
+
+    out: Final = get_dynamic_litellm_params(
+        litellm_params=dict(deployment_params),
+        request_kwargs={"api_base": "https://caller.example/v1", "api_key": "sk-caller"},
+    )
+    assert (out["api_base"], out["api_key"]) == ("https://caller.example/v1", "sk-caller")
 
 
 def test_test_connection_may_name_a_credential_holding_an_oidc_api_key(oidc_api_key_credential):

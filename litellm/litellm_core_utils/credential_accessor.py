@@ -42,6 +42,12 @@ class CredentialAccessor:
                 litellm.credential_list.append(credential)
 
 
+def sends_api_key_secret_reference(params: Mapping[str, object]) -> bool:
+    named: Final = params.get("litellm_credential_name")
+    credential_values: Final = CredentialAccessor.get_credential_values(named) if isinstance(named, str) else {}
+    return holds_api_key_secret_reference({**credential_values, **params})
+
+
 def reject_api_key_secret_reference(params: Mapping[str, object]) -> None:
     if holds_api_key_secret_reference(params):
         raise ValueError(API_KEY_SECRET_REFERENCE_REJECTION)

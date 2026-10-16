@@ -741,6 +741,12 @@ def _named_credential_values(kwargs: Mapping[str, object]) -> Mapping[str, objec
     return MappingProxyType({key: value for key, value in credential.credential_values.items() if key not in kwargs})
 
 
+def resolve_api_key_secret_reference(api_key: str | None, model: object, llm_provider: object) -> str | None:
+    if api_key is None or not api_key.startswith(OIDC_SECRET_REFERENCE_PREFIX):
+        return api_key
+    return _secret_behind_api_key_reference(api_key, model=model, llm_provider=llm_provider)
+
+
 def _secret_behind_api_key_reference(reference: str, model: object, llm_provider: object) -> str:
     if not reference.startswith(LOCAL_OIDC_SECRET_PREFIXES):
         raise BadRequestError(
