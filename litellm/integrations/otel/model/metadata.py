@@ -36,7 +36,7 @@ model. They coincide on the SDK path, which is correct.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from types import MappingProxyType
@@ -132,10 +132,7 @@ class RequestIdentity:
         snapshot) is flattened to dotted keys so ``requester_metadata.<key>``
         resolves too.
         """
-
-        def get(name: str) -> object:
-            return _AUTH_ATTRIBUTE.validate_python(getattr(auth, name, None))
-
+        get: Final[Callable[[str], object]] = lambda name: _AUTH_ATTRIBUTE.validate_python(getattr(auth, name, None))  # noqa: E731
         auth_meta: Final = tuple(
             (meta_key, str(value))
             for meta_key, attr in (

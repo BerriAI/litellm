@@ -25,7 +25,7 @@ from litellm.types.utils import (
 
 BatchFileProvider: TypeAlias = Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral"]
 
-_VERTEX_AI_UNKNOWN_CUSTOM_ID: Final = "unknown"
+_VERTEX_AI_UNKNOWN_CUSTOM_ID: Final = "unknown"  # what a Vertex AI batch row that carries no custom_id is read as
 _LINE: Final = re.compile(rb"[^\n]+")
 
 
