@@ -1,12 +1,14 @@
 from collections.abc import Iterable, Iterator, Mapping, Sequence
+from functools import reduce
 from itertools import chain
 from types import MappingProxyType
-from typing import Final
+from typing import Final, TypeAlias
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.anthropic.pass_through.messages.utils import normalize_native_messages
 from litellm.responses.litellm_completion_transformation.transformation import drops_unsupported_params
 from litellm.types.utils import TokenCountMessagesFormat
@@ -167,6 +169,62 @@ def _tool_result_text_errors(block: object) -> Iterator[str]:
 def malformed_tool_result_text_error(messages: Iterable[Mapping[str, object]]) -> str | None:
     blocks: Final = chain.from_iterable(map(_user_content_blocks, messages))
     return next(chain.from_iterable(map(_tool_result_text_errors, blocks)), None)
+
+
+_IndexedParts: TypeAlias = tuple[tuple[int, object], ...]
+
+
+def _non_string_text_parts(content: object) -> _IndexedParts:
+    return tuple((index, block) for index, block in enumerate(_list_items(content)) if _has_non_string_text(block))
+
+
+def _tool_result_non_string_texts(block: object) -> tuple[tuple[str, _IndexedParts], ...]:
+    match block:
+        case {"type": "tool_result", "tool_use_id": str(tool_use_id), "content": object() as content}:
+            parts: Final = _non_string_text_parts(content)
+            return ((tool_use_id, parts),) if parts else ()
+        case _:
+            return ()
+
+
+def _content_blocks(content: object) -> tuple[object, ...]:
+    match content:
+        case str() if content:
+            return ({"type": "text", "text": content},)
+        case _:
+            return _list_items(content)
+
+
+def _insert_part(blocks: tuple[object, ...], part: tuple[int, object]) -> tuple[object, ...]:
+    index, block = part
+    return (*blocks[:index], block, *blocks[index:])
+
+
+def _restored_block(block: object, kept: Mapping[str, _IndexedParts]) -> object:
+    match as_str_mapping(block):
+        case {"type": "tool_result", "tool_use_id": str(tool_use_id)} as tool_result if tool_use_id in kept:
+            content: Final = reduce(_insert_part, kept[tool_use_id], _content_blocks(tool_result.get("content")))
+            return {**tool_result, "content": list(content)}
+        case _:
+            return block
+
+
+def _restored_message(message: object, kept: Mapping[str, _IndexedParts]) -> object:
+    match as_str_mapping(message):
+        case {"role": "user", "content": list()} as user_message:
+            blocks: Final = _list_items(user_message.get("content"))
+            return {**user_message, "content": [_restored_block(block, kept) for block in blocks]}
+        case _:
+            return message
+
+
+def keep_non_string_tool_result_texts(rewritten: Sequence[object], original: object) -> Sequence[object]:
+    original_messages: Final = filter(None, map(as_str_mapping, _list_items(original)))
+    blocks: Final = chain.from_iterable(map(_user_content_blocks, original_messages))
+    kept: Final = MappingProxyType(dict(chain.from_iterable(map(_tool_result_non_string_texts, blocks))))
+    if not kept:
+        return rewritten
+    return [_restored_message(message, kept) for message in rewritten]
 
 
 def deployment_drops_params(deployment: Mapping[str, object] | None) -> bool:

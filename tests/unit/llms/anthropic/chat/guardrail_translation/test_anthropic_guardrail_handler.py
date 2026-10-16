@@ -11,7 +11,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import litellm
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -2473,36 +2472,37 @@ class TestStructuredWriteBackKeepsToolResults:
         later_blocks = [b for m in messages[tool_use_index + 1 :] for b in self._blocks(m)]
         assert {"type": "text", "text": "Now fetch the page."} in later_blocks
 
-
-    @pytest.mark.parametrize("text", [None, 73], ids=["null", "number"])
-    async def test_rewrite_rejects_a_non_string_tool_result_text_without_drop_params(self, text):
-        data = {"model": "claude-fable-5", "messages": self._claude_code_tool_search_turns([{"type": "text", "text": text}])}
-
-        with pytest.raises(
-            litellm.BadRequestError, match=r"tool_result toolu_01 content\.0\.text: Input should be a valid string"
-        ):
-            await AnthropicMessagesHandler().process_input_messages(
-                data=data, guardrail_to_apply=MockStructuredMaskingGuardrail()
-            )
-
-    async def test_rewrite_drops_a_non_string_tool_result_text_under_drop_params(self):
-        data = {
-            "model": "claude-fable-5",
-            "drop_params": True,
-            "messages": self._claude_code_tool_search_turns(
-                [{"type": "text", "text": 73}, {"type": "text", "text": "log for bob@example.com"}]
+    @pytest.mark.parametrize(
+        ("tool_result_content", "expected_written_back_content"),
+        [
+            (
+                [{"type": "text", "text": None}, {"type": "text", "text": "log for bob@example.com"}],
+                [{"type": "text", "text": None}, {"type": "text", "text": "log for <EMAIL>"}],
             ),
-        }
+            (
+                [{"type": "text", "text": "log for bob@example.com"}, {"type": "text", "text": 73}],
+                [{"type": "text", "text": "log for <EMAIL>"}, {"type": "text", "text": 73}],
+            ),
+            ([{"type": "text", "text": None}], [{"type": "text", "text": None}]),
+        ],
+        ids=["null-first", "number-last", "null-only"],
+    )
+    async def test_rewrite_keeps_a_non_string_tool_result_text_in_place(
+        self, tool_result_content, expected_written_back_content
+    ):
+        data = {"model": "claude-fable-5", "messages": self._claude_code_tool_search_turns(tool_result_content)}
 
         await AnthropicMessagesHandler().process_input_messages(
             data=data, guardrail_to_apply=MockStructuredMaskingGuardrail()
         )
 
+        assert "bob@example.com" not in json.dumps(data["messages"])
         assert data["messages"][2]["content"][0] == {
             "type": "tool_result",
             "tool_use_id": "toolu_01",
-            "content": "log for <EMAIL>",
+            "content": expected_written_back_content,
         }
+
 
 class TestAnthropicMessagesHandlerStreamingScanKey:
     """get_streaming_scan_key mirrors what process_output_streaming_response would scan"""

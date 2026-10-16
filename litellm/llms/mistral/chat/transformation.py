@@ -277,7 +277,7 @@ class MistralConfig(OpenAIGPTConfig):
         for m in messages:
             m = MistralConfig._handle_name_in_message(m)
             m = MistralConfig._handle_tool_call_message(m)
-            if MistralConfig._is_empty_assistant_message(m):
+            if m.get("role") != "tool" and MistralConfig._is_empty_assistant_message(m):
                 continue
             m = strip_none_values_from_message(m)  # prevents 'extra_forbidden' error
             new_messages.append(m)
@@ -476,8 +476,6 @@ class MistralConfig(OpenAIGPTConfig):
         """
         from litellm.types.llms.openai import ChatCompletionAssistantMessage
 
-        if message.get("role") != "assistant":
-            return False
         set_keys: Final = get_type_hints(ChatCompletionAssistantMessage).keys()
 
         all_expected_values_are_empty = True

@@ -432,43 +432,57 @@ def _guardrail(gateway: Gateway, scenario: Scenario, wire: Wire, mode: str) -> s
     return name
 
 
-def _forwarded_tool_result_texts(body: Mapping[str, JsonValue]) -> tuple[JsonValue, ...]:
-    content: Final = _forwarded_tool_result(body)
-    if isinstance(content, str):
-        return (content,)
-    return tuple(block.get("text") for block in _JSON_OBJECTS.validate_python(content) if block.get("type") == "text")
+def _first_turn(messages: JsonValue) -> str:
+    return json.dumps(_JSON_OBJECTS.validate_python(messages)[0])
 
 
-def test_rewriting_guardrail_rejects_a_non_string_tool_result_text(gateway: Gateway) -> None:
+def test_rewriting_guardrail_leaves_the_rejection_to_the_openai_route(gateway: Gateway) -> None:
     with (
-        wire_server(_anthropic_peer) as provider,
+        wire_server(_openai_peer) as provider,
         wire_server(_guardrail_peer) as guard,
         gateway.scenario() as scenario,
     ):
-        model: Final = _anthropic_model(scenario, provider)
+        model: Final = _openai_model(scenario, provider)
         body: Final = _body(model, _NULL_TEXT, max_tokens=64, guardrails=[_guardrail(gateway, scenario, guard, "rows")])
         _assert_field_rejection(gateway, "/v1/messages", body)
         _assert_field_rejection(gateway, "/v1/messages", {**body, "stream": True})
         assert provider.drain() == ()
 
 
-@pytest.mark.parametrize("source", ("body", "claude_code"))
-def test_rewriting_guardrail_drops_the_malformed_text_under_drop_params(gateway: Gateway, source: str) -> None:
+@pytest.mark.parametrize("source", sorted(_DROP_SOURCES))
+def test_rewriting_guardrail_then_drop_params_drops_the_malformed_text(gateway: Gateway, source: str) -> None:
     deployment, extra, headers = _DROP_SOURCES[source]
+    with (
+        wire_server(_openai_peer) as provider,
+        wire_server(_guardrail_peer) as guard,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _openai_model(scenario, provider, **deployment)
+        guardrail: Final = _guardrail(gateway, scenario, guard, "rows")
+        body: Final = _body(model, _NUMBER_THEN_WEATHER, max_tokens=64, guardrails=[guardrail], **extra)
+        created: Final = gateway.request("POST", "/v1/messages", body, headers=headers)
+        assert created.status_code == 200, created.text
+        forwarded: Final = _only(provider.drain(), "/responses")
+        first_turn: Final = _first_turn(forwarded["input"])
+        assert _REDACTED_CITY in first_turn and _CITY not in first_turn, first_turn
+        assert _function_call_output(forwarded) == _WEATHER, forwarded
+
+
+def test_rewriting_guardrail_forwards_the_malformed_text_to_anthropic_unchanged(gateway: Gateway) -> None:
     with (
         wire_server(_anthropic_peer) as provider,
         wire_server(_guardrail_peer) as guard,
         gateway.scenario() as scenario,
     ):
-        model: Final = _anthropic_model(scenario, provider, **deployment)
+        model: Final = _anthropic_model(scenario, provider, drop_params=True)
         guardrail: Final = _guardrail(gateway, scenario, guard, "rows")
-        body: Final = _body(model, _NUMBER_THEN_WEATHER, max_tokens=64, guardrails=[guardrail], **extra)
-        created: Final = gateway.request("POST", "/v1/messages", body, headers=headers)
+        body: Final = _body(model, _NUMBER_THEN_WEATHER, max_tokens=64, guardrails=[guardrail])
+        created: Final = gateway.request("POST", "/v1/messages", body)
         assert created.status_code == 200, created.text
         forwarded: Final = _only(provider.drain(), "/v1/messages")
-        first_turn: Final = json.dumps(_JSON_OBJECTS.validate_python(forwarded["messages"])[0])
+        first_turn: Final = _first_turn(forwarded["messages"])
         assert _REDACTED_CITY in first_turn and _CITY not in first_turn, first_turn
-        assert _forwarded_tool_result_texts(forwarded) == (_WEATHER,), forwarded
+        assert _forwarded_tool_result(forwarded) == [{"type": "text", "text": 5}, {"type": "text", "text": _WEATHER}]
 
 
 def test_guardrail_that_rewrites_nothing_forwards_a_null_tool_result_text_unchanged(gateway: Gateway) -> None:

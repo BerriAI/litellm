@@ -945,6 +945,20 @@ def test_mistral_transform_request_keeps_an_empty_tool_message_after_its_tool_ca
     assert result[2].get("tool_call_id") == "call_1"
 
 
+@pytest.mark.parametrize("role", ["system", "user"])
+def test_mistral_transform_request_drops_a_message_with_null_content(role):
+    messages: List[AllMessageValues] = cast(
+        List[AllMessageValues],
+        [{"role": role, "content": None}, {"role": "user", "content": "hi"}],
+    )
+
+    request = MistralConfig().transform_request(
+        model="mistral-small-latest", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert request["messages"] == [{"role": "user", "content": "hi"}]
+
+
 def test_mistral_transform_request_hoists_tool_message_image():
     """Images inside role:"tool" messages must be moved to a following user
     message (Mistral rejects/ignores non-text tool content), including when

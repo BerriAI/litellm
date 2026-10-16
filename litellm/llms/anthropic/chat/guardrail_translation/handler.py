@@ -30,7 +30,7 @@ from litellm.llms.anthropic.pass_through.adapters.transformation import (
     LiteLLMAnthropicMessagesAdapter,
     is_provider_native_tool_dict,
 )
-from litellm.llms.anthropic.pass_through.convertible_blocks import reject_malformed_tool_result_text
+from litellm.llms.anthropic.pass_through.convertible_blocks import keep_non_string_tool_result_texts
 from litellm.llms.anthropic.pass_through.stream_assembly import (
     build_complete_streaming_response,
     build_usage_only_response_from_chunks,
@@ -228,8 +228,6 @@ def _write_back_message_text(message: _WritableMessage, target: MessageTextTarge
 
 _TOOL_USE_INPUT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _DECODED_SSE_DATA: Final = TypeAdapter(object)
-_REQUEST_BODY: Final = TypeAdapter(dict[str, object])
-_REQUEST_MESSAGES: Final = TypeAdapter(tuple[object, ...])
 _RELEASED_TOOL_USE_STOP: Final = (
     b"event: message_delta\n"
     b'data: {"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": null}, '
@@ -298,11 +296,6 @@ class _AnthropicSSEDelta(TypedDict, total=False):
 
 class _AnthropicSSEEvent(TypedDict, total=False):
     delta: ReadOnly[_AnthropicSSEDelta]
-
-
-def _request_message_mappings(messages: object) -> tuple[Mapping[str, object], ...]:
-    items: Final = _REQUEST_MESSAGES.validate_python(messages) if isinstance(messages, list) else ()
-    return tuple(filter(None, map(as_str_mapping, items)))
 
 
 class AnthropicMessagesHandler(BaseTranslation):
@@ -667,10 +660,6 @@ class AnthropicMessagesHandler(BaseTranslation):
                 guardrailed_structured_messages is not None
                 and guardrailed_structured_messages is not original_structured_messages
             ):
-                request: Final = _REQUEST_BODY.validate_python(data)
-                reject_malformed_tool_result_text(
-                    _request_message_mappings(request.get("messages")), str(request.get("model") or ""), request
-                )
                 self._write_back_structured_messages(
                     data,
                     guardrailed_structured_messages
@@ -842,7 +831,7 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     @staticmethod
     def _write_back_structured_messages(
-        data: dict,  # mutable-ok: API message payload
+        data: dict[str, object],  # mutable-ok: API message payload
         structured_messages: list,  # mutable-ok: API message payload
         hoisted_system_message: object = None,
         preserve_system_messages: bool = False,
@@ -909,7 +898,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 for block in content:
                     if isinstance(block, dict) and block.get("type") == "thinking":
                         block.pop("cache_control", None)
-        data["messages"] = converted
+        data["messages"] = keep_non_string_tool_result_texts(converted, data.get("messages"))
 
     @staticmethod
     def _extract_midturn_system_text(
