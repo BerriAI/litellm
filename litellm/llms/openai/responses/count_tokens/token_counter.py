@@ -9,6 +9,7 @@ from pydantic import JsonValue
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.llms.anthropic.pass_through.convertible_blocks import unconvertible_blocks_error
 from litellm.llms.anthropic.pass_through.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
@@ -22,10 +23,26 @@ from litellm.llms.openai.responses.count_tokens.transformation import (
     OpenAICountTokensConfig,
     ResponsesCountRequestParts,
 )
+from litellm.llms.openai.workload_identity import (
+    get_workload_identity_bearer_token,
+    resolve_openai_workload_identity_config,
+)
 from litellm.types.utils import LlmProviders, TokenCountMessagesFormat, TokenCountResponse
 
 # Global handler instance - reuse across all token counting requests
 openai_count_tokens_handler: Final = OpenAICountTokensHandler()
+
+
+async def _workload_identity_bearer_token(litellm_params: Mapping[str, object]) -> str | None:
+    api_base: Final = litellm_params.get("api_base")
+    config: Final = resolve_openai_workload_identity_config(
+        api_key=None,
+        api_base=api_base if isinstance(api_base, str) else None,
+        litellm_params=litellm_params,
+    )
+    if config is None:
+        return None
+    return await asyncify(get_workload_identity_bearer_token)(config)
 
 
 class OpenAITokenCounter(BaseTokenCounter):
@@ -109,7 +126,7 @@ class OpenAITokenCounter(BaseTokenCounter):
         credentials: Final = get_openai_credentials(
             api_base=litellm_params.get("api_base"), api_key=litellm_params.get("api_key")
         )
-        api_key: Final = credentials.api_key
+        api_key: Final = credentials.api_key or await _workload_identity_bearer_token(litellm_params)
 
         if not api_key:
             return TokenCountResponse(
@@ -120,7 +137,8 @@ class OpenAITokenCounter(BaseTokenCounter):
                 error=True,
                 error_message=(
                     f"No OpenAI API key is set for model {request_model or model_to_use}, so tokens can't be "
-                    "counted. Set api_key on the deployment or OPENAI_API_KEY in the proxy environment."
+                    "counted. Set api_key or workload identity on the deployment, or OPENAI_API_KEY in the proxy "
+                    "environment."
                 ),
                 status_code=401,
             )
