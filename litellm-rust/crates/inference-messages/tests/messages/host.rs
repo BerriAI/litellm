@@ -381,6 +381,7 @@ async fn the_request_context_carries_the_shaped_params_without_model_or_messages
             shaping: MessagesShaping {
                 settings: MessagesSettings {
                     additional_drop_params: vec!["temperature".to_string()],
+                    ..call.shaping.settings.clone()
                 },
                 ..MessagesShaping::default()
             },

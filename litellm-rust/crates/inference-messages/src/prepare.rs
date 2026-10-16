@@ -440,6 +440,7 @@ mod tests {
         let shaping = MessagesShaping {
             settings: MessagesSettings {
                 additional_drop_params: vec!["thinking.display".to_string()],
+                ..shaping.settings
             },
             ..shaping
         };
