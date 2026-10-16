@@ -17,6 +17,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.common_utils import cache_control_as_prompt_cache_breakpoint
+from litellm.llms.anthropic.pass_through.held_stream_completion import hold_completion_of
 from litellm.responses.bridge_executor import anative_responses, native_logging_obj, native_responses
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
@@ -298,6 +299,7 @@ class LiteLLMMessagesToResponsesAPIHandler:
                 model=local_model_name(model, kwargs.get("custom_llm_provider")),
                 litellm_logging_obj=logging_obj,
                 safeguards_evaluator=safeguards_evaluator,
+                held_completion=None if native_logging is None else hold_completion_of(result, native_logging),
             )
             return wrapper.async_anthropic_sse_wrapper()
 
@@ -385,6 +387,7 @@ class LiteLLMMessagesToResponsesAPIHandler:
                 responses_stream=result,
                 model=local_model_name(model, kwargs.get("custom_llm_provider")),
                 litellm_logging_obj=logging_obj,
+                held_completion=None if native_logging is None else hold_completion_of(result, native_logging),
             )
             return wrapper.async_anthropic_sse_wrapper()
 

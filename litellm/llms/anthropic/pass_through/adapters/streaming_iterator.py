@@ -43,6 +43,7 @@ from litellm.types.utils import AdapterCompletionStreamWrapper, ChatCompletionDe
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
+    from litellm.llms.anthropic.pass_through.held_stream_completion import HeldStreamCompletion
     from litellm.llms.anthropic.pass_through.safeguards import SafeguardsEvaluator
     from litellm.types.llms.openai import AllMessageValues
     from litellm.types.utils import ModelResponseStream
@@ -475,6 +476,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         iterations_usage: list[UsageIteration] | None = None,
         litellm_logging_obj: "LiteLLMLoggingObject | None" = None,
         safeguards_evaluator: "SafeguardsEvaluator | None" = None,
+        held_completion: "HeldStreamCompletion | None" = None,
     ):
         # Wrap the upstream stream so chunks that carry both content and a
         # finish_reason (fake-streamed providers) are split into two — see
@@ -486,6 +488,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             litellm_logging_obj.record_streamed_anthropic_message_id(self._message_id)
         self.litellm_logging_obj = litellm_logging_obj
         self.safeguards_evaluator: Final = safeguards_evaluator
+        self._held_completion: Final = held_completion
         # Mapping of truncated tool names to original names (for OpenAI's 64-char limit)
         self.tool_name_mapping = tool_name_mapping or {}
         # Polyfill applied_edits on final message_delta.
@@ -1168,14 +1171,18 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
         This wrapper ensures dict chunks are SSE formatted with both event and data lines.
         """
-        for chunk in self:
-            if isinstance(chunk, dict):
-                event_type: str = str(chunk.get("type", "message"))
-                payload = f"event: {event_type}\ndata: {json.dumps(chunk)}\n\n"
-                yield payload.encode()
-            else:
-                # For non-dict chunks, forward the original value unchanged
-                yield chunk
+        try:
+            for chunk in self:
+                if isinstance(chunk, dict):
+                    event_type: str = str(chunk.get("type", "message"))
+                    payload = f"event: {event_type}\ndata: {json.dumps(chunk)}\n\n"
+                    yield payload.encode()
+                else:
+                    # For non-dict chunks, forward the original value unchanged
+                    yield chunk
+        finally:
+            if self._held_completion is not None:
+                self._held_completion.log(is_async=False)
 
     async def async_anthropic_sse_wrapper(self) -> AsyncIterator[bytes]:
         """
@@ -1194,6 +1201,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 else:
                     yield anthropic_sse_frame(await safeguard_results.observe(_SSE_EVENT.validate_python(chunk)))
         except Exception as e:  # noqa: BLE001  # boundary before the socket: any upstream failure becomes an Anthropic error event
+            if self._held_completion is not None:
+                self._held_completion.discard()
             verbose_logger.exception("Anthropic Adapter - mid-stream error: %s", e)
             logging_obj: Final = self.litellm_logging_obj
             provider_error: Final = _provider_error(e)
@@ -1214,6 +1223,12 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         failure_handler_error,
                     )
             yield _mid_stream_error_sse_event(e)
+        else:
+            if self._held_completion is not None:
+                self._held_completion.log(is_async=True)
+        finally:
+            if self._held_completion is not None:
+                self._held_completion.log(is_async=True, client_detached=True)
 
     def _increment_content_block_index(self):
         self.current_content_block_index += 1
