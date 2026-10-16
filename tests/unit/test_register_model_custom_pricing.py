@@ -913,49 +913,99 @@ def test_register_model_inherits_builtin_token_pricing_for_unmapped_key(monkeypa
         _invalidate_model_cost_lowercase_map()
 
 
-def test_register_model_keeps_custom_flat_prices_above_an_inherited_tier(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An unmapped alias with custom flat prices inherits a tiered built-in entry, but the flat prices stay
-    its price above 200k prompt tokens instead of the built-in's higher tier."""
-    from litellm.types.utils import ModelResponse, Usage
+@pytest.mark.parametrize(
+    ("builtin_prices", "custom_prices", "usage", "expected_cost"),
+    [
+        pytest.param(
+            {
+                "input_cost_per_token": 3e-06,
+                "output_cost_per_token": 1.5e-05,
+                "input_cost_per_token_above_200k_tokens": 6e-06,
+                "output_cost_per_token_above_200k_tokens": 2.25e-05,
+            },
+            {"input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06},
+            {"prompt_tokens": 250_000, "completion_tokens": 1_000},
+            250_000 * 1e-06 + 1_000 * 2e-06,
+            id="above-200k-tier",
+        ),
+        pytest.param(
+            {
+                "tiered_pricing": [
+                    {"input_cost_per_token": 5e-08, "output_cost_per_token": 4e-07, "range": [0, 256_000]},
+                    {"input_cost_per_token": 2.5e-07, "output_cost_per_token": 2e-06, "range": [256_000, 1_000_000]},
+                ]
+            },
+            {"input_cost_per_token": 1e-06},
+            {"prompt_tokens": 300_000, "completion_tokens": 1_000},
+            300_000 * 1e-06 + 1_000 * 2e-06,
+            id="tiered-pricing-input-only",
+        ),
+        pytest.param(
+            {"input_cost_per_token": 3e-06, "output_cost_per_token": 1.5e-05, "output_cost_per_reasoning_token": 3e-05},
+            {"output_cost_per_token": 2e-06},
+            {"prompt_tokens": 100, "completion_tokens": 1_000, "reasoning_tokens": 600},
+            100 * 3e-06 + 1_000 * 2e-06,
+            id="reasoning-rate-output-only",
+        ),
+        pytest.param(
+            {
+                "input_cost_per_token": 3e-06,
+                "output_cost_per_token": 1.5e-05,
+                "off_peak_pricing": {
+                    "input_cost_per_token": 1e-06,
+                    "output_cost_per_token": 5e-06,
+                    "hours_utc": "00:00-00:00",
+                },
+            },
+            {"output_cost_per_token": 2e-06},
+            {"prompt_tokens": 100, "completion_tokens": 1_000},
+            100 * 1e-06 + 1_000 * 2e-06,
+            id="off-peak-output-only",
+        ),
+    ],
+)
+def test_register_model_keeps_custom_flat_prices_over_inherited_rate_variants(
+    monkeypatch: pytest.MonkeyPatch,
+    builtin_prices: dict[str, object],
+    custom_prices: dict[str, float],
+    usage: dict[str, int],
+    expected_cost: float,
+) -> None:
+    """An unmapped alias inherits a built-in entry, but a direction the caller prices flat bills at that price
+    above a token threshold, in every tier, for reasoning tokens, and off-peak, while the other direction keeps
+    the built-in's own rates."""
+    from litellm.types.utils import CompletionTokensDetailsWrapper, ModelResponse, Usage
 
     builtin_key: Final = "anthropic.lit-5853-tiered-model-v1:0"
     alias: Final = f"bedrock/ap-northeast-1.{builtin_key}"
-    flat_input: Final = 1e-06
-    flat_output: Final = 2e-06
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(
         litellm,
         "model_cost",
         {
             **litellm.get_model_cost_map(url=""),
-            builtin_key: {
-                "litellm_provider": "bedrock",
-                "mode": "chat",
-                "input_cost_per_token": 3e-06,
-                "output_cost_per_token": 1.5e-05,
-                "input_cost_per_token_above_200k_tokens": 6e-06,
-                "output_cost_per_token_above_200k_tokens": 2.25e-05,
-            },
+            builtin_key: {"litellm_provider": "bedrock", "mode": "chat", **builtin_prices},
         },
     )
     _invalidate_model_cost_lowercase_map()
 
     try:
         litellm.register_model(
-            {
-                alias: {
-                    "litellm_provider": "bedrock",
-                    "input_cost_per_token": flat_input,
-                    "output_cost_per_token": flat_output,
-                }
-            },
+            {alias: {"litellm_provider": "bedrock", **custom_prices}},
             persist_across_reloads=False,
         )
-        usage: Final = Usage(prompt_tokens=250_000, completion_tokens=1_000, total_tokens=251_000)
-        cost: Final = litellm.completion_cost(
-            completion_response=ModelResponse(model=alias, usage=usage), model=alias, custom_llm_provider="bedrock"
+        response_usage: Final = Usage(
+            prompt_tokens=usage["prompt_tokens"],
+            completion_tokens=usage["completion_tokens"],
+            total_tokens=usage["prompt_tokens"] + usage["completion_tokens"],
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=usage.get("reasoning_tokens", 0)),
         )
-        assert cost == pytest.approx(250_000 * flat_input + 1_000 * flat_output)
+        cost: Final = litellm.completion_cost(
+            completion_response=ModelResponse(model=alias, usage=response_usage),
+            model=alias,
+            custom_llm_provider="bedrock",
+        )
+        assert cost == pytest.approx(expected_cost)
     finally:
         _invalidate_model_cost_lowercase_map()
 

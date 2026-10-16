@@ -44,7 +44,7 @@ from httpx import Proxy
 from httpx._utils import get_environment_proxies
 from openai.lib import _parsing, _pydantic  # pyright: ignore[reportPrivateUsage]  # OpenAI parser module is private
 from openai.types.chat.completion_create_params import ResponseFormat
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, with_config
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError, with_config
 
 import litellm
 import litellm.litellm_core_utils
@@ -3285,20 +3285,63 @@ def _without_synthesized_costs(
     )
 
 
+_DIRECTION_RATE_FIELDS: Final = MappingProxyType(
+    {
+        "input_cost_per_token": ("input_cost_per_token",),
+        "output_cost_per_token": ("output_cost_per_token", "output_cost_per_reasoning_token"),
+    }
+)
+_RATE_TABLE: Final = TypeAdapter(Mapping[str, object])
+_RATE_TIERS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def _is_overridden_rate(name: str, overridden_fields: tuple[str, ...]) -> bool:
+    is_variant: Final = name.startswith(tuple(f"{rate_field}_" for rate_field in overridden_fields))
+    return name in overridden_fields or (is_variant and "_cache_" not in name)
+
+
+def _without_overridden_rates(rates: Mapping[str, object], overridden_fields: tuple[str, ...]) -> Mapping[str, object]:
+    return MappingProxyType(
+        {name: rate for name, rate in rates.items() if not _is_overridden_rate(name, overridden_fields)}
+    )
+
+
+def _rate_table_with_flat_prices(
+    name: str, table: object, overridden_fields: tuple[str, ...], flat_prices: Mapping[str, object]
+) -> object:
+    try:
+        if name == "tiered_pricing":
+            return [
+                {**_without_overridden_rates(tier, overridden_fields), **flat_prices}
+                for tier in _RATE_TIERS.validate_python(table)
+            ]
+        if name == "off_peak_pricing":
+            return dict(_without_overridden_rates(_RATE_TABLE.validate_python(table), overridden_fields))
+    except ValidationError:
+        return table
+    return table
+
+
 def _without_overridden_price_variants(
     entry: Mapping[str, object], value: Mapping[str, object]
 ) -> Mapping[str, object]:
-    """A caller's flat ``input_cost_per_token`` / ``output_cost_per_token`` is its price at every tier, so the
-    inherited tier, priority, flex and batch variants of that direction, and ``tiered_pricing``, must not override
-    it above a token threshold or for a service tier."""
-    overridden_prefixes: Final = tuple(
-        f"{cost_field}_" for cost_field in _TOKEN_COST_FIELDS if value.get(cost_field) is not None
+    """A caller's flat ``input_cost_per_token`` / ``output_cost_per_token`` is that direction's price above every
+    token threshold, for every service tier and batch, in every ``tiered_pricing`` tier and off-peak window, so each
+    inherited rate that would stand in for it there, the reasoning-token rate included for output, is dropped, and
+    each tier carries the flat price instead."""
+    flat_prices: Final = MappingProxyType(
+        {cost_field: value[cost_field] for cost_field in _TOKEN_COST_FIELDS if value.get(cost_field) is not None}
     )
+    overridden_fields: Final = tuple(
+        itertools.chain.from_iterable(_DIRECTION_RATE_FIELDS[cost_field] for cost_field in flat_prices)
+    )
+    if not overridden_fields:
+        return entry
     return MappingProxyType(
         {
-            name: field_value
+            name: _rate_table_with_flat_prices(name, field_value, overridden_fields, flat_prices)
             for name, field_value in entry.items()
-            if not name.startswith(overridden_prefixes) and not (overridden_prefixes and name == "tiered_pricing")
+            if not _is_overridden_rate(name, overridden_fields)
         }
     )
 
