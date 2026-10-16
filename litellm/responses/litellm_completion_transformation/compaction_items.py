@@ -21,6 +21,8 @@ _INSTRUCTION_ROLES: Final = frozenset(("system", "developer"))
 
 
 def _json_object(value: object) -> Mapping[str, object] | None:
+    if not isinstance(value, Mapping):
+        return None
     try:
         return _JSON_OBJECT.validate_python(value)
     except ValidationError:
@@ -50,12 +52,33 @@ def _newest_compaction_block(compaction_blocks: object) -> CompactionBlock | Non
     return next((block for value in reversed(blocks) if (block := _compaction_block(value)) is not None), None)
 
 
-def compaction_output_item(provider_specific_fields: object) -> ResponseCompactionItem | None:
+def _provider_compaction_block(provider_specific_fields: object) -> CompactionBlock | None:
+    fields: Final = _json_object(provider_specific_fields)
+    return None if fields is None else _newest_compaction_block(fields.get("compaction_blocks"))
+
+
+def provider_compaction_summary(provider_specific_fields: object) -> str | None:
+    block: Final = _provider_compaction_block(provider_specific_fields)
+    return None if block is None else block.summary
+
+
+def _choice_provider_specific_fields(choice: object) -> object:
+    choice_fields: Final = _json_object(choice)
+    message: Final = None if choice_fields is None else _json_object(choice_fields.get("message"))
+    return None if message is None else message.get("provider_specific_fields")
+
+
+def response_holds_compaction_block(response: object) -> bool:
+    fields: Final = _json_object(response)
     try:
-        fields: Final = _JSON_OBJECT.validate_python(provider_specific_fields)
+        choices: Final = _OBJECT_LIST.validate_python(None if fields is None else fields.get("choices"))
     except ValidationError:
-        return None
-    block: Final = _newest_compaction_block(fields.get("compaction_blocks"))
+        return False
+    return any(provider_compaction_summary(_choice_provider_specific_fields(choice)) is not None for choice in choices)
+
+
+def compaction_output_item(provider_specific_fields: object) -> ResponseCompactionItem | None:
+    block: Final = _provider_compaction_block(provider_specific_fields)
     if block is None:
         return None
     return ResponseCompactionItem(
@@ -137,6 +160,14 @@ def holds_compaction_summary(input: object) -> bool:
 def _is_instruction_item(item: object) -> bool:
     fields: Final = _json_object(item)
     return fields is not None and fields.get("role") in _INSTRUCTION_ROLES
+
+
+def instruction_items(input: object) -> tuple[object, ...]:
+    try:
+        items: Final = _OBJECT_LIST.validate_python(input)
+    except ValidationError:
+        return ()
+    return tuple(item for item in items if _is_instruction_item(item))
 
 
 def _items_from_newest_compaction(input: Sequence[_Item]) -> tuple[_Item, ...]:

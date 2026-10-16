@@ -789,7 +789,12 @@ async def test_message_history_replays_real_key_named_tool_payloads() -> None:
     assert json.loads(tool_message["content"]) == function_output
 
 
-def _turn_spend_log(turn_input: list[dict[str, str]], answer: str) -> dict[str, object]:
+def _turn_spend_log(
+    turn_input: list[dict[str, str]], answer: str, compaction_blocks: list[dict[str, str]] | None = None
+) -> dict[str, object]:
+    compaction_fields: Final = (
+        {"provider_specific_fields": {"compaction_blocks": compaction_blocks}} if compaction_blocks else {}
+    )
     return {
         "request_id": f"resp_{len(turn_input)}",
         "session_id": "session-compacted",
@@ -797,7 +802,7 @@ def _turn_spend_log(turn_input: list[dict[str, str]], answer: str) -> dict[str, 
         "response": {
             "id": f"chatcmpl-{len(turn_input)}",
             "object": "chat.completion",
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": answer}}],
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": answer, **compaction_fields}}],
         },
     }
 
@@ -842,3 +847,35 @@ async def test_previous_response_history_starts_at_the_newest_turn_that_sent_a_c
         ("user", "And Osaka?"),
         ("assistant", "Dotonbori."),
     ]
+
+
+@pytest.mark.asyncio
+async def test_previous_response_history_starts_at_the_newest_answer_that_compacted():
+    compaction_blocks: Final = [{"type": "compaction", "content": "Turn one planned Tokyo."}]
+    spend_logs: Final = [
+        _turn_spend_log([{"role": "user", "content": "Hi."}], "Hello."),
+        _turn_spend_log(
+            [{"role": "developer", "content": "Answer briefly."}, {"role": "user", "content": "Plan a Tokyo trip."}],
+            "Day one, Asakusa.",
+            compaction_blocks,
+        ),
+        _turn_spend_log([{"role": "user", "content": "And Osaka?"}], "Dotonbori."),
+    ]
+
+    with patch.object(
+        ResponsesSessionHandler,
+        "get_all_spend_logs_for_previous_response_id",
+        new_callable=AsyncMock,
+        return_value=spend_logs,
+    ):
+        session: Final = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            "resp_1"
+        )
+
+    assert [_role_and_content(message) for message in session["messages"]] == [
+        ("developer", "Answer briefly."),
+        ("assistant", "Day one, Asakusa."),
+        ("user", "And Osaka?"),
+        ("assistant", "Dotonbori."),
+    ]
+    assert getattr(session["messages"][1], "provider_specific_fields", None) == {"compaction_blocks": compaction_blocks}

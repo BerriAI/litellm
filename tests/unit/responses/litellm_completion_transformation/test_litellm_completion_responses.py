@@ -6534,6 +6534,71 @@ def test_compaction_input_item_replays_as_a_compaction_block_only_when_anthropic
     ]
 
 
+def _replayed_compacted_answer(model: str, context_management: object) -> list[tuple[object, object, object]]:
+    async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
+        return ChatCompletionSession(
+            messages=[
+                Message(
+                    role="assistant",
+                    content="Day one, Asakusa.",
+                    provider_specific_fields={"compaction_blocks": [_COMPACTION_BLOCK]},
+                )
+            ],
+            litellm_session_id=None,
+        )
+
+    request: Final = asyncio.run(
+        LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+            previous_response_id="resp_compacted",
+            litellm_completion_request={
+                "model": model,
+                "messages": [{"role": "user", "content": "And Osaka?"}],
+                **({"context_management": context_management} if context_management else {}),
+            },
+            instructions=None,
+            session_lookup=session_lookup,
+        )
+    )
+    return [
+        (
+            message.get("role"),
+            message.get("content"),
+            (message.get("provider_specific_fields") or {}).get("compaction_blocks"),
+        )
+        for message in request["messages"]
+    ]
+
+
+_ANSWER_AFTER_SUMMARY: Final = [
+    ("user", _COMPACTION_BLOCK["content"], None),
+    ("assistant", "Day one, Asakusa.", None),
+    ("user", "And Osaka?", None),
+]
+
+
+@pytest.mark.parametrize(
+    ("model", "context_management", "replayed"),
+    [
+        (
+            "anthropic/claude-sonnet-5-5",
+            _COMPACTION_REQUESTED["context_management"],
+            [("assistant", "Day one, Asakusa.", [_COMPACTION_BLOCK]), ("user", "And Osaka?", None)],
+        ),
+        ("anthropic/claude-sonnet-5-5", None, _ANSWER_AFTER_SUMMARY),
+        (
+            "bedrock/claude_platform/claude-sonnet-5-5",
+            _COMPACTION_REQUESTED["context_management"],
+            _ANSWER_AFTER_SUMMARY,
+        ),
+        ("gpt-5.6", _COMPACTION_REQUESTED["context_management"], _ANSWER_AFTER_SUMMARY),
+    ],
+)
+def test_stored_compacted_answer_replays_its_block_only_when_anthropic_compacts(
+    model: str, context_management: object, replayed: list[tuple[object, object, object]]
+) -> None:
+    assert _replayed_compacted_answer(model, context_management) == replayed
+
+
 def test_summary_replay_drops_the_history_its_compaction_item_replaces() -> None:
     result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
         model="gemini/gemini-3.8-flash",

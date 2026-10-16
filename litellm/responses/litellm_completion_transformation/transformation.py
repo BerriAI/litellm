@@ -120,6 +120,7 @@ from .compaction_items import (
     compaction_output_item,
     decode_compaction_item,
     holds_compaction_summary,
+    provider_compaction_summary,
     provider_takes_compaction_blocks,
     requests_compaction,
     without_items_before_compaction,
@@ -308,6 +309,26 @@ def _without_stored_tool_search_uses(message: SessionMessage, search_call_ids: f
     if isinstance(message, Mapping) and holds_tool_search_use(message):
         return _replayed_assistant_without_tool_search_uses(message)
     return message
+
+
+def _stored_compaction_summary(message: SessionMessage) -> str | None:
+    return provider_compaction_summary(message.provider_specific_fields) if isinstance(message, Message) else None
+
+
+def _with_stored_compaction_as_summary(message: SessionMessage) -> tuple[SessionMessage, ...]:
+    if not isinstance(message, Message):
+        return (message,)
+    summary: Final = provider_compaction_summary(message.provider_specific_fields)
+    if summary is None:
+        return (message,)
+    other_fields: Final = {
+        key: value
+        for key, value in _STR_KEY_DICT_ADAPTER.validate_python(message.provider_specific_fields).items()
+        if key != "compaction_blocks"
+    }
+    answer: Final = message.model_copy(update={"provider_specific_fields": other_fields or None})
+    summary_message: Final = ChatCompletionUserMessage(role="user", content=summary)
+    return (summary_message, answer) if answer.content or answer.tool_calls else (summary_message,)
 
 
 def _input_item_cache_control(input_item: Mapping[str, object]) -> ChatCompletionCachedContent | None:
@@ -1036,6 +1057,18 @@ class LiteLLMCompletionResponsesConfig:
         )
 
     @staticmethod
+    def _with_compaction_blocks_the_route_takes(
+        messages: Sequence[SessionMessage], route: CompletionRoute, context_management: object
+    ) -> tuple[SessionMessage, ...]:
+        if not any(_stored_compaction_summary(message) is not None for message in messages):
+            return tuple(messages)
+        if requests_compaction(context_management) and provider_takes_compaction_blocks(
+            route.model, route.custom_llm_provider
+        ):
+            return tuple(messages)
+        return tuple(chain.from_iterable(map(_with_stored_compaction_as_summary, messages)))
+
+    @staticmethod
     async def async_responses_api_session_handler(
         previous_response_id: str,
         litellm_completion_request: dict,
@@ -1063,11 +1096,12 @@ class LiteLLMCompletionResponsesConfig:
             else ChatCompletionSession(messages=[], litellm_session_id=None)
         )
         _messages: Final = litellm_completion_request.get("messages") or []
-        stored_messages: Final = chat_completion_session.get("messages") or []
+        route: Final = CompletionRoute(model=model, custom_llm_provider=provider)
+        stored_messages: Final = LiteLLMCompletionResponsesConfig._with_compaction_blocks_the_route_takes(
+            chat_completion_session.get("messages") or [], route, request_fields.get("context_management")
+        )
         replayed_messages: Final = (
-            LiteLLMCompletionResponsesConfig._without_tool_search_uses_off_anthropic(
-                stored_messages, CompletionRoute.model_validate(litellm_completion_request)
-            )
+            LiteLLMCompletionResponsesConfig._without_tool_search_uses_off_anthropic(stored_messages, route)
             if any(holds_tool_search_use(message) for message in stored_messages)
             else stored_messages
         )

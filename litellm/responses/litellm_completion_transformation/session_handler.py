@@ -1,13 +1,18 @@
 import asyncio
 import json
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 from litellm.litellm_core_utils.cold_storage_handler import ColdStorageHandler
-from litellm.responses.litellm_completion_transformation.compaction_items import holds_compaction_summary
+from litellm.responses.litellm_completion_transformation.compaction_items import (
+    holds_compaction_summary,
+    instruction_items,
+    response_holds_compaction_block,
+)
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -43,15 +48,45 @@ def _normalize_redacted_tool_call_arguments(message: Message) -> None:
         function_call.arguments = REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 
 
-def _first_replayed_request(proxy_server_requests: Sequence[Mapping[str, object] | None]) -> int:
+@dataclass(frozen=True, slots=True)
+class _ReplayStart:
+    index: int
+    at_output: bool
+
+
+def _compaction_point(
+    index: int, spend_log: "SpendLogsPayload", proxy_server_request: Mapping[str, object] | None
+) -> _ReplayStart | None:
+    if response_holds_compaction_block(spend_log.get("response")):
+        return _ReplayStart(index=index, at_output=True)
+    if proxy_server_request is not None and holds_compaction_summary(proxy_server_request.get("input")):
+        return _ReplayStart(index=index, at_output=False)
+    return None
+
+
+def _replay_start(
+    spend_logs: Sequence["SpendLogsPayload"], proxy_server_requests: Sequence[Mapping[str, object] | None]
+) -> _ReplayStart:
     return next(
         (
-            index
-            for index in range(len(proxy_server_requests) - 1, -1, -1)
-            if (request := proxy_server_requests[index]) is not None and holds_compaction_summary(request.get("input"))
+            start
+            for index in range(len(spend_logs) - 1, -1, -1)
+            if (start := _compaction_point(index, spend_logs[index], proxy_server_requests[index])) is not None
         ),
-        0,
+        _ReplayStart(index=0, at_output=False),
     )
+
+
+def _replayed_request(
+    index: int, proxy_server_request: Mapping[str, object] | None, start: _ReplayStart
+) -> Mapping[str, object] | None:
+    if proxy_server_request is None or not start.at_output or index != start.index:
+        return proxy_server_request
+    return {
+        **proxy_server_request,
+        "input": list(instruction_items(proxy_server_request.get("input"))),
+        "messages": None,
+    }
 
 
 def _stored_instructions(proxy_server_request: Mapping[str, object] | None) -> str | None:
@@ -93,14 +128,12 @@ class ResponsesSessionHandler:
             await ResponsesSessionHandler.get_proxy_server_request_from_spend_log(spend_log=spend_log)
             for spend_log in all_spend_logs
         ]
-        first_replayed: Final = _first_replayed_request(proxy_server_requests)
-        for spend_log, proxy_server_request_dict in zip(
-            all_spend_logs[first_replayed:], proxy_server_requests[first_replayed:]
-        ):
+        start: Final = _replay_start(all_spend_logs, proxy_server_requests)
+        for index in range(start.index, len(all_spend_logs)):
             chat_completion_message_history = (
                 ResponsesSessionHandler.extend_chat_completion_message_with_spend_log_payload(
-                    spend_log=spend_log,
-                    proxy_server_request_dict=proxy_server_request_dict,
+                    spend_log=all_spend_logs[index],
+                    proxy_server_request_dict=_replayed_request(index, proxy_server_requests[index], start),
                     chat_completion_message_history=chat_completion_message_history,
                     item_cache_control=item_cache_control,
                 )
