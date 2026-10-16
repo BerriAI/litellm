@@ -765,6 +765,20 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         if not texts:
             return response
 
+        await self._scan_output_texts(
+            texts, holders, guardrail_to_apply, litellm_logging_obj, user_api_key_dict, request_data
+        )
+        return response
+
+    async def _scan_output_texts(
+        self,
+        texts: list[str],
+        holders: list[_StringHolder],
+        guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj: Optional["LiteLLMLoggingObj"],
+        user_api_key_dict: Optional["UserAPIKeyAuth"],
+        request_data: dict[str, object] | None,  # mutable-ok: the request dict guardrails receive
+    ) -> None:
         effective_request_data = request_data or {}
         if "litellm_metadata" not in effective_request_data and user_api_key_dict is not None:
             user_metadata: Final = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
@@ -775,8 +789,8 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
                 }
 
         inputs: Final = GenericGuardrailAPIInputs(texts=texts)
-        model: Final = effective_request_data.get("model") if effective_request_data else None
-        if model:
+        model: Final = effective_request_data.get("model")
+        if isinstance(model, str) and model:
             inputs["model"] = model
 
         guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
@@ -789,8 +803,6 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
         if guardrailed_texts:
             _write_back_texts(guardrailed_texts, holders)
-
-        return response
 
     async def process_output_streaming_response(
         self,
@@ -807,13 +819,25 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         block and kind. Once the stream has ended, guardrail rewrites are written back into the frames, which reach
         the caller only when the stream is held until moderated. A guardrail that sets ``reads_stream_marks`` gets
         a copy of the request marked as chat completions marks a streamed answer; the others get it unchanged.
+        Such a guardrail also gets the ended scan of a reply with no text, such as a call to a tool that takes no
+        input, with no texts to scan.
         """
         frames: Final = _converse_frames(responses_so_far)
         groups: Final = _group_stream_texts([frame.scanned_texts() for frame in frames])
+        ended: Final = self._check_streaming_has_ended(frames)
+        reads_marks: Final = _reads_stream_marks(guardrail_to_apply)
         if not groups.groups:
+            if request_data is not None and reads_marks and ended and _finished_converse_content(frames, groups):
+                await self._scan_output_texts(
+                    [],
+                    [],
+                    guardrail_to_apply,
+                    litellm_logging_obj,
+                    user_api_key_dict,
+                    _stream_marked_request_data(request_data, frames, groups, ended),
+                )
             return responses_so_far
         content: Final = [{"text": text} for text in groups.texts()]
-        ended: Final = self._check_streaming_has_ended(frames)
         await self.process_output_response(  # pyright: ignore[reportUnknownMemberType]  # takes the untyped request dict
             response={"output": {"message": {"role": "assistant", "content": content}}},
             guardrail_to_apply=guardrail_to_apply,
@@ -821,7 +845,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             user_api_key_dict=user_api_key_dict,
             request_data=(
                 _stream_marked_request_data(request_data, frames, groups, ended)
-                if request_data is not None and _reads_stream_marks(guardrail_to_apply)
+                if request_data is not None and reads_marks
                 else request_data
             ),
         )

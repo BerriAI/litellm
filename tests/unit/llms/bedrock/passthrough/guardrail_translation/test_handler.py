@@ -1591,6 +1591,16 @@ def _tool_call_stream(tool_input: str) -> tuple[bytes, ...]:
     )
 
 
+def _tool_without_input_stream() -> tuple[bytes, ...]:
+    return (
+        _build_event_stream_frame("messageStart", {"role": "assistant"}),
+        _tool_use_start_frame(0, "tooluse_1", "get_time"),
+        _build_event_stream_frame("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"toolUse": {"input": ""}}}),
+        _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 0}),
+        _build_event_stream_frame("messageStop", {"stopReason": "tool_use"}),
+    )
+
+
 class TestConverseStreamGuardrailRelay:
     @pytest.mark.asyncio
     async def test_sampled_stream_relays_frames_as_received_and_scans_one_text_per_block(self, monkeypatch):
@@ -1805,6 +1815,72 @@ class TestConverseStreamGuardrailRelay:
         assert relayed == b"".join(_tool_call_stream(tool_input))
         finished = json.loads(route.calls[-1].request.content)["request_data"]["response"]
         assert finished["output"]["message"]["content"][1]["toolUse"]["input"] == tool_input
+
+    @pytest.mark.parametrize("held", [False, True], ids=["sampled", "held"])
+    @pytest.mark.asyncio
+    async def test_noma_alone_gets_one_ended_scan_of_a_reply_that_only_calls_a_tool_without_input(
+        self, monkeypatch, respx_mock: respx.MockRouter, held: bool
+    ):
+        route = respx_mock.post(f"{_NOMA_API_BASE}/litellm/guardrail").respond(json={"action": "NONE"})
+        later = _RecordingGuardrail()
+
+        relayed = await _relay_through_post_call_guardrail(
+            _tool_without_input_stream(),
+            _noma_guardrail(monkeypatch),
+            monkeypatch,
+            holds_until_moderated=held,
+            outer=(later, False),
+        )
+
+        assert relayed == b"".join(_tool_without_input_stream())
+        scans = [json.loads(call.request.content) for call in route.calls]
+        tool_call = {"toolUse": {"toolUseId": "tooluse_1", "name": "get_time", "type": "tool_use", "input": {}}}
+        finished = {"output": {"message": {"role": "assistant", "content": [tool_call]}}, "stopReason": "tool_use"}
+        assert [
+            (
+                scan["input_type"],
+                scan["inputs"]["texts"],
+                scan["request_data"]["stream"],
+                scan["request_data"]["response"],
+            )
+            for scan in scans
+        ] == [("response", [], True, finished)]
+        assert later.received_texts == []
+
+    @pytest.mark.asyncio
+    async def test_noma_gets_no_scan_of_a_reply_with_no_text_and_no_tool_call(
+        self, monkeypatch, respx_mock: respx.MockRouter
+    ):
+        route = respx_mock.post(f"{_NOMA_API_BASE}/litellm/guardrail").respond(json={"action": "NONE"})
+        stream = (
+            _build_event_stream_frame("messageStart", {"role": "assistant"}),
+            _build_event_stream_frame("messageStop", {"stopReason": "end_turn"}),
+        )
+
+        relayed = await _relay_through_post_call_guardrail(stream, _noma_guardrail(monkeypatch), monkeypatch)
+
+        assert relayed == b"".join(stream)
+        assert route.calls.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_noma_gets_no_scan_of_a_tool_call_without_input_before_the_reply_ends(
+        self, monkeypatch, respx_mock: respx.MockRouter
+    ):
+        route = respx_mock.post(f"{_NOMA_API_BASE}/litellm/guardrail").respond(json={"action": "NONE"})
+        frames = [
+            frame
+            async for frame in BedrockPassthroughGuardrailHandler.event_stream_items(
+                _chunks(*_tool_without_input_stream())
+            )
+        ]
+
+        await BedrockPassthroughGuardrailHandler().process_output_streaming_response(
+            frames[:4],
+            _noma_guardrail(monkeypatch),
+            request_data={"model": "claude", "endpoint": "model/claude/converse-stream"},
+        )
+
+        assert route.calls.call_count == 0
 
     @pytest.mark.asyncio
     async def test_guardrails_scanning_after_noma_see_the_request_without_its_stream_marks(

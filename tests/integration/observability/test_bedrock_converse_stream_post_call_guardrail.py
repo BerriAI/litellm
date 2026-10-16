@@ -841,6 +841,30 @@ def test_noma_scans_carry_stream_and_only_the_last_carries_the_finished_response
     }, scans[-1]
 
 
+def test_noma_gets_one_scan_of_a_reply_that_only_calls_a_tool_without_input(rig: Rig) -> None:
+    marker: Final = f"relay-{uuid.uuid4().hex}"
+    tool_use: Final = {"toolUseId": "tooluse_relay", "name": "get_time", "type": "tool_use"}
+    rig.scripts[marker] = Reply(
+        content_type=EVENT_STREAM,
+        chunks=(
+            event_frame("messageStart", {"role": "assistant"}),
+            event_frame("contentBlockStart", {"contentBlockIndex": 0, "start": {"toolUse": tool_use}}),
+            event_frame("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"toolUse": {"input": ""}}}),
+            event_frame("contentBlockStop", {"contentBlockIndex": 0}),
+            event_frame("messageStop", {"stopReason": "tool_use"}),
+            event_frame("metadata", {"usage": {"inputTokens": 9, "outputTokens": 4, "totalTokens": 13}, "metrics": {}}),
+        ),
+    )
+    status, _, body = _stream(rig, NOMA, marker)
+    assert status == 200 and _exception(decode(body)) is None, decode(body)
+    finished: Final = {
+        "output": {"message": {"role": "assistant", "content": [{"toolUse": {**tool_use, "input": {}}}]}},
+        "stopReason": "tool_use",
+    }
+    scans: Final = rig.forwarded_request_data(marker)[NOMA]
+    assert [(scan.get("stream"), scan.get("response")) for scan in scans] == [(True, finished)], scans
+
+
 def test_guardrails_after_noma_see_the_streamed_request_unchanged(rig: Rig) -> None:
     marker: Final = f"relay-{uuid.uuid4().hex}"
     words: Final = (f"Alice {marker} ", *(f" word{index}" for index in range(11)))
