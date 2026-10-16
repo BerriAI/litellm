@@ -3250,14 +3250,14 @@ class ProxyLogging:
                 alerting_metadata=alerting_metadata,
                 **extra_kwargs,
             )
-        for client in self.alerting:
-            if client == "sentry":
-                if litellm.utils.sentry_sdk_instance is not None:
-                    litellm.utils.sentry_sdk_instance.capture_message(formatted_message)
-                else:
-                    raise Exception("Missing SENTRY_DSN from environment")
+        if "sentry" in self.alerting:
+            litellm.litellm_core_utils.litellm_logging.initialize_sentry()
+            sentry: Final = litellm.litellm_core_utils.litellm_logging.sentry_sdk_instance
+            if sentry is None:
+                raise Exception("Missing SENTRY_DSN from environment")
+            sentry.capture_message(formatted_message)
 
-    async def failure_handler(self, original_exception, duration: float, call_type: str, traceback_str=""):
+    async def failure_handler(self, original_exception: Exception, duration: float, call_type: str, traceback_str=""):
         """
         Log failed db read/writes
 
@@ -3298,8 +3298,9 @@ class ProxyLogging:
                 call_type=call_type,
             )
 
-        if litellm.utils.capture_exception:
-            litellm.utils.capture_exception(error=original_exception)
+        capture: Final = litellm.litellm_core_utils.litellm_logging.capture_exception
+        if capture is not None:
+            capture(error=original_exception)
 
     async def post_call_failure_hook(
         self,

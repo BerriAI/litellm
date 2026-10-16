@@ -4507,6 +4507,32 @@ def get_masked_values(
 _get_masked_values = get_masked_values
 
 
+@lru_cache(maxsize=1)
+def start_sentry(dsn: str) -> None:
+    try:
+        import sentry_sdk
+    except ImportError:
+        print_verbose("Package 'sentry_sdk' is missing. Installing it...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "sentry_sdk"])
+        import sentry_sdk
+    from litellm.litellm_core_utils.sentry_scrubbing import build_sentry_init_options
+
+    sentry_sdk.init(**build_sentry_init_options({**os.environ, "SENTRY_DSN": dsn}))
+
+
+def initialize_sentry() -> None:
+    global sentry_sdk_instance, capture_exception, add_breadcrumb
+    dsn: Final = os.environ.get("SENTRY_DSN")
+    if not dsn:
+        return
+    start_sentry(dsn)
+    import sentry_sdk
+
+    sentry_sdk_instance = sentry_sdk  # rebind-ok: process-wide Sentry SDK handle read by every logging path
+    capture_exception = sentry_sdk.capture_exception  # rebind-ok: process-wide Sentry SDK handle
+    add_breadcrumb = sentry_sdk.add_breadcrumb  # rebind-ok: process-wide Sentry SDK handle
+
+
 def set_callbacks(
     callback_list: Iterable[str | Callable[..., object] | CustomLogger],
     function_id: str | None = None,
@@ -4515,9 +4541,6 @@ def set_callbacks(
     Globally sets the callback client
     """
     global \
-        sentry_sdk_instance, \
-        capture_exception, \
-        add_breadcrumb, \
         slack_app, \
         alerts_channel, \
         traceloopLogger, \
@@ -4541,18 +4564,7 @@ def set_callbacks(
     try:
         for callback in callback_list:
             if callback == "sentry":
-                try:
-                    import sentry_sdk
-                except ImportError:
-                    print_verbose("Package 'sentry_sdk' is missing. Installing it...")
-                    subprocess.check_call([sys.executable, "-m", "pip", "install", "sentry_sdk"])
-                    import sentry_sdk
-                from litellm.litellm_core_utils.sentry_scrubbing import build_sentry_init_options
-
-                sentry_sdk_instance = sentry_sdk
-                sentry_sdk_instance.init(**build_sentry_init_options(os.environ))
-                capture_exception = sentry_sdk_instance.capture_exception
-                add_breadcrumb = sentry_sdk_instance.add_breadcrumb
+                initialize_sentry()
             elif callback == "slack":
                 try:
                     from slack_bolt import App
