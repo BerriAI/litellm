@@ -2300,6 +2300,13 @@ class Logging(LiteLLMLoggingBaseClass):
         self.model_call_details["combined_usage_object"] = usage
         self.model_call_details["response_cost"] = response_cost
 
+    def attempt_scoped_copy(self) -> "Logging":
+        """A copy with its own model_call_details, so logging one attempt of a request through it leaves
+        the state the request's other attempts share untouched."""
+        attempt: Final = copy.copy(self)
+        attempt.model_call_details = dict(self.model_call_details)
+        return attempt
+
     def carry_failed_attempt_usage(self) -> None:
         """Move what a failed earlier attempt stashed off the retry sharing this logging object, so the retry logs its
         own usage while the request's failure log still bills every attempt."""
