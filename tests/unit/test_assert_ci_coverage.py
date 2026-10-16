@@ -81,6 +81,13 @@ def test_integration_groups_require_exclusive_scheduled_circleci_owner(tmp_path:
     github_owned, github_findings = coverage._integration_ownership(tmp_path)
     assert github_owned == frozenset({test_path, github_path})
     assert github_findings == ()
+    unit_shards: Final = tmp_path / ".github/workflows/test-unit.yml"
+    unit_shards.write_text(yaml.safe_dump({"jobs": {"mcp": {"steps": [{"run": f"pytest {github_path}"}]}}}))
+    _, shard_findings = coverage._integration_ownership(tmp_path)
+    assert [(finding.subject, finding.detail) for finding in shard_findings] == [
+        (github_path, "GitHub-owned integration contract runs on a shared unit-test shard")
+    ]
+    unit_shards.unlink()
     workflow.write_text(yaml.safe_dump({"jobs": {}}))
     _, missing_invocation = coverage._integration_ownership(tmp_path)
     assert [(finding.subject, finding.detail) for finding in missing_invocation] == [

@@ -616,6 +616,11 @@ def _integration_ownership(repo_root: pathlib.Path = REPO_ROOT) -> tuple[frozens
         for path in (repo_root / ".github/workflows").glob("*.y*ml")
         for scalar in _scalars(yaml.safe_load(path.read_text()), path.name)
     )
+    unit_shard_tokens: Final = _invoked_test_tokens(
+        scalar
+        for path in (repo_root / ".github/workflows").glob("test-unit.y*ml")
+        for scalar in _scalars(yaml.safe_load(path.read_text()), path.name)
+    )
     findings: Final = (
         tuple(
             Finding(path, "integration contract is also selected by GitHub Actions")
@@ -631,6 +636,11 @@ def _integration_ownership(repo_root: pathlib.Path = REPO_ROOT) -> tuple[frozens
             Finding(path, "GitHub-owned integration file is missing")
             for path in sorted(github_files)
             if not (repo_root / path).is_file()
+        )
+        + tuple(
+            Finding(path, "GitHub-owned integration contract runs on a shared unit-test shard")
+            for path in sorted(github_files)
+            if any(_token_covers(token, path) for token in unit_shard_tokens)
         )
     )
     browser_commands: Final = tuple(
