@@ -1,15 +1,19 @@
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
-
+import respx
 
 import litellm
+from litellm.caching.caching import Cache
 from litellm.completion_extras.litellm_responses_transformation.handler import (
     ResponsesToCompletionBridgeHandler,
 )
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.responses import bridge_executor
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelResponse
 
@@ -41,6 +45,11 @@ def test_is_preformatted_cached_chat_stream_false_wrong_type():
     )
 
 
+@pytest.fixture
+def _cache_on(monkeypatch):
+    monkeypatch.setattr(litellm, "cache", MagicMock(spec=Cache))
+
+
 def _bridge_kwargs(stream: bool):
     logging_obj = LiteLLMLogging(
         litellm_call_id="test-call",
@@ -63,7 +72,7 @@ def _bridge_kwargs(stream: bool):
     }
 
 
-def test_completion_returns_cached_model_response_directly():
+def test_completion_returns_cached_model_response_directly(_cache_on):
     """Non-streaming bridge cache hit: responses() returns a ModelResponse -> bridge returns it as-is."""
     cached = ModelResponse(id="chatcmpl-cached-nonstream", model="gpt-5.4")
     bridge = ResponsesToCompletionBridgeHandler()
@@ -82,7 +91,7 @@ def test_completion_returns_cached_model_response_directly():
 
 
 @pytest.mark.asyncio
-async def test_acompletion_returns_cached_model_response_directly():
+async def test_acompletion_returns_cached_model_response_directly(_cache_on):
     cached = ModelResponse(id="chatcmpl-cached-nonstream-async", model="gpt-5.4")
     bridge = ResponsesToCompletionBridgeHandler()
 
@@ -99,7 +108,7 @@ async def test_acompletion_returns_cached_model_response_directly():
     assert result is cached
 
 
-def test_completion_skips_rewrapping_preformatted_cached_chat_stream():
+def test_completion_skips_rewrapping_preformatted_cached_chat_stream(_cache_on):
     """Streaming bridge cache hit returning CustomStreamWrapper(cached_response) -> bridge skips re-wrapping."""
     stream = MagicMock(spec=CustomStreamWrapper)
     stream.custom_llm_provider = "cached_response"
@@ -124,7 +133,7 @@ def test_completion_skips_rewrapping_preformatted_cached_chat_stream():
     assert result is stream
 
 
-def test_completion_preserves_top_level_stream_flag_in_responses_request():
+def test_completion_preserves_top_level_stream_flag_in_responses_request(_cache_on):
     stream = MagicMock(spec=CustomStreamWrapper)
     stream.custom_llm_provider = "cached_response"
     bridge = ResponsesToCompletionBridgeHandler()
@@ -152,7 +161,7 @@ def test_completion_preserves_top_level_stream_flag_in_responses_request():
 
 
 @pytest.mark.asyncio
-async def test_acompletion_skips_rewrapping_preformatted_cached_chat_stream():
+async def test_acompletion_skips_rewrapping_preformatted_cached_chat_stream(_cache_on):
     stream = MagicMock(spec=CustomStreamWrapper)
     stream.custom_llm_provider = "cached_response"
     bridge = ResponsesToCompletionBridgeHandler()
@@ -177,7 +186,7 @@ async def test_acompletion_skips_rewrapping_preformatted_cached_chat_stream():
 
 
 @pytest.mark.asyncio
-async def test_acompletion_preserves_top_level_stream_flag_in_responses_request():
+async def test_acompletion_preserves_top_level_stream_flag_in_responses_request(_cache_on):
     stream = MagicMock(spec=CustomStreamWrapper)
     stream.custom_llm_provider = "cached_response"
     bridge = ResponsesToCompletionBridgeHandler()
@@ -219,7 +228,7 @@ def _completed_chat_response() -> ModelResponse:
 
 
 @pytest.mark.asyncio
-async def test_acompletion_streams_completed_model_response():
+async def test_acompletion_streams_completed_model_response(_cache_on):
     """A streaming request whose bridge call comes back already completed must still be
     handed back as an async-iterable stream. Returning the bare ModelResponse crashed the
     proxy's SSE generator with "'async for' requires an object with __aiter__ method".
@@ -245,7 +254,7 @@ async def test_acompletion_streams_completed_model_response():
     assert [c for c in chunks if c.choices[0].finish_reason], "stream never emitted a finish_reason"
 
 
-def test_completion_streams_completed_model_response():
+def test_completion_streams_completed_model_response(_cache_on):
     completed = _completed_chat_response()
     bridge = ResponsesToCompletionBridgeHandler()
 
@@ -288,7 +297,7 @@ def _upstream_model_for(handed_model: str, custom_llm_provider: str) -> str:
 def test_completion_keeps_provider_native_model_id_through_responses(
     custom_llm_provider, bridge_model, expected_upstream_model
 ):
-    """responses() resolves the provider itself, so the bridge must not hand it an already-stripped model."""
+    """The Responses executor resolves the provider itself, so the bridge must not hand it an already-stripped model."""
     cached = ModelResponse(id="chatcmpl-cached", model=bridge_model)
     bridge = ResponsesToCompletionBridgeHandler()
     kwargs = _bridge_kwargs(stream=False)
@@ -301,11 +310,11 @@ def test_completion_keeps_provider_native_model_id_through_responses(
             "transform_request",
             return_value={"model": bridge_model, "input": "hi"},
         ),
-        patch("litellm.responses", return_value=cached) as responses_call,
+        patch.object(bridge_executor, "native_responses", return_value=cached) as responses_call,
     ):
         bridge.completion(**kwargs)
 
-    handed_model = responses_call.call_args.kwargs["model"]
+    handed_model = responses_call.call_args.args[1]
     assert _upstream_model_for(handed_model, custom_llm_provider) == expected_upstream_model
 
 
@@ -329,9 +338,93 @@ async def test_acompletion_keeps_provider_native_model_id_through_responses(
             "transform_request",
             return_value={"model": bridge_model, "input": "hi"},
         ),
-        patch("litellm.aresponses", new=AsyncMock(return_value=cached)) as responses_call,
+        patch.object(bridge_executor, "anative_responses", new=AsyncMock(return_value=cached)) as responses_call,
     ):
         await bridge.acompletion(**kwargs)
 
-    handed_model = responses_call.call_args.kwargs["model"]
+    handed_model = responses_call.call_args.args[1]
     assert _upstream_model_for(handed_model, custom_llm_provider) == expected_upstream_model
+
+
+class _DeploymentHookCounter(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    async def async_pre_call_deployment_hook(self, kwargs, call_type) -> None:
+        self.calls += 1
+
+
+@pytest.mark.asyncio
+async def test_bridged_chat_call_runs_deployment_hooks_once(monkeypatch):
+    counter = _DeploymentHookCounter()
+    monkeypatch.setattr(litellm, "callbacks", [counter])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    litellm.register_model(
+        {"openai/bridge-only-model": {"litellm_provider": "openai", "mode": "responses", "max_tokens": 100}}
+    )
+
+    with respx.mock(assert_all_called=False) as upstream:
+        responses_route = upstream.post("https://example.invalid/v1/responses").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "resp_bridge",
+                    "object": "response",
+                    "created_at": 1,
+                    "status": "completed",
+                    "model": "bridge-only-model",
+                    "output": [
+                        {
+                            "type": "message",
+                            "id": "msg_bridge",
+                            "status": "completed",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "from upstream", "annotations": []}],
+                        }
+                    ],
+                    "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+                },
+            )
+        )
+        response = await litellm.acompletion(
+            model="openai/bridge-only-model",
+            api_base="https://example.invalid/v1",
+            api_key="x",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+    assert response.choices[0].message.content == "from upstream"
+    assert responses_route.call_count == 1
+    assert counter.calls == 1
+
+
+@pytest.mark.parametrize(
+    "bridge_model, tools",
+    [
+        ("gpt-5.4", [{"type": "mcp", "server_label": "docs", "server_url": "litellm_proxy"}]),
+        ("gpt-5.4", [{"type": "file_search", "vector_store_ids": ["vs_1"]}]),
+        ("chat_completions/gpt-5.4", None),
+    ],
+)
+def test_completion_keeps_responses_surface_for_what_only_it_serves(bridge_model, tools):
+    cached = ModelResponse(id="chatcmpl-surface", model="gpt-5.4")
+    bridge = ResponsesToCompletionBridgeHandler()
+    kwargs = _bridge_kwargs(stream=False)
+    kwargs["model"] = bridge_model
+
+    with (
+        patch.object(
+            bridge.transformation_handler,
+            "transform_request",
+            return_value={"model": bridge_model, "input": "hi", "tools": tools},
+        ),
+        patch("litellm.responses", return_value=cached) as responses_call,
+        patch.object(bridge_executor, "native_responses") as executor_call,
+    ):
+        result = bridge.completion(**kwargs)
+
+    assert result is cached
+    assert responses_call.call_count == 1
+    assert executor_call.call_count == 0

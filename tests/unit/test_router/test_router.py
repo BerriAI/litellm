@@ -1668,7 +1668,9 @@ def test_arouter_responses_api_bridge():
 
     ## CONFIRM BRIDGE IS CALLED
     # an empty stream: the Router reads the first chunk before returning, and a stream of mocks never produces one
-    with patch.object(litellm, "responses", return_value=iter([])) as mock_responses:
+    from litellm.responses import bridge_executor
+
+    with patch.object(bridge_executor, "native_responses", return_value=iter([])) as mock_responses:
         result = router.completion(
             model="[IP-approved] o3-pro",
             messages=[{"role": "user", "content": "Hello, world!"}],

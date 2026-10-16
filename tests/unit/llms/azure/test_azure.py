@@ -585,7 +585,9 @@ def test_azure_openai_responses_bridge():
 
     litellm.turn_on_debug()
 
-    with patch.object(litellm, "responses") as mock_responses:
+    from litellm.responses import bridge_executor
+
+    with patch.object(bridge_executor, "native_responses") as mock_responses:
         try:
             response = completion(
                 model="azure/responses/test-azure-computer-use-preview",
@@ -599,10 +601,10 @@ def test_azure_openai_responses_bridge():
 
         mock_responses.assert_called_once()
         assert (
-            mock_responses.call_args.kwargs["model"]
+            mock_responses.call_args.args[0]["model"]
             == "azure/test-azure-computer-use-preview"
         )
-        assert mock_responses.call_args.kwargs["custom_llm_provider"] == "azure"
+        assert mock_responses.call_args.args[0]["custom_llm_provider"] == "azure"
 
 
 def test_azure_with_content_safety_error():
