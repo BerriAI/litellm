@@ -20,6 +20,7 @@ import pytest
 import yaml
 from pydantic import TypeAdapter
 
+from litellm.proxy.types_utils.utils import get_instance_fn
 from tests.integration._support.client import Gateway, eventually
 from tests.integration._support.process import (
     OwnedProxy,
@@ -34,6 +35,32 @@ from tests.integration._support.process import (
 )
 
 TESTS_DIR: Final = Path(__file__).resolve().parents[2]
+
+
+@pytest.mark.parametrize("config_contents", ("[]\n", "general_settings: []\n", "general_settings: {}\n"))
+def test_worker_configuration_preserves_sibling_auth_modules(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    config_contents: str,
+) -> None:
+    monkeypatch.setenv("INTEGRATION_WORKER_ISOLATION", "1")
+    monkeypatch.setenv("INTEGRATION_PROVIDER_PORT", "8203")
+    monkeypatch.setenv("INTEGRATION_UPSTREAM_URL", "http://127.0.0.1:8202")
+    source: Final = tmp_path / "source.yaml"
+    source.write_text(config_contents)
+    auth_state: Final = tmp_path / "sibling_auth.json"
+    auth_state.write_text("authenticated")
+    (tmp_path / "sibling_auth.py").write_text(
+        "from pathlib import Path\n"
+        "def authenticate():\n"
+        "    return Path(__file__).with_suffix('.json').read_text()\n"
+    )
+
+    configured: Final = worker_configuration(source, tmp_path / "worker")
+
+    assert get_instance_fn("sibling_auth.authenticate", config_file_path=str(configured))() == "authenticated"
+    auth_state.write_text("updated")
+    assert get_instance_fn("sibling_auth.authenticate", config_file_path=str(configured))() == "updated"
 
 
 def test_worker_configuration_routes_stock_edges_to_its_own_servers_and_preserves_other_targets(
