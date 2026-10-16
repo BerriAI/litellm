@@ -11,6 +11,8 @@ const small: Manifest = {
   priority: { p0: { color: "B60205", description: "Bleeding" } },
   lift: {},
   needs: { template: { color: "E99695", description: "Template sections missing" } },
+  dup: {},
+  repro: { skip: { color: "C5DEF5", description: "Opted out" } },
 };
 
 describe("syncPlan", () => {
@@ -24,6 +26,7 @@ describe("syncPlan", () => {
       "unchanged domain:caching",
       "update priority:p0",
       "create needs:template",
+      "create repro:skip",
     ]);
   });
 
@@ -32,8 +35,8 @@ describe("syncPlan", () => {
     expect(syncPlan(existing, small)[0]?.kind).toBe("update");
   });
 
-  test("the real manifest is 44 labels across six namespaces", () => {
-    expect(manifestLabels(MANIFEST)).toHaveLength(44);
+  test("the real manifest is 50 labels across eight namespaces", () => {
+    expect(manifestLabels(MANIFEST)).toHaveLength(50);
     expect(syncPlan([], MANIFEST).every((action) => action.kind === "create")).toBe(true);
   });
 });
@@ -63,13 +66,14 @@ describe("syncLabels", () => {
       'POST /repos/BerriAI/litellm/labels {"name":"domain:caching","color":"1C6E5B","description":"Response cache"}',
       'PATCH /repos/BerriAI/litellm/labels/priority%3Ap0 {"color":"B60205","description":"Bleeding"}',
       'POST /repos/BerriAI/litellm/labels {"name":"needs:template","color":"E99695","description":"Template sections missing"}',
+      'POST /repos/BerriAI/litellm/labels {"name":"repro:skip","color":"C5DEF5","description":"Opted out"}',
     ]);
   });
 
   test("a dry run returns the plan and writes nothing", async () => {
     const { api, writes } = fakeApi([]);
     const plan = await syncLabels(api, { repo: "BerriAI/litellm", dryRun: true }, small);
-    expect(plan.map((action) => action.kind)).toEqual(["create", "create", "create"]);
+    expect(plan.map((action) => action.kind)).toEqual(["create", "create", "create", "create"]);
     expect(writes).toEqual([]);
   });
 });
