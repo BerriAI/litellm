@@ -19,15 +19,18 @@ _MODULE: Final = "litellm.llms.vertex_ai.context_caching.vertex_ai_context_cachi
 _SCOPE: Final = ("https://vertex.test/v1/projects/p/locations/us/cachedContents", "")
 
 
+def _token_and_url(gemini_api_key=None, custom_llm_provider="vertex_ai", **_):
+    url: Final = "https://vertex.test/v1/projects/p/locations/us/cachedContents"
+    if custom_llm_provider == "gemini":
+        return {"x-goog-api-key": gemini_api_key}, url
+    return "token", url
+
+
 @pytest.fixture(autouse=True)
 def _cacheable_prompt_and_fixed_url():
     with (
         patch(f"{_MODULE}.is_prompt_caching_valid_prompt", return_value=True),
-        patch.object(
-            ContextCachingEndpoints,
-            "_get_token_and_url_context_caching",
-            return_value=("token", "https://vertex.test/v1/projects/p/locations/us/cachedContents"),
-        ),
+        patch.object(ContextCachingEndpoints, "_get_token_and_url_context_caching", side_effect=_token_and_url),
     ):
         yield
 
@@ -53,8 +56,15 @@ def _created(name: str, expire_time: str | None) -> dict:
     return body if expire_time is None else {**body, "expireTime": expire_time}
 
 
-def _sync_call(client: HTTPHandler, api_key: str = "k", custom_llm_provider: str = "vertex_ai", messages=None):
+def _sync_call(
+    client: HTTPHandler,
+    api_key: str = "k",
+    custom_llm_provider: str = "vertex_ai",
+    messages=None,
+    extra_headers: dict | None = None,
+):
     return ContextCachingEndpoints().check_and_create_cache(
+        extra_headers=extra_headers,
         messages=messages or _messages(),
         optional_params={},
         api_key=api_key,
@@ -166,6 +176,22 @@ def test_gemini_caches_are_not_shared_across_api_keys():
     _sync_call(client, api_key="key-b", custom_llm_provider="gemini")
 
     assert client.post.call_count == 2
+
+
+def test_gemini_cache_created_with_an_overridden_api_key_is_not_reused_with_the_configured_key():
+    client: Final = MagicMock(spec=HTTPHandler)
+    client.get.return_value = _response({})
+    client.post.side_effect = [
+        _response(_created("cachedContents/caller-project", _expire_time(60))),
+        _response(_created("cachedContents/deployment-project", _expire_time(60))),
+    ]
+
+    caller: Final = _sync_call(
+        client, api_key="deployment-key", custom_llm_provider="gemini", extra_headers={"X-Goog-Api-Key": "caller-key"}
+    )
+    configured: Final = _sync_call(client, api_key="deployment-key", custom_llm_provider="gemini")
+
+    assert (caller[2], configured[2]) == ("cachedContents/caller-project", "cachedContents/deployment-project")
 
 
 def test_different_prefixes_do_not_share_a_cache():

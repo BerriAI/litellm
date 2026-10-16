@@ -3,7 +3,7 @@ import re
 import threading
 import time
 import weakref
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Final, Literal
 
@@ -116,15 +116,17 @@ class _KnownCachedContents:
     def scope(
         base_url: str,
         custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
-        api_key: str | None,
+        headers: Mapping[str, str],
     ) -> tuple[str, str]:
         """Where a cache name is valid: the Vertex URL names project and location, a Gemini key names the project.
 
-        The Gemini key is kept as-is in this in-memory scope and is never logged or persisted.
+        The Gemini key is read from the headers actually sent, so an ``extra_headers`` override scopes the
+        cache to the caller's project. It is kept as-is in this in-memory scope and never logged or persisted.
         """
-        if custom_llm_provider == "gemini":
-            return (base_url, api_key or "")
-        return (base_url, "")
+        if custom_llm_provider != "gemini":
+            return (base_url, "")
+        sent_keys: Final = [value for name, value in headers.items() if name.lower() == "x-goog-api-key"]
+        return (base_url, sent_keys[-1] if sent_keys else "")
 
     @staticmethod
     def is_usable(expire_time: object) -> bool:
@@ -259,7 +261,7 @@ class ContextCachingEndpoints(VertexBase):
         self,
         cache_key: str,
         client: HTTPHandler,
-        headers: dict,
+        headers: dict[str, str],  # mutable-ok: passed through to the HTTP client, which takes a dict
         api_key: str,
         api_base: str | None,
         logging_obj: Logging,
@@ -289,7 +291,7 @@ class ContextCachingEndpoints(VertexBase):
             vertex_auth_header=vertex_auth_header,
             model=model,
         )
-        scope: Final = _KnownCachedContents.scope(base_url, custom_llm_provider, api_key)
+        scope: Final = _KnownCachedContents.scope(base_url, custom_llm_provider, headers)
         known_name: Final = known_cached_contents.get(scope, cache_key)
         if known_name is not None:
             return known_name
@@ -356,7 +358,7 @@ class ContextCachingEndpoints(VertexBase):
         self,
         cache_key: str,
         client: AsyncHTTPHandler,
-        headers: dict,
+        headers: dict[str, str],  # mutable-ok: passed through to the HTTP client, which takes a dict
         api_key: str,
         api_base: str | None,
         logging_obj: Logging,
@@ -386,7 +388,7 @@ class ContextCachingEndpoints(VertexBase):
             vertex_auth_header=vertex_auth_header,
             model=model,
         )
-        scope: Final = _KnownCachedContents.scope(base_url, custom_llm_provider, api_key)
+        scope: Final = _KnownCachedContents.scope(base_url, custom_llm_provider, headers)
         known_name: Final = known_cached_contents.get(scope, cache_key)
         if known_name is not None:
             return known_name
@@ -602,7 +604,7 @@ class ContextCachingEndpoints(VertexBase):
         raw_response_cached: Final = _CreatedCachedContentRoot.model_validate(response.json()).root
         _record_cache_creation_tokens(logging_obj, raw_response_cached)
         known_cached_contents.remember(
-            _KnownCachedContents.scope(url, custom_llm_provider, api_key),
+            _KnownCachedContents.scope(url, custom_llm_provider, headers),
             generated_cache_key,
             raw_response_cached.get("name"),
             raw_response_cached.get("expireTime"),
@@ -704,7 +706,7 @@ class ContextCachingEndpoints(VertexBase):
         generated_cache_key: Final = local_cache_obj.get_cache_key(
             messages=cached_messages, tools=tools, tool_choice=tool_choice, model=model
         )
-        scope: Final = _KnownCachedContents.scope(url, custom_llm_provider, api_key)
+        scope: Final = _KnownCachedContents.scope(url, custom_llm_provider, headers)
 
         async def lookup_or_create() -> str | None:
             google_cache_name: Final = await self.async_check_cache(
