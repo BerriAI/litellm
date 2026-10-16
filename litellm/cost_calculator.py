@@ -1755,7 +1755,7 @@ def completion_cost(
                         completion_response.usage.seconds
                         if isinstance(completion_response, TranscriptionResponse)
                         and isinstance(completion_response.usage, TranscriptionUsageDurationObject)
-                        and _bills_provider_transcription_seconds(model, custom_llm_provider)
+                        and _bills_provider_transcription_seconds(requested_model, custom_llm_provider)
                         else 0.0
                     )
                 elif call_type in _RERANK_CALL_TYPES:
