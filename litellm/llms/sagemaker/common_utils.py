@@ -276,6 +276,8 @@ class AWSEventStreamDecoder:
                 yield None
 
     def _parse_message_from_event(self, event, final: bool = False) -> str | None:
+        # Note: callers during stream iteration pass final=False; final flushing of any incomplete
+        # multi-byte bytes is handled on stream exhaustion via self.utf8_decoder.decode(b"", final=True).
         response_stream_shape: Final = get_sagemaker_response_stream_shape()
         if response_stream_shape is None:
             raise SagemakerError(

@@ -317,15 +317,18 @@ async def test_aiter_bytes_raises_on_non_200_event():
     mock_buffer = MagicMock()
     mock_buffer.__iter__.return_value = [err_event]
 
+    async def mock_gen():
+        yield b""
+
+    async def consume():
+        async for _ in decoder.aiter_bytes(mock_gen()):
+            pass
+
     with (
         patch("botocore.eventstream.EventStreamBuffer", return_value=mock_buffer),
         pytest.raises(ValueError, match="Bad response code, expected 200"),
     ):
-        async def mock_gen():
-            yield b""
-
-        async for _ in decoder.aiter_bytes(mock_gen()):
-            pass
+        await consume()
 
 
 class TestSagemakerTransform:
