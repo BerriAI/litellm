@@ -34,7 +34,6 @@ import { getCustomerBudgetCounts, hasSharedCustomerBudget } from "./customerPayl
 type BulkEditCustomersModalProps = {
   allCustomers: readonly EndUser[];
   selectedCustomers: EndUser[];
-  open: boolean;
   onCancel: () => void;
   onCompleted: (successfulIds: string[]) => void;
 };
@@ -192,7 +191,7 @@ function BudgetEditField({
             </p>
           )}
           {edit.mode === "link" && <CatalogFeedback label="Budgets" catalog={catalog} />}
-          {edit.enabled && edit.mode === "link" && (
+          {edit.mode === "link" && (
             <div className="space-y-2">
               <Label htmlFor="bulk-budget-id">Budget</Label>
               <SearchSelect
@@ -207,7 +206,7 @@ function BudgetEditField({
               <p className="text-sm text-muted-foreground">Replace the budget link for every selected customer.</p>
             </div>
           )}
-          {edit.enabled && edit.mode === "max" && (
+          {edit.mode === "max" && (
             <div className="space-y-2">
               <Label htmlFor="bulk-max-budget">Max Budget (USD)</Label>
               <Input
@@ -228,17 +227,16 @@ function BudgetEditField({
   );
 }
 
-function BulkEditSession({
+export function BulkEditCustomersModal({
   selectedCustomers,
   allCustomers,
   onCancel,
   onCompleted,
-}: Omit<BulkEditCustomersModalProps, "open">) {
+}: BulkEditCustomersModalProps) {
   const [customers, setCustomers] = useState(() => selectedCustomers);
   const [edits, setEdits] = useState(emptyBulkCustomerEdits);
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<BulkUpdateCustomersResponse | null>(null);
-  const [submitting, setSubmitting] = useState(false);
   const inFlight = useRef(false);
   const resultsRef = useRef<HTMLDivElement>(null);
   const errorRef = useRef<HTMLDivElement>(null);
@@ -249,7 +247,7 @@ function BulkEditSession({
   const groups = useMCPAccessGroups();
   const toolsets = useMCPToolsets();
   const mutation = useBulkUpdateCustomers();
-  const pending = submitting || mutation.isPending;
+  const pending = mutation.isPending;
   const budgetCounts = useMemo(() => getCustomerBudgetCounts(allCustomers), [allCustomers]);
   const hasSharedBudget = useMemo(
     () => customers.some((customer) => hasSharedCustomerBudget(customer, budgetCounts)),
@@ -299,7 +297,6 @@ function BulkEditSession({
       return;
     }
     inFlight.current = true;
-    setSubmitting(true);
     setError(null);
     try {
       const response = await mutation.mutateAsync(payload.payload);
@@ -316,7 +313,6 @@ function BulkEditSession({
       setError(extractProxyErrorMessage(failure));
     } finally {
       inFlight.current = false;
-      setSubmitting(false);
     }
   };
 
@@ -489,9 +485,4 @@ function BulkEditSession({
       </DialogContent>
     </Dialog>
   );
-}
-
-export function BulkEditCustomersModal({ open, ...props }: BulkEditCustomersModalProps) {
-  if (!open) return null;
-  return <BulkEditSession {...props} />;
 }

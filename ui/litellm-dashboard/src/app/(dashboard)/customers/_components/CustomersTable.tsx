@@ -321,7 +321,6 @@ export default function CustomersTable({
       />
       {canModify && bulkEditCustomers && (
         <BulkEditCustomersModal
-          open
           selectedCustomers={bulkEditCustomers}
           allCustomers={data}
           onCancel={() => setBulkEditCustomers(null)}

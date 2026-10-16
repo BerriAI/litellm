@@ -50,7 +50,6 @@ const mountModal = (rows = customers, allCustomers = rows) => {
   const onCompleted = vi.fn();
   const view = renderWithProviders(
     <BulkEditCustomersModal
-      open
       allCustomers={allCustomers}
       selectedCustomers={rows}
       onCancel={onCancel}
@@ -86,7 +85,6 @@ describe("Bulk customer editor", () => {
     const { rerender, onCancel, onCompleted } = mountModal();
     rerender(
       <BulkEditCustomersModal
-        open
         selectedCustomers={[{ ...customers[0], user_id: "later-selection" }]}
         allCustomers={customers}
         onCancel={onCancel}
