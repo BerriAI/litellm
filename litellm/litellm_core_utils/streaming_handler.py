@@ -1126,31 +1126,23 @@ class CustomStreamWrapper:
 
 
         """
-        if self.merge_reasoning_content_in_choices is True:
-            reasoning_content: Final = getattr(model_response.choices[0].delta, "reasoning_content", None)
-            if reasoning_content:
-                if self.sent_first_thinking_block is False:
-                    # Ensure content is not None before concatenation
-                    if model_response.choices[0].delta.content is None:
-                        model_response.choices[0].delta.content = ""
-                    model_response.choices[0].delta.content += "<think>" + reasoning_content
-                    self.sent_first_thinking_block = True
-                elif (
-                    self.sent_first_thinking_block is True
-                    and hasattr(model_response.choices[0].delta, "reasoning_content")
-                    and model_response.choices[0].delta.reasoning_content
-                ):
-                    model_response.choices[0].delta.content = reasoning_content
-            elif (
-                self.sent_first_thinking_block is True
-                and not self.sent_last_thinking_block
-                and model_response.choices[0].delta.content
-            ):
-                model_response.choices[0].delta.content = "</think>" + (model_response.choices[0].delta.content or "")
-                self.sent_last_thinking_block = True
+        if self.merge_reasoning_content_in_choices is not True:
+            return
+        delta: Final = model_response.choices[0].delta
+        reasoning_content: Final = getattr(delta, "reasoning_content", None)
+        content: Final = delta.content or ""
+        if reasoning_content:
+            closes_thinking: Final = bool(content) and not self.sent_last_thinking_block
+            opening: Final = "" if self.sent_first_thinking_block else "<think>"
+            delta.content = opening + reasoning_content + ("</think>" + content if closes_thinking else "")
+            self.sent_first_thinking_block = True
+            self.sent_last_thinking_block = self.sent_last_thinking_block or closes_thinking
+        elif self.sent_first_thinking_block and not self.sent_last_thinking_block and content:
+            delta.content = "</think>" + content
+            self.sent_last_thinking_block = True
 
-            if hasattr(model_response.choices[0].delta, "reasoning_content"):
-                del model_response.choices[0].delta.reasoning_content
+        if hasattr(delta, "reasoning_content"):
+            del delta.reasoning_content
 
     def _dispatch_provider_chunk(
         self,

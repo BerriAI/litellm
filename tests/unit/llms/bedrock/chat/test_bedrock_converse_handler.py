@@ -512,3 +512,21 @@ async def test_async_fake_streamed_text_tool_call_arrives_as_the_tool_call_of_th
 
     assert _tool_answer(answer) == ("tool_calls", None, [("get_weather", '{"city": "Paris"}')])
     assert _tool_answer(litellm.stream_chunk_builder(chunks, messages=kwargs["messages"])) == _tool_answer(answer)
+
+
+def test_fake_streamed_json_mode_answer_closes_merged_reasoning_before_the_answer() -> None:
+    """A fake stream sends reasoning and answer in one chunk, so merging reasoning into content must open and close
+    the think block around the reasoning in that chunk, before the answer"""
+    client: Final = HTTPHandler(
+        client=httpx.Client(transport=httpx.MockTransport(_answer_with_json_mode_thinking_response))
+    )
+    kwargs: Final = _json_mode_thinking_kwargs()
+
+    answer: Final = litellm.completion(client=client, **kwargs)
+    chunks: Final = list(
+        litellm.completion(client=client, stream=True, merge_reasoning_content_in_choices=True, **kwargs)
+    )
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == (
+        f"<think>{answer.choices[0].message.reasoning_content}</think>{answer.choices[0].message.content}"
+    )
