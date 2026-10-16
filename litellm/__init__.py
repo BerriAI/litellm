@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from litellm._process_defaults import apply_process_defaults
+from litellm._process_defaults import apply_process_defaults as _apply_process_defaults
 
-apply_process_defaults()
+_apply_process_defaults()
 
 ### INIT VARIABLES #########################
 import threading

@@ -2,13 +2,16 @@
 
 The CLI is a thin HTTP client, but it lives inside the `litellm` package, so a plain
 import would run the whole SDK `__init__` before Click parses argv. These entry points
-import the CLI against an uninitialized `litellm` package object instead. The first
-attribute access on the SDK, or, once the CLI is imported, the first import that would
-load anything new under `litellm`, initializes the SDK in place before that code runs,
-so code that needs the SDK sees it exactly as a plain `import litellm` would leave it.
+import the CLI against an uninitialized `litellm` package object instead. CLI code under
+`litellm.proxy.client`, and whatever it imports, loads without the SDK whenever it is
+first imported. The first attribute read on the SDK, or the first import of any other
+new code under `litellm`, initializes the SDK in place before that code runs, so code
+that needs the SDK sees it exactly as a plain `import litellm` would leave it.
 """
 
 import builtins
+import contextvars
+import importlib
 import importlib.util
 import sys
 import threading
@@ -17,15 +20,22 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Final
 
 SDK_PACKAGE: Final = "litellm"
-_SDK_SUBMODULE_PREFIX: Final = f"{SDK_PACKAGE}."
+CLI_PACKAGE: Final = "litellm.proxy.client"
 _INITIALIZATION_LOCK: Final = threading.RLock()
 _BUILTIN_IMPORT: Final = builtins.__import__
+_IMPORT_MODULE: Final = importlib.import_module
+_LOADING_CLI_CODE: Final = contextvars.ContextVar("_LOADING_CLI_CODE", default=False)
+
+
+def _is_dunder(name: str) -> bool:
+    return name.startswith("__") and name.endswith("__")
 
 
 class _SDKUntilFirstUse(types.ModuleType):
-    def __getattr__(self, name: str) -> object:
-        _initialize(self)
-        return getattr(self, name)
+    def __getattribute__(self, name: str) -> object:
+        if not _is_dunder(name):
+            _initialize(self)
+        return types.ModuleType.__getattribute__(self, name)
 
 
 class _SDKInitializing(types.ModuleType):
@@ -40,6 +50,13 @@ def _become(sdk: types.ModuleType, state: type[types.ModuleType]) -> None:
     sdk.__class__ = state
 
 
+def _restore_interpreter_imports() -> None:
+    if builtins.__import__ is _import_initializing_sdk:
+        builtins.__import__ = _BUILTIN_IMPORT
+    if importlib.import_module is _import_module_initializing_sdk:
+        importlib.import_module = _IMPORT_MODULE
+
+
 def _initialize(sdk: types.ModuleType) -> None:
     with _INITIALIZATION_LOCK:
         if type(sdk) is not _SDKUntilFirstUse:
@@ -48,12 +65,43 @@ def _initialize(sdk: types.ModuleType) -> None:
         if spec is None or spec.loader is None:
             raise ModuleNotFoundError(f"No module named {SDK_PACKAGE!r}", name=SDK_PACKAGE)
         _become(sdk, _SDKInitializing)
-        if builtins.__import__ is _import_initializing_sdk:
-            builtins.__import__ = _BUILTIN_IMPORT
+        _restore_interpreter_imports()
         try:
             spec.loader.exec_module(sdk)
         finally:
             _become(sdk, types.ModuleType)
+
+
+def _in_package(target: str, package: str) -> bool:
+    return target == package or target.startswith(f"{package}.")
+
+
+def _loads_new_sdk_code(target: str, fromlist: Sequence[str]) -> bool:
+    if not _in_package(target, SDK_PACKAGE):
+        return False
+    loaded: Final = sys.modules.get(target)
+    if loaded is None:
+        return True
+    return any(name != "*" and name not in vars(loaded) for name in fromlist)
+
+
+def _load_cli_code(load: Callable[[], types.ModuleType]) -> types.ModuleType:
+    token: Final = _LOADING_CLI_CODE.set(True)
+    try:
+        return load()
+    finally:
+        _LOADING_CLI_CODE.reset(token)
+
+
+def _imported(target: str | None, fromlist: Sequence[str], load: Callable[[], types.ModuleType]) -> types.ModuleType:
+    if _LOADING_CLI_CODE.get() or target is None or not _loads_new_sdk_code(target, fromlist):
+        return load()
+    if _in_package(target, CLI_PACKAGE):
+        return _load_cli_code(load)
+    sdk: Final = sys.modules.get(SDK_PACKAGE)
+    if sdk is not None:
+        _initialize(sdk)
+    return load()
 
 
 def _import_target(name: str, importer_globals: Mapping[str, object] | None, level: int) -> str | None:
@@ -65,15 +113,6 @@ def _import_target(name: str, importer_globals: Mapping[str, object] | None, lev
     return importlib.util.resolve_name("." * level + name, package)
 
 
-def _loads_new_sdk_code(target: str, fromlist: Sequence[str]) -> bool:
-    if target != SDK_PACKAGE and not target.startswith(_SDK_SUBMODULE_PREFIX):
-        return False
-    loaded: Final = sys.modules.get(target)
-    if loaded is None:
-        return True
-    return any(name != "*" and name not in vars(loaded) for name in fromlist)
-
-
 def _import_initializing_sdk(
     name: str,
     globals: Mapping[str, object] | None = None,
@@ -81,14 +120,26 @@ def _import_initializing_sdk(
     fromlist: Sequence[str] | None = (),
     level: int = 0,
 ) -> types.ModuleType:
-    target: Final = _import_target(name, globals, level)
-    sdk: Final = sys.modules.get(SDK_PACKAGE)
-    if target is not None and sdk is not None and _loads_new_sdk_code(target, fromlist or ()):
-        _initialize(sdk)
-    return _BUILTIN_IMPORT(name, globals, locals, fromlist or (), level)
+    return _imported(
+        _import_target(name, globals, level),
+        fromlist or (),
+        lambda: _BUILTIN_IMPORT(name, globals, locals, fromlist or (), level),
+    )
 
 
-def _imported_without_sdk() -> tuple[Callable[[], None], Callable[[], None]]:
+def _import_module_target(name: str, package: str | None) -> str | None:
+    if not name.startswith("."):
+        return name
+    if not package:
+        return None
+    return importlib.util.resolve_name(name, package)
+
+
+def _import_module_initializing_sdk(name: str, package: str | None = None) -> types.ModuleType:
+    return _imported(_import_module_target(name, package), (), lambda: _IMPORT_MODULE(name, package))
+
+
+def _install_sdk_until_first_use() -> None:
     sdk_spec: Final = importlib.util.find_spec(SDK_PACKAGE)
     if sdk_spec is None:
         raise ModuleNotFoundError(f"No module named {SDK_PACKAGE!r}", name=SDK_PACKAGE)
@@ -99,19 +150,25 @@ def _imported_without_sdk() -> tuple[Callable[[], None], Callable[[], None]]:
     from litellm._process_defaults import apply_process_defaults
 
     apply_process_defaults()
+    builtins.__import__ = _import_initializing_sdk
+    importlib.import_module = _import_module_initializing_sdk
+
+
+def _entry_points() -> tuple[Callable[[], None], Callable[[], None]]:
+    if SDK_PACKAGE not in sys.modules:
+        _install_sdk_until_first_use()
 
     from litellm.proxy.client.cli.main import cli as lite
     from litellm.proxy.client.cli.main import litellm_proxy_cli as deprecated_litellm_proxy
 
-    builtins.__import__ = _import_initializing_sdk
     return lite, deprecated_litellm_proxy
 
 
 def cli() -> None:
-    lite, _ = _imported_without_sdk()
+    lite, _ = _entry_points()
     lite()
 
 
 def litellm_proxy_cli() -> None:
-    _, deprecated_litellm_proxy = _imported_without_sdk()
+    _, deprecated_litellm_proxy = _entry_points()
     deprecated_litellm_proxy()
