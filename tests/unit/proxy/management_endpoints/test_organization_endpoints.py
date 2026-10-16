@@ -1573,3 +1573,45 @@ async def test_delete_organization_evicts_the_cache_of_the_keys_it_deletes(monke
     assert all(cache.get_cache(key=cache_key) is None for cache_key in doomed_cache_keys)
     assert all(cache.get_cache(key=cache_key) == {"retained": True} for cache_key in kept_cache_keys)
     assert jwt_table.rows == (kept_row,)
+
+
+@pytest.mark.asyncio
+async def test_delete_organization_is_refused_while_one_of_its_teams_holds_a_ptu_share(monkeypatch):
+    """Deleting an organization deletes its teams, so a team still holding a PTU share stops it the
+    way /team/delete does, before any team, member, key, or the organization itself is removed."""
+    from litellm import Router
+    from litellm.proxy._types import DeleteOrganizationRequest, LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.organization_endpoints import delete_organization
+
+    shared_router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4.1-ptu",
+                "litellm_params": {"model": "azure/gpt-4.1", "api_key": "sk-azure", "api_base": "https://x"},
+                "model_info": {
+                    "id": "shared-ptu",
+                    "ptu_count": 50,
+                    "cost_per_ptu_per_hour": 1.0,
+                    "ptu_effective_from": "2026-01-01T00:00:00Z",
+                    "ptu_shares": {"team-in-org": 30, "team-elsewhere": 20},
+                },
+            }
+        ]
+    )
+    prisma_client: Final = AsyncMock()
+    prisma_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[SimpleNamespace(team_id="team-in-org")])
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True, raising=False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", shared_router)
+
+    with pytest.raises(HTTPException) as refused:
+        await delete_organization(
+            data=DeleteOrganizationRequest(organization_ids=["org-with-a-share"]),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert refused.value.status_code == 400
+    assert "team-in-org" in str(refused.value.detail) and "shared-ptu" in str(refused.value.detail)
+    prisma_client.db.litellm_teamtable.delete_many.assert_not_called()
+    prisma_client.db.litellm_verificationtoken.delete_many.assert_not_called()
+    prisma_client.db.litellm_organizationtable.delete.assert_not_called()

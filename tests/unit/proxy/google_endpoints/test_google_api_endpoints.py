@@ -182,6 +182,29 @@ def test_google_count_tokens_unchanged():
         assert body["totalTokens"] == 7
 
 
+def test_google_count_tokens_unexpected_failure_uses_the_google_error_envelope():
+    try:
+        client = _build_test_client()
+    except ImportError as e:
+        pytest.skip(f"Skipping test due to missing dependency: {e}")
+
+    with patch(
+        "litellm.proxy.proxy_server.token_counter",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("tokenizer unavailable"),
+    ):
+        response = client.post(
+            "/v1beta/models/test-model:countTokens",
+            json={"contents": [{"role": "user", "parts": [{"text": "Hello"}]}]},
+        )
+
+    assert response.status_code == 500
+    error = response.json()["error"]
+    assert error["code"] == 500
+    assert error["status"] == "INTERNAL"
+    assert "tokenizer unavailable" not in error["message"]
+
+
 def test_google_count_tokens_uses_normalized_total_when_provider_shape_differs():
     """A provider that counts in Anthropic shape (Bedrock, Anthropic) carries no totalTokens key, so the normalized total must win over the raw response's missing field."""
     try:

@@ -1,6 +1,9 @@
 import copy
+import itertools
 import json
+import logging
 import os
+import pathlib
 import subprocess
 import sys
 import textwrap
@@ -9,9 +12,11 @@ from typing import Final, List, Optional, Tuple, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
+from openai.types.chat import ChatCompletionMessage
 from pydantic import BaseModel, ConfigDict
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.integrations.anthropic_cache_control_hook import (
     CARRY_UNMATCHED_MESSAGE_POINTS,
     EXTERNAL_BREAKPOINTS_STAMP,
@@ -23,9 +28,11 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _convert_to_bedrock_tool_call_invoke,
     convert_to_anthropic_tool_invoke,
 )
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantToolCall
-from litellm.types.utils import ChatCompletionMessageToolCall, Message
+from litellm.types.utils import ChatCompletionMessageToolCall, LlmProviders, Message
+from litellm.utils import ProviderConfigManager
 
 
 @pytest.fixture(autouse=True)
@@ -1166,46 +1173,303 @@ def test_cache_control_hook_counts_tool_call_marks_except_answered_server_tool_c
     assert AnthropicCacheControlHook.count_request_cache_breakpoints([message]) == 2
 
 
-@pytest.mark.parametrize(
-    ("follow_ups", "expected_breakpoints"),
-    [
-        pytest.param((), 0, id="rebuilt_from_its_kept_result"),
-        pytest.param(
-            ({"role": "tool", "tool_call_id": "srvtoolu_01Search", "content": "found get_weather"},),
-            1,
-            id="replayed_with_the_client_answer",
-        ),
-        pytest.param(
-            (
-                {"role": "tool", "tool_call_id": "srvtoolu_01Search", "content": "found get_weather"},
-                {"role": "user", "content": "Go on"},
-            ),
-            0,
-            id="client_answer_replaced_by_the_kept_result",
-        ),
-    ],
-)
-def test_cache_control_hook_counts_a_server_tool_call_mark_only_when_the_call_replays_as_tool_use(
-    follow_ups: tuple[AllMessageValues, ...], expected_breakpoints: int
-):
-    search_call: Final = cast(
+_SEARCH_ANSWER: Final = {"role": "tool", "tool_call_id": "srvtoolu_01Search", "content": "found get_weather"}
+_GO_ON: Final = {"role": "user", "content": "Go on"}
+_SYSTEM_NOTE: Final = {"role": "system", "content": "Answer in one sentence."}
+_SEARCH_CALL: Final = {
+    "id": "srvtoolu_01Search",
+    "type": "function",
+    "function": {"name": "tool_search_tool_bm25", "arguments": "{}"},
+    "cache_control": {"type": "ephemeral"},
+}
+_WEATHER_CALL: Final = {
+    "id": "toolu_01Weather",
+    "type": "function",
+    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+    "cache_control": {"type": "ephemeral"},
+}
+
+
+def _wire_cache_marks(messages: list[AllMessageValues], model: str = "claude-opus-5-5") -> int:
+    request: Final = AnthropicConfig().transform_request(
+        model=model,
+        messages=copy.deepcopy(messages),
+        optional_params={"max_tokens": 64},
+        litellm_params={},
+        headers={},
+    )
+    message_blocks: Final = itertools.chain.from_iterable(
+        message["content"] for message in request["messages"] if isinstance(message["content"], list)
+    )
+    blocks: Final = itertools.chain(request.get("system") or (), message_blocks)
+    return sum(1 for block in blocks if isinstance(block, dict) and "cache_control" in block)
+
+
+def _replayed_search_call(*tool_calls: dict[str, object]) -> AllMessageValues:
+    return cast(
         AllMessageValues,
         {
             "role": "assistant",
             "content": None,
-            "tool_calls": [
-                {
-                    "id": "srvtoolu_01Search",
-                    "type": "function",
-                    "function": {"name": "tool_search_tool_bm25", "arguments": "{}"},
-                    "cache_control": {"type": "ephemeral"},
-                }
-            ],
-            "provider_specific_fields": {"tool_results": [{"tool_use_id": "srvtoolu_01Search"}]},
+            "tool_calls": list(tool_calls),
+            "provider_specific_fields": {
+                "tool_results": [
+                    {
+                        "type": "tool_search_tool_result",
+                        "tool_use_id": "srvtoolu_01Search",
+                        "content": {"type": "tool_search_tool_search_result", "tool_references": []},
+                    }
+                ]
+            },
         },
     )
 
-    assert AnthropicCacheControlHook.count_request_cache_breakpoints([search_call, *follow_ups]) == expected_breakpoints
+
+@pytest.mark.parametrize(
+    ("tool_calls", "follow_ups", "modify_params", "expected_breakpoints"),
+    [
+        pytest.param((_SEARCH_CALL,), (), False, 0, id="trailing_call_rebuilt_from_its_kept_result"),
+        pytest.param((_SEARCH_CALL,), (), True, 1, id="trailing_call_replayed_with_the_modify_params_placeholder"),
+        pytest.param((_SEARCH_CALL,), (_SEARCH_ANSWER,), False, 1, id="replayed_with_the_client_answer"),
+        pytest.param(
+            (_SEARCH_CALL,), (_SEARCH_ANSWER,), True, 1, id="replayed_with_the_client_answer_under_modify_params"
+        ),
+        pytest.param(
+            (_SEARCH_CALL,), (_SEARCH_ANSWER, _GO_ON), False, 0, id="client_answer_replaced_by_the_kept_result"
+        ),
+        pytest.param((_SEARCH_CALL,), (_GO_ON,), True, 0, id="placeholder_replaced_by_the_kept_result"),
+        pytest.param(
+            (_SEARCH_CALL, _WEATHER_CALL),
+            (_SEARCH_ANSWER,),
+            True,
+            1,
+            id="client_answer_replaced_when_modify_params_answers_the_other_call",
+        ),
+        pytest.param(
+            (_SEARCH_CALL,), (_SYSTEM_NOTE,), True, 0, id="placeholder_replaced_when_a_later_system_message_is_sent"
+        ),
+        pytest.param((_SEARCH_CALL,), (_SYSTEM_NOTE,), False, 0, id="trailing_call_rebuilt_before_a_system_message"),
+    ],
+)
+@pytest.mark.parametrize("model", ["claude-opus-5-5", "claude-sonnet-4-6"])
+def test_cache_control_hook_counts_a_server_tool_call_mark_only_when_anthropic_receives_it(
+    monkeypatch: pytest.MonkeyPatch,
+    tool_calls: tuple[dict[str, object], ...],
+    follow_ups: tuple[AllMessageValues, ...],
+    modify_params: bool,
+    expected_breakpoints: int,
+    model: str,
+):
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
+    messages: Final = [
+        cast(AllMessageValues, {"role": "user", "content": "Weather in Paris?"}),
+        _replayed_search_call(*tool_calls),
+        *follow_ups,
+    ]
+
+    census: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(messages)
+
+    assert (census, _wire_cache_marks(messages, model)) == (expected_breakpoints, expected_breakpoints)
+
+
+@pytest.mark.parametrize(
+    "after_the_call",
+    [(_SEARCH_ANSWER, _SYSTEM_NOTE), (_SYSTEM_NOTE, _SEARCH_ANSWER)],
+    ids=["system_message_after_the_answer", "system_message_before_the_answer"],
+)
+@pytest.mark.parametrize("modify_params", [False, True])
+@pytest.mark.parametrize("model", ["claude-opus-5-5", "claude-sonnet-4-6"])
+def test_cache_control_hook_never_counts_fewer_marks_than_anthropic_receives_after_a_system_message(
+    monkeypatch: pytest.MonkeyPatch, modify_params: bool, model: str, after_the_call: tuple[dict[str, object], ...]
+):
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
+    messages: Final = [
+        cast(AllMessageValues, {"role": "system", "content": "You are a weather assistant."}),
+        cast(AllMessageValues, {"role": "user", "content": "Weather in Paris?"}),
+        _replayed_search_call(_SEARCH_CALL),
+        *(cast(AllMessageValues, message) for message in after_the_call),
+    ]
+
+    census: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(messages)
+
+    assert census >= _wire_cache_marks(messages, model)
+
+
+@pytest.mark.parametrize(
+    ("hook_model", "wire_model"),
+    [
+        ("anthropic/claude-opus-5-5", "claude-opus-5-5"),
+        ("anthropic/claude-sonnet-4-6", "claude-sonnet-4-6"),
+        pytest.param("invoke/us.anthropic.claude-opus-5-5", "claude-opus-5-5", id="provider-left-out-of-the-params"),
+        pytest.param("anthropic/my-claude-alias", "my-claude-alias", id="model-the-cost-map-does-not-know"),
+        pytest.param(
+            "anthropic/my-unreadable-claude-alias", "my-unreadable-claude-alias", id="cost-map-entry-the-lookup-cannot-read"
+        ),
+    ],
+)
+def test_cache_control_hook_fills_the_mark_budget_when_the_client_answers_one_of_two_marked_search_calls(
+    monkeypatch: pytest.MonkeyPatch, hook_model: str, wire_model: str
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+    monkeypatch.setitem(litellm.model_cost, "my-unreadable-claude-alias", [])
+    marked_text: Final = {"type": "text", "text": "Context: a trip.", "cache_control": {"type": "ephemeral"}}
+    two_kept_searches: Final = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [_SEARCH_CALL, {**_SEARCH_CALL, "id": "srvtoolu_02Search"}],
+        "provider_specific_fields": {
+            "tool_results": [
+                {
+                    "type": "tool_search_tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content": {"type": "tool_search_tool_search_result", "tool_references": []},
+                }
+                for tool_use_id in ("srvtoolu_01Search", "srvtoolu_02Search")
+            ]
+        },
+    }
+    messages: Final = [
+        {"role": "system", "content": "You are a weather assistant."},
+        {"role": "user", "content": [marked_text, {**marked_text, "text": "Find a weather tool."}]},
+        two_kept_searches,
+        _SEARCH_ANSWER,
+        _SYSTEM_NOTE,
+    ]
+
+    _, processed, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+        model=hook_model,
+        messages=cast(list[AllMessageValues], messages),
+        non_default_params={
+            "cache_control_injection_points": [
+                {"location": "message", "role": "system"},
+                {"location": "message", "index": -1},
+            ]
+        },
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+
+    assert _wire_cache_marks(processed, wire_model) == 4
+
+
+def _marks_in(value: object) -> int:
+    if isinstance(value, Mapping):
+        mapping: Final = cast(Mapping[str, object], value)
+        own_mark: Final = int("cache_control" in mapping or "cachePoint" in mapping)
+        return own_mark + sum(_marks_in(item) for item in mapping.values())
+    if isinstance(value, list):
+        return sum(_marks_in(item) for item in cast(list[object], value))
+    return 0
+
+
+def _marks_the_route_sends(model: str, custom_llm_provider: str | None, messages: list[AllMessageValues]) -> int:
+    served_model, provider, _, _ = (
+        (model, custom_llm_provider, None, None) if custom_llm_provider else litellm.get_llm_provider(model=model)
+    )
+    route_config: Final = ProviderConfigManager.get_provider_chat_config(
+        model=served_model, provider=LlmProviders(provider)
+    )
+    assert route_config is not None
+    weather_tool: Final = {
+        "type": "function",
+        "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+    }
+    return _marks_in(
+        route_config.transform_request(
+            model=served_model,
+            messages=copy.deepcopy(messages),
+            optional_params={"max_tokens": 64, "tools": [weather_tool]},
+            litellm_params={},
+            headers={},
+        )
+    )
+
+
+_SECOND_SEARCH_CALL: Final = {**_SEARCH_CALL, "id": "srvtoolu_02Search"}
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider"),
+    [
+        ("anthropic/claude-sonnet-4-6", None),
+        ("bedrock/invoke/us.anthropic.claude-opus-5-5", None),
+        ("vertex_ai/claude-opus-5-5@default", None),
+        ("databricks/databricks-claude-sonnet-4-6", None),
+        pytest.param("databricks-claude-sonnet-4-6", "databricks", id="provider-passed-beside-a-bare-model"),
+        ("openrouter/anthropic/claude-sonnet-4.6", None),
+        ("bedrock/converse/us.anthropic.claude-sonnet-4-6", None),
+        pytest.param("claude-sonnet-4.6", "github_copilot", id="copilot-with-no-stored-login"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("tool_calls", "follow_ups"),
+    [
+        pytest.param(
+            (_SEARCH_CALL, _SECOND_SEARCH_CALL),
+            (_SEARCH_ANSWER, {**_SEARCH_ANSWER, "tool_call_id": "srvtoolu_02Search"}, _SYSTEM_NOTE),
+            id="both-search-calls-answered-before-a-system-message",
+        ),
+        pytest.param(
+            (_SEARCH_CALL, _WEATHER_CALL), (_SEARCH_ANSWER,), id="function-call-left-for-modify-params-to-answer"
+        ),
+    ],
+)
+def test_cache_control_hook_fills_the_mark_budget_every_claude_route_sends_after_marked_search_calls(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    model: str,
+    custom_llm_provider: str | None,
+    tool_calls: tuple[dict[str, object], ...],
+    follow_ups: tuple[dict[str, object], ...],
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setenv("GITHUB_COPILOT_DEVICE_CODE_URL", "http://127.0.0.1:9/login/device/code")
+    marked_text: Final = {"type": "text", "text": "Context: a trip.", "cache_control": {"type": "ephemeral"}}
+    kept_searches: Final = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": list(tool_calls),
+        "provider_specific_fields": {
+            "tool_results": [
+                {
+                    "type": "tool_search_tool_result",
+                    "tool_use_id": tool_call["id"],
+                    "content": {"type": "tool_search_tool_search_result", "tool_references": []},
+                }
+                for tool_call in tool_calls
+                if str(tool_call["id"]).startswith("srvtoolu_")
+            ]
+        },
+    }
+    messages: Final = cast(
+        list[AllMessageValues],
+        [
+            {"role": "system", "content": "You are a weather assistant."},
+            {"role": "user", "content": [marked_text, {**marked_text, "text": "Find a weather tool."}]},
+            kept_searches,
+            *follow_ups,
+        ],
+    )
+    params: Final[dict[str, object]] = {
+        "cache_control_injection_points": [
+            {"location": "message", "role": "system"},
+            {"location": "message", "index": -1},
+        ]
+    }
+    AnthropicCacheControlHook.maybe_seed_default_injection_points(params, messages, model, custom_llm_provider)
+
+    _, processed, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+        model=model,
+        messages=messages,
+        non_default_params=params,
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+
+    assert _marks_the_route_sends(model, custom_llm_provider, processed) == 4
 
 
 @pytest.mark.parametrize("tool_call_type", ["function", "custom", None])
@@ -4572,3 +4836,97 @@ class TestMalformedInjectionPointsAreIgnored:
         kwargs: dict = {"cache_control_injection_points": copy.deepcopy(value)}
         _stamp_injection_points_for_the_hook(kwargs, "gpt-5.6", "openai", None, None)
         assert kwargs == {"cache_control_injection_points": value}
+
+
+def test_cache_control_hook_leaves_the_duplicate_tool_result_warning_to_the_request_builder(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+    weather_answer: Final = {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"}
+    messages: Final = [
+        cast(AllMessageValues, {"role": "user", "content": "Weather in Paris?"}),
+        cast(AllMessageValues, {"role": "assistant", "content": None, "tool_calls": [_SEARCH_CALL, _WEATHER_CALL]}),
+        cast(AllMessageValues, _SEARCH_ANSWER),
+        cast(AllMessageValues, weather_answer),
+        cast(AllMessageValues, weather_answer),
+    ]
+    monkeypatch.setattr(verbose_logger, "propagate", True)
+    caplog.set_level(logging.WARNING, logger=verbose_logger.name)
+
+    census: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(messages)
+    warnings_from_the_hook: Final = len(caplog.records)
+    wire_marks: Final = _wire_cache_marks(messages)
+
+    assert (census, wire_marks) == (2, 2)
+    assert (warnings_from_the_hook, len(caplog.records)) == (0, 1)
+
+
+@pytest.mark.parametrize(
+    "stray_message",
+    [
+        pytest.param("junk", id="string"),
+        pytest.param(None, id="null"),
+        pytest.param(ChatCompletionMessage(role="assistant", content="Checking the weather"), id="openai_sdk_message"),
+    ],
+)
+def test_cache_control_hook_counts_marked_tool_calls_next_to_a_message_it_cannot_pair(
+    monkeypatch: pytest.MonkeyPatch, stray_message: object
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+    messages: Final = [
+        stray_message,
+        {"role": "assistant", "content": None, "tool_calls": [_SEARCH_CALL, _WEATHER_CALL]},
+        _SEARCH_ANSWER,
+        {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"},
+    ]
+
+    census: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(messages)
+    envelope_census: Final = AnthropicCacheControlHook.count_external_cache_breakpoints(
+        None, request_kwargs={"extra_body": {"messages": messages}}
+    )
+
+    assert (census, envelope_census) == (2, 2)
+
+
+@pytest.mark.parametrize("modify_params", [False, True])
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        pytest.param(
+            {"role": "assistant", "content": None, "tool_calls": [{**_WEATHER_CALL, "id": {"id": "toolu_02"}}]},
+            id="tool_call_id_is_a_dict",
+        ),
+        pytest.param(
+            {"role": "assistant", "content": None, "tool_calls": [{**_WEATHER_CALL, "id": ["toolu_02"]}]},
+            id="tool_call_id_is_a_list",
+        ),
+        pytest.param({"role": "tool", "tool_call_id": {"id": "toolu_02"}, "content": "18C"}, id="answer_id_is_a_dict"),
+        pytest.param({"role": ["assistant"], "content": "Checking"}, id="role_is_a_list"),
+    ],
+)
+def test_cache_control_hook_injects_next_to_a_malformed_message_instead_of_raising(
+    monkeypatch: pytest.MonkeyPatch, modify_params: bool, malformed: dict[str, object]
+):
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
+    messages: Final = [
+        {"role": "system", "content": "You are a weather assistant."},
+        {"role": "user", "content": "Weather in Paris?"},
+        {"role": "assistant", "content": None, "tool_calls": [_SEARCH_CALL]},
+        _SEARCH_ANSWER,
+        malformed,
+        _SYSTEM_NOTE,
+    ]
+
+    _, processed, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+        model="anthropic/claude-opus-5-5",
+        messages=cast(list[AllMessageValues], messages),
+        non_default_params={"cache_control_injection_points": [{"location": "message", "role": "system"}]},
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+
+    assert [message.get("cache_control") for message in processed if message.get("role") == "system"] == [
+        {"type": "ephemeral"},
+        {"type": "ephemeral"},
+    ]
