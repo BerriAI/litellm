@@ -3,10 +3,12 @@ Test DynamoAI Guardrails integration
 """
 
 import importlib
+import json
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import respx
 
 import litellm
 from litellm.caching.caching import DualCache
@@ -116,6 +118,89 @@ async def test_dynamoai_allows_content_with_none_action():
 
     # Should return the request data unchanged
     assert result == request_data
+
+
+_ANALYZE_URL = "https://api.dynamo.ai/v1/moderation/analyze/"
+_BLOCK_VERDICT = {
+    "finalAction": "BLOCK",
+    "appliedPolicies": [
+        {
+            "policy": {"id": "policy-123", "name": "Toxicity Policy", "method": "TOXICITY"},
+            "outputs": {"action": "BLOCK", "message": "Content contains toxic language"},
+        }
+    ],
+}
+
+
+def _post_call_guardrail() -> DynamoAIGuardrails:
+    return DynamoAIGuardrails(
+        guardrail_name="test-dynamoai",
+        api_key="test-api-key",
+        api_base="https://api.dynamo.ai",
+        event_hook="post_call",
+        default_on=True,
+    )
+
+
+def _assistant_reply(content: str | None) -> litellm.ModelResponse:
+    return litellm.ModelResponse(
+        choices=[{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": content}}]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+async def test_post_call_hook_sends_the_assistant_text_to_dynamoai_and_allows_a_clean_reply(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route = respx_mock.post(_ANALYZE_URL).respond(json={"finalAction": "NONE", "appliedPolicies": []})
+    request_data = {"model": "gpt-5.5", "messages": [{"role": "user", "content": "hi"}]}
+
+    result = await _post_call_guardrail().async_post_call_success_hook(
+        data=request_data, user_api_key_dict=UserAPIKeyAuth(), response=_assistant_reply("Hello, how are you?")
+    )
+
+    assert result is None
+    sent = route.calls.last.request
+    assert json.loads(sent.content) == {"messages": [{"role": "assistant", "content": "Hello, how are you?"}]}
+    assert sent.headers["Authorization"] == "Bearer test-api-key"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+async def test_post_call_hook_raises_when_dynamoai_blocks_the_assistant_text(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post(_ANALYZE_URL).respond(json=_BLOCK_VERDICT)
+
+    with pytest.raises(ValueError, match="Guardrail failed") as blocked:
+        await _post_call_guardrail().async_post_call_success_hook(
+            data={"model": "gpt-5.5", "messages": [{"role": "user", "content": "hi"}]},
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=_assistant_reply("This is harmful content"),
+        )
+
+    assert str(blocked.value) == (
+        "Guardrail failed: 1 violation(s) detected\n\n"
+        "- TOXICITY POLICY:\n"
+        "  Action: BLOCK\n"
+        "  Method: TOXICITY\n"
+        "  Message: Content contains toxic language\n"
+        "  Policy ID: policy-123"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport")
+async def test_post_call_hook_skips_dynamoai_when_the_reply_has_no_text(respx_mock: respx.MockRouter) -> None:
+    route = respx_mock.post(_ANALYZE_URL).respond(json=_BLOCK_VERDICT)
+
+    result = await _post_call_guardrail().async_post_call_success_hook(
+        data={"model": "gpt-5.5", "messages": [{"role": "user", "content": "hi"}]},
+        user_api_key_dict=UserAPIKeyAuth(),
+        response=_assistant_reply(None),
+    )
+
+    assert result is None
+    assert route.called is False
 
 
 @pytest.fixture(autouse=True)

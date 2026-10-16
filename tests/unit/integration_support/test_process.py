@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-import asyncio
-import errno
 import importlib
 import os
-import socket
 import subprocess
 import sys
 import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from functools import reduce
 from pathlib import Path
 from types import ModuleType
 from typing import Final
@@ -36,7 +34,6 @@ from tests.integration._support.process import (
 )
 
 TESTS_DIR: Final = Path(__file__).resolve().parents[2]
-UNRELATED_CRASH: Final = "Traceback (most recent call last):\nModuleNotFoundError: No module named 'litellm'\n"
 
 
 def test_worker_configuration_routes_stock_edges_to_its_own_servers_and_preserves_other_targets(
@@ -108,46 +105,6 @@ def test_serial_proxy_keeps_the_requested_configuration(monkeypatch: pytest.Monk
 def process_module(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     monkeypatch.syspath_prepend(str(TESTS_DIR))
     return importlib.import_module("integration._support.process")
-
-
-async def _refused_bind(port: int) -> OSError | None:
-    try:
-        await asyncio.get_running_loop().create_server(asyncio.Protocol, "127.0.0.1", port)
-    except OSError as refused:
-        return refused
-    return None
-
-
-@pytest.fixture
-def bind_error_line() -> Iterator[str]:
-    with socket.socket() as held:
-        held.bind(("127.0.0.1", 0))
-        held.listen()
-        refused: Final = asyncio.run(_refused_bind(held.getsockname()[1]))
-        assert refused is not None and refused.errno == errno.EADDRINUSE
-        yield f"ERROR:    {refused}\n"
-
-
-def _written_log(directory: Path, text: str) -> Path:
-    log: Final = directory / "owned-proxy.log"
-    log.write_text(text)
-    return log
-
-
-def test_lost_port_race_matches_the_bind_error_the_server_logs(
-    process_module: ModuleType, bind_error_line: str, tmp_path: Path
-) -> None:
-    assert process_module._lost_port_race(1, _written_log(tmp_path, bind_error_line))
-
-
-def test_lost_port_race_ignores_an_exit_for_another_reason(process_module: ModuleType, tmp_path: Path) -> None:
-    assert not process_module._lost_port_race(1, _written_log(tmp_path, UNRELATED_CRASH))
-
-
-def test_lost_port_race_needs_the_process_to_have_exited(
-    process_module: ModuleType, bind_error_line: str, tmp_path: Path
-) -> None:
-    assert not process_module._lost_port_race(None, _written_log(tmp_path, bind_error_line))
 
 
 @pytest.mark.parametrize("failure", (psutil.AccessDenied, psutil.NoSuchProcess))
@@ -236,6 +193,74 @@ def test_only_live_readable_workers_can_satisfy_readiness(
     else:
         with pytest.raises(AssertionError, match="readiness deadline"):
             process_module._wait_until_ready(launch)
+
+
+def test_readiness_never_sends_a_request_to_a_port_the_launch_does_not_own(
+    process_module: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(psutil, "process_iter", lambda: iter(()))
+    parent: Final = MagicMock()
+    parent.pid = 99
+    parent.poll.return_value = None
+    launch: Final = process_module._Launch(parent, 8123, tmp_path / "unused.log", 0.0)
+    original_client: Final = httpx.Client
+
+    def foreign_listener(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"probed a listener another process owns: {request.url}")
+
+    def client(*, base_url: str, timeout: float, trust_env: bool, limits: httpx.Limits) -> httpx.Client:
+        return original_client(
+            base_url=base_url,
+            timeout=timeout,
+            trust_env=trust_env,
+            limits=limits,
+            transport=httpx.MockTransport(foreign_listener),
+        )
+
+    monkeypatch.setattr(httpx, "Client", client)
+    monkeypatch.setattr(time, "monotonic", lambda: 0.0)
+    monkeypatch.setenv("INTEGRATION_PROXY_READY_SECONDS", "-1")
+    with pytest.raises(AssertionError, match="readiness deadline"):
+        process_module._wait_until_ready(launch)
+
+
+def test_boot_phases_mark_when_prisma_ran_the_port_bound_and_each_worker_answered(
+    process_module: ModuleType,
+) -> None:
+    probe: Final = process_module._Probe
+    timeline: Final = (
+        probe(0.5, listening=False, prisma=False, ready_pid=None),
+        probe(4.0, listening=False, prisma=True, ready_pid=None),
+        probe(5.0, listening=False, prisma=False, ready_pid=None),
+        probe(5.5, listening=False, prisma=True, ready_pid=None),
+        probe(6.5, listening=False, prisma=False, ready_pid=None),
+        probe(7.0, listening=True, prisma=False, ready_pid=None),
+        probe(10.0, listening=True, prisma=False, ready_pid=41),
+        probe(11.0, listening=True, prisma=False, ready_pid=42),
+    )
+    phases: Final = reduce(process_module._observe, timeline, process_module.BootPhases())
+    assert phases == process_module.BootPhases(
+        prisma_started=4.0,
+        prisma_finished=6.5,
+        listening=7.0,
+        first_ready=10.0,
+        ready_pids=frozenset((41, 42)),
+    )
+
+
+def test_boot_phases_leave_prisma_unset_when_no_prisma_child_was_seen(process_module: ModuleType) -> None:
+    probe: Final = process_module._Probe
+    timeline: Final = (
+        probe(1.0, listening=False, prisma=False, ready_pid=None),
+        probe(2.0, listening=True, prisma=False, ready_pid=7),
+    )
+    phases: Final = reduce(process_module._observe, timeline, process_module.BootPhases())
+    assert (phases.prisma_started, phases.prisma_finished, phases.listening, phases.first_ready) == (
+        None,
+        None,
+        2.0,
+        2.0,
+    )
 
 
 @pytest.mark.parametrize(

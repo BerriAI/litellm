@@ -61,6 +61,13 @@ _HEADROOM_RETRIEVE: Final[Mapping[str, JsonValue]] = MappingProxyType(
     }
 )
 _RESPONSES_SEARCH: Final[Mapping[str, JsonValue]] = MappingProxyType({"type": "web_search"})
+_BARE_WEB_SEARCH: Final[Mapping[str, JsonValue]] = MappingProxyType({"type": "web_search"})
+_APP_WEB_SEARCH: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        "type": "function",
+        "function": {"name": "web_search", "description": "Search the app index", "parameters": dict(_PARAMETERS)},
+    }
+)
 _BURST_MODEL: Final = f"interception-burst-{uuid.uuid4().hex}"
 _BURST_DEPLOYMENT: Final = iv.deployment("search")
 _STARTED_WORKER: Final = "Started server process ["
@@ -458,6 +465,70 @@ def test_openai_sdk_chat_without_streaming_through_web_search_answers_in_json(ri
     assert completion.choices[0].message.content == iv.answer(deployment.name), completion
     assert completion.usage is not None, completion
     _assert_search_turn(rig, deployment, completion.id)
+
+
+def _assert_answered_in_json(reply: _Stream, text: str) -> str:
+    assert reply.status == 200, reply.text
+    completion: Final = iv.JSON_OBJECT.validate_json(reply.text)
+    (choice,) = rv.ITEMS.validate_python(completion["choices"])
+    assert object_value(choice["message"])["content"] == text, completion
+    return string_value(completion["id"])
+
+
+def _offered_tools(call: Mapping[str, JsonValue]) -> tuple[Mapping[str, JsonValue], ...]:
+    return tuple(rv.ITEMS.validate_python(call["tools"]))
+
+
+def _function_name(tool: Mapping[str, JsonValue]) -> str:
+    return string_value(object_value(tool["function"])["name"])
+
+
+@pytest.mark.parametrize("stream", (pytest.param(True, id="stream"), pytest.param(False, id="json")))
+def test_bare_web_search_type_on_chat_is_searched_and_the_apps_own_web_search_function_reaches_azure_untouched(
+    rig: _Rig, scenario: Scenario, stream: bool
+) -> None:
+    deployment: Final = _deploy(rig, scenario, "search")
+    body: Final = {
+        **_chat_body(deployment, stream=stream),
+        "tools": [dict(_BARE_WEB_SEARCH), dict(_APP_WEB_SEARCH)],
+    }
+    reply: Final = _chat(rig, body)
+    identity: Final = (
+        _assert_restreamed(reply, iv.answer(deployment.name), usage=None)
+        if stream
+        else _assert_answered_in_json(reply, iv.answer(deployment.name))
+    )
+    received: Final = _upstream(rig, deployment)
+    _assert_upstream(received, model_calls=2, searches=1)
+    assert [search["query"] for search in received.searches] == [iv.query(deployment.name)], received.searches
+    offered: Final = _offered_tools(received.model_calls[0])
+    assert [tool.get("type") for tool in offered] == ["function", "function"], offered
+    assert [_function_name(tool) for tool in offered] == [iv.SEARCH_TOOL, "web_search"], offered
+    assert offered[1] == dict(_APP_WEB_SEARCH), offered
+    _assert_landed_once(deployment.model, frozenset({identity}), rows=1)
+
+
+def test_bare_web_search_type_on_messages_through_the_azure_chat_adapter_is_never_searched(
+    rig: _Rig, scenario: Scenario
+) -> None:
+    deployment: Final = _deploy(rig, scenario, "search")
+    reply: Final = _post(
+        rig,
+        "/v1/messages",
+        {
+            "model": deployment.model,
+            "max_tokens": 64,
+            "messages": [{"role": "user", "content": f"Search for {deployment.name}"}],
+            "tools": [dict(_BARE_WEB_SEARCH)],
+            **_NO_CACHE,
+        },
+    )
+    assert reply.status == 200, reply.text
+    blocks: Final = rv.ITEMS.validate_python(iv.JSON_OBJECT.validate_json(reply.text)["content"])
+    assert [block.get("text") for block in blocks] == [iv.plain(deployment.name)], reply.text
+    received: Final = _upstream(rig, deployment)
+    _assert_upstream(received, model_calls=1, searches=0)
+    assert [call.get("tools") for call in received.model_calls] == [None], received.model_calls
 
 
 @pytest.mark.parametrize(

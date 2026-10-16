@@ -4,16 +4,17 @@ PARITY pairs the streamed case with its plain twin where both bill the same row.
 
 from typing import Final
 
+from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase, bridge_pairs
 from integration.cost_calculation.cost_tracking_case import (
     CostTrackingTestCase,
     ExactExpected,
     JsonResponse,
     RecountExpected,
     RecountRates,
+    RoutedResponse,
     SseResponse,
 )
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase, sse_frames
-
 
 # gemini/gemini-3.1-pro
 GEMINI_GEMINI_3_1_PRO_INPUT_TEXT: Final = CostTrackingTestCase(
@@ -3468,6 +3469,81 @@ GEMINI_NANO_BANANA_2_1_WEB_SEARCH_MULTIPLE_QUERIES: Final = CostTrackingTestCase
 )
 
 
+GEMINI_GEMINI_3_1_PRO_CACHE_CREATION: Final = CostTrackingTestCase(
+    name="gemini-gemini-3.1-pro-cache_creation",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gemini/gemini-3.1-pro",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "cacheable pricing-harness prefix " * 1000,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "9c1d4e7a2b60 answer from the cached prefix in one line"}],
+            },
+        ],
+        "stream": False,
+        "allowed_openai_params": [],
+    },
+    response=RoutedResponse(
+        content_type="application/x-routed",
+        routes={
+            "GET /models/gemini-3.1-pro:cachedContents": JsonResponse(
+                content_type="application/json", body={"cachedContents": []}
+            ),
+            "POST /models/gemini-3.1-pro:cachedContents": JsonResponse(
+                content_type="application/json",
+                body={
+                    "name": "cachedContents/$REQUEST_ID",
+                    "model": "models/gemini-3.1-pro",
+                    "createTime": "2026-10-13T00:00:00Z",
+                    "expireTime": "2026-10-13T01:00:00Z",
+                    "usageMetadata": {"totalTokenCount": 1280},
+                },
+            ),
+            "POST /models/gemini-3.1-pro:generateContent": JsonResponse(
+                content_type="application/json",
+                body={
+                    "candidates": [
+                        {
+                            "content": {"parts": [{"text": "scripted answer 9c1d4e7a2b60"}], "role": "model"},
+                            "finishReason": "STOP",
+                            "index": 0,
+                        }
+                    ],
+                    "usageMetadata": {
+                        "promptTokenCount": 1536,
+                        "candidatesTokenCount": 40,
+                        "totalTokenCount": 1576,
+                        "cachedContentTokenCount": 1280,
+                        "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 1536}],
+                    },
+                    "modelVersion": "gemini-3.1-pro",
+                },
+            ),
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.003808,
+        input_cost=0.003328,
+        output_cost=0.00048,
+        cache_read_cost=0.000256,
+        cache_creation_cost=0.00256,
+        prompt_tokens=2816,
+        completion_tokens=40,
+    ),
+)
+
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GEMINI_GEMINI_3_1_PRO_INPUT_TEXT,
     GEMINI_GEMINI_3_1_PRO_CACHE_READ,
@@ -3528,6 +3604,7 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GEMINI_NANO_BANANA_2_1_MIXED_TEXT_IMAGE_OUTPUT,
     GEMINI_NANO_BANANA_2_1_WEB_SEARCH_SINGLE_QUERY,
     GEMINI_NANO_BANANA_2_1_WEB_SEARCH_MULTIPLE_QUERIES,
+    GEMINI_GEMINI_3_1_PRO_CACHE_CREATION,
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
@@ -3549,4 +3626,16 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
         streamed=GEMINI_GEMINI_3_8_FLASH_STREAM_RESPONSE_MODEL_OVERRIDE,
     ),
     StreamParityTestCase(plain=GEMINI_GEMINI_3_8_FLASH_TOOL_CALL, streamed=GEMINI_GEMINI_3_8_FLASH_STREAM_TOOL_CALL),
+)
+
+BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
+    *bridge_pairs(
+        (
+            GEMINI_GEMINI_3_8_FLASH_INPUT_TEXT,
+            GEMINI_GEMINI_3_8_FLASH_CACHE_READ,
+            GEMINI_GEMINI_3_8_FLASH_REASONING,
+            GEMINI_GEMINI_3_8_FLASH_STREAM,
+        ),
+        ("/v1/responses", "/v1/messages"),
+    ),
 )

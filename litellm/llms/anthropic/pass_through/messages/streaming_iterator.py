@@ -1,11 +1,12 @@
 import asyncio
 import json
-from collections.abc import AsyncIterator, Mapping, Sequence
+import re
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
 from datetime import datetime
-from typing import Any, Final, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import TypedDict
 
 from litellm.constants import (
@@ -17,12 +18,17 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.anthropic.common_utils import ANTHROPIC_ERROR_STATUS_CODE_MAP
 from litellm.llms.anthropic.pass_through.messages.utils import INCOMPLETE_STREAM_ERROR_MESSAGE
+from litellm.llms.anthropic.pass_through.safeguards import StreamedSafeguardResults
+from litellm.llms.anthropic.pass_through.utils import anthropic_sse_frame
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
+
+if TYPE_CHECKING:
+    from litellm.llms.anthropic.pass_through.safeguards import SafeguardsEvaluator
 
 GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ: Final = PassThroughEndpointLogging()
 
@@ -85,11 +91,14 @@ def is_anthropic_content_delta_chunk(chunk: object) -> bool:
     return False
 
 
+_DECODED_SSE_DATA: Final = TypeAdapter(object)
+
+
 def _decoded_sse_data_line(line: bytes) -> object | None:
     if not line.startswith(b"data:"):
         return None
     try:
-        return json.loads(line[len(b"data:") :].strip())
+        return _DECODED_SSE_DATA.validate_python(json.loads(line[len(b"data:") :].strip()))
     except (ValueError, TypeError):
         return None
 
@@ -391,6 +400,74 @@ class AnthropicMessagesStreamingResponse:
 
     async def aclose(self) -> None:
         await aclose_if_supported(self.completion_stream)
+
+
+_SSE_FRAME_END: Final = re.compile(rb"(?<=\n\n)|(?<=\r\n\r\n)")
+_SSE_FRAME_TERMINATORS: Final = (b"\n\n", b"\r\n\r\n")
+_SSE_TERMINATOR_OVERLAP: Final = max(len(terminator) for terminator in _SSE_FRAME_TERMINATORS) - 1
+_SSE_EVENT: Final = TypeAdapter(Mapping[str, object])
+
+
+def _sse_data_payload(line: bytes) -> bytes | None:
+    return line[len(b"data:") :].removeprefix(b" ") if line.startswith(b"data:") else None
+
+
+def _sse_frame_event(frame: bytes) -> Mapping[str, object] | None:
+    payloads: Final = (_sse_data_payload(line) for line in frame.splitlines())
+    data: Final = b"\n".join(payload for payload in payloads if payload is not None)
+    try:
+        return _SSE_EVENT.validate_python(json.loads(data))
+    except (ValueError, ValidationError):
+        return None
+
+
+async def _stamped_sse_frame(frame: bytes, safeguard_results: StreamedSafeguardResults) -> bytes:
+    event: Final = _sse_frame_event(frame)
+    if event is None:
+        return frame
+    stamped: Final = await safeguard_results.observe(event)
+    return frame if stamped is event else anthropic_sse_frame(stamped)
+
+
+def _ends_a_frame(open_frame: bytearray, scan_from: int) -> bool:
+    return any(open_frame.find(terminator, scan_from) != -1 for terminator in _SSE_FRAME_TERMINATORS)
+
+
+async def _stamped_sse_frames(
+    stream: AsyncIterator[bytes], safeguard_results: StreamedSafeguardResults
+) -> AsyncGenerator[bytes, None]:
+    open_frame: Final = bytearray()
+    async for chunk in stream:
+        scan_from = max(len(open_frame) - _SSE_TERMINATOR_OVERLAP, 0)
+        open_frame.extend(chunk)
+        if not _ends_a_frame(open_frame, scan_from):
+            continue
+        *frames, unterminated = _SSE_FRAME_END.split(open_frame)
+        open_frame[:] = unterminated
+        for frame in frames:
+            yield await _stamped_sse_frame(frame, safeguard_results)
+    if open_frame:
+        yield await _stamped_sse_frame(bytes(open_frame), safeguard_results)
+
+
+class SafeguardedAnthropicSSEStream:
+    def __init__(self, stream: AsyncIterator[bytes], evaluator: "SafeguardsEvaluator") -> None:
+        self._stream: Final = stream
+        self._frames: Final = _stamped_sse_frames(stream, StreamedSafeguardResults(evaluator))
+
+    @property
+    def has_buffered_provider_output(self) -> bool:
+        return getattr(self._stream, "has_buffered_provider_output", False) is True
+
+    def __aiter__(self) -> "SafeguardedAnthropicSSEStream":
+        return self
+
+    async def __anext__(self) -> bytes:
+        return await self._frames.__anext__()
+
+    async def aclose(self) -> None:
+        await self._frames.aclose()
+        await aclose_if_supported(self._stream)
 
 
 class BaseAnthropicMessagesStreamingIterator:
