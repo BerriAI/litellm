@@ -8160,11 +8160,11 @@ async def test_a2a_url_target_owns_invocation_fee_and_request_limit(
 @pytest.mark.asyncio
 async def test_fail_closed_parallel_limiter_increments_prometheus_counter(monkeypatch):
     import litellm.proxy.proxy_server as proxy_server
-    from litellm.proxy.hooks.rate_limit_failure_metrics import _get_counter
+    from litellm.proxy.hooks.rate_limit_failure_metrics import get_counter
 
     monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", True)
 
-    counter = _get_counter()
+    counter = get_counter()
     assert counter is not None
     before: Final = counter.labels(limiter_type="parallel_v3", error_type="ConnectionError")._value.get()
 
@@ -8183,11 +8183,11 @@ async def test_fail_closed_parallel_limiter_increments_prometheus_counter(monkey
 @pytest.mark.asyncio
 async def test_fail_open_parallel_limiter_still_increments_counter(monkeypatch):
     import litellm.proxy.proxy_server as proxy_server
-    from litellm.proxy.hooks.rate_limit_failure_metrics import _get_counter
+    from litellm.proxy.hooks.rate_limit_failure_metrics import get_counter
 
     monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", False)
 
-    counter = _get_counter()
+    counter = get_counter()
     assert counter is not None
     before: Final = counter.labels(limiter_type="parallel_v3", error_type="ConnectionError")._value.get()
 
@@ -8207,13 +8207,13 @@ async def test_fail_closed_model_rate_limit_check_increments_counter(monkeypatch
     from litellm.caching import DualCache
     from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
     from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitUnverifiableError
-    from litellm.proxy.hooks.rate_limit_failure_metrics import _get_counter
+    from litellm.proxy.hooks.rate_limit_failure_metrics import get_counter
 
     import litellm.proxy.proxy_server as proxy_server
 
     monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", True)
 
-    counter = _get_counter()
+    counter = get_counter()
     before: Final = counter.labels(limiter_type="model_rate_limit_check", error_type="ConnectionError")._value.get()
 
     class _BombCache(DualCache):

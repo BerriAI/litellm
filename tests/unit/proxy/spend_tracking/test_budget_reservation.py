@@ -431,10 +431,10 @@ def test_budget_window_start_reads_json_encoded_windows(window: str, expected: d
 @pytest.mark.asyncio
 @pytest.mark.asyncio
 async def test_reserve_budget_increments_prometheus_counter_on_failure():
-    from litellm.proxy.hooks.rate_limit_failure_metrics import _get_counter
+    from litellm.proxy.hooks.rate_limit_failure_metrics import get_counter
     from litellm.proxy.spend_tracking.budget_reservation import reserve_budget_for_request
 
-    counter = _get_counter()
+    counter = get_counter()
     before = counter.labels(limiter_type="budget_reservation", error_type="reservation_failure")._value.get()
 
     result = await reserve_budget_for_request(
