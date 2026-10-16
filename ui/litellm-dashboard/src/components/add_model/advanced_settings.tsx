@@ -465,6 +465,48 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
               </MountedFormField>
             )}
             <MountedFormField
+              name="weight"
+              label={labelWithHint(
+                "Weight",
+                "Load balancing share for this deployment when several deployments share the same model name. Only used by the simple-shuffle routing strategy.",
+              )}
+              className="mb-4"
+            >
+              {(control) => (
+                <Input
+                  id={control.id}
+                  type="number"
+                  step="any"
+                  min={0}
+                  value={(control.value as string | undefined) ?? ""}
+                  onChange={control.onChange}
+                  onBlur={control.onBlur}
+                  placeholder="e.g. 0.7"
+                />
+              )}
+            </MountedFormField>
+            <MountedFormField
+              name="order"
+              label={labelWithHint(
+                "Order",
+                "Failover priority for this deployment. Lower orders are tried first, higher orders only receive traffic when the lower ones are failing.",
+              )}
+              className="mb-4"
+            >
+              {(control) => (
+                <Input
+                  id={control.id}
+                  type="number"
+                  step={1}
+                  min={0}
+                  value={(control.value as string | undefined) ?? ""}
+                  onChange={control.onChange}
+                  onBlur={control.onBlur}
+                  placeholder="e.g. 0 for primary, 1 for fallback"
+                />
+              )}
+            </MountedFormField>
+            <MountedFormField
               name="litellm_extra_params"
               label={labelWithHint(
                 "LiteLLM Params",

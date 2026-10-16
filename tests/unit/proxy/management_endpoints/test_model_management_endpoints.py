@@ -4551,6 +4551,44 @@ class TestUpdateDBModelClearCredentialName:
         assert params["tpm"] == 100
 
 
+class TestUpdateDBModelClearWeightAndOrder:
+    def test_explicit_null_removes_stored_weight_and_order(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+        db_model: Final = Deployment(
+            model_name="gpt-4",
+            litellm_params=LiteLLM_Params(model="openai/gpt-4o", weight=0.7, order=1),
+            model_info=ModelInfo(id="dep-weight-1"),
+        )
+        update_patch: Final = updateDeployment(litellm_params=updateLiteLLMParams(weight=None, order=None))
+
+        with patch("litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper", side_effect=lambda value, **kwargs: value):
+            result: Final = update_db_model(db_model=db_model, updated_patch=update_patch)
+
+        params: Final = json.loads(result["litellm_params"])
+        assert "weight" not in params
+        assert "order" not in params
+        assert params["model"] == "openai/gpt-4o"
+
+    def test_omitted_weight_and_order_keep_stored_values(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+        db_model: Final = Deployment(
+            model_name="gpt-4",
+            litellm_params=LiteLLM_Params(model="openai/gpt-4o", weight=0.7, order=1),
+            model_info=ModelInfo(id="dep-weight-1"),
+        )
+        update_patch: Final = updateDeployment(litellm_params=updateLiteLLMParams(tpm=10))
+
+        with patch("litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper", side_effect=lambda value, **kwargs: value):
+            result: Final = update_db_model(db_model=db_model, updated_patch=update_patch)
+
+        params: Final = json.loads(result["litellm_params"])
+        assert params["weight"] == 0.7
+        assert params["order"] == 1
+        assert params["tpm"] == 10
+
+
 class TestPatchModelCredentialName:
     @staticmethod
     async def _patch_model(

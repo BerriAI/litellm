@@ -147,6 +147,11 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
               modelInfoObj[key] = value;
             }
           }
+        } else if (key === "weight" || key === "order") {
+          if (value !== undefined && value !== null) {
+            litellmParamsObj[key] = Number(value);
+          }
+          continue;
         }
 
         // Handle the pricing fields
