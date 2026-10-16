@@ -39,7 +39,7 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
 from litellm.litellm_core_utils.reasoning_effort_utils import reasoning_effort_from_thinking
-from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo, validated_object_mapping
 from litellm.types.llms.anthropic import AnthropicThinkingParam
 from litellm.types.llms.openai import REASONING_EFFORT
 
@@ -227,6 +227,20 @@ def adaptive_thinking_beside_effort(
     return thinking if "output_config" in translated else None
 
 
+def adaptive_thinking_without_effort(
+    thinking: AnthropicThinkingParam | None, *, model: str, custom_llm_provider: str, drop_params: bool
+) -> Mapping[object, object] | AnthropicThinkingParam | None:
+    translated: Final = with_adaptive_thinking_as_effort(
+        {"thinking": thinking}, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
+    )
+    adaptive: Final = validated_object_mapping(translated.get("thinking")) if "output_config" in translated else None
+    return thinking if adaptive is None else adaptive
+
+
+def clears_effort(requested: RequestedReasoningEffort, resolved: RequestedReasoningEffort) -> bool:
+    return _requested_level(requested) is not None and _requested_level(resolved) is None
+
+
 def _rounding(value: object) -> ReasoningEffortRounding | None:
     match value.strip().lower() if isinstance(value, str) else value:
         case "up":
@@ -316,6 +330,64 @@ def resolve_deployment_reasoning_effort(
     )
     return DeploymentReasoningEffort(
         value=_with_level(requested, sent_level), deployment_accepts_effort=deployment_accepts_effort
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ChatReasoning:
+    effort: DeploymentReasoningEffort
+    thinking: Mapping[object, object] | AnthropicThinkingParam | None
+
+
+def resolve_chat_reasoning(
+    reasoning_effort: RequestedReasoningEffort,
+    thinking: AnthropicThinkingParam | None,
+    output_config: Mapping[str, object] | None,
+    *,
+    model: str,
+    custom_llm_provider: str,
+    deployment_model_info: object,
+    model_group: str | None,
+    drop_params: bool,
+) -> ChatReasoning:
+    rounds_onto_levels: Final = thinking is not None and deployment_rounds_thinking_budget(
+        deployment_model_info, custom_llm_provider
+    )
+    read_natively: Final = rounds_onto_levels and provider_reads_thinking(
+        thinking, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
+    )
+    output_effort_requested: Final = (
+        read_natively and output_config is not None and output_config.get(_EFFORT_KEY) is not None
+    )
+    budget_effort: Final = (
+        thinking_budget_effort(thinking, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params)
+        if reasoning_effort is None and not output_effort_requested and rounds_onto_levels
+        else None
+    )
+    effort: Final = resolve_deployment_reasoning_effort(
+        reasoning_effort if reasoning_effort is not None else budget_effort,
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        deployment_model_info=deployment_model_info,
+        model_group=model_group,
+        drop_params=drop_params,
+    )
+    if reasoning_effort is not None and rounds_onto_levels and not read_natively:
+        return ChatReasoning(effort=effort, thinking=None)
+    if output_effort_requested or (read_natively and clears_effort(reasoning_effort, effort.value)):
+        return ChatReasoning(
+            effort=effort,
+            thinking=adaptive_thinking_without_effort(
+                thinking, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
+            ),
+        )
+    if budget_effort is None:
+        return ChatReasoning(effort=effort, thinking=thinking)
+    return ChatReasoning(
+        effort=effort,
+        thinking=adaptive_thinking_beside_effort(
+            thinking, effort.value, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
+        ),
     )
 
 

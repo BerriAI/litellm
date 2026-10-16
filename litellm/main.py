@@ -133,13 +133,10 @@ from litellm.llms.vertex_ai.common_utils import (
 )
 from litellm.realtime_api.main import realtime_health_check
 from litellm.router_utils.reasoning_effort_capability import (
-    adaptive_thinking_beside_effort,
-    deployment_rounds_thinking_budget,
     model_group_from_metadata,
-    provider_reads_thinking,
     reasoning_effort_needs_allowing,
+    resolve_chat_reasoning,
     resolve_deployment_reasoning_effort,
-    thinking_budget_effort,
 )
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.types.completion import (
@@ -5546,43 +5543,27 @@ def completion(
         drop_unsupported_reasoning: Final = (
             litellm.drop_params is True or normalize_drop_params(routing_kwargs.get("drop_params")) is True
         )
-        thinking_rounds_onto_levels: Final = thinking is not None and deployment_rounds_thinking_budget(
-            routing_kwargs.get("model_info"), custom_llm_provider
+        reasoning_model_group: Final = model_group_from_metadata(
+            routing_kwargs.get("metadata"), routing_kwargs.get("litellm_metadata")
         )
-        thinking_effort: Final = (
-            thinking_budget_effort(
-                thinking, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_unsupported_reasoning
-            )
-            if reasoning_effort is None and thinking_rounds_onto_levels
-            else None
-        )
-        explicit_effort_replaces_thinking: Final = (
-            reasoning_effort is not None
-            and thinking_rounds_onto_levels
-            and not provider_reads_thinking(
-                thinking, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_unsupported_reasoning
-            )
-        )
-        deployment_reasoning_effort: Final = resolve_deployment_reasoning_effort(
-            reasoning_effort if reasoning_effort is not None else thinking_effort,
+        requested_output_config: Final = as_str_mapping(non_default_params.get("output_config"))
+        chat_reasoning: Final = resolve_chat_reasoning(
+            reasoning_effort,
+            thinking,
+            requested_output_config,
             model=model,
             custom_llm_provider=custom_llm_provider,
             deployment_model_info=routing_kwargs.get("model_info"),
-            model_group=model_group_from_metadata(
-                routing_kwargs.get("metadata"), routing_kwargs.get("litellm_metadata")
-            ),
+            model_group=reasoning_model_group,
             drop_params=drop_unsupported_reasoning,
         )
-        resolved_reasoning_effort: Final = deployment_reasoning_effort.value
-        requested_output_config: Final = as_str_mapping(non_default_params.get("output_config"))
+        resolved_reasoning_effort: Final = chat_reasoning.effort.value
         resolved_output_config: Final = resolve_deployment_reasoning_effort(
             requested_output_config,
             model=model,
             custom_llm_provider=custom_llm_provider,
             deployment_model_info=routing_kwargs.get("model_info"),
-            model_group=model_group_from_metadata(
-                routing_kwargs.get("metadata"), routing_kwargs.get("litellm_metadata")
-            ),
+            model_group=reasoning_model_group,
             drop_params=drop_unsupported_reasoning,
         ).value
         provider_params: Final = (
@@ -5694,7 +5675,7 @@ def completion(
             [*(kwargs.get("allowed_openai_params") or []), "reasoning_effort"]
             if bridges_to_responses_api
             or reasoning_effort_needs_allowing(
-                deployment_reasoning_effort,
+                chat_reasoning.effort,
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 base_model=base_model if isinstance(base_model, str) else None,
@@ -5734,19 +5715,7 @@ def completion(
             "messages": messages,
             "reasoning_effort": resolved_reasoning_effort,
             "verbosity": verbosity,
-            "thinking": (
-                None
-                if explicit_effort_replaces_thinking
-                else thinking
-                if thinking_effort is None
-                else adaptive_thinking_beside_effort(
-                    thinking,
-                    resolved_reasoning_effort,
-                    model=model,
-                    custom_llm_provider=custom_llm_provider,
-                    drop_params=drop_unsupported_reasoning,
-                )
-            ),
+            "thinking": chat_reasoning.thinking,
             "web_search_options": web_search_options,
             "include_server_side_tool_invocations": (
                 include_server_side_tool_invocations
