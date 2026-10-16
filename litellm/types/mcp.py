@@ -248,6 +248,15 @@ class MCPCredentials(TypedDict, total=False):
     Optional RFC 8707 resource indicator sent on ID-JAG leg 1
     """
 
+    id_jag_subject_source: ReadOnly[str | None]
+    """
+    Which token ID-JAG leg 1 presents as its RFC 8693 subject_token. ``login_assertion`` (the default) is the
+    identity assertion captured at SSO login, an OIDC id_token or a SAML assertion. ``refresh_token`` exchanges
+    that assertion at the IdP token endpoint once, at login, for a refresh token and presents the refresh token
+    on every leg 1 instead, which is how a SAML requesting app works at IdPs whose ID-JAG exchange does not take
+    a saml2 subject directly.
+    """
+
     id_jag_resource_client_id: ReadOnly[str | None]
     """OAuth client identifier used at the ID-JAG resource authorization server."""
 

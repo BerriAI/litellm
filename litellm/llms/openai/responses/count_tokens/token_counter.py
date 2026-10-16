@@ -29,7 +29,7 @@ from litellm.llms.openai.workload_identity import (
     get_workload_identity_bearer_token,
     resolve_openai_workload_identity_config,
 )
-from litellm.types.utils import LlmProviders, TokenCountMessagesFormat, TokenCountResponse
+from litellm.types.utils import CountContextManagement, LlmProviders, TokenCountMessagesFormat, TokenCountResponse
 
 # Global handler instance - reuse across all token counting requests
 openai_count_tokens_handler: Final = OpenAICountTokensHandler()
@@ -95,6 +95,7 @@ class OpenAITokenCounter(BaseTokenCounter):
         system: object = None,
         messages_format: TokenCountMessagesFormat = "openai",
         output_format: JsonValue = None,
+        context_management: CountContextManagement | None = None,
     ) -> TokenCountResponse | None:
         """
         Count tokens using OpenAI's Responses API /input_tokens endpoint.

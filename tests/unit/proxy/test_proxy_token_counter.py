@@ -8,7 +8,7 @@ import logging
 import threading
 import time
 import traceback
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from functools import partial
 from typing import Final, NoReturn
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -181,6 +181,7 @@ async def test_anthropic_messages_count_tokens_endpoint():
 
     # Mock request object
     mock_request = MagicMock(spec=Request)
+    mock_request.headers = {}
     mock_request_data = {
         "model": "claude-3-sonnet-20240229",
         "messages": [{"role": "user", "content": "Hello Claude!"}],
@@ -200,7 +201,14 @@ async def test_anthropic_messages_count_tokens_endpoint():
     anthropic_endpoints.read_request_body = mock_read_request_body
 
     # Mock the internal token_counter function to return a controlled response
-    async def mock_token_counter(request, call_endpoint=False, messages_format="openai", output_format=None):
+    async def mock_token_counter(
+        request,
+        call_endpoint=False,
+        messages_format="openai",
+        output_format=None,
+        context_management=None,
+        request_litellm_params=None,
+    ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "claude-3-sonnet-20240229"
         assert request.messages == [{"role": "user", "content": "Hello Claude!"}]
@@ -253,6 +261,7 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
 
     # Mock request object
     mock_request = MagicMock(spec=Request)
+    mock_request.headers = {}
     mock_request_data = {
         "model": "gpt-4",
         "messages": [{"role": "user", "content": "Hello GPT!"}],
@@ -272,7 +281,14 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
     anthropic_endpoints.read_request_body = mock_read_request_body
 
     # Mock the internal token_counter function to return a controlled response
-    async def mock_token_counter(request, call_endpoint=True, messages_format="openai", output_format=None):
+    async def mock_token_counter(
+        request,
+        call_endpoint=True,
+        messages_format="openai",
+        output_format=None,
+        context_management=None,
+        request_litellm_params=None,
+    ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "gpt-4"
         assert request.messages == [{"role": "user", "content": "Hello GPT!"}]
@@ -1083,7 +1099,14 @@ async def test_anthropic_endpoint_returns_anthropic_error_format():
     original_token_counter = proxy_server.count_request_tokens
 
     # Mock token_counter to raise ProxyException with Bedrock-style error
-    async def mock_token_counter_error(request, call_endpoint=False, messages_format="openai", output_format=None):
+    async def mock_token_counter_error(
+        request,
+        call_endpoint=False,
+        messages_format="openai",
+        output_format=None,
+        context_management=None,
+        request_litellm_params=None,
+    ):
         raise ProxyException(
             message='{"detail":{"message":"Input is too long for requested model."}}',
             type="token_counting_error",
@@ -1133,7 +1156,14 @@ async def test_anthropic_endpoint_403_permission_error_format():
     original_token_counter = proxy_server.count_request_tokens
 
     # Mock token_counter to raise ProxyException with 403 error
-    async def mock_token_counter_error(request, call_endpoint=False, messages_format="openai", output_format=None):
+    async def mock_token_counter_error(
+        request,
+        call_endpoint=False,
+        messages_format="openai",
+        output_format=None,
+        context_management=None,
+        request_litellm_params=None,
+    ):
         raise ProxyException(
             message='{"Message":"Bearer Token has expired"}',
             type="token_counting_error",
@@ -1183,7 +1213,14 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
     original_token_counter = proxy_server.count_request_tokens
 
     # Mock token_counter to raise ProxyException with 429 error
-    async def mock_token_counter_error(request, call_endpoint=False, messages_format="openai", output_format=None):
+    async def mock_token_counter_error(
+        request,
+        call_endpoint=False,
+        messages_format="openai",
+        output_format=None,
+        context_management=None,
+        request_litellm_params=None,
+    ):
         raise ProxyException(
             message="Rate limit exceeded",
             type="token_counting_error",
@@ -1208,8 +1245,10 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
 
 
 class _ScriptedCounter(BaseTokenCounter):
-    def __init__(self, replies: dict[str, TokenCountResponse]) -> None:
+    def __init__(self, replies: dict[str, TokenCountResponse], burst: int = 1) -> None:
         self._replies = replies
+        self._burst = burst
+        self._burst_arrived = asyncio.Event()
         self.calls: list[tuple[str, object, object, object]] = []
 
     def should_use_token_counting_api(self, custom_llm_provider: str | None = None) -> bool:
@@ -1226,8 +1265,12 @@ class _ScriptedCounter(BaseTokenCounter):
         system: object = None,
         messages_format: TokenCountMessagesFormat = "openai",
         output_format: JsonValue = None,
+        context_management: object = None,
     ) -> TokenCountResponse | None:
         self.calls.append((model_to_use, messages, tools, system))
+        if len(self.calls) >= self._burst:
+            self._burst_arrived.set()
+        await self._burst_arrived.wait()
         return self._replies[model_to_use]
 
 
@@ -1579,13 +1622,14 @@ async def test_framed_deployment_whose_custom_tokenizer_cannot_load_answers_the_
 
 
 def _framed_kimis_with_custom_tokenizers(
-    monkeypatch: pytest.MonkeyPatch, tokenizers: Mapping[str, tuple[str, str]]
+    monkeypatch: pytest.MonkeyPatch, tokenizers: Mapping[str, tuple[str, str]], burst: int = 1
 ) -> None:
     counter: Final = _ScriptedCounter(
         {
             "us.moonshotai.kimi-k3": _provider_reply("kimi", status_code=400),
             "us.anthropic.claude-sonnet-5-5": _provider_reply("sonnet", total_tokens=12),
-        }
+        },
+        burst=burst,
     )
     monkeypatch.setattr(
         litellm.proxy.proxy_server,
@@ -1773,7 +1817,7 @@ async def test_tokenizer_loads_past_the_cap_answer_the_provider_error_without_st
     monkeypatch: pytest.MonkeyPatch,
 ):
     tokenizers: Final = {f"kimi-{n}": (f"lit-tests/unreachable-tokenizer-{n}", "main") for n in range(5)}
-    _framed_kimis_with_custom_tokenizers(monkeypatch, tokenizers)
+    _framed_kimis_with_custom_tokenizers(monkeypatch, tokenizers, burst=len(tokenizers))
     hub_released: Final = threading.Event()
     downloads: Final[list[object]] = []
 
@@ -2133,6 +2177,310 @@ async def test_framing_still_applies_while_the_deployment_is_cooling_down(monkey
     assert cooling.count_source == "local_estimate"
 
 
+_GEMINI_TOOL_OUTPUT: Final = "line of a long file that the agent read earlier. " * 180
+
+
+class _GeminiCountTokensPeer:
+    def __init__(self) -> None:
+        self.request_bodies: tuple[bytes, ...] = ()
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.request_bodies = (*self.request_bodies, request.content)
+        return httpx.Response(200, json={"totalTokens": 41}, request=request)
+
+
+def _agent_turns_with_tool_results(rounds: int) -> list[dict[str, JsonValue]]:
+    return [
+        *(
+            turn
+            for index in range(rounds)
+            for turn in (
+                {"role": "user", "content": f"Read file {index}."},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": f"toolu_{index}", "name": "read_file", "input": {"path": f"{index}"}}
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": f"toolu_{index}", "content": _GEMINI_TOOL_OUTPUT}
+                    ],
+                },
+            )
+        ),  # comprehension-ok: flattens each round into its three turns
+        {"role": "user", "content": "Summarize what you read."},
+    ]
+
+
+_READ_FILE_TOOL: Final[dict[str, JsonValue]] = {
+    "name": "read_file",
+    "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}},
+}
+_CLEAR_TOOL_USES: Final[dict[str, JsonValue]] = {
+    "edits": [
+        {
+            "type": "clear_tool_uses_20250919",
+            "trigger": {"type": "input_tokens", "value": 500},
+            "keep": {"type": "tool_uses", "value": 1},
+        }
+    ]
+}
+_INVALID_COMPACT_EDIT: Final[dict[str, JsonValue]] = {
+    "edits": [{"type": "compact_20260112", "trigger": {"type": "input_tokens", "value": 1000}}]
+}
+
+
+def _gemini_deployment(model_name: str, litellm_params: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {"model": "gemini/gemini-2.5-flash", "api_key": "test-key", **litellm_params},
+    }
+
+
+async def _count_through_the_messages_endpoint(
+    router: Router, request_options: Mapping[str, JsonValue]
+) -> tuple[object, tuple[bytes, ...]]:
+    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
+
+    peer: Final = _GeminiCountTokensPeer()
+    request_body: Final[dict[str, JsonValue]] = {
+        "messages": _agent_turns_with_tool_results(3),
+        "tools": [_READ_FILE_TOOL],
+        "context_management": _CLEAR_TOOL_USES,
+        **request_options,
+    }
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.headers = {}
+
+    with (
+        patch.object(proxy_server, "llm_router", router),
+        patch.object(anthropic_endpoints, "read_request_body", AsyncMock(return_value=request_body)),
+        patch.object(
+            gemini_count_tokens_handler,
+            "get_async_httpx_client",
+            return_value=AsyncHTTPHandler(transport=httpx.MockTransport(peer)),
+        ),
+    ):
+        response: Final = await anthropic_count_tokens(mock_request, MagicMock())
+    return response, peer.request_bodies
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    (
+        "requested_model",
+        "additional_drop_params",
+        "router_additional_drop_params",
+        "request_options",
+        "expected_tool_outputs_sent",
+    ),
+    (
+        ("gemini-agent", None, None, {}, 1),
+        ("gemini-agent", ["context_management"], None, {}, 3),
+        ("gemini-agent", None, None, {"additional_drop_params": ["context_management"]}, 3),
+        ("gemini-agent", ["context_management"], None, {"additional_drop_params": []}, 1),
+        ("gemini-agent", None, ["context_management"], {}, 3),
+        ("gemini-agent", None, ["context_management"], {"additional_drop_params": []}, 1),
+        ("gemini/gemini-2.5-flash", None, None, {}, 1),
+        ("gemini/gemini-2.5-flash", ["context_management"], None, {}, 3),
+        ("gemini/gemini-2.5-flash", None, ["context_management"], {}, 3),
+        ("gemini/gemini-2.5-flash", None, None, {"additional_drop_params": ["context_management"]}, 3),
+        ("gemini/gemini-2.5-flash", ["context_management"], None, {"additional_drop_params": []}, 1),
+    ),
+    ids=(
+        "edits-applied",
+        "deployment-drops-context-management",
+        "request-drops-context-management",
+        "request-overrides-the-deployment-drop",
+        "router-default-drops-context-management",
+        "request-overrides-the-router-default-drop",
+        "litellm-model-name-edits-applied",
+        "litellm-model-name-deployment-drops-context-management",
+        "litellm-model-name-router-default-drops-context-management",
+        "litellm-model-name-request-drops-context-management",
+        "litellm-model-name-request-overrides-the-deployment-drop",
+    ),
+)
+async def test_gemini_messages_count_tokens_applies_the_context_edits_inference_applies(
+    requested_model: str,
+    additional_drop_params: list[str] | None,
+    router_additional_drop_params: list[str] | None,
+    request_options: dict[str, JsonValue],
+    expected_tool_outputs_sent: int,
+) -> None:
+    router: Final = Router(
+        model_list=[_gemini_deployment("gemini-agent", {"additional_drop_params": additional_drop_params})],
+        default_litellm_params={"additional_drop_params": router_additional_drop_params},
+    )
+    response, sent_bodies = await _count_through_the_messages_endpoint(
+        router, {**request_options, "model": requested_model}
+    )
+
+    assert response == {"input_tokens": 41, "litellm_count_source": "provider"}
+    assert len(sent_bodies) == 1
+    assert sent_bodies[0].decode().count(_GEMINI_TOOL_OUTPUT) == expected_tool_outputs_sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("requested_model", "model_list"),
+    (
+        (
+            "gemini-agent",
+            [
+                {
+                    "model_name": "gemini-agent",
+                    "litellm_params": {"model": "gemini/gemini-2.5-flash", "api_key": "test-key", "order": 1},
+                },
+                {
+                    "model_name": "gemini-agent",
+                    "litellm_params": {
+                        "model": "gemini/gemini-2.5-flash",
+                        "api_key": "test-key",
+                        "order": 2,
+                        "additional_drop_params": ["context_management"],
+                    },
+                },
+            ],
+        ),
+        (
+            "gemini-agent-deployment-id",
+            [
+                {
+                    "model_name": "gemini-agent",
+                    "litellm_params": {
+                        "model": "gemini/gemini-2.5-flash",
+                        "api_key": "test-key",
+                        "additional_drop_params": ["context_management"],
+                    },
+                    "model_info": {"id": "gemini-agent-deployment-id"},
+                },
+            ],
+        ),
+        (
+            "gemini-agent-deployment-id",
+            [
+                {"model_name": "*", "litellm_params": {"model": "gemini/*", "api_key": "test-key"}},
+                {
+                    "model_name": "gemini-agent",
+                    "litellm_params": {
+                        "model": "gemini/gemini-2.5-flash",
+                        "api_key": "test-key",
+                        "additional_drop_params": ["context_management"],
+                    },
+                    "model_info": {"id": "gemini-agent-deployment-id"},
+                },
+            ],
+        ),
+    ),
+    ids=("group-member-drops", "deployment-id-drops", "deployment-id-drops-beside-a-wildcard"),
+)
+async def test_gemini_messages_count_tokens_keeps_tool_results_when_a_routable_deployment_drops_context_management(
+    requested_model: str, model_list: list[dict[str, JsonValue]]
+) -> None:
+    response, sent_bodies = await _count_through_the_messages_endpoint(
+        Router(model_list=model_list), {"model": requested_model}
+    )
+
+    assert response == {"input_tokens": 41, "litellm_count_source": "provider"}
+    assert sent_bodies[0].decode().count(_GEMINI_TOOL_OUTPUT) == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("requested_model", "make_router", "request_options", "expected_tool_outputs_sent"),
+    (
+        (
+            "unrouted-model",
+            lambda: Router(model_list=[_gemini_deployment("gemini-agent", {})], default_fallbacks=["gemini-agent"]),
+            {},
+            1,
+        ),
+        (
+            "unrouted-model",
+            lambda: Router(
+                model_list=[_gemini_deployment("gemini-agent", {"additional_drop_params": ["context_management"]})],
+                default_fallbacks=["gemini-agent"],
+            ),
+            {},
+            3,
+        ),
+        (
+            "unrouted-model",
+            lambda: Router(
+                model_list=[_gemini_deployment("gemini-agent", {})],
+                default_fallbacks=["gemini-agent"],
+                default_litellm_params={"additional_drop_params": ["context_management"]},
+            ),
+            {},
+            3,
+        ),
+        (
+            "unrouted-model",
+            lambda: Router(model_list=[_gemini_deployment("gemini-agent", {})], default_fallbacks=["gemini-agent"]),
+            {"additional_drop_params": ["context_management"]},
+            3,
+        ),
+        (
+            "flash-alias",
+            lambda: Router(
+                model_list=[_gemini_deployment("gemini-agent", {"additional_drop_params": ["context_management"]})],
+                model_group_alias={"flash-alias": "gemini/gemini-2.5-flash"},
+            ),
+            {},
+            3,
+        ),
+    ),
+    ids=(
+        "default-fallback-edits-applied",
+        "default-fallback-deployment-drops-context-management",
+        "default-fallback-router-default-drops-context-management",
+        "default-fallback-request-drops-context-management",
+        "alias-to-a-litellm-model-deployment-drops-context-management",
+    ),
+)
+async def test_gemini_messages_count_tokens_reads_the_opt_out_of_the_deployment_the_router_falls_back_to(
+    requested_model: str,
+    make_router: Callable[[], Router],
+    request_options: dict[str, JsonValue],
+    expected_tool_outputs_sent: int,
+) -> None:
+    response, sent_bodies = await _count_through_the_messages_endpoint(
+        make_router(), {**request_options, "model": requested_model}
+    )
+
+    assert response == {"input_tokens": 41, "litellm_count_source": "provider"}
+    assert sent_bodies[0].decode().count(_GEMINI_TOOL_OUTPUT) == expected_tool_outputs_sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("requested_model", "completion_model", "expected_tool_outputs_sent"),
+    (("gemini-agent", "gemini-dropping", 3), ("gemini-dropping", "gemini-agent", 1)),
+    ids=("completion-model-drops-context-management", "completion-model-keeps-context-management"),
+)
+async def test_gemini_messages_count_tokens_reads_the_opt_out_of_the_completion_model_inference_sends_to(
+    requested_model: str, completion_model: str, expected_tool_outputs_sent: int
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server
+
+    router: Final = Router(
+        model_list=[
+            _gemini_deployment("gemini-agent", {}),
+            _gemini_deployment("gemini-dropping", {"additional_drop_params": ["context_management"]}),
+        ]
+    )
+    with patch.object(proxy_server, "general_settings", {"completion_model": completion_model}):
+        response, sent_bodies = await _count_through_the_messages_endpoint(router, {"model": requested_model})
+
+    assert response == {"input_tokens": 41, "litellm_count_source": "provider"}
+    assert sent_bodies[0].decode().count(_GEMINI_TOOL_OUTPUT) == expected_tool_outputs_sent
+
+
 class _GeminiPart(BaseModel):
     model_config = ConfigDict(frozen=True)
     text: str = ""
@@ -2176,6 +2524,48 @@ def _gemini_router(drop_params: bool = False) -> Router:
             }
         ]
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_params", "router_defaults", "request_options", "litellm_drop_params"),
+    (
+        ({"drop_params": True}, {}, {}, False),
+        ({}, {"drop_params": True}, {}, False),
+        ({}, {}, {"drop_params": True}, False),
+        ({}, {}, {}, True),
+    ),
+    ids=("deployment-drop-params", "router-default-drop-params", "request-drop-params", "litellm-drop-params"),
+)
+async def test_gemini_messages_count_tokens_counts_the_unedited_body_when_drop_params_drops_an_invalid_edit(
+    deployment_params: dict[str, JsonValue],
+    router_defaults: dict[str, JsonValue],
+    request_options: dict[str, JsonValue],
+    litellm_drop_params: bool,
+) -> None:
+    router: Final = Router(
+        model_list=[_gemini_deployment("gemini-agent", deployment_params)], default_litellm_params=router_defaults
+    )
+    with patch.object(litellm, "drop_params", litellm_drop_params):
+        response, sent_bodies = await _count_through_the_messages_endpoint(
+            router, {**request_options, "model": "gemini-agent", "context_management": _INVALID_COMPACT_EDIT}
+        )
+
+    assert response == {"input_tokens": 41, "litellm_count_source": "provider"}
+    assert sent_bodies[0].decode().count(_GEMINI_TOOL_OUTPUT) == 3
+
+
+@pytest.mark.asyncio
+async def test_gemini_messages_count_tokens_rejects_an_invalid_edit_without_drop_params() -> None:
+    with patch.object(litellm, "drop_params", False):
+        response, sent_bodies = await _count_through_the_messages_endpoint(
+            Router(model_list=[_gemini_deployment("gemini-agent", {})]),
+            {"model": "gemini-agent", "context_management": _INVALID_COMPACT_EDIT},
+        )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    assert sent_bodies == ()
 
 
 @pytest.mark.asyncio
