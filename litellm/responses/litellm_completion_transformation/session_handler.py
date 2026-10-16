@@ -320,7 +320,13 @@ class ResponsesSessionHandler:
 
         SQL query
 
-        SELECT session_id FROM spend_logs WHERE response_id = previous_response_id, SELECT * FROM spend_logs WHERE session_id = session_id
+        SELECT session_id, api_key, "user", team_id FROM spend_logs WHERE request_id = previous_response_id, then
+        SELECT * FROM spend_logs with that session_id and the same owner
+
+        Only rows with the referenced response's owner are returned: the same user and team, and for a key with
+        neither, the same key. The session id can be caller supplied, so matching on it alone would mix owners. A
+        user's or team's regenerated or second key keeps the history; a key with neither does not, and turns written
+        by another owner (an admin continuing the chain) are not replayed.
 
         A just-finished turn gets a short second chance: the worker that served it may
         still be writing its spend log when the follow-up arrives, and an empty result
@@ -343,13 +349,24 @@ class ResponsesSessionHandler:
         request_ids: Final = list(dict.fromkeys((response_id, previous_response_id, *client_response_ids)))
         query: Final = """
             WITH matching_session AS (
-                SELECT session_id
+                SELECT session_id, api_key, "user", team_id
                 FROM "LiteLLM_SpendLogs"
                 WHERE request_id = ANY($1::text[])
             )
             SELECT *
-            FROM "LiteLLM_SpendLogs"
-            WHERE session_id IN (SELECT session_id FROM matching_session)
+            FROM "LiteLLM_SpendLogs" AS logs
+            WHERE EXISTS (
+                SELECT 1
+                FROM matching_session
+                WHERE matching_session.session_id = logs.session_id
+                  AND matching_session."user" IS NOT DISTINCT FROM logs."user"
+                  AND matching_session.team_id IS NOT DISTINCT FROM logs.team_id
+                  AND (
+                      COALESCE(matching_session."user", '') <> ''
+                      OR COALESCE(matching_session.team_id, '') <> ''
+                      OR matching_session.api_key = logs.api_key
+                  )
+            )
             ORDER BY "endTime" ASC;
         """
 
