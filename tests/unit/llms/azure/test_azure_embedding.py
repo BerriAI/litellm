@@ -1,18 +1,19 @@
 import json
 import os
 import sys
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 import respx
-
-import litellm
+from httpx import Response
 
 sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
 )
 
+import litellm
 from litellm.llms.azure.azure import AzureChatCompletion
 from litellm.types.utils import EmbeddingResponse, Usage
 
@@ -179,6 +180,27 @@ def test_azure_embedding_maps_a_scripted_request_timeout(respx_mock: respx.MockR
             api_version="2023-05-15",
             api_key="test-key",
             timeout=0.5,
+            max_retries=0,
+        )
+
+    assert route.call_count == 1
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_azure_embedding_max_retries_zero_sends_one_request(respx_mock: respx.MockRouter) -> None:
+    url: Final = "https://example-resource.openai.azure.com/openai/deployments/text-embedding-ada-002/embeddings"
+    route: Final = respx_mock.post(url__startswith=url).mock(
+        return_value=Response(500, json={"error": {"message": "temporary failure"}})
+    )
+
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    with pytest.raises(litellm.APIError):
+        litellm.embedding(
+            model="azure/text-embedding-ada-002",
+            input=["hello"],
+            api_base="https://example-resource.openai.azure.com",
+            api_key="azure-test-key",
+            api_version="2024-02-01",
             max_retries=0,
         )
 

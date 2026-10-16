@@ -3,7 +3,6 @@ import base64
 import json
 import os
 import re
-import signal
 import threading
 import time
 import uuid
@@ -625,27 +624,28 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_billing_the_uplift(ga
                 held_by: Final = {pid: _open_upstream_connections(pid, wire.url) for pid in workers}
                 assert sum(held_by.values()) == len(call_ids), held_by
                 victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-                psutil.Process(victim_pid).send_signal(signal.SIGKILL)
-                release.set()
-                served: Final = await burst
-                succeeded: Final = tuple(item.call_id for item in served if item.status == 200)
-                _artifact(
-                    tmp_path,
-                    "worker-sigkill.json",
-                    {
-                        "held_by_killed_worker": held_by[victim_pid],
-                        "held_by_surviving_worker": held_by[survivor_pid],
-                        "served": len(served),
-                        "succeeded": len(succeeded),
-                        "transport_errors": len(call_ids) - len(served),
-                    },
-                )
-                assert len(succeeded) == held_by[survivor_pid], (
-                    held_by,
-                    [(item.status, item.text[:80]) for item in served],
-                )
-                follow_up_id, follow_up = _generate(owned.gateway, _CONFIG_MODEL)
-                _assert_images(follow_up, follow_up_id, _REGIONAL_TOKEN_COST)
+                with owned.replacing_worker(victim_pid) as kill:
+                    await asyncio.to_thread(kill)
+                    release.set()
+                    served: Final = await burst
+                    succeeded: Final = tuple(item.call_id for item in served if item.status == 200)
+                    _artifact(
+                        tmp_path,
+                        "worker-sigkill.json",
+                        {
+                            "held_by_killed_worker": held_by[victim_pid],
+                            "held_by_surviving_worker": held_by[survivor_pid],
+                            "served": len(served),
+                            "succeeded": len(succeeded),
+                            "transport_errors": len(call_ids) - len(served),
+                        },
+                    )
+                    assert len(succeeded) == held_by[survivor_pid], (
+                        held_by,
+                        [(item.status, item.text[:80]) for item in served],
+                    )
+                    follow_up_id, follow_up = _generate(owned.gateway, _CONFIG_MODEL)
+                    _assert_images(follow_up, follow_up_id, _REGIONAL_TOKEN_COST)
                 rows: Final = await asyncio.to_thread(_spend_rows, succeeded, seconds=120)
                 assert rows == {call_id: pytest.approx(_REGIONAL_TOKEN_COST) for call_id in succeeded}
                 await asyncio.to_thread(
@@ -670,7 +670,7 @@ async def test_proxy_restart_mid_burst_bills_each_landed_call_once(gateway: Gate
             )
             async with _gated_burst(base_url, gateway.key, call_ids, release) as burst:
                 await asyncio.to_thread(eventually, held.qsize, lambda size: size == len(call_ids), 120)
-                owned.process.terminate()
+                owned.begin_shutdown()
                 release.set()
                 served: Final = await burst
                 await asyncio.to_thread(owned.process.wait, 240)

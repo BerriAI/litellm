@@ -1,8 +1,10 @@
+import asyncio
 import json
 import os
 import signal
 import sys
 import urllib.parse
+from typing import Any, Final, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
@@ -10,7 +12,13 @@ from fastapi.testclient import TestClient
 
 
 
-from litellm.proxy.db.prisma_client import PrismaManager, PrismaWrapper, should_update_prisma_schema
+from litellm.proxy.db.prisma_client import (
+    PrismaManager,
+    PrismaWrapper,
+    _PrismaDrainTracker,
+    _TrackedPrismaEngine,
+    should_update_prisma_schema,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -470,3 +478,97 @@ def test_without_proxy_extras_the_index_build_reports_failure_instead_of_raising
     monkeypatch.setitem(sys.modules, "litellm_proxy_extras.utils", None)
 
     assert run() is outcome
+
+
+class _SlowEngine:
+    """Engine double whose requests only answer once the test lets them, recording what the engine saw."""
+
+    def __init__(self) -> None:
+        self.gates: dict[str, asyncio.Event] = {}  # mutable-ok: one gate per request the test lets through
+        self.queries_finished = 0
+        self.requests_cancelled = 0
+        self.rolled_back: list[str] = []  # mutable-ok: test records
+        self.process = object()
+
+    def gate(self, request: str) -> asyncio.Event:
+        return self.gates.setdefault(request, asyncio.Event())
+
+    async def _answer_once_released(self, request: str) -> None:
+        try:
+            await self.gate(request).wait()
+        except asyncio.CancelledError:
+            self.requests_cancelled += 1
+            raise
+
+    async def query(self, content: str, *, tx_id: str | None) -> object:
+        await self._answer_once_released(content)
+        self.queries_finished += 1
+        return {"content": content, "tx_id": tx_id}
+
+    async def start_transaction(self, *, content: str) -> str:
+        await self._answer_once_released("start")
+        return "tx-opened-after-caller-left"
+
+    async def commit_transaction(self, tx_id: str) -> None:
+        raise AssertionError(f"unexpected commit of {tx_id}")
+
+    async def rollback_transaction(self, tx_id: str) -> None:
+        self.rolled_back.append(tx_id)
+
+
+def _tracked(engine: _SlowEngine) -> tuple[_TrackedPrismaEngine, _PrismaDrainTracker]:
+    tracker: Final = _PrismaDrainTracker()
+    return _TrackedPrismaEngine(cast(Any, engine), tracker), tracker
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_query_caller_lets_the_engine_finish_the_statement() -> None:
+    engine: Final = _SlowEngine()
+    tracked, tracker = _tracked(engine)
+    caller: Final = asyncio.create_task(tracked.query("x", tx_id=None))
+    await asyncio.sleep(0)
+    caller.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    drained: Final = asyncio.create_task(tracker.wait_until_drained())
+    await asyncio.sleep(0)
+    assert engine.requests_cancelled == 0
+    assert not drained.done()
+    engine.gate("x").set()
+    await asyncio.wait_for(drained, timeout=1)
+    assert engine.queries_finished == 1
+
+
+@pytest.mark.asyncio
+async def test_transaction_opened_after_its_caller_was_cancelled_is_rolled_back() -> None:
+    engine: Final = _SlowEngine()
+    tracked, tracker = _tracked(engine)
+    caller: Final = asyncio.create_task(tracked.start_transaction(content="{}"))
+    await asyncio.sleep(0)
+    caller.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    engine.gate("start").set()
+    await asyncio.wait_for(tracker.wait_until_drained(), timeout=1)
+    assert engine.requests_cancelled == 0
+    assert engine.rolled_back == ["tx-opened-after-caller-left"]
+
+
+@pytest.mark.asyncio
+async def test_a_query_issued_while_the_last_one_finishes_keeps_the_engine_drain_open() -> None:
+    engine: Final = _SlowEngine()
+    tracked, tracker = _tracked(engine)
+    first: Final = asyncio.create_task(tracked.query("first", tx_id=None))
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    drained: Final = asyncio.create_task(tracker.wait_until_drained())
+    await asyncio.sleep(0)
+    second: Final = asyncio.create_task(tracked.query("second", tx_id=None))
+    engine.gate("first").set()
+    await first
+    await asyncio.sleep(0)
+    assert not drained.done()
+    engine.gate("second").set()
+    await second
+    await asyncio.wait_for(drained, timeout=1)
+    assert engine.queries_finished == 2

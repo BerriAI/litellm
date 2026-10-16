@@ -12,6 +12,7 @@ from litellm.messages.dispatch import (
     _ADISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
     _DISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
 )
+from litellm.proxy import proxy_server
 from litellm.rust_bridge import catalog
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Route, RouteRule, Rules
@@ -21,6 +22,8 @@ from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 
 MESSAGES: Final = [{"role": "user", "content": "hi"}]
+DANGEROUS_TOOL_USE: Final = [{"type": "dangerous_tool_use", "classifier_context": {"permission_mode": "auto"}}]
+CLASSIFIER_SETTINGS: Final = {"safeguards_classifier_model": "gpt-oss-120b"}
 PYTHON_RULES: Final[Rules] = ()
 RUST_RULES: Final[Rules] = (RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),)
 
@@ -241,6 +244,51 @@ def test_vertex_claude_reaches_native() -> None:
         rules=RUST_RULES,
     )
     assert result is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "kwargs", "general_settings", "serves_python"),
+    (
+        ("deepseek/deepseek-v4-flash", {"safeguards": DANGEROUS_TOOL_USE}, CLASSIFIER_SETTINGS, True),
+        (
+            "deepseek-v4-flash",
+            {"safeguards": DANGEROUS_TOOL_USE, "custom_llm_provider": "deepseek"},
+            CLASSIFIER_SETTINGS,
+            True,
+        ),
+        ("deepseek/deepseek-v4-flash", {"safeguards": DANGEROUS_TOOL_USE}, {}, False),
+        ("deepseek/deepseek-v4-flash", {}, CLASSIFIER_SETTINGS, False),
+        ("deepseek/deepseek-v4-flash", {"safeguards": [{"type": "other"}]}, CLASSIFIER_SETTINGS, False),
+        ("anthropic/claude-sonnet-4-5", {"safeguards": DANGEROUS_TOOL_USE}, CLASSIFIER_SETTINGS, False),
+    ),
+)
+async def test_python_keeps_the_requests_it_answers_with_safeguard_results(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    kwargs: Mapping[str, object],
+    general_settings: Mapping[str, object],
+    serves_python: bool,
+) -> None:
+    monkeypatch.setattr(proxy_server, "general_settings", general_settings)
+    python_result: Final = response(model)
+    native_result: Final = response(model)
+
+    async def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: fallback
+        return python_result
+
+    async def native(request: NativeCall) -> AnthropicMessagesResponse:
+        return native_result
+
+    result: Final = await _ADISPATCH.arun(
+        (16, MESSAGES, model),
+        kwargs,
+        python=python,
+        binding=amessages_binding(native),
+        native=lambda hook, request, call_args, call_kwargs: hook(request),
+        rules=RUST_RULES,
+    )
+    assert result is (python_result if serves_python else native_result)
 
 
 @pytest.mark.parametrize(

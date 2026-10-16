@@ -4,6 +4,7 @@ from urllib.parse import urlsplit
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.azure_ai.common_utils import (
     azure_ai_supports_native_responses,
     foundry_chat_rejects_function_tools_while_reasoning,
@@ -11,7 +12,8 @@ from litellm.llms.azure_ai.common_utils import (
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import OpenAIWebSearchOptions
-from litellm.utils import get_model_info_helper
+from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager, get_model_info_helper
 
 _OPENAI_DEFAULT_API_BASE: Final = "https://api.openai.com/v1"
 _OPENAI_API_HOST: Final = "api.openai.com"
@@ -34,6 +36,18 @@ def _resolve_openai_api_base(api_base: str | None) -> str:
         or get_secret_str("OPENAI_API_BASE")
         or _OPENAI_DEFAULT_API_BASE
     )
+
+
+def chat_target_accepts_reasoning_summary(model: str, custom_llm_provider: str | None) -> bool:
+    try:
+        local_model, provider, _, _ = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+        chat_config: Final = ProviderConfigManager.get_provider_chat_config(
+            model=local_model, provider=LlmProviders(provider)
+        )
+    except Exception as e:  # noqa: BLE001  # a capability probe must never fail the request it probes for
+        verbose_logger.debug("chat target reasoning summary check failed: %s", e)
+        return False
+    return chat_config is not None and chat_config.accepts_reasoning_summary_in_reasoning_effort
 
 
 def responses_api_bridge_check(
@@ -108,6 +122,10 @@ def responses_api_bridge_check(
         )
         for tool in (tools or ())
     )
+    carries_tool_search: Final = any(
+        (tool.get("type") if isinstance(tool, dict) else getattr(tool, "type", None)) == "tool_search"
+        for tool in (tools or ())
+    )
     if isinstance(reasoning_effort, dict):
         reasoning_active = reasoning_effort.get("effort") != "none" or reasoning_effort.get("summary") is not None
     else:
@@ -142,7 +160,11 @@ def responses_api_bridge_check(
         and model_info.get("mode") != "responses"
         and OpenAIGPT5Config.is_model_gpt_5_model(model)
         and not OpenAIGPT5Config.is_model_gpt_5_search_model(model)
-        and ((reasoning_effort is not None and reasoning_summary is not None) or chat_rejects_function_tools)
+        and (
+            (reasoning_effort is not None and reasoning_summary is not None)
+            or chat_rejects_function_tools
+            or (carries_tool_search and on_constraint_enforcing_endpoint)
+        )
     ):
         model_info["mode"] = "responses"
         model = model.replace("responses/", "")

@@ -1,6 +1,5 @@
 import asyncio
 import re
-import signal
 import threading
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -304,12 +303,12 @@ async def test_f2_a_worker_killed_mid_burst_leaves_the_survivor_marking_requests
             held_by: Final = MappingProxyType({pid: _open_peer_connections(pid, wire.url) for pid in workers})
             assert sum(held_by.values()) == _HELD_BURST, held_by
             victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-            victim: Final = psutil.Process(victim_pid)
-            victim.suspend()
-            victim.send_signal(signal.SIGKILL)
-            release.set()
-            served: Final = await burst
-            assert len(served) == held_by[survivor_pid], (held_by, len(served))
+            with owned.replacing_worker(victim_pid) as kill:
+                kill.freeze()
+                await asyncio.to_thread(kill)
+                release.set()
+                served: Final = await burst
+                assert len(served) == held_by[survivor_pid], (held_by, len(served))
             follow_up: Final = fresh_marker()
             (answered,) = await _held_burst(url, candidate.key, (follow_up,))
             _assert_served_and_landed(wire, (*served, answered), expected_received=_HELD_BURST + 1)
@@ -365,7 +364,7 @@ async def test_f3_a_graceful_restart_mid_burst_drains_the_held_requests_and_keep
             release.clear()
             burst: Final = asyncio.create_task(_held_burst(url, candidate.key, markers))
             await asyncio.to_thread(eventually, held.qsize, lambda size: size == _HELD_BURST, 60)
-            owned.process.terminate()
+            owned.begin_shutdown()
             release.set()
             served: Final = await burst
         assert len(served) == _HELD_BURST, len(served)
