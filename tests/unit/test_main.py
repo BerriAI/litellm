@@ -41,6 +41,11 @@ from litellm.types.litellm_params import ControlOptions
 from litellm.types.llms.openai import AllMessageValues, HttpxBinaryResponseContent
 from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.utils import Delta, ModelResponseStream, StandardCallbackDynamicParams, StreamingChoices, Usage
+from tests.unit.llms.bedrock.slow_upstream import (
+    STREAM_TIMEOUT_SECONDS,
+    UPSTREAM_FIRST_BYTE_SECONDS,
+    slow_upstream_sync_client,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -1928,6 +1933,60 @@ def test_responses_bridge_preserves_reasoning_effort_with_drop_params(
 
     request_body: Final = json.loads(response_route.calls[0].request.content)
     assert request_body["reasoning"] == {"effort": "high"}
+
+
+_BRIDGED_RESPONSE_ANSWER: Final = json.dumps(
+    {
+        "id": "resp_slow",
+        "object": "response",
+        "created_at": 1734366691,
+        "status": "completed",
+        "model": "slow-responses-model",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_1",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+            }
+        ],
+        "parallel_tool_calls": True,
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        "tool_choice": "auto",
+        "tools": [],
+    }
+).encode()
+
+
+def test_responses_bridge_fake_stream_is_bounded_by_the_request_timeout_not_the_stream_timeout(
+    restore_model_registry,
+) -> None:
+    model: Final = "openai/slow-responses-model"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "openai",
+                "mode": "responses",
+                "supports_native_streaming": False,
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+            }
+        },
+        persist_across_reloads=False,
+    )
+
+    response: Final = litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        stream_timeout=STREAM_TIMEOUT_SECONDS,
+        timeout=UPSTREAM_FIRST_BYTE_SECONDS * 2,
+        api_key="fake-key",
+        client=slow_upstream_sync_client(_BRIDGED_RESPONSE_ANSWER),
+    )
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in response) == "hi"
 
 
 _FOUNDRY_RESPONSES_FUNCTION_CALL_BODY: Final = {

@@ -1129,6 +1129,44 @@ def _drop_anthropic_only_tool_keys(tools: list[dict[str, object]] | None) -> lis
     return [_without_anthropic_only_tool_keys(tool) if isinstance(tool, dict) else tool for tool in tools]
 
 
+def _completion_fakes_stream(
+    model: str,
+    custom_llm_provider: str | None,
+    provider_config: BaseConfig | None,
+    optional_params: Mapping[str, object],
+    *,
+    base_model: str | None,
+    bridges_to_responses_api: bool,
+) -> bool:
+    if optional_params.get("fake_stream") is True:
+        return True
+    if custom_llm_provider is None:
+        return False
+    if bridges_to_responses_api:
+        responses_config: Final = ProviderConfigManager.get_provider_responses_api_config(
+            provider=custom_llm_provider, model=model
+        )
+        return responses_config is not None and responses_config.should_fake_stream(
+            model=model, stream=True, custom_llm_provider=custom_llm_provider
+        )
+    if (
+        custom_llm_provider == LlmProviders.VERTEX_AI.value
+        and get_vertex_ai_model_route(model=model, litellm_params={"base_model": base_model})
+        == VertexAIModelRoute.GEMMA
+    ):
+        return True
+    if isinstance(provider_config, litellm.AmazonAI21Config):
+        return True
+    dispatch_config: Final = (
+        ProviderConfigManager.get_provider_chat_config(model=model, provider=LlmProviders(custom_llm_provider))
+        if base_model is not None and provider_config is not None
+        else provider_config
+    )
+    return dispatch_config is not None and dispatch_config.should_fake_stream(
+        model=model, stream=True, custom_llm_provider=custom_llm_provider
+    )
+
+
 class _ProxyAuthHeadersProvider(Protocol):
     def get_auth_headers(self) -> Mapping[str, str]: ...
 
@@ -5682,15 +5720,13 @@ def completion(
         optional_params = get_optional_params(
             **{**optional_param_args, "reasoning_effort": provider_reasoning_effort}, **non_default_params
         )
-        reads_live_stream: Final = (
-            stream is True
-            and optional_params.get("fake_stream") is not True
-            and not (
-                provider_config is not None
-                and provider_config.should_fake_stream(
-                    model=model, stream=stream, custom_llm_provider=custom_llm_provider
-                )
-            )
+        reads_live_stream: Final = stream is True and not _completion_fakes_stream(
+            model,
+            custom_llm_provider,
+            provider_config,
+            optional_params,
+            base_model=base_model if isinstance(base_model, str) else None,
+            bridges_to_responses_api=bridges_to_responses_api is True,
         )
 
         ### TIMEOUT LOGIC ###

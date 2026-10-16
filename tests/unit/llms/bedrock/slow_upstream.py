@@ -31,9 +31,13 @@ def _answer_once_the_first_byte_is_due(body: bytes) -> Callable[[httpx.Request],
     return answer
 
 
+def slow_upstream_transport(body: bytes = b"") -> httpx.MockTransport:
+    return httpx.MockTransport(_answer_once_the_first_byte_is_due(body))
+
+
 def slow_upstream_async_client(body: bytes = b"") -> AsyncHTTPHandler:
-    return AsyncHTTPHandler(transport=httpx.MockTransport(_answer_once_the_first_byte_is_due(body)))
+    return AsyncHTTPHandler(transport=slow_upstream_transport(body))
 
 
 def slow_upstream_sync_client(body: bytes = b"") -> HTTPHandler:
-    return HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_answer_once_the_first_byte_is_due(body))))
+    return HTTPHandler(client=httpx.Client(transport=slow_upstream_transport(body)))

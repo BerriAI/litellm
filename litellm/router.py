@@ -4661,11 +4661,18 @@ class Router:
                 router_stream_timeout=_router_stream_timeout,
             )
         elif function_name in _CHAT_COMPLETION_FUNCTION_NAMES:
+            request_kwargs: Final = _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
+            deployment_params: Final = _DEPLOYMENT_PARAMS_ADAPTER.validate_python(deployment["litellm_params"])
+            stream_timeout: Final = (
+                self._get_stream_timeout(kwargs=request_kwargs, data=deployment_params)
+                if request_kwargs.get("stream")
+                else None
+            )
             kwargs.update(
-                self._chat_completion_timeouts(
-                    kwargs=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
-                    data=_DEPLOYMENT_PARAMS_ADAPTER.validate_python(deployment["litellm_params"]),
-                )
+                {
+                    "timeout": self._get_non_stream_timeout(kwargs=request_kwargs, data=deployment_params),
+                    **({"stream_timeout": stream_timeout} if stream_timeout is not None else {}),
+                }
             )
         else:
             kwargs["timeout"] = self._get_timeout(
@@ -4733,15 +4740,6 @@ class Router:
             or self.timeout  # timeout set on router (router_settings.timeout)
             or self.default_litellm_params.get("timeout", None)
         )
-
-    def _chat_completion_timeouts(
-        self, kwargs: Mapping[str, object], data: Mapping[str, object] | GenericLiteLLMParams
-    ) -> Mapping[str, object]:
-        stream_timeout: Final = self._get_stream_timeout(kwargs=kwargs, data=data) if kwargs.get("stream") else None
-        return {
-            "timeout": self._get_non_stream_timeout(kwargs=kwargs, data=data),
-            **({"stream_timeout": stream_timeout} if stream_timeout is not None else {}),
-        }
 
     def _get_timeout(self, kwargs: Mapping[str, object], data: Mapping[str, object] | GenericLiteLLMParams) -> object:
         """Helper to get timeout from kwargs or deployment params"""
@@ -5088,6 +5086,7 @@ class Router:
                 }
             )
         litellm_logging_object = cast(LiteLLMLogging, litellm_logging_object)
+        caller_stream_timeout: Final = kwargs.get("stream_timeout")
         specific_deployment: Final = kwargs.pop("specific_deployment", None)
         prompt_management_deployment: Final = await self.async_get_available_deployment(
             model=model,
@@ -5160,7 +5159,13 @@ class Router:
             kwargs.pop("original_function")
             return await litellm.acompletion(**kwargs)
 
-        return await self.async_function_with_fallbacks(**kwargs)
+        target_group_stream_timeout: Final = (
+            caller_stream_timeout if caller_stream_timeout is not None else filtered_data.get("stream_timeout")
+        )
+        return await self.async_function_with_fallbacks(
+            **{key: value for key, value in kwargs.items() if key != "stream_timeout"},
+            **({"stream_timeout": target_group_stream_timeout} if target_group_stream_timeout is not None else {}),
+        )
 
     def image_generation(self, prompt: str, model: str, **kwargs):
         try:

@@ -324,8 +324,18 @@ _FAKE_STREAMED_REQUESTS: Final = pytest.mark.parametrize(
             "bedrock/converse/meta.llama3-3-70b-instruct-v1:0",
             {"tools": [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}]},
         ),
+        (
+            "bedrock/converse/meta.llama3-3-70b-instruct-v1:0",
+            {"response_format": {"type": "json_schema", "json_schema": {"name": "answer", "schema": {"type": "object"}}}},
+        ),
+        ("bedrock/invoke/ai21.j2-ultra-v1", {}),
     ],
-    ids=["model_without_streaming", "request_shape_without_streaming"],
+    ids=[
+        "model_without_streaming",
+        "request_shape_without_streaming",
+        "json_schema_without_native_structured_output",
+        "invoke_route_without_streaming",
+    ],
 )
 
 

@@ -13,8 +13,15 @@ import respx
 
 import litellm
 from litellm import Router
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 import time
 from unittest.mock import patch, MagicMock
+
+from tests.unit.llms.bedrock.slow_upstream import (
+    STREAM_TIMEOUT_SECONDS,
+    UPSTREAM_FIRST_BYTE_SECONDS,
+    slow_upstream_async_client,
+)
 
 
 @pytest.fixture
@@ -138,23 +145,47 @@ def test_unit_test_streaming_timeout(stream):
         assert stream_timeout_val == normal_timeout
 
 
-
-@pytest.mark.parametrize(
-    "stream, expected",
-    (
-        (True, {"timeout": 120.0, "stream_timeout": 15.0}),
-        (False, {"timeout": 120.0}),
-    ),
-)
-def test_chat_completion_timeouts_keep_the_request_timeout_beside_the_stream_timeout(
-    stream: bool, expected: dict[str, float]
-) -> None:
-    router: Final = Router(model_list=[{"model_name": "gpt", "litellm_params": {"model": "gpt-4o"}}])
-
-    assert (
-        router._chat_completion_timeouts(kwargs={"stream": stream}, data={"timeout": 120.0, "stream_timeout": 15.0})
-        == expected
+@pytest.mark.asyncio
+async def test_prompt_managed_stream_keeps_the_target_deployments_own_stream_timeout() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude-agent",
+                "litellm_params": {"model": "litellm_agent/claude-target"},
+            },
+            {
+                "model_name": "claude-target",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-sonnet-4-5-v1:0",
+                    "aws_access_key_id": "fake",
+                    "aws_secret_access_key": "fake",
+                    "aws_region_name": "us-east-1",
+                    "stream_timeout": STREAM_TIMEOUT_SECONDS,
+                },
+            },
+        ],
+        timeout=UPSTREAM_FIRST_BYTE_SECONDS * 2,
+        stream_timeout=UPSTREAM_FIRST_BYTE_SECONDS * 2,
+        num_retries=0,
     )
+    messages: Final = [{"role": "user", "content": "hi"}]
+
+    with pytest.raises(litellm.Timeout):
+        await router.acompletion(
+            model="claude-agent",
+            messages=messages,
+            stream=True,
+            client=slow_upstream_async_client(),
+            litellm_logging_obj=LiteLLMLogging(
+                model="claude-agent",
+                messages=messages,
+                stream=True,
+                call_type="acompletion",
+                start_time=time.time(),
+                litellm_call_id="prompt-managed-stream",
+                function_id="f",
+            ),
+        )
 
 
 @pytest.mark.asyncio
