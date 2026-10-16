@@ -21,6 +21,7 @@ WRITER_ROLE: Final = "litellm_writer"
 READER_ROLE: Final = "litellm_reader"
 ROLES: Final = (READER_ROLE, WRITER_ROLE)
 DATABASE_NAME: Final = "circle_test"
+WORKER_DATABASE_PREFIX: Final = "integration_worker"
 OBSERVED_FILE: Final = "routing-observed.json"
 DIFF_FILE: Final = "routing-diff.txt"
 EITHER_ROLE_FILE: Final = Path(__file__).resolve().parents[1] / "routing" / "either_role.json"
@@ -216,10 +217,10 @@ def snapshot(connection: psycopg.Connection[object]) -> Mapping[tuple[str, str],
         SELECT r.rolname, s.query, s.calls
         FROM pg_stat_statements s
         JOIN pg_roles r ON r.oid = s.userid
-        WHERE s.dbid = (SELECT oid FROM pg_database WHERE datname = %s)
+        WHERE s.dbid IN (SELECT oid FROM pg_database WHERE datname = %s OR starts_with(datname, %s))
           AND r.rolname = ANY(%s)
         """,
-        (DATABASE_NAME, list(ROLES)),
+        (DATABASE_NAME, f"{WORKER_DATABASE_PREFIX}_", list(ROLES)),
     ).fetchall()
     return MappingProxyType(
         {

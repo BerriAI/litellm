@@ -1,7 +1,11 @@
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
+import litellm
 from litellm.llms.ollama.completion.handler import ollama_aembeddings, ollama_embeddings
 from litellm.types.utils import EmbeddingResponse
 
@@ -112,3 +116,23 @@ def test_prompt_eval_fallback_when_missing(mock_embedding_response, mock_encodin
         assert response.usage.total_tokens == 5
         assert response.usage.completion_tokens == 0
         assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "http://gateway.example.com/ollama",
+        "http://gateway.example.com/ollama/",
+        "http://gateway.example.com/ollama/api/embed/",
+    ],
+)
+@respx.mock
+def test_ollama_embeddings_ignore_a_trailing_slash_on_api_base(api_base: str) -> None:
+    route: Final = respx.post("http://gateway.example.com/ollama/api/embed").mock(
+        return_value=httpx.Response(200, json={"embeddings": [[0.1, 0.2], [0.3, 0.4]], "prompt_eval_count": 2})
+    )
+
+    response: Final = litellm.embedding(model="ollama/all-minilm", api_base=api_base, input=["hello", "world"])
+
+    assert route.called
+    assert [item["embedding"] for item in response.data] == [[0.1, 0.2], [0.3, 0.4]]

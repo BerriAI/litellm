@@ -1,7 +1,7 @@
 import pytest
 from fastapi import HTTPException
 
-from litellm.proxy.utils import _premium_user_check
+from litellm.proxy.utils import premium_user_check
 
 
 def normalize(value):
@@ -13,7 +13,7 @@ def test_premium_user_check_happy_path_no_raise_when_premium(monkeypatch):
 
     monkeypatch.setattr(ps, "premium_user", True, raising=False)
     summary = {
-        "result": _premium_user_check(),
+        "result": premium_user_check(),
         "premium_user": True,
         "raised": False,
     }
@@ -29,7 +29,7 @@ def test_premium_user_check_happy_path_with_feature_no_raise(monkeypatch):
 
     monkeypatch.setattr(ps, "premium_user", True, raising=False)
     summary = {
-        "result": _premium_user_check(feature="model-routing"),
+        "result": premium_user_check(feature="model-routing"),
         "premium_user": True,
         "feature": "model-routing",
     }
@@ -45,7 +45,7 @@ def test_premium_user_check_raises_when_not_premium(monkeypatch):
 
     monkeypatch.setattr(ps, "premium_user", False, raising=False)
     with pytest.raises(HTTPException) as exc_info:
-        _premium_user_check()
+        premium_user_check()
     snapshot = {
         "status_code": exc_info.value.status_code,
         "is_dict_detail": isinstance(exc_info.value.detail, dict),
@@ -63,7 +63,7 @@ def test_premium_user_check_raises_with_feature_message(monkeypatch):
 
     monkeypatch.setattr(ps, "premium_user", False, raising=False)
     with pytest.raises(HTTPException) as exc_info:
-        _premium_user_check(feature="custom-callbacks")
+        premium_user_check(feature="custom-callbacks")
     error_msg = exc_info.value.detail["error"]
     snapshot = {
         "status_code": exc_info.value.status_code,

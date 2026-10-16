@@ -14,16 +14,15 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from types import MappingProxyType
+from types import MappingProxyType, UnionType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, runtime_checkable
 
 import tiktoken
-from tokenizers import AddedToken
-from tokenizers import Tokenizer as PythonHuggingFaceTokenizer
 
 if TYPE_CHECKING:
     import numpy as np
     import numpy.typing as npt
+    from tokenizers import Tokenizer as PythonHuggingFaceTokenizer
 
     from litellm.rust_bridge._native import HuggingFaceEncoding
     from litellm.rust_bridge._native import Tokenizer as NativeTokenizer
@@ -218,6 +217,19 @@ class OpenAIEncoding:
 
 
 @dataclass(frozen=True, slots=True)
+class _NativeAddedToken:
+    content: str
+    single_word: bool
+    lstrip: bool
+    rstrip: bool
+    normalized: bool
+    special: bool
+
+    def __str__(self) -> str:
+        return self.content
+
+
+@dataclass(frozen=True, slots=True)
 class HuggingFaceTokenizer:
     """The read-only ``tokenizers.Tokenizer`` surface over the Rust Hugging Face codec."""
 
@@ -269,7 +281,14 @@ class HuggingFaceTokenizer:
     def get_vocab_size(self, with_added_tokens: bool = True) -> int:
         return self._native.get_vocab_size(with_added_tokens)
 
-    def get_added_tokens_decoder(self) -> dict[int, AddedToken]:  # mutable-ok: [LIT001] SDK return type
+    def get_added_tokens_decoder(self) -> dict[int, _AddedToken]:  # mutable-ok: [LIT001] SDK return type
+        try:
+            from tokenizers import AddedToken
+        except ModuleNotFoundError as error:
+            if error.name != "tokenizers":
+                raise
+            return {token_id: _NativeAddedToken(*data) for token_id, data in self._native.added_tokens_decoder()}
+
         return {
             token_id: AddedToken(
                 content, single_word=single_word, lstrip=lstrip, rstrip=rstrip, normalized=normalized, special=special
@@ -361,11 +380,40 @@ def _batch_input(
 
 
 Encoding: TypeAlias = tiktoken.Encoding | OpenAIEncoding
-HuggingFace: TypeAlias = PythonHuggingFaceTokenizer | HuggingFaceTokenizer
-Tokenizer: TypeAlias = Encoding | HuggingFace
+if TYPE_CHECKING:
+    HuggingFace: TypeAlias = PythonHuggingFaceTokenizer | HuggingFaceTokenizer
+    Tokenizer: TypeAlias = Encoding | HuggingFace
+
+
+def __getattr__(name: str) -> UnionType | type[HuggingFaceTokenizer]:
+    if name not in {"HuggingFace", "Tokenizer"}:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    available: Final = HuggingFaceTokenizer if name == "HuggingFace" else Encoding | HuggingFaceTokenizer
+    try:
+        from tokenizers import Tokenizer as PythonTokenizer
+    except ModuleNotFoundError as error:
+        if error.name == "tokenizers":
+            return available
+        raise
+    return available | PythonTokenizer
 
 
 class _AddedToken(Protocol):
+    @property
+    def content(self) -> str: ...
+
+    @property
+    def single_word(self) -> bool: ...
+
+    @property
+    def lstrip(self) -> bool: ...
+
+    @property
+    def rstrip(self) -> bool: ...
+
+    @property
+    def normalized(self) -> bool: ...
+
     @property
     def special(self) -> bool: ...
 

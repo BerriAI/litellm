@@ -18,8 +18,8 @@ LIT003  noqa suppression without rule codes or without a reason.
 LIT004  pyright/mypy ignore without bracketed codes or without a reason.
         Required shape: `# pyright: ignore[reportArgumentType]  # <reason>`
 LIT005  A `# mutable-ok` / `# cast-ok` / `# guard-ok` / `# kwargs-ok` /
-        `# rebind-ok` / `# writable-ok` / `# comprehension-ok` suppression
-        without a reason.
+        `# rebind-ok` / `# writable-ok` / `# comprehension-ok` / `# frozen-ok`
+        suppression without a reason.
 LIT006  `cast(...)` call. typing.cast is an unchecked assertion (the moral equivalent
         of TypeScript's `as`); it lies to the type checker with zero runtime guarantee.
         Validate into a concrete frozen type at the boundary instead.
@@ -91,6 +91,16 @@ LIT014  Comprehension with more than one `for` clause or more than one `if` clau
         `# comprehension-ok: <reason>` on any line the comprehension spans. The
         marker belongs to the innermost violating comprehension spanning that
         line, and also to any single-line violating comprehension on that line.
+LIT015  Pydantic model class that is not frozen. Set `frozen=True` in
+        `model_config = ConfigDict(...)`, `SettingsConfigDict(...)`, a dict-literal
+        `model_config`, an inner `class Config`, or the class keywords. Classes
+        inherit the frozen setting from in-module model bases, unless their own
+        configuration overrides it. Detection is name-based: `BaseModel`,
+        `pydantic.BaseModel`, `LiteLLMBaseModel`, `BaseLiteLLMOpenAIResponseObject`,
+        `LiteLLMPydanticObjectBase`, `OpenAIObject`, `RootModel`, and `BaseSettings` identify
+        models, while `TypedDict` classes are exempt. Replace in-place field writes
+        with `model_copy(update=...)`. Suppress with `# frozen-ok: <reason>` on the
+        `class` line.
 
 LIT000  Setup failure: a target file could not be read, or contains a syntax error.
         Reported as a violation rather than crashing the run.
@@ -110,12 +120,13 @@ import os
 import re
 import sys
 import tokenize
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import groupby
 from multiprocessing import Pool
 from pathlib import Path
-from collections.abc import Iterable, Iterator, Mapping, Sequence
 from types import MappingProxyType
-from typing import NamedTuple
+from typing import Final, NamedTuple
 
 # Mutable collection types, banned in *every* annotation. Name-based, so `dict`,
 # `typing.Dict`, `collections.deque`, and `collections.abc.MutableMapping` all match
@@ -149,6 +160,19 @@ READONLY_QUALIFIER = "ReadOnly"
 # first argument is type syntax, the rest is metadata and never qualifies the field.
 FIELD_QUALIFIER_WRAPPERS = frozenset(("Required", "NotRequired", "Annotated"))
 TYPEDDICT_BASE = "TypedDict"
+# Base names that mark a class as a pydantic model (LIT015).
+PYDANTIC_BASES: Final = frozenset(
+    (
+        "BaseModel",
+        "LiteLLMBaseModel",
+        "BaseLiteLLMOpenAIResponseObject",
+        "LiteLLMPydanticObjectBase",
+        "OpenAIObject",
+        "RootModel",
+        "BaseSettings",
+    )
+)
+PYDANTIC_CONFIG_FACTORIES: Final = frozenset(("ConfigDict", "SettingsConfigDict"))
 MIN_REASON_LEN = 3
 
 NOQA_RE = re.compile(
@@ -166,6 +190,8 @@ KWARGS_OK_RE = re.compile(r"#\s*kwargs-ok(?::\s*(?P<reason>.*))?")
 REBIND_OK_RE = re.compile(r"#\s*rebind-ok(?::\s*(?P<reason>.*))?")
 WRITABLE_OK_RE = re.compile(r"#\s*writable-ok(?::\s*(?P<reason>.*))?")
 COMPREHENSION_OK_RE = re.compile(r"#\s*comprehension-ok(?::\s*(?P<reason>.*))?")
+FROZEN_OK_RE: Final = re.compile(r"#\s*frozen-ok(?::\s*(?P<reason>.*))?")
+
 
 @dataclass(frozen=True, slots=True)
 class _OkToken:
@@ -185,6 +211,7 @@ OK_SUPPRESSIONS: Final[tuple[_OkToken, ...]] = (
     _OkToken("rebind-ok", REBIND_OK_RE, frozenset(("LIT010", "LIT011"))),
     _OkToken("writable-ok", WRITABLE_OK_RE, frozenset(("LIT012",))),
     _OkToken("comprehension-ok", COMPREHENSION_OK_RE, frozenset(("LIT014",))),
+    _OkToken("frozen-ok", FROZEN_OK_RE, frozenset(("LIT015",))),
 )
 
 
@@ -834,6 +861,147 @@ def iter_typeddict_violations(path: Path, tree: ast.AST) -> Iterator[Violation]:
 
 
 # --------------------------------------------------------------------------- #
+# Unfrozen pydantic models (LIT015)
+# --------------------------------------------------------------------------- #
+
+
+def _pydantic_classes(tree: ast.AST) -> tuple[ast.ClassDef, ...]:
+    classes: Final = tuple(node for node in ast.walk(tree) if isinstance(node, ast.ClassDef))
+
+    def expand(known: frozenset[str]) -> frozenset[str]:
+        grown: Final = known | frozenset(cls.name for cls in classes if _base_names(cls) & known)
+        return grown if grown == known else expand(grown)
+
+    model_names: Final = expand(PYDANTIC_BASES)
+    typeddict_names: Final = expand(frozenset((TYPEDDICT_BASE,)))
+    return tuple(cls for cls in classes if _base_names(cls) & model_names and not _base_names(cls) & typeddict_names)
+
+
+def _bool_constant(value: ast.expr) -> bool | None:
+    return value.value if isinstance(value, ast.Constant) and isinstance(value.value, bool) else None
+
+
+def _module_assignment_items(tree: ast.AST) -> Iterator[tuple[str, tuple[int, ast.expr]]]:
+    if not isinstance(tree, ast.Module):
+        return
+    for stmt in tree.body:
+        if isinstance(stmt, ast.Assign):
+            yield from (
+                (target.id, (stmt.lineno, stmt.value)) for target in stmt.targets if isinstance(target, ast.Name)
+            )
+        elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name) and stmt.value is not None:
+            yield stmt.target.id, (stmt.lineno, stmt.value)
+
+
+def _model_config_frozen(
+    value: ast.expr,
+    module_assignments: Mapping[str, tuple[tuple[int, ast.expr], ...]],
+    class_lineno: int,
+) -> bool | None:
+    config: Final = (
+        next(
+            (
+                expression
+                for lineno, expression in reversed(module_assignments.get(value.id, ()))
+                if lineno < class_lineno
+            ),
+            None,
+        )
+        if isinstance(value, ast.Name)
+        else value
+    )
+    if isinstance(config, ast.Call) and _head_name(config.func) in PYDANTIC_CONFIG_FACTORIES:
+        flags: Final = tuple(_bool_constant(kw.value) for kw in config.keywords if kw.arg == "frozen")
+        return flags[-1] if flags else None
+    if isinstance(config, ast.Dict):
+        flags: Final = tuple(
+            _bool_constant(item)
+            for key, item in zip(config.keys, config.values)
+            if isinstance(key, ast.Constant) and key.value == "frozen"
+        )
+        return flags[-1] if flags else None
+    return None
+
+
+def _assigns_name(stmt: ast.stmt, name: str) -> ast.expr | None:
+    value: Final = stmt.value if isinstance(stmt, (ast.Assign, ast.AnnAssign)) else None
+    targets: Final = (
+        stmt.targets if isinstance(stmt, ast.Assign) else (stmt.target,) if isinstance(stmt, ast.AnnAssign) else ()
+    )
+    if value is not None and any(isinstance(target, ast.Name) and target.id == name for target in targets):
+        return value
+    return None
+
+
+def _config_class_frozen(node: ast.ClassDef) -> bool | None:
+    values: Final = tuple(_assigns_name(stmt, "frozen") for stmt in node.body)
+    flags: Final = tuple(_bool_constant(value) for value in values if value is not None)
+    return flags[-1] if flags else None
+
+
+def _stmt_frozen_flag(
+    stmt: ast.stmt,
+    module_assignments: Mapping[str, tuple[tuple[int, ast.expr], ...]],
+    class_lineno: int,
+) -> bool | None:
+    config_value: Final = _assigns_name(stmt, "model_config")
+    if config_value is not None:
+        return _model_config_frozen(config_value, module_assignments, class_lineno)
+    if isinstance(stmt, ast.ClassDef) and stmt.name == "Config":
+        return _config_class_frozen(stmt)
+    return None
+
+
+def _class_frozen_override(
+    cls: ast.ClassDef,
+    module_assignments: Mapping[str, tuple[tuple[int, ast.expr], ...]],
+    class_lineno: int,
+) -> bool | None:
+    keyword_flags: Final = tuple(_bool_constant(keyword.value) for keyword in cls.keywords if keyword.arg == "frozen")
+    if keyword_flags:
+        return keyword_flags[-1]
+    body_flags: Final = tuple(_stmt_frozen_flag(stmt, module_assignments, class_lineno) for stmt in cls.body)
+    return next((flag for flag in reversed(body_flags) if flag is not None), None)
+
+
+def iter_pydantic_violations(path: Path, tree: ast.AST) -> Iterator[Violation]:
+    module_assignments: Final = MappingProxyType(
+        {
+            name: tuple(binding for _, binding in assignments)
+            for name, assignments in groupby(
+                sorted(_module_assignment_items(tree), key=lambda item: item[0]),
+                key=lambda item: item[0],
+            )
+        }
+    )
+    models: Final = _pydantic_classes(tree)
+    bases_of: Final = {cls: _base_names(cls) for cls in models}
+    override_of: Final = {cls: _class_frozen_override(cls, module_assignments, cls.lineno) for cls in models}
+
+    def frozen(known: frozenset[str]) -> frozenset[str]:
+        grown: Final = known | frozenset(
+            cls.name
+            for cls in models
+            if override_of[cls] is True or (override_of[cls] is None and bases_of[cls] & known)
+        )
+        return grown if grown == known else frozen(grown)
+
+    frozen_names: Final = frozen(frozenset())
+    for cls in models:
+        if override_of[cls] is True or (override_of[cls] is None and bases_of[cls] & frozen_names):
+            continue
+        yield Violation(
+            path,
+            cls.lineno,
+            "LIT015",
+            f"pydantic model `{cls.name}` is not frozen: set `frozen=True` in "
+            f"`model_config`, an inner `class Config`, or the class keywords, and "
+            f"replace in-place field writes with `model_copy(update=...)` "
+            f"(suppress: `# frozen-ok: <reason>`)",
+        )
+
+
+# --------------------------------------------------------------------------- #
 # Stacked comprehension clauses (LIT014)
 # --------------------------------------------------------------------------- #
 
@@ -978,6 +1146,7 @@ def check_file(path: Path) -> tuple[Violation, ...]:
                 *iter_final_violations(path, tree),
                 *iter_param_violations(path, tree),
                 *iter_typeddict_violations(path, tree),
+                *iter_pydantic_violations(path, tree),
                 *(v for v, owned in comprehension_violations if owned),
             ),
             suppressions,
@@ -1009,7 +1178,7 @@ def _worker_count(path_count: int) -> int:
 def scan_paths(paths: Sequence[Path]) -> tuple[Violation, ...]:
     """check_file over every path. Pure per-file work, so it fans out across
     processes; callers sort, which is what keeps output order stable."""
-    workers = _worker_count(len(paths))
+    workers: Final = _worker_count(len(paths))
     if workers == 1:
         return tuple(v for path in paths for v in check_file(path))
     with Pool(workers) as pool:
@@ -1017,13 +1186,13 @@ def scan_paths(paths: Sequence[Path]) -> tuple[Violation, ...]:
 
 
 def main(argv: Sequence[str]) -> int:
-    paths = tuple(a for a in argv if not a.startswith("-"))
+    paths: Final = tuple(a for a in argv if not a.startswith("-"))
     if not paths:
         print("usage: check_type_discipline.py <files-or-dirs>...", file=sys.stderr)
         return 2
 
-    targets = tuple(collect_paths(paths))
-    violations = sorted(scan_paths(targets))
+    targets: Final = tuple(collect_paths(paths))
+    violations: Final = sorted(scan_paths(targets))
     for v in violations:
         print(v.render())
 

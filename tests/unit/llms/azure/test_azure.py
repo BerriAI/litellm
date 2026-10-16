@@ -1,12 +1,16 @@
 """Tests for litellm/llms/azure/azure.py AzureChatCompletion handler behaviour."""
 
 import asyncio
+import json
 import os
 import time
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
+import respx
 from httpx import Client, Headers
 from openai import AsyncAzureOpenAI, AzureOpenAI
 
@@ -658,3 +662,134 @@ def test_azure_with_content_safety_error():
         ]
         == "high"
     )
+
+
+def _azure_sse_body(chunks: tuple[Mapping[str, object], ...]) -> str:
+    return "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
+
+
+@respx.mock
+def test_azure_chat_stream_preserves_text_and_special_characters():
+    response_chunks: Final = (
+        {
+            "id": "chatcmpl-azure",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "gpt-4.1-mini",
+            "choices": [{"index": 0, "delta": {"content": "<xml>café ☃</xml>"}, "finish_reason": None}],
+        },
+        {
+            "id": "chatcmpl-azure",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "gpt-4.1-mini",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        },
+    )
+    route: Final = respx.post(
+        url__regex=r"https://azure-stream\.openai\.azure\.com/.*/chat/completions.*"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            text=_azure_sse_body(response_chunks),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    stream: Final = litellm.completion(
+        model="azure/gpt-4.1-mini",
+        messages=[{"role": "user", "content": "Respond with the <xml> tag only"}],
+        api_base="https://azure-stream.openai.azure.com",
+        api_version="2024-02-15-preview",
+        api_key="test-azure-key",
+        max_retries=0,
+        stream=True,
+    )
+    chunks: Final = list(stream)
+
+    assert route.call_count == 1
+    assert [chunk._hidden_params["custom_llm_provider"] for chunk in chunks] == ["azure"] * len(chunks)
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "<xml>café ☃</xml>"
+    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices[0].finish_reason] == ["stop"]
+
+
+@respx.mock
+def test_azure_chat_stream_reassembles_tool_call_arguments():
+    response_chunks: Final = (
+        {
+            "id": "chatcmpl-azure-tools",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "gpt-4.1-mini",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call-weather",
+                                "type": "function",
+                                "function": {"name": "get_current_weather", "arguments": '{"city":'},
+                            }
+                        ]
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-azure-tools",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "gpt-4.1-mini",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"tool_calls": [{"index": 0, "function": {"arguments": '"Boston"}'}}]},
+                    "finish_reason": "tool_calls",
+                }
+            ],
+        },
+    )
+    route: Final = respx.post(
+        url__regex=r"https://azure-tool-stream\.openai\.azure\.com/.*/chat/completions.*"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            text=_azure_sse_body(response_chunks),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+    messages: Final = [{"role": "user", "content": "What is the weather in Boston?"}]
+    stream: Final = litellm.completion(
+        model="azure/gpt-4.1-mini",
+        messages=messages,
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_current_weather",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}},
+                        "required": ["city"],
+                    },
+                },
+            }
+        ],
+        tool_choice="auto",
+        api_base="https://azure-tool-stream.openai.azure.com",
+        api_version="2024-02-15-preview",
+        api_key="test-azure-key",
+        max_retries=0,
+        stream=True,
+    )
+    chunks: Final = list(stream)
+    response: Final = litellm.stream_chunk_builder(chunks, messages=messages)
+    tool_call: Final = response.choices[0].message.tool_calls[0]
+
+    assert route.call_count == 1
+    assert tool_call.function.name == "get_current_weather"
+    assert json.loads(tool_call.function.arguments) == {"city": "Boston"}
+    assert response.choices[0].finish_reason == "tool_calls"

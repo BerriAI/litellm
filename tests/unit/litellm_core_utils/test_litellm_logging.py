@@ -28,9 +28,11 @@ import litellm
 from litellm._internal_context import in_post_response_phase
 from litellm._logging import session_id_var, trace_id_var, verbose_logger
 from litellm._service_logger import ServiceLogging
+from litellm.caching.caching import DualCache
 from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE, REDACTED_BY_LITELLM, SENTRY_PII_DENYLIST
 from litellm.cost_calculator import ocr_batch_cost
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils import litellm_logging
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.litellm_logging import (
     Logging,
@@ -42,8 +44,10 @@ from litellm.litellm_core_utils.litellm_logging import (
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.hooks.cache_control_check import _PROXY_CacheControlCheck
-from litellm.proxy.hooks.max_iterations_limiter import _PROXY_MaxIterationsHandler
+from litellm.proxy.hooks.cache_control_check import PROXY_CacheControlCheck
+from litellm.proxy.hooks.max_iterations_limiter import PROXY_MaxIterationsHandler
+from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
+from litellm.proxy.utils import InternalUsageCache
 from litellm.types.llms.openai import ResponseAPIUsage, ResponseCompletedEvent, ResponsesAPIResponse
 from litellm.types.utils import (
     CallTypes,
@@ -419,6 +423,13 @@ def test_post_call_serializes_dict_with_datetime(logging_obj):
     assert "2026-05-11" in serialized
 
 
+def _reset_sentry_globals(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm_logging, "sentry_sdk_instance", None)
+    litellm_logging.start_sentry.cache_clear()
+    monkeypatch.setattr(litellm_logging, "capture_exception", None)
+    monkeypatch.setattr(litellm_logging, "add_breadcrumb", None)
+
+
 def test_sentry_environment(monkeypatch):
     import sentry_sdk
 
@@ -427,15 +438,59 @@ def test_sentry_environment(monkeypatch):
     monkeypatch.setenv("SENTRY_DSN", "https://test@sentry.io/123456")
     monkeypatch.delenv("SENTRY_ENVIRONMENT", raising=False)
 
+    _reset_sentry_globals(monkeypatch)
     set_callbacks(["sentry"])
     assert mock_init.call_args[1]["environment"] == "production"
 
     for environment in ("development", "staging"):
         monkeypatch.setenv("SENTRY_ENVIRONMENT", environment)
         mock_init.reset_mock()
+        _reset_sentry_globals(monkeypatch)
         set_callbacks(["sentry"])
         mock_init.assert_called_once()
         assert mock_init.call_args[1]["environment"] == environment
+
+
+def test_set_callbacks_initializes_sentry_once_per_dsn(monkeypatch):
+    import sentry_sdk
+
+    mock_init: Final = MagicMock()
+    monkeypatch.setattr(sentry_sdk, "init", mock_init)
+    monkeypatch.setenv("SENTRY_DSN", "https://first@sentry.example/1")
+    _reset_sentry_globals(monkeypatch)
+
+    set_callbacks(["sentry"])
+    set_callbacks(["sentry"])
+    monkeypatch.setenv("SENTRY_DSN", "https://second@sentry.example/2")
+    set_callbacks(["sentry"])
+
+    assert [call.kwargs["dsn"] for call in mock_init.call_args_list] == [
+        "https://first@sentry.example/1",
+        "https://second@sentry.example/2",
+    ]
+    assert litellm_logging.sentry_sdk_instance is sentry_sdk
+    assert litellm_logging.capture_exception is sentry_sdk.capture_exception
+
+
+def test_sentry_started_before_its_dsn_is_loaded_picks_the_dsn_up_later(monkeypatch):
+    import sentry_sdk
+
+    mock_init: Final = MagicMock()
+    monkeypatch.setattr(sentry_sdk, "init", mock_init)
+    monkeypatch.delenv("SENTRY_DSN", raising=False)
+    _reset_sentry_globals(monkeypatch)
+
+    litellm_logging.initialize_sentry()
+    assert litellm_logging.sentry_sdk_instance is None
+
+    monkeypatch.setenv("SENTRY_DSN", "https://from-db@sentry.example/3")
+    set_callbacks(["sentry"])
+
+    mock_init.assert_called_once()
+    assert mock_init.call_args.kwargs["dsn"] == "https://from-db@sentry.example/3"
+    assert litellm_logging.sentry_sdk_instance is sentry_sdk
+
+
 def test_use_custom_pricing_for_model():
     from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
 
@@ -766,6 +821,20 @@ class TestZeroCostDiagnostic:
             )
 
         assert logging_obj.model_call_details["standard_logging_object"]["zero_cost_diagnostic"] is None
+        assert self._zero_cost_warnings(caplog) == []
+
+    def test_response_served_from_the_cache_at_no_charge_stays_silent(
+        self, deployment_pricing: Mapping[str, float], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        logging_obj: Final = self._logging_obj(deployment_pricing)
+        response: Final = self._response(usage, response_cost=0.0, cache_hit=True, model_id=self.DEPLOYMENT_ID)
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            cost: Final = logging_obj.response_cost_calculator(result=response)
+
+        assert cost == 0.0
+        assert logging_obj.model_call_details["zero_cost_diagnostic"] is None
         assert self._zero_cost_warnings(caplog) == []
 
     def test_unbilled_read_route_with_usage_stays_silent(
@@ -3372,7 +3441,9 @@ def test_sentry_event_scrubber_initialization(monkeypatch):
 
     mock_init = MagicMock()
     monkeypatch.setattr(sentry_sdk, "init", mock_init)
+    monkeypatch.setenv("SENTRY_DSN", "https://key@sentry.example/1")
     monkeypatch.delenv("SENTRY_SEND_DEFAULT_PII", raising=False)
+    _reset_sentry_globals(monkeypatch)
 
     set_callbacks(["sentry"])
 
@@ -3389,7 +3460,9 @@ def test_sentry_send_default_pii_opt_in(monkeypatch):
 
     mock_init = MagicMock()
     monkeypatch.setattr(sentry_sdk, "init", mock_init)
+    monkeypatch.setenv("SENTRY_DSN", "https://key@sentry.example/1")
     monkeypatch.setenv("SENTRY_SEND_DEFAULT_PII", "true")
+    _reset_sentry_globals(monkeypatch)
 
     set_callbacks(["sentry"])
 
@@ -3714,11 +3787,11 @@ def test_get_usage_as_dict():
 
     # Test case 1: None response_obj returns empty usage dict
     result = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj=None)
-    assert result == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    assert result == {}
 
     # Test case 2: Empty response_obj returns empty usage dict
     result = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj={})
-    assert result == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    assert result == {}
 
     # Test case 3: combined_usage_object takes priority
     combined = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
@@ -3738,7 +3811,35 @@ def test_get_usage_as_dict():
 
     # Test case 5: response_obj with no usage key returns empty
     result = StandardLoggingPayloadSetup.get_usage_as_dict(response_obj={"id": "resp-1", "choices": []})
-    assert result == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    assert result == {}
+
+
+@pytest.mark.parametrize(
+    "usage, include_usage",
+    [(None, False), (None, True), ({"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}, True)],
+)
+def test_logging_preserves_missing_usage_without_accepting_request_metadata(
+    logging_obj: Logging, usage: dict[str, int] | None, include_usage: bool
+) -> None:
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+    from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import convert_to_model_response_object
+
+    now: Final = datetime_unit_test(2026, 1, 1, 12, 0, 0)
+    response: Final[ModelResponse] = convert_to_model_response_object(
+        response_object={"id": "usage-coverage", "choices": [], **({"usage": usage} if include_usage else {})},
+        model_response_object=ModelResponse(),
+    )
+    payload: Final = get_standard_logging_object_payload(
+        kwargs={"litellm_params": {"metadata": {"usage_object": {"prompt_tokens": 99, "completion_tokens": 99}}}},
+        init_response_obj=response,
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+    assert payload is not None
+    assert payload["metadata"]["usage_object"] == (response.usage.model_dump() if usage is not None else {})
+    assert (payload["prompt_tokens"], payload["completion_tokens"], payload["total_tokens"]) == (0, 0, 0)
 
 
 def test_append_system_prompt_messages():
@@ -3938,6 +4039,61 @@ async def test_async_success_handler_prevents_reprocessing_for_pass_through_endp
     # Verify standard_logging_object wasn't modified by second call
     assert logging_obj.model_call_details["standard_logging_object"] is first_standard_logging_object, (
         "standard_logging_object should not be modified on re-processing"
+    )
+
+
+class _StreamSuccessRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged_contents: list[str | None] = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.logged_contents.append(response_obj.choices[0].message.content)
+
+
+@pytest.mark.asyncio
+async def test_async_success_handler_logs_a_completed_stream_only_once():
+    recorder: Final = _StreamSuccessRecorder()
+    start: Final = dt_object(2026, 1, 1)
+    logging_obj: Final = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=start,
+        litellm_call_id="stream-once",
+        function_id="stream-once",
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-4o",
+        user=None,
+        optional_params={},
+        litellm_params={"litellm_call_id": "stream-once", "metadata": {}},
+        custom_llm_provider="openai",
+    )
+
+    await logging_obj.async_success_handler(
+        result=ModelResponse(
+            model="gpt-4o",
+            choices=[{"index": 0, "message": {"role": "assistant", "content": "Hello there"}, "finish_reason": "stop"}],
+            usage={"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        ),
+        start_time=start,
+        end_time=start,
+    )
+    await logging_obj.async_success_handler(
+        result=ModelResponse(
+            model="gpt-4o",
+            choices=[{"index": 0, "message": {"role": "assistant", "content": "Hello again"}, "finish_reason": "stop"}],
+        ),
+        start_time=start,
+        end_time=start,
+    )
+
+    assert recorder.logged_contents == ["Hello there"]
+    assert logging_obj.model_call_details["async_complete_streaming_response"].choices[0].message.content == (
+        "Hello there"
     )
 
 
@@ -4463,6 +4619,103 @@ def test_process_hidden_params_recalculates_cost_after_failure_handler_zero():
     assert cost is not None and cost > 0
     slo = logging_obj.model_call_details.get("standard_logging_object") or {}
     assert slo.get("response_cost", 0) > 0
+
+
+@pytest.mark.parametrize("reported_cost", [0.0, 0.37])
+@pytest.mark.parametrize("cache_hit", [False, True])
+def test_provider_reported_cost_reaches_metadata_and_spend(reported_cost: float, cache_hit: bool) -> None:
+    started: Final = datetime_standard_logging(2026, 1, 1)
+    logging_obj: Final = LitellmLogging(
+        model="native-test",
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=started,
+        litellm_call_id="reported-cost",
+        function_id="reported-cost",
+    )
+    logging_obj.update_from_kwargs(kwargs={}, optional_params={})
+    logging_obj._provider_reported_cost = reported_cost
+    logging_obj.model_call_details.update({"cache_hit": cache_hit, "litellm_params": {}})
+    response: Final = ModelResponse(
+        id="reported-cost",
+        model="native-test",
+        choices=[{"message": {"role": "assistant", "content": "ok"}}],
+    )
+    expected: Final = 0.0 if cache_hit else reported_cost
+    assert logging_obj.response_cost_calculator(response) == expected
+    logging_obj._process_hidden_params_and_response_cost(response, started, started)
+    assert logging_obj.model_call_details["response_cost"] == expected
+    assert logging_obj.model_call_details["standard_logging_object"]["response_cost"] == expected
+
+
+@pytest.mark.parametrize("pricing_policy", ["reported", "custom", "base"])
+@pytest.mark.parametrize("reported_cost", [None, 0.0, 0.37])
+@pytest.mark.parametrize("additional_cost", [0.0, 0.12])
+@pytest.mark.parametrize("cache_hit", [False, True])
+def test_reported_cost_respects_configured_pricing_and_additional_charges(
+    monkeypatch: pytest.MonkeyPatch,
+    pricing_policy: Literal["reported", "custom", "base"],
+    reported_cost: float | None,
+    additional_cost: float,
+    cache_hit: bool,
+) -> None:
+    pricing_model: Final = "anthropic/reported-cost-pricing-test"
+    input_rate: Final = 0.002
+    output_rate: Final = 0.004
+    prompt_tokens: Final = 10
+    completion_tokens: Final = 5
+    monkeypatch.setitem(
+        litellm.model_cost,
+        pricing_model,
+        {"input_cost_per_token": input_rate, "output_cost_per_token": output_rate, "litellm_provider": "anthropic"},
+    )
+    started: Final = datetime_standard_logging(2026, 1, 1)
+    logging_obj: Final = LitellmLogging(
+        model=pricing_model,
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=started,
+        litellm_call_id="reported-cost-pricing",
+        function_id="reported-cost-pricing",
+    )
+    logging_obj.update_from_kwargs(
+        kwargs={},
+        optional_params={"provider_reported_cost": 0.0, "_provider_reported_cost": 0.0},
+        litellm_params={
+            **({"base_model": pricing_model} if pricing_policy == "base" else {}),
+            "metadata": {
+                "model_info": {
+                    "id": pricing_model,
+                    **(
+                        {"input_cost_per_token": input_rate, "output_cost_per_token": output_rate}
+                        if pricing_policy == "custom"
+                        else {}
+                    ),
+                }
+            }
+        }
+    )
+    logging_obj.model_call_details.update(
+        {"additional_response_cost": additional_cost, "cache_hit": cache_hit}
+    )
+    logging_obj._provider_reported_cost = reported_cost
+    response: Final = ModelResponse(
+        model=pricing_model,
+        choices=[{"message": {"role": "assistant", "content": "ok"}}],
+        usage=Usage(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens),
+    )
+    base_cost: Final = (
+        prompt_tokens * input_rate + completion_tokens * output_rate
+        if pricing_policy != "reported" or reported_cost is None
+        else reported_cost
+    )
+    expected: Final = 0.0 if cache_hit else base_cost + additional_cost
+    assert logging_obj.response_cost_calculator(response) == pytest.approx(expected)
+    logging_obj._process_hidden_params_and_response_cost(response, started, started)
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(expected)
+    assert logging_obj.model_call_details["standard_logging_object"]["response_cost"] == pytest.approx(expected)
 
 
 def test_process_hidden_params_preserves_zero_cost_in_hidden_params():
@@ -5125,6 +5378,63 @@ def test_get_standard_logging_object_payload_includes_litellm_call_id(logging_ob
 
 
 @pytest.mark.parametrize(
+    "hidden_params, passed_cache_hit, expected_cache_hit, expected_cost, expected_unique_id",
+    [
+        ({"cache_hit": True, "response_cost": 0.0}, None, True, 0.0, True),
+        ({"cache_hit": True, "response_cost": 0.002}, None, None, 0.002, True),
+        ({"cache_hit": True, "response_cost": 0.0}, False, False, 0.0, True),
+        ({"response_cost": 0.0}, None, None, 0.0, False),
+        ({}, None, None, None, False),
+    ],
+)
+def test_success_handler_logs_a_response_served_from_the_cache_under_a_unique_id(
+    hidden_params: dict[str, object],
+    passed_cache_hit: bool | None,
+    expected_cache_hit: bool | None,
+    expected_cost: float | None,
+    expected_unique_id: bool,
+):
+    """A parent call whose response came back from the response cache (an internal sub-call's hit) reuses the
+    id of the row that cached it, so its row needs a unique id, and it is a cache hit only when it cost nothing."""
+    from litellm.litellm_core_utils.hidden_params import set_hidden_params
+
+    logging_obj: Final = LitellmLogging(
+        model="gpt-5.6",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="parent-call-id",
+        function_id="parent-fn-id",
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={}, optional_params={}, model="gpt-5.6", custom_llm_provider="openai"
+    )
+    response: Final = ModelResponse(
+        id="chatcmpl-cached-src",
+        model="gpt-5.6",
+        usage=Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500),
+    )
+    set_hidden_params(response, dict(hidden_params))
+
+    logging_obj._success_handler_helper_fn(
+        result=response,
+        start_time=datetime.datetime.now(),
+        end_time=datetime.datetime.now(),
+        cache_hit=passed_cache_hit,
+    )
+
+    payload: Final = logging_obj.model_call_details["standard_logging_object"]
+    assert logging_obj.model_call_details["cache_hit"] is expected_cache_hit
+    assert payload["cache_hit"] is expected_cache_hit
+    if expected_cost is not None:
+        assert payload["response_cost"] == expected_cost
+    assert payload["id"].startswith("chatcmpl-cached-src_cache_hit") is expected_unique_id
+    assert (payload["id"] == "chatcmpl-cached-src") is not expected_unique_id
+    assert payload["saved_cache_cost"] == 0.0 or expected_cache_hit is True
+
+
+@pytest.mark.parametrize(
     "client_sent_oauth_token, custom_llm_provider, expected",
     [(True, "anthropic", True), (True, "bedrock", False), (False, "anthropic", False), (None, "anthropic", None)],
 )
@@ -5733,6 +6043,58 @@ def test_handle_anthropic_messages_response_logging_keeps_the_served_response_id
     assert isinstance(result, ModelResponse)
     assert result.id == served_id, "the spend log row must keep the id the caller was served"
     assert result.service_tier == "flex"
+
+
+def test_handle_anthropic_messages_response_logging_bills_the_bridged_chat_completion_not_the_served_body():
+    """A chat deployment answers /v1/messages through the chat bridge. The Anthropic body served to the
+    caller has no reasoning token field, so the spend row must come from the recorded chat completion."""
+    from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+    from litellm.types.utils import CompletionTokensDetailsWrapper, Usage
+
+    chat_completion = ModelResponse(
+        id="chatcmpl-upstream",
+        model="gpt-5.6",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "answer"}, "finish_reason": "stop"}],
+        usage=Usage(
+            prompt_tokens=1240,
+            completion_tokens=4040,
+            total_tokens=5280,
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=3480),
+        ),
+    )
+    served = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response=chat_completion)
+    assert served is not None
+    logging_obj = _anthropic_messages_logging_obj()
+    logging_obj.record_bridged_model_response(chat_completion)
+
+    logged = logging_obj._handle_anthropic_messages_response_logging(result=dict(served))
+
+    assert isinstance(logged, ModelResponse)
+    assert logged.id == served["id"], "the spend log row keeps the id the caller was served"
+    assert logged.usage.completion_tokens == 4040  # type: ignore[attr-defined]
+    assert logged.usage.completion_tokens_details.reasoning_tokens == 3480  # type: ignore[attr-defined]
+
+
+def test_handle_anthropic_messages_response_logging_reparses_the_served_body_without_a_bridged_completion():
+    logging_obj = _anthropic_messages_logging_obj()
+    logging_obj.optional_params = {}
+
+    logged = logging_obj._handle_anthropic_messages_response_logging(
+        result={
+            "id": "msg_native",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-5",
+            "content": [{"type": "text", "text": "answer"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 12, "output_tokens": 7},
+        }
+    )
+
+    assert isinstance(logged, ModelResponse)
+    assert logged.id == "msg_native"
+    assert logged.usage.completion_tokens == 7  # type: ignore[attr-defined]
 
 
 def test_handle_anthropic_messages_response_logging_passes_model_response_through():
@@ -6887,6 +7249,21 @@ class TestNonInferenceCallTypesAreNotBilled:
 
         assert payload is not None
         assert payload["total_tokens"] == 6000
+
+    @pytest.mark.parametrize(
+        "litellm_metadata",
+        [
+            {"_managed_background_response": True},
+            {"internal_call_origin": "background_response_status_poll"},
+        ],
+        ids=["managed_read", "status_poll"],
+    )
+    def test_managed_read_of_a_background_response_is_free(self, litellm_metadata):
+        """The proxy's cost poll bills a background response it tracks once, so a read the managed files
+        hook marks, or the poll's own status check, must not bill the same tokens again."""
+        logging_obj = self._logging_obj("aget_responses", litellm_metadata=litellm_metadata)
+        cost = logging_obj.response_cost_calculator(result=self._retrieved_response(background=True))
+        assert cost == 0.0
 
     def test_reading_a_foreground_response_is_still_free(self):
         """Guards the test above against a blanket exemption: an explicit background=false read was
@@ -10353,7 +10730,7 @@ def test_truncate_standard_logging_payload():
     1. the payload passed in is never modified, since every callback of the request shares it
     2. the `messages`, `response`, and `error_str` in the returned payload are truncated
     """
-    from tests.local_testing.create_mock_standard_logging_payload import (
+    from tests.unit.create_mock_standard_logging_payload import (
         create_standard_logging_payload_with_long_content,
     )
 
@@ -11046,6 +11423,24 @@ def test_litellm_logging_no_log_param(monkeypatch, disable_no_log_param):
     else:
         assert should_run is False
 
+    proxy_callback = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
+    should_run_proxy_callback = litellm_logging_obj.should_run_callback(
+        callback=proxy_callback,
+        litellm_params={"no-log": True},
+        event_hook="success_handler",
+    )
+    assert should_run_proxy_callback is True
+
+    from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
+
+    managed_files_callback = PROXY_LiteLLMManagedFiles(DualCache(), prisma_client=MagicMock())
+    should_run_managed_files_callback = litellm_logging_obj.should_run_callback(
+        callback=managed_files_callback,
+        litellm_params={"no-log": True},
+        event_hook="success_handler",
+    )
+    assert should_run_managed_files_callback is True
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 def test_get_callback_name():
@@ -11080,7 +11475,7 @@ def test_is_internal_litellm_proxy_callback():
     """
     logging = setup_logging()
 
-    assert logging._is_internal_litellm_proxy_callback(_PROXY_MaxIterationsHandler) == True
+    assert logging._is_internal_litellm_proxy_callback(PROXY_MaxIterationsHandler) == True
 
     # Test non-internal callbacks
     def regular_callback():
@@ -11113,7 +11508,7 @@ def test_should_run_sync_callbacks_for_async_calls():
     assert logging._should_run_sync_callbacks_for_async_calls() == True
 
     # Test with internal callback only
-    litellm.success_callback = [_PROXY_MaxIterationsHandler]
+    litellm.success_callback = [PROXY_MaxIterationsHandler]
     assert logging._should_run_sync_callbacks_for_async_calls() == False
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
@@ -11125,8 +11520,8 @@ def test_remove_internal_litellm_callbacks():
 
     callbacks = [
         regular_callback,
-        _PROXY_MaxIterationsHandler,
-        _PROXY_CacheControlCheck,
+        PROXY_MaxIterationsHandler,
+        PROXY_CacheControlCheck,
         "string_callback",
     ]
 
@@ -11134,8 +11529,8 @@ def test_remove_internal_litellm_callbacks():
     assert len(filtered) == 2  # Should only keep regular_callback and string_callback
     assert regular_callback in filtered
     assert "string_callback" in filtered
-    assert _PROXY_MaxIterationsHandler not in filtered
-    assert _PROXY_CacheControlCheck not in filtered
+    assert PROXY_MaxIterationsHandler not in filtered
+    assert PROXY_CacheControlCheck not in filtered
 
 @pytest.mark.asyncio
 async def test_background_interaction_completion_logs_while_in_progress_handler_is_parked(monkeypatch):
@@ -11514,3 +11909,97 @@ class CompletionCustomHandler(
         except Exception:
             print(f"Assertion Error: {traceback.format_exc()}")
             self.errors.append(traceback.format_exc())
+
+
+def test_masking_function_isolated_from_other_loggers():
+    from litellm.litellm_core_utils.litellm_logging import (
+        scrub_sensitive_keys_in_metadata,
+    )
+
+    def my_masking_fn(data):
+        return data
+
+    litellm_params = {
+        "metadata": {
+            "langfuse_masking_function": my_masking_fn,
+            "other_key": "other_value",
+        }
+    }
+
+    result = scrub_sensitive_keys_in_metadata(litellm_params)
+
+    assert "langfuse_masking_function" not in result["metadata"]
+
+    assert result.get("_langfuse_masking_function") == my_masking_fn
+
+    assert result["metadata"]["other_key"] == "other_value"
+
+
+def test_masking_function_not_in_metadata_when_not_provided():
+    from litellm.litellm_core_utils.litellm_logging import (
+        scrub_sensitive_keys_in_metadata,
+    )
+
+    litellm_params = {
+        "metadata": {
+            "some_key": "some_value",
+        }
+    }
+
+    result = scrub_sensitive_keys_in_metadata(litellm_params)
+
+    assert "_langfuse_masking_function" not in result
+
+    assert result["metadata"]["some_key"] == "some_value"
+
+
+def test_copy_for_new_call_logs_a_turn_under_its_own_call_id_against_the_connections_reservation() -> None:
+    reservation: Final[dict[str, object]] = {"reserved_cost": 0.5, "entries": []}
+    connection: Final = LitellmLogging(
+        model="gpt-5.4",
+        messages=[],
+        stream=False,
+        call_type=CallTypes.aresponses_websocket.value,
+        start_time=time.time(),
+        litellm_call_id="connection-call",
+        function_id="connection-call",
+    )
+    connection.litellm_params = {
+        "litellm_call_id": "connection-call",
+        "metadata": {"user_api_key": "hashed-key", "user_api_key_budget_reservation": reservation},
+    }
+    connection.model_call_details["litellm_params"] = connection.litellm_params
+    turn_start: Final = datetime.datetime(2026, 1, 1, 12, 0, 0)
+
+    turn: Final = connection.copy_for_new_call(litellm_call_id="turn-1", start_time=turn_start)
+
+    assert (turn.litellm_call_id, turn.start_time) == ("turn-1", turn_start)
+    assert (turn.model_call_details["litellm_call_id"], turn.model_call_details["start_time"]) == ("turn-1", turn_start)
+    assert turn.model_call_details["litellm_params"]["litellm_call_id"] == "turn-1"
+    assert turn.litellm_params["metadata"]["user_api_key"] == "hashed-key"
+    assert turn.litellm_params["metadata"]["user_api_key_budget_reservation"] is reservation
+    turn.litellm_params["metadata"]["turn_only"] = True
+    assert "turn_only" not in connection.litellm_params["metadata"]
+    assert (connection.litellm_call_id, connection.model_call_details["litellm_call_id"]) == (
+        "connection-call",
+        "connection-call",
+    )
+
+
+@pytest.mark.parametrize("response_id, expected_row_id", [(None, "turn-7"), ("resp_9", "resp_9")])
+def test_a_websocket_turn_row_is_keyed_by_the_response_id_or_else_its_call_id(
+    logging_obj: LitellmLogging, response_id: str | None, expected_row_id: str
+) -> None:
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+
+    now: Final = datetime_unit_test(2026, 1, 1, 12, 0, 0)
+    payload: Final = get_standard_logging_object_payload(
+        kwargs={"litellm_call_id": "turn-7", "litellm_params": {"metadata": {}}},
+        init_response_obj=LiteLLMRealtimeStreamLoggingObject(id=response_id, usage=Usage(), results=[]),
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+    assert payload is not None
+    assert payload["id"] == expected_row_id

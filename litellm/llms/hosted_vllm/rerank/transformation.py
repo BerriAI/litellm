@@ -4,7 +4,7 @@ Transformation logic for Hosted VLLM rerank
 
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Final
 
 import httpx
 from pydantic import ValidationError
@@ -86,7 +86,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         model: str,
         drop_params: bool,
         query: str,
-        documents: list[str | dict[str, Any]],
+        documents: list[str | dict[str, object]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
         rank_fields: list[str] | None = None,

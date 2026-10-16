@@ -246,6 +246,43 @@ class TestBedrockMantleConfig:
         )
         assert optional_params["verbosity"] == "low"
 
+    @pytest.mark.parametrize(
+        "model", ["openai.gpt-5.6-terra", "us-gov-west-1/openai.gpt-5.6-terra", "openai.gpt-6-sol"]
+    )
+    @pytest.mark.parametrize("limit_param", ["max_tokens", "max_completion_tokens"])
+    def test_gpt_reasoning_series_output_limit_is_sent_as_max_completion_tokens(
+        self, model: str, limit_param: str
+    ) -> None:
+        optional_params = litellm.get_optional_params(
+            model=model,
+            custom_llm_provider="bedrock_mantle",
+            drop_params=False,
+            **{limit_param: 1000},
+        )
+        assert optional_params["max_completion_tokens"] == 1000
+        assert "max_tokens" not in optional_params
+
+    def test_gpt_reasoning_series_explicit_max_completion_tokens_wins_over_max_tokens(self):
+        optional_params = litellm.get_optional_params(
+            model="openai.gpt-5.6-terra",
+            custom_llm_provider="bedrock_mantle",
+            drop_params=False,
+            max_tokens=1000,
+            max_completion_tokens=50,
+        )
+        assert optional_params["max_completion_tokens"] == 50
+        assert "max_tokens" not in optional_params
+
+    def test_non_gpt_reasoning_models_keep_the_openai_compatible_max_tokens(self):
+        optional_params = litellm.get_optional_params(
+            model="openai.gpt-oss-120b",
+            custom_llm_provider="bedrock_mantle",
+            drop_params=False,
+            max_completion_tokens=1000,
+        )
+        assert optional_params["max_tokens"] == 1000
+        assert "max_completion_tokens" not in optional_params
+
 
 class TestBedrockMantleChatAuth:
     """Chat Completions must use the same Bearer-or-SigV4 auth as the Responses
@@ -1042,3 +1079,18 @@ async def test_mantle_signing_runs_off_the_event_loop():
 
     assert "Authorization" in signed
     assert probe.served_during_refresh is True
+
+
+@pytest.mark.parametrize("missing", ["botocore", "unrelated_dependency"])
+def test_mantle_signing_reports_only_missing_aws_dependency(missing):
+    config = BedrockMantleChatConfig()
+    failure = ModuleNotFoundError("missing dependency", name=missing)
+    with patch.dict("os.environ", {}, clear=True), patch("builtins.__import__", side_effect=failure):
+        with pytest.raises(ImportError) as error:
+            config.sign_request(headers={}, optional_params={}, request_data={},
+                                api_base="https://bedrock-mantle.us-east-1.api.aws/v1/chat/completions", api_key="")
+    if missing == "botocore":
+        assert "pip install boto3" in str(error.value)
+        assert error.value.__cause__ is failure
+    else:
+        assert error.value is failure

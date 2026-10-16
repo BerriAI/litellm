@@ -552,6 +552,17 @@ class TestOpenAIFileObjectBatchGuardrailSerialization:
         original = self._file_object(litellm_batch_guardrail=self._report())
         assert OpenAIFileObject(**original.model_dump()) == original
 
+    def test_details_fallback_marker_is_omitted_when_unset_and_round_trips_when_set(self):
+        from litellm.types.llms.openai import OpenAIFileObject
+
+        without_marker = self._file_object()
+        assert "litellm_details_fallback" not in without_marker.model_dump()
+        assert "litellm_details_fallback" not in without_marker.model_dump_json()
+
+        with_marker = self._file_object(litellm_details_fallback=True)
+        assert with_marker.model_dump()["litellm_details_fallback"] is True
+        assert OpenAIFileObject.model_validate_json(with_marker.model_dump_json()) == with_marker
+
     def test_serialization_json_schema_still_describes_the_model(self):
         """A return annotation on the wrap serializer would collapse this to a bare object."""
         from litellm.types.llms.openai import OpenAIFileObject
@@ -657,3 +668,21 @@ def test_openai_video_object_hidden_params_public_accessor_preserves_identity() 
     video.hidden_params = replacement
     assert video._hidden_params is replacement
     assert video.hidden_params["public_key"] == "visible"
+
+
+@pytest.mark.parametrize("extra_keys", ({}, {"created_by": "server"}), ids=("bridge-item", "openai-item"))
+def test_rebuilding_a_dumped_responses_answer_keeps_the_tool_search_call_keys(extra_keys: dict[str, str]) -> None:
+    search_call: Final = {
+        "id": "tsc_1",
+        "arguments": {"query": "weather"},
+        "call_id": None,
+        "execution": "server",
+        "status": "completed",
+        "type": "tool_search_call",
+        **extra_keys,
+    }
+    answer: Final = ResponsesAPIResponse(id="resp_1", created_at=1, output=[search_call])
+
+    rebuilt: Final = ResponsesAPIResponse(**answer.model_dump())
+
+    assert rebuilt.model_dump()["output"] == [search_call]

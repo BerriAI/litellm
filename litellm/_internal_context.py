@@ -55,6 +55,16 @@ def in_emulated_file_search() -> bool:
 
 
 @contextmanager
+def internal_sub_call() -> Generator[None]:
+    """A nested call the parent call logs and bills, so the parent must fold this call's cost into its own."""
+    token: Final = is_internal_call.set(True)
+    try:
+        yield
+    finally:
+        is_internal_call.reset(token)
+
+
+@contextmanager
 def post_response_phase() -> Generator[None]:
     """Work the caller no longer waits for (success callbacks, response-cache writes), including tasks it spawns."""
     token: Final = _post_response.set(True)
