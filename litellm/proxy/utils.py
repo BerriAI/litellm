@@ -4405,6 +4405,9 @@ class ProxyLogging:
         double-decrement under the limiter's in-memory fallback.
         """
         limiter: Final = self.get_proxy_hook("parallel_request_limiter")
+        if isinstance(limiter, PROXY_MaxParallelRequestsHandler):
+            await limiter.async_release_websocket_connection_slot()
+            return
         if not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3):
             return
         await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
