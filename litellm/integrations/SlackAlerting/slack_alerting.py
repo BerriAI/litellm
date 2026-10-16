@@ -174,7 +174,7 @@ class SlackAlerting(CustomBatchLogger):
         alerting_threshold: float | None = None,
         alert_types: list[AlertType] | None = None,
         alert_to_webhook_url: dict[AlertType, list[str] | str] | None = None,
-        alerting_args: Mapping[str, object] | None = None,
+        alerting_args: dict | None = None,
         llm_router: Router | None = None,
         alert_type_config: dict[str, dict] | None = None,
     ):
