@@ -3415,13 +3415,18 @@ def _complete_openrouter(ctx: CompletionDispatchContext) -> _CompletionDispatchR
 
     ## Load Config
     config: Final = litellm.OpenrouterConfig.get_config()
+    config_region: Final[str | None] = (
+        ctx.provider_config.region
+        if isinstance(ctx.provider_config, litellm.OpenrouterConfig) and isinstance(ctx.provider_config.region, str)
+        else (litellm.OpenrouterConfig.region if isinstance(litellm.OpenrouterConfig.region, str) else None)
+    )
     api_base = resolve_openrouter_api_base(  # rebind-ok: regional endpoint resolution for openrouter
         api_base=api_base,
-        region=getattr(config, "region", None),
+        region=config_region,
         litellm_params=litellm_params,
         optional_params=optional_params,
     )
-    if isinstance(litellm_params, dict):
+    if litellm_params is not None:
         litellm_params["api_base"] = api_base
         litellm_params["data_residency"] = infer_openrouter_data_residency("openrouter", api_base)
 
@@ -6793,7 +6798,7 @@ def embedding(
                 litellm_params=litellm_params_dict,
                 optional_params=optional_params,
             )
-            if isinstance(litellm_params_dict, dict):
+            if litellm_params_dict is not None:
                 litellm_params_dict["api_base"] = api_base
                 litellm_params_dict["data_residency"] = infer_openrouter_data_residency("openrouter", api_base)
 

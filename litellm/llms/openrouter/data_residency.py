@@ -9,7 +9,7 @@ OpenRouter provides dedicated regional endpoints for end-to-end data residency:
 Docs: https://openrouter.ai/docs/guides/features/in-region-routing
 """
 
-from collections.abc import Mapping, MutableMapping
+from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 from urllib.parse import urlparse
@@ -39,11 +39,22 @@ _OPENROUTER_REGIONAL_HOSTNAMES: Final[Mapping[str, str]] = MappingProxyType(
 _DEFAULT_OPENROUTER_API_BASE: Final[str] = "https://openrouter.ai/api/v1"
 
 
+def _extract_region_value(params: object) -> str | None:
+    if not isinstance(params, Mapping):
+        return None
+    for key in ("region", "region_name", "data_residency"):
+        if key in params:
+            val: Final[object] = params[key]
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+    return None
+
+
 def resolve_openrouter_api_base(
     api_base: str | None = None,
     region: str | None = None,
-    litellm_params: Mapping[str, object] | None = None,
-    optional_params: Mapping[str, object] | None = None,
+    litellm_params: object = None,
+    optional_params: object = None,
 ) -> str:
     """
     Resolve the OpenRouter API base URL based on custom api_base, explicit region, or environment.
@@ -64,33 +75,20 @@ def resolve_openrouter_api_base(
         return api_base
 
     # Check for region in litellm_params, optional_params, explicit region argument, config, or environment
-    raw_from_params: Final[object] = (
-        litellm_params.get("region") or litellm_params.get("region_name") or litellm_params.get("data_residency")
-        if isinstance(litellm_params, Mapping)
-        else None
-    )
-    raw_from_optional: Final[object] = (
-        (
-            optional_params.pop("region", None)
-            or optional_params.pop("region_name", None)
-            or optional_params.pop("data_residency", None)
-        )
-        if isinstance(optional_params, MutableMapping)
-        else (
-            optional_params.get("region") or optional_params.get("region_name") or optional_params.get("data_residency")
-            if isinstance(optional_params, Mapping)
-            else None
-        )
-    )
-    resolved_region: Final[object] = (
-        raw_from_params
-        or raw_from_optional
-        or region
-        or getattr(litellm, "openrouter_region", None)
-        or getattr(litellm, "openrouter_data_residency", None)
+    region_from_params: Final[str | None] = _extract_region_value(litellm_params)
+    region_from_optional: Final[str | None] = _extract_region_value(optional_params)
+
+    litellm_region: Final[object] = getattr(litellm, "openrouter_region", None)
+    litellm_data_residency: Final[object] = getattr(litellm, "openrouter_data_residency", None)
+    attr_region: Final[str | None] = (
+        litellm_region
+        if isinstance(litellm_region, str)
+        else (litellm_data_residency if isinstance(litellm_data_residency, str) else None)
     )
 
-    if resolved_region and isinstance(resolved_region, str):
+    resolved_region: Final[str | None] = region_from_params or region_from_optional or region or attr_region
+
+    if resolved_region is not None:
         normalized_region: Final[str] = resolved_region.strip().lower()
         if normalized_region in ("global", "default"):
             return _DEFAULT_OPENROUTER_API_BASE
@@ -104,7 +102,8 @@ def resolve_openrouter_api_base(
             f"Unsupported OpenRouter region: '{resolved_region}'. Supported regions are 'eu', 'us', 'global'."
         )
 
-    return api_base or litellm.api_base or get_secret_str("OPENROUTER_API_BASE") or _DEFAULT_OPENROUTER_API_BASE
+    fallback_api_base: Final[str | None] = api_base or litellm.api_base or get_secret_str("OPENROUTER_API_BASE")
+    return fallback_api_base or _DEFAULT_OPENROUTER_API_BASE
 
 
 def infer_openrouter_data_residency(
@@ -121,11 +120,12 @@ def infer_openrouter_data_residency(
         return None
 
     try:
-        host: Final = urlparse(api_base).hostname
+        parsed_url: Final = urlparse(api_base)
+        host: Final[str | None] = parsed_url.hostname
     except (TypeError, ValueError):
         return None
 
-    if not host:
+    if host is None:
         return None
 
     return _OPENROUTER_REGIONAL_HOSTNAMES.get(host.lower())

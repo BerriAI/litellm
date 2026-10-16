@@ -1418,7 +1418,7 @@ from .exceptions import (
     ImageFetchError,
     VectorStoreSearchError,
     NotFoundError,
-    OpenRouterRegionNotSupportedError,
+    OpenRouterRegionNotSupportedError as OpenRouterRegionNotSupportedError,
     PermissionDeniedError,
     RateLimitError,
     RateLimitErrorCategory,
