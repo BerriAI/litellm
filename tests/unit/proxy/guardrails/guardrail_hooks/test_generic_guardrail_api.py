@@ -7,13 +7,14 @@ specifically focusing on metadata extraction and passing.
 
 import json
 import os
-from collections.abc import Callable
-from typing import Final
+from collections.abc import Callable, Mapping
+from typing import Final, TypeAlias
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm import ModelResponse
@@ -750,10 +751,20 @@ ANTHROPIC_ROWS: Final = {
 }
 
 
-def _guardrail_server(answer: Callable[[dict], dict], seen: list[dict]) -> Callable[..., MagicMock]:
-    def post(url, json, headers, **_kwargs):
+class _GuardrailBody(TypedDict):
+    texts: ReadOnly[list[str]]
+    structured_messages: ReadOnly[list[dict[str, object]]]
+
+
+_GuardrailReply: TypeAlias = Mapping[str, object]
+
+
+def _guardrail_server(
+    answer: Callable[[_GuardrailBody], _GuardrailReply], seen: list[_GuardrailBody]
+) -> Callable[..., MagicMock]:
+    def post(url: str, json: _GuardrailBody, headers: Mapping[str, str], **_kwargs: object) -> MagicMock:
         seen.append(json)
-        response = MagicMock()
+        response: Final = MagicMock()
         response.json.return_value = answer(json)
         response.raise_for_status = MagicMock()
         return response
@@ -769,7 +780,7 @@ class TestStructuredMessagesSentToTheServer:
     async def test_openai_rows_are_sent_exactly_as_the_chat_completion_types_serialize_them(
         self, generic_guardrail, mock_request_data_input
     ):
-        seen: Final[list[dict]] = []  # mutable-ok: records every body the guardrail server received
+        seen: Final[list[_GuardrailBody]] = []  # mutable-ok: records every body the guardrail server received
         rows: Final = [dict(row) for row in OPENAI_ROWS]
 
         with patch.object(
@@ -790,7 +801,7 @@ class TestStructuredMessagesSentToTheServer:
     async def test_a_row_the_chat_completion_types_cannot_carry_is_sent_as_the_caller_sent_it(
         self, generic_guardrail, mock_request_data_input, row
     ):
-        seen: Final[list[dict]] = []  # mutable-ok: records every body the guardrail server received
+        seen: Final[list[_GuardrailBody]] = []  # mutable-ok: records every body the guardrail server received
         openai_row: Final = {"role": "user", "content": "Look up 123-45-6789 for me.", "name": "pat"}
 
         with patch.object(
@@ -818,9 +829,9 @@ class TestStructuredMessagesSentToTheServer:
         """An echo of rows with list content is still an echo, so the texts redaction
         reaches the LLM instead of the unredacted rows being written back."""
         texts: Final = ["Look up 123-45-6789 for me.", "ssn 123-45-6789"]
-        seen: Final[list[dict]] = []  # mutable-ok: records every body the guardrail server received
+        seen: Final[list[_GuardrailBody]] = []  # mutable-ok: records every body the guardrail server received
 
-        def echo_rows_and_redact_texts(body: dict) -> dict:
+        def echo_rows_and_redact_texts(body: _GuardrailBody) -> _GuardrailReply:
             return {
                 "action": "GUARDRAIL_INTERVENED",
                 "texts": [text.replace("123-45-6789", "[SSN]") for text in body["texts"]],
@@ -846,9 +857,9 @@ class TestStructuredMessagesSentToTheServer:
     ):
         user_row: Final = {"role": "user", "content": "Look up 123-45-6789 for me."}
         redacted_row: Final = {"role": "user", "content": "Look up [SSN] for me."}
-        seen: Final[list[dict]] = []  # mutable-ok: records every body the guardrail server received
+        seen: Final[list[_GuardrailBody]] = []  # mutable-ok: records every body the guardrail server received
 
-        def redact_the_user_row(body: dict) -> dict:
+        def redact_the_user_row(body: _GuardrailBody) -> _GuardrailReply:
             return {
                 "action": "GUARDRAIL_INTERVENED",
                 "structured_messages": [redacted_row, *body["structured_messages"][1:]],
