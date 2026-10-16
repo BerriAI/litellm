@@ -2780,6 +2780,22 @@ async def insert_sso_user(
     return response
 
 
+async def _insert_sso_user_or_find_concurrent_insert(
+    insert: Awaitable[NewUserResponse],
+    user_id: str | None,
+    prisma_client: PrismaClient,
+) -> NewUserResponse | LiteLLM_UserTable:
+    try:
+        return await insert
+    except Exception:
+        concurrent_insert: Final = (
+            None if user_id is None else await UserRepository(prisma_client, use_writer=True).find_by_id(user_id)
+        )
+        if concurrent_insert is None:
+            raise
+        return concurrent_insert
+
+
 @router.get(
     "/sso/get/ui_settings",
     tags=["experimental"],
@@ -3418,9 +3434,10 @@ class SSOAuthenticationHandler:
             else:
                 verbose_proxy_logger.info("user not in DB, inserting user into LiteLLM DB")
                 # user not in DB, insert User into LiteLLM DB
-                user_info = await insert_sso_user(
-                    result_openid=result,
-                    user_defined_values=user_defined_values,
+                user_info = await _insert_sso_user_or_find_concurrent_insert(
+                    insert=insert_sso_user(result_openid=result, user_defined_values=user_defined_values),
+                    user_id=None if user_defined_values is None else user_defined_values.get("user_id"),
+                    prisma_client=prisma_client,
                 )
             return user_info
         except Exception as e:

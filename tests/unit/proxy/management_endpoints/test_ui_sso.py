@@ -1403,6 +1403,52 @@ async def test_upsert_sso_user_no_role_in_sso_response():
     assert "user_role" not in call_args.kwargs["data"]
 
 
+def _users_by_id(*rows: LiteLLM_UserTable) -> MagicMock:
+    by_id: Final = {row.user_id: row for row in rows}
+    prisma: Final = MagicMock()
+    prisma.writer_db.litellm_usertable.find_unique = AsyncMock(side_effect=lambda where: by_id.get(where["user_id"]))
+    return prisma
+
+
+async def _first_sign_in(prisma: MagicMock, duplicate: str) -> NewUserResponse | LiteLLM_UserTable | None:
+    from litellm.proxy.utils import handle_exception_on_proxy
+
+    rejected: Final = handle_exception_on_proxy(HTTPException(status_code=409, detail={"error": duplicate}))
+    with patch("litellm.proxy.management_endpoints.ui_sso.new_user", AsyncMock(side_effect=rejected)):
+        return await SSOAuthenticationHandler.upsert_sso_user(
+            result=CustomOpenID(id="sso-subject", email="person@example.com", display_name="Person", team_ids=[]),
+            user_info=None,
+            user_email="person@example.com",
+            user_defined_values={
+                "user_id": "sso-subject",
+                "user_email": "person@example.com",
+                "user_role": None,
+                "max_budget": None,
+                "budget_duration": None,
+                "models": [],
+            },
+            prisma_client=prisma,
+        )
+
+
+@pytest.mark.asyncio
+async def test_upsert_sso_user_signs_in_to_the_account_a_concurrent_first_sign_in_created():
+    winner: Final = LiteLLM_UserTable(user_id="sso-subject", user_email="person@example.com", user_role="internal_user")
+
+    signed_in: Final = await _first_sign_in(_users_by_id(winner), "User with id sso-subject already exists")
+
+    assert signed_in == winner
+
+
+@pytest.mark.asyncio
+async def test_upsert_sso_user_does_not_sign_in_to_another_account_holding_the_email():
+    other: Final = LiteLLM_UserTable(user_id="someone-else", user_email="person@example.com", user_role="proxy_admin")
+
+    signed_in: Final = await _first_sign_in(_users_by_id(other), "User with email person@example.com already exists")
+
+    assert signed_in is None
+
+
 def test_get_user_email_and_id_extracts_microsoft_role():
     """
     Test that _get_user_email_and_id_from_result extracts user_role from Microsoft SSO.
