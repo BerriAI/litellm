@@ -6,9 +6,10 @@ The handler processes the 'prompt' parameter for guardrails.
 """
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # one boundary cast keeps element checks typed
 
 from litellm._logging import verbose_proxy_logger
+from litellm.exceptions import GuardrailRaisedException
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -76,6 +77,16 @@ class OpenAITextCompletionHandler(BaseTranslation):
             )
 
         elif isinstance(prompt, list):
+            prompt_list: Final = cast(list[object], prompt)  # cast-ok: narrow Unknown once for typed element checks
+            if any(not isinstance(p, str) for p in prompt_list):
+                # Token-ID prompts (list[int] or list[list[int]]) carry no inspectable
+                # text, so an input guardrail cannot judge them. Fail closed instead of
+                # forwarding an uninspected request.
+                raise GuardrailRaisedException(
+                    guardrail_name=guardrail_to_apply.guardrail_name,
+                    message="OpenAI Text Completion: input guardrails cannot inspect token-ID prompts (lists of integers). Resend the prompt as decoded text to apply guardrails.",
+                    should_wrap_with_default_message=False,
+                )
             # List of string prompts (batch completion)
             texts_to_check: Final = []
             text_indices: Final = []  # Track which prompts are strings
