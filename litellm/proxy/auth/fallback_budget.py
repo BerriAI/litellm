@@ -156,8 +156,11 @@ async def is_token_within_budget_for_model(
         if user_spend >= user_budget:
             return False
 
-    team_member_budget: Final = getattr(valid_token, "max_budget_in_team", None) or getattr(
-        valid_token, "team_member_max_budget", None
+    member_team_budget: Final = getattr(valid_token, "max_budget_in_team", None)
+    team_member_budget: Final = (
+        member_team_budget
+        if member_team_budget is not None
+        else getattr(valid_token, "team_member_max_budget", None)
     )
     if (
         team_member_budget is not None

@@ -1,6 +1,6 @@
 from collections.abc import Mapping, Sequence
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
 import pytest
@@ -132,6 +132,41 @@ async def test_paid_target_allowed_when_under_team_member_overall_budget():
 async def test_free_target_allowed_even_when_over_team_member_overall_budget():
     token = _token(user_id="u1", team_id="t1", max_budget_in_team=50.0, team_member_spend=100.0)
     assert await is_token_within_budget_for_model(model="free-model", valid_token=token, llm_router=_router()) is True
+
+
+@pytest.mark.asyncio
+async def test_paid_target_refused_when_team_member_budget_is_zero():
+    token = _token(user_id="u1", team_id="t1", max_budget_in_team=0.0, team_member_spend=0.0)
+    assert await is_token_within_budget_for_model(model="paid-model", valid_token=token, llm_router=_router()) is False
+
+
+@pytest.mark.asyncio
+async def test_load_team_member_budget_populates_token_when_budget_checks_skipped():
+    from litellm.proxy.auth.user_api_key_auth import _load_team_member_default_model_budget
+
+    token = _token(user_id="u1", team_id="t1")
+    assert token.max_budget_in_team is None
+
+    mock_membership = MagicMock()
+    mock_membership.spend = 15.0
+    mock_budget_row = MagicMock()
+    mock_budget_row.effective_max_budget.return_value = 50.0
+    mock_budget_row.model_max_budget = None
+    mock_membership.litellm_budget_table = mock_budget_row
+    mock_membership.budget_id = None
+
+    with patch("litellm.proxy.auth.user_api_key_auth.get_team_membership", new=AsyncMock(return_value=mock_membership)):
+        await _load_team_member_default_model_budget(
+            user_api_key_auth_obj=token,
+            team_object=None,
+            prisma_client=MagicMock(),
+            user_api_key_cache=MagicMock(),
+            skip_budget_checks=True,
+            proxy_logging_obj=None,
+        )
+
+    assert token.max_budget_in_team == 50.0
+    assert token.team_member_spend == 15.0
 
 
 @pytest.mark.asyncio
