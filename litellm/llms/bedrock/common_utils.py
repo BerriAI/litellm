@@ -29,6 +29,7 @@ import litellm
 from litellm import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
+from litellm.litellm_core_utils.prompt_templates.common_utils import schema_property_count
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -270,12 +271,26 @@ def bedrock_chat_uses_native_structured_output(
     )
 
 
-def bedrock_native_output_schema(
+BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES: Final = 64
+
+
+def bedrock_cleaned_output_schema(
     model: str, schema: Mapping[str, object], custom_llm_provider: str = "bedrock"
 ) -> Mapping[str, object] | None:
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
-    native_schema: Final = AnthropicConfig.native_output_schema(schema)
+    if (
+        not _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider)
+        and schema_property_count(schema) > BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES
+    ):
+        return None
+    return AnthropicConfig.native_output_schema(schema)
+
+
+def bedrock_native_output_schema(
+    model: str, schema: Mapping[str, object], custom_llm_provider: str = "bedrock"
+) -> Mapping[str, object] | None:
+    native_schema: Final = bedrock_cleaned_output_schema(model, schema, custom_llm_provider)
     if _bedrock_model_supports(model, "supports_native_structured_output", custom_llm_provider):
         return schema if native_schema is None else native_schema
     if _bedrock_model_supports(model, "supports_bedrock_native_structured_output", custom_llm_provider):

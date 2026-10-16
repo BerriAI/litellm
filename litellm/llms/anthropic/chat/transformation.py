@@ -34,7 +34,6 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     schema_has_open_object,
     schema_has_unresolvable_ref,
     schema_optional_property_count,
-    schema_property_count,
     schema_string_formats,
     schema_union_property_count,
     unpack_defs,
@@ -169,7 +168,6 @@ _NATIVE_OUTPUT_STRING_FORMATS: Final = frozenset(
 NATIVE_OUTPUT_MAX_UNION_PARAMETERS: Final = 16
 NATIVE_OUTPUT_MAX_OPTIONAL_PARAMETERS: Final = 24
 NATIVE_OUTPUT_MAX_GRAMMAR_BRANCHES: Final = 2048
-NATIVE_OUTPUT_MAX_PROPERTIES: Final = 64
 
 
 def _tool_type(tool: object) -> str | None:
@@ -1672,7 +1670,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             or schema_union_property_count(json_schema) > NATIVE_OUTPUT_MAX_UNION_PARAMETERS
             or schema_optional_property_count(json_schema) > NATIVE_OUTPUT_MAX_OPTIONAL_PARAMETERS
             or schema_grammar_branch_count(json_schema) > NATIVE_OUTPUT_MAX_GRAMMAR_BRANCHES
-            or schema_property_count(json_schema) > NATIVE_OUTPUT_MAX_PROPERTIES
         ):
             return None
         return AnthropicConfig.filter_anthropic_output_schema(dict(json_schema))
@@ -3024,6 +3021,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             completion_response["stop_reason"] = "stop"
             if refusal_fields:
                 json_mode_message.provider_specific_fields = dict(refusal_fields)
+            if thinking_blocks:
+                json_mode_message.thinking_blocks = thinking_blocks
+                json_mode_message.reasoning_content = reasoning_content
             _message = json_mode_message
 
         model_response.choices[0].message = _message

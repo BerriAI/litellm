@@ -9576,6 +9576,17 @@ def test_json_mode_tool_use_turn_adds_no_stop_fields_to_the_message():
     assert not message.provider_specific_fields
 
 
+def test_json_mode_keeps_the_thinking_that_preceded_the_json_tool_call():
+    thinking_block: Final = {"type": "thinking", "thinking": "The user wants a greeting.", "signature": "sig-1"}
+    body: Final = _json_mode_message_body("tool_use", None)
+    result: Final = _transform_json_mode_body({**body, "content": [thinking_block, *body["content"]]})
+
+    message: Final = result.choices[0].message
+    assert json.loads(message.content) == {"answer": "Hello"}
+    assert message.reasoning_content == thinking_block["thinking"]
+    assert [block["signature"] for block in message.thinking_blocks] == [thinking_block["signature"]]
+
+
 def test_non_dict_upstream_body_still_transforms_without_refusal_fields() -> None:
     result = AnthropicConfig().transform_parsed_response(
         completion_response=MagicMock(),

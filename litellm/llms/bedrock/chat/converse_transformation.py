@@ -58,6 +58,7 @@ from litellm.llms.base_llm.chat.transformation import REQUEST_PARAMS, BaseConfig
 from litellm.llms.bedrock.chat.tool_result_images import place_tool_result_images
 from litellm.llms.bedrock.common_utils import (
     bedrock_chat_uses_native_structured_output,
+    bedrock_cleaned_output_schema,
     bedrock_model_supports_regex_lookaround,
     bedrock_native_output_format,
     bedrock_supports_tool_search,
@@ -1001,7 +1002,7 @@ class AmazonConverseConfig(BaseConfig):
         if not self._supports_native_structured_outputs(model, self.custom_llm_provider, thinking_requested):
             return None
         if BedrockModelInfo.get_base_model(model).startswith("anthropic"):
-            return AnthropicConfig.native_output_schema(json_schema)
+            return bedrock_cleaned_output_schema(model, json_schema, self.custom_llm_provider or "bedrock_converse")
         return json_schema
 
     def _output_config_for_anthropic_format(

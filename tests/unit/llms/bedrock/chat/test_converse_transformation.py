@@ -21,9 +21,9 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
 from litellm.llms.anthropic.chat.transformation import (
     NATIVE_OUTPUT_MAX_GRAMMAR_BRANCHES,
     NATIVE_OUTPUT_MAX_OPTIONAL_PARAMETERS,
-    NATIVE_OUTPUT_MAX_PROPERTIES,
     NATIVE_OUTPUT_MAX_UNION_PARAMETERS,
 )
+from litellm.llms.bedrock.common_utils import BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -1483,32 +1483,25 @@ def test_output_config_format_dropped_on_unsupported_converse_model_warns(caplog
     """When Converse model lacks native structured-output support, the silently
     dropped ``output_config.format`` must surface as a warning so callers can
     diagnose plain-text responses."""
-    from unittest.mock import patch
-
     config = AmazonConverseConfig()
     schema = {
         "type": "object",
         "properties": {"answer": {"type": "string"}},
     }
 
-    with patch.object(
-        AmazonConverseConfig,
-        "_supports_native_structured_outputs",
-        return_value=False,
-    ):
-        with caplog.at_level("WARNING"):
-            result = config._transform_request(
-                model="bedrock/converse/us.anthropic.claude-3-haiku-20240307-v1:0",
-                messages=[{"role": "user", "content": "hi"}],
-                optional_params={
-                    "maxTokens": 256,
-                    "output_config": {
-                        "format": {"type": "json_schema", "schema": schema},
-                    },
+    with caplog.at_level("WARNING"):
+        result = config._transform_request(
+            model="bedrock/converse/us.anthropic.claude-3-haiku-20240307-v1:0",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={
+                "maxTokens": 256,
+                "output_config": {
+                    "format": {"type": "json_schema", "schema": schema},
                 },
-                litellm_params={},
-                headers={},
-            )
+            },
+            litellm_params={},
+            headers={},
+        )
 
     assert "outputConfig" not in result
     assert any("dropping `output_config.format`" in record.getMessage() for record in caplog.records)
@@ -5157,9 +5150,8 @@ def _optional_groups_schema(count: int, group_size: int = 6) -> Mapping[str, obj
             lambda count: _flat_schema({"type": "string"}, count, False),
             NATIVE_OUTPUT_MAX_GRAMMAR_BRANCHES.bit_length() - 1,
         ),
-        (lambda count: _flat_schema({"type": "string"}, count, True), NATIVE_OUTPUT_MAX_PROPERTIES),
     ],
-    ids=["type-list-unions", "any-of-unions", "optional", "optional-grammar-branches", "properties"],
+    ids=["type-list-unions", "any-of-unions", "optional", "optional-grammar-branches"],
 )
 def test_schema_past_a_native_output_size_limit_keeps_the_tool_path(
     set_native_structured_output, native_key, schema_for, limit
@@ -5174,6 +5166,52 @@ def test_schema_past_a_native_output_size_limit_keeps_the_tool_path(
     assert sent["properties"].keys() == schema_for(limit)["properties"].keys()
     assert "outputConfig" not in past_limit
     assert past_limit["toolConfig"]["tools"][0]["toolSpec"]["name"] == "json_tool_call"
+
+
+@pytest.mark.parametrize(
+    ("native_key", "native_past_limit"), [("legacy", True), ("bedrock", False)], ids=["legacy-key", "bedrock-key"]
+)
+def test_field_count_limit_sends_the_json_tool_only_on_the_bedrock_native_key(
+    set_native_structured_output, native_key, native_past_limit
+):
+    model: Final = "us.anthropic.claude-opus-4-8"
+    set_native_structured_output(model, native_key)
+
+    at_limit: Final = _converse_request_for_schema(
+        model, _flat_schema({"type": "string"}, BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES, True)
+    )
+    past_limit: Final = _converse_request_for_schema(
+        model, _flat_schema({"type": "string"}, BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES + 1, True)
+    )
+
+    assert "outputConfig" in at_limit
+    assert ("outputConfig" in past_limit) is native_past_limit
+
+
+NUMERIC_FORMAT_SCHEMA: Final = {
+    "type": "object",
+    "properties": {
+        "count": {"type": "integer", "format": "int32"},
+        "total": {"type": "integer", "format": "int64"},
+        "ratio": {"type": "number", "format": "double"},
+    },
+    "required": ["count", "total", "ratio"],
+}
+
+
+@pytest.mark.parametrize("native_key", ["legacy", "bedrock"])
+def test_numeric_formats_keep_native_output(set_native_structured_output, native_key):
+    model: Final = "us.anthropic.claude-opus-4-8"
+    set_native_structured_output(model, native_key)
+
+    request: Final = _converse_request_for_schema(model, NUMERIC_FORMAT_SCHEMA)
+
+    sent: Final = json.loads(request["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"])
+    assert {name: field["format"] for name, field in sent["properties"].items()} == {
+        "count": "int32",
+        "total": "int64",
+        "ratio": "double",
+    }
 
 
 def _doubling_defs_schema(depth: int) -> Mapping[str, object]:

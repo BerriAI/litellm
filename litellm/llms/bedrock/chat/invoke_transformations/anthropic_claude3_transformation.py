@@ -24,6 +24,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 from litellm.llms.bedrock.common_utils import (
     apply_bedrock_invoke_structured_output,
     bedrock_chat_uses_native_structured_output,
+    bedrock_cleaned_output_schema,
     bedrock_supports_tool_search,
     get_anthropic_beta_from_headers,
     normalize_bedrock_opus_output_config_effort,
@@ -88,7 +89,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         self, model: str, json_schema: Mapping[str, object] | None, thinking_requested: bool
     ) -> bool:
         return bedrock_chat_uses_native_structured_output(model, thinking_requested) and (
-            json_schema is None or self.native_output_format_schema(json_schema) is not None
+            json_schema is None or bedrock_cleaned_output_schema(model, json_schema) is not None
         )
 
     def map_openai_params(

@@ -1470,7 +1470,14 @@ def schema_has_lookaround_pattern(schema: Mapping[str, object]) -> bool:
 
 
 def schema_string_formats(schema: Mapping[str, object]) -> frozenset[str]:
-    return frozenset(value for node in _schema_nodes(schema) if isinstance(value := node.get("format"), str))
+    return frozenset(
+        value for node in _schema_nodes(schema) if _may_be_string(node) and isinstance(value := node.get("format"), str)
+    )
+
+
+def _may_be_string(node: Mapping[str, object]) -> bool:
+    node_type: Final = node.get("type")
+    return node_type is None or node_type == "string" or "string" in _list_at(node, "type")
 
 
 def is_object_schema(node: Mapping[str, object]) -> bool:
