@@ -595,6 +595,28 @@ async def test_the_auto_summary_asks_each_target_for_a_level_it_accepts_on_every
     assert sent == {call.marker: ("responses", _AUTO_SUMMARY_LEVELS[call.model]) for call in calls}
 
 
+def _health_upstream(request: Request) -> Reply:
+    if request.method != "POST":
+        return Reply(body=b'{"object": "list", "data": []}')
+    backend: Final = string_value(_JSON_OBJECT.validate_json(request.body)["model"])
+    if _api(request.target) == "responses":
+        return responses_reply("resp_health", backend, "ok", stream=False)
+    return chat_reply("chatcmpl-health", backend, "ok", stream=False)
+
+
+@pytest.mark.parametrize(("mode", "route"), (("chat", "chat"), (None, "responses")), ids=("chat-pin", "unpinned"))
+def test_a_health_check_probes_the_api_its_deployment_sends_chat_to(
+    gateway: Gateway, mode: str | None, route: Api
+) -> None:
+    with wire_server(_health_upstream) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire, _MANTLE_GPT, mode)
+        response: Final = gateway.request("GET", "/health", params={"model": model})
+        probed: Final = tuple(_api(request.target) for request in wire.drain() if request.method == "POST")
+    assert response.status_code == 200, response.text
+    assert _JSON_OBJECT.validate_json(response.content)["healthy_count"] == 1, response.text
+    assert probed == (route,), probed
+
+
 @pytest.mark.parametrize("placement", ("top-level", "extra-body"))
 async def test_a_mantle_chat_pin_rejects_n_above_one_before_the_upstream(gateway: Gateway, placement: str) -> None:
     marker: Final = uuid.uuid4().hex

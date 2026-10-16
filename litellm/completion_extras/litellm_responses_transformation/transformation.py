@@ -180,6 +180,16 @@ def _without_audio_input_parts(input_items: list[object]) -> list[object]:
     return [_without_audio_input_parts_in_item(item) for item in input_items]
 
 
+def _effort_with_requested_summary(nested_effort: object, top_level_effort: object) -> object:
+    match top_level_effort, nested_effort:
+        case {"summary": str() as summary}, str() as effort:
+            return {"effort": effort, "summary": summary}
+        case {"summary": str() as summary}, Mapping() as reasoning if "summary" not in reasoning:
+            return {**reasoning, "summary": summary}
+        case _:
+            return nested_effort
+
+
 def _served_provider(litellm_params: Mapping[str, object]) -> str | None:
     custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
     return custom_llm_provider if isinstance(custom_llm_provider, str) else None
@@ -1713,10 +1723,16 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         # Extract supported params from extra_body and merge into optional_params
         extra_body_copy: Final = extra_body.copy()
+        top_level_effort: Final = cast(object, optional_params.get("reasoning_effort"))  # cast-ok: upcast
         for key, value in extra_body_copy.items():
             if key in supported_responses_api_params:
                 # Prefer extra_body value if it exists (may have more complete info like summary in reasoning_effort)
-                optional_params[key] = extra_body.pop(key)
+                extra_body.pop(key)
+                optional_params[key] = (
+                    _effort_with_requested_summary(cast(object, value), top_level_effort)  # cast-ok: upcast
+                    if key == "reasoning_effort"
+                    else value
+                )
 
         return optional_params
 

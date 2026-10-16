@@ -6,6 +6,7 @@ import uuid
 from typing import Any, Dict, Final, List
 
 import httpx
+import respx
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
@@ -1098,25 +1099,21 @@ async def test_messages_honors_a_chat_pin_on_a_prefixed_responses_deployment(
     }
     litellm.model_cost["perplexity/pin-test-model"] = {"litellm_provider": "perplexity", "mode": "chat"}
     _invalidate_model_cost_lowercase_map()
-    captured = {}
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
 
-    async def fake_send(self, request, **kwargs):
-        captured["url"] = str(request.url)
-        raise httpx.ConnectError("cut at the wire", request=request)
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route(host="api.perplexity.ai").mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises(litellm.exceptions.InternalServerError):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "ping"}],
+                model="perplexity/perplexity/pin-test-model",
+                api_key="test-api-key",
+                model_info=model_info,
+            )
 
-    with (
-        patch.object(httpx.AsyncClient, "send", fake_send),
-        pytest.raises(litellm.exceptions.InternalServerError),
-    ):
-        await litellm.anthropic.messages.acreate(
-            max_tokens=100,
-            messages=[{"role": "user", "content": "ping"}],
-            model="perplexity/perplexity/pin-test-model",
-            api_key="test-api-key",
-            model_info=model_info,
-        )
-
-    assert captured["url"] == expected_url
+    assert {str(call.request.url) for call in upstream.calls} == {expected_url}
 
 
 @pytest.mark.asyncio

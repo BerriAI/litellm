@@ -384,9 +384,17 @@ class TestBedrockMantleConfig:
         [
             ({"reasoning_effort": {"effort": "low"}}, False, {"reasoning_effort": "low"}),
             ({"n": 2}, True, {}),
+            ({"reasoning_effort": {}}, False, {}),
+            ({"reasoning_effort": {"effort": None}}, False, {}),
             ({"n": 1, "reasoning_effort": "high"}, False, {"n": 1, "reasoning_effort": "high"}),
         ],
-        ids=["dict-effort", "n-above-one-dropped", "servable"],
+        ids=[
+            "dict-effort",
+            "n-above-one-dropped",
+            "empty-effort-asks-for-the-default",
+            "null-effort-asks-for-the-default",
+            "servable",
+        ],
     )
     def test_a_chat_pin_sends_extra_body_through_the_same_chat_checks(
         self, monkeypatch, local_cost_map, extra_body, drop_params, expected

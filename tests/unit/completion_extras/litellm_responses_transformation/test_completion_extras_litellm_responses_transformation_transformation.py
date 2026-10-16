@@ -86,6 +86,62 @@ _MANTLE_RESPONSES_URL: Final = "https://bedrock-mantle.us-east-1.api.aws/openai/
 
 
 @pytest.mark.parametrize(
+    "extra_body",
+    [
+        {"reasoning_effort": "low", "reasoningSummary": "auto"},
+        {"reasoning_effort": {"effort": "low"}, "reasoning_summary": "auto"},
+    ],
+    ids=["string-effort", "dict-effort"],
+)
+@pytest.mark.parametrize(
+    ("model", "url", "model_info"),
+    [
+        ("openai/gpt-5.4", "https://api.openai.com/v1/responses", None),
+        ("bedrock_mantle/openai.gpt-5.6-terra", _MANTLE_RESPONSES_URL, {"mode": "chat"}),
+    ],
+    ids=["openai", "mantle-chat-pin"],
+)
+def test_a_summary_alias_beside_an_extra_body_effort_reaches_the_responses_api(
+    monkeypatch: pytest.MonkeyPatch,
+    extra_body: Mapping[str, object],
+    model: str,
+    url: str,
+    model_info: Mapping[str, object] | None,
+) -> None:
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    response_body: Final = {
+        "id": "resp_nested_effort_summary",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": "completed",
+        "model": model.rsplit("/", 1)[-1],
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_nested_effort_summary",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url).mock(return_value=httpx.Response(200, json=response_body))
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "ping"}],
+            extra_body=dict(extra_body),
+            model_info=model_info,
+            api_key="test-key",
+            aws_region_name="us-east-1",
+        )
+
+    assert json.loads(upstream.calls.last.request.content)["reasoning"] == {"effort": "low", "summary": "auto"}
+
+
+@pytest.mark.parametrize(
     ("model", "url", "expected_summary"),
     [
         ("bedrock_mantle/openai.gpt-5.6-terra", _MANTLE_RESPONSES_URL, "auto"),

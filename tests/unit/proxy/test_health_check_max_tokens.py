@@ -607,6 +607,71 @@ async def test_run_model_health_check_honors_an_explicit_chat_mode_on_mantle_cla
     assert fake_ahealth_check.call_args.kwargs["mode"] == "chat"
 
 
+_MANTLE_GPT_CHAT_REPLY: Final = {
+    "id": "chatcmpl-health",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "openai.gpt-5.6-terra",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+_MANTLE_GPT_RESPONSES_REPLY: Final = {
+    "id": "resp_health",
+    "object": "response",
+    "created_at": 1,
+    "status": "completed",
+    "model": "openai.gpt-5.6-terra",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_health",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+        }
+    ],
+    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_info", "probed_api"),
+    (({"mode": "chat"}, "chat"), ({}, "responses")),
+    ids=("chat-pin", "unpinned"),
+)
+async def test_run_model_health_check_probes_the_api_a_mantle_gpt_deployment_sends_chat_to(
+    monkeypatch, model_info, probed_api
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        chat_route: Final = respx_mock.post(
+            url__regex=r"^https://bedrock-mantle\.us-east-2\.api\.aws/.*/chat/completions$"
+        ).respond(json=_MANTLE_GPT_CHAT_REPLY)
+        responses_route: Final = respx_mock.post(
+            url__regex=r"^https://bedrock-mantle\.us-east-2\.api\.aws/.*/responses$"
+        ).respond(json=_MANTLE_GPT_RESPONSES_REPLY)
+        result: Final = await hc_module._run_model_health_check(
+            {
+                "litellm_params": {
+                    "model": "bedrock_mantle/openai.gpt-5.6-terra",
+                    "api_key": "test-bearer",
+                    "aws_region_name": "us-east-2",
+                },
+                "model_info": model_info,
+            }
+        )
+
+    assert "error" not in result, result
+    assert {"chat": chat_route.call_count, "responses": responses_route.call_count} == {
+        "chat": int(probed_api == "chat"),
+        "responses": int(probed_api == "responses"),
+    }
+
+
 def test_autodetected_embedding_skips_reasoning_effort():
     """reasoning_effort must not leak into an embedding probe whose mode is auto-detected.
 

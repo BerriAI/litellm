@@ -554,7 +554,7 @@ async def _run_model_health_check(model: dict):
 
     return await run_with_timeout(
         litellm.ahealth_check(
-            litellm_params,
+            {**litellm_params, "model_info": model_info},
             mode=mode,
             prompt=DEFAULT_HEALTH_CHECK_PROMPT,
             input=["test from litellm"],
