@@ -103,15 +103,18 @@ async def _mock_streaming_chunks():
     )
 
 
+_PLANNED_CHAT = "litellm.llms.anthropic.pass_through.adapters.handler.aexecute_planned_chat"
+
+
 @pytest.mark.asyncio
 async def test_polyfill_round_trip_non_streaming():
     captured = {}
 
-    async def fake_acompletion(**kwargs):
-        captured.update(kwargs)
+    async def fake_chat(plan):
+        captured.update({**plan.kwargs, **plan.named})
         return _mock_completion_response()
 
-    with patch("litellm.acompletion", side_effect=fake_acompletion):
+    with patch(_PLANNED_CHAT, side_effect=fake_chat):
         response = await litellm.anthropic.messages.acreate(
             model=MODEL,
             messages=_make_history(n_pairs=5),
@@ -173,11 +176,11 @@ async def test_polyfill_round_trip_non_streaming():
 async def test_polyfill_trigger_not_met_passes_through_unchanged():
     captured = {}
 
-    async def fake_acompletion(**kwargs):
-        captured.update(kwargs)
+    async def fake_chat(plan):
+        captured.update({**plan.kwargs, **plan.named})
         return _mock_completion_response()
 
-    with patch("litellm.acompletion", side_effect=fake_acompletion):
+    with patch(_PLANNED_CHAT, side_effect=fake_chat):
         response = await litellm.anthropic.messages.acreate(
             model=MODEL,
             messages=_make_history(n_pairs=2),
@@ -209,10 +212,10 @@ async def test_polyfill_trigger_not_met_passes_through_unchanged():
 
 @pytest.mark.asyncio
 async def test_polyfill_streaming_attaches_to_message_delta():
-    async def fake_acompletion(**kwargs):
+    async def fake_chat(plan):
         return _mock_streaming_chunks()
 
-    with patch("litellm.acompletion", side_effect=fake_acompletion):
+    with patch(_PLANNED_CHAT, side_effect=fake_chat):
         response = await litellm.anthropic.messages.acreate(
             model=MODEL,
             messages=_make_history(n_pairs=5),
