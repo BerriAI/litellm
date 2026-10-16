@@ -1409,3 +1409,36 @@ async def test_background_health_check_timeout_does_not_cancel_a_sibling(
     assert fast_upstream.called
     assert healthy_model_ids == {"fast"}
     assert unhealthy_model_ids == {"slow"}
+
+
+@pytest.mark.asyncio
+async def test_a_failing_health_probe_leaves_the_deployment_serving_requests(monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    deployment: Final = {
+        "model_name": "probe-group",
+        "litellm_params": {
+            "model": "openai/gpt-4o-mini",
+            "api_key": "test-key",
+            "api_base": "https://probe.example/v1",
+        },
+        "model_info": {"id": "probe-deployment", "mode": "chat"},
+    }
+    router: Final = litellm.Router(model_list=[deployment])
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        respx_mock.post("https://probe.example/v1/chat/completions").mock(
+            side_effect=(
+                httpx.Response(404, json={"error": {"message": "model not found", "type": "invalid_request_error"}}),
+                httpx.Response(200, json={**_MANTLE_GPT_CHAT_REPLY, "model": "gpt-4o-mini"}),
+            )
+        )
+        probe: Final = await hc_module._run_model_health_check(copy.deepcopy(deployment))
+        reply: Final = await router.acompletion(model="probe-group", messages=[{"role": "user", "content": "Say ok"}])
+
+    assert "error" in probe
+    assert reply.choices[0].message.content == "ok"
