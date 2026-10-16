@@ -625,6 +625,13 @@ def test_hostile_input_shapes_do_not_crash_the_head(rig: Rig) -> None:
     events: Final = success_messages(rig, marker_big)
     assert MARKER not in body_blob([e.get("messages") for e in events])
 
+    marker_list: Final = "row16list-" + tag()
+    response_list: Final = post_responses(rig, {"model": "open-model", "input": [marker_body(marker_list), "second line"], "max_output_tokens": 32})
+    assert response_list.status_code == 200, response_list.text
+    list_events: Final = success_messages(rig, marker_list)
+    assert isinstance(list_events[-1]["messages"], list) and isinstance(list_events[-1]["messages"][0], dict), list_events[-1]["messages"]
+    assert list_events[-1]["messages"][0] == {"role": "user", "content": marker_body(marker_list)}
+
     response_none_content: Final = post_responses(
         rig,
         {"model": "mask-model", "input": [{"role": "user", "content": None}], "max_output_tokens": 32},

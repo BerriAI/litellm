@@ -556,6 +556,23 @@ def _timestamp_seconds(moment: object) -> float | None:
     return None
 
 
+def normalize_input_messages_for_logging(
+    messages: str | Sequence[object],
+) -> Sequence[object]:
+    """Wrap bare strings and lists of strings as user messages.
+
+    The single wrapping rule for the logging snapshot: a bare string and a list of
+    bare strings both become chat-shaped user messages, every other list passes
+    through verbatim. Shared by ``Logging.__init__`` (the initial snapshot) and the
+    proxy's post-guardrail refresh so the two can never disagree on the schema.
+    """
+    if isinstance(messages, str):
+        return [{"role": "user", "content": messages}]
+    if isinstance(messages, list) and len(messages) > 0 and isinstance(messages[0], str):
+        return [{"role": "user", "content": m} for m in messages]
+    return messages
+
+
 class Logging(LiteLLMLoggingBaseClass):
     global \
         supabaseClient, \
@@ -632,15 +649,7 @@ class Logging(LiteLLMLoggingBaseClass):
     ):
         _input: Final[str | None] = messages  # save original value of messages
         if messages is not None:
-            if isinstance(messages, str):
-                messages = [
-                    {"role": "user", "content": messages}
-                ]  # convert text completion input to the chat completion format
-            elif isinstance(messages, list) and len(messages) > 0 and isinstance(messages[0], str):
-                new_messages: Final = []
-                for m in messages:
-                    new_messages.append({"role": "user", "content": m})
-                messages = new_messages
+            messages = normalize_input_messages_for_logging(messages)
 
         self.model = model
         # Shallow copy of the outer list only (inner message dicts are shared).

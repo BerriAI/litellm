@@ -10982,6 +10982,32 @@ class TestResponseCostFromLoggingObjForBridgedMessages:
 
 
 class TestRefreshResponsesInputLoggingSnapshot:
+    def test_list_of_strings_input_is_wrapped_like_the_initial_snapshot(self):
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.proxy.common_request_processing import (
+            refresh_responses_input_logging_snapshot,
+        )
+
+        logging_obj = Logging(
+            model="gpt-4o",
+            messages=["sensitive-value", "second-line"],
+            stream=False,
+            call_type="aresponses",
+            start_time=datetime.datetime.now(),
+            function_id="",
+            litellm_call_id="unit-test-call-3",
+        )
+        assert logging_obj.messages == [
+            {"role": "user", "content": "sensitive-value"},
+            {"role": "user", "content": "second-line"},
+        ], "the initial snapshot wraps list[str]"
+
+        refresh_responses_input_logging_snapshot(logging_obj, ["sensitive-value [MASKED]", "second-line"])
+
+        assert logging_obj.messages == [
+            {"role": "user", "content": "sensitive-value [MASKED]"},
+            {"role": "user", "content": "second-line"},
+        ], "the refresh must keep the same wrapped schema"
     def test_rewritten_string_input_restamps_snapshot_wrapped_like_function_setup(self):
         from litellm.litellm_core_utils.litellm_logging import Logging
         from litellm.proxy.common_request_processing import (
