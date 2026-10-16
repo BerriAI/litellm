@@ -444,6 +444,9 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # Deployment opt-in: a caller-supplied false would switch off identity
     # forwarding and let the caller choose the `user` Fireworks sees.
     "fireworks_forward_user_id",
+    # Deployment opt-in: a caller-supplied false would switch off per-key
+    # prefix-cache isolation and let the caller share another key's vLLM cache.
+    "hosted_vllm_cache_salt",
     # SDK-only field; also rejected outright in is_request_body_safe.
     "model_list",
     "vertex_ai_credentials",
