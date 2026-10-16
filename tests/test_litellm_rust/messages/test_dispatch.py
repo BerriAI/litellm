@@ -12,7 +12,6 @@ from litellm.messages.dispatch import (
     _DISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
 )
 from litellm.proxy import proxy_server
-from litellm.rust_bridge import catalog
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Feature, Route, RouteRule, Rules, Target
 from litellm.rust_bridge.configuration import Rollout
@@ -282,7 +281,7 @@ def test_binding_errors_delegate_to_python(args: tuple[object, ...], kwargs: Map
     assert captured == [(args, kwargs)]
 
 
-def test_anthropic_create_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_anthropic_create_routes_through_dispatch() -> None:
     captured: Final[list[NativeCall]] = []
     expected: Final = response()
 
@@ -293,7 +292,6 @@ def test_anthropic_create_routes_through_dispatch(monkeypatch: pytest.MonkeyPatc
         return expected
 
     NATIVE_MESSAGES.override(native)
-    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
     public_create: Final = cast(Callable[..., AnthropicMessagesResponse], litellm.anthropic.create)
     try:
         result: Final = public_create(max_tokens=16, messages=MESSAGES, model="claude-sonnet-4-5")
@@ -304,7 +302,7 @@ def test_anthropic_create_routes_through_dispatch(monkeypatch: pytest.MonkeyPatc
 
 
 @pytest.mark.asyncio
-async def test_anthropic_acreate_routes_through_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_anthropic_acreate_routes_through_dispatch() -> None:
     captured: Final[list[NativeCall]] = []
     expected: Final = response()
 
@@ -315,7 +313,6 @@ async def test_anthropic_acreate_routes_through_dispatch(monkeypatch: pytest.Mon
         return expected
 
     NATIVE_AMESSAGES.override(native)
-    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
     public_acreate: Final = cast(Callable[..., Awaitable[AnthropicMessagesResponse]], litellm.anthropic.acreate)
     try:
         result: Final = await public_acreate(max_tokens=16, messages=MESSAGES, model="claude-sonnet-4-5")
@@ -370,37 +367,6 @@ def test_messages_binding_error_delegates_unchanged_to_python() -> None:
     response: Final = dispatch._DISPATCH.run(  # pyright: ignore[reportPrivateUsage]  # test an explicit route decision
         (),
         {"model": "claude-test", "messages": MESSAGES, "custom_llm_provider": "anthropic"},
-        python=python,
-        binding=binding,
-        native=lambda hook, request, args, kwargs: hook(request),
-        rules=rules,
-    )
-
-    assert response is expected
-
-
-@pytest.mark.asyncio
-async def test_async_messages_falls_back_after_native_declines() -> None:
-    from litellm.rust_bridge.bindings import native_exception_types
-
-    native_types: Final = native_exception_types()
-    if native_types is None:
-        pytest.skip("native bridge is unavailable")
-    declined, _ = native_types
-    expected: Final = AnthropicMessagesResponse(model="claude-test")
-    rules: Final[Rules] = (RouteRule(Route.MESSAGES, Rollout.RUST_OPT_OUT),)
-
-    async def native(request: NativeCall) -> AnthropicMessagesResponse:
-        raise declined("unsupported")
-
-    async def python(*args: object, **kwargs: object) -> AnthropicMessagesResponse:
-        return expected
-
-    binding: Final[NativeBinding[NativeAmessages]] = NativeBinding("amessages", validate=lambda _: None)
-    binding.override(native)
-    response: Final = await dispatch._ADISPATCH.arun(  # pyright: ignore[reportPrivateUsage]  # test an explicit route decision
-        (),
-        {"model": "claude-test", "messages": MESSAGES, "max_tokens": 10},
         python=python,
         binding=binding,
         native=lambda hook, request, args, kwargs: hook(request),

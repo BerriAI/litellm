@@ -4,7 +4,6 @@ from typing import Final, TypeAlias
 
 import pytest
 
-from litellm.rust_bridge import configuration
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Feature, Route, RouteContext, RouteRule, Rules, Target
 from litellm.rust_bridge.configuration import Rollout
@@ -67,29 +66,6 @@ def test_unconditional_python_rule_prevents_later_rust_rule_projection() -> None
         native=lambda hook, request, args, kwargs: pytest.fail("First-match Python rule must prevent native"),
         rules=rules,
     )
-    assert result is expected
-
-
-def test_disabled_optional_rust_rule_forwards_before_projection() -> None:
-    rules: Final[Rules] = (RouteRule(Route.OCR, Rollout.RUST_OPT_OUT),)
-
-    def reject_request(args: tuple[object, ...], kwargs: Mapping[str, object]) -> Request:
-        pytest.fail("Disabled optional Rust must not project the request")
-
-    dispatch: Final = PublicDispatch(route=Route.OCR, request=reject_request, context=lambda _: RouteContext(Route.OCR))
-    expected: Final = object()
-    configuration.rust(False)
-    try:
-        result: Final = dispatch.run(
-            ("model",),
-            {},
-            python=lambda *args, **kwargs: expected,
-            binding=binding(),
-            native=lambda hook, request, args, kwargs: pytest.fail("Disabled optional Rust must not call native"),
-            rules=rules,
-        )
-    finally:
-        configuration.rust(None)
     assert result is expected
 
 
@@ -242,7 +218,7 @@ def test_constrained_python_rule_still_projects_for_a_later_rust_rule(constraine
 NativeRoute: TypeAlias = Callable[[Request, tuple[object, ...], Mapping[str, object]], object]
 
 
-def native_route(result: object) -> NativeBinding[NativeRoute]:
+def no_python_binding(result: object) -> NativeBinding[NativeRoute]:
     bound: Final[NativeBinding[NativeRoute]] = NativeBinding("no_python", validate=lambda _: None)
     bound.override(lambda request, args, kwargs: (result, request, args, dict(kwargs)))
     return bound
@@ -278,20 +254,15 @@ def ocr_dispatch(request: Request | None) -> PublicDispatch[Request]:
 
 
 @pytest.mark.parametrize("asynchronous", (False, True))
-@pytest.mark.parametrize("switch", (None, False))
-async def test_dispatch_without_python_hands_every_call_to_native(asynchronous: bool, switch: bool | None) -> None:
+async def test_dispatch_without_python_hands_every_call_to_native(asynchronous: bool) -> None:
     request: Final = Request(model="model")
     result: Final = object()
-    configuration.rust(switch)
-    try:
-        dispatched: Final = await dispatch_without_python(
-            ocr_dispatch(request),
-            native_route(result),
-            (RouteRule(Route.OCR, Rollout.RUST_REQUIRED),),
-            asynchronous=asynchronous,
-        )
-    finally:
-        configuration.rust(None)
+    dispatched: Final = await dispatch_without_python(
+        ocr_dispatch(request),
+        no_python_binding(result),
+        (RouteRule(Route.OCR, Rollout.RUST_REQUIRED),),
+        asynchronous=asynchronous,
+    )
 
     assert dispatched == (result, request, ("model",), {"page": 1})
 

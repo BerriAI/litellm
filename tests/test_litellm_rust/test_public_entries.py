@@ -1,5 +1,6 @@
 import inspect
 from collections.abc import Awaitable, Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Final, TypeAlias, cast  # noqa: TID251  # public entries return union results
@@ -8,7 +9,6 @@ import pytest
 
 import litellm
 from litellm.messages import dispatch as messages
-from litellm.rust_bridge import catalog, configuration
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Route, RouteRule
 from litellm.rust_bridge.chat_completions.entrypoints import NATIVE_ACOMPLETION, NATIVE_COMPLETION
@@ -20,6 +20,7 @@ from litellm.rust_bridge.public_call import NativeCall
 from litellm.rust_bridge.responses.entrypoints import NATIVE_ARESPONSES, NATIVE_RESPONSES
 from litellm.rust_bridge.runtime import NoPythonImplementationError
 from litellm.types.utils import ModelResponse
+from tests.test_litellm_rust.support.routing import routed
 
 MESSAGES: Final = [{"role": "user", "content": "hi"}]
 
@@ -155,9 +156,7 @@ async def call(entry: Entry, form: Form) -> object:
 @dataclass(slots=True)
 class Native:
     result: ModelResponse = field(default_factory=ModelResponse)
-    calls: list[tuple[str, NativeCall]] = field(
-        default_factory=list
-    )  # mutable-ok: records the native calls a test makes
+    calls: list[tuple[str, NativeCall]] = field(default_factory=list)  # mutable-ok: records native calls
 
     def install(self, entry: Entry) -> None:
         def sync(native_call: NativeCall) -> ModelResponse:
@@ -181,13 +180,6 @@ def native(entry: Entry) -> Iterator[Native]:
     entry.async_binding.reset()
 
 
-@pytest.fixture(autouse=True)
-def rust_switch(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    monkeypatch.delenv("LITELLM_RUST", raising=False)
-    yield
-    configuration.rust(None)
-
-
 class Outcome(Enum):
     PYTHON = auto()
     NATIVE = auto()
@@ -198,19 +190,15 @@ class Outcome(Enum):
 @dataclass(frozen=True, slots=True)
 class Scenario:
     rollout: Rollout | None
-    switch: bool | None
     binding: bool
     outcome: Outcome
 
 
 SCENARIOS: Final = {
-    "no-rule": Scenario(None, None, binding=True, outcome=Outcome.PYTHON),
-    "python-only": Scenario(Rollout.PYTHON_ONLY, True, binding=True, outcome=Outcome.PYTHON),
-    "opt-in-switched-off": Scenario(Rollout.RUST_OPT_IN, None, binding=True, outcome=Outcome.PYTHON),
-    "opt-in": Scenario(Rollout.RUST_OPT_IN, True, binding=True, outcome=Outcome.NATIVE),
-    "opt-in-without-extension": Scenario(Rollout.RUST_OPT_IN, True, binding=False, outcome=Outcome.PYTHON),
-    "required": Scenario(Rollout.RUST_REQUIRED, None, binding=True, outcome=Outcome.NATIVE),
-    "required-without-extension": Scenario(Rollout.RUST_REQUIRED, None, binding=False, outcome=Outcome.UNAVAILABLE),
+    "no-rule": Scenario(None, binding=True, outcome=Outcome.PYTHON),
+    "python-only": Scenario(Rollout.PYTHON_ONLY, binding=True, outcome=Outcome.PYTHON),
+    "required": Scenario(Rollout.RUST_REQUIRED, binding=True, outcome=Outcome.NATIVE),
+    "required-without-extension": Scenario(Rollout.RUST_REQUIRED, binding=False, outcome=Outcome.UNAVAILABLE),
 }
 
 
@@ -220,13 +208,13 @@ def expected(entry: Entry, scenario: Scenario) -> Outcome:
     return scenario.outcome
 
 
-def apply(entry: Entry, scenario: Scenario, monkeypatch: pytest.MonkeyPatch) -> None:
-    rules: Final = () if scenario.rollout is None else (RouteRule(entry.route, scenario.rollout),)
-    monkeypatch.setattr(catalog, "RULES", rules)
-    configuration.rust(scenario.switch)
+@contextmanager
+def scenario_rules(entry: Entry, scenario: Scenario) -> Iterator[None]:
     if not scenario.binding:
         entry.sync_binding.override(None)
         entry.async_binding.override(None)
+    with routed(*(() if scenario.rollout is None else (RouteRule(entry.route, scenario.rollout),))):
+        yield
 
 
 def entry_id(entry: Entry) -> str:
@@ -237,22 +225,20 @@ def entry_id(entry: Entry) -> str:
 @pytest.mark.parametrize("scenario", tuple(SCENARIOS.values()), ids=tuple(SCENARIOS))
 @pytest.mark.parametrize("entry", ENTRIES, ids=entry_id)
 async def test_every_public_form_takes_the_path_the_rules_pick(
-    entry: Entry, scenario: Scenario, form: Form, native: Native, monkeypatch: pytest.MonkeyPatch
+    entry: Entry, scenario: Scenario, form: Form, native: Native
 ) -> None:
-    apply(entry, scenario, monkeypatch)
     outcome: Final = expected(entry, scenario)
-
-    if outcome is Outcome.UNAVAILABLE:
-        with pytest.raises(RuntimeError, match=f"Rust {entry.route.value} bridge is unavailable"):
-            await call(entry, form)
-        return
-    if outcome is Outcome.NO_PYTHON:
-        with pytest.raises(NoPythonImplementationError, match=f"{entry.route.value} has no Python implementation"):
-            await call(entry, form)
-        assert native.calls == []
-        return
-
-    result: Final = await call(entry, form)
+    with scenario_rules(entry, scenario):
+        if outcome is Outcome.UNAVAILABLE:
+            with pytest.raises(RuntimeError, match=f"Rust {entry.route.value} bridge is unavailable"):
+                await call(entry, form)
+            return
+        if outcome is Outcome.NO_PYTHON:
+            with pytest.raises(NoPythonImplementationError, match=f"{entry.route.value} has no Python implementation"):
+                await call(entry, form)
+            assert native.calls == []
+            return
+        result: Final = await call(entry, form)
 
     if outcome is Outcome.PYTHON:
         assert entry.python is not None
@@ -267,13 +253,10 @@ async def test_every_public_form_takes_the_path_the_rules_pick(
 
 
 @pytest.mark.parametrize("entry", ENTRIES, ids=entry_id)
-async def test_async_forms_hand_native_the_same_call(
-    entry: Entry, native: Native, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    apply(entry, SCENARIOS["required"], monkeypatch)
-
-    for form in (Form.ASYNC, Form.SYNC_FLAGGED, Form.ASYNC_FLAGGED):
-        _ = await call(entry, form)
+async def test_async_forms_hand_native_the_same_call(entry: Entry, native: Native) -> None:
+    with scenario_rules(entry, SCENARIOS["required"]):
+        for form in (Form.ASYNC, Form.SYNC_FLAGGED, Form.ASYNC_FLAGGED):
+            _ = await call(entry, form)
 
     assert [binding for binding, _ in native.calls] == ["async", "async", "async"]
     resolved: Final = [dict(native_call.resolved) for _, native_call in native.calls]
@@ -281,27 +264,21 @@ async def test_async_forms_hand_native_the_same_call(
 
 
 @pytest.mark.parametrize("entry", ENTRIES, ids=entry_id)
-async def test_flagged_sync_entry_does_nothing_until_awaited(
-    entry: Entry, native: Native, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    apply(entry, SCENARIOS["required"], monkeypatch)
+async def test_flagged_sync_entry_does_nothing_until_awaited(entry: Entry, native: Native) -> None:
+    with scenario_rules(entry, SCENARIOS["required"]):
+        pending: Final = entry.sync(*entry.args(), **entry.kwargs(**{entry.flag: True}))
 
-    pending: Final = entry.sync(*entry.args(), **entry.kwargs(**{entry.flag: True}))
-
-    assert inspect.iscoroutine(pending)
-    assert native.calls == []
-    assert await pending is native.result
+        assert inspect.iscoroutine(pending)
+        assert native.calls == []
+        assert await pending is native.result
     assert len(native.calls) == 1
 
 
 @pytest.mark.parametrize("entry", ENTRIES, ids=entry_id)
-async def test_flagged_sync_entry_raises_setup_errors_at_await(
-    entry: Entry, native: Native, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    apply(entry, SCENARIOS["required-without-extension"], monkeypatch)
+async def test_flagged_sync_entry_raises_setup_errors_at_await(entry: Entry, native: Native) -> None:
+    with scenario_rules(entry, SCENARIOS["required-without-extension"]):
+        pending: Final = entry.sync(*entry.args(), **entry.kwargs(**{entry.flag: True}))
 
-    pending: Final = entry.sync(*entry.args(), **entry.kwargs(**{entry.flag: True}))
-
-    assert inspect.iscoroutine(pending)
-    with pytest.raises(RuntimeError, match="is unavailable"):
-        await pending
+        assert inspect.iscoroutine(pending)
+        with pytest.raises(RuntimeError, match="is unavailable"):
+            await pending

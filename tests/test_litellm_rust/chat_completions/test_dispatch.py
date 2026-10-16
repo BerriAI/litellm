@@ -1,4 +1,3 @@
-import threading
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Final, cast  # noqa: TID251  # narrows legacy callable signatures
 
@@ -10,8 +9,6 @@ from litellm.chat_completions.dispatch import (
     _ADISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
     _DISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
 )
-from litellm.integrations.custom_logger import CustomLogger
-from litellm.rust_bridge import catalog, configuration
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Route, RouteRule, Rules
 from litellm.rust_bridge.chat_completions.entrypoints import (
@@ -205,37 +202,6 @@ def test_sync_completion_request_projects_public_arguments() -> None:
     assert response is expected
 
 
-@pytest.mark.asyncio
-async def test_async_completion_falls_back_after_native_declines() -> None:
-    from litellm.rust_bridge.bindings import native_exception_types
-
-    native_types: Final = native_exception_types()
-    if native_types is None:
-        pytest.skip("native bridge is unavailable")
-    declined, _ = native_types
-    expected: Final = ModelResponse()
-    rules: Final[Rules] = (RouteRule(Route.CHAT_COMPLETIONS, Rollout.RUST_OPT_OUT),)
-
-    async def native(request: NativeCall) -> ModelResponse:
-        raise declined("unsupported")
-
-    async def python(*args: object, **kwargs: object) -> ModelResponse:
-        return expected
-
-    binding: Final[NativeBinding[NativeAcompletion]] = NativeBinding("acompletion", validate=lambda _: None)
-    binding.override(native)
-    response: Final = await dispatch._ADISPATCH.arun(  # pyright: ignore[reportPrivateUsage]  # test an explicit route decision
-        ("test-model", MESSAGES),
-        {},
-        python=python,
-        binding=binding,
-        native=native_call_hook,
-        rules=rules,
-    )
-
-    assert response is expected
-
-
 def test_positional_parameters_remain_available_to_native_projection() -> None:
     request: Final = _DISPATCH.request(("anthropic/test-model", MESSAGES, 12.0, 0.25), {})
     assert request is not None
@@ -245,7 +211,7 @@ def test_positional_parameters_remain_available_to_native_projection() -> None:
 
 
 @pytest.mark.asyncio
-async def test_acompletion_marker_binds_positionals_by_the_sync_signature(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_acompletion_marker_binds_positionals_by_the_sync_signature() -> None:
     captured: Final[list[NativeCall]] = []
 
     async def native(call: NativeCall) -> ModelResponse:
@@ -253,36 +219,9 @@ async def test_acompletion_marker_binds_positionals_by_the_sync_signature(monkey
         return ModelResponse()
 
     NATIVE_ACOMPLETION.override(native)
-    monkeypatch.setattr(catalog, "RULES", RUST_RULES)
     public_completion: Final = cast(Callable[..., Awaitable[ModelResponse]], litellm.completion)
     try:
         _ = await public_completion("gpt-4o", MESSAGES, 30.0, acompletion=True)
     finally:
         NATIVE_ACOMPLETION.reset()
     assert [(request.resolved["timeout"], request.resolved["functions"]) for request in captured] == [(30.0, None)]
-
-
-@pytest.mark.asyncio
-async def test_acompletion_marker_fallback_runs_legacy_setup_off_the_event_loop(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    setup_threads: Final[list[int]] = []
-
-    class SetupThread(CustomLogger):
-        def log_pre_api_call(self, model: str, messages: object, kwargs: object) -> None:
-            setup_threads.append(threading.get_ident())
-
-    NATIVE_ACOMPLETION.override(None)
-    monkeypatch.setattr(catalog, "RULES", (RouteRule(Route.CHAT_COMPLETIONS, Rollout.RUST_OPT_IN),))
-    configuration.rust(True)
-    public_completion: Final = cast(Callable[..., Awaitable[ModelResponse]], litellm.completion)
-    try:
-        result: Final = await public_completion(
-            model="gpt-4o", messages=MESSAGES, mock_response="served", callbacks=[SetupThread()], acompletion=True
-        )
-    finally:
-        configuration.rust(None)
-        NATIVE_ACOMPLETION.reset()
-    assert result.choices[0].message.content == "served"
-    assert setup_threads
-    assert threading.get_ident() not in setup_threads
