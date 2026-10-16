@@ -59,7 +59,7 @@ _TRANSLATION_SECRET_BODY: Final = {
 _TRANSLATION_SDP_BODY: Final = {
     "requestBody": {"required": True, "content": {"application/sdp": {"schema": {"type": "string"}}}}
 }
-_TRANSLATION_SDP_RESPONSES: Final = {
+_TRANSLATION_SDP_RESPONSES: Final[dict[int | str, dict[str, object]]] = {
     200: {"description": "WebRTC SDP answer", "content": {"application/sdp": {"schema": {"type": "string"}}}}
 }
 

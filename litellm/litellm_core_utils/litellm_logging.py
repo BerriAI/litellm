@@ -3243,7 +3243,12 @@ class Logging(LiteLLMLoggingBaseClass):
         try:
             ## BUILD COMPLETE STREAMED RESPONSE
             complete_streaming_response: (
-                ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse | None
+                ModelResponse
+                | TextCompletionResponse
+                | ResponsesAPIResponse
+                | InteractionsAPIResponse
+                | TranscriptionResponse
+                | None
             ) = None
             if "complete_streaming_response" in self.model_call_details and not for_async_request:
                 return  # break out of this.

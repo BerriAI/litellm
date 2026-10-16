@@ -26,8 +26,8 @@ class OpenAIGPTAudioTranscriptionConfig(OpenAIWhisperAudioTranscriptionConfig):
         self,
         model: str,
         audio_file: FileTypes,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
     ) -> AudioTranscriptionRequestData:
         """
         Transform the audio transcription request
@@ -53,8 +53,8 @@ class OpenAIGPTTranscribeAudioTranscriptionConfig(OpenAIGPTAudioTranscriptionCon
         self,
         model: str,
         audio_file: FileTypes,
-        optional_params: dict,  # mutable-ok: base transformation interface supplies a mutable request payload
-        litellm_params: dict,  # mutable-ok: base transformation interface supplies mutable provider parameters
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
     ) -> AudioTranscriptionRequestData:
         data: Final = {
             "model": model,

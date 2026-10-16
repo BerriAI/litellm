@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.base_llm.chat.transformation import BaseConfig
@@ -15,6 +15,7 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import FileTypes, ModelResponse, TranscriptionResponse
 
 _TRANSCRIPTION_REQUEST: Final = TypeAdapter(Mapping[str, object])
+_TRANSCRIPTION_TEXT: Final = TypeAdapter(str)
 
 
 def sdk_compatible_transcription_request_data(data: object) -> Mapping[str, object]:
@@ -41,6 +42,12 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+def sdk_compatible_transcription_response(response: object) -> BaseModel | str:
+    if isinstance(response, BaseModel):
+        return response
+    return _TRANSCRIPTION_TEXT.validate_python(response, strict=True)
 
 
 @dataclass
