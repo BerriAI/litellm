@@ -13,11 +13,12 @@ class _CarriesStatusCode(Protocol):
 
 
 def _provider_status_code(exc: Exception) -> int | None:
-    match exc:
+    unwrapped = exc  # rebind-ok: the recursion gate requires iterative wrapper traversal
+    while isinstance(unwrapped, MidStreamFallbackError) and unwrapped.original_exception is not None:
+        unwrapped = unwrapped.original_exception
+    match unwrapped:
         case InternalServerError(provider_status_code=int() as provider_status):
             return provider_status
-        case MidStreamFallbackError(original_exception=Exception() as original):
-            return _provider_status_code(original)
         case _:
             return None
 
