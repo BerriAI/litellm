@@ -300,7 +300,6 @@ class CostTrackingTestCase(BaseModel):
     name: str
     covers: str
     known_bug: str | None = None
-    skip_reason: str | None = None
     model: str
     alias: str | None = None
     endpoint: (
