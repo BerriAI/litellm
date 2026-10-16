@@ -13,6 +13,7 @@ from openai.types.completion_usage import CompletionUsage
 from pydantic import BaseModel
 
 import litellm
+import litellm.cost_calculator as cost_calculator_module
 from litellm import TranscriptionResponse, model_cost
 from litellm.constants import REALTIME_METERED_USAGE_KEY
 from litellm.cost_calculator import BaseTokenUsageProcessor, RealtimeAPITokenUsageProcessor, ResponsesWebSocketTokenUsageProcessor, batch_cost_calculator, completion_cost, cost_per_token, handle_realtime_stream_cost_calculation, response_cost_calculator
@@ -89,6 +90,30 @@ def _claude_family_generalization() -> Iterator[None]:
                     "name": "claude-family-baseline",
                     "pattern": r"claude-[a-z]+-\d+(?:[-.]\d+)?(?:-\d{8})?",
                     "model_info": {"mode": "chat", "max_input_tokens": 200000, "max_output_tokens": 64000},
+                }
+            ]
+        )
+        yield
+    finally:
+        set_fallback_generalizations(previous_rules)
+
+
+@pytest.fixture
+def _priced_claude_family_generalization() -> Iterator[None]:
+    previous_rules: Final = list(get_fallback_generalization_rules())
+    try:
+        set_fallback_generalizations(
+            [
+                {
+                    "name": "claude-family-priced",
+                    "pattern": r"claude-[a-z]+-\d+(?:[-.]\d+)?(?:-\d{8})?",
+                    "model_info": {
+                        "mode": "chat",
+                        "max_input_tokens": 200000,
+                        "max_output_tokens": 64000,
+                        "input_cost_per_token": 0.0000321,
+                        "output_cost_per_token": 0.0000765,
+                    },
                 }
             ]
         )
@@ -202,6 +227,60 @@ def test_completion_cost_prefers_exact_route_price_over_capability_generalizatio
     assert isinstance(input_rate, (int, float)), priced_entry
     assert isinstance(output_rate, (int, float)), priced_entry
     assert cost == usage.prompt_tokens * input_rate + usage.completion_tokens * output_rate
+
+
+def test_completion_cost_keeps_priced_generalization_before_later_exact_candidate(
+    _local_model_cost_map: None,
+    _priced_claude_family_generalization: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    priced_model: Final = "bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0"
+    exact_entry: Final = {
+        "litellm_provider": "bedrock",
+        "mode": "chat",
+        "input_cost_per_token": 0.0000123,
+        "output_cost_per_token": 0.0000456,
+    }
+    monkeypatch.setattr(litellm, "model_cost", {priced_model: exact_entry})
+    usage: Final = Usage(prompt_tokens=17, completion_tokens=9, total_tokens=26)
+    response: Final = ModelResponse(
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
+        choices=[],
+        usage=usage,
+    )
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model=priced_model,
+        custom_llm_provider="bedrock",
+    )
+
+    assert cost == pytest.approx(usage.prompt_tokens * 0.0000321 + usage.completion_tokens * 0.0000765)
+
+
+def test_completion_cost_skips_candidate_lookups_with_custom_pricing(
+    _local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    usage: Final = Usage(prompt_tokens=17, completion_tokens=9, total_tokens=26)
+    response: Final = ModelResponse(
+        model="explicit-pricing-model",
+        choices=[],
+        usage=usage,
+    )
+    cost_map_lookup: Final = MagicMock(wraps=cost_calculator_module._cost_map_model_info)
+    monkeypatch.setattr(cost_calculator_module, "_cost_map_model_info", cost_map_lookup)
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model="explicit-pricing-model",
+        custom_llm_provider="openai",
+        custom_pricing=True,
+        custom_cost_per_token={"input_cost_per_token": 0.001, "output_cost_per_token": 0.002},
+    )
+
+    cost_map_lookup.assert_not_called()
+    assert cost == pytest.approx(usage.prompt_tokens * 0.001 + usage.completion_tokens * 0.002)
 
 
 def test_completion_cost_returns_zero_for_capability_only_generalization(
