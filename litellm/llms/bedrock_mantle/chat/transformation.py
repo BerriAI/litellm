@@ -66,6 +66,10 @@ def _unsupported_chat_values(non_default_params: Mapping[str, object]) -> tuple[
     )
 
 
+def _drops_params(litellm_params: Mapping[str, object]) -> bool:
+    return litellm.drop_params is True or litellm_params.get("drop_params") is True
+
+
 def _chat_request_params(optional_params: Mapping[str, object], drop_params: bool) -> Mapping[str, object]:
     unsupported: Final = _unsupported_chat_values(optional_params)
     if unsupported and not drop_params:
@@ -209,9 +213,19 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
         litellm_params: dict[str, object],  # mutable-ok: OpenAIGPTConfig.transform_request signature
         headers: dict[str, str],  # mutable-ok: OpenAIGPTConfig.transform_request signature
     ) -> dict[str, object]:  # mutable-ok: OpenAIGPTConfig.transform_request signature
-        drop_params: Final = litellm.drop_params is True or litellm_params.get("drop_params") is True
-        request_params: Final = dict(_chat_request_params(optional_params, drop_params))
+        request_params: Final = dict(_chat_request_params(optional_params, _drops_params(litellm_params)))
         return super().transform_request(model, messages, request_params, litellm_params, headers)
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        return _chat_request_params(
+            super().transform_extra_body(extra_body, request, model, litellm_params), _drops_params(litellm_params)
+        )
 
     def _supports_reasoning(self, model: str) -> bool:
         try:

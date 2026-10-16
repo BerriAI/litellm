@@ -466,27 +466,48 @@ async def test_a_mantle_chat_pin_sends_what_chat_cannot_serve_to_responses(
         _assert_logged(answer, pinned, "success")
 
 
-async def test_a_mantle_chat_pin_rejects_n_above_one_before_the_upstream(gateway: Gateway) -> None:
+def _placed(placement: str, params: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    return params if placement == "top-level" else {"extra_body": dict(params)}
+
+
+@pytest.mark.parametrize("placement", ("top-level", "extra-body"))
+async def test_a_mantle_chat_pin_rejects_n_above_one_before_the_upstream(gateway: Gateway, placement: str) -> None:
     marker: Final = uuid.uuid4().hex
     with wire_server(_upstream()) as wire, gateway.scenario() as scenario:
         pinned: Final = _deployment(scenario, wire, _MANTLE_GPT, "chat")
-        answer: Final = await _http(gateway, _Call(pinned, "chat", False, marker), {**_NO_RETRIES, "n": 2})
+        answer: Final = await _http(
+            gateway, _Call(pinned, "chat", False, marker), {**_NO_RETRIES, **_placed(placement, {"n": 2})}
+        )
         assert answer.status == 400, answer.text
         assert "does not support n=2" in answer.text and "drop_params" in answer.text, answer.text
         assert _attempts(wire) == ()
         _assert_logged(answer, pinned, "failure")
 
 
-async def test_a_mantle_chat_pin_drops_n_above_one_under_drop_params(gateway: Gateway) -> None:
+@pytest.mark.parametrize("placement", ("top-level", "extra-body"))
+async def test_a_mantle_chat_pin_drops_n_above_one_under_drop_params(gateway: Gateway, placement: str) -> None:
     marker: Final = uuid.uuid4().hex
+    extra: Final[Mapping[str, JsonValue]] = {**_NO_RETRIES, **_placed(placement, {"n": 2}), "drop_params": True}
     with wire_server(_upstream()) as wire, gateway.scenario() as scenario:
         pinned: Final = _deployment(scenario, wire, _MANTLE_GPT, "chat")
-        answer: Final = _assert_answered(
-            await _http(gateway, _Call(pinned, "chat", False, marker), {**_NO_RETRIES, "n": 2, "drop_params": True}),
-            marker,
-        )
+        answer: Final = _assert_answered(await _http(gateway, _Call(pinned, "chat", False, marker), extra), marker)
         (attempt,) = _attempts(wire)
         assert attempt.api == "chat" and "n" not in attempt.body, attempt
+        _assert_logged(answer, pinned, "success")
+
+
+@pytest.mark.parametrize("placement", ("top-level", "extra-body"))
+async def test_a_no_provider_mantle_chat_pin_sends_an_effort_object_as_its_level(
+    gateway: Gateway, placement: str
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    effort: Final[Mapping[str, JsonValue]] = {"reasoning_effort": {"effort": "low"}}
+    extra: Final[Mapping[str, JsonValue]] = {**_NO_RETRIES, **_placed(placement, effort)}
+    with wire_server(_upstream()) as wire, gateway.scenario() as scenario:
+        pinned: Final = _deployment(scenario, wire, _MANTLE_GPT, "chat", provider_pin=False)
+        answer: Final = _assert_answered(await _http(gateway, _Call(pinned, "chat", False, marker), extra), marker)
+        (attempt,) = _attempts(wire)
+        assert (attempt.api, attempt.body.get("reasoning_effort")) == ("chat", "low"), attempt
         _assert_logged(answer, pinned, "success")
 
 
