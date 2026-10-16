@@ -5,7 +5,7 @@ from typing import Final
 
 import pytest
 from integration._support.client import Gateway, eventually
-from integration._support.process import graceful_stop_seconds, owned_proxy_process
+from integration._support.process import WorkerHealthcheck, graceful_stop_seconds, owned_proxy_process
 
 WORKERS: Final = 2
 DEPLOYMENT_HEALTHCHECK_SECONDS: Final = 5
@@ -38,7 +38,7 @@ def test_owned_proxy_workers_outlast_the_deployments_healthcheck_default(gateway
         tmp_path,
         _slow_worker_environment(tmp_path),
         workers=WORKERS,
-        extra_arguments=("--timeout_worker_healthcheck", str(int(graceful_stop_seconds()))),
+        healthcheck=WorkerHealthcheck.LENIENT,
     ) as owned:
         started: Final = eventually(
             lambda: STARTED_WORKER.findall(owned.log.read_text()),

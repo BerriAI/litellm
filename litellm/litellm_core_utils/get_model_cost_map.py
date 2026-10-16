@@ -21,6 +21,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from importlib.resources import files
+from itertools import chain
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Protocol
@@ -93,6 +94,7 @@ class GetModelCostMap:
         return GetModelCostMap.load_local_model_cost_map_with_revision().model_cost_map
 
     _loaded_catalog: Mapping[str, Mapping[str, object]] = MappingProxyType({})
+    _loaded_catalog_fields: frozenset[str] = frozenset()
 
     @classmethod
     def loaded_model_cost_map(cls) -> Mapping[str, Mapping[str, object]]:
@@ -100,9 +102,15 @@ class GetModelCostMap:
         return cls._loaded_catalog
 
     @classmethod
+    def loaded_model_cost_map_fields(cls) -> frozenset[str]:
+        """Every field name that at least one entry of the loaded catalog carries."""
+        return cls._loaded_catalog_fields
+
+    @classmethod
     def _snapshot_loaded_catalog(cls, model_cost: Mapping[str, object]) -> None:
         raw: Final = _CATALOG_ADAPTER.validate_python(model_cost)
         cls._loaded_catalog = MappingProxyType({key: MappingProxyType(entry) for key, entry in raw.items()})
+        cls._loaded_catalog_fields = frozenset(chain.from_iterable(entry.keys() for entry in raw.values()))
 
     @classmethod
     def get_backup_model_count(cls) -> int:
@@ -233,8 +241,9 @@ class _FetchAttemptRetryable:
 
 
 def _parse_retry_after_seconds(response: httpx.Response) -> float | None:
-    header: Final[str | None] = response.headers.get("Retry-After")
-    if header is None:
+    try:
+        header: Final = response.headers["Retry-After"]
+    except KeyError:
         return None
     try:
         seconds: Final = float(header)
@@ -246,7 +255,7 @@ def _parse_retry_after_seconds(response: httpx.Response) -> float | None:
 def _retry_wait_seconds(outcome: _FetchAttemptRetryable, attempt: int, rng: random.Random) -> float:
     if outcome.retry_after_seconds is not None:
         return min(outcome.retry_after_seconds, MODEL_COST_MAP_FETCH_MAX_WAIT_SECONDS)
-    return min(float(2**attempt) + rng.uniform(0.0, 1.0), MODEL_COST_MAP_FETCH_MAX_WAIT_SECONDS)
+    return min(2.0**attempt + rng.uniform(0.0, 1.0), MODEL_COST_MAP_FETCH_MAX_WAIT_SECONDS)
 
 
 class _AsyncGetClient(Protocol):

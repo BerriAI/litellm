@@ -21,7 +21,7 @@ import traceback
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeVar, cast
+from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeVar, cast
 
 import fastapi
 import yaml
@@ -112,9 +112,13 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (  # n
 )
 from litellm.proxy.management_endpoints.router_weights import validate_router_settings_weights
 from litellm.proxy.management_endpoints.team_admin_field_permissions import (
+    TEAM_ADMIN_MEMBER_KEY_TYPE,
     team_admin_key_edit_verdict,
     team_admin_key_request_or_raise,
+    team_admin_may_create_member_keys,
     team_admin_may_edit_member_key_budgets,
+    team_admin_member_key_creation_or_raise,
+    team_admin_member_key_creation_verdict,
 )
 from litellm.proxy.management_helpers.access_group_key_sync import (
     sync_key_access_group_membership,
@@ -122,6 +126,7 @@ from litellm.proxy.management_helpers.access_group_key_sync import (
     sync_key_update_access_group_membership,
 )
 from litellm.proxy.management_helpers.key_settings_audit import with_settings_updated_at
+from litellm.proxy.management_helpers.managed_resource_owner_sync import repoint_key_owned_managed_resources
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
     ObjectPermissionUpsert,
     _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -445,7 +450,7 @@ def _generate_budget_windows(
 
 
 def _effective_key_for_generate(data: GenerateKeyRequest, now: datetime) -> LiteLLM_VerificationToken:
-    requested: Final = data.model_dump(exclude_unset=True, exclude_none=True)
+    requested: Final = _as_object_dict(data.model_dump(exclude_unset=True, exclude_none=True))
     metadata_fields: Final = MappingProxyType(
         {field: value for field, value in requested.items() if field in _KEY_METADATA_REQUEST_FIELDS}
     )
@@ -488,7 +493,7 @@ def _regenerate_request_as_update_request(key: str, data: RegenerateKeyRequest) 
     changed_fields: Final = MappingProxyType(
         {
             field: value
-            for field, value in data.model_dump(exclude_unset=True).items()
+            for field, value in _as_object_dict(data.model_dump(exclude_unset=True)).items()
             if field in UpdateKeyRequest.model_fields
             and field != "key"
             and not (field in _EMPTY_DURATION_MEANS_UNCHANGED and value == "")
@@ -1215,6 +1220,37 @@ def _enforce_upperbound_key_params(
                         )
 
 
+def _team_admin_requests_member_key(
+    data: GenerateKeyRequest,
+    team_table: LiteLLM_TeamTableCachedObj | None,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> bool:
+    """Whether the caller is a team admin asking for a team key owned by another member of that team."""
+    return not (
+        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+        or team_table is None
+        or data.user_id is None
+        or data.user_id == user_api_key_dict.user_id
+        or _get_user_in_team(team_table=team_table, user_id=data.user_id) is None
+        or not is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_table)
+    )
+
+
+def _member_key_request(data: GenerateKeyRequest, acting_as_team_admin: bool) -> GenerateKeyRequest:
+    if not acting_as_team_admin:
+        return data
+    return data.model_copy(update={"key_type": TEAM_ADMIN_MEMBER_KEY_TYPE})
+
+
+async def _stored_user_role(prisma_client: PrismaClient | None, user_id: str | None) -> str | None:
+    if prisma_client is None or user_id is None:
+        return None
+    user_row: Final = await _prisma_table(UserRepository(prisma_client, use_writer=True)).find_unique(
+        where={"user_id": user_id}
+    )
+    return user_row.user_role if user_row is not None else None
+
+
 async def _common_key_generation_helper(
     data: GenerateKeyRequest,
     user_api_key_dict: UserAPIKeyAuth,
@@ -1229,9 +1265,28 @@ async def _common_key_generation_helper(
         prisma_client,
     )
 
+    acting_as_team_admin: Final = _team_admin_requests_member_key(
+        data=data,
+        team_table=team_table,
+        user_api_key_dict=user_api_key_dict,
+    )
+    if acting_as_team_admin:
+        general_settings: Final = _general_settings()
+        team_admin_member_key_creation_or_raise(
+            team_admin_member_key_creation_verdict(
+                general_settings,
+                key_type=data.key_type,
+                owner_role=(
+                    await _stored_user_role(prisma_client, data.user_id)
+                    if team_admin_may_create_member_keys(general_settings)
+                    else None
+                ),
+            )
+        )
     common_key_access_checks(
         user_api_key_dict=user_api_key_dict,
         data=data,
+        user_id=user_api_key_dict.user_id if acting_as_team_admin else None,
         llm_router=llm_router,
         premium_user=premium_user,
     )
@@ -1439,7 +1494,7 @@ async def _common_key_generation_helper(
 
     data_json = data.model_dump(exclude_unset=True, exclude_none=True)
 
-    data_json = handle_key_type(data, data_json)
+    data_json = handle_key_type(_member_key_request(data, acting_as_team_admin), data_json)
 
     # Re-check allowed_routes after handle_key_type, since key_type can derive
     # an elevated bucket (e.g. ["management_routes"]) that wasn't present in
@@ -2113,7 +2168,7 @@ async def generate_key_fn(
     - key_alias: Optional[str] - User defined key alias
     - key: Optional[str] - User defined key value. Must start with 'sk-' and be at least 16 characters long. If not set, a 16-digit unique sk-key is created for you.
     - team_id: Optional[str] - The team id of the key
-    - user_id: Optional[str] - The user id of the key
+    - user_id: Optional[str] - The user id of the key. Non-admin callers may only pass their own id, except a team admin creating a key in a team they administer for another member of that team, when a proxy admin has added `create_member_keys` to `team_admin_editable_team_fields`. That member must have the `internal_user` or `internal_user_viewer` role, and the key is always an `llm_api` key.
     - agent_id: Optional[str] - The agent id associated with the key.
     - organization_id: Optional[str] - The organization id of the key. If not set, and team_id is set, the organization id will be the same as the team id. If conflict, an error will be raised.
     - project_id: Optional[str] - The project id of the key. When set, models and max_budget are validated against the project's limits.
@@ -4612,7 +4667,8 @@ async def info_key_fn(
           hour), so subtracting budget_duration from it does not give the window's start
         - model_max_budget: dict - Per-model budgets, e.g. {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
         - model_max_budget_usage: dict | None - Current-window spend per model, present only when
-          the key has per-model budgets
+          the key has per-model budgets. Each entry's budget_reset_at is when that model's open
+          window ends and its spend resets, or None when no window is open or it ends after year 9999
         - budget_limits: list | None - Concurrent budget windows, exactly as stored
         - budget_limits_usage: dict | None - Current-window spend per budget window, e.g.
           {"1h": {"current_spend": 0.0009}}, present only when the key has budget windows
@@ -5957,6 +6013,13 @@ async def _execute_virtual_key_regeneration(
 
     await evict_and_broadcast(cache_keys=jwt_mapping_cache_keys, user_api_key_cache=user_api_key_cache)
 
+    await repoint_key_owned_managed_resources(
+        prisma_client=prisma_client,
+        existing_key_row=key_in_db,
+        previous_key_token=hashed_api_key,
+        new_key_token=new_token_hash,
+    )
+
     # After credential invalidation, so a failure here can never keep the old key alive.
     await sync_key_regeneration_access_group_membership(
         prisma_client=prisma_client,
@@ -6470,7 +6533,7 @@ async def reset_key_spend_fn(
         None,
         description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
     ),
-) -> dict[str, Any]:
+) -> dict[str, object]:
     try:
         from litellm.proxy.proxy_server import (
             hash_token,
@@ -7014,7 +7077,7 @@ async def key_aliases(
     size: int = Query(50, ge=1, le=100, description="Page size"),
     search: str | None = Query(None, description="Search key aliases (case-insensitive partial match)"),
     team_id: str | None = Query(None, description="Filter aliases to keys belonging to this team"),
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """
     Lists key aliases with pagination and optional search.
 

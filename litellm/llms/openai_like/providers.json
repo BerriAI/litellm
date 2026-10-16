@@ -108,7 +108,7 @@
     "api_base_env": "AIHUBMIX_API_BASE"
   },
   "crusoe": {
-    "base_url": "https://managed-inference-api-proxy.crusoecloud.com/v1",
+    "base_url": "https://api.inference.crusoecloud.com/v1",
     "api_key_env": "CRUSOE_API_KEY",
     "api_base_env": "CRUSOE_API_BASE",
     "param_mappings": {
@@ -180,6 +180,12 @@
     "api_key_env": "COGNITION_API_KEY",
     "api_base_env": "COGNITION_API_BASE"
   },
+  "coralbricks": {
+    "base_url": "https://inference.coralbricks.ai/v1",
+    "api_key_env": "CORALBRICKS_API_KEY",
+    "api_base_env": "CORALBRICKS_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
+  },
   "cortecs": {
     "base_url": "https://api.cortecs.ai/v1",
     "api_key_env": "CORTECS_API_KEY",
@@ -223,6 +229,16 @@
     "base_url": "https://api.reka.ai/v1",
     "api_key_env": "REKA_API_KEY",
     "api_base_env": "REKA_API_BASE"
+  },
+  "inferenceapis": {
+    "base_url": "https://api.inferenceapis.com/v1",
+    "api_key_env": "INFERENCEAPIS_API_KEY",
+    "api_base_env": "INFERENCEAPIS_API_BASE",
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/responses",
+      "/v1/messages"
+    ]
   },
   "linkrra": {
     "base_url": "https://pool.linkrra.com/v1",

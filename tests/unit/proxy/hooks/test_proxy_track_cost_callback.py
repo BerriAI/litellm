@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
@@ -413,6 +414,24 @@ async def test_async_post_call_failure_hook_keeps_a_guardrail_verdict_recorded_a
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("tracking_disabled", "expected_end_user_id"), [(True, None), (None, "session-abc123")])
+async def test_async_post_call_failure_hook_records_end_user_only_while_end_user_cost_tracking_is_on(
+    monkeypatch: pytest.MonkeyPatch, tracking_disabled: bool | None, expected_end_user_id: str | None
+):
+    monkeypatch.setattr(litellm, "disable_end_user_cost_tracking", tracking_disabled)
+    writer: Final = MagicMock(spec=DBSpendUpdateWriter)
+    writer.update_database = AsyncMock()
+
+    await ProxyDBLogger(spend_writer=lambda: writer).async_post_call_failure_hook(
+        request_data={"model": "gpt-5.4-mini", "messages": [{"role": "user", "content": "Hello"}]},
+        original_exception=Exception("provider rejected the key"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key", end_user_id="session-abc123"),
+    )
+
+    assert writer.update_database.call_args.kwargs["end_user_id"] == expected_end_user_id
+
+
+@pytest.mark.asyncio
 async def test_async_post_call_failure_hook_non_llm_route():
     # Setup
     logger = ProxyDBLogger()
@@ -455,6 +474,35 @@ async def test_async_post_call_failure_hook_non_llm_route():
 
         # Assert that update_database was NOT called for non-LLM routes
         mock_update_database.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("team_id", "route", "written"),
+    [
+        ("litellm-dashboard", "/key/list", False),
+        ("litellm-dashboard", "/v2/user/info", False),
+        ("litellm-dashboard", "/chat/completions", True),
+        ("team-1", "/key/list", True),
+        (None, "/key/list", True),
+    ],
+)
+async def test_async_post_call_failure_hook_skips_dashboard_session_info_route_failures(  # test-quality-ok: update_database is the DB write boundary, so whether it is awaited is the observable outcome
+    team_id: str | None, route: str, written: bool
+) -> None:
+    """An expired Admin UI session key refetching dashboard info routes must not
+    write a failure SpendLog row, while its LLM calls and other keys' info calls still do."""
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await ProxyDBLogger().async_post_call_failure_hook(
+            request_data={},
+            original_exception=Exception("Authentication Error - Expired Key"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-session", team_id=team_id, request_route=route),
+        )
+
+    assert mock_update_database.await_count == (1 if written else 0)
 
 
 @pytest.mark.asyncio
