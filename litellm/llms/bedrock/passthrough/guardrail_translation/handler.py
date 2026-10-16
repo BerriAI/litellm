@@ -461,6 +461,30 @@ def _converse_frames(items: Sequence[object]) -> tuple[ConverseStreamFrame, ...]
     return tuple(item for item in items if isinstance(item, ConverseStreamFrame))
 
 
+def _reads_stream_marks(guardrail: "CustomGuardrail") -> bool:
+    return getattr(guardrail, "reads_stream_marks", False) is True
+
+
+def _stream_marked_request_data(
+    request_data: Mapping[str, object], frames: Sequence[ConverseStreamFrame], texts: Sequence[str], ended: bool
+) -> dict[str, object]:  # mutable-ok: the request dict guardrails receive
+    """``request_data`` with the marks chat completions gives a streamed answer: ``stream`` on every scan and, once
+    the stream has ended, the finished ``response``."""
+    if not ended:
+        return {**request_data, "stream": True}
+    stop_reason: Final = next(
+        (
+            frame.payload.get("stopReason")
+            for frame in frames
+            if frame.event_type == "messageStop" and frame.payload is not None
+        ),
+        None,
+    )
+    message: Final = {"role": "assistant", "content": [{"text": text} for text in texts]}
+    response: Final = {"output": {"message": message}, **({"stopReason": stop_reason} if stop_reason else {})}
+    return {**request_data, "stream": True, "response": response}
+
+
 def _write_back_stream_texts(
     frames: Sequence[ConverseStreamFrame], groups: _StreamTextGroups, rewritten_texts: Sequence[str]
 ) -> None:
@@ -728,23 +752,32 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         """
         Scan the Converse frames relayed so far as the buffered path scans a whole response: one text per content
         block and kind. Once the stream has ended, guardrail rewrites are written back into the frames, which reach
-        the caller only when the stream is held until moderated.
+        the caller only when the stream is held until moderated. A guardrail that sets ``reads_stream_marks`` gets
+        a copy of the request marked as chat completions marks a streamed answer; the others get it unchanged.
         """
         frames: Final = _converse_frames(responses_so_far)
         groups: Final = _group_stream_texts([frame.scanned_texts() for frame in frames])
         if not groups.groups:
             return responses_so_far
         content: Final = [{"text": text} for text in groups.texts()]
+        ended: Final = self._check_streaming_has_ended(frames)
         await self.process_output_response(  # pyright: ignore[reportUnknownMemberType]  # takes the untyped request dict
             response={"output": {"message": {"role": "assistant", "content": content}}},
             guardrail_to_apply=guardrail_to_apply,
             litellm_logging_obj=litellm_logging_obj,
             user_api_key_dict=user_api_key_dict,
-            request_data=request_data,
+            request_data=(
+                _stream_marked_request_data(request_data, frames, groups.texts(), ended)
+                if request_data is not None and _reads_stream_marks(guardrail_to_apply)
+                else request_data
+            ),
         )
-        if self._check_streaming_has_ended(frames):
+        if ended:
             _write_back_stream_texts(frames, groups, [block["text"] for block in content])
         return responses_so_far
+
+    def needs_ended_stream_scan(self, guardrail: "CustomGuardrail", responses_so_far: Sequence[object]) -> bool:
+        return _reads_stream_marks(guardrail)
 
     def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
         frames: Final = _converse_frames(responses_so_far)

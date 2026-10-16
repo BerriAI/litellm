@@ -5,7 +5,9 @@ guardrail that scans responses through ``apply_guardrail`` runs on the stream th
 ``/v1/chat/completions``, ``/v1/messages`` and ``/v1/responses``: frames reach the caller as the upstream sends
 them, every fifth frame and the end of the stream are scanned, and a block ends the stream with an AWS
 exception frame. ``streaming_buffer_until_moderated: true`` still holds the stream and applies masks per content
-block."""
+block, and a caller leaving before the first held frame stops the proxy reading the upstream. Noma v2 scans carry
+``stream`` and, on the last one, the finished ``response``, as chat completions sends them; other guardrails see the
+request as before."""
 
 from __future__ import annotations
 
@@ -48,6 +50,10 @@ STACKED: Final = "relay-stacked"
 RELEASE_ON_SCAN: Final = "relay-release-on-scan"
 PARALLEL: Final = "relay-parallel"
 PARALLEL_FIRST: Final = "relay-parallel-first"
+HELD_END_ONLY: Final = "relay-held-end-only"
+NOMA: Final = "relay-noma"
+ALICE: Final = "relay-alice"
+NOMA_THEN_ALICE: Final = "relay-noma-then-alice"
 CODE_BLOCK_REASON: Final = "code says no"
 BLOCK_REASON: Final = "Violated guardrail policy"
 MASKED_WORD: Final = "Paris"
@@ -174,7 +180,18 @@ class Rig:
             if request.target.startswith(f"/{guardrail}/") and marker.encode() in request.body
         )
 
-    def converse_stream(self, guardrail: str, marker: str) -> "StreamOutcome":
+    def forwarded_request_data(self, marker: str) -> dict[str, tuple[Mapping[str, JsonValue], ...]]:
+        """The ``request_data`` each response scan forwarded to Noma v2 and Alice, by guardrail, in scan order."""
+        forwarded: Final[dict[str, list[Mapping[str, JsonValue]]]] = {NOMA: [], ALICE: []}
+        for request in self.sink.drain():
+            guardrail = request.target.split("/")[1]
+            if guardrail in forwarded and marker.encode() in request.body:
+                body = json.loads(request.body)
+                if body["input_type"] == "response":
+                    forwarded[guardrail].append(body["request_data"])
+        return {guardrail: tuple(scans) for guardrail, scans in forwarded.items()}
+
+    def converse_stream(self, guardrail: str, marker: str) -> StreamOutcome:
         client: Final = boto3.client(
             "bedrock-runtime",
             region_name="us-east-1",
@@ -246,6 +263,10 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
             return bedrock_verdict(request)
         if request.target.startswith(f"/{PARALLEL}/"):
             return parallel_verdict(request)
+        if request.target.startswith(f"/{NOMA}/"):
+            return Reply(body=json.dumps({"action": "NONE"}).encode())
+        if request.target.startswith(f"/{ALICE}/"):
+            return Reply(body=json.dumps({"verdict": "ALLOW"}).encode())
         return verdict(request)
 
     with httpx.Client(base_url=os.environ["INTEGRATION_PROXY_URL"], timeout=30, trust_env=False) as root_client:
@@ -264,6 +285,29 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
                 _guardrail(FAILING, sink),
                 _guardrail(FAILING_HELD, sink, streaming_buffer_until_moderated=True),
                 _guardrail(END_ONLY, sink, streaming_end_of_stream_only=True),
+                _guardrail(
+                    HELD_END_ONLY, sink, streaming_buffer_until_moderated=True, streaming_end_of_stream_only=True
+                ),
+                {
+                    "guardrail_name": NOMA,
+                    "litellm_params": {
+                        "guardrail": "noma_v2",
+                        "mode": "post_call",
+                        "default_on": False,
+                        "api_base": f"{sink.url}/{NOMA}",
+                        "api_key": "synthetic-noma-key",
+                    },
+                },
+                {
+                    "guardrail_name": ALICE,
+                    "litellm_params": {
+                        "guardrail": "alice",
+                        "mode": "post_call",
+                        "default_on": False,
+                        "api_base": f"{sink.url}/{ALICE}",
+                        "api_key": "synthetic-alice-key",
+                    },
+                },
                 _guardrail(OUTAGE, sink),
                 {
                     "guardrail_name": RELEASE_ON_SCAN,
@@ -312,7 +356,17 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
             config_path.write_text(yaml.safe_dump(config))
             with owned_proxy_process(root, directory, {}, config=config_path, workers=2) as owned:
                 with owned.gateway.scenario() as scenario:
-                    single: Final = (SAMPLED, BUFFERED, CODE, FAILING, FAILING_HELD, END_ONLY, OUTAGE, RELEASE_ON_SCAN)
+                    single: Final = (
+                        SAMPLED,
+                        BUFFERED,
+                        CODE,
+                        FAILING,
+                        FAILING_HELD,
+                        END_ONLY,
+                        OUTAGE,
+                        RELEASE_ON_SCAN,
+                        NOMA,
+                    )
                     yield Rig(
                         owned.gateway,
                         scenario,
@@ -323,6 +377,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
                             **{name: scenario.key(guardrails=[name]) for name in single},
                             STACKED: scenario.key(guardrails=[SAMPLED, BUFFERED]),
                             PARALLEL_FIRST: scenario.key(guardrails=[PARALLEL, BUFFERED]),
+                            NOMA_THEN_ALICE: scenario.key(guardrails=[NOMA, ALICE]),
                         },
                         outage,
                     )
@@ -362,6 +417,13 @@ def _spend_rows(call_id: str) -> list[dict[str, JsonValue]]:
         'SELECT status, api_base, prompt_tokens FROM "LiteLLM_SpendLogs" WHERE litellm_call_id=%s OR request_id=%s '
         "OR metadata->>'litellm_call_id'=%s ORDER BY status",
         (call_id, call_id, call_id),
+    )
+
+
+def _spend_rows_for_key_alias(alias: str) -> list[dict[str, JsonValue]]:
+    return read_rows(
+        "SELECT status, prompt_tokens FROM \"LiteLLM_SpendLogs\" WHERE metadata->>'user_api_key_alias'=%s",
+        (alias,),
     )
 
 
@@ -699,6 +761,95 @@ def test_client_disconnect_logs_prompt_tokens_the_upstream_never_reported(rig: R
     rows: Final = eventually(lambda: _spend_rows(call_id), lambda rows: len(rows) >= 1, seconds=70)
     assert [row["status"] for row in rows] == ["success"], rows
     assert isinstance(rows[0]["prompt_tokens"], int) and rows[0]["prompt_tokens"] > 0, rows
+
+
+def test_client_leaving_a_held_stream_before_its_first_frame_stops_the_proxy_reading_the_upstream(rig: Rig) -> None:
+    marker: Final = f"relay-{uuid.uuid4().hex}"
+    frames: Final = converse_frames((f"Held {marker} ", *(f" word{index}" for index in range(80))))
+    rig.scripts[marker] = Reply(content_type=EVENT_STREAM, chunks=frames, pause_between_chunks=0.1)
+    alias: Final = f"held-{marker}"
+    key: Final = rig.scenario.key(guardrails=[HELD_END_ONLY], key_alias=alias)
+    while not rig.provider.disconnected.empty():
+        rig.provider.disconnected.get_nowait()
+    with pytest.raises(httpx.ReadTimeout):
+        rig.gateway.client.post(
+            _stream_path(),
+            json=_stream_body(marker),
+            headers={"Authorization": f"Bearer {key}"},
+            timeout=httpx.Timeout(case_timeout_seconds(), read=1.5),
+        )
+    closed: Final = eventually(
+        lambda: rig.provider.disconnected.qsize(), lambda count: count > 0, seconds=3, return_last_on_timeout=True
+    )
+    assert closed, "the proxy kept reading the upstream after the caller left a held stream"
+    assert rig.provider.disconnected.get_nowait() == f"/model/{MODEL_ID}/converse-stream"
+    rows: Final = eventually(lambda: _spend_rows_for_key_alias(alias), lambda rows: len(rows) >= 1, seconds=70)
+    assert [row["status"] for row in rows] == ["success"], rows
+    assert isinstance(rows[0]["prompt_tokens"], int) and rows[0]["prompt_tokens"] > 0, rows
+
+
+def test_client_leaving_a_held_stream_before_bedrock_sends_a_byte_frees_its_parallel_request_slot(rig: Rig) -> None:
+    marker: Final = f"relay-{uuid.uuid4().hex}"
+    first_byte: Final = threading.Event()
+    rig.scripts[marker] = Reply(
+        content_type=EVENT_STREAM, chunks=converse_frames((f"Held {marker} ", " done")), gate_before_first=first_byte
+    )
+    key: Final = rig.scenario.key(guardrails=[HELD_END_ONLY], max_parallel_requests=1)
+    follow_up: Final = f"relay-{uuid.uuid4().hex}"
+    rig.scripts[follow_up] = Reply(content_type=EVENT_STREAM, chunks=converse_frames((f"Next {follow_up} ", " done")))
+
+    def follow_up_status() -> int:
+        return rig.gateway.client.post(
+            _stream_path(),
+            json=_stream_body(follow_up),
+            headers={"Authorization": f"Bearer {key}"},
+            timeout=case_timeout_seconds(),
+        ).status_code
+
+    try:
+        with pytest.raises(httpx.ReadTimeout):
+            rig.gateway.client.post(
+                _stream_path(),
+                json=_stream_body(marker),
+                headers={"Authorization": f"Bearer {key}"},
+                timeout=httpx.Timeout(case_timeout_seconds(), read=1.5),
+            )
+        status: Final = eventually(
+            follow_up_status, lambda status: status == 200, seconds=5, return_last_on_timeout=True
+        )
+    finally:
+        first_byte.set()
+    assert status == 200, "the request that left before Bedrock answered still holds the key's only parallel slot"
+
+
+@pytest.mark.parametrize(
+    "word_count", [12, 9], ids=["a-sampled-scan-sees-the-end", "the-last-sampled-scan-runs-before-the-end"]
+)
+def test_noma_scans_carry_stream_and_only_the_last_carries_the_finished_response(rig: Rig, word_count: int) -> None:
+    marker: Final = f"relay-{uuid.uuid4().hex}"
+    words: Final = (f"Noma {marker} ", *(f" word{index}" for index in range(word_count - 1)))
+    rig.scripts[marker] = Reply(content_type=EVENT_STREAM, chunks=converse_frames(words))
+    status, _, body = _stream(rig, NOMA, marker)
+    assert status == 200 and _exception(decode(body)) is None, decode(body)
+    scans: Final = rig.forwarded_request_data(marker)[NOMA]
+    assert len(scans) >= 2, scans
+    assert [scan.get("stream") for scan in scans] == [True] * len(scans), scans
+    assert [scan.get("response") is not None for scan in scans] == [False] * (len(scans) - 1) + [True], scans
+    assert scans[-1]["response"] == {
+        "output": {"message": {"role": "assistant", "content": [{"text": "".join(words)}]}},
+        "stopReason": "end_turn",
+    }, scans[-1]
+
+
+def test_guardrails_after_noma_see_the_streamed_request_unchanged(rig: Rig) -> None:
+    marker: Final = f"relay-{uuid.uuid4().hex}"
+    words: Final = (f"Alice {marker} ", *(f" word{index}" for index in range(11)))
+    rig.scripts[marker] = Reply(content_type=EVENT_STREAM, chunks=converse_frames(words))
+    status, _, body = _stream(rig, NOMA_THEN_ALICE, marker)
+    assert status == 200 and _exception(decode(body)) is None, decode(body)
+    scans: Final = rig.forwarded_request_data(marker)[ALICE]
+    assert len(scans) >= 2, scans
+    assert [(scan.get("stream"), scan.get("response")) for scan in scans] == [(None, None)] * len(scans), scans
 
 
 def test_non_streaming_converse_block_is_unchanged(rig: Rig) -> None:

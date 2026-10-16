@@ -58,6 +58,7 @@ class Reply:
     content_type: str = "application/json"
     chunks: tuple[bytes, ...] | None = None
     abort_after: int | None = None
+    gate_before_first: threading.Event | None = None
     gate_after_first: threading.Event | None = None
     pause_between_chunks: float = 0
     headers: Mapping[str, str] = MappingProxyType({})
@@ -155,6 +156,12 @@ def wire_server(
                 else:
                     for index, chunk in enumerate(reply.chunks):
                         if reply.abort_after == index:
+                            break
+                        if (
+                            index == 0
+                            and reply.gate_before_first is not None
+                            and not _await_release(reply.gate_before_first, closing)
+                        ):
                             break
                         self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
                         self.wfile.flush()

@@ -10,17 +10,20 @@ Validates that:
 """
 
 import copy
+import json
 from datetime import datetime
 from typing import Literal
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import respx
 
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.noma import NomaV2Guardrail
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
@@ -1451,6 +1454,51 @@ class _RecordingGuardrail(CustomGuardrail):
         return inputs
 
 
+class _RequestMarksRecordingGuardrail(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="marks", event_hook=GuardrailEventHooks.post_call, default_on=True)
+        self.received_marks: list[tuple[object, object]] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.received_marks.append((request_data.get("stream"), request_data.get("response")))
+        return inputs
+
+
+def _two_scan_stream() -> tuple[bytes, ...]:
+    return (
+        _build_event_stream_frame("messageStart", {"role": "assistant"}),
+        *(
+            _build_event_stream_frame("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": text}})
+            for text in ("Your ", "order ", "ships ", "on ", "Monday.")
+        ),
+        _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 0}),
+        _build_event_stream_frame("contentBlockDelta", {"contentBlockIndex": 1, "delta": {"text": "Thanks!"}}),
+        _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 1}),
+        _build_event_stream_frame("messageStop", {"stopReason": "end_turn"}),
+    )
+
+
+_NOMA_API_BASE = "https://noma.example.test"
+
+
+def _noma_guardrail(monkeypatch: pytest.MonkeyPatch) -> NomaV2Guardrail:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", None)
+    return NomaV2Guardrail(
+        api_key="test-key",
+        api_base=_NOMA_API_BASE,
+        guardrail_name="noma",
+        event_hook="post_call",
+        default_on=True,
+    )
+
+
 class TestConverseStreamFrames:
     @pytest.mark.asyncio
     async def test_frames_are_cut_at_their_boundaries_whatever_the_transport_chunks(self):
@@ -1624,6 +1672,60 @@ class TestConverseStreamGuardrailRelay:
 
         assert relayed == b"".join(stream)
         assert held.received_texts[-1] == [f"Card: {_TEST_CARD} now."]
+
+    @pytest.mark.asyncio
+    async def test_noma_scans_carry_stream_and_only_the_last_one_the_finished_answer(
+        self, monkeypatch, respx_mock: respx.MockRouter
+    ):
+        route = respx_mock.post(f"{_NOMA_API_BASE}/litellm/guardrail").respond(json={"action": "NONE"})
+
+        await _relay_through_post_call_guardrail(_two_scan_stream(), _noma_guardrail(monkeypatch), monkeypatch)
+
+        sent = [json.loads(call.request.content)["request_data"] for call in route.calls]
+        answer = [{"text": "Your order ships on Monday."}, {"text": "Thanks!"}]
+        finished = {"output": {"message": {"role": "assistant", "content": answer}}, "stopReason": "end_turn"}
+        assert [(scan.get("stream"), scan.get("response")) for scan in sent] == [(True, None), (True, finished)]
+
+    @pytest.mark.asyncio
+    async def test_noma_gets_the_finished_answer_when_the_last_sampled_scan_already_covered_it(
+        self, monkeypatch, respx_mock: respx.MockRouter
+    ):
+        route = respx_mock.post(f"{_NOMA_API_BASE}/litellm/guardrail").respond(json={"action": "NONE"})
+        later = _RequestMarksRecordingGuardrail()
+        stream = (
+            _build_event_stream_frame("messageStart", {"role": "assistant"}),
+            *(
+                _build_event_stream_frame("contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": text}})
+                for text in ("Your ", "order ", "ships ", "Monday.")
+            ),
+            _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 0}),
+            _build_event_stream_frame("messageStop", {"stopReason": "end_turn"}),
+        )
+
+        await _relay_through_post_call_guardrail(
+            stream, _noma_guardrail(monkeypatch), monkeypatch, outer=(later, False)
+        )
+
+        sent = [json.loads(call.request.content)["request_data"] for call in route.calls]
+        finished = {
+            "output": {"message": {"role": "assistant", "content": [{"text": "Your order ships Monday."}]}},
+            "stopReason": "end_turn",
+        }
+        assert [(scan.get("stream"), scan.get("response")) for scan in sent] == [(True, None), (True, finished)]
+        assert later.received_marks == [(None, None)]
+
+    @pytest.mark.asyncio
+    async def test_guardrails_scanning_after_noma_see_the_request_without_its_stream_marks(
+        self, monkeypatch, respx_mock: respx.MockRouter
+    ):
+        respx_mock.post(f"{_NOMA_API_BASE}/litellm/guardrail").respond(json={"action": "NONE"})
+        later = _RequestMarksRecordingGuardrail()
+
+        await _relay_through_post_call_guardrail(
+            _two_scan_stream(), _noma_guardrail(monkeypatch), monkeypatch, outer=(later, False)
+        )
+
+        assert later.received_marks == [(None, None), (None, None)]
 
     @pytest.mark.asyncio
     async def test_block_after_frames_were_relayed_raises_for_the_relay_to_report(self, monkeypatch):

@@ -154,9 +154,30 @@ async def test_asyncpassthroughstreamingresponse_wait_for_spend_flush_returns_on
 
     await gen.__anext__()
     await gen.aclose()
-    await gen.wait_for_spend_flush()
 
+    assert await gen.wait_for_spend_flush() is True
     assert flushed == [b"chunk-1"]
+
+
+@pytest.mark.asyncio
+async def test_asyncpassthroughstreamingresponse_closed_before_any_chunk_says_it_logged_no_spend():
+    from litellm.passthrough.main import AsyncPassthroughStreamingResponse
+
+    async def response_coro():
+        return _make_streaming_response([b"chunk-1"])
+
+    mock_logging_obj = _make_logging_obj()
+    gen = AsyncPassthroughStreamingResponse(
+        response=response_coro(),
+        litellm_logging_obj=mock_logging_obj,
+        provider_config=_provider_config(_RecordingCollector()),
+    )
+
+    await gen
+    await gen.aclose()
+
+    assert await gen.wait_for_spend_flush() is False
+    mock_logging_obj.async_flush_passthrough_collected_chunks.assert_not_called()
 
 
 @pytest.mark.asyncio

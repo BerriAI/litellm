@@ -4,12 +4,13 @@
 #
 # +-------------------------------------------------------------+
 
+import asyncio
 import enum
 import json
 import os
 from collections.abc import Callable, Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, TypeAlias, cast
 from urllib.parse import urlparse
 
 from litellm._logging import verbose_proxy_logger
@@ -55,6 +56,11 @@ class _Action(str, enum.Enum):
 
 
 class NomaV2Guardrail(CustomGuardrail):
+    reads_stream_marks: ClassVar[bool] = True
+    """Noma keeps one record per streamed reply when every scan carries ``stream`` and only the last one carries the
+    finished ``response``, as chat completions sends them, so provider streams relayed on the passthrough route mark
+    this guardrail's scans that way."""
+
     def __init__(
         self,
         api_key: str | None = None,
@@ -337,6 +343,10 @@ class NomaV2Guardrail(CustomGuardrail):
             guardrail_json_response = (
                 response_json if isinstance(response_json, dict) else getattr(e, "detail", blocked_detail)
             )
+            raise
+        except asyncio.CancelledError:
+            # The caller left before Noma answered, so there is no verdict to record.
+            guardrail_status = "not_run"  # rebind-ok: the status the finally block records
             raise
         except Exception as e:
             guardrail_status = "guardrail_failed_to_respond"

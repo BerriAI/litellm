@@ -4599,6 +4599,32 @@ class TestStreamCloseOnDisconnect:
                 timeout=5,
             )
 
+    async def test_cancelling_the_first_chunk_wait_stops_the_upstream_read(self):
+        reads: list[int] = []
+        closed = asyncio.Event()
+
+        async def slow_upstream():
+            try:
+                while True:
+                    reads.append(len(reads))
+                    await asyncio.sleep(0.01)
+                yield "data: never\n\n"
+            finally:
+                closed.set()
+
+        waiting = asyncio.ensure_future(
+            _buffer_first_chunk_honoring_disconnect(slow_upstream(), request=self._request_that_stays_connected())
+        )
+        await asyncio.sleep(0.05)
+        waiting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
+        reads_at_cancel = len(reads)
+        await asyncio.sleep(0.05)
+
+        assert closed.is_set()
+        assert len(reads) == reads_at_cancel
+
     async def test_buffer_first_chunk_raises_sentinel_and_closes_on_disconnect(self):
         closed = asyncio.Event()
 
@@ -5993,7 +6019,7 @@ class TestAllmPassthroughStreamingProviderGate:
         }
         return ProxyBaseLLMRequestProcessing(data=data)
 
-    async def _run(self, processing_obj, monkeypatch, chunks, stream=None, proxy_logging_obj=None):
+    async def _run(self, processing_obj, monkeypatch, chunks, stream=None, proxy_logging_obj=None, request=None):
         import litellm.proxy.common_request_processing as crp
         from litellm.proxy._types import UserAPIKeyAuth as RealUserAPIKeyAuth
 
@@ -6018,7 +6044,7 @@ class TestAllmPassthroughStreamingProviderGate:
         proxy_logging_obj.post_call_success_hook = AsyncMock()
 
         return await processing_obj.base_process_llm_request(
-            request=MagicMock(spec=Request, headers={}),
+            request=request if request is not None else MagicMock(spec=Request, headers={}),
             fastapi_response=Response(),
             user_api_key_dict=RealUserAPIKeyAuth(api_key="sk-test"),
             route_type="allm_passthrough_route",
@@ -6187,13 +6213,22 @@ class TestAllmPassthroughStreamingProviderGate:
             async def aclose(self) -> None:
                 events.append("upstream closed")
 
-            async def wait_for_spend_flush(self) -> None:
+            async def wait_for_spend_flush(self) -> bool:
                 events.append("spend logged")
+                return True
 
         return _Upstream()
 
     async def _run_converse_stream(
-        self, monkeypatch, guardrail, chunks, event_stream_hook=None, stream=None, failure_hook=None, read_body=True
+        self,
+        monkeypatch,
+        guardrail,
+        chunks,
+        event_stream_hook=None,
+        stream=None,
+        failure_hook=None,
+        read_body=True,
+        request=None,
     ):
         processing_obj = self._build_processing_obj("bedrock", "model/us.amazon.nova-lite-v1:0/converse-stream")
         monkeypatch.setattr(litellm, "callbacks", [guardrail])
@@ -6221,7 +6256,12 @@ class TestAllmPassthroughStreamingProviderGate:
             new=AsyncMock(return_value=b"modified-body"),
         ) as mock_handler:
             result = await self._run(
-                processing_obj, monkeypatch, chunks, stream=stream, proxy_logging_obj=self._proxy_logging_obj
+                processing_obj,
+                monkeypatch,
+                chunks,
+                stream=stream,
+                proxy_logging_obj=self._proxy_logging_obj,
+                request=request,
             )
             body = (
                 b"".join([chunk async for chunk in result.body_iterator])
@@ -6420,6 +6460,117 @@ class TestAllmPassthroughStreamingProviderGate:
         await result.upstream_generator.aclose()
 
         assert events == ["guardrails closed", "upstream closed"]
+
+    @pytest.mark.asyncio
+    async def test_bedrock_converse_stream_client_leaving_a_held_stream_before_its_first_frame_gets_a_499(
+        self, monkeypatch
+    ):
+        events: list[str] = []
+        frames = self._converse_stream()
+        first_frame_read = asyncio.Event()
+        release_budget = AsyncMock()
+        monkeypatch.setattr(
+            "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation_on_cancel", release_budget
+        )
+
+        class _SlowUpstream:
+            def __init__(self) -> None:
+                self._frames = iter(frames)
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self) -> bytes:
+                frame = next(self._frames, None)
+                if frame is None:
+                    raise StopAsyncIteration
+                if first_frame_read.is_set():
+                    await asyncio.Event().wait()
+                first_frame_read.set()
+                return frame
+
+            async def aclose(self) -> None:
+                events.append("upstream closed")
+
+            async def wait_for_spend_flush(self) -> bool:
+                events.append("spend logged")
+                return True
+
+        async def hold_until_the_end(response, user_api_key_dict, request_data, guardrails):
+            held = [item async for item in response]
+            for item in held:
+                yield item
+
+        async def client_leaves_once_the_upstream_answers():
+            await first_frame_read.wait()
+            return {"type": "http.disconnect"}
+
+        request = MagicMock(spec=Request, headers={})
+        request.receive = client_leaves_once_the_upstream_answers
+
+        result, body, _, _ = await asyncio.wait_for(
+            self._run_converse_stream(
+                monkeypatch,
+                self._apply_guardrail(),
+                frames,
+                event_stream_hook=hold_until_the_end,
+                stream=_SlowUpstream(),
+                request=request,
+            ),
+            timeout=5,
+        )
+
+        assert isinstance(result, JSONResponse)
+        assert result.status_code == 499
+        assert json.loads(body)["error"]["type"] == "client_disconnect"
+        assert events[-1] == "spend logged"
+        assert "upstream closed" in events
+        self._proxy_logging_obj.post_call_failure_hook.assert_not_awaited()
+        release_budget.assert_not_awaited()
+        self._proxy_logging_obj.arelease_max_parallel_requests_on_disconnect.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_bedrock_converse_stream_client_leaving_before_bedrock_answers_releases_what_the_request_holds(
+        self, monkeypatch
+    ):
+        events: list[str] = []
+        release_budget = AsyncMock()
+        monkeypatch.setattr(
+            "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation_on_cancel", release_budget
+        )
+
+        class _SilentUpstream:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self) -> bytes:
+                await asyncio.Event().wait()
+                raise StopAsyncIteration
+
+            async def aclose(self) -> None:
+                events.append("upstream closed")
+
+            async def wait_for_spend_flush(self) -> bool:
+                return False
+
+        async def client_leaves():
+            return {"type": "http.disconnect"}
+
+        request = MagicMock(spec=Request, headers={})
+        request.receive = client_leaves
+
+        result, _, _, _ = await asyncio.wait_for(
+            self._run_converse_stream(
+                monkeypatch, self._apply_guardrail(), [], stream=_SilentUpstream(), request=request
+            ),
+            timeout=5,
+        )
+
+        assert isinstance(result, JSONResponse)
+        assert result.status_code == 499
+        assert "upstream closed" in events
+        release_budget.assert_awaited_once_with(None)
+        self._proxy_logging_obj.arelease_max_parallel_requests_on_disconnect.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_bedrock_converse_stream_failure_before_the_first_frame_raises(self, monkeypatch):
