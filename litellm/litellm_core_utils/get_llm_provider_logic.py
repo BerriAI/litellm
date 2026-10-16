@@ -61,6 +61,10 @@ def _endpoint_matches_api_base(endpoint: str, api_base: str) -> bool:
     return url_path == endpoint_path or url_path.startswith(endpoint_path + "/")
 
 
+def is_openai_compatible_endpoint(api_base: str) -> bool:
+    return any(_endpoint_matches_api_base(endpoint, api_base) for endpoint in litellm.openai_compatible_endpoints)
+
+
 def is_non_openai_azure_model(model: str) -> bool:
     try:
         model_name: Final = model.split("/", 1)[1]
