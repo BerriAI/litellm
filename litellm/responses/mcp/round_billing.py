@@ -1,3 +1,4 @@
+from asyncio import CancelledError
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from types import MappingProxyType
@@ -11,7 +12,8 @@ from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.utils import CostBreakdown
 
-_RATE_KEYS: Final = frozenset({"discount_percent", "margin_percent"})
+_PER_REQUEST_KEYS: Final = frozenset({"discount_percent", "margin_percent", "margin_fixed_amount"})
+_TOTALS_WITH_FIXED_MARGIN: Final = ("total_cost", "margin_total_amount")
 _COST_BREAKDOWN: Final = TypeAdapter(CostBreakdown)
 _STR_KEYED: Final = TypeAdapter(Mapping[str, object])
 
@@ -31,7 +33,7 @@ def _summed(first: object, final: object) -> object:
 
 
 def _summed_entry(key: str, first: Mapping[str, object], final: Mapping[str, object]) -> object:
-    if key in _RATE_KEYS:
+    if key in _PER_REQUEST_KEYS:
         return final[key] if key in final else first[key]
     return _summed(first.get(key), final.get(key))
 
@@ -47,6 +49,26 @@ def merged_round_usage(first: ResponseAPIUsage | None, final: ResponseAPIUsage |
     return ResponseAPIUsage.model_validate(_summed_mapping(first.model_dump(), final.model_dump()))
 
 
+def _repeated_fixed_margin(
+    first: ResponsesAPIResponse,
+    first_breakdown: CostBreakdown | None,
+    final: ResponsesAPIResponse,
+    final_breakdown: CostBreakdown | None,
+) -> float:
+    if first_breakdown is None or final_breakdown is None or first_breakdown is final_breakdown:
+        return 0.0
+    if served_from_cache(first) or served_from_cache(final):
+        return 0.0
+    return min(first_breakdown.get("margin_fixed_amount", 0.0), final_breakdown.get("margin_fixed_amount", 0.0))
+
+
+def _less_repeated_fixed_margin(summed: Mapping[str, object], repeated: float) -> Mapping[str, object]:
+    charged_once: Final = MappingProxyType(
+        {key: total - repeated for key in _TOTALS_WITH_FIXED_MARGIN if isinstance(total := summed.get(key), float)}
+    )
+    return MappingProxyType({**summed, **charged_once})
+
+
 def summed_cost_breakdown(
     first: ResponsesAPIResponse,
     first_breakdown: CostBreakdown | None,
@@ -54,7 +76,8 @@ def summed_cost_breakdown(
     final_breakdown: CostBreakdown | None,
 ) -> CostBreakdown | None:
     """The breakdown of the charged rounds, or None when one of them was priced without a breakdown or the final round
-    kept the first round's, since a partial one would disagree with the billed cost."""
+    kept the first round's, since a partial one would disagree with the billed cost. The fixed margin is charged once
+    per request, not once per round."""
     if first_breakdown is final_breakdown:
         return None
     if served_from_cache(first):
@@ -63,19 +86,30 @@ def summed_cost_breakdown(
         return first_breakdown
     if first_breakdown is None or final_breakdown is None:
         return None
-    return _COST_BREAKDOWN.validate_python(_summed_mapping(first_breakdown, final_breakdown))
+    return _COST_BREAKDOWN.validate_python(
+        _less_repeated_fixed_margin(
+            _summed_mapping(first_breakdown, final_breakdown),
+            _repeated_fixed_margin(first, first_breakdown, final, final_breakdown),
+        )
+    )
 
 
-def billed_for_every_round(first: ResponsesAPIResponse, final: ResponsesAPIResponse) -> ResponsesAPIResponse:
+def billed_for_every_round(
+    first: ResponsesAPIResponse,
+    first_breakdown: CostBreakdown | None,
+    final: ResponsesAPIResponse,
+    final_breakdown: CostBreakdown | None,
+) -> ResponsesAPIResponse:
     """The final round's response carrying the usage and cost of both rounds, so the one logged row bills the request.
 
     Costs are summed per round rather than repriced from the summed usage, because a round's price can depend on its
-    own size (tiered rates) or on charges the usage does not show (built-in tools, provider-reported costs).
+    own size (tiered rates) or on charges the usage does not show (built-in tools, provider-reported costs). The fixed
+    margin both rounds added is charged once, since it is a per-request fee.
     """
     first_cost: Final = first.hidden_params.get("response_cost")
     final_cost: Final = final.hidden_params.get("response_cost")
     total_cost: Final = (
-        first_cost + final_cost
+        first_cost + final_cost - _repeated_fixed_margin(first, first_breakdown, final, final_breakdown)
         if isinstance(first_cost, (int, float)) and isinstance(final_cost, (int, float))
         else None
     )
@@ -91,7 +125,7 @@ def billed_for_every_round(first: ResponsesAPIResponse, final: ResponsesAPIRespo
 def first_round_billed_on_failure(logging_obj: object, first: ResponsesAPIResponse) -> Generator[None]:
     try:
         yield
-    except Exception:
+    except (Exception, CancelledError):
         first_cost: Final = first.hidden_params.get("response_cost")
         if isinstance(logging_obj, LiteLLMLoggingObj) and first.usage is not None and not served_from_cache(first):
             logging_obj.record_partial_usage_for_failure(

@@ -30,6 +30,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     update_responses_input_with_model_file_ids,
     update_responses_tools_with_model_file_ids,
@@ -365,7 +366,13 @@ async def aresponses_api_with_mcp(
                     mcp_server_auth_headers=mcp_server_auth_headers,
                     oauth2_headers=oauth2_headers,
                     raw_headers=raw_headers_from_request,
-                    litellm_trace_id=kwargs.get("litellm_trace_id"),
+                    litellm_trace_id=(
+                        StandardLoggingPayloadSetup.get_standard_logging_payload_trace_id(
+                            logging_obj=logging_obj, litellm_params=logging_obj.litellm_params
+                        )
+                        if isinstance(logging_obj, LiteLLMLoggingObj)
+                        else kwargs.get("litellm_trace_id")
+                    ),
                     request_tags=LiteLLM_Proxy_MCP_Handler.get_parent_request_tags(kwargs),
                     guardrail_context=MCPRequestContext.resolve_guardrail_context(
                         MappingProxyType({**kwargs, "metadata": metadata, "model": model})
@@ -435,20 +442,25 @@ async def aresponses_api_with_mcp(
                             request_tags=LiteLLM_Proxy_MCP_Handler.get_parent_request_tags(kwargs),
                             raw_headers=discovery_raw_headers,
                         )
+                        final_round_breakdown: Final = (
+                            logging_obj.cost_breakdown if isinstance(logging_obj, LiteLLMLoggingObj) else None
+                        )
                         if isinstance(logging_obj, LiteLLMLoggingObj):
                             logging_obj.cost_breakdown = summed_cost_breakdown(
                                 first=response,
                                 first_breakdown=first_round_breakdown,
                                 final=final_response,
-                                final_breakdown=logging_obj.cost_breakdown,
+                                final_breakdown=final_round_breakdown,
                             )
                         return billed_for_every_round(
                             first=response,
+                            first_breakdown=first_round_breakdown,
                             final=LiteLLM_Proxy_MCP_Handler.add_mcp_output_elements_to_response(
                                 response=final_response,
                                 mcp_tools_fetched=mcp_tools_for_output,
                                 tool_results=tool_results,
                             ),
+                            final_breakdown=final_round_breakdown,
                         )
                     return final_response
 

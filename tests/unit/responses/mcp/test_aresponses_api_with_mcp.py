@@ -20,6 +20,7 @@ from mcp.types import Tool as MCPTool
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.proxy.utils import _failure_fields_to_lift
 from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
 from litellm.types.llms.openai import (
     ResponsesAPIResponse,
@@ -27,7 +28,7 @@ from litellm.types.llms.openai import (
     OpenAIMcpServerTool,
     ToolParam,
 )
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import StandardLoggingPayload, Usage
 
 
 class MockUserAPIKeyAuth:
@@ -1572,6 +1573,42 @@ async def _auto_execute_echo(
     return await _auto_execute(logging_obj, _ECHO_MCP_TOOL, "PING")
 
 
+async def _auto_execute_through_mcp_server(
+    monkeypatch: pytest.MonkeyPatch, call_tool: AsyncMock, logging_obj: Logging
+) -> None:
+    monkeypatch.setitem(
+        sys.modules, "litellm.proxy.proxy_server", SimpleNamespace(proxy_logging_obj=None, prisma_client=None)
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        SimpleNamespace(
+            catalog=SimpleNamespace(operation=nullcontext),
+            get_registry=MagicMock(return_value={}),
+            call_tool=call_tool,
+            get_mcp_server_from_tool_name=MagicMock(return_value=None),
+            get_mcp_server_by_name=MagicMock(return_value=None),
+        ),
+    )
+    echo_tool: Final = MCPTool.model_validate(
+        {"name": "echo", "inputSchema": {"type": "object", "properties": {"value": {"type": "string"}}}},
+        by_name=False,
+    )
+    with patch.object(
+        LiteLLM_Proxy_MCP_Handler,
+        "process_mcp_tools_without_openai_transform",
+        AsyncMock(return_value=([echo_tool], {"echo": "demo"})),
+    ):
+        await litellm.aresponses(
+            model="openai/gpt-5.6",
+            input="Call echo with PING",
+            tools=[dict(_ECHO_MCP_TOOL)],
+            api_key="sk-mcp-rounds",
+            api_base="https://mcp-rounds.example.com/v1",
+            litellm_call_id=logging_obj.litellm_call_id,
+            litellm_logging_obj=logging_obj,
+        )
+
+
 def _rounds_logging_obj(recorder: _RoundRecorder, call_id: str) -> Logging:
     return Logging(
         model="openai/gpt-5.6",
@@ -1680,42 +1717,12 @@ async def test_non_stream_auto_execute_bills_the_paid_first_round_when_the_follo
             httpx.Response(400, json=context_window_error),
         ),
     )
-    monkeypatch.setitem(
-        sys.modules, "litellm.proxy.proxy_server", SimpleNamespace(proxy_logging_obj=None, prisma_client=None)
-    )
     call_tool: Final = AsyncMock(return_value=CallToolResult(content=[TextContent(type="text", text="PING")]))
-    monkeypatch.setattr(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
-        SimpleNamespace(
-            catalog=SimpleNamespace(operation=nullcontext),
-            get_registry=MagicMock(return_value={}),
-            call_tool=call_tool,
-            get_mcp_server_from_tool_name=MagicMock(return_value=None),
-            get_mcp_server_by_name=MagicMock(return_value=None),
-        ),
-    )
-    echo_tool: Final = MCPTool.model_validate(
-        {"name": "echo", "inputSchema": {"type": "object", "properties": {"value": {"type": "string"}}}},
-        by_name=False,
-    )
     recorder: Final = _RoundRecorder()
 
-    with (
-        patch.object(
-            LiteLLM_Proxy_MCP_Handler,
-            "process_mcp_tools_without_openai_transform",
-            AsyncMock(return_value=([echo_tool], {"echo": "demo"})),
-        ),
-        pytest.raises(litellm.BadRequestError),
-    ):
-        await litellm.aresponses(
-            model="openai/gpt-5.6",
-            input="Call echo with PING",
-            tools=[dict(_ECHO_MCP_TOOL)],
-            api_key="sk-mcp-rounds",
-            api_base="https://mcp-rounds.example.com/v1",
-            litellm_call_id="mcp-rounds-follow-up-fails",
-            litellm_logging_obj=_rounds_logging_obj(recorder, "mcp-rounds-follow-up-fails"),
+    with pytest.raises(litellm.BadRequestError):
+        await _auto_execute_through_mcp_server(
+            monkeypatch, call_tool, _rounds_logging_obj(recorder, "mcp-rounds-follow-up-fails")
         )
     await _settle(lambda: len(recorder.failed) > 0)
 
@@ -1726,7 +1733,28 @@ async def test_non_stream_auto_execute_bills_the_paid_first_round_when_the_follo
     assert recorder.failed[0]["response_cost"] > 0
     assert call_tool.await_count == 1
     assert call_tool.await_args is not None
-    assert call_tool.await_args.kwargs["litellm_logging_obj"].litellm_call_id != recorder.failed[0]["id"]
+    tool_logging_obj: Final = call_tool.await_args.kwargs["litellm_logging_obj"]
+    assert tool_logging_obj.litellm_call_id != recorder.failed[0]["id"]
+    assert tool_logging_obj.litellm_trace_id == recorder.failed[0]["trace_id"]
+
+
+@pytest.mark.asyncio
+async def test_non_stream_auto_execute_bills_the_paid_first_round_when_the_client_disconnects_during_a_tool_call(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    _serve_rounds(respx_mock, monkeypatch, (_ROUND_ONE_BODY,))
+    logging_obj: Final = _rounds_logging_obj(_RoundRecorder(), "mcp-rounds-disconnect")
+
+    with pytest.raises(asyncio.CancelledError):
+        await _auto_execute_through_mcp_server(
+            monkeypatch, AsyncMock(side_effect=asyncio.CancelledError()), logging_obj
+        )
+
+    failure_row_fields: Final = _failure_fields_to_lift(MappingProxyType({"litellm_logging_obj": logging_obj}))
+    billed_usage: Final = failure_row_fields["combined_usage_object"]
+    assert isinstance(billed_usage, Usage)
+    assert (billed_usage.prompt_tokens, billed_usage.completion_tokens) == (71, 19)
+    assert failure_row_fields["response_cost"] == pytest.approx(_round_cost(_ROUND_ONE_BODY))
 
 
 @pytest.mark.asyncio

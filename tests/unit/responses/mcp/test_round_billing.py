@@ -114,7 +114,9 @@ def test_merged_round_usage_sums_token_details_and_keeps_provider_flags():
 
 
 def test_billed_for_every_round_leaves_the_cost_to_the_caller_when_a_round_has_no_price():
-    billed: Final = billed_for_every_round(first=_round("resp_first", None), final=_round("resp_final", 0.004))
+    billed: Final = billed_for_every_round(
+        first=_round("resp_first", None), first_breakdown=None, final=_round("resp_final", 0.004), final_breakdown=None
+    )
 
     assert billed.id == "resp_final"
     assert billed.hidden_params["response_cost"] is None
@@ -123,10 +125,55 @@ def test_billed_for_every_round_leaves_the_cost_to_the_caller_when_a_round_has_n
 def test_billed_for_every_round_does_not_rebill_the_final_round_object():
     final: Final = _round("resp_final", 0.004)
 
-    billed: Final = billed_for_every_round(first=_round("resp_first", 0.001), final=final)
+    billed: Final = billed_for_every_round(
+        first=_round("resp_first", 0.001), first_breakdown=None, final=final, final_breakdown=None
+    )
 
     assert billed.hidden_params["response_cost"] == pytest.approx(0.005)
     assert final.hidden_params["response_cost"] == 0.004
+
+
+@pytest.mark.parametrize(
+    ("final_cached", "request_cost", "request_margin"),
+    [
+        (False, 0.012, 0.002),
+        (True, 0.0032, 0.0012),
+    ],
+)
+def test_the_fixed_margin_is_charged_once_per_request_across_charged_rounds(
+    final_cached: bool, request_cost: float, request_margin: float
+):
+    first_breakdown: Final[CostBreakdown] = {
+        "input_cost": 0.0015,
+        "output_cost": 0.0005,
+        "total_cost": 0.0032,
+        "margin_percent": 0.1,
+        "margin_fixed_amount": 0.001,
+        "margin_total_amount": 0.0012,
+    }
+    final_breakdown: Final[CostBreakdown] = {
+        "input_cost": 0.006,
+        "output_cost": 0.002,
+        "total_cost": 0.0098,
+        "margin_percent": 0.1,
+        "margin_fixed_amount": 0.001,
+        "margin_total_amount": 0.0018,
+    }
+    first: Final = _round("resp_first", 0.0032)
+    final: Final = _round("resp_final", 0.0 if final_cached else 0.0098, served_from_cache=final_cached)
+
+    billed: Final = billed_for_every_round(
+        first=first, first_breakdown=first_breakdown, final=final, final_breakdown=final_breakdown
+    )
+    breakdown: Final = summed_cost_breakdown(
+        first=first, first_breakdown=first_breakdown, final=final, final_breakdown=final_breakdown
+    )
+
+    assert billed.hidden_params["response_cost"] == pytest.approx(request_cost)
+    assert breakdown is not None
+    assert breakdown["total_cost"] == pytest.approx(request_cost)
+    assert breakdown["margin_fixed_amount"] == pytest.approx(0.001)
+    assert breakdown["margin_total_amount"] == pytest.approx(request_margin)
 
 
 @pytest.mark.parametrize(
