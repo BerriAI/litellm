@@ -31,6 +31,94 @@ from litellm import completion
 from typing import Tuple
 
 
+@pytest.mark.parametrize("async_stream", [False, True])
+@pytest.mark.parametrize("transport", ["sdk", "http_handler"])
+@pytest.mark.parametrize("fingerprint", ["fp_ollama", "fp_openai", None])
+async def test_ollama_stream_ids_match_usage_and_spend_logs(
+    async_stream: bool,
+    transport: str,
+    fingerprint: str | None,
+) -> None:
+    from datetime import datetime
+
+    from openai.types.chat import ChatCompletionChunk
+
+    from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import convert_to_model_response_object
+    from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+    parser: Final = OpenAIChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
+    bodies: Final = [
+        {"choices": [{"index": 0, "delta": {"role": "assistant", "content": "h"}, "finish_reason": None}]},
+        {"choices": [{"index": 0, "delta": {"content": "i"}, "finish_reason": None}]},
+        {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+        {"choices": [], "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6}},
+    ]
+    raw_chunks: Final = [
+        {
+            "id": "chatcmpl-0",
+            "object": "chat.completion.chunk",
+            "model": "gpt-oss:20b",
+            "created": 1,
+            "system_fingerprint": fingerprint,
+            **body,
+        }
+        for body in bodies
+    ]
+    chunks: Final = [
+        ChatCompletionChunk(**body) if transport == "sdk" else parser.chunk_parser(body) for body in raw_chunks
+    ]
+    streams: Final = [
+        CustomStreamWrapper(
+            completion_stream=ModelResponseListIterator(model_responses=chunks),
+            model="gpt-oss:20b",
+            custom_llm_provider="openai",
+            stream_options={"include_usage": True},
+            logging_obj=Logging(
+                model="gpt-oss:20b",
+                messages=[{"role": "user", "content": "hi"}],
+                stream=True,
+                call_type="acompletion",
+                start_time=1.0,
+                litellm_call_id="same-client-call-id",
+                function_id="test",
+            ),
+        )
+        for _ in range(2)
+    ]
+    received_streams: Final = (
+        [chunk async for chunk in streams[0]] if async_stream else list(streams[0]),
+        [chunk async for chunk in streams[1]] if async_stream else list(streams[1]),
+    )
+    for received in received_streams:
+        assembled: Final = litellm.stream_chunk_builder(chunks=received)
+        assert assembled.choices[0].message.content == "hi"
+        assert assembled.usage.total_tokens == 6
+        assert len({chunk.id for chunk in received}) == 1
+        assert received[-1].usage.total_tokens == 6
+        assert assembled.id == received[0].id
+        reparsed: Final = convert_to_model_response_object(
+            response_object=assembled.model_dump(),
+            model_response_object=ModelResponse(),
+        )
+        assert reparsed.id == assembled.id
+        logged: Final = get_logging_payload(
+            kwargs={"call_type": "acompletion", "litellm_call_id": "same-client-call-id", "response_cost": 0.01},
+            response_obj=assembled,
+            start_time=datetime(2025, 1, 1),
+            end_time=datetime(2025, 1, 1),
+        )
+        assert logged["request_id"] == assembled.id
+        if fingerprint == "fp_ollama":
+            assert assembled.id != "chatcmpl-0"
+            assert received[0].provider_specific_fields == {"original_response_id": "chatcmpl-0"}
+            assert assembled.provider_specific_fields == {"original_response_id": "chatcmpl-0"}
+        else:
+            assert assembled.id == "chatcmpl-0"
+    assert len({chunks[0].id for chunks in received_streams}) == (2 if fingerprint == "fp_ollama" else 1)
+    assert all(chunk.id == "chatcmpl-0" for chunk in chunks)
+
+
 @pytest.fixture
 def initialized_custom_stream_wrapper() -> CustomStreamWrapper:
     streaming_handler = CustomStreamWrapper(
@@ -929,6 +1017,40 @@ async def test_bridged_stream_mid_stream_fallback_error_is_rebuilt_around_the_pr
     assert excinfo.value.message == f"litellm.MidStreamFallbackError: {rate_limit_error}"
     assert excinfo.value.is_pre_first_chunk is True
     assert excinfo.value.generated_content == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_streaming_rate_limit_midstream_fallback_keeps_provider_headers(logging_obj: Logging, sync_mode: bool):
+    """MidStreamFallbackError keeps the provider headers the non-streaming RateLimitError carries."""
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    provider_headers: Final = {"retry-after": "3", "x-request-id": "req-abc123"}
+
+    def _raise_rate_limit(**kwargs: object) -> NoReturn:
+        raise VertexAIError(status_code=429, message="Resource exhausted.", headers=provider_headers)
+
+    async def _araise_rate_limit(**kwargs: object) -> NoReturn:
+        _raise_rate_limit(**kwargs)
+
+    response: Final = CustomStreamWrapper(
+        completion_stream=None,
+        model="gemini-3-flash-preview",
+        logging_obj=logging_obj,
+        custom_llm_provider="vertex_ai_beta",
+        make_call=_raise_rate_limit if sync_mode else _araise_rate_limit,
+    )
+
+    async def _read_first_chunk() -> object:
+        return next(response) if sync_mode else await response.__anext__()
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        await _read_first_chunk()
+
+    assert excinfo.value.status_code == 429
+    assert excinfo.value.litellm_response_headers.get("retry-after") == "3"
+    assert excinfo.value.litellm_response_headers.get("x-request-id") == "req-abc123"
 
 
 def test_sync_streaming_bad_request_not_midstream(logging_obj: Logging):

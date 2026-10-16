@@ -11,6 +11,7 @@ import threading
 import warnings
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -82,6 +83,7 @@ from litellm.types.router import (
     ModelInfo,
     PreRoutingHookResponse,
     RetryPolicy,
+    RouterRateLimitError,
     RoutingContext,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -7362,6 +7364,48 @@ def test_get_wildcard_deployment_usable_by_team_prefers_the_team_pattern():
     assert router.get_credential_deployment(model_id=ocr, team_id="team-b").model_info.id == "shared-wildcard"
 
 
+@pytest.mark.parametrize(
+    ("with_catch_all", "requested", "team_id", "expected_ids"),
+    [
+        pytest.param(False, "rwild-chat", "team-r", ("team-r-wildcard",), id="team-pattern-when-no-proxy-wide-match"),
+        pytest.param(False, "rwild-chat", "team-b", (), id="another-teams-pattern-never-serves"),
+        pytest.param(False, "rwild-chat", None, (), id="no-team-no-team-pattern"),
+        pytest.param(True, "rwild-chat", "team-r", ("catch-all",), id="proxy-wide-pattern-beats-the-team-pattern"),
+        pytest.param(True, "ptu-chat", "team-r", ("ptu-wildcard",), id="only-the-most-specific-proxy-wide-pattern"),
+    ],
+)
+def test_wildcard_route_deployments_is_the_one_pattern_routing_serves_from(
+    with_catch_all: bool, requested: str, team_id: str | None, expected_ids: tuple[str, ...]
+):
+    catch_all: Final = (
+        ({"model_name": "*", "litellm_params": {"model": "openai/*", "api_key": "sk-open"}, "model_info": {"id": "catch-all"}},)
+        if with_catch_all
+        else ()
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "ptu-*",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "sk-ptu"},
+                "model_info": {"id": "ptu-wildcard"},
+            },
+            {
+                "model_name": "team-r-internal",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "sk-team-r"},
+                "model_info": {"id": "team-r-wildcard", "team_id": "team-r", "team_public_model_name": "rwild-*"},
+            },
+            *catch_all,
+        ]
+    )
+
+    served: Final = router.wildcard_route_deployments(requested, team_id)
+    early: Final = router._try_early_resolve_deployments_for_model_not_in_names(model=requested, request_team_id=team_id)
+    early_deployments: Final = early[1] if early is not None and isinstance(early[1], list) else []
+
+    assert tuple(Deployment.model_validate(d).model_info.id for d in served) == expected_ids
+    assert tuple(Deployment.model_validate(d).model_info.id for d in early_deployments) == expected_ids
+
+
 def test_get_deployment_credentials_with_provider_aws_bedrock_runtime_endpoint():
     """
     Test that get_deployment_credentials_with_provider correctly copies
@@ -8899,6 +8943,44 @@ async def test_team_scoped_model_fallback_cross_team_blocked():
         )
 
 
+@pytest.mark.asyncio
+def _shared_ptu_deployment(model_name: str, deployment_id: str, **litellm_params: str) -> dict[str, object]:
+    """A one-PTU Azure deployment whose whole reservation is team-a's share."""
+    return {
+        "model_name": model_name,
+        "litellm_params": {"model": "azure/gpt-4.1", "api_key": "fake", "api_base": "https://ptu.example", **litellm_params},
+        "model_info": {
+            "id": deployment_id,
+            "base_model": "azure/gpt-4.1",
+            "ptu_count": 1,
+            "cost_per_ptu_per_hour": 1.0,
+            "ptu_effective_from": "2026-01-01T00:00:00Z",
+            "ptu_shares": {"team-a": 1},
+        },
+    }
+
+
+async def test_a_ptu_share_holders_failed_call_is_retried_on_its_shared_deployment(monkeypatch):
+    """A shared PTU deployment is only servable to the teams holding a share, so the retry loop
+    has to look it up as the calling team; looked up with no team it finds no healthy deployment
+    and gives up after the first failure."""
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "true")
+    router = litellm.Router(
+        model_list=[_shared_ptu_deployment("gpt-4.1-ptu", "shared-ptu", mock_response="litellm.InternalServerError")],
+        num_retries=2,
+        retry_after=0,
+    )
+
+    with pytest.raises(litellm.InternalServerError) as failed:
+        await router.acompletion(
+            model="gpt-4.1-ptu",
+            messages=[{"role": "user", "content": "Hello"}],
+            metadata={"user_api_key_team_id": "team-a"},
+        )
+
+    assert failed.value.num_retries == 2
+
+
 def test_get_all_deployments_with_team_id():
     """
     Test that _get_all_deployments with team_id can find deployments
@@ -10410,14 +10492,16 @@ class TestBackgroundResponseCostPollCooldown:
         )
         assert "dep-1" in self._cooled_down_ids(router)
 
-    def test_cost_poll_not_found_does_not_cool_down_deployment(self):
+    @pytest.mark.parametrize("poll_origin", ["background_response_cost_poll", "background_response_status_poll"])
+    def test_background_response_poll_not_found_does_not_cool_down_deployment(self, poll_origin: str):
+        """A client can delete its background response before the poll reads it, so a 404 on either
+        poll read says nothing about the deployment's health."""
         from datetime import datetime
 
         from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
         from litellm.router_utils.router_callbacks.track_deployment_metrics import (
             get_deployment_failures_for_current_minute,
         )
-        from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
 
         router = self._router()
         now = datetime.now()
@@ -10427,9 +10511,7 @@ class TestBackgroundResponseCostPollCooldown:
                     "exception": self._not_found(),
                     "litellm_params": {
                         "model_info": {"id": "dep-1"},
-                        "litellm_metadata": {
-                            INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
-                        },
+                        "litellm_metadata": {INTERNAL_CALL_ORIGIN_METADATA_KEY: poll_origin},
                     },
                 },
                 None,
@@ -12110,7 +12192,7 @@ def test_pre_call_checks_uses_deployment_model_when_model_info_lookup_raises(mon
         model="custom-alias",
         healthy_deployments=deployments,
         messages=[{"role": "user", "content": "hi"}],
-        request_kwargs={},
+        request_kwargs={"response_format": {"type": "json_object"}},
     )
 
     assert len(result) == 1
@@ -15956,6 +16038,28 @@ async def test_anthropic_messages_stream_dropped_before_content_is_retried_withi
     assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
     assert all(model in _ANTHROPIC_MESSAGES_RETRY_GROUP for model, _, _ in provider.calls)
     assert [(attempted, budget) for _, attempted, budget in provider.calls] == [(0, 2), (1, 2)]
+
+
+@pytest.mark.asyncio
+async def test_a_ptu_share_holders_messages_stream_dropped_before_content_is_retried_on_its_shared_group(monkeypatch):
+    """The same-group retry has to look the group's health up as the calling team; looked up with no
+    team a shared PTU group looks empty, so the share holder's dropped stream is never retried."""
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "true")
+    router: Final = Router(
+        model_list=[_shared_ptu_deployment("glm", f"shared-ptu-{i}") for i in (1, 2)],
+        num_retries=2,
+    )
+    provider: Final = _AnthropicMessagesScriptedProvider(
+        _anthropic_messages_dropped_before_content, _anthropic_messages_retried_stream
+    )
+
+    stream: Final = await _anthropic_messages_stream_through_router(
+        router, provider, litellm_metadata={"user_api_key_team_id": "team-a"}
+    )
+    body: Final = [chunk async for chunk in stream]
+
+    assert body == [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("pong")]
+    assert len(provider.calls) == 2
 
 
 @pytest.mark.asyncio
@@ -20517,6 +20621,27 @@ async def test_prioritized_request_leaves_queue_when_it_stops_waiting(stop_waiti
 
 
 @pytest.mark.asyncio
+async def test_a_ptu_share_holders_prioritized_request_is_admitted_while_its_shared_deployment_is_healthy(monkeypatch):
+    """The scheduler has to look the group's health up as the calling team; looked up with no team a
+    shared PTU deployment looks unhealthy, so the share holder waits behind the queue until it times out."""
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "true")
+    router: Final = Router(
+        model_list=[_shared_ptu_deployment("sched-ptu", "shared-ptu", mock_response="hi")],
+        timeout=0.5,
+    )
+    await router.scheduler.add_request(FlowItem(priority=0, request_id="head-of-queue", model_name="sched-ptu"))
+
+    response: Final = await router.acompletion(
+        model="sched-ptu",
+        messages=[{"role": "user", "content": "hi"}],
+        priority=5,
+        metadata={"user_api_key_team_id": "team-a"},
+    )
+
+    assert response.choices[0].message.content == "hi"
+
+
+@pytest.mark.asyncio
 async def test_bare_model_group_served_by_wildcard_deployment_uses_provider_prefixed_fallback_key() -> None:
     """Claude Code sends the bare "claude-sonnet-4-6" to /v1/messages; routing serves it through the
     "anthropic/*" wildcard, so a fallback keyed the way that wildcard is written ("anthropic/claude-sonnet-4-6",
@@ -20606,6 +20731,128 @@ def test_bare_model_group_served_by_wildcard_deployment_has_provider_prefixed_co
 
     assert router._has_content_policy_fallback("claude-sonnet-4-6", {}) is True
     assert router._has_content_policy_fallback("claude-haiku-4-5", {}) is False
+
+
+def _shared_ptu_model_list() -> list:
+    return [
+        {
+            "model_name": "gpt-4.1-ptu",
+            "litellm_params": {"model": "gpt-4.1", "mock_response": "shared"},
+            "model_info": {
+                "id": "shared-deployment",
+                "base_model": "azure/gpt-4.1",
+                "ptu_count": 50,
+                "cost_per_ptu_per_hour": 1.0,
+                "ptu_effective_from": "2026-01-01T00:00:00Z",
+                "ptu_shares": {"team-a": 30, "team-b": 20},
+            },
+        },
+        {
+            "model_name": "gpt-4.1-ptu",
+            "litellm_params": {"model": "gpt-4.1", "mock_response": "open"},
+            "model_info": {"id": "open-deployment"},
+        },
+    ]
+
+
+def test_ptu_shares_hide_the_shared_deployment_from_teams_holding_no_share(monkeypatch):
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True")
+    router = Router(model_list=_shared_ptu_model_list())
+    for request_kwargs in ({"metadata": {"user_api_key_team_id": "team-c"}}, {"metadata": {}}, {}):
+        _, deployments = router._common_checks_available_deployment(model="gpt-4.1-ptu", request_kwargs=request_kwargs)
+        assert [d["model_info"]["id"] for d in deployments] == ["open-deployment"]
+    for team_id in ("team-a", "team-b"):
+        _, deployments = router._common_checks_available_deployment(
+            model="gpt-4.1-ptu",
+            request_kwargs={"metadata": {"user_api_key_team_id": team_id}},
+        )
+        assert [d["model_info"]["id"] for d in deployments] == ["shared-deployment"]
+
+
+def test_ptu_shares_raise_when_only_shared_deployments_remain(monkeypatch):
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True")
+    router = Router(model_list=_shared_ptu_model_list()[:1])
+    with pytest.raises(litellm.BadRequestError, match="reserved for the teams holding a PTU share"):
+        router._common_checks_available_deployment(
+            model="gpt-4.1-ptu",
+            request_kwargs={"metadata": {"user_api_key_team_id": "team-c"}},
+        )
+    _, deployments = router._common_checks_available_deployment(
+        model="gpt-4.1-ptu",
+        request_kwargs={"metadata": {"user_api_key_team_id": "team-b"}},
+    )
+    assert [d["model_info"]["id"] for d in deployments] == ["shared-deployment"]
+
+
+def test_team_ptu_ceiling_follows_shares_moved_on_the_live_model_list():
+    router: Final = Router(model_list=_shared_ptu_model_list()[:1])
+    team_a_before: Final = router.team_ptu_ceiling("team-a", "gpt-4.1-ptu")
+    assert router.team_ptu_ceiling("team-c", "gpt-4.1-ptu") is None
+
+    moved: Final = _shared_ptu_model_list()[0]
+    moved["model_info"]["ptu_shares"] = {"team-a": 10, "team-c": 40}
+    router.upsert_deployment(Deployment(**moved))
+
+    team_a_after: Final = router.team_ptu_ceiling("team-a", "gpt-4.1-ptu")
+    team_c_after: Final = router.team_ptu_ceiling("team-c", "gpt-4.1-ptu")
+    assert team_a_before is not None and team_a_after is not None and team_c_after is not None
+    assert team_a_before.tpm_limit == 3 * team_a_after.tpm_limit
+    assert team_c_after.tpm_limit == 4 * team_a_after.tpm_limit
+
+    router.delete_deployment(id="shared-deployment")
+    assert router.team_ptu_ceiling("team-a", "gpt-4.1-ptu") is None
+
+
+def test_ptu_shares_hide_the_shared_deployment_even_while_the_feature_is_off(monkeypatch):
+    """The flag switches cost attribution on; a declared split is an access rule and holds
+    without it, so a team never reaches a deployment reserved for others while the flag is
+    off."""
+    monkeypatch.delenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", raising=False)
+    router = Router(model_list=_shared_ptu_model_list())
+    _, deployments = router._common_checks_available_deployment(
+        model="gpt-4.1-ptu",
+        request_kwargs={"metadata": {"user_api_key_team_id": "team-c"}},
+    )
+    assert [d["model_info"]["id"] for d in deployments] == ["open-deployment"]
+
+
+def test_a_shared_ptu_deployment_whose_shares_do_not_add_up_is_refused_at_registration(monkeypatch):
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True")
+    model_list = _shared_ptu_model_list()[:1]
+    model_list[0]["model_info"]["ptu_shares"] = {"team-a": 30}
+    with pytest.raises(ValueError, match=r"gpt-4\.1-ptu.*30 of 50 allocated"):
+        Router(model_list=model_list)
+
+
+def test_a_shared_ptu_deployment_with_a_fractional_count_is_refused_at_registration(monkeypatch):
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True")
+    model_list = _shared_ptu_model_list()[:1]
+    model_list[0]["model_info"]["ptu_count"] = 50.5
+    with pytest.raises(ValueError, match="ptu_count"):
+        Router(model_list=model_list)
+
+
+@pytest.mark.parametrize(("flag", "warned"), [("True", True), ("", False)])
+def test_an_unsized_shared_ptu_deployment_is_warned_about_at_registration_only_with_the_feature_on(
+    monkeypatch, caplog, flag, warned
+):
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", flag)
+    model_list = _shared_ptu_model_list()[:1]
+    model_list[0]["litellm_params"]["model"] = "azure/my-ptu-deployment"
+    del model_list[0]["model_info"]["base_model"]
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        Router(model_list=model_list)
+    assert ("'gpt-4.1-ptu'" in caplog.text and "base_model" in caplog.text) is warned
+
+
+def test_a_config_entry_declaring_shares_without_terms_is_refused_even_while_the_feature_is_off(monkeypatch):
+    """The split is enforced with the flag off, so its shape is checked with the flag off too: a
+    malformed one is refused at boot instead of being honoured or ignored without a word."""
+    monkeypatch.delenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", raising=False)
+    model_list = _shared_ptu_model_list()[:1]
+    model_list[0]["model_info"] = {"id": "shared-deployment", "ptu_shares": {"team-a": 30, "team-b": 20}}
+    with pytest.raises(ValueError, match=r"ptu_count and cost_per_ptu_per_hour are required when ptu_shares is set"):
+        Router(model_list=model_list)
 
 
 @pytest.mark.asyncio
@@ -26519,3 +26766,471 @@ def test_completion_streams_a_wrapper_that_hands_iteration_to_another_iterator()
         streamed = list(response)
 
     assert streamed == chunks
+
+
+_PRE_CALL_CHECK_UNPARSEABLE_MESSAGES: Final = [
+    {
+        "role": "user",
+        "content": [
+            {"type": "image_url", "image_url": {"detail": "not-a-real-detail-value"}},
+        ],
+    }
+]
+
+
+def test_pre_call_checks_filters_deployment_when_token_count_exceeds_limit():
+    model_list: Final = [
+        {
+            "model_name": "fake-openai-endpoint",
+            "litellm_params": {"model": "openai/my-fake-model", "api_key": "my-fake-key"},
+            "model_info": {"id": "small", "max_input_tokens": 5},
+        },
+        {
+            "model_name": "fake-openai-endpoint",
+            "litellm_params": {"model": "openai/my-other-fake-model", "api_key": "my-fake-key"},
+            "model_info": {"id": "large", "max_input_tokens": 10000},
+        },
+    ]
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
+
+    filtered: Final = router._pre_call_checks(
+        model="fake-openai-endpoint",
+        healthy_deployments=model_list,
+        messages=[{"role": "user", "content": " ".join(["word"] * 100)}],
+    )
+
+    assert [d["model_info"]["id"] for d in filtered] == ["large"]
+
+
+def test_pre_call_checks_rpm_check_still_enforced_when_token_counting_fails():
+    from litellm.types.router import RouterRateLimitErrorBasic
+
+    model_list: Final = [
+        {
+            "model_name": "fake-openai-endpoint",
+            "litellm_params": {"model": "openai/my-fake-model", "api_key": "my-fake-key", "rpm": 0},
+            "model_info": {"max_input_tokens": 100},
+        },
+    ]
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
+
+    with pytest.raises(RouterRateLimitErrorBasic):
+        router._pre_call_checks(
+            model="fake-openai-endpoint",
+            healthy_deployments=model_list,
+            messages=_PRE_CALL_CHECK_UNPARSEABLE_MESSAGES,
+        )
+
+
+def test_pre_call_checks_context_window_check_is_skipped_but_not_fatal_when_token_counting_fails():
+    model_list: Final = [
+        {
+            "model_name": "fake-openai-endpoint",
+            "litellm_params": {"model": "openai/my-fake-model", "api_key": "my-fake-key"},
+            "model_info": {"max_input_tokens": 100},
+        },
+    ]
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
+
+    filtered: Final = router._pre_call_checks(
+        model="fake-openai-endpoint",
+        healthy_deployments=model_list,
+        messages=_PRE_CALL_CHECK_UNPARSEABLE_MESSAGES,
+    )
+
+    assert len(filtered) == 1
+
+
+def test_pre_call_checks_keeps_unsupported_param_filter_when_token_counting_fails(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    no_json_mode_model: Final = "gpt-3.5-turbo-16k"
+    assert "response_format" not in (
+        litellm.get_supported_openai_params(model=no_json_mode_model, custom_llm_provider="openai") or []
+    )
+    model_list: Final = [
+        {
+            "model_name": "fake-openai-endpoint",
+            "litellm_params": {"model": f"openai/{deployment_model}", "api_key": "my-fake-key"},
+            "model_info": {"id": deployment_model, "max_input_tokens": 100},
+        }
+        for deployment_model in (no_json_mode_model, "gpt-4o")
+    ]
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
+
+    filtered: Final = router._pre_call_checks(
+        model="fake-openai-endpoint",
+        healthy_deployments=model_list,
+        messages=_PRE_CALL_CHECK_UNPARSEABLE_MESSAGES,
+        request_kwargs={"response_format": {"type": "json_object"}},
+    )
+
+    assert [d["model_info"]["id"] for d in filtered] == ["gpt-4o"]
+
+
+async def test_async_get_healthy_deployments_keeps_region_check_when_token_counting_fails():
+    model_list: Final = [
+        {
+            "model_name": "fake-openai-endpoint",
+            "litellm_params": {"model": "openai/my-fake-model", "api_key": "my-fake-key", "region_name": region},
+            "model_info": {"id": f"{region}-deployment", "max_input_tokens": 100},
+        }
+        for region in ("eu", "us")
+    ]
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
+
+    healthy: Final = await router.async_get_healthy_deployments(
+        model="fake-openai-endpoint",
+        request_kwargs={"allowed_model_region": "eu"},
+        messages=_PRE_CALL_CHECK_UNPARSEABLE_MESSAGES,
+        input=None,
+        specific_deployment=False,
+        parent_otel_span=None,
+    )
+
+    assert [deployment["model_info"]["id"] for deployment in healthy] == ["eu-deployment"]
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [_PRE_CALL_CHECK_UNPARSEABLE_MESSAGES, [{"role": "user", "content": "hi"}]],
+    ids=["uncountable", "countable"],
+)
+def test_completion_answers_400_when_no_deployment_supports_the_requested_param(
+    monkeypatch: pytest.MonkeyPatch, messages: list[dict[str, object]]
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "no-json-mode",
+                "litellm_params": {"model": "openai/gpt-3.5-turbo-16k", "api_key": "my-fake-key"},
+                "model_info": {"max_input_tokens": 100},
+            }
+        ],
+        enable_pre_call_checks=True,
+        num_retries=2,
+    )
+
+    with pytest.raises(litellm.UnsupportedParamsError) as error:
+        router.completion(
+            model="no-json-mode",
+            messages=messages,
+            response_format={"type": "json_object"},
+            mock_response="should not be served",
+        )
+
+    assert error.value.status_code == 400
+    assert "allowed_openai_params" in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("deployment_params", "request_kwargs"),
+    [
+        ({}, {"allowed_openai_params": ["response_format"]}),
+        ({}, {"drop_params": True}),
+        ({}, {"additional_drop_params": ["response_format"]}),
+        ({"allowed_openai_params": ["response_format"]}, {}),
+        ({"drop_params": True}, {}),
+    ],
+    ids=["request-allowlist", "request-drop", "request-additional-drop", "deployment-allowlist", "deployment-drop"],
+)
+def test_pre_call_checks_keeps_deployment_whose_unsupported_param_is_allowed_or_dropped(
+    monkeypatch: pytest.MonkeyPatch, deployment_params: Mapping[str, object], request_kwargs: Mapping[str, object]
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    model_list: Final = [
+        {
+            "model_name": "no-json-mode",
+            "litellm_params": {"model": "openai/gpt-3.5-turbo-16k", "api_key": "my-fake-key", **deployment_params},
+            "model_info": {"id": "only", "max_input_tokens": 100},
+        }
+    ]
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
+
+    filtered: Final = router._pre_call_checks(
+        model="no-json-mode",
+        healthy_deployments=model_list,
+        messages=[{"role": "user", "content": "hi"}],
+        request_kwargs={"response_format": {"type": "json_object"}, **request_kwargs},
+    )
+
+    assert [d["model_info"]["id"] for d in filtered] == ["only"]
+
+
+def test_pre_call_checks_keeps_retryable_429_when_a_cooling_down_deployment_supports_the_param(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    model_list: Final = [
+        {
+            "model_name": "mixed-json-mode",
+            "litellm_params": {"model": f"openai/{deployment_model}", "api_key": "my-fake-key"},
+            "model_info": {"id": deployment_model, "max_input_tokens": 100},
+        }
+        for deployment_model in ("gpt-3.5-turbo-16k", "gpt-4o")
+    ]
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
+    without_json_mode: Final = [d for d in router.model_list if d["model_info"]["id"] == "gpt-3.5-turbo-16k"]
+
+    filtered: Final = router._pre_call_checks(
+        model="mixed-json-mode",
+        healthy_deployments=without_json_mode,
+        messages=[{"role": "user", "content": "hi"}],
+        request_kwargs={"response_format": {"type": "json_object"}},
+    )
+
+    assert filtered == []
+
+
+def test_completion_uses_context_window_fallback_when_the_small_deployment_also_lacks_the_param(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "small",
+                "litellm_params": {"model": "openai/gpt-3.5-turbo-16k", "api_key": "my-fake-key"},
+                "model_info": {"id": "small-id", "max_input_tokens": 5},
+            },
+            {
+                "model_name": "big",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "my-fake-key"},
+                "model_info": {"id": "big-id"},
+            },
+        ],
+        enable_pre_call_checks=True,
+        context_window_fallbacks=[{"small": ["big"]}],
+        num_retries=0,
+    )
+
+    response: Final = router.completion(
+        model="small",
+        messages=[{"role": "user", "content": "hi " * 50}],
+        response_format={"type": "json_object"},
+        mock_response="served by the fallback",
+    )
+
+    assert response._hidden_params["model_id"] == "big-id"
+
+
+@pytest.mark.parametrize(
+    ("deployment_params", "request_kwargs"),
+    [
+        ({}, {"allowed_openai_params": ["response_format"]}),
+        ({}, {"drop_params": True}),
+        ({}, {"additional_drop_params": ["response_format"]}),
+        ({"drop_params": True}, {}),
+        ({"allowed_openai_params": ["response_format"]}, {}),
+    ],
+    ids=["request-allowlist", "request-drop", "request-additional-drop", "deployment-drop", "deployment-allowlist"],
+)
+def test_pre_call_checks_prefers_a_deployment_that_takes_the_param_over_dropping_it(
+    monkeypatch: pytest.MonkeyPatch, deployment_params: Mapping[str, object], request_kwargs: Mapping[str, object]
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    model_list: Final = [
+        {
+            "model_name": "mixed-json-mode",
+            "litellm_params": {"model": "openai/gpt-3.5-turbo-16k", "api_key": "my-fake-key", **deployment_params},
+            "model_info": {"id": "gpt-3.5-turbo-16k", "max_input_tokens": 100},
+        },
+        {
+            "model_name": "mixed-json-mode",
+            "litellm_params": {"model": "openai/gpt-4o", "api_key": "my-fake-key"},
+            "model_info": {"id": "gpt-4o", "max_input_tokens": 100},
+        },
+    ]
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
+
+    filtered: Final = router._pre_call_checks(
+        model="mixed-json-mode",
+        healthy_deployments=model_list,
+        messages=[{"role": "user", "content": "hi"}],
+        request_kwargs={"response_format": {"type": "json_object"}, **request_kwargs},
+    )
+
+    assert [d["model_info"]["id"] for d in filtered] == ["gpt-4o"]
+
+
+def test_pre_call_checks_drops_the_param_when_the_capable_deployment_is_outside_the_region(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    model_list: Final = [
+        {
+            "model_name": "regional-json-mode",
+            "litellm_params": {"model": "openai/gpt-3.5-turbo-16k", "api_key": "my-fake-key", "region_name": "eu"},
+            "model_info": {"id": "eu-without-json-mode", "max_input_tokens": 100},
+        },
+        {
+            "model_name": "regional-json-mode",
+            "litellm_params": {"model": "openai/gpt-4o", "api_key": "my-fake-key", "region_name": "us"},
+            "model_info": {"id": "us-with-json-mode", "max_input_tokens": 100},
+        },
+    ]
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
+
+    filtered: Final = router._pre_call_checks(
+        model="regional-json-mode",
+        healthy_deployments=model_list,
+        messages=[{"role": "user", "content": "hi"}],
+        request_kwargs={"response_format": {"type": "json_object"}, "drop_params": True, "allowed_model_region": "eu"},
+    )
+
+    assert [d["model_info"]["id"] for d in filtered] == ["eu-without-json-mode"]
+
+
+def test_pre_call_checks_filters_an_authenticating_provider_deployment_that_lacks_the_param(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+    (tmp_path / "api-key.json").write_text(json.dumps({"token": "tid=test", "expires_at": 4102444800}))
+    model_list: Final = [
+        {
+            "model_name": "mixed-json-mode",
+            "litellm_params": {"model": "github_copilot/gpt-4"},
+            "model_info": {"id": "copilot-gpt-4", "max_input_tokens": 100},
+        },
+        {
+            "model_name": "mixed-json-mode",
+            "litellm_params": {"model": "openai/gpt-4o", "api_key": "my-fake-key"},
+            "model_info": {"id": "gpt-4o", "max_input_tokens": 100},
+        },
+    ]
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
+
+    filtered: Final = router._pre_call_checks(
+        model="mixed-json-mode",
+        healthy_deployments=model_list,
+        messages=[{"role": "user", "content": "hi"}],
+        request_kwargs={"response_format": {"type": "json_object"}},
+    )
+
+    assert [d["model_info"]["id"] for d in filtered] == ["gpt-4o"]
+
+
+def test_pre_call_checks_answers_400_when_the_group_name_lists_no_deployments(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    model_list: Final = [
+        {
+            "model_name": "no-json-mode",
+            "litellm_params": {"model": "openai/gpt-3.5-turbo-16k", "api_key": "my-fake-key"},
+            "model_info": {"id": "only", "max_input_tokens": 100},
+        }
+    ]
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
+
+    with pytest.raises(litellm.UnsupportedParamsError):
+        router._pre_call_checks(
+            model="team-public-name",
+            healthy_deployments=model_list,
+            messages=[{"role": "user", "content": "hi"}],
+            request_kwargs={"response_format": {"type": "json_object"}},
+        )
+
+
+def test_pre_call_checks_lets_a_request_setting_replace_the_deployment_setting(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    model_list: Final = [
+        {
+            "model_name": "no-json-mode",
+            "litellm_params": {"model": "openai/gpt-3.5-turbo-16k", "api_key": "my-fake-key", "drop_params": True},
+            "model_info": {"id": "drops-it", "max_input_tokens": 100},
+        },
+        {
+            "model_name": "no-json-mode",
+            "litellm_params": {
+                "model": "openai/gpt-4",
+                "api_key": "my-fake-key",
+                "allowed_openai_params": ["response_format"],
+            },
+            "model_info": {"id": "allows-it", "max_input_tokens": 100},
+        },
+    ]
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
+
+    filtered: Final = router._pre_call_checks(
+        model="no-json-mode",
+        healthy_deployments=model_list,
+        messages=[{"role": "user", "content": "hi"}],
+        request_kwargs={"response_format": {"type": "json_object"}, "drop_params": False},
+    )
+
+    assert [d["model_info"]["id"] for d in filtered] == ["allows-it"]
+
+
+async def _select_team_json_deployment(router: Router, entrypoint: str, selection: Mapping[str, object]) -> object:
+    if entrypoint == "async":
+        return await router.async_get_available_deployment(**selection)
+    if entrypoint == "sync":
+        return router.get_available_deployment(**selection)
+    return router.get_available_deployment_for_pass_through(**selection)
+
+
+@pytest.mark.parametrize("entrypoint", ["sync", "async", "pass-through"])
+@pytest.mark.parametrize(
+    ("deployment_models", "cooled_down", "expected_error"),
+    [
+        pytest.param(("gpt-3.5-turbo-16k", "gpt-4"), (), litellm.UnsupportedParamsError, id="none-takes-it"),
+        pytest.param(("gpt-3.5-turbo-16k", "gpt-4o"), ("gpt-4o",), RouterRateLimitError, id="capable-cooling-down"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_team_public_model_name_answers_400_only_when_no_team_deployment_takes_the_param(
+    monkeypatch: pytest.MonkeyPatch,
+    entrypoint: str,
+    deployment_models: tuple[str, str],
+    cooled_down: tuple[str, ...],
+    expected_error: type[Exception],
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": f"team-json-{deployment_model}",
+                "litellm_params": {
+                    "model": f"openai/{deployment_model}",
+                    "api_key": "my-fake-key",
+                    "use_in_pass_through": True,
+                },
+                "model_info": {
+                    "id": deployment_model,
+                    "max_input_tokens": 100,
+                    "team_id": "json-team",
+                    "team_public_model_name": "team-json",
+                },
+            }
+            for deployment_model in deployment_models
+        ],
+        enable_pre_call_checks=True,
+        num_retries=0,
+    )
+    _cool_down(router, *cooled_down)
+    selection: Final = {
+        "model": "team-json",
+        "messages": [{"role": "user", "content": "hi"}],
+        "request_kwargs": {
+            "metadata": {"user_api_key_team_id": "json-team"},
+            "response_format": {"type": "json_object"},
+        },
+    }
+
+    with pytest.raises(expected_error):
+        await _select_team_json_deployment(router, entrypoint, selection)
+
+
+def test_pre_call_checks_ignores_an_image_response_format_string(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    model_list: Final = [
+        {
+            "model_name": "image-model",
+            "litellm_params": {"model": "openai/gpt-3.5-turbo-16k", "api_key": "my-fake-key"},
+            "model_info": {"id": "only", "max_input_tokens": 100},
+        }
+    ]
+    router: Final = Router(model_list=model_list, enable_pre_call_checks=True, num_retries=0)
+
+    filtered: Final = router._pre_call_checks(
+        model="image-model",
+        healthy_deployments=model_list,
+        messages=[{"role": "user", "content": "prompt"}],
+        request_kwargs={"response_format": "b64_json"},
+    )
+
+    assert [d["model_info"]["id"] for d in filtered] == ["only"]

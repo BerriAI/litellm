@@ -3098,7 +3098,7 @@ class PrometheusLogger(CustomLogger):
             if exception is not None:
                 exception_status = str(getattr(exception, "status_code", None))
                 if exception_status == "None" or not exception_status:
-                    code: Final = getattr(exception, "code", None)
+                    code: Final[object] = getattr(exception, "code", None)
                     if code is not None:
                         exception_status = str(code)
 
