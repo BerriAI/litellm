@@ -1646,9 +1646,7 @@ def infer_content_type_from_url_and_content(
     """
     from litellm.litellm_core_utils.token_counter import get_image_type
 
-    media_type: Final = (
-        current_content_type.split(";", 1)[0].strip().lower() if current_content_type else None
-    )
+    media_type: Final = current_content_type.split(";", 1)[0].strip().lower() if current_content_type else None
 
     # If we have a valid content type that's not generic, use it
     if media_type and media_type not in [
