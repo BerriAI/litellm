@@ -773,7 +773,7 @@ class PrometheusLogger(CustomLogger):
                 "Remaining budget for provider - used when you set provider budget limits",
                 labelnames=["api_provider"],
             )
-            self.litellm_provider_max_budget_metric = self._gauge_factory(
+            self.litellm_provider_max_budget_metric = self._gauge_factory(  # pyright: ignore[reportUnknownMemberType]  # the metric factory returns a partly unknown type, as for every gauge here
                 "litellm_provider_max_budget_metric",
                 "Maximum budget set for provider - used when you set provider budget limits",
                 labelnames=["api_provider"],
@@ -3848,7 +3848,7 @@ class PrometheusLogger(CustomLogger):
                 spend=spend,
             )
         )
-        self.litellm_provider_max_budget_metric.labels(provider).set(budget_limit)
+        self.litellm_provider_max_budget_metric.labels(provider).set(budget_limit)  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]  # same factory type as the remaining gauge above
 
     def _safe_get_remaining_budget(self, max_budget: float | None, spend: float | None) -> float:
         if max_budget is None:
