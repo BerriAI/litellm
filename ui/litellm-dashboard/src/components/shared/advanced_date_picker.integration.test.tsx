@@ -178,6 +178,32 @@ describe("AdvancedDatePicker", () => {
     expect(todayOption.closest("button")).toHaveClass("bg-info/10");
   });
 
+  it("applies the inclusive 7-day preset through the picker", () => {
+    const today = "2026-10-13";
+    const expectedStart = "2026-10-07";
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(`${today}T12:00:00`));
+
+    try {
+      render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />);
+
+      fireEvent.click(screen.getByRole("button"));
+      fireEvent.click(screen.getByRole("button", { name: /Last 7 days/ }));
+
+      expect(screen.getByDisplayValue(expectedStart)).toBeInTheDocument();
+      expect(screen.getByDisplayValue(today)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+      expect(mockOnValueChange).toHaveBeenLastCalledWith({
+        from: new Date(`${expectedStart}T00:00:00.000`),
+        to: new Date(`${today}T23:59:59.999`),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("selects a relative range from the keyboard alone", async () => {
     const user = userEvent.setup();
     const { container } = render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />);
