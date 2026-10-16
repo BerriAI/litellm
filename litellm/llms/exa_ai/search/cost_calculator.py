@@ -9,6 +9,7 @@ EXA_AI_ADDITIONAL_RESULT_COST: Final = 0.001
 EXA_AI_STANDARD_SEARCH_MODEL: Final = "exa_ai/search"
 EXA_AI_PRICING_MODEL_BY_TYPE: Final[Mapping[str, str]] = MappingProxyType(
     {
+        "instant": "exa_ai/search-instant",
         "deep-lite": "exa_ai/search-deep",
         "deep": "exa_ai/search-deep",
         "deep-reasoning": "exa_ai/search-deep-reasoning",

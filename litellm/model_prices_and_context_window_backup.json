@@ -23892,6 +23892,14 @@
         },
         "mode": "search"
     },
+    "exa_ai/search-instant": {
+        "input_cost_per_query": 0.004,
+        "litellm_provider": "exa_ai",
+        "metadata": {
+            "notes": "Base price per /search request with type instant, covering up to 10 results. Source: https://exa.ai/pricing (2026-10-15)"
+        },
+        "mode": "search"
+    },
     "exa_ai/search-deep": {
         "input_cost_per_query": 0.012,
         "litellm_provider": "exa_ai",

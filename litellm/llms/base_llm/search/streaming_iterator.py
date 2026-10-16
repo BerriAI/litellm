@@ -137,11 +137,15 @@ class SearchStreamWrapper:
             raise self._error("Malformed search stream event") from error
         payload: Final = TypeAdapter(Mapping[str, object]).validate_python(event.model_dump())
         if "requestId" in payload:
-            self._request_metadata = {"requestId": payload["requestId"]}
+            self._request_metadata = {**self._request_metadata, "requestId": payload["requestId"]}
         if event.type == "error":
             raise self._error(f"Search stream error: {payload.get('error')}", body=payload)
         if event.type == "results":
             self._results = payload.get("results", [])
+            self._request_metadata = {
+                **self._request_metadata,
+                **{key: value for key, value in payload.items() if key not in ("type", "results")},
+            }
         if event.type == "done":
             self._finished = True
             completed: Final = {key: value for key, value in payload.items() if key != "type"}
