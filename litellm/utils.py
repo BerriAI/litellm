@@ -89,8 +89,10 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     match_capability_generalizations,
     match_fill_missing_generalizations,
 )
+from litellm.litellm_core_utils.model_param_helper import peek_reasoning_summary_aliases
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.litellm_core_utils.tokenizer import strip_special_tokens
+from litellm.litellm_core_utils.tool_fields import MalformedField, resolve_deployment_tool_fields
 from litellm.rust_bridge import tokenizer as tokenizer_dispatch
 from litellm.rust_bridge.catalog import decision
 from litellm.rust_bridge.configuration import Decision
@@ -473,6 +475,7 @@ from .exceptions import (
     BudgetExceededError,
     ContentPolicyViolationError,
     ContextWindowExceededError,
+    MalformedRequestFieldError,
     ModelNotMappedError,
     NotFoundError,
     OpenAIError,
@@ -1373,15 +1376,16 @@ def _dispatch_success_logging(
     is_completion_with_fallbacks: bool,
     is_litellm_internal_call: bool,
 ) -> None:
-    if not is_litellm_internal_call:
-        _schedule_async_success_logging(
-            logging_obj=logging_obj,
-            result=result,
-            start_time=start_time,
-            end_time=end_time,
-            is_completion_with_fallbacks=is_completion_with_fallbacks,
-        )
+    if is_litellm_internal_call:
+        return
 
+    _schedule_async_success_logging(
+        logging_obj=logging_obj,
+        result=result,
+        start_time=start_time,
+        end_time=end_time,
+        is_completion_with_fallbacks=is_completion_with_fallbacks,
+    )
     logging_obj.handle_sync_success_callbacks_for_async_calls(
         result=result,
         start_time=start_time,
@@ -1493,7 +1497,23 @@ def check_coroutine(value) -> bool:
     return get_coroutine_checker().is_async_callable(value)
 
 
-async def async_pre_call_deployment_hook(kwargs: dict[str, Any], call_type: str):
+def _deployment_provider(kwargs: Mapping[str, object]) -> str:
+    model: Final = kwargs.get("model")
+    custom_llm_provider: Final = kwargs.get("custom_llm_provider")
+    api_base: Final = kwargs.get("api_base")
+    if not isinstance(model, str):
+        return ""
+    try:
+        return litellm.get_llm_provider(
+            model=model,
+            custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+            api_base=api_base if isinstance(api_base, str) else None,
+        )[1]
+    except BadRequestError:
+        return ""
+
+
+async def async_pre_call_deployment_hook(kwargs: dict[str, Any], call_type: str) -> dict[str, Any]:
     """
     Allow modifying the request just before it's sent to the deployment.
 
@@ -1504,7 +1524,16 @@ async def async_pre_call_deployment_hook(kwargs: dict[str, Any], call_type: str)
     except ValueError:
         typed_call_type = None  # unknown call type
 
-    modified_kwargs = kwargs.copy()
+    route: Final[object] = getattr(kwargs.get("litellm_logging_obj"), "call_type", None)
+    resolved: Final = resolve_deployment_tool_fields(kwargs, route)
+    if isinstance(resolved, MalformedField):
+        raise MalformedRequestFieldError(
+            message=resolved.message,
+            model=kwargs.get("model"),
+            llm_provider=_deployment_provider(kwargs),
+            body={"type": "invalid_request_error", "param": resolved.field},
+        )
+    modified_kwargs = dict(resolved)
 
     custom_logger_class: Final = _get_cached_custom_logger()
     for callback in litellm.callbacks:
@@ -3056,6 +3085,20 @@ def supports_prompt_cache_breakpoint(model: str, custom_llm_provider: str | None
         model=model,
         custom_llm_provider=custom_llm_provider,
         key="supports_prompt_cache_breakpoint",
+    )
+
+
+def supports_assistant_prefill(model: str, custom_llm_provider: str | None = None) -> bool:
+    """
+    Whether the model can continue a prefilled assistant message (Anthropic's
+    ``prefix: True`` trick and equivalents). Missing metadata reads as False,
+    so a mid-stream fallback continuation is only routed to a model known to
+    support it.
+    """
+    return _supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_assistant_prefill",
     )
 
 
@@ -9239,7 +9282,7 @@ class ProviderConfigManager:
 
             return XAIAudioTranscriptionConfig()
         elif litellm.LlmProviders.OPENAI == provider:
-            if "gpt-4o" in model:
+            if "gpt-4o" in model or (model.startswith("gpt-") and "transcribe" in model):
                 return litellm.OpenAIGPTAudioTranscriptionConfig()
             else:
                 return litellm.OpenAIWhisperAudioTranscriptionConfig()
@@ -9935,6 +9978,10 @@ class ProviderConfigManager:
             return MinimaxVideoConfig()
         elif LlmProviders.EDENAI == provider:
             return litellm.EdenAIVideoConfig()
+        elif LlmProviders.VOLCENGINE == provider:
+            from litellm.llms.volcengine.videos.transformation import VolcEngineVideoConfig
+
+            return VolcEngineVideoConfig()
         return None
 
     @staticmethod
@@ -9959,6 +10006,7 @@ class ProviderConfigManager:
     def get_provider_realtime_config(
         model: str,
         provider: LlmProviders,
+        drop_params: bool = False,
     ) -> BaseRealtimeConfig | None:
         if LlmProviders.GEMINI == provider:
             from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
@@ -9967,7 +10015,7 @@ class ProviderConfigManager:
         if LlmProviders.META == provider:
             from litellm.llms.meta.realtime.transformation import MetaRealtimeConfig
 
-            return MetaRealtimeConfig()
+            return MetaRealtimeConfig(drop_params=drop_params)
         return None
 
     @staticmethod
@@ -10449,22 +10497,21 @@ def get_non_default_completion_params(kwargs: Mapping[str, object]) -> dict[str,
     return filter_out_litellm_params(kwargs, excluding=litellm.OPENAI_CHAT_COMPLETION_PARAMS)
 
 
-def peek_reasoning_summary_aliases(optional_params: dict) -> object | None:
-    """Read AI-SDK-style reasoning summary from optional_params or nested extra_body.
-
-    Uses key membership (not ``or`` chains) so falsy values like ``""`` are not skipped.
-    """
-    if "reasoningSummary" in optional_params:
-        return optional_params["reasoningSummary"]
-    if "reasoning_summary" in optional_params:
-        return optional_params["reasoning_summary"]
-    extra_body: Final = optional_params.get("extra_body")
-    if isinstance(extra_body, dict):
-        if "reasoningSummary" in extra_body:
-            return extra_body["reasoningSummary"]
-        if "reasoning_summary" in extra_body:
-            return extra_body["reasoning_summary"]
-    return None
+def reasoning_effort_with_summary_alias(
+    reasoning_effort: object, params: Mapping[str, object], accepts_summary: bool
+) -> object:
+    summary: Final = peek_reasoning_summary_aliases(params)
+    if not accepts_summary or not isinstance(summary, str):
+        return reasoning_effort
+    match reasoning_effort:
+        case str():
+            return {"effort": reasoning_effort, "summary": summary}
+        case {"summary": _}:
+            return reasoning_effort
+        case {"effort": str() as effort}:
+            return {"effort": effort, "summary": summary}
+        case _:
+            return reasoning_effort
 
 
 def strip_reasoning_summary_aliases_from_optional_params(

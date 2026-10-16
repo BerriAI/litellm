@@ -2,6 +2,7 @@ import json
 import re
 import time
 from collections.abc import Collection, Mapping, Sequence
+from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
 from typing import (
@@ -3900,6 +3901,7 @@ class MirroredPricingParams(LiteLLMBaseModel):
     output_cost_per_character: float | None = None
     cache_read_input_token_cost: float | None = None
     cache_creation_input_token_cost: float | None = None
+    cache_creation_input_token_cost_above_1hr: float | None = None
     tiered_pricing: list[dict[str, Any]] | None = None
 
 
@@ -3927,7 +3929,6 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     input_cost_per_token_priority: float | None = None
     input_cost_per_token_balanced: float | None = None
     input_cost_per_token_ultrafast: float | None = None
-    cache_creation_input_token_cost_above_1hr: float | None = None
     cache_creation_input_token_cost_above_100k_tokens: float | None = None
     cache_creation_input_token_cost_above_1hr_above_100k_tokens: float | None = None
     cache_creation_input_token_cost_above_200k_tokens: float | None = None
@@ -4046,7 +4047,9 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
 
 DEPLOYMENT_SCOPED_PRICING_FIELDS: Final[frozenset[str]] = frozenset({"off_peak_pricing"})
 
-DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset({"supports_regex_lookaround"})
+DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset(
+    {"supports_regex_lookaround", "supports_assistant_prefill"}
+)
 
 SHARED_BACKEND_MODEL_INFO_FIELDS: Final[frozenset[str]] = (
     frozenset(ModelInfoBase.__required_keys__ | ModelInfoBase.__optional_keys__)
@@ -4474,6 +4477,12 @@ class LiteLLMLoggingBaseClass:
 
 
 TokenCountMessagesFormat: TypeAlias = Literal["openai", "anthropic"]
+
+
+@dataclass(frozen=True, slots=True)
+class CountContextManagement:
+    spec: JsonValue
+    drop_invalid_edits: bool
 
 
 class TokenCountResponse(LiteLLMPydanticObjectBase):
