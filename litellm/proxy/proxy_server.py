@@ -75,6 +75,7 @@ from litellm.constants import (
     DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
     DEFAULT_SHARED_HEALTH_CHECK_TTL,
     DEFAULT_SLACK_ALERTING_THRESHOLD,
+    INTERNAL_CALLBACK_NAMES,
     LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS,
     LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS,
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
@@ -19922,8 +19923,7 @@ def _hidden_runtime_callback_names(configured_callback_names: frozenset[str]) ->
         if name in CustomLoggerRegistry.CALLBACK_CLASS_STR_TO_CLASS_TYPE
     )
     configured_modules: Final = frozenset(name.rsplit(".", 1)[0] for name in configured_callback_names if "." in name)
-    internal_callback_names: Final = frozenset({"cache", "vector_store_pre_call_hook"})
-    return internal_callback_names | frozenset(
+    return INTERNAL_CALLBACK_NAMES | frozenset(
         callback_name
         for callback_name, callback in litellm.logging_callback_manager.get_callback_objects()
         if isinstance(callback, CustomGuardrail)
