@@ -85,6 +85,7 @@ async def apply_context_management(
     user_api_key_auth: "UserAPIKeyAuth | None" = None,
     sub_call_logging_kwargs: "ProxySubCallLoggingKwargs | None" = None,
     parent_trace_id: str | None = None,
+    count_only: bool = False,
 ) -> PolyfillResult:
     """Run edits in order; return a single ``PolyfillResult``.
 
@@ -128,6 +129,7 @@ async def apply_context_management(
                 user_api_key_auth=user_api_key_auth,
                 sub_call_logging_kwargs=sub_call_logging_kwargs,
                 parent_trace_id=parent_trace_id,
+                count_only=count_only,
             )
             if editor_is_async
             else await asyncify(editor)(
