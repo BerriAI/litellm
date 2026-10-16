@@ -122,6 +122,9 @@ def test_classify_decisions(category: str, changed: list[str], expected: str) ->
     ("changed", "expected"),
     (
         ("litellm/caching/redis_cache.py", "run"),
+        ("litellm/scheduler.py", "run"),
+        ("litellm/caching/dual_cache.py", "run"),
+        ("tests/integration/sdk/test_dual_cache_redis.py", "run"),
         ("tests/unit/caching/test_redis_cluster_cache.py", "run"),
         ("tests/integration/sdk/test_redis_cluster_iam_auth.py", "run"),
         (".github/workflows/test-unit.yml", "run"),

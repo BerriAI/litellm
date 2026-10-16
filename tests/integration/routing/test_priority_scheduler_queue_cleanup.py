@@ -3,12 +3,11 @@ from __future__ import annotations
 import asyncio
 import http.client
 import json
-import os
 import re
 import threading
 import time
 import uuid
-from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from dataclasses import dataclass
@@ -21,22 +20,16 @@ import httpx
 import openai
 import psutil
 import pytest
-import pytest_asyncio
 import yaml
 from integration._support.client import Gateway, eventually, gateway_from_environment
-from integration._support.async_server import LoopbackServer, close_writer
 from integration._support.database import read_rows
 from integration._support.openai_wire import answering_model_discovery, chat_reply, openai_error, responses_reply
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
-from integration._support.ports import allocate_port
 from integration._support.redis_process import OwnedRedis, owned_redis
 from integration._support.timing import assert_cut_short
 from integration._support.wire import Reply, Request, Wire, wire_server
-from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic import JsonValue, TypeAdapter
 from redis import Redis
-
-from litellm.caching.redis_cache import RedisCache
-from litellm.scheduler import FlowItem, Scheduler, SchedulerCacheKeys
 
 T = TypeVar("T")
 Endpoint = Literal["chat", "chat-stream", "completions", "completions-stream", "queue", "queue-stream"]
@@ -858,148 +851,3 @@ def test_sibling_worker_keeps_serving_prioritized_requests_after_a_worker_is_kil
                 seconds=graceful_stop_seconds(),
             )
             assert_once(received_markers(wire), (*(marker for _, marker, _ in outcomes), follow_up))
-
-
-@pytest_asyncio.fixture(loop_scope="function")
-async def shared_scheduler_cache() -> AsyncIterator[RedisCache]:
-    cache: Final = RedisCache(
-        host=os.environ["REDIS_HOST"],
-        port=int(os.environ["REDIS_PORT"]),
-        namespace="scheduler-atomic-" + uuid.uuid4().hex,
-    )
-    try:
-        yield cache
-    finally:
-        client: Final = cache.init_async_client()
-        await client.delete(cache.check_and_fix_namespace(f"{SchedulerCacheKeys.queue.value}:shared"))
-        await client.aclose()
-        cache.redis_client.close()
-
-
-async def test_shared_scheduler_preserves_concurrent_admissions(shared_scheduler_cache: RedisCache) -> None:
-    first: Final = Scheduler(redis_cache=shared_scheduler_cache)
-    second: Final = Scheduler(redis_cache=shared_scheduler_cache)
-    await asyncio.gather(first.get_queue("shared"), second.get_queue("shared"))
-    await asyncio.gather(
-        first.add_request(FlowItem(priority=1, request_id="first", model_name="shared")),
-        second.add_request(FlowItem(priority=2, request_id="second", model_name="shared")),
-    )
-    assert await shared_scheduler_cache.async_get_cache("scheduler:queue:shared") == [[1, "first"], [2, "second"]]
-    assert await first.get_queue("shared") == [(1, "first"), (2, "second")]
-    assert await second.get_queue("shared") == [(1, "first"), (2, "second")]
-
-
-async def test_shared_scheduler_does_not_resurrect_peer_removal(shared_scheduler_cache: RedisCache) -> None:
-    await shared_scheduler_cache.async_set_cache("scheduler:queue:shared", [[1, "removed"], [2, "waiting"]])
-    first: Final = Scheduler(redis_cache=shared_scheduler_cache)
-    second: Final = Scheduler(redis_cache=shared_scheduler_cache)
-    await asyncio.gather(first.get_queue("shared"), second.get_queue("shared"))
-    await first.remove_request("removed", "shared")
-    await second.add_request(FlowItem(priority=3, request_id="new", model_name="shared"))
-    assert await shared_scheduler_cache.async_get_cache("scheduler:queue:shared") == [[2, "waiting"], [3, "new"]]
-
-
-async def test_shared_scheduler_observes_peer_pop(shared_scheduler_cache: RedisCache) -> None:
-    await shared_scheduler_cache.async_set_cache("scheduler:queue:shared", [[1, "first"], [2, "second"]])
-    first: Final = Scheduler(redis_cache=shared_scheduler_cache)
-    second: Final = Scheduler(redis_cache=shared_scheduler_cache)
-    await asyncio.gather(first.get_queue("shared"), second.get_queue("shared"))
-    assert await first.poll(FlowItem(priority=1, request_id="first", model_name="shared"), [])
-    assert await second.poll(FlowItem(priority=2, request_id="second", model_name="shared"), [])
-    assert await shared_scheduler_cache.async_get_cache("scheduler:queue:shared") == []
-
-
-async def test_shared_scheduler_keeps_other_requests_during_concurrent_cleanup(
-    shared_scheduler_cache: RedisCache,
-) -> None:
-    schedulers: Final = tuple(Scheduler(redis_cache=shared_scheduler_cache) for _ in range(16))
-    await asyncio.gather(
-        *(
-            scheduler.add_request(FlowItem(priority=i, request_id=str(i), model_name="shared"))
-            for i, scheduler in enumerate(schedulers)
-        )
-    )
-    await asyncio.gather(
-        *(scheduler.remove_request(str(i), "shared") for i, scheduler in enumerate(schedulers) if i % 2 == 0)
-    )
-    assert await schedulers[0].get_queue("shared") == [(i, str(i)) for i in range(16) if i % 2]
-
-
-@pytest.fixture
-def interrupted_scheduler_cache(shared_scheduler_cache: RedisCache) -> Iterator[tuple[RedisCache, threading.Event]]:
-    interrupted: Final = threading.Event()
-
-    async def relay(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        upstream_reader, upstream_writer = await asyncio.open_connection(
-            os.environ["REDIS_HOST"], int(os.environ["REDIS_PORT"])
-        )
-
-        async def forward(source: asyncio.StreamReader, destination: asyncio.StreamWriter) -> None:
-            try:
-                while chunk := await source.read(65536):
-                    if interrupted.is_set():
-                        return
-                    destination.write(chunk)
-                    await destination.drain()
-            except ConnectionError:
-                return
-            finally:
-                await close_writer(destination)
-
-        await asyncio.gather(forward(reader, upstream_writer), forward(upstream_reader, writer))
-
-    port: Final = allocate_port()
-    server: Final = LoopbackServer(port, relay)
-    server.start()
-    cache: Final = RedisCache(host="127.0.0.1", port=port, namespace=shared_scheduler_cache.namespace)
-    try:
-        yield cache, interrupted
-    finally:
-        cache.redis_client.close()
-        server.stop()
-
-
-async def test_shared_scheduler_keeps_local_fallback_out_of_recovered_shared_queue(
-    shared_scheduler_cache: RedisCache,
-    interrupted_scheduler_cache: tuple[RedisCache, threading.Event],
-) -> None:
-    cache, interrupted = interrupted_scheduler_cache
-    scheduler: Final = Scheduler(redis_cache=cache)
-    try:
-        await scheduler.add_request(FlowItem(priority=1, request_id="removed", model_name="shared"))
-        interrupted.set()
-        await scheduler.add_request(FlowItem(priority=2, request_id="local", model_name="shared"))
-        assert await scheduler.get_queue("shared") == [(1, "removed"), (2, "local")]
-        await Scheduler(redis_cache=shared_scheduler_cache).remove_request("removed", "shared")
-        interrupted.clear()
-        await scheduler.add_request(FlowItem(priority=3, request_id="new", model_name="shared"))
-        assert await scheduler.get_queue("shared") == [(3, "new")]
-        assert await shared_scheduler_cache.async_get_cache("scheduler:queue:shared") == [[3, "new"]]
-    finally:
-        interrupted.clear()
-        await cache.init_async_client().aclose()
-
-
-async def test_shared_scheduler_preserves_invalid_queue_for_diagnosis(shared_scheduler_cache: RedisCache) -> None:
-    await shared_scheduler_cache.async_set_cache("scheduler:queue:shared", {"invalid": "queue"})
-    scheduler: Final = Scheduler(redis_cache=shared_scheduler_cache)
-    with pytest.raises(ValidationError):
-        await scheduler.add_request(FlowItem(priority=1, request_id="first", model_name="shared"))
-    assert await shared_scheduler_cache.async_get_cache("scheduler:queue:shared") == {"invalid": "queue"}
-
-
-@pytest.mark.parametrize("priority", [0, -1, 2**80])
-async def test_shared_scheduler_retains_priority_and_request_id(
-    shared_scheduler_cache: RedisCache, priority: int
-) -> None:
-    scheduler: Final = Scheduler(redis_cache=shared_scheduler_cache)
-    scheduler.cache.update_cache_ttl(default_in_memory_ttl=17, default_redis_ttl=None)
-    await scheduler.add_request(FlowItem(priority=priority, request_id="请求-é", model_name="shared"))
-    assert await scheduler.get_queue("shared") == [(priority, "请求-é")]
-    assert (
-        0
-        < shared_scheduler_cache.redis_client.ttl(
-            shared_scheduler_cache.check_and_fix_namespace("scheduler:queue:shared")
-        )
-        <= 17
-    )
