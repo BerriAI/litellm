@@ -24,6 +24,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+from prisma.errors import DataError
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
@@ -5266,8 +5267,18 @@ async def test_cached_environment_variables_row_older_than_the_stored_one_change
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("revision_test_environment")
 @pytest.mark.parametrize("cached_revision", [None, 4])
-async def test_unreachable_writer_keeps_the_applied_environment_variables_when_the_cached_row_is_behind(
-    cached_revision,
+@pytest.mark.parametrize(
+    "writer_error",
+    [
+        httpx.ConnectError("Can't reach database server"),
+        DataError(
+            {"user_facing_error": {"message": "Error querying the database: FATAL: sorry, too many clients already"}}
+        ),
+    ],
+    ids=["unreachable", "out_of_connections"],
+)
+async def test_a_writer_that_cannot_answer_keeps_the_applied_environment_variables_when_the_cached_row_is_behind(
+    cached_revision, writer_error
 ):
     pc: Final = ProxyConfig()
     await _sync_environment_variables_row(pc, {"REVISION_TEST_KEPT": "newer"}, revision=5)
@@ -5276,9 +5287,7 @@ async def test_unreachable_writer_keeps_the_applied_environment_variables_when_t
     )
 
     prisma_client: Final = _rows_database(cached, stored=None)
-    prisma_client.writer_db.litellm_config.find_unique = AsyncMock(
-        side_effect=httpx.ConnectError("Can't reach database server")
-    )
+    prisma_client.writer_db.litellm_config.find_unique = AsyncMock(side_effect=writer_error)
     prisma_client.attempt_db_reconnect = AsyncMock(return_value=False)
 
     await _sync_from(pc, prisma_client)

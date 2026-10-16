@@ -8440,7 +8440,10 @@ class ProxyConfig:
                 reason="environment_variables_writer_read_failure",
             )
         except Exception as e:
-            if not PrismaDBExceptionHandler.is_database_transport_error(e):
+            if not (
+                PrismaDBExceptionHandler.is_database_transport_error(e)
+                or PrismaDBExceptionHandler.is_database_connection_error(e)
+            ):
                 raise
             verbose_proxy_logger.warning(
                 "Could not read environment_variables from the writer database, keeping the current environment "
