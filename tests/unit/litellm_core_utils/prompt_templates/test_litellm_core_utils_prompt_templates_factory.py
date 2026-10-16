@@ -796,12 +796,19 @@ def test_anthropic_messages_pt_keeps_signed_thinking_block():
     assert thinking_blocks[0]["thinking"] == "genuine anthropic reasoning"
 
 
-@pytest.mark.parametrize("empty_content", [None, []])
-def test_anthropic_messages_pt_preserves_trailing_user_message_with_empty_content(empty_content):
+EMPTY_USER_MESSAGES = pytest.mark.parametrize(
+    "empty_user_message",
+    [{"role": "user", "content": None}, {"role": "user", "content": []}, {"role": "user"}],
+    ids=["null", "empty-list", "content-key-dropped"],
+)
+
+
+@EMPTY_USER_MESSAGES
+def test_anthropic_messages_pt_preserves_trailing_user_message_with_empty_content(empty_user_message):
     messages = [
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": "hello"},
-        {"role": "user", "content": empty_content},
+        empty_user_message,
     ]
 
     result = anthropic_messages_pt(
@@ -814,8 +821,8 @@ def test_anthropic_messages_pt_preserves_trailing_user_message_with_empty_conten
     assert result[-1]["content"] == [{"type": "text", "text": _EMPTY_TEXT_PLACEHOLDER}]
 
 
-@pytest.mark.parametrize("empty_content", [None, []])
-def test_anthropic_messages_pt_empty_user_message_beside_tool_result_keeps_tool_result_only(empty_content):
+@EMPTY_USER_MESSAGES
+def test_anthropic_messages_pt_empty_user_message_beside_tool_result_keeps_tool_result_only(empty_user_message):
     messages = [
         {"role": "user", "content": "hi"},
         {
@@ -823,7 +830,7 @@ def test_anthropic_messages_pt_empty_user_message_beside_tool_result_keeps_tool_
             "content": None,
             "tool_calls": [{"id": "toolu_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}],
         },
-        {"role": "user", "content": empty_content},
+        empty_user_message,
         {"role": "tool", "tool_call_id": "toolu_1", "content": "ok"},
     ]
 
