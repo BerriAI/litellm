@@ -16,7 +16,7 @@ from litellm.proxy.hooks.parallel_request_limiter import (
     PROXY_MaxParallelRequestsHandler,
 )
 from litellm.proxy.utils import InternalUsageCache, hash_token
-from litellm.types.utils import EmbeddingResponse, ModelResponse, TextCompletionResponse, Usage
+from litellm.types.utils import CallTypes, EmbeddingResponse, ModelResponse, TextCompletionResponse, Usage
 
 FROZEN_INSTANT: Final = datetime(2026, 1, 31, 23, 59, 30)
 LAST_MICROSECOND_OF_JANUARY: Final = datetime(2026, 1, 31, 23, 59, 59, 999999)
@@ -323,3 +323,33 @@ async def test_retry_after_is_the_seconds_until_the_next_minute_of_the_injected_
         )
 
     assert exc_info.value.headers["retry-after"] == "14.5"
+
+
+@pytest.mark.asyncio
+async def test_websocket_turn_callbacks_keep_the_sockets_slot_until_the_disconnect_release():
+    api_key = hash_token("sk-websocket")
+    handler = PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()), clock=_frozen_clock)
+    bucket = f"{api_key}::{FROZEN_INSTANT.strftime('%Y-%m-%d-%H-%M')}::request_count"
+    await handler.internal_usage_cache.async_set_cache(
+        key=bucket,
+        value={"current_requests": 1, "current_tpm": 0, "current_rpm": 1},
+        litellm_parent_otel_span=None,
+    )
+    turn_kwargs = {
+        "call_type": CallTypes.aresponses_websocket.value,
+        "litellm_params": {"metadata": {"user_api_key": api_key}},
+        "exception": RuntimeError("provider rejected the turn"),
+    }
+
+    await handler.async_log_success_event(
+        kwargs=turn_kwargs, response_obj=None, start_time=FROZEN_INSTANT, end_time=FROZEN_INSTANT
+    )
+    await handler.async_log_failure_event(
+        kwargs=turn_kwargs, response_obj=None, start_time=FROZEN_INSTANT, end_time=FROZEN_INSTANT
+    )
+    after_two_turns = await handler.internal_usage_cache.async_get_cache(key=bucket, litellm_parent_otel_span=None)
+    assert after_two_turns["current_requests"] == 1, after_two_turns
+
+    await handler.async_release_max_parallel_requests_on_disconnect(UserAPIKeyAuth(api_key=api_key))
+    after_disconnect = await handler.internal_usage_cache.async_get_cache(key=bucket, litellm_parent_otel_span=None)
+    assert after_disconnect["current_requests"] == 0, after_disconnect

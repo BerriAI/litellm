@@ -9267,3 +9267,23 @@ def test_completion_cost_search_uses_search_tool_input_cost_per_query(
 
     assert map_cost == pytest.approx(expected_queries * litellm.model_cost["agentcore/search"]["input_cost_per_query"])
     assert configured_cost == pytest.approx(expected_queries * 0.05)
+
+
+def test_responses_ws_logging_object_carries_the_completed_responses_id_tier_and_usage() -> None:
+    events = [
+        {"type": "response.created", "response": {"id": "resp_a", "status": "in_progress"}},
+        {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_a",
+                "service_tier": "priority",
+                "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+            },
+        },
+    ]
+
+    logged = ResponsesWebSocketTokenUsageProcessor.create_logging_object(events)
+
+    assert (logged.id, logged.service_tier) == ("resp_a", "priority")
+    assert (logged.usage.prompt_tokens, logged.usage.completion_tokens, logged.usage.total_tokens) == (10, 5, 15)
+    assert ResponsesWebSocketTokenUsageProcessor.create_logging_object([{"type": "error", "error": {}}]).id is None

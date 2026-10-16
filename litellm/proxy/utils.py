@@ -231,7 +231,7 @@ from litellm.proxy.hooks.cache_control_check import (  # noqa: F401, RUF100  # l
 )
 from litellm.proxy.hooks.parallel_request_limiter import (  # noqa: F401, RUF100  # legacy module exports
     PROXY_MaxParallelRequestsHandler,
-    _PROXY_MaxParallelRequestsHandler,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _PROXY_MaxParallelRequestsHandler,  # pyright: ignore[reportPrivateUsage]  # backwards-compatible package export
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (  # noqa: F401, RUF100  # legacy module exports
     PROXY_MaxParallelRequestsHandler_v3,
@@ -4405,7 +4405,7 @@ class ProxyLogging:
         double-decrement under the limiter's in-memory fallback.
         """
         limiter: Final = self.get_proxy_hook("parallel_request_limiter")
-        if not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3):
+        if not isinstance(limiter, (PROXY_MaxParallelRequestsHandler_v3, _PROXY_MaxParallelRequestsHandler)):
             return
         await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
 

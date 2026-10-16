@@ -157,7 +157,10 @@ def sanitize_user_api_key_auth(auth: object) -> object:
     return auth
 
 
-def _sanitized(parent_metadata: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: SDK metadata kwarg
+def without_budget_reservation(
+    parent_metadata: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: SDK metadata kwarg
+    """Parent metadata minus the admission reservation, also inside ``user_api_key_auth``."""
     return {
         k: sanitize_user_api_key_auth(v) if k == _USER_API_KEY_AUTH_KEY else v
         for k, v in parent_metadata.items()
@@ -176,7 +179,7 @@ def forwarded_internal_call_metadata(
     """
     if not parent_metadata:
         return {}
-    return _sanitized(parent_metadata) | {INTERNAL_CALL_ORIGIN_METADATA_KEY: call_origin}
+    return without_budget_reservation(parent_metadata) | {INTERNAL_CALL_ORIGIN_METADATA_KEY: call_origin}
 
 
 def parent_session_kwargs(request_kwargs: Mapping[str, object] | None) -> Mapping[str, str]:
@@ -202,4 +205,4 @@ def sanitized_forwardable_call_metadata(
     must not inherit per-request state such as its routing decision or logging payload.
     """
     identity: Final = {k: v for k, v in parent_metadata.items() if k in FORWARDABLE_IDENTITY_METADATA_KEYS}
-    return _sanitized(identity) | {INTERNAL_CALL_ORIGIN_METADATA_KEY: call_origin}
+    return without_budget_reservation(identity) | {INTERNAL_CALL_ORIGIN_METADATA_KEY: call_origin}
