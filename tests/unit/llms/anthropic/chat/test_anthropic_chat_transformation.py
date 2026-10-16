@@ -6764,8 +6764,10 @@ def test_chat_flagged_model_converts_system_with_no_following_user_turn(local_mo
 
 
 @pytest.mark.parametrize("empty_content", [[], None], ids=["empty-list", "none"])
-def test_chat_flagged_model_anchors_a_system_on_an_empty_user_turn(local_model_cost_map, empty_content):
-    messages = [
+def test_chat_flagged_model_anchors_a_system_on_an_empty_user_turn(
+    local_model_cost_map: None, empty_content: list[object] | None
+) -> None:
+    messages: Final = [
         {"role": "system", "content": "You are terse."},
         {"role": "user", "content": empty_content},
         {"role": "system", "content": REMINDER_TEXT},
@@ -6773,14 +6775,14 @@ def test_chat_flagged_model_anchors_a_system_on_an_empty_user_turn(local_model_c
         {"role": "user", "content": "Second question"},
     ]
 
-    result = _chat_request(AnthropicConfig(), FLAGGED_CLAUDE, messages)
+    result: Final = _chat_request(AnthropicConfig(), FLAGGED_CLAUDE, messages)
 
     assert [m["role"] for m in result["messages"]] == ["user", "system", "assistant", "user"]
     assert _texts(result["messages"][1]) == [REMINDER_TEXT]
 
 
-def test_chat_flagged_model_converts_a_system_behind_a_user_turn_that_sends_nothing(local_model_cost_map):
-    messages = [
+def test_chat_flagged_model_converts_a_system_behind_a_user_turn_that_sends_nothing(local_model_cost_map: None) -> None:
+    messages: Final = [
         {"role": "system", "content": "You are terse."},
         {"role": "user", "content": [{"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}}]},
         {"role": "system", "content": REMINDER_TEXT},
@@ -6788,7 +6790,7 @@ def test_chat_flagged_model_converts_a_system_behind_a_user_turn_that_sends_noth
         {"role": "user", "content": "Second question"},
     ]
 
-    result = _chat_request(AnthropicConfig(), FLAGGED_CLAUDE, messages)
+    result: Final = _chat_request(AnthropicConfig(), FLAGGED_CLAUDE, messages)
 
     assert [m["role"] for m in result["messages"]] == ["user", "assistant", "user"]
     assert _texts(result["messages"][0]) == [CONVERTED_SYSTEM_NOTE, REMINDER_TEXT]
