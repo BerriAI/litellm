@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional
 
@@ -31,8 +31,12 @@ class StreamTransformSink:
     single call, not shared state.
     """
 
-    mutated_text_per_choice: dict[int, str] = field(default_factory=dict)
-    holdback_per_choice: dict[int, int] = field(default_factory=dict)
+    mutated_text_per_choice: Mapping[int, str] = field(default_factory=dict)
+    holdback_per_choice: Mapping[int, int] = field(default_factory=dict)
+
+    def record(self, texts: Mapping[int, str], holdback: Mapping[int, int]) -> None:
+        self.mutated_text_per_choice = texts
+        self.holdback_per_choice = holdback
 
 
 @dataclass(frozen=True, slots=True)
