@@ -698,13 +698,9 @@ def main() -> int:
     scalars = _all_scalars()
 
     integration_paths, ownership_findings = _integration_ownership()
-    test_findings = (
-        _uncovered_tests(
-            allowlist,
-            _invoked_selections(scalars)
-            + (Selection(included=integration_paths, ignored=frozenset()),),
-        )
-        + ownership_findings
+    test_findings = _uncovered_tests(
+        allowlist,
+        _invoked_selections(scalars) + (Selection(included=integration_paths, ignored=frozenset()),),
     )
     dockerfile_findings = _uncovered_dockerfiles(allowlist, _built_dockerfile_tokens(scalars))
     stale_findings = _stale_allowlist_paths(allowlist, test_files=_test_files(), dockerfiles=_dockerfiles())
@@ -721,13 +717,19 @@ def main() -> int:
             test_findings,
             "Add each to a job's test path, or list it in .github/ci-coverage-allowlist.yml with a reason.",
         )
+    if ownership_findings:
+        _report(
+            "integration contracts with the wrong CI owner",
+            ownership_findings,
+            "Follow tests/integration/AGENTS.md, which says which CI job owns each integration file.",
+        )
     if dockerfile_findings:
         _report(
             "Dockerfiles that no CI job builds",
             dockerfile_findings,
             "Build each in a workflow, or list it in .github/ci-coverage-allowlist.yml with a reason.",
         )
-    if stale_findings or test_findings or dockerfile_findings:
+    if stale_findings or test_findings or ownership_findings or dockerfile_findings:
         return 1
 
     _write(
