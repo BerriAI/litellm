@@ -1,6 +1,7 @@
 import ast
 import contextvars
 import functools
+import inspect
 import itertools
 import logging
 import os
@@ -896,6 +897,43 @@ verbose_router_logger.addFilter(_diagnostic_filter)
 verbose_proxy_logger.addFilter(_diagnostic_filter)
 verbose_proxy_stdout_logger.addFilter(_diagnostic_filter)
 verbose_logger.addFilter(_diagnostic_filter)
+
+_ANSI_ESCAPE: Final = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def print_startup_message(message: str) -> None:
+    """Write a boot-time message meant for the operator's terminal.
+
+    Plain mode prints it unchanged, colors and spacing included. With JSON logs on, every line of
+    stdout is read by a log pipeline, so the message goes out as one INFO record on the proxy logger
+    instead, on stdout like the print, with the ANSI color codes and surrounding blank lines removed,
+    located at the caller and emitted at any log level; a blank spacer produces no record.
+    """
+    if not litellm.json_logs:
+        print(message)  # noqa: T201  # plain mode: this is the operator-terminal print it replaces
+        return
+    text: Final = _ANSI_ESCAPE.sub("", message).strip("\n")
+    if not text:
+        return
+    frame: Final = inspect.currentframe()
+    caller: Final = frame.f_back if frame is not None else None
+    record: Final = verbose_proxy_logger.makeRecord(
+        verbose_proxy_logger.name,
+        logging.INFO,
+        caller.f_code.co_filename if caller is not None else __file__,
+        caller.f_lineno if caller is not None else 0,
+        text,
+        (),
+        None,
+        func=caller.f_code.co_name if caller is not None else None,
+    )
+    # The print this replaces shows at any log level, so the record skips the level checks of the
+    # proxy logger (at the root's WARNING in the CLI process until initialize() runs) and of its JSON
+    # handler (LITELLM_LOG), and still runs the logger's and the handler's filters and the formatter.
+    if not verbose_proxy_logger.filter(record):
+        return
+    for json_handler in verbose_proxy_logger.handlers:
+        json_handler.handle(record)
 
 
 def _suppress_loggers():

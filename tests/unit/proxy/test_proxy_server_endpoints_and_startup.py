@@ -7,6 +7,7 @@ import os
 import re
 import socket
 import subprocess
+import sys
 import time
 import types
 from datetime import datetime, timedelta, timezone
@@ -28,6 +29,7 @@ from fastapi.testclient import TestClient
 import litellm
 import litellm.proxy.proxy_server as proxy_server_module
 from litellm._internal_context import current_service_target
+from litellm._logging import turn_on_json, verbose_proxy_logger
 from litellm.caching.caching import RedisCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
@@ -14343,7 +14345,6 @@ async def test_moderations_response_carries_litellm_call_id_header():
 async def test_moderations_failure_log_carries_the_callers_litellm_call_id(caplog):
     """LIT-7836: the /v1/moderations error line must carry the litellm_call_id the
     client sent, rendered in the message and as a structured log record field."""
-    from litellm._logging import verbose_proxy_logger
     from litellm.proxy._types import ProxyException
 
     call_id = "moderations-call-7836"
@@ -15705,3 +15706,22 @@ async def test_update_cache_reads_and_writes_declare_the_auth_objects_key_family
     assert seen, "update_cache must touch the cache for a priced user request"
     assert {target for _, target in seen} == {"auth_objects"}
     assert current_service_target() is None
+
+
+def test_feedback_box_is_one_json_record_in_json_mode(monkeypatch, capfd):
+    """The feedback box is a dozen terminal lines; with JSON logs on it has to land as one parseable
+    record, not a plaintext line per row."""
+    monkeypatch.setattr(litellm, "json_logs", True)
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)  # turn_on_json swaps it; put it back at teardown
+    turn_on_json()
+
+    proxy_server_module.generate_feedback_box()
+
+    out, err = capfd.readouterr()
+    assert err == ""
+    lines: Final = [raw for raw in out.splitlines() if raw.strip()]
+    assert len(lines) == 1, lines
+    record: Final = json.loads(lines[0])
+    assert "Give Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new" in record["message"]
+    assert "Thank you for using LiteLLM! - Krrish & Ishaan" in record["message"]
+    assert "\x1b[" not in record["message"]

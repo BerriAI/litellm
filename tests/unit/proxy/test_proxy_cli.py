@@ -1,4 +1,5 @@
 import inspect
+import json
 import logging
 import os
 from contextlib import nullcontext
@@ -23,6 +24,8 @@ import yaml
 from uvicorn.config import LOOP_FACTORIES
 from uvicorn.importer import import_from_string
 
+import litellm
+from litellm._logging import turn_on_json
 from litellm.constants import GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS
 from litellm.proxy import proxy_cli
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers, run_server
@@ -3929,3 +3932,79 @@ class TestValidateConfigFlag:
         assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
         assert "config OK" in result.output
         mock_popen.assert_not_called()
+
+
+class TestJsonLogsConfigReachesSpawnedWorkers:
+    """`litellm_settings.json_logs: true` turns JSON on inside the CLI process, but the workers that
+    uvicorn or granian spawn are fresh interpreters that pick plain or JSON from the JSON_LOGS
+    environment variable at import. The CLI has to export it, or every worker logs plain text until
+    its own load_config reaches the key."""
+
+    @staticmethod
+    def _json_logs_env_after_boot(config_path: Path, litellm_settings: dict[str, object]) -> str | None:
+        config_path.write_text(yaml.dump({"model_list": [], "litellm_settings": litellm_settings}))
+        mock_proxy_config: Final = MagicMock()
+        mock_proxy_config.return_value.get_config = AsyncMock(return_value=yaml.safe_load(config_path.read_text()))
+        mock_proxy_module: Final = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=mock_proxy_config,
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL", "JSON_LOGS")}
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {"proxy_server": mock_proxy_module, "litellm.proxy.proxy_server": mock_proxy_module},
+            ),
+            patch("atexit.register"),
+            patch("litellm.turn_on_json"),  # test-quality-ok: it swaps every logger handler in this pytest worker
+        ):
+            run_server.main(["--config", str(config_path), "--local", "--skip_server_startup"], standalone_mode=False)
+            return os.environ.get("JSON_LOGS")
+
+    def test_json_logs_true_exports_json_logs_to_spawned_workers(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.setattr(litellm, "json_logs", False)  # run_server flips it on; undone at teardown
+        assert self._json_logs_env_after_boot(tmp_path / "config.yaml", {"json_logs": True}) == "true"
+
+    def test_plain_logs_config_leaves_json_logs_unset(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.setattr(litellm, "json_logs", False)
+        assert self._json_logs_env_after_boot(tmp_path / "config.yaml", {}) is None
+
+
+def test_granian_flag_notices_are_json_records_in_json_mode(monkeypatch, capfd):
+    """The yellow notices for the flags Granian ignores (`--max_requests_before_restart`, `--ciphers`) are
+    printed while the launcher starts; with json_logs on they are INFO records on stdout like every other
+    line, not plaintext between the records."""
+    pytest.importorskip("granian")
+    monkeypatch.setattr(litellm, "json_logs", True)
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)  # turn_on_json swaps it; put it back at teardown
+    turn_on_json()
+
+    with (
+        patch("granian.Granian") as mock_granian_cls,
+        patch("granian.constants.Interfaces", SimpleNamespace(ASGI="asgi")),
+    ):
+        ProxyInitializationHelpers._init_granian_server(
+            host="0.0.0.0",
+            port=4000,
+            num_workers=2,
+            ssl_certfile_path=None,
+            ssl_keyfile_path=None,
+            max_requests_before_restart=100,
+            ciphers="ECDHE",
+            granian_runtime_threads=None,
+        )
+
+    mock_granian_cls.return_value.serve.assert_called_once()
+    out, err = capfd.readouterr()
+    assert err == ""
+    records: Final = [json.loads(raw) for raw in out.splitlines() if raw.strip()]
+    assert [record["message"] for record in records] == [
+        "LiteLLM Proxy: Starting server on 0.0.0.0:4000 using Granian",
+        "LiteLLM: --max_requests_before_restart is not supported by Granian "
+        "(Granian uses workers_lifetime in seconds, not a per-request limit).",
+        "LiteLLM: --ciphers is not applied when using --run_granian.",
+    ]
+    assert {record["level"] for record in records} == {"INFO"}
